@@ -198,14 +198,7 @@ Launch: April 15, 2026
 ```
 CipherBox_v1.0_PRD.md         ← Full spec (15k words)
 IMPLEMENTATION_ROADMAP.md     ← Week-by-week plan
-DEV_QUICK_REFERENCE.md        ← Developer cheat sheet
-INDEX.md                      ← Document navigation
-PRD_COMPLETION_SUMMARY.md     ← Coverage map
-cipherbox_answers_complete.md ← Design Q&A
-DELIVERY_SUMMARY.txt          ← What was delivered
 ```
-
-**Ask me:** `"Show me [filename]"` to get any document.
 
 ***
 

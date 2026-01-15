@@ -1,7 +1,6 @@
-# CipherBox v1.0 - Product Requirements Document
+# CipherBox - Product Requirements Document
 
 **Product Name:** CipherBox  
-**Version:** v1.0  
 **Status:** Specification Document  
 **Created:** January 15, 2026  
 **Last Updated:** January 15, 2026  
@@ -2294,5 +2293,5 @@ A: v1 has a free 500 MiB tier indefinitely. Pricing for larger storage deferred 
 
 ---
 
-**End of CipherBox v1.0 PRD**
+**End of CipherBox PRD**
 
