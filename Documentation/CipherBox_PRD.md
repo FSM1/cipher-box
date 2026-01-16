@@ -2,8 +2,8 @@
 
 **Product Name:** CipherBox  
 **Status:** Specification Document  
-**Created:** January 15, 2026  
-**Last Updated:** January 15, 2026  
+**Created:** January 14, 2026  
+**Last Updated:** January 16, 2026  
 
 ---
 
@@ -50,7 +50,7 @@ Core pillars:
 
 **Must-Have for v1.0:**
 - ✓ Personal, private file storage replacing Dropbox/Google Drive
-- ✓ Multi-method authentication (Email/Password, Passkeys, OAuth, Magic Link) without central key custody
+- ✓ Multi-method authentication (Email/Password, OAuth, Magic Link, External Wallet) without central key custody
 - ✓ Web-based file browser (upload, download, organize)
 - ✓ Desktop mount (macOS/Linux/Windows) for transparent file access
 - ✓ Production-ready encryption (AES-256-GCM, ECDSA, secp256k1)
@@ -118,31 +118,35 @@ Core pillars:
 
 ```
 1. User visits CipherBox.com
-2. Chooses signup method: Email/Password, Passkey, Google, or Magic Link
-3. For Email/Password:
-   - Enters email + password
-   - Backend verifies credentials, issues JWT
-   - Client presents JWT to Torus Network
-   - Torus derives ECDSA keypair, reconstructed in memory
-4. For Passkey:
-   - Browser prompts for biometric (Touch ID, Face ID) or PIN
-   - Passkey signs challenge
-   - Backend verifies, issues JWT
-   - Same Torus derivation as above
-5. For OAuth (Google/Apple/GitHub):
-   - Standard OAuth flow
-   - CipherBox backend issues JWT with subjectId
-   - Client derives ECDSA keypair via Torus
-6. Client queries: GET /my-vault
-7. Server responds: 403 Vault Not Initialized
-8. Client generates random 256-bit root folder key
-9. Client encrypts root key: ECIES(rootKey, userPublicKey)
-10. Client sends: POST /my-vault/initialize with encrypted key
-11. Server stores in Vaults table, marks initialized
-12. User sees empty vault, ready to upload
-13. User drags file into web UI
-14. File encrypted client-side, uploaded to IPFS, IPNS entry updated
-15. User sees file in decrypted tree view
+2. User is redirected to Web3Auth customized login screen
+3. User chooses auth method: Email/Password, Google, Magic Link, or External Wallet
+4. Web3Auth handles authentication:
+   - For OAuth: Standard OAuth flow with selected provider
+   - For Email/Password: Web3Auth verifies credentials
+   - For External Wallet: User signs message with existing wallet (MetaMask, etc.)
+   - OAuth token is provided to Web3Auth backend for verification
+5. Web3Auth key derivation:
+   - Each Web3Auth node retrieves its part of the user key
+   - Key parts are sent to the client and reconstructed in memory
+   - ECDSA keypair (secp256k1) is now available client-side
+6. Client initiates auth with CipherBox backend:
+   - Option A (JWT): Client calls POST /auth/login with Web3Auth ID token
+   - Option B (SIWE): Client fetches nonce from GET /auth/nonce,
+     signs message with private key, calls POST /auth/login with signature
+7. CipherBox backend validates authentication:
+   - For JWT: Verifies Web3Auth ID token signature via JWKS endpoint
+   - For SIWE: Validates signature matches claimed pubkey and nonce
+8. Backend issues CipherBox access token and refresh token
+9. Client queries: GET /my-vault (using CipherBox access token)
+10. Server responds: 403 Vault Not Initialized
+11. Client generates random 256-bit root folder key
+12. Client encrypts root key: ECIES(rootKey, userPublicKey)
+13. Client sends: POST /my-vault/initialize with encrypted key
+14. Server stores in Vaults table, marks initialized
+15. User sees empty vault, ready to upload
+16. User drags file into web UI
+17. File encrypted client-side, uploaded to IPFS, IPNS entry updated
+18. User sees file in decrypted tree view
 ```
 
 #### Journey 2: Multi-device File Access
@@ -150,22 +154,27 @@ Core pillars:
 ```
 1. User has uploaded files via web app on laptop
 2. Opens CipherBox web UI on phone
-3. Logs in (same email/password, same JWT → same Torus derivation → same ECDSA key)
-4. GET /my-vault returns same vault data (same IPNS entry, same encrypted root key)
-5. Client decrypts same root key (same private key → can decrypt)
-6. Polls IPNS for folder metadata
-7. Sees all files uploaded from laptop
-8. Downloads file: fetches from IPFS, decrypts with file key from metadata
-9. All without any server-side key sharing or sync infrastructure
+3. User is redirected to Web3Auth login screen
+4. Logs in with any linked auth method (same Web3Auth group → same ECDSA key)
+5. Web3Auth derives same keypair (group connections ensure same key across providers)
+6. Client authenticates with CipherBox backend (JWT or SIWE flow)
+7. GET /my-vault returns same vault data (same IPNS entry, same encrypted root key)
+8. Client decrypts same root key (same private key → can decrypt)
+9. Polls IPNS for folder metadata
+10. Sees all files uploaded from laptop
+11. Downloads file: fetches from IPFS, decrypts with file key from metadata
+12. All without any server-side key sharing or sync infrastructure
 ```
 
 #### Journey 3: Desktop Mount & Seamless Access
 
 ```
 1. User installs CipherBox desktop app (macOS/Linux/Windows)
-2. Logs in with same credentials (email/password, Passkey, or OAuth)
-3. App derives same ECDSA keypair via Torus
-4. FUSE mount created at ~/CipherVault
+2. App opens Web3Auth login flow (embedded browser or system browser)
+3. User logs in with any linked auth method
+4. Web3Auth derives same ECDSA keypair (group connections ensure consistency)
+5. App authenticates with CipherBox backend (JWT or SIWE flow)
+6. FUSE mount created at ~/CipherVault
 5. User opens Finder, navigates to ~/CipherVault
 6. Sees folder tree with decrypted names (no CIDs, no IPFS internals visible)
 7. Double-clicks PDF → opens in Preview
@@ -207,21 +216,24 @@ Core pillars:
 #### Journey 5: Account Linking (Email to Existing Google Account)
 
 ```
-1. User signed up with Google (pubKey A generated via subjectId A)
+1. User signed up with Google (pubKey A generated via Web3Auth group)
 2. Later, user wants to add email/password to same account
 3. User navigates to Settings → Linked Accounts
 4. Clicks "Add Email + Password"
-5. Enters email address + new password
-6. CipherBox backend verifies email (sends verification link)
-7. User clicks link, confirms email ownership
-8. Backend maps email credential to same subjectId (same as Google)
-9. Backend stores in auth_providers table: (userId, "email", email_hash)
-10. User can now login with either:
+5. User is redirected to Web3Auth account linking flow
+6. Enters email address + new password
+7. Web3Auth verifies email ownership and links to existing group
+8. Group connection in Web3Auth now includes both Google and email/password
+9. User can now login with either:
     - Google OAuth
     - Email + password
-11. Both derive same ECDSA pubkey (because same subjectId)
-12. Both can decrypt same vault (same root key, same IPNS entry)
-13. Account seamlessly linked, vault access unchanged
+10. Both derive same ECDSA pubkey (Web3Auth group connections ensure same key)
+11. Both can decrypt same vault (same root key, same IPNS entry)
+12. Account seamlessly linked via Web3Auth, vault access unchanged
+
+Note: Account aggregation is handled entirely by Web3Auth group connections.
+CipherBox backend only stores the user's public key and validates identity
+via Web3Auth ID tokens or SIWE signatures.
 ```
 
 ---
@@ -230,177 +242,281 @@ Core pillars:
 
 ### 3.1 Authentication Module
 
-**Responsibility:** Support 4 auth methods, derive deterministic ECDSA keypairs, manage sessions.
+**Responsibility:** Support 4 auth methods via Web3Auth, derive deterministic ECDSA keypairs, authenticate with CipherBox backend.
 
 #### 3.1.1 Multi-Method Authentication
 
-**Supported Methods (v1):**
+**Authentication Architecture:**
+
+CipherBox uses a two-phase authentication approach:
+1. **Phase 1 (Web3Auth):** User authenticates with Web3Auth to derive ECDSA keypair
+2. **Phase 2 (CipherBox Backend):** User authenticates with CipherBox to obtain access/refresh tokens
+
+**Phase 1: Web3Auth Authentication & Key Derivation**
+
+**Supported Methods (v1) via Web3Auth:**
 1. **Email + Password**
-   - User enters email + password
-   - Server verifies against Argon2 hash (password not stored plaintext)
-   - Backend issues JWT with subjectId = userId + email
+   - User enters email + password on Web3Auth login screen
+   - Web3Auth verifies credentials
+   - Key derivation proceeds
 
-2. **Passkeys (WebAuthn/FIDO2)**
-   - User registers passkey (biometric or PIN on device)
-   - WebAuthn challenge signed by device
-   - Server verifies challenge signature against stored passkey public key
-   - Backend issues JWT with subjectId = userId
+2. **OAuth 2.0 (Google, Apple, GitHub)**
+   - Standard OAuth flow via Web3Auth
+   - User consents to share profile with Web3Auth
+   - Key derivation proceeds
 
-3. **OAuth 2.0 Aggregation (Google, Apple, GitHub)**
-   - Standard OAuth flow via Web3Auth or direct integration
-   - User consents to share profile
-   - CipherBox backend receives OAuth token
-   - Backend issues JWT with subjectId = userId
+3. **Magic Link (Passwordless Email)**
+   - User enters email on Web3Auth login screen
+   - Web3Auth sends magic link
+   - User clicks link, key derivation proceeds
 
-4. **Magic Link (Passwordless Email)**
-   - User enters email
-   - System sends link with unique token
-   - User clicks link (token in URL)
-   - Backend validates token, issues JWT with subjectId = userId
+4. **External Wallet (Trustless Auth)**
+   - User connects existing wallet (MetaMask, WalletConnect, etc.)
+   - User signs authentication message with wallet private key
+   - Web3Auth verifies signature and proceeds with key derivation
+   - Fully trustless: no credentials stored, identity proven via signature
 
-**Key Property:** All auth methods issue JWT with same **subjectId** for linked accounts.
+**Passkeys as MFA (Future):**
+Web3Auth supports passkeys as a multi-factor authentication (MFA) method. In future versions, users will be able to add passkeys as an additional security layer on top of their primary authentication method.
 
-#### 3.1.2 Key Derivation via Torus Network
+**Web3Auth Group Connections:**
+Multiple auth methods can be linked to the same identity using Web3Auth's group connections feature. This is configured in the Web3Auth dashboard and ensures:
+- Same ECDSA keypair derived regardless of which linked method is used
+- Account linking handled entirely by Web3Auth (no CipherBox backend logic needed)
+- User can log in with Google, then later with email, and access same vault
+
+Configuration example:
+```typescript
+const modalConfig = {
+  connectors: {
+    [WALLET_CONNECTORS.AUTH]: {
+      loginMethods: {
+        google: {
+          authConnectionId: 'w3a-google',
+          groupedAuthConnectionId: 'cipherbox-aggregate',  // Group ID
+        },
+        email_passwordless: {
+          authConnectionId: 'w3a-email-passwordless',
+          groupedAuthConnectionId: 'cipherbox-aggregate',  // Same group
+        },
+      },
+    },
+    [WALLET_CONNECTORS.WALLET_CONNECT_V2]: {
+      // External wallet connections can also be grouped
+    },
+  },
+};
+```
+
+**Phase 2: CipherBox Backend Authentication**
+
+After Web3Auth key derivation, client authenticates with CipherBox backend using one of two methods:
+
+**Option A: Web3Auth ID Token (JWT)**
+- Client obtains ID token from Web3Auth via `getIdentityToken()`
+- Client sends ID token to CipherBox backend
+- Backend verifies token via Web3Auth JWKS endpoint (`https://api-auth.web3auth.io/jwks`)
+- Backend extracts wallet public key from token claims
+- Backend issues CipherBox access token and refresh token
+
+**Option B: SIWE-like Signature Flow**
+- Client requests nonce from CipherBox backend: `GET /auth/nonce`
+- Client constructs message: `{pubkey, nonce, timestamp, domain}`
+- Client signs message with ECDSA private key (derived from Web3Auth)
+- Client sends signature + message to backend: `POST /auth/login`
+- Backend verifies signature matches claimed pubkey
+- Backend verifies nonce is valid and unused
+- Backend issues CipherBox access token and refresh token
+
+**Key Property:** Same ECDSA keypair is derived regardless of auth method (via Web3Auth group connections).
+
+#### 3.1.2 Key Derivation via Web3Auth Network
 
 **Process:**
 ```
-1. Client receives JWT from CipherBox auth backend
-   JWT contains: { subjectId, email (if applicable), provider, iat, exp, ... }
+1. User initiates login on CipherBox client
+   Client redirects to Web3Auth customized login screen
 
-2. Client presents JWT to Torus Network (docs.web3auth.io)
-   - Torus is external service (distributed verifier nodes)
-   - Client sends: POST https://torus-nodes/api/v2/verify { JWT }
+2. User selects auth method and completes authentication
+   - OAuth providers: User completes OAuth flow, token sent to Web3Auth
+   - Email/Password: Web3Auth verifies credentials
+   - External Wallet: User signs message with wallet, signature verified
+   - Magic Link: User clicks email link
 
-3. Torus verifiers independently verify JWT signature
-   - Each verifier verifies JWT using CipherBox backend's public key
-   - All verifiers agree JWT is valid
+3. Web3Auth backend receives and verifies OAuth token / credentials
+   - Each Web3Auth node independently verifies the authentication
+   - Uses configured group connection to determine key derivation
 
-4. Torus verifiers share ECDSA private key material
-   - Each verifier sends client its share of private key
-   - Uses Shamir Secret Sharing (or evolved mechanism)
-   - Requires honest majority of verifiers
+4. Web3Auth nodes share ECDSA private key material
+   - Each node retrieves its share of the user key
+   - Uses Shamir Secret Sharing (threshold cryptography)
+   - Requires honest majority of nodes
 
 5. Client reconstructs ECDSA private key in memory
-   - Combines shares from multiple Torus nodes
-   - Private key never exists on server or transmitted unencrypted
+   - Key parts sent to client and combined
+   - Private key never exists on Web3Auth servers in complete form
    - Private key held only in client RAM for this session
 
 6. Client derives public key from private key
    - ECDSA pubkey = EC_point(private_key)
-   - Publicly known from private key
+   - Curve: secp256k1
 ```
 
-**Determinism Guarantee:**
-- Same subjectId → Torus derives same ECDSA private key
-- Torus derivation is deterministic (verifiable by user)
-- User can regenerate same keypair by re-authenticating with same method
-- Cross-method linking: Same subjectId (from backend) → Same pubkey
+**Group Connections & Determinism Guarantee:**
+- Web3Auth group connections ensure same keypair across linked auth methods
+- All auth methods in the same group derive identical ECDSA keypair
+- User can log in with Google, later with email, and get same key
+- Account linking is configured in Web3Auth dashboard (not CipherBox backend)
+- Determinism verified: same user + any grouped auth method → same keypair
+
+**Web3Auth ID Token:**
+After key derivation, client can obtain an ID token from Web3Auth:
+```typescript
+const { getIdentityToken } = useIdentityToken();
+const idToken = await getIdentityToken();
+// Token contains: iss, aud, sub, wallets[{public_key, curve, type}], iat, exp
+```
+
+This ID token can be used to authenticate with the CipherBox backend.
 
 **Acceptance Criteria:**
-- [ ] Auth latency <3s (all methods combined with Torus derivation)
-- [ ] No private keys transmitted over network
+- [ ] Auth latency <3s (Web3Auth login + key derivation)
+- [ ] No private keys transmitted over network in complete form
 - [ ] No private keys stored on server
 - [ ] No private keys written to logs
-- [ ] Determinism verified (same subjectId → same keypair)
+- [ ] Determinism verified (group connections → same keypair across methods)
 
 #### 3.1.3 Session Management
 
-**JWT Token:**
-- **Issued:** After auth credential verified, before Torus derivation
-- **Contains:** subjectId, email (if available), providers (linked auth methods), iat, exp
-- **Expiration:** 24 hours
-- **Encoding:** Standard JWT (RS256 or HS256 signed by backend)
-- **Storage:** In client memory (not localStorage, not disk)
+**Token Architecture:**
+
+CipherBox uses two separate token systems:
+
+1. **Web3Auth ID Token** (for CipherBox backend authentication)
+   - **Issued:** By Web3Auth after successful login
+   - **Contains:** iss, aud, sub, wallets (with public keys), iat, exp
+   - **Purpose:** Authenticate user identity to CipherBox backend
+   - **Verification:** Via Web3Auth JWKS endpoint
+
+2. **CipherBox Access/Refresh Tokens** (for API access)
+   - **Access Token:**
+     - **Issued:** After CipherBox backend validates identity (JWT or SIWE)
+     - **Contains:** userId, pubkey, iat, exp
+     - **Expiration:** 15 minutes (short-lived for security)
+     - **Storage:** In client memory only
+   - **Refresh Token:**
+     - **Issued:** Alongside access token
+     - **Expiration:** 7 days
+     - **Storage:** Secure HTTP-only cookie or encrypted local storage
+     - **Purpose:** Obtain new access tokens without re-authentication
 
 **Session Lifecycle:**
 ```
-1. User authenticates (email/pass, passkey, OAuth, or magic link)
-2. Backend issues JWT
-3. Client receives JWT
-4. Client presents JWT to Torus
-5. Torus derives keypair
-6. Client fetches GET /my-vault (uses JWT as Authorization header)
-7. Server validates JWT (checks expiration, signature)
-8. Server returns vault data
-9. Client decrypts root key with derived ECDSA private key
-10. Session active: client has root key in memory, ready for file ops
-11. On logout or 24h expiration: 
-    - Session data cleared
-    - Root key discarded from memory
-    - Must re-authenticate to continue
+1. User initiates login, redirected to Web3Auth
+2. User completes auth (OAuth, email/pass, magic link, or external wallet)
+3. Web3Auth derives ECDSA keypair, reconstructed in client memory
+4. Client authenticates with CipherBox backend:
+   Option A: POST /auth/login with Web3Auth ID token
+   Option B: GET /auth/nonce, then POST /auth/login with SIWE signature
+5. CipherBox backend validates identity
+6. Backend issues access token (15min) + refresh token (7 days)
+7. Client fetches GET /my-vault (uses access token as Authorization header)
+8. Server validates access token (checks expiration, signature)
+9. Server returns vault data
+10. Client decrypts root key with derived ECDSA private key
+11. Session active: client has root key in memory, ready for file ops
+12. On access token expiration:
+    - Client uses refresh token to obtain new access token
+    - No re-authentication with Web3Auth needed
+13. On logout or refresh token expiration:
+    - All tokens cleared
+    - Root key and ECDSA private key discarded from memory
+    - Must re-authenticate via Web3Auth to continue
 ```
 
 **Logout Behavior:**
-- Clear JWT from memory
+- Clear CipherBox access and refresh tokens
 - Clear root folder key from memory
 - Clear ECDSA private key from memory
 - Clear any cached metadata
+- Invalidate refresh token on server (if stored)
 - Redirect to login page
 
 **Acceptance Criteria:**
-- [ ] JWT expiration enforced (24h)
-- [ ] No tokens persisted to disk/localStorage
+- [ ] Access token expiration enforced (15 min)
+- [ ] Refresh token expiration enforced (7 days)
+- [ ] No access tokens persisted to disk/localStorage
 - [ ] Logout clears all sensitive data
+- [ ] Refresh token rotation implemented (new refresh token on each use)
 - [ ] Session validation on every protected API call
 
-#### 3.1.4 Account Linking
+#### 3.1.4 Account Linking (via Web3Auth Group Connections)
 
-**Manual Linking (User Initiates):**
+**Architecture Change:**
+
+Account linking is now handled entirely by Web3Auth's group connections feature. CipherBox backend no longer maintains auth provider mappings or handles account aggregation logic.
+
+**How Group Connections Work:**
 
 ```
-Precondition: User has existing account (e.g., with Google)
+1. Developer configures group connections in Web3Auth dashboard
+2. Multiple auth methods (Google, email, external wallet) are added to a "group"
+3. All auth methods in the same group derive the same ECDSA keypair
+4. Web3Auth handles the identity aggregation automatically
+```
 
-1. User logs in with Google
-2. User navigates to Settings → Linked Accounts
+**Manual Linking (User Initiates via Web3Auth):**
+
+```
+Precondition: User has existing account (e.g., signed up with Google)
+
+1. User logs in with Google via Web3Auth
+2. User navigates to Settings → Linked Accounts in CipherBox
 3. User clicks "Add Email + Password"
-4. User enters email + desired password
-5. System sends verification email to that address
-6. User clicks verification link in email
-7. User confirms they want to link email to existing account
-8. Backend:
-   - Verifies email ownership (token validation)
-   - Hashes password with Argon2
-   - Adds to auth_providers table: (userId, "email", email_hash)
-   - Same userId, same subjectId → same vault access
-9. User can now log in with either Google or email/password
-10. Both methods → same ECDSA pubkey → same vault
+4. CipherBox redirects to Web3Auth account linking flow
+5. User enters email + desired password in Web3Auth UI
+6. Web3Auth verifies email ownership (sends verification email)
+7. User clicks verification link
+8. Web3Auth links email credential to existing group identity
+9. User can now log in with either:
+   - Google OAuth → same keypair
+   - Email + password → same keypair
+10. Both methods → same ECDSA pubkey (Web3Auth ensures this)
+11. Both methods → same vault access
+
+Note: CipherBox backend only stores the user's public key.
+No auth provider mapping needed on CipherBox side.
 ```
 
-**Auto-Detection (Backend Prevents Accidental Conflicts):**
+**Automatic Aggregation:**
 
 ```
 Scenario: User signs up with Google as alice@gmail.com
 Later: User tries to sign in with email alice@gmail.com + password
 
-Backend logic:
-1. Email+password login attempts
-2. Backend checks auth_providers: is alice@gmail.com already linked to a user?
-3. If YES: User already has account, use existing subjectId, issue JWT for login
-4. If NO: User is new, create account, issue JWT
+Web3Auth logic (configured via group connections):
+1. User attempts email+password login
+2. Web3Auth recognizes email is part of an existing group
+3. Web3Auth prompts user to link accounts or creates linked identity
+4. Same keypair derived regardless of auth method used
 
-This prevents duplicate accounts from same email across different auth methods.
+CipherBox backend behavior:
+1. Receives Web3Auth ID token or SIWE signature
+2. Extracts public key from token/signature
+3. Looks up user by public key (not by email or provider)
+4. Returns vault data for that public key
+
+No duplicate accounts possible - identity is tied to keypair, not email.
 ```
 
-**Blocked Linking (Prevents Conflicts):**
+**Benefits of Web3Auth Group Connections:**
 
 ```
-Scenario: User A has account with Google (alice@gmail.com)
-Later: User B tries to sign up with email bob@gmail.com
-
-Backend logic:
-1. Bob signs up with email bob@gmail.com
-2. Bob adds password
-3. Backend stores: (bobUserId, "email", bob_hashed_password)
-4. Bob's vault linked to bobUserId
-
-Later: Bob tries to add Google OAuth to his account
-1. Bob clicks "Link Google"
-2. Google OAuth returns bob@gmail.com
-3. Backend checks auth_providers: is bob@gmail.com already used?
-4. If YES for different user: Deny linking (email already used)
-5. If NO or same user: Allow linking
-
-This prevents email conflicts across accounts.
+- CipherBox backend is simpler (no auth provider mapping)
+- Account linking UX handled by Web3Auth (battle-tested)
+- Conflict resolution handled by Web3Auth
+- Single source of truth for identity (the ECDSA keypair)
+- Users identified by public key, not email
 ```
 
 ---
@@ -793,32 +909,44 @@ async function fetchFileTree(ipnsName: string, folderKey: Uint8Array): Promise<F
 #### 3.3.1 Key Hierarchy
 
 ```
-User Authentication (Email/Pass, Passkey, OAuth, or Magic Link)
+User Authentication (via Web3Auth - Email/Pass, OAuth, Magic Link, or External Wallet)
     ↓
-CipherBox Auth Backend verifies credentials
+Web3Auth verifies credentials and group connection
     ↓
-Issues JWT with subjectId = userId
-    ↓
-Client presents JWT to Torus Network
-    ↓
-Torus derives ECDSA Keypair (secp256k1)
+Web3Auth nodes derive ECDSA Keypair (secp256k1)
     │
     ├─ ECDSA Private Key (secp256k1)
     │  ├─ Held ONLY in client memory
-    │  ├─ Never transmitted
+    │  ├─ Never transmitted in complete form
     │  ├─ Never persisted to disk
     │  ├─ Used for:
     │  │  ├─ ECIES decryption (of folder/file keys)
-    │  │  └─ IPNS entry signing
+    │  │  ├─ IPNS entry signing
+    │  │  └─ SIWE signature (for CipherBox backend auth)
     │  └─ Discarded on logout
     │
     └─ ECDSA Public Key (secp256k1)
-       ├─ Stored in Vaults table on server
-       ├─ Used by server to:
-       │  ├─ Validate IPNS signatures (optional)
+       ├─ Included in Web3Auth ID token (wallets claim)
+       ├─ Stored in Vaults table on CipherBox server
+       ├─ Used by CipherBox backend to:
+       │  ├─ Identify user (pubkey is primary identifier)
+       │  ├─ Validate SIWE signatures
        │  └─ Display in user settings
        └─ Used by client to:
           └─ Encrypt all data keys (ECIES)
+
+CipherBox Backend Authentication:
+    ↓
+Client authenticates via JWT (Web3Auth ID token) or SIWE signature
+    ↓
+CipherBox Backend issues Access Token + Refresh Token
+    ├─ Access Token (15 min expiry)
+    │  ├─ Contains: userId, pubkey, iat, exp
+    │  ├─ Used for all API calls
+    │  └─ Stored in client memory only
+    └─ Refresh Token (7 day expiry)
+       ├─ Used to obtain new access tokens
+       └─ Stored securely (HTTP-only cookie or encrypted storage)
 
 Root Folder Key (AES-256)
     ├─ Generated on vault initialization
@@ -888,31 +1016,31 @@ File Keys (AES-256, one per file)
 ```
 - Display title "CipherBox"
 - Tagline: "Privacy-first encrypted cloud storage"
-- Auth method buttons (4 options):
-  [ Sign up with Google ]
-  [ Sign up with Apple  ]
-  [ Sign up with GitHub ]
-  [ Sign up with Email  ]
-  [ Register Passkey    ]
-  [ Sign in with Passkey]
+- [ Continue with Web3Auth ] button (primary action)
+
+On click:
+- User redirected to Web3Auth customized login modal
+- Web3Auth handles auth method selection:
+  [ Sign in with Google ]
+  [ Sign in with Apple  ]
+  [ Sign in with GitHub ]
+  [ Sign in with Email  ]
+  [ Connect Wallet      ]
   [ Magic Link          ]
-- Existing user? "Sign in" link
 
-For Email/Password:
-- Email input field
-- Password input field (toggle show/hide)
-- "Sign up" or "Sign in" button
-- Password strength indicator (on signup)
+- Web3Auth handles:
+  - Credential verification
+  - Key derivation
+  - Account linking (via group connections)
 
-For Passkey:
-- "Register Passkey" button (on signup)
-- Browser prompts for biometric/PIN
-- "Sign in with Passkey" button (on signin)
-- Browser prompts for biometric/PIN
+- On successful Web3Auth login:
+  - Client has ECDSA keypair in memory
+  - Client authenticates with CipherBox backend
+  - User redirected to /vault
 
-For OAuth & Magic Link:
-- Click button → browser redirect → OAuth provider/email
-- On return, auto-logged in
+Alternatively (embedded Web3Auth modal):
+- Web3Auth modal can be embedded directly in page
+- Same flow, but no redirect to separate domain
 ```
 
 **Vault Page (`/vault`)**
@@ -958,37 +1086,35 @@ Sync Status:
 Sections:
 
 1. Linked Accounts
-   - Display current auth method (e.g., "Signed in via Google")
-   - List all linked providers:
-     * [ Unlink ] Google
-     * [ Unlink ] Email + Password
-   - "Add Email + Password" button (if not added)
-   - "Add Passkey" button
+   - Display current auth methods (managed by Web3Auth)
+   - List all linked providers from Web3Auth group:
+     * Google (alice@gmail.com)
+     * Email + Password (alice@gmail.com)
+   - "Link Another Account" button
+     - Opens Web3Auth account linking flow
+     - User can add Google, email/password, external wallet, etc.
+     - Web3Auth handles linking to existing group identity
+   - Note: Unlinking is handled via Web3Auth dashboard (advanced users)
 
-2. Passkeys
-   - List all registered passkeys:
-     * MacBook Pro (Touch ID) - Registered Jan 14, 2026
-     * [ Remove ]
-   - "Register New Passkey" button
+2. Security
+   - Display public key (for reference, verification)
+   - Display user ID (for reference)
+   - Active sessions (if multi-session tracking implemented)
 
-3. Account & Security
-   - Display public key (for reference, future use)
-   - Display userId (for reference)
-
-4. Data & Privacy
+3. Data & Privacy
    - [ Export Vault ] button
      - Triggers download of vault.json (CIDs + encrypted root key)
      - Includes recovery instructions
 
-5. Danger Zone
+4. Danger Zone
    - [ Delete Account ] button
      - Confirm dialog: "Permanently delete your account and vault?"
      - Lists consequences (immediate deletion)
      - [ Cancel ] [ Delete ]
 
-6. Session
+5. Session
    - [ Logout ] button
-   - "Logout all other devices" (future, if multi-session supported)
+   - Session info: "Signed in via Google" (current auth method)
 ```
 
 **Export Modal**
@@ -1024,8 +1150,8 @@ Buttons:
 - **State Management:** React Context + Hooks (or Redux if complex)
 - **Encryption:** Web Crypto API
 - **IPFS Client:** kubo-rpc-client (JSON-RPC to IPFS gateway)
-- **WebAuthn:** SimpleWebAuthn library
-- **OAuth:** Web3Auth SDK or direct OAuth libraries
+- **Web3Auth:** @web3auth/modal for authentication and key derivation
+- **SIWE (optional):** ethers.js or viem for signature-based auth
 - **HTTP Client:** Axios or Fetch API
 
 **Acceptance Criteria:**
@@ -1097,7 +1223,16 @@ Desktop Sync:
 ```
 1. App launches
 2. If no session: show login window
-3. User chooses auth method
+3. App opens Web3Auth login flow (embedded browser or system browser)
+4. User completes authentication via Web3Auth
+5. Web3Auth derives ECDSA keypair, reconstructed in memory
+6. App authenticates with CipherBox backend (JWT or SIWE)
+7. Backend issues access token + refresh token
+8. Refresh token stored securely (OS keychain)
+9. Access token stored in memory
+10. FUSE mount activates
+11. App runs in system tray
+```
 4. App follows same auth flow as web (Torus derivation)
 5. Session stored securely (OS keychain)
 6. FUSE mount activates
@@ -1290,22 +1425,24 @@ Desktop Sync:
 │           │                     │                             │
 └───────────┼─────────────────────┼─────────────────────────────┘
             │                     │
-            └─────────────────────┘
+            └──────────┬──────────┘
                       │
            ┌──────────┴──────────┐
            │                     │
            ▼                     ▼
     ┌──────────────┐      ┌─────────────────┐
-    │  Torus       │      │  CipherBox      │
-    │  Network     │      │  Auth Backend   │
-    │  (External)  │      │  (Node.js +     │
-    │              │      │   NestJS)       │
-    │ Key Share    │      │                 │
-    │ Derivation   │      │ - JWT issuance  │
-    └──────────────┘      │ - Credential    │
-                          │   verification  │
-                          │ - IPNS proxy    │
-                          └────────┬────────┘
+    │  Web3Auth      │      │  CipherBox      │
+    │  Network       │      │  Backend        │
+    │  (External)    │      │  (Node.js +     │
+    │                │      │   NestJS)       │
+    │ - Auth UI      │      │                 │
+    │ - OAuth        │      │ - JWT/SIWE      │
+    │ - Key Share    │      │   validation    │
+    │   Derivation   │      │ - Access/Refresh│
+    │ - Group        │      │   tokens        │
+    │   Connections  │      │ - IPNS proxy    │
+    │ - ID Token     │      │ - Vault mgmt    │
+    └──────────────┘      └────────┬────────┘
                                    │
                     ┌──────────────┼──────────────┐
                     │              │              │
@@ -1315,11 +1452,23 @@ Desktop Sync:
             │  Database      │  │ Infura   │  │ Network │
             │                │  │ (Pinning │  │ (P2P    │
             │ - Users        │  │ Service) │  │ Storage)│
-            │ - Vaults       │  │          │  │         │
-            │ - Auth         │  │ Pins     │  │ Immut.  │
-            │   Providers    │  │ encrypted│  │ Content │
-            │ - Audit Trail  │  │ data     │  │         │
+            │   (by pubkey)  │  │          │  │         │
+            │ - Vaults       │  │ Pins     │  │ Immut.  │
+            │ - Refresh      │  │ encrypted│  │ Content │
+            │   Tokens       │  │ data     │  │         │
+            │ - Auth Nonces  │  │          │  │         │
+            │ - Audit Trail  │  │          │  │         │
             └────────────────┘  └──────────┘  └─────────┘
+```
+
+**Authentication Flow:**
+```
+1. Client → Web3Auth: User authenticates (OAuth, email, external wallet, etc.)
+2. Web3Auth: Verifies credentials, derives ECDSA keypair via group connections
+3. Client: Receives keypair + Web3Auth ID token
+4. Client → CipherBox Backend: Authenticates via JWT or SIWE signature
+5. CipherBox Backend: Validates identity, issues access/refresh tokens
+6. Client → CipherBox Backend: Uses access token for all API calls
 ```
 
 ### 5.2 Tech Stack
@@ -1329,14 +1478,15 @@ Desktop Sync:
 | **Frontend** | React 18 + TypeScript | Modern, popular, good for encryption UI |
 | **Web Crypto** | Web Crypto API | Native browser, no external crypto dependency |
 | **IPFS Client (Web)** | kubo-rpc-client | JSON-RPC to IPFS gateway, simple |
-| **WebAuthn** | SimpleWebAuthn | Standards-based, FIDO2 compliance |
-| **OAuth** | Web3Auth or direct | Torus integration for key derivation |
+| **Web3Auth SDK** | @web3auth/modal | Authentication, key derivation, group connections |
+| **SIWE (optional)** | ethers.js or viem | SIWE-style signature generation |
 | **Desktop (macOS)** | Tauri or Electron + Swift | Light footprint, native FUSE support |
 | **Desktop (Linux)** | Tauri or Electron + Rust | FUSE support, good performance |
 | **Desktop (Windows)** | Electron or C# | WinFSP for FUSE equivalent |
 | **Backend Server** | Node.js + NestJS + TypeScript | Type-safe, scalable, same language as frontend |
+| **JWT Verification** | jose | Verify Web3Auth ID tokens via JWKS |
 | **Database** | PostgreSQL | ACID, structured data, audit trail |
-| **Cache** | Redis (optional) | Fast session lookups, future rate limiting |
+| **Cache** | Redis (optional) | Fast token lookups, nonce storage |
 | **IPFS Backend** | Pinata API or go-ipfs | Pinata for MVP simplicity, go-ipfs for control |
 | **Deployment** | Docker + Kubernetes (future) | Containerization, horizontal scaling |
 
@@ -1347,54 +1497,64 @@ Desktop Sync:
 #### Authentication Endpoints
 
 ```
-POST /auth/register
-  Body: { email, password } OR {} (for OAuth/Passkey/Magic Link redirects)
-  Response: { jwt, userId, pubkey }
+GET /auth/nonce
+  Response: { nonce, expiresAt }
+  Purpose: Get a nonce for SIWE-style signature authentication
 
 POST /auth/login
-  Body: { email, password } OR { token } (OAuth/Magic Link)
-  Response: { jwt, userId, pubkey }
+  Body (Option A - Web3Auth JWT): { idToken, appPubKey }
+  Body (Option B - SIWE): { message, signature, pubkey }
+  Response: { accessToken, refreshToken, userId, pubkey }
+  
+  JWT Verification:
+    - Verify token via Web3Auth JWKS (https://api-auth.web3auth.io/jwks)
+    - Check iss = "https://api-auth.web3auth.io"
+    - Check aud = CipherBox project client ID
+    - Extract pubkey from wallets claim
+    - Find or create user by pubkey
+  
+  SIWE Verification:
+    - Verify nonce is valid and unused
+    - Verify signature matches claimed pubkey
+    - Verify message format and timestamp
+    - Find or create user by pubkey
 
-GET /auth/passkey-challenge
-  Response: { challenge, salt }
-
-POST /auth/register-passkey
-  Body: { displayName, attestationObject, clientDataJSON }
-  Response: { credentialId, status }
-
-POST /auth/login-passkey
-  Body: { credentialId, assertionObject, clientDataJSON }
-  Response: { jwt, userId, pubkey }
-
-POST /auth/link-provider
-  Authorization: Bearer JWT
-  Body: { provider, token, email (if verifying) }
-  Response: { status: "linked" }
+POST /auth/refresh
+  Body: { refreshToken }
+  Response: { accessToken, refreshToken }
+  Purpose: Exchange refresh token for new access + refresh token pair
 
 POST /auth/logout
-  Authorization: Bearer JWT
+  Authorization: Bearer accessToken
+  Body: { refreshToken }
   Response: { status: "logged_out" }
+  Purpose: Invalidate refresh token on server
+
+GET /auth/linked-accounts
+  Authorization: Bearer accessToken
+  Response: { providers: ["google", "email", ...] }
+  Note: Retrieved from Web3Auth, not CipherBox database
 ```
 
 #### Vault Management Endpoints
 
 ```
 GET /my-vault
-  Authorization: Bearer JWT
+  Authorization: Bearer accessToken
   Response: { vaultId, ownerPublicKey, rootFolderEncryptedEncryptionKey, initializedAt }
 
 POST /my-vault/initialize
-  Authorization: Bearer JWT
+  Authorization: Bearer accessToken
   Body: { publicKey, encryptedRootFolderKey }
   Response: { vaultId, status: "initialized" }
 
 POST /vault/upload
-  Authorization: Bearer JWT
+  Authorization: Bearer accessToken
   Body: FormData { encryptedFile: File, iv: string }
   Response: { cid, size, uploadedAt }
 
 POST /vault/publish-ipns
-  Authorization: Bearer JWT
+  Authorization: Bearer accessToken
   Body: { ipnsName, signedEntry: JSON }
   Response: { success, cid }
 ```
@@ -1403,24 +1563,16 @@ POST /vault/publish-ipns
 
 ```
 GET /user/profile
-  Authorization: Bearer JWT
-  Response: { userId, email, pubkey, linkedProviders: [] }
-
-PUT /user/profile
-  Authorization: Bearer JWT
-  Body: { displayName? }
-  Response: { updated: true }
-
-DELETE /user/passkey/:credentialId
-  Authorization: Bearer JWT
-  Response: { deleted: true }
+  Authorization: Bearer accessToken
+  Response: { userId, pubkey, linkedProviders: [] }
+  Note: linkedProviders retrieved from Web3Auth group connection info
 
 GET /user/export-vault
-  Authorization: Bearer JWT
+  Authorization: Bearer accessToken
   Response: { vaultExport: { rootIpnsName, rootKeyEncrypted, allCids, instructions } }
 
 DELETE /user/account
-  Authorization: Bearer JWT
+  Authorization: Bearer accessToken
   Body: { confirmDelete: true }
   Response: { deleted: true }
 ```
@@ -1428,44 +1580,47 @@ DELETE /user/account
 ### 5.4 Database Schema
 
 ```sql
--- Users table
+-- Users table (simplified - identified by public key)
 CREATE TABLE users (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  email VARCHAR(255),
-  password_hash VARCHAR(255),  -- Argon2 hash (only if email/password enabled)
+  pubkey BYTEA UNIQUE NOT NULL,  -- ECDSA public key (primary identifier)
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- Authentication providers (OAuth, Passkey, Email, Magic Link)
-CREATE TABLE auth_providers (
+-- Note: auth_providers table is NO LONGER NEEDED
+-- Authentication and account linking is handled entirely by Web3Auth
+-- Users are identified by their ECDSA public key, not email or provider IDs
+
+-- Note: passkeys table is NO LONGER NEEDED
+-- Passkey MFA will be handled by Web3Auth in future versions
+
+-- Refresh tokens (for session management)
+CREATE TABLE refresh_tokens (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  provider VARCHAR(50),  -- "google", "apple", "github", "email", "passkey", "magic_link"
-  provider_id VARCHAR(255),  -- External ID from provider
-  provider_metadata JSONB,  -- Extra data (email for email provider, etc.)
-  linked_at TIMESTAMP DEFAULT NOW(),
-  UNIQUE(user_id, provider, provider_id)
+  token_hash BYTEA NOT NULL,  -- SHA256 hash of refresh token
+  expires_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  revoked_at TIMESTAMP,  -- Set when token is revoked
+  UNIQUE(token_hash)
 );
 
--- Passkey credentials (WebAuthn)
-CREATE TABLE passkeys (
+-- Auth nonces (for SIWE-style authentication)
+CREATE TABLE auth_nonces (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  credential_id BYTEA UNIQUE NOT NULL,
-  public_key BYTEA NOT NULL,
-  sign_count INTEGER DEFAULT 0,
-  device_name VARCHAR(255),
-  created_at TIMESTAMP DEFAULT NOW(),
-  last_used TIMESTAMP
+  nonce VARCHAR(64) UNIQUE NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  used_at TIMESTAMP,  -- Set when nonce is consumed
+  created_at TIMESTAMP DEFAULT NOW()
 );
 
 -- User vaults
 CREATE TABLE vaults (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   owner_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
-  owner_pubkey BYTEA NOT NULL,  -- ECDSA public key
-  root_folder_encrypted_key BYTEA NOT NULL,  -- ECIES(rootKey, pubkey)
+  owner_pubkey BYTEA NOT NULL,  -- ECDSA public key (denormalized for quick lookup)
+  root_folder_owner_encrypted_key BYTEA NOT NULL,  -- ECIES(rootKey, pubkey)
   root_ipns_name VARCHAR(255),
   created_at TIMESTAMP DEFAULT NOW(),
   initialized_at TIMESTAMP,
@@ -1507,286 +1662,385 @@ CREATE TABLE pinned_cids (
 
 #### Complete Key Derivation Formula
 
-**Input:** User authentication (credentials + auth method)
-**Output:** ECDSA keypair (secp256k1) guaranteed deterministic across all auth methods
+**Input:** User authentication via Web3Auth (any supported method)
+**Output:** ECDSA keypair (secp256k1) guaranteed deterministic across all linked auth methods
 
-**Step 1: Credential Verification (Backend)**
-
-```
-POST /auth/[register|login]
-  Credential: email + password, WebAuthn challenge, OAuth token, or magic link token
-  
-Backend:
-  1. Verify credential against stored data
-  2. Determine userId (new user for signup, existing for login/linking)
-  3. Generate subjectId = hash(userId + auth_method)  (consistent across all methods for same user)
-  4. Create JWT payload:
-     {
-       "subjectId": "0x...",
-       "userId": "uuid",
-       "email": "user@example.com",
-       "providers": ["google", "email"],
-       "iat": current_timestamp,
-       "exp": current_timestamp + 86400  // 24h
-     }
-  5. Sign JWT with backend private key: JWT = RS256_sign(payload, backend_privkey)
-  6. Return JWT to client
-```
-
-**Step 2: Torus Key Derivation (Client)**
+**Step 1: Web3Auth Authentication**
 
 ```
-Client receives JWT from backend
+User initiates login on CipherBox client
 
-1. Client presents JWT to Torus Network:
-   POST https://torus.distributed-verifiers.io/api/v2/verify
+1. Client redirects to Web3Auth customized login screen
+2. User selects auth method (Google, email/password, external wallet, magic link)
+3. User completes authentication with selected provider
+4. Web3Auth receives OAuth token or verifies credentials
+5. Web3Auth identifies user's group connection:
+   - Checks if auth method is part of a configured group
+   - Determines group ID (e.g., "cipherbox-aggregate")
+6. Web3Auth nodes derive key shares based on group identity
+7. Key shares sent to client, combined into ECDSA keypair
+8. Web3Auth issues ID token containing:
    {
-     "verifier": "cipherbox-backend",
-     "verifierId": subjectId,
-     "idToken": JWT
+     "iss": "https://api-auth.web3auth.io",
+     "aud": "cipherbox-project-client-id",
+     "sub": "unique-user-identifier",
+     "wallets": [
+       {
+         "type": "web3auth_app_key",
+         "public_key": "0x04abc...",
+         "curve": "secp256k1"
+       }
+     ],
+     "iat": current_timestamp,
+     "exp": current_timestamp + 3600
+   }
+```
+
+**Step 2: CipherBox Backend Authentication**
+
+```
+Client has ECDSA keypair in memory and Web3Auth ID token
+
+Option A - JWT Authentication:
+1. Client obtains ID token from Web3Auth: getIdentityToken()
+2. Client sends to CipherBox backend:
+   POST /auth/login
+   {
+     "idToken": "eyJhbGciOiJFUzI1NiIs...",
+     "appPubKey": "0x04abc..."  // Public key to verify
+   }
+3. Backend verifies ID token:
+   - Fetches JWKS from https://api-auth.web3auth.io/jwks
+   - Verifies JWT signature (ES256)
+   - Checks iss = "https://api-auth.web3auth.io"
+   - Checks aud = CipherBox project client ID
+   - Checks exp > current time
+   - Extracts wallets array, finds web3auth_app_key
+   - Verifies appPubKey matches wallet public_key
+4. Backend finds or creates user by pubkey
+5. Backend issues CipherBox tokens:
+   {
+     "accessToken": "eyJhbGciOiJSUzI1NiIs...",
+     "refreshToken": "abc123...",
+     "userId": "uuid",
+     "pubkey": "0x04abc..."
    }
 
-2. Torus Network:
-   a) Route request to multiple verifier nodes (e.g., 5 nodes)
-   b) Each node independently verifies JWT:
-      - Checks JWT signature (using CipherBox backend's public key)
-      - Verifies JWT expiration
-      - Verifies JWT payload matches expected format
-   c) If >3 nodes verify successfully:
-      - Each node computes its share of ECDSA private key:
-        share_i = ECDSA_PrivateKey_Fragment(subjectId, node_i)
-        (using Shamir Secret Sharing or similar)
-      - Each node sends its share to client (encrypted)
-
-3. Client reconstructs ECDSA private key:
-   - Receives shares from Torus nodes (encrypted with client's ephemeral public key)
-   - Decrypts all shares
-   - Combines shares: ECDSA_privateKey = Combine_Shares(share_1, share_2, share_3)
-   - Derives public key: ECDSA_publicKey = EC_multiply(ECDSA_privateKey, G)
-   - Stores private key in RAM for session duration
+Option B - SIWE-style Signature Authentication:
+1. Client requests nonce:
+   GET /auth/nonce
+   Response: { "nonce": "abc123", "expiresAt": "..." }
+2. Client constructs message:
+   message = {
+     "domain": "cipherbox.io",
+     "pubkey": "0x04abc...",
+     "nonce": "abc123",
+     "timestamp": current_timestamp,
+     "statement": "Sign in to CipherBox"
+   }
+3. Client signs message with ECDSA private key:
+   signature = ECDSA_sign(keccak256(message), privateKey)
+4. Client sends to CipherBox backend:
+   POST /auth/login
+   {
+     "message": message,
+     "signature": "0xdef789...",
+     "pubkey": "0x04abc..."
+   }
+5. Backend verifies:
+   - Nonce exists and not expired/used
+   - Recovers pubkey from signature
+   - Verifies recovered pubkey matches claimed pubkey
+   - Marks nonce as used
+6. Backend finds or creates user by pubkey
+7. Backend issues CipherBox tokens (same as Option A)
 ```
 
-**Determinism Guarantee:**
+**Determinism Guarantee (via Web3Auth Group Connections):**
 
 ```
-Theorem: Same user authentication method → Same ECDSA keypair
+Theorem: Same user with linked auth methods → Same ECDSA keypair
 
 Proof:
-- Same user + same auth method → same userId
-- Same userId → same subjectId (deterministic hash)
-- Same subjectId → Torus derives same ECDSA private key (Torus is deterministic)
-- Same private key → same public key (ECDSA is deterministic)
+- Web3Auth group connections configured in dashboard
+- All auth methods in group "cipherbox-aggregate" linked
+- Group identity determines key derivation input
+- Same group identity → same key shares → same keypair
 
-Therefore: User logs in multiple times with same method → same keypair → can decrypt same vault
+Example:
+- User signs up with Google (email: alice@gmail.com)
+- Google auth in group "cipherbox-aggregate"
+- Web3Auth derives keypair A
 
-Cross-Method Guarantee:
-- User signs up with Google → subjectId_google = hash(userId + "google")
-- User later links email/password
-- Backend maps both credentials to same userId
-- Email login → subjectId_email = hash(userId + "email")  (DIFFERENT!)
+- User later adds email/password (alice@gmail.com)
+- Email auth added to same group "cipherbox-aggregate"
+- Web3Auth links to same identity
 
-Wait, that would give different keys. Issue in design!
+- User logs in with email/password
+- Email auth in group "cipherbox-aggregate"
+- Web3Auth derives keypair A (same!)
 
-Resolution (as specified by user):
-- subjectId should be independent of auth method
-- subjectId = hash(userId) only
-- All auth methods for same user derive from same userId → same subjectId → same keypair
-
-Formula (corrected):
-  subjectId = hash(userId)  // Independent of auth method
-  
-  Then:
-  - Google login → userId_google → subjectId = hash(userId_google) → key_A
-  - Link email → userId_google (same!) → subjectId = hash(userId_google) → key_A
-  ✓ Same keypair across methods
+✓ Same keypair across methods
+✓ Account linking handled by Web3Auth (not CipherBox backend)
+✓ Users identified by pubkey (not email)
 ```
 
 #### Test Vectors
 
-**Test Vector 1: Email Signup + Login Consistency**
+**Test Vector 1: Google Signup + Email Login Consistency**
 
 ```
-Scenario: User signs up with email, then logs in with same email
-
-Signup:
-  Email: alice@example.com
-  Password: correcthorsebatterystaple
-  Backend: hash(alice@example.com) → userId_1
-           hash(userId_1) → subjectId_1
-           JWT = sign({ subjectId_1, userId_1, ... })
-  Torus: subjectId_1 → ECDSA_privkey_1 → ECDSA_pubkey_1
-  Client: privkey_1 ∈ memory
-
-Login (1 day later):
-  Email: alice@example.com
-  Password: correcthorsebatterystaple
-  Backend: hash(alice@example.com) → userId_1 (same!)
-           hash(userId_1) → subjectId_1 (same!)
-           JWT = sign({ subjectId_1, userId_1, ... })
-  Torus: subjectId_1 → ECDSA_privkey_1 (same!) → ECDSA_pubkey_1 (same!)
-  Client: privkey_1 ∈ memory (matches signup)
-
-Result: ✓ Same keypair, can decrypt vault from signup
-```
-
-**Test Vector 2: OAuth + Email Linking**
-
-```
-Scenario: User signs up with Google, then adds email/password
+Scenario: User signs up with Google, later logs in with linked email
 
 Signup with Google:
-  OAuth: Google returns alice@example.com
-  Backend: hash(alice@example.com) → userId_1
-           hash(userId_1) → subjectId_1
-           JWT = sign({ subjectId_1, userId_1, ... })
-  Torus: subjectId_1 → ECDSA_privkey_1 → ECDSA_pubkey_1
-  Client: privkey_1 ∈ memory, creates root_vault_key_1
-
-Add Email:
-  Backend: User confirms alice@example.com ownership
-           Links email to existing userId_1
-           auth_providers: (userId_1, "google", "123456"), (userId_1, "email", "alice@example.com")
-
-Later login with email:
-  Email: alice@example.com
-  Password: mysecurepassword
-  Backend: hash(alice@example.com) → userId_1 (same!)
-           hash(userId_1) → subjectId_1 (same!)
-           JWT = sign({ subjectId_1, userId_1, ... })
-  Torus: subjectId_1 → ECDSA_privkey_1 (same!) → ECDSA_pubkey_1 (same!)
-  Client: privkey_1 ∈ memory
-
-GET /my-vault:
-  Server returns: root_vault_key_1 (encrypted with ECDSA_pubkey_1)
-  Client decrypts: root_vault_key = ECIES_Decrypt(encrypted, privkey_1)
-  ✓ Same root key, access same vault
-
-Result: ✓ Cross-method access works, same vault unlocked
-```
-
-**Test Vector 3: Passkey Signup + OAuth Linking**
-
-```
-Scenario: User registers with Passkey, later adds OAuth
-
-Passkey Signup:
-  Passkey: Device stores credential
-  WebAuthn challenge signed
-  Backend: Passkey verified → userId_2
-           hash(userId_2) → subjectId_2
-           JWT = sign({ subjectId_2, userId_2, ... })
-  Torus: subjectId_2 → ECDSA_privkey_2 → ECDSA_pubkey_2
-  Client: privkey_2 ∈ memory
-
-Add Google OAuth:
-  Backend: Google returns bob@example.com
-           Links Google to existing userId_2
-           auth_providers: (userId_2, "passkey", "cred_id"), (userId_2, "google", "999")
-
-Later login with Google:
-  OAuth: Google returns bob@example.com
-  Backend: hash(bob@example.com) → but wait, Passkey signup used what?
+  OAuth: Google returns alice@gmail.com
+  Web3Auth: Group "cipherbox-aggregate" → derive keypair
+  Result: ECDSA_privkey_1 → ECDSA_pubkey_1
   
-Issue: Need to track email separately or use OAuth-provided email consistently
-Solution: Backend tracks email on signup, uses it consistently
+  Client authenticates with CipherBox:
+  POST /auth/login { idToken: "...", appPubKey: "0xpubkey1" }
+  Backend: Creates user with pubkey_1, returns tokens
+  
+  Client initializes vault:
+  POST /my-vault/initialize { publicKey: "0xpubkey1", encryptedRootFolderKey: "..." }
 
-Corrected:
-  Passkey Signup: Backend generates userId_2, email is optional for passkey
-  Google Add: Backend uses OAuth email (bob@example.com), links to userId_2
-  Google Login: OAuth email → hash → userId_2 → subjectId_2 ✓
+Add email/password (via Web3Auth account linking):
+  User clicks "Add Email" in CipherBox settings
+  Redirected to Web3Auth linking flow
+  Enters alice@gmail.com + password
+  Web3Auth links to existing group identity
 
-Result: ✓ Cross-method with Passkey works
+Login with email (1 day later):
+  User enters alice@gmail.com + password
+  Web3Auth: Same group "cipherbox-aggregate" → derive keypair
+  Result: ECDSA_privkey_1 (same!) → ECDSA_pubkey_1 (same!)
+  
+  Client authenticates with CipherBox:
+  POST /auth/login { idToken: "...", appPubKey: "0xpubkey1" }
+  Backend: Finds existing user by pubkey_1, returns tokens
+  
+  GET /my-vault returns same vault (same pubkey)
+  Client decrypts root key with privkey_1
+
+Result: ✓ Same keypair, same vault access across auth methods
+```
+
+**Test Vector 2: SIWE-style Authentication**
+
+```
+Scenario: User logs in using signature instead of JWT
+
+User completes Web3Auth login:
+  ECDSA_privkey_1, ECDSA_pubkey_1 in memory
+
+Client requests nonce:
+  GET /auth/nonce
+  Response: { nonce: "abc123", expiresAt: "2026-01-15T05:00:00Z" }
+
+Client constructs and signs message:
+  message = {
+    domain: "cipherbox.io",
+    pubkey: "0x04pubkey1...",
+    nonce: "abc123",
+    timestamp: 1705298400,
+    statement: "Sign in to CipherBox"
+  }
+  signature = ECDSA_sign(keccak256(JSON.stringify(message)), privkey_1)
+
+Client sends authentication request:
+  POST /auth/login
+  {
+    message: message,
+    signature: "0xsignature...",
+    pubkey: "0x04pubkey1..."
+  }
+
+Backend verification:
+  1. Find nonce "abc123" in auth_nonces table
+  2. Verify not expired and not used
+  3. Recover pubkey: recovered = ecrecover(keccak256(message), signature)
+  4. Verify: recovered == "0x04pubkey1..."
+  5. Mark nonce as used
+  6. Find or create user by pubkey
+  7. Issue access token + refresh token
+
+Result: ✓ User authenticated without exposing Web3Auth ID token
+```
+
+**Test Vector 3: Token Refresh Flow**
+
+```
+Scenario: Access token expires, client refreshes
+
+T0: User logged in, has access token (expires T0+15min) + refresh token
+T+14min: Access token still valid, API calls succeed
+T+16min: Access token expired
+
+Client detects 401 response:
+  GET /my-vault
+  Response: 401 { error: "Token expired" }
+
+Client refreshes tokens:
+  POST /auth/refresh
+  { refreshToken: "abc123..." }
+  
+  Response: {
+    accessToken: "new_access_token",
+    refreshToken: "new_refresh_token"  // Rotation
+  }
+
+Client retries with new access token:
+  GET /my-vault
+  Authorization: Bearer new_access_token
+  Response: 200 { vaultId: "...", ... }
+
+Result: ✓ Session continues without re-authentication via Web3Auth
 ```
 
 ---
 
 ## 6. Data Flows & Examples
 
-### 6.1 Complete Auth Flow (Email + Password)
+### 6.1 Complete Auth Flow (Web3Auth + CipherBox Backend)
 
 ```
-User navigates to CipherBox.com/auth
+User navigates to CipherBox.com
 
 1. Frontend:
-   User enters email + password
-   User clicks "Sign up" or "Sign in"
+   User clicks "Sign In" or "Sign Up"
+   Frontend redirects to Web3Auth customized login screen
 
-2. Frontend → Backend:
-   POST /auth/register or /auth/login
-   Body: { email: "alice@example.com", password: "secure123" }
+2. Web3Auth Login Screen:
+   User sees options: Google, Email, External Wallet, Magic Link
+   User selects Google and completes OAuth flow
 
-3. Backend:
-   If signup:
-     a) Check if email already in auth_providers
-     b) If exists: Return 409 Conflict "Email already registered"
-     c) If not:
-        - Hash password: password_hash = Argon2("secure123", salt)
-        - Create user: users(id, email, password_hash)
-        - userId = user.id
-        - subjectId = hash(userId)
-   If login:
-     a) Find user by email
-     b) Verify password: Argon2_verify(password, password_hash)
-     c) If invalid: Return 401 Unauthorized
-     d) userId = user.id
-     e) subjectId = hash(userId)
+3. Web3Auth Backend:
+   Receives OAuth token from Google
+   Verifies token with Google
+   Identifies group connection "cipherbox-aggregate"
+   Instructs nodes to derive key shares
 
-4. Backend → Frontend:
-   Response: {
-     jwt: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
-     userId: "uuid-here",
-     pubkey: "0x..." (initial, will be replaced after Torus)
-   }
+4. Web3Auth Nodes (Distributed):
+   Each node derives its share of ECDSA private key
+   Shares sent to client (encrypted)
 
 5. Frontend (Client):
-   Stores JWT in memory (not localStorage!)
-   Presents JWT to Torus Network
+   Receives key shares from Web3Auth nodes
+   Reconstructs ECDSA private key in RAM:
+     privateKey = combineShares(share1, share2, share3, ...)
+   Derives public key:
+     publicKey = EC_multiply(privateKey, G)
+   Obtains Web3Auth ID token:
+     idToken = await getIdentityToken()
 
-6. Frontend → Torus:
-   POST https://torus-nodes/api/v2/verify
+6. Frontend → CipherBox Backend (Authentication):
+   POST /auth/login
    Body: {
-     verifier: "cipherbox-backend",
-     verifierId: subjectId,
-     idToken: JWT
+     idToken: "eyJhbGciOiJFUzI1NiIs...",
+     appPubKey: "0x04abc123..."
    }
 
-7. Torus Network:
-   Multiple nodes verify JWT in parallel
-   Each node verifies JWT signature with CipherBox backend's public key
-   If >2/3 honest, nodes return their key shares
+7. CipherBox Backend:
+   a) Fetch JWKS from Web3Auth:
+      GET https://api-auth.web3auth.io/jwks
+   b) Verify JWT signature (ES256) using JWKS
+   c) Validate claims:
+      - iss == "https://api-auth.web3auth.io"
+      - aud == CIPHERBOX_PROJECT_CLIENT_ID
+      - exp > now
+      - iat < now
+   d) Extract wallets array from payload
+   e) Find wallet with type "web3auth_app_key"
+   f) Verify appPubKey matches wallet.public_key
+   g) Find user by pubkey or create new user:
+      SELECT * FROM users WHERE pubkey = $1
+      If not found: INSERT INTO users (pubkey) VALUES ($1)
+   h) Generate access token (15 min expiry):
+      accessToken = JWT_sign({ userId, pubkey, iat, exp }, backendPrivateKey)
+   i) Generate refresh token (Same expiry as the Web3Auth ID Token):
+      refreshToken = secureRandomBytes(32)
+      INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
+        VALUES ($userId, SHA256(refreshToken), now + 7 days)
 
-8. Frontend:
-   Receives key shares from Torus nodes
-   Reconstructs ECDSA private key in RAM
-   Derives public key: pubkey = EC_multiply(privkey, G)
+8. CipherBox Backend → Frontend:
+   Response: {
+     accessToken: "eyJhbGciOiJSUzI1NiIs...",
+     refreshToken: "abc123...",
+     userId: "uuid-here",
+     pubkey: "0x04abc123..."
+   }
 
 9. Frontend:
-   Calls GET /my-vault
-   Header: Authorization: Bearer JWT
+   Stores accessToken in memory
+   Stores refreshToken securely (HTTP-only cookie or encrypted storage)
+   Calls GET /my-vault with accessToken:
+   Header: Authorization: Bearer <accessToken>
 
-10. Backend:
-    Verifies JWT (signature, expiration)
-    Finds user's vault in Vaults table
+10. CipherBox Backend:
+    Verifies accessToken (signature, expiration)
+    Finds user's vault in Vaults table by userId
     Returns:
     {
       vaultId: "uuid",
-      ownerPublicKey: "0x...",
+      ownerPublicKey: "0x04abc123...",
       rootFolderEncryptedEncryptionKey: "0x..." (encrypted with pubkey)
     }
+    OR if no vault: 403 Vault Not Initialized
 
-11. Frontend:
-    Stores JWT in memory
-    Stores ECDSA private key in memory (session-only)
-    Decrypts root folder key:
-    rootFolderKey = ECIES_Decrypt(
-      rootFolderEncryptedEncryptionKey,
-      ECDSA_privateKey
-    )
+11. Frontend (if vault not initialized):
+    Generate random 256-bit root folder key
+    Encrypt with user's public key:
+      encryptedRootKey = ECIES_Encrypt(rootFolderKey, publicKey)
+    POST /my-vault/initialize {
+      publicKey: "0x04abc123...",
+      encryptedRootFolderKey: encryptedRootKey
+    }
 
-12. Frontend:
+12. Frontend (vault initialized):
+    Decrypt root folder key:
+      rootFolderKey = ECIES_Decrypt(
+        rootFolderEncryptedEncryptionKey,
+        ECDSA_privateKey
+      )
+    Store rootFolderKey in memory (session-only)
+
+13. Frontend:
     User now authenticated
     Redirect to /vault page
     Display file browser (initially empty or cached)
+
+Alternative: SIWE-style Authentication (Step 6-8)
+
+6a. Frontend → CipherBox Backend (Get Nonce):
+    GET /auth/nonce
+    Response: { nonce: "xyz789", expiresAt: "..." }
+
+6b. Frontend (Sign Message):
+    message = {
+      domain: "cipherbox.io",
+      pubkey: "0x04abc123...",
+      nonce: "xyz789",
+      timestamp: Date.now(),
+      statement: "Sign in to CipherBox"
+    }
+    signature = ECDSA_sign(keccak256(JSON.stringify(message)), privateKey)
+
+6c. Frontend → CipherBox Backend (Authenticate):
+    POST /auth/login
+    Body: {
+      message: message,
+      signature: "0xsig...",
+      pubkey: "0x04abc123..."
+    }
+
+7a. CipherBox Backend (SIWE Verification):
+    a) Find nonce in auth_nonces table
+    b) Verify nonce not expired and not used
+    c) Recover pubkey from signature:
+       recoveredPubkey = ecrecover(keccak256(message), signature)
+    d) Verify recoveredPubkey == claimed pubkey
+    e) Mark nonce as used
+    f) Continue from step 7g (find/create user by pubkey)
 ```
 
 ### 6.2 Complete File Upload Flow
@@ -2119,7 +2373,7 @@ Key Property:
 ### v1.0 (Q1 2026 - 3 Month MVP)
 
 **Must-Have:**
-- ✓ Multi-method auth (Email/Pass, Passkeys, OAuth, Magic Link)
+- ✓ Multi-method auth (Email/Pass, OAuth, Magic Link, External Wallet)
 - ✓ File upload/download with E2E encryption
 - ✓ Folder organization (create, rename, move, delete)
 - ✓ Web UI (React)
@@ -2184,7 +2438,7 @@ Key Property:
 
 ### 8.1 Glossary
 
-- **ECDSA:** Elliptic Curve Digital Signature Algorithm. Used for signing IPNS entries and key derivation.
+- **ECDSA:** Elliptic Curve Digital Signature Algorithm. Used for signing IPNS entries and identity verification.
 - **ECIES:** Elliptic Curve Integrated Encryption Scheme. Used for key wrapping (asymmetric encryption of symmetric keys).
 - **AES-256-GCM:** Advanced Encryption Standard (256-bit key) with Galois/Counter Mode (authenticated encryption).
 - **IPFS:** InterPlanetary File System. Peer-to-peer, content-addressed distributed storage network.
@@ -2193,18 +2447,31 @@ Key Property:
 - **FUSE:** Filesystem in Userspace. Kernel module allowing user-space filesystem implementation.
 - **E2E Encryption:** End-to-End. Data encrypted on client; server never holds plaintext.
 - **Zero-Knowledge:** Server has no knowledge of user data or encryption keys (cryptographic guarantee).
-- **Torus Network:** Distributed key derivation service. Provides deterministic ECDSA keypair from JWT.
-- **WebAuthn/FIDO2:** Standards for phishing-resistant authentication via device-bound credentials (Passkeys).
-- **JWT:** JSON Web Token. Signed credential for authentication and key derivation.
+- **Web3Auth:** Distributed key derivation and authentication service. Provides deterministic ECDSA keypair via threshold cryptography.
+- **Web3Auth Group Connections:** Feature that links multiple auth methods (Google, email, external wallet) to derive the same ECDSA keypair, enabling seamless account aggregation.
+- **Web3Auth ID Token:** JWT issued by Web3Auth containing user identity claims and wallet public keys, used to authenticate with backend services.
+- **WebAuthn/FIDO2:** Standards for phishing-resistant authentication via device-bound credentials (Passkeys). Used as MFA in Web3Auth, not primary authentication.
+- **External Wallet Auth:** Trustless authentication method where user signs a message with an existing cryptocurrency wallet (MetaMask, WalletConnect, etc.) to prove identity.
+- **JWT:** JSON Web Token. Signed credential containing identity claims.
+- **SIWE:** Sign-In with Ethereum (or similar). Authentication method where user signs a message with their private key to prove ownership.
+- **Access Token:** Short-lived JWT (15 min) issued by CipherBox backend for API authorization.
+- **Refresh Token:** Long-lived token (7 days) used to obtain new access tokens without re-authentication.
+- **JWKS:** JSON Web Key Set. Endpoint providing public keys for JWT signature verification.
 
 ### 8.2 Security Considerations
 
 **Threat Model:**
 
 - **Server Compromise:** Attacker gains access to CipherBox database and code.
-  - Impact: Attacker has encrypted root keys, user pubkeys, IPNS names.
+  - Impact: Attacker has encrypted root keys, user pubkeys, refresh token hashes.
   - Cannot decrypt: All data encrypted with user's private key (only in client memory).
-  - Mitigation: Private keys never stored on server.
+  - Cannot impersonate: Refresh tokens are hashed; attacker cannot derive valid tokens.
+  - Mitigation: Private keys never stored on server. Users identified by pubkey, not credentials.
+
+- **Web3Auth Compromise:** Attacker compromises Web3Auth infrastructure.
+  - Impact: Could potentially derive user keypairs (requires compromising threshold of nodes).
+  - Mitigation: Web3Auth uses threshold cryptography; no single point of failure.
+  - Defense-in-depth: CipherBox backend validates identity independently via SIWE signatures.
 
 - **Network Interception:** Attacker intercepts HTTPS traffic.
   - Impact: Attacker can observe ciphertexts (but not keys or plaintext).
@@ -2214,20 +2481,26 @@ Key Property:
 - **Client Compromise:** Attacker gains control of user's device.
   - Impact: Attacker can access private key in RAM during session.
   - Mitigation: Limited exposure during session, keys discarded on logout.
-  - Defense-in-depth: Passkeys require biometric/PIN (attacker can't bypass).
+  - Defense-in-depth: External wallet auth requires wallet approval; MFA (passkeys) adds extra layer.
 
 - **Weak Password:** User chooses weak password for email/password auth.
-  - Impact: Attacker can brute-force password, derive private key via Torus.
-  - Mitigation: Torus derivation is deterministic but not password-weak. Server-side verification enforces strong passwords.
-  - Future: Enforce minimum entropy (zxcvbn or similar).
+  - Impact: Attacker can brute-force password via Web3Auth.
+  - Mitigation: Web3Auth can enforce password policies. Key derivation is rate-limited.
+  - Future: Enforce minimum entropy (zxcvbn or similar) in Web3Auth config.
+
+- **Refresh Token Theft:** Attacker steals refresh token from client storage.
+  - Impact: Attacker can obtain new access tokens, impersonate user.
+  - Mitigation: Refresh token rotation (new token on each use), secure storage (HTTP-only cookie).
+  - Defense-in-depth: Short access token expiry (15 min) limits exposure window.
 
 **Best Practices:**
 
-- Use strong, unique passwords (or Passkeys instead).
+- Use strong, unique passwords (or external wallet for trustless auth).
 - Backup vault export and store securely.
 - Don't share recovery key with anyone.
 - Keep software updated (app + OS).
 - Use device lock (biometric, PIN) for physical security.
+- Prefer SIWE authentication for maximum security (no reliance on Web3Auth ID tokens).
 
 ### 8.3 Privacy Policy Framework
 
@@ -2244,27 +2517,35 @@ Key Property:
 
 **Q: If the server is compromised, is my data safe?**
 
-A: Yes. The server holds encrypted data only. Your encryption keys are never stored on the server; they're generated and held only in your device's memory. Even if an attacker compromises the server, they cannot decrypt your files without your private key.
+A: Yes. The server holds encrypted data only. Your encryption keys are never stored on the server; they're generated by Web3Auth and held only in your device's memory. Even if an attacker compromises the CipherBox server, they cannot decrypt your files without your private key.
 
 **Q: How is my private key kept safe?**
 
-A: Your private key is generated by the Torus Network and reconstructed only in your device's memory during your session. It's never transmitted, stored on disk, or logged. On logout or after 24h, the key is discarded.
+A: Your private key is generated by Web3Auth's distributed network using threshold cryptography. The complete key is reconstructed only in your device's memory during your session. It's never transmitted in complete form, stored on disk, or logged. On logout or session expiration, the key is discarded.
 
 **Q: Can CipherBox employees see my files?**
 
-A: No. CipherBox never has your encryption keys or plaintext files. We cannot decrypt your data even if we wanted to. This is enforced by the cryptography, not just policy.
+A: No. CipherBox never has your encryption keys or plaintext files. We cannot decrypt your data even if we wanted to. This is enforced by the cryptography, not just policy. We identify you by your public key, not by credentials.
+
+**Q: How does account linking work with multiple auth methods?**
+
+A: CipherBox uses Web3Auth's group connections feature. When you sign up with Google and later add email/password, both auth methods are linked in Web3Auth's system to derive the same ECDSA keypair. This means you get the same private key regardless of how you log in, giving you access to the same vault.
 
 **Q: What if I forget my password?**
 
-A: If you use email/password, you can request a password reset (we'll verify email ownership). Your vault remains encrypted; resetting password just lets you re-authenticate. You don't lose access to your data.
+A: If you use email/password, you can reset your password through Web3Auth's recovery flow. Because Web3Auth handles password verification and key derivation, resetting your password will still give you access to the same keypair (and thus your vault) as long as the email is linked to your Web3Auth group.
 
-**Q: What if I lose my device with the only Passkey?**
+**Q: What if I lose my device?**
 
-A: You can log in using an alternate auth method (email/password or OAuth). Once logged in, you can register a new Passkey on another device. Your vault access is preserved.
+A: You can log in using an alternate auth method linked to your Web3Auth group (email/password, OAuth, or external wallet). Once logged in via Web3Auth, your vault access is preserved because all linked methods derive the same keypair.
 
-**Q: Can I recover my vault if I lose my private key?**
+**Q: Can I recover my vault if I lose access to all auth methods?**
 
-A: If you don't have a backup (vault export), and you lose access to all your auth methods, your vault cannot be recovered. This is the security/convenience tradeoff of zero-knowledge architecture. We recommend exporting your vault regularly.
+A: If you lose access to all auth methods linked to your Web3Auth group, and you don't have a vault export with your private key, your vault cannot be recovered. This is the security/convenience tradeoff of zero-knowledge architecture. We recommend exporting your vault regularly and storing the backup securely.
+
+**Q: What's the difference between JWT and SIWE authentication with CipherBox backend?**
+
+A: Both achieve the same result (authenticating with CipherBox to get access tokens). JWT authentication uses the Web3Auth ID token - simpler but relies on Web3Auth's token signing. SIWE authentication uses your private key to sign a message - more control and doesn't rely on Web3Auth tokens, but requires an extra step. Both are secure; choose based on your preference.
 
 **Q: Why decentralized storage (IPFS) instead of centralized cloud (S3)?**
 
@@ -2286,10 +2567,10 @@ A: v1 has a free 500 MiB tier indefinitely. Pricing for larger storage deferred 
 
 ## Document Approval
 
-- **Author:** [User]
-- **Reviewed:** [Architect]
-- **Approved:** [Date]
-- **Status:** APPROVED FOR DEVELOPMENT
+- **Author:** Michael Yankelev
+- **Reviewed:** Michael Yankelev
+- **Approved:** TBC
+- **Status:** IN REVIEW
 
 ---
 

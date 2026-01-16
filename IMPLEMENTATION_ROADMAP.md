@@ -32,7 +32,7 @@
 ✅ PRD reviewed by team
 ✅ Dev environments working (Node.js, PostgreSQL, Docker)
 ✅ Crypto libraries evaluated (Web Crypto API, libsodium.js)
-✅ Torus Network sandbox setup
+✅ Web3Auth dashboard setup + group connections configured
 ✅ Pinata API test account
 ✅ Database schema migration scripts
 ✅ Git repos created (backend, frontend, desktop)
@@ -50,10 +50,11 @@
 **Deliverables:**
 
 ```
-✅ Torus key derivation tested (same JWT → same keypair)
+✅ Web3Auth key derivation tested (same user → same keypair via group connections)
+✅ Web3Auth ID token verification via JWKS endpoint
 ✅ IPFS/Pinata integration verified
 ✅ Crypto test vectors pass (AES-256-GCM, ECIES)
-✅ PostgreSQL schema deployed (8 tables)
+✅ PostgreSQL schema deployed (5 tables: users, refresh_tokens, auth_nonces, vaults, pinned_cids)
 ✅ API contract stub (18 endpoints)
 ✅ Docker containers working
 ```
@@ -62,43 +63,45 @@
 
 ***
 
-### **Week 3: Backend Auth (Email/Password)**
+### **Week 3: Backend Auth (Web3Auth Integration)**
 
-**Goal:** Email/password auth + JWT generation
+**Goal:** Web3Auth ID token validation + CipherBox token issuance
 
 **Deliverables:**
 
 ```
-✅ POST /auth/register
-✅ POST /auth/login  
-✅ Argon2 password hashing
-✅ JWT with subjectId = hash(userId)
-✅ Database: users, auth_providers tables
-✅ Session middleware (JWT validation)
+✅ GET /auth/nonce (for SIWE-style auth)
+✅ POST /auth/login (Web3Auth JWT or SIWE signature)
+✅ POST /auth/refresh (token rotation)
+✅ Web3Auth JWKS verification (jose library)
+✅ Access token (15min) + refresh token (7 days) issuance
+✅ Database: users (by pubkey), refresh_tokens, auth_nonces tables
+✅ Session middleware (access token validation)
 ```
 
-**Tests:** Signup → login → consistent userId
+**Tests:** Web3Auth login → token issuance → API access → token refresh
 
 **Team:** Backend (100%)
 
 ***
 
-### **Week 4: Auth Completion (Passkeys + OAuth)**
+### **Week 4: Auth Completion (All Methods via Web3Auth)**
 
-**Goal:** All 4 auth methods working
+**Goal:** All 4 auth methods working via Web3Auth
 
 **Deliverables:**
 
 ```
-✅ Passkeys: WebAuthn challenge/register/login
-✅ OAuth: Google/Apple/GitHub redirects
-✅ Magic Link: Email token flow
-✅ Torus integration: JWT → keypair derivation
-✅ Account linking: Multiple methods → same vault
+✅ Email/Password: Web3Auth handles credential verification
+✅ OAuth: Google/Apple/GitHub via Web3Auth modal
+✅ Magic Link: Email passwordless via Web3Auth
+✅ External Wallet: MetaMask/WalletConnect via Web3Auth
+✅ Web3Auth group connections: All methods → same keypair
+✅ Account linking: Handled by Web3Auth (not CipherBox backend)
 ✅ GET /my-vault (vault init check)
 ```
 
-**Tests:** Cross-method consistency (Google → email → same keypair)
+**Tests:** Cross-method consistency (Google → email → external wallet → same keypair)
 
 **Team:** Backend (80%), Frontend (60%)
 
@@ -171,16 +174,16 @@
 **Deliverables:**
 
 ```
-✅ Login page (4 auth methods)
+✅ Login page (Web3Auth modal integration)
 ✅ Vault page: Sidebar tree + main file list
 ✅ Drag-drop upload zone
 ✅ Context menus (right-click: rename/delete/move)
-✅ Settings: Linked accounts, passkeys, export
+✅ Settings: Linked accounts (via Web3Auth), export
 ✅ Storage indicator (500 MiB free tier)
 ✅ Responsive design (mobile/tablet/desktop)
 ```
 
-**Tech:** React 18 + TypeScript + Tailwind
+**Tech:** React 18 + TypeScript + Tailwind + @web3auth/modal
 
 **Team:** Frontend (100%)
 
@@ -193,7 +196,9 @@
 **Deliverables:**
 
 ```
-✅ Login window (same auth as web)
+✅ Login window (Web3Auth via embedded browser or system browser)
+✅ Web3Auth keypair derivation + CipherBox backend auth
+✅ Secure token storage (OS keychain for refresh token)
 ✅ FUSE mount at ~/CipherVault
 ✅ Read: IPFS fetch → decrypt → return plaintext
 ✅ Write: Encrypt → IPFS upload → IPNS update
@@ -319,7 +324,7 @@
 
 | Risk | Probability | Mitigation |
 | :-- | :-- | :-- |
-| Torus integration | Medium | Week 1 deep-dive, direct support |
+| Web3Auth integration | Medium | Week 1 deep-dive, direct support, group connections testing |
 | IPFS performance | Medium | Pinata + caching strategy |
 | Security audit | Low | Continuous review, 2-week buffer |
 | Desktop complexity | Medium | macOS first, others v1.1 |
@@ -404,7 +409,7 @@ Code reviews within 24h
 [ ] No critical blockers
 ```
 
-**NO-GO:** Torus issues → Week 1 fallback plan
+**NO-GO:** Web3Auth issues → Week 1 fallback plan
 
 ### **Week 7: "Storage Done"** ✅
 ```
@@ -469,7 +474,7 @@ TOTAL: 800 hours (12 weeks × 3 people × 40h)
 
 | Risk | Impact | Probability | Mitigation |
 |------|--------|-------------|------------|
-| Torus integration fails | High | Medium | Week 1 deep-dive + fallback derivation |
+| Web3Auth integration fails | High | Medium | Week 1 deep-dive + group connections testing |
 | IPFS Pinata slow | Medium | Medium | Local IPFS node + caching |
 | Security audit fails | High | Low | Continuous review + 2-week buffer |
 | Desktop FUSE complex | Medium | Medium | macOS first, others v1.1 |
