@@ -54,9 +54,10 @@
 ✅ Web3Auth ID token verification via JWKS endpoint
 ✅ IPFS/Pinata integration verified
 ✅ Crypto test vectors pass (AES-256-GCM, ECIES)
-✅ PostgreSQL schema deployed (5 tables: users, refresh_tokens, auth_nonces, vaults, pinned_cids)
-✅ API contract stub (18 endpoints)
+✅ PostgreSQL schema deployed (6 tables: users, refresh_tokens, auth_nonces, vaults, ipns_entries, volume_audit, pinned_cids)
+✅ API contract stub (17 endpoints - no backend IPNS proxy)
 ✅ Docker containers working
+✅ Client-side IPFS publishing tested (kubo-rpc-client)
 ```
 
 **Team:** Backend (80%), DevOps (80%), Frontend (40%)
@@ -117,8 +118,10 @@
 ✅ Client: Random file key + AES-256-GCM encryption
 ✅ Client: ECIES key wrapping (fileKey → userPubkey)
 ✅ POST /vault/upload → Pinata → CID
+✅ POST /vault/unpin → Pinata unpin (for delete/update operations)
 ✅ Database: volume_audit (quota tracking)
 ✅ 500 MiB free tier quota enforcement
+✅ File size limit enforcement (100 MB max per file)
 ```
 
 **Tests:** Encrypt → upload → download → decrypt matches original
@@ -127,43 +130,55 @@
 
 ***
 
-### **Week 6: IPNS Publishing + Folders**
+### **Week 6: IPNS Publishing + Folders (Client-Side)**
 
-**Goal:** Folder hierarchy + IPNS updates
+**Goal:** Folder hierarchy + client-side IPNS publishing
 
 **Deliverables:**
 
 ```
-✅ Per-folder IPNS entries (root → Documents → Work)
-✅ Client signs metadata: ECDSA(SHA256(encrypted_metadata))
-✅ POST /vault/publish-ipns → ipfs name publish
-✅ Folder create → metadata → IPNS publish
+✅ Per-folder IPNS keypairs (Ed25519, generated per folder)
+✅ IPNS keypairs stored encrypted: ECIES(ipnsPrivKey, userPubkey)
+✅ Root IPNS keypair stored on server (via POST /my-vault/initialize)
+✅ Subfolder IPNS keypairs stored in parent folder metadata
+✅ Client-side IPFS publishing (kubo-rpc-client or similar)
+✅ Client decrypts IPNS key → signs → publishes directly to IPFS
+✅ Folder create → generate keypair → metadata → IPNS publish
 ✅ Tree traversal (resolve IPNS → fetch → decrypt → recurse)
+✅ No backend IPNS proxy (keys never leave client)
 ```
+
+**Architecture Note:** IPNS signing keys are managed entirely client-side.
+Backend stores only the encrypted root IPNS key. All publishing is direct
+from client to IPFS network, ensuring zero-knowledge for folder structure.
 
 **Tests:** Create folder → IPNS resolves → metadata decrypts correctly
 
-**Team:** Backend (70%), Frontend (100%)
+**Team:** Backend (40%), Frontend (100%)
 
 ***
 
-### **Week 7: File Operations (Rename/Move/Delete)**
+### **Week 7: File Operations (Rename/Move/Delete/Update)**
 
 **Goal:** Complete CRUD operations
 
 **Deliverables:**
 
 ```
-✅ Rename file: Update metadata → republish IPNS
-✅ Move: Remove source → add destination → dual IPNS publish
-✅ Delete: Remove metadata entry → republish
+✅ Rename file: Update metadata → republish IPNS (client-side)
+✅ Move: Add to destination → remove from source → dual IPNS publish
+✅ Delete: Unpin CID (POST /vault/unpin) → remove metadata → republish
+✅ Update file: New key/IV → upload → update metadata → unpin old CID
 ✅ Bulk operations (multi-select upload/delete)
 ✅ Download flow: IPNS resolve → IPFS fetch → decrypt
+✅ Storage quota reclaimed on delete/update via unpin
 ```
 
-**Tests:** Rename/move/delete → metadata updates → other devices see changes
+**Move Operation Order:** Destination first, then source removal (prevents data loss)
 
-**Team:** Frontend (100%), Backend (50%)
+**Tests:** Rename/move/delete/update → metadata updates → other devices see changes
+
+**Team:** Frontend (100%), Backend (30%)
 
 ***
 
@@ -285,8 +300,9 @@
 
 ```
 ✅ File upload/download end-to-end
-✅ IPNS publishing reliable
-✅ Folder hierarchy working
+✅ Client-side IPNS publishing reliable
+✅ Folder hierarchy with per-folder IPNS keypairs
+✅ File update/delete with CID unpinning
 ```
 
 
@@ -313,9 +329,12 @@
 
 | Role | W1-4 | W5-8 | W9-10 | W11-12 | Total |
 | :-- | :-- | :-- | :-- | :-- | :-- |
-| **Backend** | 100% | 70% | 60% | 90% | **360h** |
-| **Frontend** | 50% | 100% | 50% | 80% | **240h** |
+| **Backend** | 100% | 50% | 60% | 90% | **320h** |
+| **Frontend** | 50% | 100% | 50% | 80% | **280h** |
 | **DevOps** | 40% | 40% | 80% | 100% | **200h** |
+
+**Note:** Backend allocation reduced in W5-8 due to client-side IPNS publishing
+architecture (no backend IPNS proxy). Frontend handles IPFS client integration.
 
 
 ***
@@ -326,6 +345,7 @@
 | :-- | :-- | :-- |
 | Web3Auth integration | Medium | Week 1 deep-dive, direct support, group connections testing |
 | IPFS performance | Medium | Pinata + caching strategy |
+| Client-side IPFS publishing | Medium | Week 2 kubo-rpc-client testing, fallback to js-ipfs |
 | Security audit | Low | Continuous review, 2-week buffer |
 | Desktop complexity | Medium | macOS first, others v1.1 |
 
@@ -414,12 +434,15 @@ Code reviews within 24h
 ### **Week 7: "Storage Done"** ✅
 ```
 [ ] File upload/download complete
-[ ] IPNS publishing reliable
+[ ] Client-side IPNS publishing reliable
+[ ] Per-folder IPNS keypairs working
 [ ] Folder hierarchy functional
 [ ] Multi-file operations working
+[ ] File update/delete with unpin working
 ```
 
 **NO-GO:** IPFS latency → Caching + gateway switch
+**NO-GO:** Client IPFS publishing issues → Evaluate js-ipfs alternative
 
 ### **Week 10: "Platforms Done"** ✅
 ```

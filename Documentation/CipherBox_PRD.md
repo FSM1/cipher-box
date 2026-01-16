@@ -140,13 +140,19 @@ Core pillars:
 9. Client queries: GET /my-vault (using CipherBox access token)
 10. Server responds: 403 Vault Not Initialized
 11. Client generates random 256-bit root folder key
-12. Client encrypts root key: ECIES(rootKey, userPublicKey)
-13. Client sends: POST /my-vault/initialize with encrypted key
-14. Server stores in Vaults table, marks initialized
-15. User sees empty vault, ready to upload
-16. User drags file into web UI
-17. File encrypted client-side, uploaded to IPFS, IPNS entry updated
-18. User sees file in decrypted tree view
+12. Client generates random IPNS keypair (Ed25519 for IPNS compatibility)
+13. Client encrypts root key: ECIES(rootKey, userPublicKey)
+14. Client encrypts IPNS private key: ECIES(ipnsPrivKey, userPublicKey)
+15. Client derives IPNS name from IPNS public key
+16. Client sends: POST /my-vault/initialize with:
+    - encryptedRootFolderKey
+    - encryptedRootIpnsKey
+    - rootIpnsName
+17. Server stores in Vaults table, marks initialized
+18. User sees empty vault, ready to upload
+19. User drags file into web UI
+20. Client decrypts IPNS key, publishes directly to IPFS
+21. User sees file in decrypted tree view
 ```
 
 #### Journey 2: Multi-device File Access
@@ -200,6 +206,7 @@ Core pillars:
 3. Server returns JSON containing:
    - Root IPNS name (k51qzi5uqu5dlvj55...)
    - Encrypted root folder key (ECIES encrypted)
+   - Encrypted root IPNS signing key (ECIES encrypted)
    - List of all CIDs in vault (collected during initialization)
    - Instructions for independent recovery
 4. User downloads export.json
@@ -211,6 +218,30 @@ Core pillars:
 10. User decrypts all metadata using root key
 11. User has complete access to entire vault without CipherBox service
 12. Complete independence achieved, zero vendor lock-in
+```
+
+#### Journey 4a: Device Loss Recovery (Web3Auth Key Available)
+
+```
+Scenario: User loses device but can still authenticate via Web3Auth
+
+1. User gets new device
+2. User navigates to CipherBox.com
+3. User logs in with any linked auth method (Google, email, etc.)
+4. Web3Auth derives the SAME keypair (group connections ensure consistency)
+5. Client authenticates with CipherBox backend
+6. GET /my-vault returns encrypted root folder key + root IPNS name
+7. Client decrypts root key with recovered ECDSA private key
+8. User has full vault access restored automatically
+
+Key insight: As long as user can authenticate with Web3Auth using any linked
+method, they automatically recover full vault access. No vault export needed.
+The encrypted root key is stored server-side and decryptable with the user's
+Web3Auth-derived keypair.
+
+This is why account linking is important: multiple auth methods = redundant
+recovery paths. If user loses access to one method (e.g., forgot password),
+they can use another linked method (e.g., Google OAuth) to recover.
 ```
 
 #### Journey 5: Account Linking (Email to Existing Google Account)
@@ -275,9 +306,39 @@ CipherBox uses a two-phase authentication approach:
    - User signs authentication message with wallet private key
    - Web3Auth verifies signature and proceeds with key derivation
    - Fully trustless: no credentials stored, identity proven via signature
+   
+   **Important: Dual Keypair for External Wallet Users**
+   
+   Users authenticating via external wallet will have TWO keypairs:
+   1. **Wallet Keypair:** The user's existing cryptocurrency wallet (e.g., MetaMask)
+      - Used only for authentication (signing the Web3Auth login message)
+      - May use different curve (e.g., secp256k1 for Ethereum wallets)
+      - Remains under user's control in their wallet
+   2. **Web3Auth-Derived Keypair:** A separate ECDSA keypair derived by Web3Auth
+      - Used for CipherBox encryption/decryption operations
+      - Derived deterministically from wallet identity via Web3Auth
+      - This is the keypair used for ECIES key wrapping
+   
+   The wallet keypair proves identity; the Web3Auth keypair encrypts data.
+   This separation ensures CipherBox works consistently across all auth methods
+   while allowing external wallet users to maintain their existing wallet security.
 
 **Passkeys as MFA (Future):**
-Web3Auth supports passkeys as a multi-factor authentication (MFA) method. In future versions, users will be able to add passkeys as an additional security layer on top of their primary authentication method.
+Web3Auth supports passkeys as a multi-factor authentication (MFA) method. 
+Passkeys in Web3Auth are NEVER a primary authentication factor - they serve 
+only as a secondary security layer on top of primary auth methods.
+
+How it works:
+- User authenticates with primary method (Google, email, etc.)
+- User can optionally enable passkey MFA in Web3Auth settings
+- On subsequent logins, after primary auth, user must also verify via passkey
+- Passkey MFA is "basically free" - minimal implementation effort
+
+See: https://blog.web3auth.io/passkeys-authentication-factor/
+
+Note: Passkeys do NOT affect key derivation. The same ECDSA keypair is derived
+regardless of whether passkey MFA is enabled. Passkeys only add an extra
+authentication step before Web3Auth releases the key shares.
 
 **Web3Auth Group Connections:**
 Multiple auth methods can be linked to the same identity using Web3Auth's group connections feature. This is configured in the Web3Auth dashboard and ensures:
@@ -321,12 +382,31 @@ After Web3Auth key derivation, client authenticates with CipherBox backend using
 
 **Option B: SIWE-like Signature Flow**
 - Client requests nonce from CipherBox backend: `GET /auth/nonce`
-- Client constructs message: `{pubkey, nonce, timestamp, domain}`
+- Client constructs EIP-4361 compliant message:
+  ```
+  cipherbox.io wants you to sign in with your Ethereum account:
+  0x{pubkey}
+  
+  Sign in to CipherBox
+  
+  URI: https://cipherbox.io
+  Version: 1
+  Chain ID: 1
+  Nonce: {nonce}
+  Issued At: {timestamp}
+  ```
 - Client signs message with ECDSA private key (derived from Web3Auth)
 - Client sends signature + message to backend: `POST /auth/login`
-- Backend verifies signature matches claimed pubkey
-- Backend verifies nonce is valid and unused
+- Backend verifies:
+  - Domain matches expected value (`cipherbox.io`)
+  - Chain ID is 1 (for EIP-4361 compliance)
+  - Nonce exists in database and has not expired
+  - Signature recovers to claimed pubkey
+- Backend deletes nonce from database (prevents replay attacks)
 - Backend issues CipherBox access token and refresh token
+
+Note: Nonces are single-use and deleted immediately upon successful verification.
+Nonce table entries have a TTL and are automatically deleted when expired.
 
 **Key Property:** Same ECDSA keypair is derived regardless of auth method (via Web3Auth group connections).
 
@@ -576,22 +656,21 @@ No duplicate accounts possible - identity is tied to keypair, not email.
     encryptedMetadata = AES-256-GCM(metadataJSON, folderKey)
     iv_metadata = random_96_bits
 
-11. Client signs and publishes IPNS entry:
+11. Client decrypts folder's IPNS private key:
+    ipnsPrivKey = ECIES_Decrypt(ipnsKeyEncrypted, userPrivateKey)
+
+12. Client signs and publishes IPNS entry directly to IPFS:
     ipnsEntry = {
       version: "1.0",
       encryptedMetadata: encryptedMetadata,
       iv: iv_metadata,
-      signature: ECDSA_sign(hash(encryptedMetadata), privateKey)
+      signature: IPNS_sign(encryptedMetadata, ipnsPrivKey)  // IPNS-specific signature
     }
-    Client calls: POST /vault/publish-ipns {
-      ipnsName: "k51qzi5uqu5dlvj55...",
-      signedEntry: ipnsEntry
-    }
-
-12. Server publishes to IPFS:
-    - Receives signed entry from client
-    - Publishes to IPNS (IPFS Name System)
-    - Returns { success: true, cid: "QmYyy..." }
+    Client publishes directly to IPFS network:
+      await ipfs.name.publish(ipnsCID, { key: ipnsPrivKey })
+    
+    Note: Client publishes directly to IPFS to ensure IPNS signing keys never leave 
+    the client device. Backend is not involved in IPNS publishing.
 
 13. File now accessible to all devices with vault access
 ```
@@ -632,7 +711,7 @@ No duplicate accounts possible - identity is tied to keypair, not email.
 |-----------|---------|----------|-----------------|
 | AES-256-GCM | File content + metadata encryption | NIST | Web Crypto API or libsodium.js |
 | ECIES (secp256k1) | Key wrapping (files, folders) | SEC 2 | libsodium.js or ethers.js |
-| ECDSA (secp256k1) | IPNS entry signing, key derivation | NIST/SECG | Torus Network or libsodium.js |
+| ECDSA (secp256k1) | IPNS entry signing, key derivation | NIST/SECG | Web3Auth or libsodium.js |
 | HKDF-SHA256 | Key derivation (backup, expansion) | RFC 5869 | Web Crypto API or libsodium.js |
 | SHA-256 | Hashing (signatures, integrity) | NIST | Web Crypto API or libsodium.js |
 | Argon2 | Password hashing | OWASP | argon2-browser or server-side |
@@ -645,6 +724,33 @@ No duplicate accounts possible - identity is tied to keypair, not email.
 - [ ] AES-256-GCM authentication verified (tampering detected)
 - [ ] ECIES ciphertext not reversible without private key
 
+**No File Deduplication:**
+
+CipherBox explicitly does NOT perform file deduplication. Each file upload uses:
+- A unique randomly-generated 256-bit AES key
+- A unique randomly-generated 96-bit IV
+
+This means the same plaintext file uploaded multiple times will produce:
+- Different ciphertexts (due to different keys and IVs)
+- Different IPFS CIDs (content-addressed hashes differ)
+- Different file IPNS entries
+
+This is a security feature, not a limitation. Deduplication would leak information
+about file contents, enabling attacks where adversaries could determine if a user
+has a specific file by comparing CIDs.
+
+**File Size Limits (v1):**
+
+| Limit | Value | Rationale |
+|-------|-------|----------|
+| Max single file | 100 MB | Conservative for MVP, browser memory constraints |
+| Max total storage | 500 MiB | Free tier limit (encrypted size) |
+| Max files per folder | 1,000 | UI performance, metadata size |
+| Max folder depth | 20 levels | Traversal performance |
+
+These limits are conservative for v1 and can be increased in future versions
+based on performance testing and user feedback.
+
 ---
 
 #### 3.2.2 Folder Hierarchy & IPNS Structure
@@ -652,17 +758,27 @@ No duplicate accounts possible - identity is tied to keypair, not email.
 **Per-Folder IPNS Entries:**
 
 ```
-Design: Each folder has its own IPNS entry (enables future per-folder sharing)
+Design: Each folder has its own IPNS entry with dedicated keypair (enables future per-folder sharing)
+
+IPNS Keypair Management:
+- Each folder has a unique IPNS keypair (Ed25519 or RSA for IPNS compatibility)
+- IPNS keypair is randomly generated when folder is created
+- IPNS private key is stored encrypted in parent folder metadata: ECIES(ipnsPrivKey, userPublicKey)
+- IPNS public key derives the IPNS name (e.g., k51qzi5uqu5dlvj55...)
+- Root folder IPNS keypair stored encrypted on server alongside root folder key
+- Client decrypts IPNS private key to sign and publish updates directly to IPFS
 
 Root Folder:
-- IPNS Name: k51qzi5uqu5dlvj55... (derived from userId)
-- Published to IPFS by server
+- IPNS Name: k51qzi5uqu5dlvj55... (derived from root IPNS keypair)
+- IPNS keypair stored encrypted on server: ECIES(ipnsPrivKey, userPublicKey)
+- Published directly to IPFS by client (requires client-side IPNS signing)
 - Contains encrypted metadata of root's children
 
 Subfolder (e.g., Documents):
-- IPNS Name: k51qzi5uqu5dlvj66... (derived from parentIPNSName + folderName)
+- IPNS Name: k51qzi5uqu5dlvj66... (derived from subfolder's IPNS keypair)
+- IPNS keypair stored encrypted in parent metadata: ECIES(ipnsPrivKey, userPublicKey)
 - Contains encrypted metadata of Documents's children
-- Reference in parent: ipnsName field
+- Reference in parent: ipnsName + ipnsKeyEncrypted fields
 
 Example Tree:
 /
@@ -698,6 +814,7 @@ Example Tree:
       "nameEncrypted": "0xabcd...",
       "nameIv": "0x1234...",
       "ipnsName": "k51qzi5uqu5dlvj66...",
+      "ipnsKeyEncrypted": "0xECIES(...)",  // IPNS signing key for this folder
       "subfolderKeyEncrypted": "0xECIES(...)",
       "created": 1705268100,
       "modified": 1705268100
@@ -757,10 +874,11 @@ async function fetchFileTree(ipnsName: string, folderKey: Uint8Array): Promise<F
   const signedEntryJSON = await ipfs.cat(cid);
   const signedEntry = JSON.parse(signedEntryJSON);
   
-  // 3. Verify signature (optional: client-side cache validation)
-  const messageHash = SHA256(signedEntry.encryptedMetadata);
-  const isValid = ECDSA_verify(messageHash, signedEntry.signature, userPublicKey);
-  if (!isValid) throw new Error("Metadata signature invalid");
+  // 3. Verify IPNS signature
+  // Note: IPNS signature verification is handled by IPFS protocol during resolution.
+  // If the IPNS entry resolves successfully, the signature is valid.
+  // Additional application-level signature verification is optional for v1.
+  // The IPFS network guarantees signature validity - if resolution succeeds, data is authentic.
   
   // 4. Decrypt metadata with folder key
   const metadataJSON = AES256GCM_Decrypt(
@@ -822,10 +940,20 @@ async function fetchFileTree(ipnsName: string, folderKey: Uint8Array): Promise<F
 }
 ```
 
+**Conflict Resolution (v1):**
+
+For v1, IPFS nodes are the ultimate arbiter of which IPNS update is kept. When multiple 
+devices publish conflicting IPNS entries:
+- IPFS network uses sequence numbers and timestamps in IPNS records
+- Latest valid record (by sequence number) wins
+- No application-level conflict resolution in v1
+- Future versions may implement vector clocks or CRDTs
+
 **Acceptance Criteria:**
-- [ ] Per-folder IPNS entries enable future per-folder sharing
+- [ ] Per-folder IPNS entries with dedicated keypairs
+- [ ] IPNS keypairs stored encrypted in parent metadata
+- [ ] Client-side IPNS publishing (keys never leave client)
 - [ ] Tree traversal <2s for 1000 files
-- [ ] Metadata signature verification implemented
 - [ ] No plaintext folder/file names transmitted
 - [ ] All keys properly nested and encrypted
 
@@ -838,16 +966,18 @@ async function fetchFileTree(ipnsName: string, folderKey: Uint8Array): Promise<F
 ```
 1. User names folder "NewFolder" and confirms
 2. Client generates new 256-bit symmetric key (folder key)
-3. Client generates new IPNS entry name (or derives from parent + name)
-4. Client encrypts folder name: AES256GCM(userName, parentFolderKey)
-5. Client encrypts folder key: ECIES(folderKey, userPublicKey)
-6. Client creates empty children array for new folder
-7. Client creates empty metadata JSON for new folder
-8. Client encrypts metadata: AES256GCM(metadataJSON, folderKey)
-9. Client signs and publishes new IPNS entry: POST /vault/publish-ipns
-10. Client updates parent folder metadata:
-    - Add child entry with name_encrypted, ipnsName, subfolderKeyEncrypted
-11. Client re-encrypts and publishes parent IPNS entry
+3. Client generates new IPNS keypair (Ed25519 for IPNS compatibility)
+4. Client derives IPNS name from IPNS public key
+5. Client encrypts folder name: AES256GCM(folderName, parentFolderKey)
+6. Client encrypts folder key: ECIES(folderKey, userPublicKey)
+7. Client encrypts IPNS private key: ECIES(ipnsPrivKey, userPublicKey)
+8. Client creates empty children array for new folder
+9. Client creates empty metadata JSON for new folder
+10. Client encrypts metadata: AES256GCM(metadataJSON, folderKey)
+11. Client decrypts new folder's IPNS key and publishes to IPFS
+12. Client updates parent folder metadata:
+    - Add child entry with nameEncrypted, ipnsName, ipnsKeyEncrypted, subfolderKeyEncrypted
+13. Client decrypts parent's IPNS key and republishes parent IPNS entry
 ```
 
 **Upload File:**
@@ -858,6 +988,34 @@ async function fetchFileTree(ipnsName: string, folderKey: Uint8Array): Promise<F
 3. Client gets CID from server response
 4. Client adds file entry to containing folder's metadata
 5. Client re-encrypts and publishes folder IPNS entry
+```
+
+**Update File (Replace Contents):**
+
+```
+1. User modifies existing file "budget.xlsx" and saves
+2. Client generates NEW random 256-bit file key (different from original)
+3. Client generates NEW random 96-bit IV
+4. Client encrypts updated file content:
+   newCiphertext = AES-256-GCM(updatedPlaintext, newFileKey, newIV)
+5. Client encrypts new file key: 
+   newEncryptedFileKey = ECIES(newFileKey, userPublicKey)
+6. Client uploads encrypted file to backend:
+   POST /vault/upload { encryptedFile, iv }
+7. Backend uploads to IPFS, returns NEW CID (different from original)
+8. Client updates file entry in parent folder metadata:
+   - cid: newCID (updated)
+   - fileKeyEncrypted: newEncryptedFileKey (updated)
+   - fileIv: newIV (updated)
+   - modified: currentTimestamp (updated)
+   - size: newSize (updated)
+   - nameEncrypted: unchanged (same file name)
+9. Client decrypts folder's IPNS key and republishes folder IPNS entry
+10. Client unpins OLD file CID via POST /vault/unpin (reclaims storage)
+
+Note: File updates create entirely new encrypted content with new keys.
+The old CID is unpinned but may persist on IPFS network temporarily.
+Storage quota reflects only currently pinned content.
 ```
 
 **Rename File/Folder:**
@@ -876,21 +1034,37 @@ async function fetchFileTree(ipnsName: string, folderKey: Uint8Array): Promise<F
 
 ```
 1. User moves "file.pdf" from Documents to Documents/Work
-2. Client removes file entry from Documents metadata
-3. Client republishes Documents IPNS entry (without file)
-4. Client adds file entry to Documents/Work metadata
-5. Client republishes Documents/Work IPNS entry (with file)
-6. File CID unchanged (just moved in hierarchy)
+2. Order of operations (to prevent data loss):
+   a. Publish new IPNS record in destination folder pointing to existing file CID
+   b. Publish updated destination folder (Documents/Work) IPNS with new child entry
+   c. Publish updated source folder (Documents) IPNS removing the child entry
+   d. Unpin the old file IPNS entry from source location (cleanup)
+3. File CID unchanged throughout (just metadata pointers updated)
+4. If any step fails, operation can be retried (idempotent)
+
+Note: This order ensures the file is always reachable from at least one location.
+Even if the operation fails midway, the file remains accessible from its original
+or new location.
 ```
 
 **Delete File:**
 
 ```
 1. User deletes "file.pdf" from Documents
-2. Client removes file entry from Documents metadata
-3. Client republishes Documents IPNS entry
-4. File CID remains on IPFS (immutable), but no longer referenced
-5. Note: v1 immediate delete (no recovery), v2+ will have soft-delete
+2. Delete operation sequence:
+   a. Unpin the encrypted file CID from IPFS (via Pinata API)
+      - Storage quota reclaimed immediately
+   b. Unpin the file's IPNS entry (if file had dedicated IPNS)
+   c. Update parent folder (Documents) metadata to remove file entry
+   d. Republish Documents IPNS entry without the deleted file
+3. Unpinned CIDs may still exist on IPFS network but are not guaranteed
+4. User's storage quota is reduced by the unpinned file size
+
+Note: v1 implements immediate/permanent delete (no recovery).
+Future versions (v2+) will implement recycle bin:
+- Delete moves file IPNS entry from parent folder to recycle bin folder
+- File remains pinned until recycle bin is emptied
+- User can restore files from recycle bin
 ```
 
 **Acceptance Criteria:**
@@ -920,8 +1094,7 @@ Web3Auth nodes derive ECDSA Keypair (secp256k1)
     │  ├─ Never transmitted in complete form
     │  ├─ Never persisted to disk
     │  ├─ Used for:
-    │  │  ├─ ECIES decryption (of folder/file keys)
-    │  │  ├─ IPNS entry signing
+    │  │  ├─ ECIES decryption (of folder/file/IPNS keys)
     │  │  └─ SIWE signature (for CipherBox backend auth)
     │  └─ Discarded on logout
     │
@@ -944,9 +1117,17 @@ CipherBox Backend issues Access Token + Refresh Token
     │  ├─ Contains: userId, pubkey, iat, exp
     │  ├─ Used for all API calls
     │  └─ Stored in client memory only
-    └─ Refresh Token (7 day expiry)
+    └─ Refresh Token (7 day expiry, aligned with Web3Auth session)
        ├─ Used to obtain new access tokens
        └─ Stored securely (HTTP-only cookie or encrypted storage)
+
+IPNS Keypairs (Ed25519, one per folder)
+    ├─ Generated when folder is created
+    ├─ Root IPNS keypair stored encrypted on server: ECIES(ipnsPrivKey, pubkey)
+    ├─ Subfolder IPNS keypairs stored encrypted in parent metadata
+    ├─ Decrypted client-side for IPNS publishing
+    ├─ Used to sign IPNS records (client-side only)
+    └─ IPNS public key derives the IPNS name
 
 Root Folder Key (AES-256)
     ├─ Generated on vault initialization
@@ -975,9 +1156,17 @@ File Keys (AES-256, one per file)
 - **Storage:** Client RAM only (never written to disk)
 - **Duration:** Session lifetime (24h or until logout)
 - **Lifecycle:**
-  - Generated: On user authentication via Torus
+  - Generated: On user authentication via Web3Auth
   - Used: For ECIES decryption and IPNS signing
   - Destroyed: On logout or session expiration
+
+**Future Security Enhancement (v2+):**
+Investigate additional RAM security measures:
+- Explicit memory zeroing after key use (not guaranteed by garbage collection)
+- Using Web Crypto `CryptoKey` non-exportable handles where possible
+- Avoiding string representations of keys (use Uint8Array)
+- Memory isolation techniques for Tauri/Electron to prevent swap-to-disk
+- Consider WebAssembly memory for sensitive operations
 
 **Root Folder Key:**
 - **Storage (at rest):** Server database, encrypted with ECIES(rootKey, pubkey)
@@ -1073,6 +1262,13 @@ Storage Indicator:
 - "500 MiB / 500 MiB" (for v1 free tier)
 - Progress bar showing usage
 - "Upgrade" link (deferred to v1.1)
+
+Storage Quota Details:
+- Quota measured in **encrypted file size** (ciphertext + auth tag)
+- Metadata storage (IPNS entries) is NOT counted against quota
+  (depends on Pinata/provider pricing; may be re-evaluated)
+- Uploads are **blocked** when storage quota is exceeded
+- User must delete files or upgrade to continue uploading
 
 Sync Status:
 - "Last synced: 2 minutes ago"
@@ -1233,11 +1429,6 @@ Desktop Sync:
 10. FUSE mount activates
 11. App runs in system tray
 ```
-4. App follows same auth flow as web (Torus derivation)
-5. Session stored securely (OS keychain)
-6. FUSE mount activates
-7. App runs in system tray
-```
 
 **Logout & Cleanup:**
 ```
@@ -1250,11 +1441,15 @@ Desktop Sync:
 
 #### 3.5.4 Technical Stack
 
+**Decision Required:** Choose desktop framework before Week 8.
+
+Options under consideration:
+
 **macOS:**
 - Language: Swift or Electron (TBD)
 - FUSE: macFUSE (via fuse-t for userland FUSE)
 - Encryption: CommonCrypto or libsodium
-- Keychain: SecureEnclav for key storage
+- Keychain: SecureEnclave for key storage
 
 **Linux:**
 - Language: Rust (for performance) or Node.js (for code reuse)
@@ -1267,6 +1462,18 @@ Desktop Sync:
 - FUSE: WinFSP (Windows FUSE alternative)
 - Encryption: libsodium or CNG (Cryptography API: Next Generation)
 - Keychain: Windows Credential Manager
+
+**Evaluation Criteria:**
+1. Code sharing potential with web client
+2. FUSE integration complexity
+3. Performance characteristics
+4. Bundle size and distribution
+5. Team expertise
+
+**Recommendation:** Evaluate Tauri (Rust backend + web frontend) vs pure Electron
+for code reuse. Native Swift/Rust for platforms where performance is critical.
+
+**Action Item:** Complete tech stack evaluation and decision by end of Week 2.
 
 **Acceptance Criteria:**
 - [ ] FUSE mount succeeds in <3s
@@ -1348,9 +1555,32 @@ Desktop Sync:
 - Resolve IPNS to CID: <2s typical (with caching)
 - Cache TTL: 1 hour (IPNS entries don't change frequently)
 
+**Cache Staleness Behavior (v1):**
+
+Client-side caching may result in temporarily stale folder views:
+- User sees cached folder contents until next poll interval fires
+- When poll interval triggers, parent folder metadata is refetched
+- If any changes detected, folder contents re-render with fresh data
+- Worst case: user sees old state for up to 30 seconds (poll interval)
+- This is acceptable for v1; future versions may implement push notifications
+
 **Scalability:**
 - Support users with 100k+ files (via pagination, lazy loading)
 - Support vaults up to 100GB+ (no hard limit, quota-based)
+
+**Rate Limiting (v1):**
+
+| Endpoint | Limit | Window | Rationale |
+|----------|-------|--------|----------|
+| POST /auth/login | 10 requests | per minute | Prevent brute-force |
+| POST /auth/refresh | 30 requests | per minute | Normal usage patterns |
+| GET /auth/nonce | 20 requests | per minute | SIWE flow attempts |
+| POST /vault/upload | 60 requests | per minute | Batch upload support |
+| GET /my-vault | 120 requests | per minute | Polling + normal access |
+| DELETE /user/account | 1 request | per hour | Prevent accidental deletion |
+
+Rate limits are per-user (authenticated) or per-IP (unauthenticated).
+Exceeding limits returns 429 Too Many Requests with Retry-After header.
 
 **Acceptance Criteria:**
 - [ ] Latency measured and monitored
@@ -1541,11 +1771,23 @@ GET /auth/linked-accounts
 ```
 GET /my-vault
   Authorization: Bearer accessToken
-  Response: { vaultId, ownerPublicKey, rootFolderEncryptedEncryptionKey, initializedAt }
+  Response: { 
+    vaultId, 
+    ownerPublicKey, 
+    rootFolderEncryptedEncryptionKey,
+    rootIpnsKeyEncrypted,  // IPNS signing key for root folder
+    rootIpnsName,          // Root folder IPNS name
+    initializedAt 
+  }
 
 POST /my-vault/initialize
   Authorization: Bearer accessToken
-  Body: { publicKey, encryptedRootFolderKey }
+  Body: { 
+    publicKey, 
+    encryptedRootFolderKey,
+    encryptedRootIpnsKey,  // ECIES(ipnsPrivKey, userPubKey)
+    rootIpnsName           // Derived from IPNS public key
+  }
   Response: { vaultId, status: "initialized" }
 
 POST /vault/upload
@@ -1553,10 +1795,14 @@ POST /vault/upload
   Body: FormData { encryptedFile: File, iv: string }
   Response: { cid, size, uploadedAt }
 
-POST /vault/publish-ipns
+POST /vault/unpin
   Authorization: Bearer accessToken
-  Body: { ipnsName, signedEntry: JSON }
-  Response: { success, cid }
+  Body: { cid: string }
+  Response: { success: true, unpinnedAt: timestamp }
+  Purpose: Unpin a CID when file is deleted (reclaims storage quota)
+
+Note: IPNS publishing is handled client-side. Client publishes directly to IPFS
+network using the folder's IPNS signing key. No backend proxy for IPNS operations.
 ```
 
 #### User & Settings Endpoints
@@ -1569,7 +1815,15 @@ GET /user/profile
 
 GET /user/export-vault
   Authorization: Bearer accessToken
-  Response: { vaultExport: { rootIpnsName, rootKeyEncrypted, allCids, instructions } }
+  Response: { 
+    vaultExport: { 
+      rootIpnsName,           // Root folder IPNS name
+      rootKeyEncrypted,       // ECIES(rootFolderKey, pubkey)
+      rootIpnsKeyEncrypted,   // ECIES(rootIpnsPrivKey, pubkey)
+      allCids,                // List of all content CIDs in vault
+      instructions            // Recovery instructions
+    } 
+  }
 
 DELETE /user/account
   Authorization: Bearer accessToken
@@ -1607,13 +1861,19 @@ CREATE TABLE refresh_tokens (
 );
 
 -- Auth nonces (for SIWE-style authentication)
+-- Nonces are single-use: deleted immediately upon successful verification
+-- TTL-based automatic cleanup for expired/unused nonces
 CREATE TABLE auth_nonces (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   nonce VARCHAR(64) UNIQUE NOT NULL,
   expires_at TIMESTAMP NOT NULL,
-  used_at TIMESTAMP,  -- Set when nonce is consumed
   created_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Index for TTL-based cleanup job
+CREATE INDEX idx_auth_nonces_expires_at ON auth_nonces(expires_at);
+
+-- Cleanup job (run periodically): DELETE FROM auth_nonces WHERE expires_at < NOW();
 
 -- User vaults
 CREATE TABLE vaults (
@@ -1621,7 +1881,8 @@ CREATE TABLE vaults (
   owner_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
   owner_pubkey BYTEA NOT NULL,  -- ECDSA public key (denormalized for quick lookup)
   root_folder_owner_encrypted_key BYTEA NOT NULL,  -- ECIES(rootKey, pubkey)
-  root_ipns_name VARCHAR(255),
+  root_ipns_key_encrypted BYTEA NOT NULL,  -- ECIES(ipnsPrivKey, pubkey)
+  root_ipns_name VARCHAR(255) NOT NULL,  -- Root folder IPNS name
   created_at TIMESTAMP DEFAULT NOW(),
   initialized_at TIMESTAMP,
   updated_at TIMESTAMP DEFAULT NOW()
@@ -1957,10 +2218,14 @@ User navigates to CipherBox.com
       If not found: INSERT INTO users (pubkey) VALUES ($1)
    h) Generate access token (15 min expiry):
       accessToken = JWT_sign({ userId, pubkey, iat, exp }, backendPrivateKey)
-   i) Generate refresh token (Same expiry as the Web3Auth ID Token):
+   i) Generate refresh token (7 days, aligned with Web3Auth session length):
       refreshToken = secureRandomBytes(32)
       INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
         VALUES ($userId, SHA256(refreshToken), now + 7 days)
+      
+      Note: Web3Auth session length is configured to 7 days in the Web3Auth dashboard.
+      See: https://docs.metamask.io/embedded-wallets/features/session-management
+      Refresh token expiry is aligned with this setting.
 
 8. CipherBox Backend → Frontend:
    Response: {
@@ -2035,12 +2300,14 @@ Alternative: SIWE-style Authentication (Step 6-8)
 
 7a. CipherBox Backend (SIWE Verification):
     a) Find nonce in auth_nonces table
-    b) Verify nonce not expired and not used
-    c) Recover pubkey from signature:
+    b) Verify nonce not expired
+    c) Verify domain matches expected value ("cipherbox.io")
+    d) Verify chainId is 1 (for EIP-4361 compliance)
+    e) Recover pubkey from signature:
        recoveredPubkey = ecrecover(keccak256(message), signature)
-    d) Verify recoveredPubkey == claimed pubkey
-    e) Mark nonce as used
-    f) Continue from step 7g (find/create user by pubkey)
+    f) Verify recoveredPubkey == claimed pubkey
+    g) DELETE nonce from database (prevents replay attacks)
+    h) Continue from step 7g (find/create user by pubkey)
 ```
 
 ### 6.2 Complete File Upload Flow
@@ -2114,32 +2381,23 @@ User drags file "budget.xlsx" into /Documents folder
      encryptedMetadata = AES256GCM_Encrypt(metadataJSON, documentsfolderkey)
 
 10. Frontend:
-    Signs IPNS entry:
-      entry = {
-        version: "1.0",
-        encryptedMetadata: encryptedMetadata,
-        iv: iv_metadata,
-        signature: ECDSA_sign(SHA256(encryptedMetadata), private_key)
-      }
+    Decrypts Documents folder's IPNS private key:
+      ipnsPrivKey = ECIES_Decrypt(documentsIpnsKeyEncrypted, user_private_key)
 
-11. Frontend → Backend:
-    POST /vault/publish-ipns
-    Body: {
-      ipnsName: "/ipns/k51qzi5uqu5dlvj66...",
-      signedEntry: entry
-    }
+11. Frontend publishes directly to IPFS:
+    Publishes encrypted metadata to IPFS, gets CID
+    Signs and publishes IPNS record:
+      await ipfs.name.publish(metadataCID, { key: ipnsPrivKey })
+    
+    Note: Client publishes directly to IPFS network.
+    Backend is NOT involved in IPNS publishing (keys never leave client).
 
-12. Backend:
-    Publishes to IPFS IPNS:
-      ipfs name publish --key=user_key QmNewCID
-    Returns: { success: true, cid: "QmNewCID" }
-
-13. Frontend:
+12. Frontend:
     Updates UI: Shows "budget.xlsx" in /Documents with decrypted name
     Removes upload progress indicator
 
-14. Other Devices:
-    Poll /vault/root_ipns periodically
+13. Other Devices:
+    Poll root IPNS periodically
     Detect IPNS change
     Fetch new metadata
     See new file in next sync cycle (~30 seconds)
@@ -2447,7 +2705,7 @@ Key Property:
 - **FUSE:** Filesystem in Userspace. Kernel module allowing user-space filesystem implementation.
 - **E2E Encryption:** End-to-End. Data encrypted on client; server never holds plaintext.
 - **Zero-Knowledge:** Server has no knowledge of user data or encryption keys (cryptographic guarantee).
-- **Web3Auth:** Distributed key derivation and authentication service. Provides deterministic ECDSA keypair via threshold cryptography.
+- **Web3Auth:** Distributed key derivation and authentication service. Provides deterministic ECDSA keypair via threshold cryptography. Formerly known as Torus Network.
 - **Web3Auth Group Connections:** Feature that links multiple auth methods (Google, email, external wallet) to derive the same ECDSA keypair, enabling seamless account aggregation.
 - **Web3Auth ID Token:** JWT issued by Web3Auth containing user identity claims and wallet public keys, used to authenticate with backend services.
 - **WebAuthn/FIDO2:** Standards for phishing-resistant authentication via device-bound credentials (Passkeys). Used as MFA in Web3Auth, not primary authentication.
@@ -2537,11 +2795,14 @@ A: If you use email/password, you can reset your password through Web3Auth's rec
 
 **Q: What if I lose my device?**
 
-A: You can log in using an alternate auth method linked to your Web3Auth group (email/password, OAuth, or external wallet). Once logged in via Web3Auth, your vault access is preserved because all linked methods derive the same keypair.
+A: Simply log in on a new device using any auth method linked to your Web3Auth group (Google, email/password, external wallet, etc.). Web3Auth will derive the same ECDSA keypair, and CipherBox will return your encrypted root key from the server. Your private key decrypts the root key, and you have full vault access restored automatically. This is the simplest recovery path - no vault export needed as long as you can authenticate via Web3Auth.
 
 **Q: Can I recover my vault if I lose access to all auth methods?**
 
-A: If you lose access to all auth methods linked to your Web3Auth group, and you don't have a vault export with your private key, your vault cannot be recovered. This is the security/convenience tradeoff of zero-knowledge architecture. We recommend exporting your vault regularly and storing the backup securely.
+A: If you lose access to all auth methods linked to your Web3Auth group, and you don't have a vault export with your private key, your vault cannot be recovered. This is the security/convenience tradeoff of zero-knowledge architecture. We strongly recommend:
+1. Link multiple auth methods (Google + email + external wallet) for redundant recovery paths
+2. Export your vault regularly and store the backup securely
+3. Never rely on a single auth method
 
 **Q: What's the difference between JWT and SIWE authentication with CipherBox backend?**
 
