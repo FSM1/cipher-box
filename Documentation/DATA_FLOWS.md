@@ -1,0 +1,609 @@
+---
+version: 1.7.0
+last_updated: 2026-01-16
+status: Active
+ai_context: Data flow diagrams and test vectors for CipherBox. Contains Mermaid sequence diagrams for all major operations. For system design see TECHNICAL_ARCHITECTURE.md.
+---
+
+# CipherBox - Data Flows
+
+**Document Type:** Implementation Reference  
+**Status:** Active  
+**Last Updated:** January 16, 2026  
+
+---
+
+## Table of Contents
+
+1. [Authentication Flow](#1-authentication-flow)
+2. [File Upload Flow](#2-file-upload-flow)
+3. [File Download Flow](#3-file-download-flow)
+4. [Multi-Device Sync Flow](#4-multi-device-sync-flow)
+5. [Vault Export & Recovery Flow](#5-vault-export--recovery-flow)
+6. [Write Operations](#6-write-operations)
+7. [Test Vectors](#7-test-vectors)
+
+---
+
+## Terminology
+
+| Term | Code/API | Prose |
+|------|----------|-------|
+| Root folder encryption key | `rootFolderKey` | root folder key |
+| User's ECDSA public key | `publicKey` | public key |
+| User's ECDSA private key | `privateKey` | private key |
+| IPNS identifier | `ipnsName` | IPNS name |
+| Folder encryption key | `folderKey` | folder key |
+| File encryption key | `fileKey` | file key |
+
+---
+
+## 1. Authentication Flow
+
+### 1.1 Complete Auth Flow (JWT)
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant C as Client
+    participant W as Web3Auth
+    participant B as CipherBox Backend
+    participant DB as PostgreSQL
+    
+    U->>C: Click "Sign In"
+    C->>W: Redirect to Web3Auth modal
+    U->>W: Select auth method (Google/Email/Wallet)
+    U->>W: Complete authentication
+    
+    Note over W: Key Derivation
+    W->>W: Verify credentials
+    W->>W: Identify group connection
+    W->>W: Derive ECDSA keypair (threshold crypto)
+    W->>C: Return {privateKey, publicKey, idToken}
+    
+    Note over C: Backend Authentication
+    C->>B: POST /auth/login {idToken, publicKey}
+    B->>B: Fetch JWKS from Web3Auth
+    B->>B: Verify JWT signature
+    B->>B: Validate claims (iss, aud, exp)
+    B->>B: Extract publicKey from wallets claim
+    B->>DB: Find or create user by publicKey
+    B->>DB: Store refresh token hash
+    B->>C: {accessToken, refreshToken, userId}
+    
+    Note over C: Vault Access
+    C->>B: GET /my-vault
+    B->>DB: Fetch vault by userId
+    B->>C: {encryptedRootFolderKey, rootIpnsName}
+    C->>C: rootFolderKey = ECIES_Decrypt(encrypted, privateKey)
+    
+    Note over C: Session Active
+    C->>C: Store privateKey in RAM
+    C->>C: Store rootFolderKey in RAM
+```
+
+### 1.2 SIWE Authentication Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as CipherBox Backend
+    participant DB as PostgreSQL
+    
+    Note over C: After Web3Auth key derivation
+    
+    C->>B: GET /auth/nonce
+    B->>DB: Insert nonce (5min TTL)
+    B->>C: {nonce, expiresAt}
+    
+    C->>C: Construct SIWE message
+    C->>C: signature = ECDSA_sign(message, privateKey)
+    
+    C->>B: POST /auth/login {message, signature, publicKey}
+    B->>DB: Find nonce, verify not expired/used
+    B->>B: recoveredKey = ecrecover(message, signature)
+    B->>B: Verify recoveredKey == publicKey
+    B->>DB: Delete nonce (prevent replay)
+    B->>DB: Find or create user by publicKey
+    B->>C: {accessToken, refreshToken, userId}
+```
+
+### 1.3 Token Refresh Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as CipherBox Backend
+    participant DB as PostgreSQL
+    
+    Note over C: Access token expired
+    
+    C->>B: POST /auth/refresh {refreshToken}
+    B->>DB: Find token by hash
+    B->>B: Verify not expired/revoked
+    B->>DB: Revoke old refresh token
+    B->>DB: Create new refresh token
+    B->>B: Generate new access token
+    B->>C: {accessToken, refreshToken}
+    
+    C->>C: Store new tokens
+```
+
+---
+
+## 2. File Upload Flow
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant C as Client
+    participant B as CipherBox Backend
+    participant P as Pinata
+    participant IPFS as IPFS Network
+    
+    U->>C: Drag file into folder
+    
+    Note over C: Client-side Encryption
+    C->>C: fileKey = randomBytes(32)
+    C->>C: iv = randomBytes(12)
+    C->>C: ciphertext = AES-GCM(file, fileKey, iv)
+    C->>C: encryptedFileKey = ECIES(fileKey, publicKey)
+    
+    Note over C,B: Upload to Backend
+    C->>B: POST /vault/upload {ciphertext, iv}
+    B->>P: Pin encrypted file
+    P->>IPFS: Store content
+    P->>B: Return CID
+    B->>B: Update storage quota
+    B->>C: {cid, size}
+    
+    Note over C: Update Folder Metadata
+    C->>C: Add file entry to folder.children
+    C->>C: encryptedMetadata = AES-GCM(metadata, folderKey)
+    C->>C: Decrypt folder's ipnsPrivateKey
+    
+    Note over C,IPFS: Publish IPNS
+    C->>IPFS: Upload encrypted metadata, get metadataCid
+    C->>IPFS: Sign & publish IPNS record
+    
+    Note over C: Update UI
+    C->>U: Show file in folder with decrypted name
+```
+
+### 2.1 File Entry Structure
+
+After upload, this entry is added to folder metadata:
+
+```json
+{
+  "type": "file",
+  "nameEncrypted": "AES-GCM(filename, folderKey)",
+  "nameIv": "0x...",
+  "cid": "QmXxxx...",
+  "fileKeyEncrypted": "ECIES(fileKey, publicKey)",
+  "fileIv": "0x...",
+  "size": 2048576,
+  "created": 1705268100,
+  "modified": 1705268100
+}
+```
+
+---
+
+## 3. File Download Flow
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant C as Client
+    participant IPFS as IPFS Network
+    
+    U->>C: Click download on file
+    
+    Note over C: Extract from cached metadata
+    C->>C: fileEntry = folder.children.find(file)
+    
+    Note over C: Decrypt Keys
+    C->>C: fileKey = ECIES_Decrypt(fileKeyEncrypted, privateKey)
+    C->>C: fileName = AES-GCM_Decrypt(nameEncrypted, folderKey, nameIv)
+    
+    Note over C,IPFS: Fetch Encrypted Content
+    C->>IPFS: GET /ipfs/{cid}
+    IPFS->>C: Return encrypted file
+    
+    Note over C: Decrypt Content
+    C->>C: plaintext = AES-GCM_Decrypt(ciphertext, fileKey, fileIv)
+    C->>C: Verify auth tag (tampering detection)
+    
+    Note over C,U: Present to User
+    C->>C: blob = new Blob([plaintext])
+    C->>U: Trigger browser download
+```
+
+---
+
+## 4. Multi-Device Sync Flow
+
+### 4.1 Sync Detection via Polling
+
+```mermaid
+sequenceDiagram
+    participant D1 as Device 1
+    participant IPFS as IPFS Network
+    participant D2 as Device 2
+    
+    Note over D1: User uploads file
+    D1->>IPFS: Upload file, publish IPNS record
+    
+    Note over D2: Background polling (every 30s)
+    loop Every 30 seconds
+        D2->>IPFS: Resolve root IPNS name
+        IPFS->>D2: Return current CID
+        D2->>D2: Compare with cached CID
+        
+        alt CID changed
+            D2->>IPFS: Fetch new metadata from CID
+            D2->>D2: Decrypt metadata
+            D2->>D2: Update UI with new files
+        else CID unchanged
+            D2->>D2: Skip (no changes)
+        end
+    end
+```
+
+### 4.2 Sync Implementation
+
+```typescript
+async function pollForChanges() {
+  // Get root IPNS name from vault
+  const vault = await api.get('/my-vault');
+  
+  // Resolve IPNS to current CID
+  const currentCid = await ipfs.name.resolve(vault.rootIpnsName);
+  
+  // Check if changed
+  if (currentCid === cachedRootCid) {
+    console.log("No changes detected");
+    return;
+  }
+  
+  // Changes detected - fetch new metadata
+  cachedRootCid = currentCid;
+  const rootMetadata = await fetchAndDecryptMetadata(
+    vault.rootIpnsName,
+    rootFolderKey
+  );
+  
+  // Update UI
+  updateFileTree(rootMetadata);
+}
+
+// Start polling
+setInterval(pollForChanges, 30000);
+```
+
+---
+
+## 5. Vault Export & Recovery Flow
+
+### 5.1 Export Flow
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant C as Client
+    participant B as CipherBox Backend
+    
+    U->>C: Click "Export Vault" in Settings
+    C->>B: GET /user/export-vault
+    
+    B->>B: Gather vault data
+    B->>C: Return export JSON
+    
+    Note over C: Export contains
+    C->>C: rootIpnsName
+    C->>C: encryptedRootFolderKey
+    C->>C: encryptedRootIpnsPrivateKey
+    C->>C: List of all pinned CIDs
+    
+    C->>U: Download vault_export.json
+```
+
+### 5.2 Recovery Flow (Without CipherBox)
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant R as Recovery Tool
+    participant IPFS as IPFS Gateway
+    
+    U->>R: Load vault_export.json
+    U->>R: Provide privateKey (from Web3Auth backup)
+    
+    Note over R: Decrypt Root Keys
+    R->>R: rootFolderKey = ECIES_Decrypt(encrypted, privateKey)
+    R->>R: ipnsPrivateKey = ECIES_Decrypt(encrypted, privateKey)
+    
+    Note over R,IPFS: Resolve Root IPNS
+    R->>IPFS: Resolve rootIpnsName
+    IPFS->>R: Return root metadata CID
+    R->>IPFS: Fetch root metadata
+    R->>R: Decrypt with rootFolderKey
+    
+    Note over R: Traverse All Folders
+    loop For each folder
+        R->>IPFS: Resolve folder IPNS
+        R->>IPFS: Fetch folder metadata
+        R->>R: Decrypt folder metadata
+        R->>R: Extract subfolder keys
+    end
+    
+    Note over R: Download All Files
+    loop For each file
+        R->>IPFS: Fetch encrypted file by CID
+        R->>R: Decrypt file key
+        R->>R: Decrypt file content
+        R->>U: Save plaintext file locally
+    end
+    
+    U->>U: Complete vault recovered independently
+```
+
+---
+
+## 6. Write Operations
+
+### 6.1 Create Folder
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant C as Client
+    participant IPFS as IPFS Network
+    
+    U->>C: Create new folder "Documents"
+    
+    Note over C: Generate Keys
+    C->>C: folderKey = randomBytes(32)
+    C->>C: ipnsKeypair = generateEd25519()
+    C->>C: ipnsName = deriveIpnsName(ipnsKeypair.public)
+    
+    Note over C: Encrypt Keys
+    C->>C: encryptedFolderKey = ECIES(folderKey, publicKey)
+    C->>C: encryptedIpnsKey = ECIES(ipnsKeypair.private, publicKey)
+    
+    Note over C: Create Empty Folder
+    C->>C: folderMetadata = { children: [] }
+    C->>C: encrypted = AES-GCM(metadata, folderKey)
+    C->>IPFS: Publish folder IPNS record
+    
+    Note over C: Update Parent
+    C->>C: Add folder entry to parent.children
+    C->>C: Re-encrypt parent metadata
+    C->>IPFS: Publish parent IPNS record
+```
+
+### 6.2 Rename File/Folder
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant C as Client
+    participant IPFS as IPFS Network
+    
+    U->>C: Rename "old.pdf" to "new.pdf"
+    
+    C->>C: Find file entry in parent metadata
+    C->>C: newNameEncrypted = AES-GCM("new.pdf", folderKey)
+    C->>C: Update entry.nameEncrypted
+    C->>C: Re-encrypt parent metadata
+    C->>IPFS: Publish parent IPNS record
+    
+    Note over C: CID unchanged (only metadata updated)
+```
+
+### 6.3 Move File/Folder
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant IPFS as IPFS Network
+    
+    Note over C: Move file.pdf from /Docs to /Docs/Work
+    
+    Note over C: Step 1: Add to destination first
+    C->>C: Add file entry to destination folder
+    C->>C: Re-encrypt destination metadata
+    C->>IPFS: Publish destination IPNS
+    
+    Note over C: Step 2: Remove from source
+    C->>C: Remove file entry from source folder
+    C->>C: Re-encrypt source metadata
+    C->>IPFS: Publish source IPNS
+    
+    Note over C: Order ensures file always reachable
+```
+
+### 6.4 Delete File
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as CipherBox Backend
+    participant IPFS as IPFS Network
+    
+    Note over C: Delete file.pdf
+    
+    C->>B: POST /vault/unpin {cid}
+    B->>B: Unpin from Pinata
+    B->>B: Reclaim storage quota
+    B->>C: {success: true}
+    
+    C->>C: Remove file entry from parent
+    C->>C: Re-encrypt parent metadata
+    C->>IPFS: Publish parent IPNS
+```
+
+### 6.5 Update File (Replace Contents)
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as CipherBox Backend
+    participant IPFS as IPFS Network
+    
+    Note over C: Update existing file
+    
+    C->>C: newFileKey = randomBytes(32)
+    C->>C: newIv = randomBytes(12)
+    C->>C: ciphertext = AES-GCM(newContent, newFileKey, newIv)
+    C->>C: encryptedKey = ECIES(newFileKey, publicKey)
+    
+    C->>B: POST /vault/upload {ciphertext, newIv}
+    B->>C: {cid: newCid}
+    
+    C->>C: Update file entry with new cid, key, iv
+    C->>C: Re-encrypt parent metadata
+    C->>IPFS: Publish parent IPNS
+    
+    C->>B: POST /vault/unpin {oldCid}
+    Note over B: Reclaim old file storage
+```
+
+---
+
+## 7. Test Vectors
+
+### 7.1 Key Derivation Consistency
+
+**Scenario:** Verify same keypair across auth methods
+
+```
+Test: User signs up with Google, later logs in with linked email
+
+Signup with Google:
+  Web3Auth group: "cipherbox-aggregate"
+  Result: publicKey = 0x04abc123...
+
+Login with email (linked):
+  Web3Auth group: "cipherbox-aggregate" (same)
+  Result: publicKey = 0x04abc123... (same!)
+
+Verification:
+  ✓ Both auth methods derive identical keypair
+  ✓ Both can decrypt same vault
+```
+
+### 7.2 SIWE Authentication
+
+**Scenario:** Verify SIWE signature flow
+
+```
+Input:
+  privateKey = 0x1234...
+  nonce = "abc123xyz789"
+  timestamp = 1705298400
+
+Message:
+  {
+    "domain": "cipherbox.io",
+    "publicKey": "0x04abc123...",
+    "nonce": "abc123xyz789",
+    "timestamp": 1705298400,
+    "statement": "Sign in to CipherBox"
+  }
+
+Process:
+  messageHash = keccak256(JSON.stringify(message))
+  signature = ECDSA_sign(messageHash, privateKey)
+
+Verification:
+  recoveredKey = ecrecover(messageHash, signature)
+  ✓ recoveredKey == publicKey
+```
+
+### 7.3 Token Refresh
+
+**Scenario:** Verify token refresh and rotation
+
+```
+T0: Login
+  accessToken expires: T0 + 15min
+  refreshToken expires: T0 + 7days
+  refreshToken hash stored in DB
+
+T+14min: API call succeeds (accessToken valid)
+
+T+16min: API call fails (accessToken expired)
+  Client calls POST /auth/refresh
+
+  Backend:
+    1. Verify old refreshToken hash exists
+    2. Revoke old refreshToken (set revoked_at)
+    3. Generate new refreshToken, store hash
+    4. Generate new accessToken
+
+  Result:
+    ✓ New accessToken (expires T+16min + 15min)
+    ✓ New refreshToken (expires T+16min + 7days)
+    ✓ Old refreshToken no longer valid
+```
+
+### 7.4 File Encryption Round-Trip
+
+**Scenario:** Verify file encryption/decryption integrity
+
+```
+Input:
+  plaintext = "Hello, CipherBox!" (UTF-8 bytes)
+  fileKey = randomBytes(32)
+  iv = randomBytes(12)
+
+Encryption:
+  ciphertext = AES-256-GCM(plaintext, fileKey, iv)
+  Output: ciphertext (17 bytes) + authTag (16 bytes)
+
+Decryption:
+  result = AES-256-GCM_Decrypt(ciphertext, fileKey, iv, authTag)
+  
+Verification:
+  ✓ result == plaintext
+  ✓ Modifying ciphertext causes auth failure
+  ✓ Wrong key causes decryption failure
+```
+
+### 7.5 ECIES Key Wrapping
+
+**Scenario:** Verify ECIES encryption/decryption
+
+```
+Input:
+  fileKey = randomBytes(32) // The secret to wrap
+  publicKey = 0x04abc123...
+  privateKey = 0x1234...
+
+Encryption:
+  encryptedKey = ECIES_Encrypt(fileKey, publicKey)
+  Output: ephemeralPubkey || nonce || ciphertext || authTag
+
+Decryption:
+  result = ECIES_Decrypt(encryptedKey, privateKey)
+
+Verification:
+  ✓ result == fileKey
+  ✓ Different privateKey causes failure
+  ✓ Same publicKey/privateKey pair always works
+```
+
+---
+
+## Related Documents
+
+- [PRD.md](./PRD.md) - Product requirements and user journeys
+- [TECHNICAL_ARCHITECTURE.md](./TECHNICAL_ARCHITECTURE.md) - System design and encryption
+- [API_SPECIFICATION.md](./API_SPECIFICATION.md) - Backend endpoints and database schema
+- [CLIENT_SPECIFICATION.md](./CLIENT_SPECIFICATION.md) - Web UI and desktop app specifications
+
+---
+
+**End of Data Flows**

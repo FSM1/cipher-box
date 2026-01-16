@@ -1,6 +1,8 @@
-<img src="https://r2cdn.perplexity.ai/pplx-full-logo-primary-dark%402x.png" style="height:64px;margin-right:32px"/>
+<p align="center">
+<img src="./cipherbox logo.png" alt="CipherBox Logo" width="450"/>
+</p>
 
-# CipherBox v1.0 - README.md
+# CipherBox - README.md
 
 **Privacy-first cloud storage with decentralized persistence**
 
@@ -8,15 +10,22 @@
 
 ## 📄 Overview
 
-**CipherBox** delivers **zero-knowledge cloud storage** using:
+**CipherBox is a technology demonstrator** showcasing privacy-first cloud storage with decentralized persistence. It is **not intended as a commercial product** but as a proof-of-concept for:
+
+- **Zero-knowledge client-side encryption**
+- **Decentralized storage via IPFS/IPNS**
+- **Deterministic key derivation via Web3Auth**
+- **Cross-device sync without server-side key access**
+
+**CipherBox** demonstrates:
 
 - **IPFS/IPNS** for decentralized, redundant storage
-- **Torus Network** for deterministic key derivation across 4 auth methods
+- **Web3Auth** for deterministic key derivation across multiple auth methods
 - **AES-256-GCM + ECIES secp256k1** for layered E2E encryption
 - **React web UI** + **FUSE desktop mount** (macOS v1)
 - **Automatic multi-device sync** via IPNS polling
 
-**Target:** Cypherpunks \& crypto enthusiasts demanding cryptographic privacy guarantees.
+**Target:** Developers and technical users interested in cryptography, IPFS, and privacy-preserving architectures.
 
 ***
 
@@ -41,13 +50,12 @@
 ### ✅ **Included**
 
 ```
-Auth: Email/Password, Passkeys, OAuth, Magic Link → Torus key derivation
+Auth: Email/Password, OAuth, Magic Link, External Wallet → Web3Auth key derivation
 Storage: IPFS via Pinata (v1), per-folder IPNS entries
 Encryption: AES-256-GCM files + ECIES key wrapping
 Web UI: React file browser, drag-drop, folder ops
 Desktop: macOS FUSE mount + background sync
 Sync: IPNS polling (~30s eventual consistency)
-Freemium: 500 MiB free tier
 Portability: Vault export + independent recovery
 ```
 
@@ -70,10 +78,9 @@ v2: File versioning, folder sharing, search
 | **Web Crypto** | Web Crypto API | Native browser encryption |
 | **Backend** | Node.js + NestJS + TypeScript | Type-safe APIs |
 | **Database** | PostgreSQL | ACID audit trail |
-| **Key Derivation** | Torus Network | Deterministic across auth methods |
+| **Key Derivation** | Web3Auth Network | Deterministic across auth methods |
 | **Storage** | IPFS via Pinata | Redundant, decentralized |
 | **Desktop** | Tauri/Electron + FUSE | Transparent file access |
-| **Auth** | WebAuthn + OAuth 2.0 | Phishing-resistant |
 
 
 ***
@@ -85,7 +92,7 @@ User Device (Web/Desktop)
         ↓ Auth (4 methods)
 CipherBox Backend (JWT)
         ↓
-Torus Network (Key Derivation)
+Web3Auth Network (Key Derivation)
         ↓ ECDSA Private Key (RAM only!)
 User Device ← Vault Data ← PostgreSQL
         ↓ Encrypted Keys
@@ -98,10 +105,10 @@ IPFS (Pinata) ← Encrypted Files
 
 ## 📊 5 Key Decisions
 
-### 1. **Torus for Key Derivation**
+### 1. **Web3Auth for Key Derivation**
 
 ```
-Email/Passkey/OAuth → Backend JWT → Torus → Same ECDSA keypair
+Email/Password/OAuth/Magic Link/External Wallet → Web3Auth → Same ECDSA keypair
 ```
 
 
@@ -139,9 +146,9 @@ Client holds: Private key (RAM only)
 ## 🛤️ User Journey (Example)
 
 ```
-1. Signup (Google) → Torus derives KeyA
+1. Signup (Google) → Web3Auth derives KeyA
 2. Upload file → Encrypt → IPFS CID → IPNS publish
-3. Phone login (Email) → Torus derives KeyA (same!)
+3. Phone login (Email) → Web3Auth derives KeyA (same!)
 4. Phone polls IPNS → Sees file → Downloads & decrypts
 5. Export vault → JSON with CIDs + encrypted root key
 6. CipherBox gone? → Use export + private key → Full recovery
@@ -153,14 +160,13 @@ Client holds: Private key (RAM only)
 ## 📈 Timeline
 
 ```
-Week 1-2:  Planning, Torus/IPFS setup
+Week 1-2:  Planning, Web3Auth/IPFS setup
 Week 3-4:  Auth endpoints + key derivation
 Week 5-7:  Encryption + IPFS integration
 Week 8-10: React UI + macOS FUSE mount
 Week 11-12: Testing + security audit + launch
 
 Team: 3 people | Total: 12 weeks
-Launch: April 15, 2026
 ```
 
 
@@ -173,41 +179,36 @@ Launch: April 15, 2026
 ✅ E2E Encryption: AES-256-GCM + ECIES secp256k1
 ✅ Data Portability: Export vault, recover independently
 ✅ No Tracking: No analytics/telemetry
-✅ Threat Model: Documented in PRD Section 8.2
+✅ Threat Model: See TECHNICAL_ARCHITECTURE.md
 ```
 
 
 ***
 
-## 📋 Success Metrics (v1 Launch)
+## 📋 Success Criteria (Tech Demo)
 
-| Metric | Target |
+| Criterion | Target |
 | :-- | :-- |
-| **Privacy** | Private keys never on server |
-| **Auth** | <3s login (all methods) |
-| **Upload** | <5s (<100MB files) |
-| **Sync** | <30s multi-device |
-| **Uptime** | 99.5% |
-| **Scale** | 100k+ files, 100GB+ vaults |
+| **Privacy** | Private keys never on server (cryptographically enforced) |
+| **Encryption** | AES-256-GCM + ECIES correctly implemented |
+| **Key Derivation** | Same user + any auth method → same keypair |
+| **Multi-Device Sync** | <30s via IPNS polling |
+| **Data Recovery** | Vault export enables independent recovery |
+| **Zero Dependencies** | Can decrypt vault without CipherBox service |
 
 
 ***
 
-## 📚 Other Documents
+## 📚 Documentation
 
 ```
-CipherBox_v1.0_PRD.md         ← Full spec (15k words)
-IMPLEMENTATION_ROADMAP.md     ← Week-by-week plan
+00_START_HERE.md              ← Quick overview
+Documentation/PRD.md          ← Product requirements
+Documentation/TECHNICAL_ARCHITECTURE.md  ← Encryption & system design
+Documentation/API_SPECIFICATION.md       ← Backend endpoints
+Documentation/DATA_FLOWS.md              ← Sequence diagrams
+Documentation/CLIENT_SPECIFICATION.md    ← Web UI & desktop specs
+IMMPLEMENTATION_ROADMAP.md    ← Week-by-week plan
 ```
-
-***
-
-## 🚀 Next Steps
-
-1. **✅ Save this README.md**
-2. **Ask:** `"Show me CipherBox_v1.0_PRD.md"` (main spec)
-3. **Ask:** `"Show me IMPLEMENTATION_ROADMAP.md"` (timeline)
-4. **Share with team**
-5. **Start Week 1 planning**
 
 ***

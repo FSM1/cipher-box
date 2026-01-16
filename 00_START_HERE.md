@@ -1,11 +1,12 @@
-<img src="https://r2cdn.perplexity.ai/pplx-full-logo-primary-dark%402x.png" style="height:64px;margin-right:32px"/>
+<p align="center">
+<img src="./cipherbox logo.png" alt="CipherBox Logo" width="450"/>
+</p>
 
-# 🚀 CipherBox v1.0 - START HERE
+# 🚀 CipherBox - START HERE
 
 **Complete Product Specification for Privacy-First Encrypted Cloud Storage**
 
-Generated: January 15, 2026, 04:35 CET
-Status: ✅ **READY FOR DEVELOPMENT**
+Status: 🚂 **IN PROGRESS**
 
 ***
 
@@ -26,24 +27,32 @@ This is **not a preliminary design document**—it's a **complete blueprint** wi
 
 ***
 
-## 📚 Documents Available
+## 📚 Documentation Structure
 
+### Core Documents
 1. **00_START_HERE.md** ← **You're reading it!**
-2. **README.md** - Tech stack \& architecture overview
-3. **CipherBox_v1.0_PRD.md** - **MAIN SPEC** (15,000+ words)
-4. **IMPLEMENTATION_ROADMAP.md** - Week-by-week timeline
+2. **README.md** - Tech stack & architecture overview
+
+
+### Specifications (`Documentation/`)
+3. **IMPLEMENTATION_ROADMAP.md** - 12-week development timeline
+4. **PRD.md** - Product requirements, user journeys, scope
+5. **TECHNICAL_ARCHITECTURE.md** - Encryption, key hierarchy, system design
+6. **API_SPECIFICATION.md** - Backend endpoints, database schema
+7. **DATA_FLOWS.md** - Sequence diagrams, test vectors
+8. **CLIENT_SPECIFICATION.md** - Web UI, desktop app specs
 
 ***
 
 ## 🎯 5 Key Architectural Decisions
 
-### 1. **Torus Network for Key Derivation**
+### 1. **Web3Auth for Key Derivation**
 
 **All 4 auth methods → same keypair**
 
 ```
-Email/Passkey/OAuth/Magic Link → Backend JWT → Torus → ECDSA keypair
-(same user = same keypair across methods)
+Email/Password/OAuth/Magic Link/External Wallet → Web3Auth → ECDSA keypair
+(same user = same keypair across all grouped auth methods)
 ```
 
 
@@ -74,7 +83,7 @@ Server stores **only encrypted keys** - never plaintext
 
 ### ✅ **Included**
 
-- Multi-method auth (Email/Pass, Passkeys, OAuth, Magic Link)
+- Multi-method auth (Email/Password, OAuth, Magic Link, External Wallet)
 - File upload/download (E2E encrypted)
 - Folder organization (create/rename/move/delete)
 - Web UI (React)
@@ -106,7 +115,7 @@ Server stores **only encrypted keys** - never plaintext
 | **Frontend** | React 18 + TypeScript |
 | **Backend** | Node.js + NestJS + TypeScript |
 | **Crypto** | Web Crypto API (native) |
-| **Key Derivation** | Torus Network (external) |
+| **Key Derivation** | Web3Auth Network |
 | **Storage** | IPFS via Pinata (v1) |
 | **Database** | PostgreSQL |
 | **Desktop** | Tauri/Electron + FUSE |
@@ -155,6 +164,6 @@ Week 11-12: Testing & Launch
 
 ## 🚀 Ready to Build
 
-**Status:**  **APPROVED FOR DEVELOPMENT**
+**Status:**  **IN PROGRESS**
 
 **Launch Target:** April 15, 2026
