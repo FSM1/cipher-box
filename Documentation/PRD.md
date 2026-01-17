@@ -1,6 +1,6 @@
 ---
-version: 1.7.0
-last_updated: 2026-01-16
+version: 1.8.0
+last_updated: 2026-01-17
 status: Active
 ai_context: Product requirements for CipherBox. Tech demonstrator - not commercial. See TECHNICAL_ARCHITECTURE.md for implementation details, API_SPECIFICATION.md for backend contract, DATA_FLOWS.md for sequences.
 ---
@@ -11,7 +11,7 @@ ai_context: Product requirements for CipherBox. Tech demonstrator - not commerci
 **Type:** Technology Demonstrator  
 **Status:** Specification Document  
 **Created:** January 14, 2026  
-**Last Updated:** January 16, 2026  
+**Last Updated:** January 17, 2026  
 
 ---
 
@@ -186,6 +186,17 @@ Core pillars:
 | Max folder depth | 20 levels | Traversal performance |
 | Sync latency | ~30 seconds | IPNS polling interval |
 
+### 4.4 PoC Validation Harness
+
+To de-risk the key hierarchy, IPNS publishing, and file system flows, the project includes a **single-user console PoC harness** that runs end-to-end against live IPFS/IPNS (no Web3Auth and no backend). The PoC:
+
+- Loads `privateKey` from a local `.env` file (client-only, never logged)
+- Persists `rootFolderKey` and `rootIpnsName` to disk during the run
+- Executes a full flow per run: create folders → upload → modify → rename → move → delete
+- Verifies each step by resolving IPNS and decrypting metadata/content
+- Measures IPNS propagation delay per publish
+- Tears down by unpinning **all** created CIDs (files + folder metadata) and removing generated IPNS keys
+
 ---
 
 ## 5. Success Criteria
@@ -213,6 +224,15 @@ See [TECHNICAL_ARCHITECTURE.md](./TECHNICAL_ARCHITECTURE.md#acceptance-criteria)
 | P3 | File download (<100MB) | <5s (P95) | Integration test |
 | P4 | IPNS resolution (cached) | <200ms | Integration test |
 | P5 | FUSE mount startup | <3s | Manual test |
+
+### 5.4 PoC Validation Criteria
+
+| ID | Criterion | Validation |
+|----|-----------|------------|
+| C1 | PoC completes full flow without errors | Single-run harness test |
+| C2 | IPNS resolves to expected metadata after each publish | Poll-until-resolved check |
+| C3 | File decrypts correctly after upload, update, rename, move | Round-trip checks |
+| C4 | Teardown unpins all created CIDs | Pin audit in harness logs |
 
 ---
 

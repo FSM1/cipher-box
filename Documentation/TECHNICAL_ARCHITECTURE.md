@@ -1,6 +1,6 @@
 ---
-version: 1.7.0
-last_updated: 2026-01-16
+version: 1.8.0
+last_updated: 2026-01-17
 status: Active
 ai_context: Technical architecture for CipherBox. Contains encryption specs, key hierarchy, auth flows, and system design. For API details see API_SPECIFICATION.md, for sequences see DATA_FLOWS.md.
 ---
@@ -9,7 +9,7 @@ ai_context: Technical architecture for CipherBox. Contains encryption specs, key
 
 **Document Type:** Technical Specification  
 **Status:** Active  
-**Last Updated:** January 16, 2026  
+**Last Updated:** January 17, 2026  
 
 ---
 
@@ -373,6 +373,21 @@ File Keys (AES-256, one per file)
 3. Clear rootFolderKey from memory
 4. Clear all cached folder keys
 5. Clear all tokens
+
+### 4.4 PoC Local Key Bootstrap (Console Harness)
+
+The console PoC bypasses Web3Auth and the backend. It uses a locally provided `privateKey` and persists only the minimum vault state to disk for the duration of the run.
+
+**PoC bootstrap rules:**
+- Load `privateKey` from `.env` (client-only, never logged)
+- Derive `publicKey` locally (secp256k1)
+- Generate `rootFolderKey` and store on disk for the run
+- Generate per-folder IPNS keys on the local IPFS node
+- Store the IPNS key **name** encrypted with ECIES in folder metadata (stand-in for `ipnsPrivateKey`), while the actual IPNS private key remains in the local IPFS keystore
+
+**Teardown:**
+- Unpin all file and folder metadata CIDs created during the run
+- Remove any IPNS keys created in the local IPFS keystore
 
 ---
 
