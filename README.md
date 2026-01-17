@@ -25,6 +25,8 @@
 - **React web UI** + **FUSE desktop mount** (macOS v1)
 - **Automatic multi-device sync** via IPNS polling
 
+**PoC Focus:** A single-user, console-based harness validates IPFS/IPNS flows end-to-end without Web3Auth or backend dependencies. Each run performs a full file/folder flow, verifies correctness via IPNS resolution, measures propagation delay, and unpins all created CIDs during teardown.
+
 **Target:** Developers and technical users interested in cryptography, IPFS, and privacy-preserving architectures.
 
 ***

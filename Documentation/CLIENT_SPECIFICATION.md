@@ -1,6 +1,6 @@
 ---
-version: 1.7.0
-last_updated: 2026-01-16
+version: 1.8.0
+last_updated: 2026-01-17
 status: Active
 ai_context: Client application specifications for CipherBox. Contains Web UI and Desktop app requirements. For system design see TECHNICAL_ARCHITECTURE.md.
 ---
@@ -9,7 +9,7 @@ ai_context: Client application specifications for CipherBox. Contains Web UI and
 
 **Document Type:** Client Application Specification  
 **Status:** Active  
-**Last Updated:** January 16, 2026  
+**Last Updated:** January 17, 2026  
 
 ---
 
@@ -19,6 +19,7 @@ ai_context: Client application specifications for CipherBox. Contains Web UI and
 2. [Desktop Application](#2-desktop-application)
 3. [Shared Components](#3-shared-components)
 4. [Outstanding Questions](#4-outstanding-questions)
+5. [Console PoC Harness](#5-console-poc-harness)
 
 ---
 
@@ -498,6 +499,33 @@ interface VaultModule {
 | Menu bar icon vs dock icon? | macOS UX | Medium |
 | System notification permissions? | Desktop UX | Medium |
 | Auto-update mechanism? | Distribution | High |
+
+---
+
+## 5. Console PoC Harness
+
+**Goal:** Provide a single-user, online test harness to validate IPFS/IPNS flows without Web3Auth or the backend.
+
+**Environment:** Node.js (TypeScript), local IPFS daemon, optional Pinata API keys for pin/unpin.
+
+**Behavior:**
+
+1. Load `privateKey` from `.env` (never logged)
+2. Generate `rootFolderKey` and root IPNS key
+3. Create folders and publish IPNS updates
+4. Upload, modify, rename, move, delete a file
+5. Verify each step by resolving IPNS and decrypting metadata/content
+6. Measure IPNS propagation delay per publish
+7. Teardown: unpin all created CIDs (files + folder metadata) and remove IPNS keys
+
+**Persistence:**
+- `rootFolderKey` and `rootIpnsName` are persisted to disk during the run
+- Private keys remain in memory only
+
+**Non-goals:**
+- Web UI or desktop UI
+- Web3Auth integration
+- Vault export or recovery workflows
 
 ---
 

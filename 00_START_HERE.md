@@ -79,6 +79,12 @@ Server stores **only encrypted keys** - never plaintext
 
 ***
 
+## 🧪 Console PoC Harness (Validation-First)
+
+To de-risk the crypto and IPFS/IPNS assumptions, a single-user Node.js console harness runs the full file/folder flow end-to-end without Web3Auth or backend dependencies. Each run publishes metadata to IPFS/IPNS, verifies correctness via IPNS resolution, measures propagation delay, and unpins all created CIDs during teardown.
+
+***
+
 ## 📋 MVP Scope (v1.0)
 
 ### ✅ **Included**

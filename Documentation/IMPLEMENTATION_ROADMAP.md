@@ -1,3 +1,10 @@
+---
+version: 1.8.0
+last_updated: 2026-01-17
+status: Active
+ai_context: Implementation roadmap for CipherBox v1.0. Includes week-by-week plan, deliverables, and testing milestones.
+---
+
 <img src="https://r2cdn.perplexity.ai/pplx-full-logo-primary-dark%402x.png" style="height:64px;margin-right:32px"/>
 
 # CipherBox v1.0 - Implementation Roadmap
@@ -32,6 +39,7 @@
 ✅ PRD reviewed by team
 ✅ Dev environments working (Node.js, PostgreSQL, Docker)
 ✅ Crypto libraries evaluated (Web Crypto API, libsodium.js)
+✅ Console PoC harness spike (single-user IPFS/IPNS + pin/unpin)
 ✅ Web3Auth dashboard setup + group connections configured
 ✅ Pinata API test account
 ✅ Database schema migration scripts

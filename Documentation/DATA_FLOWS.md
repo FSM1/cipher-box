@@ -1,6 +1,6 @@
 ---
-version: 1.7.0
-last_updated: 2026-01-16
+version: 1.8.0
+last_updated: 2026-01-17
 status: Active
 ai_context: Data flow diagrams and test vectors for CipherBox. Contains Mermaid sequence diagrams for all major operations. For system design see TECHNICAL_ARCHITECTURE.md.
 ---
@@ -9,7 +9,7 @@ ai_context: Data flow diagrams and test vectors for CipherBox. Contains Mermaid 
 
 **Document Type:** Implementation Reference  
 **Status:** Active  
-**Last Updated:** January 16, 2026  
+**Last Updated:** January 17, 2026  
 
 ---
 
@@ -22,6 +22,7 @@ ai_context: Data flow diagrams and test vectors for CipherBox. Contains Mermaid 
 5. [Vault Export & Recovery Flow](#5-vault-export--recovery-flow)
 6. [Write Operations](#6-write-operations)
 7. [Test Vectors](#7-test-vectors)
+8. [Console PoC Harness Flow](#8-console-poc-harness-flow)
 
 ---
 
@@ -593,6 +594,52 @@ Verification:
   ✓ result == fileKey
   ✓ Different privateKey causes failure
   ✓ Same publicKey/privateKey pair always works
+
+---
+
+## 8. Console PoC Harness Flow
+
+The console PoC is a single-user, online test harness that executes a full filesystem flow per run and measures IPNS propagation delays. It does not use Web3Auth or the backend.
+
+```mermaid
+sequenceDiagram
+    participant H as PoC Harness
+    participant IPFS as IPFS Network
+
+    Note over H: Bootstrap
+    H->>H: Load privateKey from .env
+    H->>H: Generate rootFolderKey
+    H->>H: Generate root IPNS key (local IPFS keystore)
+    H->>IPFS: Add encrypted root metadata
+    H->>IPFS: Pin metadata CID
+    H->>IPFS: Publish IPNS (root)
+
+    Note over H: Folder Operations
+    H->>H: Create subfolder keys + IPNS key
+    H->>IPFS: Add + pin subfolder metadata
+    H->>IPFS: Publish subfolder IPNS
+    H->>IPFS: Update root metadata, publish root IPNS
+
+    Note over H: File Operations
+    H->>H: Encrypt file (AES-GCM), wrap key (ECIES)
+    H->>IPFS: Add + pin encrypted file
+    H->>IPFS: Update folder metadata, publish folder IPNS
+    H->>IPFS: Resolve IPNS, fetch metadata, decrypt and verify
+
+    Note over H: Modify / Rename / Move / Delete
+    H->>IPFS: Publish after each metadata change
+    H->>IPFS: Unpin replaced or deleted file CIDs
+
+    Note over H: Teardown
+    H->>IPFS: Unpin all file + metadata CIDs
+    H->>IPFS: Remove IPNS keys from local keystore
+```
+
+**Verification checkpoints:**
+- IPNS resolves to expected metadata CID after each publish (poll-until-resolved)
+- Metadata decrypts correctly with expected entries
+- File decrypts correctly after upload, update, rename, move
+- All created CIDs are unpinned during teardown
 ```
 
 ---
