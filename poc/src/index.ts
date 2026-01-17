@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 import { randomBytes, createCipheriv, createDecipheriv } from "crypto";
 import { encrypt as eciesEncrypt, decrypt as eciesDecrypt } from "eciesjs";
 import { getPublicKey } from "@noble/secp256k1";
-import { mkdir, readFile, writeFile } from "fs/promises";
+import { mkdir, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
 
