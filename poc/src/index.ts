@@ -233,7 +233,7 @@ const unpinCid = async (ctx: HarnessContext, cid: string): Promise<void> => {
 };
 
 const pinataPin = async (pinata: PinataConfig, cid: string): Promise<void> => {
-    const response = await fetch("https://api.pinata.cloud/pinn ing/pinByHash", {
+    const response = await fetch("https://api.pinata.cloud/pinning/pinByHash", {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
