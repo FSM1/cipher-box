@@ -1,5 +1,5 @@
 ---
-version: 1.8.1
+version: 1.8.2
 last_updated: 2026-01-18
 status: Active
 ai_context: Implementation roadmap for CipherBox v1.0. Includes week-by-week plan, deliverables, and testing milestones.
@@ -156,8 +156,9 @@ ai_context: Implementation roadmap for CipherBox v1.0. Includes week-by-week pla
 ✅ Backend relays signed IPNS records (keys never leave client)
 ```
 
-**Architecture Note:** IPNS signing keys are managed entirely client-side.
-Backend relays signed records only; private keys never leave client.
+**Architecture Note:** Backend stores the encrypted root folder key in the vaults table.
+The root IPNS keypair is stored encrypted in the root folder's metadata.
+IPNS signing keys are managed entirely client-side; backend relays signed records only.
 
 **Tests:** Create folder → IPNS resolves → metadata decrypts correctly
 

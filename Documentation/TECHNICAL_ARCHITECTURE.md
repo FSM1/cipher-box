@@ -1,5 +1,5 @@
 ---
-version: 1.8.1
+version: 1.8.2
 last_updated: 2026-01-18
 status: Active
 ai_context: Technical architecture for CipherBox. Contains encryption specs, key hierarchy, auth flows, and system design. For API details see API_SPECIFICATION.md, for sequences see DATA_FLOWS.md.
@@ -427,7 +427,8 @@ sequenceDiagram
   B->>IPFS: Add metadata, return CID
   B->>C: Return CID
   C->>C: Sign IPNS record (Ed25519)
-  C->>B: POST /ipns/publish (signed record)
+  C->>C: Encode signed record to BASE64
+  C->>B: POST /ipns/publish (BASE64-encoded signed record)
   B->>IPFS: Publish IPNS record
     Note over IPFS: IPNS name now resolves to new CID
 ```
