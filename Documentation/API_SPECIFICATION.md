@@ -8,7 +8,7 @@ ai_context: API specification for CipherBox backend. Contains all endpoints, req
 
 **Document Type:** API Specification  
 **Status:** Active  
-**Last Updated:** January 16, 2026  
+**Last Updated:** January 18, 2026  
 **Base URL:** `https://api.cipherbox.io`
 
 ---
