@@ -1,5 +1,5 @@
 ---
-version: 1.8.2
+version: 1.9.0
 last_updated: 2026-01-18
 status: Active
 ai_context: Implementation roadmap for CipherBox v1.0. Includes week-by-week plan, deliverables, and testing milestones.

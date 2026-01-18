@@ -1,5 +1,5 @@
 ---
-version: 1.8.2
+version: 1.9.0
 last_updated: 2026-01-18
 status: Active
 ai_context: API specification for CipherBox backend. Contains all endpoints, request/response formats, database schema, and rate limits. For system design see TECHNICAL_ARCHITECTURE.md.

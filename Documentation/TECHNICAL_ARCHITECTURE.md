@@ -1,5 +1,5 @@
 ---
-version: 1.8.2
+version: 1.9.0
 last_updated: 2026-01-18
 status: Active
 ai_context: Technical architecture for CipherBox. Contains encryption specs, key hierarchy, auth flows, and system design. For API details see API_SPECIFICATION.md, for sequences see DATA_FLOWS.md.
