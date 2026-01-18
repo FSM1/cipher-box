@@ -1,6 +1,6 @@
 ---
-version: 1.8.0
-last_updated: 2026-01-17
+version: 1.8.1
+last_updated: 2026-01-18
 status: Active
 ai_context: Technical architecture for CipherBox. Contains encryption specs, key hierarchy, auth flows, and system design. For API details see API_SPECIFICATION.md, for sequences see DATA_FLOWS.md.
 ---
@@ -91,6 +91,7 @@ ai_context: Technical architecture for CipherBox. Contains encryption specs, key
 3. **Deterministic Keys:** Same user + any linked auth method → same ECDSA keypair
 4. **Decentralized Storage:** Files stored on IPFS, metadata in IPNS records
 5. **User-Held Keys:** Private key exists only in client RAM during session
+6. **Signed-Record Relay:** Clients sign IPNS records; backend relays to IPFS/IPNS
 
 ---
 
@@ -416,27 +417,31 @@ This design enables future per-folder sharing (v2+).
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant IPFS as IPFS Network
+  participant B as CipherBox Backend
+  participant IPFS as IPFS Network
     
     C->>C: Update folder metadata (add/remove child)
     C->>C: Encrypt metadata: AES-GCM(metadata, folderKey)
     C->>C: Decrypt folder's ipnsPrivateKey
-    C->>IPFS: Publish metadata to IPFS, get CID
-    C->>IPFS: Sign & publish IPNS record pointing to CID
+  C->>B: POST /ipfs/add (encrypted metadata)
+  B->>IPFS: Add metadata, return CID
+  C->>C: Sign IPNS record (Ed25519)
+  C->>B: POST /ipns/publish (signed record)
+  B->>IPFS: Publish IPNS record
     Note over IPFS: IPNS name now resolves to new CID
 ```
 
-**Key Point:** Client publishes directly to IPFS. Backend is never involved in IPNS publishing—keys never leave client.
+**Key Point:** Client signs IPNS records locally; backend relays signed records only. Private keys never leave client.
 
 ### 5.3 Tree Traversal
 
 ```typescript
 async function fetchFileTree(ipnsName: string, folderKey: Uint8Array): Promise<FolderNode> {
-  // 1. Resolve IPNS to latest CID
-  const cid = await ipfs.name.resolve(ipnsName);
+  // 1. Resolve IPNS via backend relay
+  const { cid } = await api.get(`/ipns/resolve?ipnsName=${ipnsName}`);
   
   // 2. Fetch encrypted metadata from IPFS
-  const encryptedData = await ipfs.cat(cid);
+  const encryptedData = await api.get(`/ipfs/cat?cid=${cid}`, { responseType: "arraybuffer" });
   const { encryptedMetadata, iv } = JSON.parse(encryptedData);
   
   // 3. Decrypt metadata
@@ -465,16 +470,19 @@ async function fetchFileTree(ipnsName: string, folderKey: Uint8Array): Promise<F
 ```mermaid
 sequenceDiagram
     participant D1 as Device 1
-    participant IPFS as IPFS Network
+  participant B as CipherBox Backend
+  participant IPFS as IPFS Network
     participant D2 as Device 2
     
-    D1->>IPFS: Upload file, publish IPNS
+  D1->>B: POST /ipfs/add + POST /ipns/publish
+  B->>IPFS: Relay publish
     loop Every 30s
-        D2->>IPFS: Resolve root IPNS name
-        IPFS->>D2: Return current CID
+    D2->>B: GET /ipns/resolve
+    B->>IPFS: Resolve IPNS name
+    B->>D2: Return current CID
         D2->>D2: Compare with cached CID
         alt CID changed
-            D2->>IPFS: Fetch new metadata
+      D2->>B: GET /ipfs/cat
             D2->>D2: Decrypt and update UI
         end
     end
@@ -497,7 +505,7 @@ Future versions may implement vector clocks or CRDTs.
 |-----------|------------|-----------|
 | Frontend | React 18 + TypeScript | Modern, good for encryption UI |
 | Web Crypto | Web Crypto API | Native browser encryption |
-| IPFS Client | kubo-rpc-client | JSON-RPC to IPFS gateway |
+| IPFS Client | CipherBox IPFS relay | HTTP relay to IPFS/IPNS |
 | Web3Auth SDK | @web3auth/modal | Auth and key derivation |
 | Backend | Node.js + NestJS + TypeScript | Type-safe, same language as frontend |
 | JWT Verification | jose | Verify Web3Auth tokens |

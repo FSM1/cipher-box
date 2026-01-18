@@ -17,8 +17,8 @@ A **production-grade, comprehensive specification** for building CipherBox v1.0 
 This is **not a preliminary design document**—it's a **complete blueprint** with:
 
 - ✅ **5 complete user journeys** (signup → auth → sync → export → recovery)
-- ✅ **18 API endpoints** fully specified
-- ✅ **8 database tables** with schema
+- ✅ **15 API endpoints** fully specified
+- ✅ **6 database tables** with schema
 - ✅ **6 encryption algorithms** with implementation details
 - ✅ **100+ acceptance criteria**
 - ✅ **3 key derivation test vectors**
@@ -69,9 +69,9 @@ Layer 3: Folder metadata (AES-256-GCM per folder)
 
 Each folder has its own IPNS entry (enables v2+ sharing)
 
-### 4. **IPNS Polling Sync** (~30s)
+### 4. **IPFS/IPNS Relay + Polling Sync** (~30s)
 
-No push infrastructure (MVP appropriate, scalable)
+Signed IPNS records relayed by CipherBox API; no direct client publishing
 
 ### 5. **User-Held Keys** (Zero-Knowledge)
 

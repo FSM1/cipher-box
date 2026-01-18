@@ -2,7 +2,7 @@
 
 ## Version Management
 
-**Current Documentation Version:** 1.8.0
+**Current Documentation Version:** 1.8.1
 
 ### Version Bump Rule
 
@@ -55,7 +55,7 @@ CipherBox uses a **mandatory two-phase auth flow** that must be understood befor
 ```
 User Auth → Web3Auth → ECDSA Private Key (client RAM only, never transmitted)
                     ├─ Used for ECIES decryption of all data keys
-                    ├─ Used for IPNS entry signing
+                    ├─ Used to decrypt IPNS signing keys (Ed25519)
                     └─ Destroyed on logout
 
 ECDSA Public Key (stored on server, identifies user)
