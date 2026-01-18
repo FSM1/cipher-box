@@ -425,6 +425,7 @@ sequenceDiagram
     C->>C: Decrypt folder's ipnsPrivateKey
   C->>B: POST /ipfs/add (encrypted metadata)
   B->>IPFS: Add metadata, return CID
+  B->>C: Return CID
   C->>C: Sign IPNS record (Ed25519)
   C->>B: POST /ipns/publish (signed record)
   B->>IPFS: Publish IPNS record
