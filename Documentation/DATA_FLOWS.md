@@ -202,7 +202,7 @@ After upload, this entry is added to folder metadata:
 sequenceDiagram
     participant U as User
     participant C as Client
-  participant B as CipherBox Backend
+    participant B as CipherBox Backend
     participant IPFS as IPFS Network
     
     U->>C: Click download on file
@@ -237,13 +237,13 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant D1 as Device 1
-  participant B as CipherBox Backend
-  participant IPFS as IPFS Network
+    participant B as CipherBox Backend
+    participant IPFS as IPFS Network
     participant D2 as Device 2
     
     Note over D1: User uploads file
-  D1->>B: POST /ipfs/add + POST /ipns/publish
-  B->>IPFS: Relay publish
+    D1->>B: POST /ipfs/add + POST /ipns/publish
+    B->>IPFS: Relay publish
     
     Note over D2: Background polling (every 30s)
     loop Every 30 seconds
@@ -370,8 +370,8 @@ sequenceDiagram
 sequenceDiagram
     participant U as User
     participant C as Client
-  participant B as CipherBox Backend
-  participant IPFS as IPFS Network
+    participant B as CipherBox Backend
+    participant IPFS as IPFS Network
     
     U->>C: Create new folder "Documents"
     
@@ -413,8 +413,8 @@ sequenceDiagram
 sequenceDiagram
     participant U as User
     participant C as Client
-  participant B as CipherBox Backend
-  participant IPFS as IPFS Network
+    participant B as CipherBox Backend
+    participant IPFS as IPFS Network
     
     U->>C: Rename "old.pdf" to "new.pdf"
     
@@ -438,8 +438,8 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant C as Client
-  participant B as CipherBox Backend
-  participant IPFS as IPFS Network
+    participant B as CipherBox Backend
+    participant IPFS as IPFS Network
     
     Note over C: Move file.pdf from /Docs to /Docs/Work
     

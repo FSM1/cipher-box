@@ -417,8 +417,8 @@ This design enables future per-folder sharing (v2+).
 ```mermaid
 sequenceDiagram
     participant C as Client
-  participant B as CipherBox Backend
-  participant IPFS as IPFS Network
+    participant B as CipherBox Backend
+    participant IPFS as IPFS Network
     
     C->>C: Update folder metadata (add/remove child)
     C->>C: Encrypt metadata: AES-GCM(metadata, folderKey)
@@ -472,12 +472,12 @@ async function fetchFileTree(ipnsName: string, folderKey: Uint8Array): Promise<F
 ```mermaid
 sequenceDiagram
     participant D1 as Device 1
-  participant B as CipherBox Backend
-  participant IPFS as IPFS Network
+    participant B as CipherBox Backend
+    participant IPFS as IPFS Network
     participant D2 as Device 2
     
-  D1->>B: POST /ipfs/add + POST /ipns/publish
-  B->>IPFS: Relay publish
+    D1->>B: POST /ipfs/add + POST /ipns/publish
+    B->>IPFS: Relay publish
     loop Every 30s
     D2->>B: GET /ipns/resolve
     B->>IPFS: Resolve IPNS name
