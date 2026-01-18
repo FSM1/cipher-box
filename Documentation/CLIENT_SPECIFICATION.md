@@ -1,5 +1,5 @@
 ---
-version: 1.8.1
+version: 1.8.2
 last_updated: 2026-01-18
 status: Active
 ai_context: Client application specifications for CipherBox. Contains Web UI and Desktop app requirements. For system design see TECHNICAL_ARCHITECTURE.md.
@@ -419,7 +419,7 @@ interface IpfsModule {
   
   // IPNS operations
   resolveIpns(name: string): Promise<string>; // Returns CID
-  publishIpnsRecord(record: Uint8Array, ipnsName: string, sequenceNumber: number, ttlSeconds: number): Promise<void>;
+  publishIpnsRecord(ipnsRecord: string, ipnsName: string, sequenceNumber: number, ttlSeconds: number): Promise<void>; // ipnsRecord is BASE64-encoded
 }
 ```
 
@@ -516,7 +516,7 @@ interface VaultModule {
 ## 5. Console PoC Harness
 
 **Goal:** Provide a single-user, online test harness to validate IPFS/IPNS flows without Web3Auth or the backend.
-**Note:** The PoC publishes directly to IPFS/IPNS and is intentionally separate from the production relay model.
+**Note:** The PoC publishes directly to IPFS/IPNS and is intentionally separate from the production relay model. Section 8 of DATA_FLOWS.md describes the PoC-only flow and should not be used as a reference for production client implementation.
 
 **Environment:** Node.js (TypeScript), local IPFS daemon, optional Pinata API keys for pin/unpin.
 

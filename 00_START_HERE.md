@@ -18,7 +18,7 @@ This is **not a preliminary design document**—it's a **complete blueprint** wi
 
 - ✅ **5 complete user journeys** (signup → auth → sync → export → recovery)
 - ✅ **15 API endpoints** fully specified
-- ✅ **6 database tables** with schema
+- ✅ **6 database tables** (users, refresh_tokens, auth_nonces, vaults, volume_audit, pinned_cids) with schema
 - ✅ **6 encryption algorithms** with implementation details
 - ✅ **100+ acceptance criteria**
 - ✅ **3 key derivation test vectors**
