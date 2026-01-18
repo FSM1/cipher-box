@@ -2,7 +2,7 @@
 
 ## Version Management
 
-**Current Documentation Version:** 1.8.1
+**Current Documentation Version:** 1.8.2
 
 ### Version Bump Rule
 
