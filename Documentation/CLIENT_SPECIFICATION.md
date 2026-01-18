@@ -419,7 +419,7 @@ interface IpfsModule {
   
   // IPNS operations
   resolveIpns(name: string): Promise<string>; // Returns CID
-  publishIpnsRecord(ipnsRecord: string, ipnsName: string, sequenceNumber: number, ttlSeconds: number): Promise<void>; // ipnsRecord is BASE64-encoded
+  publishIpnsRecord(base64IpnsRecord: string, ipnsName: string, sequenceNumber: number, ttlSeconds: number): Promise<void>; // base64IpnsRecord is BASE64-encoded signed IPNS record
 }
 ```
 
@@ -516,7 +516,8 @@ interface VaultModule {
 ## 5. Console PoC Harness
 
 **Goal:** Provide a single-user, online test harness to validate IPFS/IPNS flows without Web3Auth or the backend.
-**Note:** The PoC publishes directly to IPFS/IPNS and is intentionally separate from the production relay model. Section 8 of DATA_FLOWS.md describes the PoC-only flow and should not be used as a reference for production client implementation.
+
+> ⚠️ **Warning:** The PoC publishes directly to IPFS/IPNS and is intentionally separate from the production relay model. Section 8 of DATA_FLOWS.md describes the PoC-only flow and should not be used as a reference for production client implementation.
 
 **Environment:** Node.js (TypeScript), local IPFS daemon, optional Pinata API keys for pin/unpin.
 
