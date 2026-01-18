@@ -1,6 +1,6 @@
 ---
-version: 1.8.0
-last_updated: 2026-01-17
+version: 1.9.0
+last_updated: 2026-01-18
 status: Active
 ai_context: Client application specifications for CipherBox. Contains Web UI and Desktop app requirements. For system design see TECHNICAL_ARCHITECTURE.md.
 ---
@@ -9,7 +9,7 @@ ai_context: Client application specifications for CipherBox. Contains Web UI and
 
 **Document Type:** Client Application Specification  
 **Status:** Active  
-**Last Updated:** January 17, 2026  
+**Last Updated:** January 18, 2026  
 
 ---
 
@@ -44,7 +44,7 @@ ai_context: Client application specifications for CipherBox. Contains Web UI and
 | Styling | Tailwind CSS |
 | State Management | React Context + Hooks |
 | Encryption | Web Crypto API |
-| IPFS Client | kubo-rpc-client |
+| IPFS Relay | CipherBox API (/ipfs/*, /ipns/*) |
 | Auth | @web3auth/modal |
 | HTTP Client | Axios |
 
@@ -272,10 +272,10 @@ interface AppState {
 | `getattr` | Return file attributes from metadata |
 | `open` | Fetch from IPFS, decrypt, return handle |
 | `read` | Return decrypted content from cache |
-| `write` | Encrypt, upload, update IPNS |
-| `create` | Generate keys, encrypt, upload, update IPNS |
+| `write` | Encrypt, upload, relay IPNS publish |
+| `create` | Generate keys, encrypt, upload, relay IPNS publish |
 | `unlink` | Unpin CID, update parent IPNS |
-| `mkdir` | Generate folder keys, create IPNS, update parent |
+| `mkdir` | Generate folder keys, create IPNS, relay publish |
 | `rmdir` | Unpin folder IPNS, update parent |
 | `rename` | Update metadata in source and destination |
 
@@ -331,7 +331,7 @@ class SyncDaemon {
   async poll() {
     try {
       // Resolve root IPNS
-      const currentCid = await ipfs.name.resolve(rootIpnsName);
+      const { cid: currentCid } = await api.get(`/ipns/resolve?ipnsName=${rootIpnsName}`);
       
       if (currentCid !== this.cachedRootCid) {
         // Changes detected
@@ -374,7 +374,7 @@ class SyncDaemon {
 | D1 | FUSE mount succeeds in <3s | Performance test |
 | D2 | File read latency <500ms (cached) | Benchmark |
 | D3 | File read latency <2s (uncached) | Benchmark |
-| D4 | File write triggers IPNS publish in <5s | Integration test |
+| D4 | File write triggers IPNS relay publish in <5s | Integration test |
 | D5 | Multi-platform builds work | CI/CD test |
 | D6 | No plaintext on disk (except temp decrypted reads) | Security audit |
 | D7 | Logout unmounts FUSE and clears keys | Manual test |
@@ -419,7 +419,7 @@ interface IpfsModule {
   
   // IPNS operations
   resolveIpns(name: string): Promise<string>; // Returns CID
-  publishIpns(cid: string, privateKey: Uint8Array): Promise<void>;
+  publishIpnsRecord(base64IpnsRecord: string, ipnsName: string, sequenceNumber: number, ttlSeconds: number): Promise<void>; // base64IpnsRecord is BASE64-encoded signed IPNS record
 }
 ```
 
@@ -438,7 +438,7 @@ interface VaultModule {
   createFolder(name: string, parentFolder: FolderNode): Promise<FolderEntry>;
   
   // IPNS publishing
-  publishFolderUpdate(folder: FolderNode): Promise<void>;
+  publishFolderUpdate(folder: FolderNode): Promise<void>; // sign locally, relay via /ipns/publish
 }
 ```
 
@@ -450,7 +450,7 @@ interface VaultModule {
 
 | Question | Context | Priority |
 |----------|---------|----------|
-| What does user see when IPFS gateway is unavailable? | Network errors | High |
+| What does user see when IPFS relay is unavailable? | Network errors | High |
 | How to handle IPNS publish failures? | Write operations | High |
 | What timeout thresholds for file operations? | Performance UX | Medium |
 | Should failed uploads be queued for retry? | Reliability | Medium |
@@ -500,11 +500,24 @@ interface VaultModule {
 | System notification permissions? | Desktop UX | Medium |
 | Auto-update mechanism? | Distribution | High |
 
+### 4.7 Desktop Client (FUSE Semantics)
+
+| Question | Context | Priority |
+|----------|---------|----------|
+| What is the write model (streaming vs temp-file commit)? | File IO correctness | High |
+| How are partial writes and truncates handled? | File IO correctness | High |
+| What is the atomic rename strategy for updates? | Consistency | High |
+| How are concurrent edits resolved across devices? | Conflict policy | Medium |
+| When is encrypted cache invalidated on IPNS updates? | Cache consistency | Medium |
+| What is the offline write queue behavior? | Reliability | Medium |
+
 ---
 
 ## 5. Console PoC Harness
 
 **Goal:** Provide a single-user, online test harness to validate IPFS/IPNS flows without Web3Auth or the backend.
+
+> ⚠️ **Warning:** The PoC publishes directly to IPFS/IPNS and is intentionally separate from the production relay model. Section 8 of DATA_FLOWS.md describes the PoC-only flow and should not be used as a reference for production client implementation.
 
 **Environment:** Node.js (TypeScript), local IPFS daemon, optional Pinata API keys for pin/unpin.
 

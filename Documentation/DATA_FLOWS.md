@@ -1,6 +1,6 @@
 ---
-version: 1.8.0
-last_updated: 2026-01-17
+version: 1.9.0
+last_updated: 2026-01-18
 status: Active
 ai_context: Data flow diagrams and test vectors for CipherBox. Contains Mermaid sequence diagrams for all major operations. For system design see TECHNICAL_ARCHITECTURE.md.
 ---
@@ -9,7 +9,7 @@ ai_context: Data flow diagrams and test vectors for CipherBox. Contains Mermaid 
 
 **Document Type:** Implementation Reference  
 **Status:** Active  
-**Last Updated:** January 17, 2026  
+**Last Updated:** January 18, 2026  
 
 ---
 
@@ -163,9 +163,14 @@ sequenceDiagram
     C->>C: encryptedMetadata = AES-GCM(metadata, folderKey)
     C->>C: Decrypt folder's ipnsPrivateKey
     
-    Note over C,IPFS: Publish IPNS
-    C->>IPFS: Upload encrypted metadata, get metadataCid
-    C->>IPFS: Sign & publish IPNS record
+    Note over C,B: Publish IPNS (Signed-Record Relay)
+    C->>B: POST /ipfs/add (encrypted metadata)
+    B->>IPFS: Add metadata, return CID
+    B->>C: Return {cid: metadataCid}
+    C->>C: Sign IPNS record (Ed25519)
+    C->>C: Encode signed record to BASE64
+    C->>B: POST /ipns/publish (signed record)
+    B->>IPFS: Publish IPNS record
     
     Note over C: Update UI
     C->>U: Show file in folder with decrypted name
@@ -197,6 +202,7 @@ After upload, this entry is added to folder metadata:
 sequenceDiagram
     participant U as User
     participant C as Client
+    participant B as CipherBox Backend
     participant IPFS as IPFS Network
     
     U->>C: Click download on file
@@ -208,9 +214,10 @@ sequenceDiagram
     C->>C: fileKey = ECIES_Decrypt(fileKeyEncrypted, privateKey)
     C->>C: fileName = AES-GCM_Decrypt(nameEncrypted, folderKey, nameIv)
     
-    Note over C,IPFS: Fetch Encrypted Content
-    C->>IPFS: GET /ipfs/{cid}
-    IPFS->>C: Return encrypted file
+    Note over C,B: Fetch Encrypted Content
+    C->>B: GET /ipfs/cat?cid={cid}
+    B->>IPFS: Fetch encrypted file
+    B->>C: Return encrypted file
     
     Note over C: Decrypt Content
     C->>C: plaintext = AES-GCM_Decrypt(ciphertext, fileKey, fileIv)
@@ -230,20 +237,23 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant D1 as Device 1
+    participant B as CipherBox Backend
     participant IPFS as IPFS Network
     participant D2 as Device 2
     
     Note over D1: User uploads file
-    D1->>IPFS: Upload file, publish IPNS record
+    D1->>B: POST /ipfs/add + POST /ipns/publish
+    B->>IPFS: Relay publish
     
     Note over D2: Background polling (every 30s)
     loop Every 30 seconds
-        D2->>IPFS: Resolve root IPNS name
-        IPFS->>D2: Return current CID
+      D2->>B: GET /ipns/resolve
+      B->>IPFS: Resolve IPNS name
+      B->>D2: Return current CID
         D2->>D2: Compare with cached CID
         
         alt CID changed
-            D2->>IPFS: Fetch new metadata from CID
+        D2->>B: GET /ipfs/cat
             D2->>D2: Decrypt metadata
             D2->>D2: Update UI with new files
         else CID unchanged
@@ -260,7 +270,7 @@ async function pollForChanges() {
   const vault = await api.get('/my-vault');
   
   // Resolve IPNS to current CID
-  const currentCid = await ipfs.name.resolve(vault.rootIpnsName);
+  const { cid: currentCid } = await api.get(`/ipns/resolve?ipnsName=${vault.rootIpnsName}`);
   
   // Check if changed
   if (currentCid === cachedRootCid) {
@@ -360,6 +370,7 @@ sequenceDiagram
 sequenceDiagram
     participant U as User
     participant C as Client
+    participant B as CipherBox Backend
     participant IPFS as IPFS Network
     
     U->>C: Create new folder "Documents"
@@ -376,12 +387,24 @@ sequenceDiagram
     Note over C: Create Empty Folder
     C->>C: folderMetadata = { children: [] }
     C->>C: encrypted = AES-GCM(metadata, folderKey)
-    C->>IPFS: Publish folder IPNS record
+    C->>B: POST /ipfs/add (encrypted metadata)
+    B->>IPFS: Add metadata, return CID
+    B->>C: Return {cid: metadataCid}
+    C->>C: Sign IPNS record (Ed25519)
+    C->>C: Encode signed record to BASE64
+    C->>B: POST /ipns/publish (signed record)
+    B->>IPFS: Publish IPNS record
     
     Note over C: Update Parent
     C->>C: Add folder entry to parent.children
     C->>C: Re-encrypt parent metadata
-    C->>IPFS: Publish parent IPNS record
+    C->>B: POST /ipfs/add (encrypted metadata)
+    B->>IPFS: Add metadata, return CID
+    B->>C: Return {cid: metadataCid}
+    C->>C: Sign IPNS record (Ed25519)
+    C->>C: Encode signed record to BASE64
+    C->>B: POST /ipns/publish (signed record)
+    B->>IPFS: Publish IPNS record
 ```
 
 ### 6.2 Rename File/Folder
@@ -390,6 +413,7 @@ sequenceDiagram
 sequenceDiagram
     participant U as User
     participant C as Client
+    participant B as CipherBox Backend
     participant IPFS as IPFS Network
     
     U->>C: Rename "old.pdf" to "new.pdf"
@@ -398,7 +422,13 @@ sequenceDiagram
     C->>C: newNameEncrypted = AES-GCM("new.pdf", folderKey)
     C->>C: Update entry.nameEncrypted
     C->>C: Re-encrypt parent metadata
-    C->>IPFS: Publish parent IPNS record
+    C->>B: POST /ipfs/add (encrypted metadata)
+    B->>IPFS: Add metadata, return CID
+    B->>C: Return {cid: metadataCid}
+    C->>C: Sign IPNS record (Ed25519)
+    C->>C: Encode signed record to BASE64
+    C->>B: POST /ipns/publish (signed record)
+    B->>IPFS: Publish IPNS record
     
     Note over C: CID unchanged (only metadata updated)
 ```
@@ -408,6 +438,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant C as Client
+    participant B as CipherBox Backend
     participant IPFS as IPFS Network
     
     Note over C: Move file.pdf from /Docs to /Docs/Work
@@ -415,12 +446,24 @@ sequenceDiagram
     Note over C: Step 1: Add to destination first
     C->>C: Add file entry to destination folder
     C->>C: Re-encrypt destination metadata
-    C->>IPFS: Publish destination IPNS
+    C->>B: POST /ipfs/add (encrypted metadata)
+    B->>IPFS: Add metadata, return CID
+    B->>C: Return {cid: metadataCid}
+    C->>C: Sign IPNS record (Ed25519)
+    C->>C: Encode signed record to BASE64
+    C->>B: POST /ipns/publish (signed record)
+    B->>IPFS: Publish IPNS record
     
     Note over C: Step 2: Remove from source
     C->>C: Remove file entry from source folder
     C->>C: Re-encrypt source metadata
-    C->>IPFS: Publish source IPNS
+    C->>B: POST /ipfs/add (encrypted metadata)
+    B->>IPFS: Add metadata, return CID
+    B->>C: Return {cid: metadataCid}
+    C->>C: Sign IPNS record (Ed25519)
+    C->>C: Encode signed record to BASE64
+    C->>B: POST /ipns/publish (signed record)
+    B->>IPFS: Publish IPNS record
     
     Note over C: Order ensures file always reachable
 ```
@@ -442,7 +485,13 @@ sequenceDiagram
     
     C->>C: Remove file entry from parent
     C->>C: Re-encrypt parent metadata
-    C->>IPFS: Publish parent IPNS
+    C->>B: POST /ipfs/add (encrypted metadata)
+    B->>IPFS: Add metadata, return CID
+    B->>C: Return {cid: metadataCid}
+    C->>C: Sign IPNS record (Ed25519)
+    C->>C: Encode signed record to BASE64
+    C->>B: POST /ipns/publish (signed record)
+    B->>IPFS: Publish IPNS record
 ```
 
 ### 6.5 Update File (Replace Contents)
@@ -465,7 +514,13 @@ sequenceDiagram
     
     C->>C: Update file entry with new cid, key, iv
     C->>C: Re-encrypt parent metadata
-    C->>IPFS: Publish parent IPNS
+    C->>B: POST /ipfs/add (encrypted metadata)
+    B->>IPFS: Add metadata, return CID
+    B->>C: Return {cid: metadataCid}
+    C->>C: Sign IPNS record (Ed25519)
+    C->>C: Encode signed record to BASE64
+    C->>B: POST /ipns/publish (signed record)
+    B->>IPFS: Publish IPNS record
     
     C->>B: POST /vault/unpin {oldCid}
     Note over B: Reclaim old file storage
@@ -594,6 +649,7 @@ Verification:
   ✓ result == fileKey
   ✓ Different privateKey causes failure
   ✓ Same publicKey/privateKey pair always works
+```
 
 ---
 

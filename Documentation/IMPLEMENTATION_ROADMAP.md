@@ -1,6 +1,6 @@
 ---
-version: 1.8.0
-last_updated: 2026-01-17
+version: 1.9.0
+last_updated: 2026-01-18
 status: Active
 ai_context: Implementation roadmap for CipherBox v1.0. Includes week-by-week plan, deliverables, and testing milestones.
 ---
@@ -62,10 +62,10 @@ ai_context: Implementation roadmap for CipherBox v1.0. Includes week-by-week pla
 ✅ Web3Auth ID token verification via JWKS endpoint
 ✅ IPFS/Pinata integration verified
 ✅ Crypto test vectors pass (AES-256-GCM, ECIES)
-✅ PostgreSQL schema deployed (6 tables: users, refresh_tokens, auth_nonces, vaults, ipns_entries, volume_audit, pinned_cids)
-✅ API contract stub (17 endpoints - no backend IPNS proxy)
+✅ PostgreSQL schema deployed (6 tables: users, refresh_tokens, auth_nonces, vaults, volume_audit, pinned_cids)
+✅ API contract stub (15 endpoints - IPFS/IPNS relay included)
 ✅ Docker containers working
-✅ Client-side IPFS publishing tested (kubo-rpc-client)
+✅ IPFS/IPNS relay endpoints tested (signed-record publish)
 ```
 
 **Team:** Backend (80%), DevOps (80%), Frontend (40%)
@@ -138,9 +138,9 @@ ai_context: Implementation roadmap for CipherBox v1.0. Includes week-by-week pla
 
 ***
 
-### **Week 6: IPNS Publishing + Folders (Client-Side)**
+### **Week 6: IPNS Publishing + Folders (Relay)**
 
-**Goal:** Folder hierarchy + client-side IPNS publishing
+**Goal:** Folder hierarchy + signed-record IPNS relay
 
 **Deliverables:**
 
@@ -149,16 +149,16 @@ ai_context: Implementation roadmap for CipherBox v1.0. Includes week-by-week pla
 ✅ IPNS keypairs stored encrypted: ECIES(ipnsPrivKey, userPubkey)
 ✅ Root IPNS keypair stored on server (via POST /my-vault/initialize)
 ✅ Subfolder IPNS keypairs stored in parent folder metadata
-✅ Client-side IPFS publishing (kubo-rpc-client or similar)
-✅ Client decrypts IPNS key → signs → publishes directly to IPFS
+✅ Client signs IPNS record → POST /ipns/publish (relay)
+✅ Encrypted metadata published via POST /ipfs/add
 ✅ Folder create → generate keypair → metadata → IPNS publish
 ✅ Tree traversal (resolve IPNS → fetch → decrypt → recurse)
-✅ No backend IPNS proxy (keys never leave client)
+✅ Backend relays signed IPNS records (keys never leave client)
 ```
 
-**Architecture Note:** IPNS signing keys are managed entirely client-side.
-Backend stores only the encrypted root IPNS key. All publishing is direct
-from client to IPFS network, ensuring zero-knowledge for folder structure.
+**Architecture Note:** Backend stores the encrypted root folder key in the vaults table.
+The root IPNS keypair is stored encrypted in the root folder's metadata.
+IPNS signing keys are managed entirely client-side; backend relays signed records only.
 
 **Tests:** Create folder → IPNS resolves → metadata decrypts correctly
 
@@ -173,8 +173,8 @@ from client to IPFS network, ensuring zero-knowledge for folder structure.
 **Deliverables:**
 
 ```
-✅ Rename file: Update metadata → republish IPNS (client-side)
-✅ Move: Add to destination → remove from source → dual IPNS publish
+✅ Rename file: Update metadata → relay IPNS publish
+✅ Move: Add to destination → remove from source → dual IPNS relay publish
 ✅ Delete: Unpin CID (POST /vault/unpin) → remove metadata → republish
 ✅ Update file: New key/IV → upload → update metadata → unpin old CID
 ✅ Bulk operations (multi-select upload/delete)
@@ -308,7 +308,7 @@ from client to IPFS network, ensuring zero-knowledge for folder structure.
 
 ```
 ✅ File upload/download end-to-end
-✅ Client-side IPNS publishing reliable
+✅ Signed-record IPNS relay reliable
 ✅ Folder hierarchy with per-folder IPNS keypairs
 ✅ File update/delete with CID unpinning
 ```
@@ -341,8 +341,8 @@ from client to IPFS network, ensuring zero-knowledge for folder structure.
 | **Frontend** | 50% | 100% | 50% | 80% | **280h** |
 | **DevOps** | 40% | 40% | 80% | 100% | **200h** |
 
-**Note:** Backend allocation reduced in W5-8 due to client-side IPNS publishing
-architecture (no backend IPNS proxy). Frontend handles IPFS client integration.
+**Note:** Backend allocation balanced in W5-8 due to IPFS/IPNS relay endpoints.
+Frontend focuses on signing and relay integration.
 
 
 ***
@@ -353,7 +353,7 @@ architecture (no backend IPNS proxy). Frontend handles IPFS client integration.
 | :-- | :-- | :-- |
 | Web3Auth integration | Medium | Week 1 deep-dive, direct support, group connections testing |
 | IPFS performance | Medium | Pinata + caching strategy |
-| Client-side IPFS publishing | Medium | Week 2 kubo-rpc-client testing, fallback to js-ipfs |
+| IPFS/IPNS relay reliability | Medium | Week 2 relay endpoint load testing + retry strategy |
 | Security audit | Low | Continuous review, 2-week buffer |
 | Desktop complexity | Medium | macOS first, others v1.1 |
 
@@ -442,7 +442,7 @@ Code reviews within 24h
 ### **Week 7: "Storage Done"** ✅
 ```
 [ ] File upload/download complete
-[ ] Client-side IPNS publishing reliable
+[ ] Signed-record IPNS relay reliable
 [ ] Per-folder IPNS keypairs working
 [ ] Folder hierarchy functional
 [ ] Multi-file operations working

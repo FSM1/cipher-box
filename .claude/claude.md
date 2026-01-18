@@ -16,7 +16,7 @@ CipherBox is a **technology demonstrator** for privacy-first encrypted cloud sto
 
 ## Version Management
 
-**Current Version:** 1.8.0
+**Current Version:** 1.9.0
 
 ### Version Bump Rule
 
@@ -75,7 +75,7 @@ When generating code for CipherBox:
 ## Architecture Decisions
 
 - **Auth:** Web3Auth for key derivation, CipherBox backend for tokens
-- **Storage:** IPFS via Pinata for files, IPNS for metadata
+- **Storage:** IPFS via Pinata for files, IPNS for metadata (all relayed via CipherBox API)
 - **Encryption:** Client-side only, server is zero-knowledge
 - **Sync:** IPNS polling (30s interval), no push infrastructure
 - **Desktop:** FUSE mount for transparent file access

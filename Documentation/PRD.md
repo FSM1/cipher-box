@@ -1,6 +1,6 @@
 ---
-version: 1.8.0
-last_updated: 2026-01-17
+version: 1.9.0
+last_updated: 2026-01-18
 status: Active
 ai_context: Product requirements for CipherBox. Tech demonstrator - not commercial. See TECHNICAL_ARCHITECTURE.md for implementation details, API_SPECIFICATION.md for backend contract, DATA_FLOWS.md for sequences.
 ---

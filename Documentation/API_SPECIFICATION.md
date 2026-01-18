@@ -1,5 +1,6 @@
-version: 1.7.0
-last_updated: 2026-01-16
+---
+version: 1.9.0
+last_updated: 2026-01-18
 status: Active
 ai_context: API specification for CipherBox backend. Contains all endpoints, request/response formats, database schema, and rate limits. For system design see TECHNICAL_ARCHITECTURE.md.
 ---
@@ -8,7 +9,7 @@ ai_context: API specification for CipherBox backend. Contains all endpoints, req
 
 **Document Type:** API Specification  
 **Status:** Active  
-**Last Updated:** January 16, 2026  
+**Last Updated:** January 18, 2026  
 **Base URL:** `https://api.cipherbox.io`
 
 ---
@@ -51,11 +52,12 @@ The CipherBox backend provides:
 - Vault management (encrypted key storage)
 - File upload to IPFS (via Pinata)
 - Storage quota tracking
+- IPFS/IPNS relay for encrypted metadata and signed IPNS records
 
 The backend **never** handles:
 - Plaintext files
 - Unencrypted keys
-- IPNS publishing (client-side only)
+- Client private keys or unsigned IPNS records
 
 ### 1.2 Authentication Flow
 
@@ -464,6 +466,118 @@ Authorization: Bearer <accessToken>
 
 ---
 
+### 3.4 IPFS/IPNS Relay Endpoints
+
+All relay endpoints require `Authorization: Bearer <accessToken>`.
+
+#### POST /ipfs/add
+
+Add encrypted metadata (or any encrypted content) to IPFS via backend relay.
+
+**Headers:**
+```
+Authorization: Bearer <accessToken>
+Content-Type: application/octet-stream
+```
+
+**Request Body:**
+Raw bytes (encrypted content)
+
+**Response (201):**
+```json
+{
+  "cid": "QmXxxx...",
+  "size": 2048
+}
+```
+
+**Errors:**
+- `400 Bad Request` - Invalid payload
+- `429 Too Many Requests` - Rate limited
+- `502 Bad Gateway` - IPFS relay failed
+
+---
+
+#### GET /ipfs/cat
+
+Fetch encrypted content by CID via backend relay.
+
+**Query:**
+```
+?cid=QmXxxx...
+```
+
+**Response (200):**
+```
+<raw bytes>
+```
+
+**Errors:**
+- `400 Bad Request` - Invalid CID
+- `404 Not Found` - CID not found
+- `429 Too Many Requests` - Rate limited
+- `502 Bad Gateway` - IPFS relay failed
+
+---
+
+#### GET /ipns/resolve
+
+Resolve IPNS name to current CID via backend relay.
+
+**Query:**
+```
+?ipnsName=k51qzi5uqu5dlvj55...
+```
+
+**Response (200):**
+```json
+{
+  "cid": "QmXxxx...",
+  "resolvedAt": "2026-01-18T12:00:00Z"
+}
+```
+
+**Errors:**
+- `400 Bad Request` - Invalid IPNS name
+- `404 Not Found` - IPNS name not found
+- `429 Too Many Requests` - Rate limited
+- `502 Bad Gateway` - IPNS relay failed
+
+---
+
+#### POST /ipns/publish
+
+Relay a client-signed IPNS record to the IPFS/IPNS network.
+
+**Request:**
+```json
+{
+  "ipnsName": "k51qzi5uqu5dlvj55...",
+  "ipnsRecord": "BASE64_ENCODED_SIGNED_RECORD",
+  "sequenceNumber": 42,
+  "ttlSeconds": 3600
+}
+```
+
+**Response (200):**
+```json
+{
+  "published": true,
+  "ipnsName": "k51qzi5uqu5dlvj55...",
+  "sequenceNumber": 42,
+  "publishedAt": "2026-01-18T12:00:00Z"
+}
+```
+
+**Errors:**
+- `400 Bad Request` - Invalid record or malformed request
+- `401 Unauthorized` - Invalid access token
+- `409 Conflict` - Sequence number too low
+- `429 Too Many Requests` - Rate limited
+- `502 Bad Gateway` - IPNS relay failed
+
+---
+
 ## 4. Database Schema
 
 ### 4.1 Users Table
@@ -594,6 +708,10 @@ CREATE INDEX idx_pinned_cids_user_id ON pinned_cids(user_id);
 | POST /vault/upload | 60 | per minute | Batch upload support |
 | GET /my-vault | 120 | per minute | Polling + normal access |
 | DELETE /user/account | 1 | per hour | Prevent accidental deletion |
+| POST /ipfs/add | 120 | per minute | Metadata relay |
+| GET /ipfs/cat | 300 | per minute | Encrypted content relay |
+| GET /ipns/resolve | 240 | per minute | Sync polling |
+| POST /ipns/publish | 120 | per minute | Signed-record relay |
 
 ### 5.2 Rate Limit Headers
 
@@ -651,6 +769,8 @@ All errors follow this format:
 | `FILE_TOO_LARGE` | 413 | File exceeds 100MB limit |
 | `RATE_LIMIT_EXCEEDED` | 429 | Too many requests |
 | `QUOTA_EXCEEDED` | 507 | Storage quota exceeded |
+| `IPFS_RELAY_FAILED` | 502 | IPFS relay failed |
+| `IPNS_RELAY_FAILED` | 502 | IPNS relay failed |
 | `INTERNAL_ERROR` | 500 | Unexpected server error |
 
 ---
