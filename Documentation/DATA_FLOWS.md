@@ -1,5 +1,5 @@
 ---
-version: 1.8.2
+version: 1.9.0
 last_updated: 2026-01-18
 status: Active
 ai_context: Data flow diagrams and test vectors for CipherBox. Contains Mermaid sequence diagrams for all major operations. For system design see TECHNICAL_ARCHITECTURE.md.
@@ -168,6 +168,7 @@ sequenceDiagram
     B->>IPFS: Add metadata, return CID
     B->>C: Return {cid: metadataCid}
     C->>C: Sign IPNS record (Ed25519)
+    C->>C: Encode signed record to BASE64
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
     
@@ -390,6 +391,7 @@ sequenceDiagram
     B->>IPFS: Add metadata, return CID
     B->>C: Return {cid: metadataCid}
     C->>C: Sign IPNS record (Ed25519)
+    C->>C: Encode signed record to BASE64
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
     
@@ -400,6 +402,7 @@ sequenceDiagram
     B->>IPFS: Add metadata, return CID
     B->>C: Return {cid: metadataCid}
     C->>C: Sign IPNS record (Ed25519)
+    C->>C: Encode signed record to BASE64
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
 ```
@@ -423,6 +426,7 @@ sequenceDiagram
     B->>IPFS: Add metadata, return CID
     B->>C: Return {cid: metadataCid}
     C->>C: Sign IPNS record (Ed25519)
+    C->>C: Encode signed record to BASE64
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
     
@@ -446,6 +450,7 @@ sequenceDiagram
     B->>IPFS: Add metadata, return CID
     B->>C: Return {cid: metadataCid}
     C->>C: Sign IPNS record (Ed25519)
+    C->>C: Encode signed record to BASE64
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
     
@@ -456,6 +461,7 @@ sequenceDiagram
     B->>IPFS: Add metadata, return CID
     B->>C: Return {cid: metadataCid}
     C->>C: Sign IPNS record (Ed25519)
+    C->>C: Encode signed record to BASE64
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
     
@@ -483,6 +489,7 @@ sequenceDiagram
     B->>IPFS: Add metadata, return CID
     B->>C: Return {cid: metadataCid}
     C->>C: Sign IPNS record (Ed25519)
+    C->>C: Encode signed record to BASE64
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
 ```
@@ -511,6 +518,7 @@ sequenceDiagram
     B->>IPFS: Add metadata, return CID
     B->>C: Return {cid: metadataCid}
     C->>C: Sign IPNS record (Ed25519)
+    C->>C: Encode signed record to BASE64
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
     
