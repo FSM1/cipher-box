@@ -166,6 +166,7 @@ sequenceDiagram
     Note over C,B: Publish IPNS (Signed-Record Relay)
     C->>B: POST /ipfs/add (encrypted metadata)
     B->>IPFS: Add metadata, return CID
+    B->>C: Return {cid: metadataCid}
     C->>C: Sign IPNS record (Ed25519)
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
@@ -387,6 +388,7 @@ sequenceDiagram
     C->>C: encrypted = AES-GCM(metadata, folderKey)
     C->>B: POST /ipfs/add (encrypted metadata)
     B->>IPFS: Add metadata, return CID
+    B->>C: Return {cid: metadataCid}
     C->>C: Sign IPNS record (Ed25519)
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
@@ -396,6 +398,7 @@ sequenceDiagram
     C->>C: Re-encrypt parent metadata
     C->>B: POST /ipfs/add (encrypted metadata)
     B->>IPFS: Add metadata, return CID
+    B->>C: Return {cid: metadataCid}
     C->>C: Sign IPNS record (Ed25519)
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
@@ -418,6 +421,7 @@ sequenceDiagram
     C->>C: Re-encrypt parent metadata
     C->>B: POST /ipfs/add (encrypted metadata)
     B->>IPFS: Add metadata, return CID
+    B->>C: Return {cid: metadataCid}
     C->>C: Sign IPNS record (Ed25519)
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
@@ -440,6 +444,7 @@ sequenceDiagram
     C->>C: Re-encrypt destination metadata
     C->>B: POST /ipfs/add (encrypted metadata)
     B->>IPFS: Add metadata, return CID
+    B->>C: Return {cid: metadataCid}
     C->>C: Sign IPNS record (Ed25519)
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
@@ -449,6 +454,7 @@ sequenceDiagram
     C->>C: Re-encrypt source metadata
     C->>B: POST /ipfs/add (encrypted metadata)
     B->>IPFS: Add metadata, return CID
+    B->>C: Return {cid: metadataCid}
     C->>C: Sign IPNS record (Ed25519)
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
@@ -475,6 +481,7 @@ sequenceDiagram
     C->>C: Re-encrypt parent metadata
     C->>B: POST /ipfs/add (encrypted metadata)
     B->>IPFS: Add metadata, return CID
+    B->>C: Return {cid: metadataCid}
     C->>C: Sign IPNS record (Ed25519)
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
@@ -502,6 +509,7 @@ sequenceDiagram
     C->>C: Re-encrypt parent metadata
     C->>B: POST /ipfs/add (encrypted metadata)
     B->>IPFS: Add metadata, return CID
+    B->>C: Return {cid: metadataCid}
     C->>C: Sign IPNS record (Ed25519)
     C->>B: POST /ipns/publish (signed record)
     B->>IPFS: Publish IPNS record
