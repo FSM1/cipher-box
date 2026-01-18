@@ -1,3 +1,4 @@
+---
 version: 1.7.1
 last_updated: 2026-01-18
 status: Active
@@ -8,7 +9,7 @@ ai_context: API specification for CipherBox backend. Contains all endpoints, req
 
 **Document Type:** API Specification  
 **Status:** Active  
-**Last Updated:** January 16, 2026  
+**Last Updated:** January 18, 2026  
 **Base URL:** `https://api.cipherbox.io`
 
 ---
