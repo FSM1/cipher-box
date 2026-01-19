@@ -2,6 +2,8 @@
 
 Single-user, online test harness that exercises CipherBox file system flows directly on IPFS/IPNS (no Web3Auth, no backend). Each run initializes a new vault, executes a full flow, verifies correctness via IPNS/IPFS, then unpins all created CIDs during teardown.
 
+This PoC is intended to validate the core file system operations against a local IPFS node. This is not production-ready code.
+
 ## Requirements
 
 - Node.js 20+
