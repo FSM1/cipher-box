@@ -1,6 +1,6 @@
 ---
-version: 1.9.0
-last_updated: 2026-01-18
+version: 1.10.0
+last_updated: 2026-01-19
 status: Active
 ai_context: Implementation roadmap for CipherBox v1.0. Includes week-by-week plan, deliverables, and testing milestones.
 ---
@@ -125,6 +125,7 @@ ai_context: Implementation roadmap for CipherBox v1.0. Includes week-by-week pla
 ```
 ✅ Client: Random file key + AES-256-GCM encryption
 ✅ Client: ECIES key wrapping (fileKey → userPubkey)
+✅ Client: Set encryptionMode="GCM" on all file uploads
 ✅ POST /vault/upload → Pinata → CID
 ✅ POST /vault/unpin → Pinata unpin (for delete/update operations)
 ✅ Database: volume_audit (quota tracking)
@@ -132,7 +133,10 @@ ai_context: Implementation roadmap for CipherBox v1.0. Includes week-by-week pla
 ✅ File size limit enforcement (100 MB max per file)
 ```
 
-**Tests:** Encrypt → upload → download → decrypt matches original
+**Tests:**
+- Encrypt → upload → download → decrypt matches original
+- File metadata includes encryptionMode field
+- Decryption handles missing encryptionMode (backward compatibility)
 
 **Team:** Frontend (100%), Backend (80%)
 
@@ -390,13 +394,22 @@ You're right - context limit cut it off. Here's the **COMPLETE IMPLEMENTATION_RO
 ✅ User feedback collection
 ```
 
-### **v1.1 (Month 5-6): Billing & Platforms**
+### **v1.1 (Month 5-6): Streaming + Billing & Platforms**
 ```
+✅ AES-256-CTR encryption implementation
+✅ MIME-based encryption mode selection (video/audio → CTR)
+✅ Chunk-by-chunk streaming decryption
+✅ Range request support for media playback
 ✅ Stripe integration + paid tiers
 ✅ Linux desktop app
-✅ Windows desktop app  
+✅ Windows desktop app
 ✅ Mobile web optimization
 ```
+
+**v1.1 Streaming Details (2-3 week sprint):**
+- Week 1: CTR encryption implementation + mode selection logic
+- Week 2: Streaming decryption + range request handling
+- Week 3: Testing (video/audio playback) + security review
 
 ***
 

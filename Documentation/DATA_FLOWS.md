@@ -1,15 +1,15 @@
 ---
-version: 1.9.0
-last_updated: 2026-01-18
+version: 1.10.0
+last_updated: 2026-01-19
 status: Active
 ai_context: Data flow diagrams and test vectors for CipherBox. Contains Mermaid sequence diagrams for all major operations. For system design see TECHNICAL_ARCHITECTURE.md.
 ---
 
 # CipherBox - Data Flows
 
-**Document Type:** Implementation Reference  
-**Status:** Active  
-**Last Updated:** January 18, 2026  
+**Document Type:** Implementation Reference
+**Status:** Active
+**Last Updated:** January 19, 2026  
 
 ---
 
@@ -188,11 +188,16 @@ After upload, this entry is added to folder metadata:
   "cid": "QmXxxx...",
   "fileKeyEncrypted": "ECIES(fileKey, publicKey)",
   "fileIv": "0x...",
+  "encryptionMode": "GCM",
   "size": 2048576,
   "created": 1705268100,
   "modified": 1705268100
 }
 ```
+
+**Field Notes:**
+- `encryptionMode`: Specifies file encryption algorithm ("GCM" or "CTR"). Always "GCM" in v1.0. Required for v1.1+ streaming support.
+- Client decryption must default to "GCM" if field is missing (backward compatibility).
 
 ---
 
@@ -697,6 +702,104 @@ sequenceDiagram
 - File decrypts correctly after upload, update, rename, move
 - All created CIDs are unpinned during teardown
 ```
+
+---
+
+## 9. Encryption Mode Selection (v1.1 Roadmap)
+
+### 9.1 Mode Selection Logic (Future)
+
+In v1.1, CipherBox will support automatic encryption mode selection based on MIME type:
+
+```typescript
+function selectEncryptionMode(file: File): "GCM" | "CTR" {
+  const streamingTypes = [
+    "video/mp4", "video/webm", "video/quicktime",
+    "audio/mpeg", "audio/mp4", "audio/webm", "audio/aac"
+  ];
+
+  if (streamingTypes.includes(file.type)) {
+    return "CTR";  // Enable streaming for media files
+  }
+
+  return "GCM";  // Default: authenticated encryption
+}
+```
+
+### 9.2 Upload Flow with Mode Selection (v1.1)
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant C as Client
+    participant B as CipherBox Backend
+    participant IPFS as IPFS Network
+
+    U->>C: Upload video.mp4
+
+    Note over C: Auto-detect encryption mode
+    C->>C: mode = selectEncryptionMode(file)
+    C->>C: mode === "CTR" (video file)
+
+    Note over C: Encrypt with CTR
+    C->>C: fileKey = randomBytes(32)
+    C->>C: iv = randomBytes(16)  // 128-bit for CTR
+    C->>C: ciphertext = AES-CTR(file, fileKey, iv)
+    C->>C: encryptedFileKey = ECIES(fileKey, publicKey)
+
+    C->>B: POST /vault/upload {ciphertext, iv}
+    B->>IPFS: Store encrypted file
+    B->>C: {cid}
+
+    Note over C: Add to metadata with mode
+    C->>C: entry = {cid, encryptionMode: "CTR", ...}
+    C->>C: Encrypt metadata → publish IPNS
+```
+
+### 9.3 Download Flow with Mode-Aware Decryption (v1.1)
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant C as Client
+    participant B as CipherBox Backend
+    participant IPFS as IPFS Network
+
+    U->>C: Stream video.mp4
+
+    C->>C: mode = fileEntry.encryptionMode || "GCM"
+    C->>C: fileKey = ECIES_Decrypt(fileKeyEncrypted)
+
+    alt mode === "CTR"
+        Note over C: Streaming decryption
+        loop Fetch chunks
+            C->>B: GET /ipfs/cat?cid={cid}&range=bytes
+            B->>IPFS: Fetch chunk
+            B->>C: Encrypted chunk
+            C->>C: AES-CTR decrypt chunk
+            C->>U: Stream decrypted chunk
+        end
+    else mode === "GCM"
+        Note over C: Full file decryption
+        C->>B: GET /ipfs/cat?cid={cid}
+        B->>C: Full encrypted file
+        C->>C: AES-GCM decrypt (with auth tag)
+        C->>U: Download complete file
+    end
+```
+
+### 9.4 Security Implications
+
+**CTR Mode Considerations:**
+- No per-file authentication tag (unlike GCM)
+- Integrity provided by IPNS Ed25519 signature + IPFS CID hash
+- Tampering with encrypted content changes CID → IPNS signature verification fails
+- Metadata-level authentication equivalent to per-file tag security
+
+**v1.0 Backward Compatibility:**
+- Missing `encryptionMode` field → defaults to "GCM"
+- All v1.0 files work unchanged in v1.1
+- No data migration required
 
 ---
 
