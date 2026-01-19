@@ -794,7 +794,7 @@ sequenceDiagram
 - No per-file authentication tag (unlike GCM)
 - Integrity provided by IPNS Ed25519 signature + IPFS CID hash
 - Tampering with encrypted content changes CID → IPNS signature verification fails
-- Metadata-level authentication equivalent to per-file tag security
+- Metadata-level authentication provides integrity protection
 
 **v1.0 Backward Compatibility:**
 - Missing `encryptionMode` field → defaults to "GCM"

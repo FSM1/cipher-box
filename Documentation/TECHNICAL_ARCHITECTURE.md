@@ -239,7 +239,7 @@ While AES-256-CTR lacks per-file authentication tags, CipherBox mitigates this t
 
 1. **IPNS Signature (Ed25519):** Every folder metadata update is signed with Ed25519, preventing CID substitution attacks
 2. **IPFS CID Hash:** Content-addressed storage ensures any modification to encrypted content produces a different CID
-3. **Metadata-Level Authentication:** The combination of IPNS signatures + CID hashing provides cryptographic integrity equivalent to GCM's per-file authentication tag
+3. **Metadata-Level Authentication:** The combination of IPNS signatures + CID hashing provides cryptographic integrity protection through metadata-level authentication
 
 This layered approach allows CTR streaming while maintaining zero-knowledge security guarantees.
 
