@@ -1,17 +1,17 @@
 ---
-version: 1.9.0
-last_updated: 2026-01-18
+version: 1.10.0
+last_updated: 2026-01-19
 status: Active
 ai_context: Product requirements for CipherBox. Tech demonstrator - not commercial. See TECHNICAL_ARCHITECTURE.md for implementation details, API_SPECIFICATION.md for backend contract, DATA_FLOWS.md for sequences.
 ---
 
 # CipherBox - Product Requirements Document
 
-**Product Name:** CipherBox  
-**Type:** Technology Demonstrator  
-**Status:** Specification Document  
-**Created:** January 14, 2026  
-**Last Updated:** January 17, 2026  
+**Product Name:** CipherBox
+**Type:** Technology Demonstrator
+**Status:** Specification Document
+**Created:** January 14, 2026
+**Last Updated:** January 19, 2026  
 
 ---
 
@@ -162,12 +162,15 @@ Core pillars:
 | Desktop mount | macOS FUSE mount at ~/CipherVault |
 | Multi-device sync | IPNS polling (~30s latency) |
 | E2E encryption | AES-256-GCM for files, ECIES for key wrapping |
+| Encryption mode metadata | `encryptionMode` field in file metadata (foundation for v1.1 streaming) |
 | Data portability | Vault export for independent recovery |
 
 ### 4.2 Out of Scope (v1.0)
 
 | Feature | Deferred To | Rationale |
 |---------|-------------|-----------|
+| CTR encryption | v1.1 | Streaming implementation complexity |
+| Streaming decryption | v1.1 | Requires CTR mode + chunk decryption |
 | Billing/payments | v1.1 | Tech demo focus |
 | File versioning | v2.0 | Complexity |
 | File/folder sharing | v2.0 | Requires key sharing infrastructure |
@@ -252,8 +255,11 @@ See [TECHNICAL_ARCHITECTURE.md](./TECHNICAL_ARCHITECTURE.md#acceptance-criteria)
 
 ### v1.1 (Q1-Q2 2026)
 
-**Focus:** Polish and infrastructure
+**Focus:** Streaming + Polish
 
+- AES-256-CTR encryption for video/audio files
+- Streaming decryption (chunk-by-chunk playback)
+- MIME-based auto-detection (video/audio → CTR, others → GCM)
 - Billing integration (if commercializing)
 - Performance optimization
 - Security audit

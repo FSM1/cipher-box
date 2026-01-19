@@ -1,15 +1,15 @@
 ---
-version: 1.9.0
-last_updated: 2026-01-18
+version: 1.10.0
+last_updated: 2026-01-19
 status: Active
 ai_context: Technical architecture for CipherBox. Contains encryption specs, key hierarchy, auth flows, and system design. For API details see API_SPECIFICATION.md, for sequences see DATA_FLOWS.md.
 ---
 
 # CipherBox - Technical Architecture
 
-**Document Type:** Technical Specification  
-**Status:** Active  
-**Last Updated:** January 18, 2026  
+**Document Type:** Technical Specification
+**Status:** Active
+**Last Updated:** January 19, 2026  
 
 ---
 
@@ -207,16 +207,43 @@ Future implementation can support this as fallback.
 
 ### 3.1 Encryption Primitives
 
-| Algorithm | Purpose | Standard | Implementation |
-|-----------|---------|----------|----------------|
-| AES-256-GCM | File content + metadata encryption | NIST | Web Crypto API |
-| ECIES (secp256k1) | Key wrapping (asymmetric encryption of symmetric keys) | SEC 2 | ethers.js |
-| ECDSA (secp256k1) | Signing, key derivation | NIST/SECG | Web3Auth |
-| Ed25519 | IPNS record signing | RFC 8032 | libsodium.js |
-| HKDF-SHA256 | Key derivation | RFC 5869 | Web Crypto API |
-| SHA-256 | Hashing | NIST | Web Crypto API |
+| Algorithm | Purpose | Standard | Implementation | Version |
+|-----------|---------|----------|----------------|---------|
+| AES-256-GCM | File content + metadata encryption | NIST | Web Crypto API | v1.0+ |
+| AES-256-CTR | Streaming file encryption (video/audio) | NIST | Web Crypto API | v1.1+ |
+| ECIES (secp256k1) | Key wrapping (asymmetric encryption of symmetric keys) | SEC 2 | ethers.js | v1.0+ |
+| ECDSA (secp256k1) | Signing, key derivation | NIST/SECG | Web3Auth | v1.0+ |
+| Ed25519 | IPNS record signing | RFC 8032 | libsodium.js | v1.0+ |
+| HKDF-SHA256 | Key derivation | RFC 5869 | Web Crypto API | v1.0+ |
+| SHA-256 | Hashing | NIST | Web Crypto API | v1.0+ |
 
-### 3.2 File Encryption
+### 3.1.1 Encryption Mode Roadmap
+
+CipherBox implements a hybrid encryption approach to balance security with streaming capabilities:
+
+**v1.0 (Current): Foundation**
+- All files encrypted with AES-256-GCM
+- `encryptionMode` metadata field added to all files (set to "GCM")
+- Provides authenticated encryption with 16-byte authentication tag
+- No streaming support (full file must be downloaded before decryption)
+
+**v1.1 (Future): Hybrid GCM + CTR**
+- Implement AES-256-CTR encryption for streaming use cases
+- Auto-detect MIME type (video/audio → CTR, others → GCM)
+- Support chunk-by-chunk decryption for media streaming
+- Maintain security via IPNS signatures + IPFS CID hashing
+
+**Security Basis for CTR Mode:**
+
+While AES-256-CTR lacks per-file authentication tags, CipherBox mitigates this through:
+
+1. **IPNS Signature (Ed25519):** Every folder metadata update is signed with Ed25519, preventing CID substitution attacks
+2. **IPFS CID Hash:** Content-addressed storage ensures any modification to encrypted content produces a different CID
+3. **Metadata-Level Authentication:** The combination of IPNS signatures + CID hashing provides cryptographic integrity protection through metadata-level authentication
+
+This layered approach allows CTR streaming while maintaining zero-knowledge security guarantees.
+
+### 3.2 File Encryption (v1.0)
 
 Each file is encrypted with a unique random key:
 
@@ -235,7 +262,10 @@ Each file is encrypted with a unique random key:
    - cid: IPFS content identifier
    - fileKeyEncrypted: wrapped key
    - fileIv: IV for decryption
+   - encryptionMode: "GCM" (for all files in v1.0)
 ```
+
+**v1.1 Roadmap Note:** Future versions will support AES-256-CTR for streaming video/audio files. The `encryptionMode` field enables this without requiring data migration. See Section 3.1.1 for security details.
 
 ### 3.3 Folder Metadata Encryption
 
@@ -278,6 +308,7 @@ Folder metadata (child list) is encrypted with the folder's key:
       "cid": "QmXxxx...",
       "fileKeyEncrypted": "0x...",
       "fileIv": "0x...",
+      "encryptionMode": "GCM",
       "size": 2048576,
       "created": 1705268100,
       "modified": 1705268100
@@ -290,6 +321,9 @@ Folder metadata (child list) is encrypted with the folder's key:
 }
 ```
 
+**Field Descriptions:**
+- `encryptionMode`: Specifies the encryption algorithm used for file content ("GCM" or "CTR"). Always "GCM" in v1.0. Added to support future streaming capabilities (v1.1+). Client-side decryption logic must default to "GCM" if field is missing for backward compatibility.
+
 ### 3.5 No File Deduplication
 
 CipherBox does NOT deduplicate files. Each upload uses:
@@ -297,6 +331,8 @@ CipherBox does NOT deduplicate files. Each upload uses:
 - Unique random 96-bit IV
 
 Same file uploaded twice produces different ciphertexts and different CIDs. This is a security feature—deduplication would leak information about file contents.
+
+**Note:** This no-deduplication policy applies to all encryption modes (both GCM and future CTR). Each file receives unique encryption parameters regardless of the algorithm used.
 
 ---
 
@@ -611,6 +647,8 @@ Future versions may implement vector clocks or CRDTs.
 | E2 | File decryption produces original content | Round-trip test | Frontend |
 | E3 | Folder metadata decryption produces valid JSON | Integration test | Frontend |
 | E4 | Key derivation is deterministic across auth methods | Cross-method login test | Frontend |
+| E5 | File metadata includes encryptionMode field | Unit test | Frontend |
+| E6 | Decryption handles both GCM and missing encryptionMode | Unit test | Frontend |
 
 ### 8.3 Performance Criteria
 
