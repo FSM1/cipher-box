@@ -34,7 +34,7 @@ This is **not a preliminary design document**—it's a **complete blueprint** wi
 2. **README.md** - Tech stack & architecture overview
 
 
-### Specifications (`Documentation/`)
+### Specifications (`Preliminary/Documentation/`)
 3. **IMPLEMENTATION_ROADMAP.md** - 12-week development timeline
 4. **PRD.md** - Product requirements, user journeys, scope
 5. **TECHNICAL_ARCHITECTURE.md** - Encryption, key hierarchy, system design

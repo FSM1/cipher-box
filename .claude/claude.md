@@ -8,35 +8,25 @@ CipherBox is a **technology demonstrator** for privacy-first encrypted cloud sto
 
 | Document | Purpose |
 |----------|---------|
-| `Documentation/PRD.md` | Product requirements, user journeys, scope |
-| `Documentation/TECHNICAL_ARCHITECTURE.md` | Encryption, key hierarchy, system design |
-| `Documentation/API_SPECIFICATION.md` | Backend endpoints, database schema |
-| `Documentation/DATA_FLOWS.md` | Sequence diagrams, test vectors |
-| `Documentation/CLIENT_SPECIFICATION.md` | Web UI, desktop app specs |
+| `Preliminary/Documentation/PRD.md` | Product requirements, user journeys, scope |
+| `Preliminary/Documentation/TECHNICAL_ARCHITECTURE.md` | Encryption, key hierarchy, system design |
+| `Preliminary/Documentation/API_SPECIFICATION.md` | Backend endpoints, database schema |
+| `Preliminary/Documentation/DATA_FLOWS.md` | Sequence diagrams, test vectors |
+| `Preliminary/Documentation/CLIENT_SPECIFICATION.md` | Web UI, desktop app specs |
+| `Preliminary/Documentation/IMPLEMENTATION_ROADMAP.md` | Week-by-week development plan |
 
-## Version Management
+## Finalized Specifications
 
 **Current Version:** 1.11.1
 
-### Version Bump Rule
+### ⚠️ IMPORTANT: Do Not Edit Preliminary/Documentation Files
 
-When modifying any documentation file in `Documentation/`, you MUST:
+All files in `Preliminary/Documentation/` are **FINALIZED** specifications (version 1.10.0, status: Finalized). These documents represent the agreed-upon design and should **NOT** be modified.
 
-1. Increment the patch version (e.g., 1.7.0 → 1.7.1) for minor updates
-2. Increment the minor version (e.g., 1.7.0 → 1.8.0) for new sections or significant changes
-3. Update the `version` field in the YAML frontmatter of the modified file
-4. Update the `last_updated` field to the current date
-5. Update this file's "Current Version" to match
-
-Example frontmatter update:
-```yaml
----
-version: 1.7.1  # Incremented from 1.7.0
-last_updated: 2026-01-17  # Updated to current date
-status: Active
-ai_context: ...
----
-```
+**If you need to make changes:**
+- New implementation documentation should be created in a separate location
+- Working notes and updates belong in `.planning/` or project-specific directories
+- Do not modify version numbers or content in `Preliminary/Documentation/`
 
 ## Terminology Standards
 

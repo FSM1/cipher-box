@@ -2,18 +2,17 @@
 
 ## Version Management
 
-**Current Documentation Version:** 1.9.0
+**Current Documentation Version:** 1.10.0
+**Status:** Finalized (2026-01-20)
 
-### Version Bump Rule
+### ⚠️ IMPORTANT: Do Not Edit Preliminary/Documentation Files
 
-When modifying any documentation file in `Documentation/`, you MUST:
+All files in `Preliminary/Documentation/` are **FINALIZED** specifications (version 1.10.0, status: Finalized). These documents represent the agreed-upon design and should **NOT** be modified.
 
-1. Increment the patch version (e.g., 1.7.0 → 1.7.1) for minor updates
-2. Increment the minor version (e.g., 1.7.0 → 1.8.0) for new sections or significant changes
-3. Update the `version` field in the YAML frontmatter of the modified file
-4. Update the `last_updated` field to the current date
-5. Update this file's "Current Documentation Version" to match
-6. Update `claude.md` "Current Version" to match
+**If you need to make changes:**
+- New implementation documentation should be created in a separate location
+- Working notes and updates belong in `.planning/` or project-specific directories
+- Do not modify version numbers or content in `Preliminary/Documentation/`
 
 ---
 
@@ -27,13 +26,14 @@ When modifying any documentation file in `Documentation/`, you MUST:
 
 ## Documentation Structure
 
-| Document                                                                | Purpose                                    |
-| ----------------------------------------------------------------------- | ------------------------------------------ |
-| [PRD.md](../Documentation/PRD.md)                                       | Product requirements, user journeys, scope |
-| [TECHNICAL_ARCHITECTURE.md](../Documentation/TECHNICAL_ARCHITECTURE.md) | Encryption, key hierarchy, system design   |
-| [API_SPECIFICATION.md](../Documentation/API_SPECIFICATION.md)           | Backend endpoints, database schema         |
-| [DATA_FLOWS.md](../Documentation/DATA_FLOWS.md)                         | Sequence diagrams, test vectors            |
-| [CLIENT_SPECIFICATION.md](../Documentation/CLIENT_SPECIFICATION.md)     | Web UI, desktop app specs                  |
+| Document                                                                                  | Purpose                                    |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------ |
+| [PRD.md](../Preliminary/Documentation/PRD.md)                                             | Product requirements, user journeys, scope |
+| [TECHNICAL_ARCHITECTURE.md](../Preliminary/Documentation/TECHNICAL_ARCHITECTURE.md)       | Encryption, key hierarchy, system design   |
+| [API_SPECIFICATION.md](../Preliminary/Documentation/API_SPECIFICATION.md)                 | Backend endpoints, database schema         |
+| [DATA_FLOWS.md](../Preliminary/Documentation/DATA_FLOWS.md)                               | Sequence diagrams, test vectors            |
+| [CLIENT_SPECIFICATION.md](../Preliminary/Documentation/CLIENT_SPECIFICATION.md)           | Web UI, desktop app specs                  |
+| [IMPLEMENTATION_ROADMAP.md](../Preliminary/Documentation/IMPLEMENTATION_ROADMAP.md)       | Week-by-week development plan              |
 
 ---
 
@@ -303,12 +303,12 @@ if (error.response?.status === 401) {
 
 - [00_START_HERE.md](../00_START_HERE.md) - Project overview, quick reference
 - [README.md](../README.md) - Architecture summary, tech stack
-- [IMPLEMENTATION_ROADMAP.md](../IMPLEMENTATION_ROADMAP.md) - 12-week development timeline
-- [Documentation/PRD.md](../Documentation/PRD.md) - Product requirements, user journeys, scope
-- [Documentation/TECHNICAL_ARCHITECTURE.md](../Documentation/TECHNICAL_ARCHITECTURE.md) - Encryption, key hierarchy, system design
-- [Documentation/API_SPECIFICATION.md](../Documentation/API_SPECIFICATION.md) - Backend endpoints, database schema
-- [Documentation/DATA_FLOWS.md](../Documentation/DATA_FLOWS.md) - Sequence diagrams, test vectors
-- [Documentation/CLIENT_SPECIFICATION.md](../Documentation/CLIENT_SPECIFICATION.md) - Web UI, desktop app specs
+- [Preliminary/Documentation/IMPLEMENTATION_ROADMAP.md](../Preliminary/Documentation/IMPLEMENTATION_ROADMAP.md) - 12-week development timeline
+- [Preliminary/Documentation/PRD.md](../Preliminary/Documentation/PRD.md) - Product requirements, user journeys, scope
+- [Preliminary/Documentation/TECHNICAL_ARCHITECTURE.md](../Preliminary/Documentation/TECHNICAL_ARCHITECTURE.md) - Encryption, key hierarchy, system design
+- [Preliminary/Documentation/API_SPECIFICATION.md](../Preliminary/Documentation/API_SPECIFICATION.md) - Backend endpoints, database schema
+- [Preliminary/Documentation/DATA_FLOWS.md](../Preliminary/Documentation/DATA_FLOWS.md) - Sequence diagrams, test vectors
+- [Preliminary/Documentation/CLIENT_SPECIFICATION.md](../Preliminary/Documentation/CLIENT_SPECIFICATION.md) - Web UI, desktop app specs
 
 **For detailed crypto flows:** See TECHNICAL_ARCHITECTURE.md (key hierarchy, encryption primitives) and DATA_FLOWS.md (sequence diagrams, test vectors)
 
@@ -387,4 +387,4 @@ const { idToken } = await web3auth.authenticateUser();
 
 This project prioritizes **cryptographic correctness over convenience**. When in doubt, err on the side of more encryption, more validation, and stricter security. The target user (cypherpunks, crypto enthusiasts) values privacy guarantees more than UX polish.
 
-**For detailed guidance:** Refer to [PRD.md](../Documentation/PRD.md) for product scope, [TECHNICAL_ARCHITECTURE.md](../Documentation/TECHNICAL_ARCHITECTURE.md) for crypto and system design, and [DATA_FLOWS.md](../Documentation/DATA_FLOWS.md) for test vectors and sequence diagrams.
+**For detailed guidance:** Refer to [PRD.md](../Preliminary/Documentation/PRD.md) for product scope, [TECHNICAL_ARCHITECTURE.md](../Preliminary/Documentation/TECHNICAL_ARCHITECTURE.md) for crypto and system design, and [DATA_FLOWS.md](../Preliminary/Documentation/DATA_FLOWS.md) for test vectors and sequence diagrams.
