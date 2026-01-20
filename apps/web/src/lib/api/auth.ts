@@ -8,25 +8,18 @@ type LoginRequest = {
 
 type LoginResponse = {
   accessToken: string;
-  refreshToken: string;
   isNewUser: boolean;
-  teeKeys: {
-    currentEpoch: number;
-    currentPublicKey: string;
-    previousEpoch: number | null;
-    previousPublicKey: string | null;
-  };
 };
 
 type TokenResponse = {
   accessToken: string;
-  refreshToken: string;
 };
 
 export const authApi = {
   /**
    * Authenticate user with Web3Auth ID token.
    * Backend verifies the idToken with appropriate JWKS endpoint based on loginType.
+   * Refresh token is stored in HTTP-only cookie automatically.
    */
   login: async (data: LoginRequest): Promise<LoginResponse> => {
     const response = await apiClient.post<LoginResponse>('/auth/login', data);
@@ -36,6 +29,7 @@ export const authApi = {
   /**
    * Refresh access token using HTTP-only refresh token cookie.
    * The refresh token is automatically sent via withCredentials: true.
+   * New refresh token is set in HTTP-only cookie by the backend.
    */
   refresh: async (): Promise<TokenResponse> => {
     const response = await apiClient.post<TokenResponse>('/auth/refresh');
