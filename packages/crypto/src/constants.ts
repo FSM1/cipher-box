@@ -19,6 +19,9 @@ export const SECP256K1_PUBLIC_KEY_SIZE = 65;
 /** secp256k1 private key size in bytes */
 export const SECP256K1_PRIVATE_KEY_SIZE = 32;
 
+/** ECIES minimum ciphertext size: ephemeral pubkey (65) + auth tag (16) */
+export const ECIES_MIN_CIPHERTEXT_SIZE = 65 + 16;
+
 /** AES-GCM algorithm name for Web Crypto API */
 export const AES_GCM_ALGORITHM = 'AES-GCM';
 

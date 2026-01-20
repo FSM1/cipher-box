@@ -6,3 +6,4 @@
 
 export { encryptAesGcm } from './encrypt';
 export { decryptAesGcm } from './decrypt';
+export { sealAesGcm, unsealAesGcm } from './seal';

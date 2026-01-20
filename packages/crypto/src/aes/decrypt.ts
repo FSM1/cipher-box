@@ -6,7 +6,7 @@
  */
 
 import { CryptoError } from '../types';
-import { AES_KEY_SIZE, AES_IV_SIZE, AES_GCM_ALGORITHM } from '../constants';
+import { AES_KEY_SIZE, AES_IV_SIZE, AES_TAG_SIZE, AES_GCM_ALGORITHM } from '../constants';
 
 /**
  * Decrypt data encrypted with AES-256-GCM.
@@ -33,6 +33,11 @@ export async function decryptAesGcm(
   // Validate IV size
   if (iv.length !== AES_IV_SIZE) {
     throw new CryptoError('Decryption failed', 'INVALID_IV_SIZE');
+  }
+
+  // Validate minimum ciphertext size (at least auth tag)
+  if (ciphertext.length < AES_TAG_SIZE) {
+    throw new CryptoError('Decryption failed', 'DECRYPTION_FAILED');
   }
 
   try {

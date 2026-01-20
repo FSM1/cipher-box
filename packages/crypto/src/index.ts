@@ -58,7 +58,7 @@ export {
 export { deriveKey, deriveContextKey, generateFolderKey, type DeriveKeyParams } from './keys';
 
 // AES-256-GCM symmetric encryption
-export { encryptAesGcm, decryptAesGcm } from './aes';
+export { encryptAesGcm, decryptAesGcm, sealAesGcm, unsealAesGcm } from './aes';
 
 // ECIES secp256k1 key wrapping
 export { wrapKey, unwrapKey } from './ecies';
@@ -92,6 +92,7 @@ export {
   AES_TAG_SIZE,
   SECP256K1_PUBLIC_KEY_SIZE,
   SECP256K1_PRIVATE_KEY_SIZE,
+  ECIES_MIN_CIPHERTEXT_SIZE,
   AES_GCM_ALGORITHM,
   ED25519_PUBLIC_KEY_SIZE,
   ED25519_PRIVATE_KEY_SIZE,

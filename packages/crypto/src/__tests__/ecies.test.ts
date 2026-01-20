@@ -8,7 +8,11 @@ import { describe, it, expect } from 'vitest';
 import * as secp256k1 from '@noble/secp256k1';
 import { wrapKey, unwrapKey } from '../ecies';
 import { generateFileKey, generateRandomBytes } from '../utils';
-import { SECP256K1_PUBLIC_KEY_SIZE, SECP256K1_PRIVATE_KEY_SIZE } from '../constants';
+import {
+  SECP256K1_PUBLIC_KEY_SIZE,
+  SECP256K1_PRIVATE_KEY_SIZE,
+  ECIES_MIN_CIPHERTEXT_SIZE,
+} from '../constants';
 
 /**
  * Generate a secp256k1 keypair for testing.
@@ -223,6 +227,80 @@ describe('ECIES Key Wrapping', () => {
       // All errors should be identical to prevent oracle attacks
       expect(new Set(errors).size).toBe(1);
       expect(errors[0]).toBe('Key unwrapping failed');
+    });
+  });
+
+  describe('minimum ciphertext size validation', () => {
+    it('should reject wrapped key shorter than minimum ECIES size (81 bytes)', async () => {
+      const keypair = generateTestKeypair();
+      const shortWrapped = new Uint8Array(ECIES_MIN_CIPHERTEXT_SIZE - 1);
+
+      await expect(unwrapKey(shortWrapped, keypair.privateKey)).rejects.toThrow(
+        'Key unwrapping failed'
+      );
+    });
+
+    it('should accept wrapped key at or above minimum size (empty plaintext)', async () => {
+      const keypair = generateTestKeypair();
+      const emptyData = new Uint8Array(0);
+
+      const wrapped = await wrapKey(emptyData, keypair.publicKey);
+      // eciesjs adds additional overhead beyond minimum (ephemeral key + HKDF + tag)
+      expect(wrapped.length).toBeGreaterThanOrEqual(ECIES_MIN_CIPHERTEXT_SIZE);
+
+      const unwrapped = await unwrapKey(wrapped, keypair.privateKey);
+      expect(unwrapped.length).toBe(0);
+    });
+  });
+
+  describe('curve point validation', () => {
+    it('should reject public key with valid length but invalid curve point', async () => {
+      // Create a 65-byte key with 0x04 prefix but invalid point coordinates
+      const invalidPublicKey = new Uint8Array(65);
+      invalidPublicKey[0] = 0x04;
+      // Fill with 0xff - this is not a valid point on secp256k1
+      invalidPublicKey.fill(0xff, 1);
+
+      const data = generateFileKey();
+      await expect(wrapKey(data, invalidPublicKey)).rejects.toThrow('Key wrapping failed');
+    });
+
+    it('should reject public key with coordinates that pass length/prefix but fail curve check', async () => {
+      // Create a seemingly valid public key that's not on the curve
+      const invalidPublicKey = new Uint8Array(65);
+      invalidPublicKey[0] = 0x04;
+      // Set X coordinate to some value
+      for (let i = 1; i <= 32; i++) {
+        invalidPublicKey[i] = i;
+      }
+      // Set Y coordinate to some value (likely not a valid Y for this X)
+      for (let i = 33; i <= 64; i++) {
+        invalidPublicKey[i] = i;
+      }
+
+      const data = generateFileKey();
+      await expect(wrapKey(data, invalidPublicKey)).rejects.toThrow('Key wrapping failed');
+    });
+
+    it('should accept valid public key on the curve', async () => {
+      const keypair = generateTestKeypair();
+      const data = generateFileKey();
+
+      // Should not throw
+      const wrapped = await wrapKey(data, keypair.publicKey);
+      expect(wrapped.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('empty data handling', () => {
+    it('should handle empty data wrapping correctly', async () => {
+      const keypair = generateTestKeypair();
+      const emptyData = new Uint8Array(0);
+
+      const wrapped = await wrapKey(emptyData, keypair.publicKey);
+      const unwrapped = await unwrapKey(wrapped, keypair.privateKey);
+
+      expect(unwrapped.length).toBe(0);
     });
   });
 });

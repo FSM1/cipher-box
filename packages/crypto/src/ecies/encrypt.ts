@@ -6,6 +6,7 @@
  */
 
 import { encrypt } from 'eciesjs';
+import { ProjectivePoint } from '@noble/secp256k1';
 import { CryptoError } from '../types';
 import { SECP256K1_PUBLIC_KEY_SIZE } from '../constants';
 
@@ -33,7 +34,14 @@ export async function wrapKey(
 
   // Validate uncompressed public key prefix (0x04)
   if (recipientPublicKey[0] !== 0x04) {
-    throw new CryptoError('Key wrapping failed', 'INVALID_PUBLIC_KEY_SIZE');
+    throw new CryptoError('Key wrapping failed', 'INVALID_PUBLIC_KEY_FORMAT');
+  }
+
+  // Validate that the public key is a valid point on secp256k1 curve
+  try {
+    ProjectivePoint.fromHex(recipientPublicKey);
+  } catch {
+    throw new CryptoError('Key wrapping failed', 'INVALID_PUBLIC_KEY_FORMAT');
   }
 
   try {

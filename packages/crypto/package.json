@@ -26,6 +26,7 @@
   },
   "devDependencies": {
     "@noble/secp256k1": "^2.2.3",
+    "@vitest/coverage-v8": "^3.2.4",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vitest": "^3.0.5"

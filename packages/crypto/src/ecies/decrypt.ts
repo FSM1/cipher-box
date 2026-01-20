@@ -7,7 +7,7 @@
 
 import { decrypt } from 'eciesjs';
 import { CryptoError } from '../types';
-import { SECP256K1_PRIVATE_KEY_SIZE } from '../constants';
+import { SECP256K1_PRIVATE_KEY_SIZE, ECIES_MIN_CIPHERTEXT_SIZE } from '../constants';
 
 /**
  * Unwrap a key using ECIES decryption.
@@ -27,6 +27,11 @@ export async function unwrapKey(
   // Validate private key size
   if (privateKey.length !== SECP256K1_PRIVATE_KEY_SIZE) {
     throw new CryptoError('Key unwrapping failed', 'INVALID_PRIVATE_KEY_SIZE');
+  }
+
+  // Validate minimum ciphertext size (ephemeral pubkey + auth tag)
+  if (wrappedKey.length < ECIES_MIN_CIPHERTEXT_SIZE) {
+    throw new CryptoError('Key unwrapping failed', 'KEY_UNWRAPPING_FAILED');
   }
 
   try {
