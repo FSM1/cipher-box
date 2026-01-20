@@ -5,3 +5,4 @@
  */
 
 export { generateEd25519Keypair, type Ed25519Keypair } from './keygen';
+export { signEd25519, verifyEd25519 } from './sign';
