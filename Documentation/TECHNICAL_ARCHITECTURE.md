@@ -1,5 +1,5 @@
 ---
-version: 1.11.0
+version: 1.11.1
 last_updated: 2026-01-20
 status: Active
 ai_context: Technical architecture for CipherBox. Contains encryption specs, key hierarchy, auth flows, TEE-based IPNS republishing, and system design. For API details see API_SPECIFICATION.md, for sequences see DATA_FLOWS.md.
@@ -844,11 +844,11 @@ sequenceDiagram
 ```sql
 -- Stores current and previous TEE public keys
 CREATE TABLE tee_key_state (
-    id VARCHAR(32) PRIMARY KEY DEFAULT 'current',
-    current_epoch INT NOT NULL,
+    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    current_epoch INTEGER NOT NULL,
     public_key_current BYTEA NOT NULL,        -- Current TEE public key
     public_key_previous BYTEA,                -- Previous epoch key (grace period)
-    previous_epoch INT,
+    previous_epoch INTEGER,
     last_updated TIMESTAMP DEFAULT NOW(),
     phala_block_height BIGINT                 -- For on-chain verification
 );
@@ -856,29 +856,29 @@ CREATE TABLE tee_key_state (
 -- Tracks IPNS entries requiring periodic republish
 CREATE TABLE ipns_republish_schedule (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID REFERENCES users(id),
-    ipns_name VARCHAR(255) UNIQUE NOT NULL,
+    user_id UUID NOT NULL REFERENCES users(id),
+    ipns_name VARCHAR(255) NOT NULL,
     latest_cid VARCHAR(255) NOT NULL,
-    sequence_number BIGINT DEFAULT 0,
+    sequence_number BIGINT NOT NULL,
     encrypted_ipns_key BYTEA NOT NULL,        -- ECIES(ipnsPrivateKey, teePublicKey)
-    key_epoch INT NOT NULL,                   -- Epoch of TEE key used for encryption
+    key_epoch INTEGER NOT NULL,               -- Epoch of TEE key used for encryption
     encrypted_ipns_key_prev BYTEA,            -- Previous epoch encrypted key (migration)
-    key_epoch_prev INT,
+    key_epoch_prev INTEGER,
     next_republish_at TIMESTAMP NOT NULL,
-    retry_count INT DEFAULT 0,
+    retry_count INTEGER DEFAULT 0,
     last_error TEXT,
     created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(user_id, ipns_name)
 );
 
 -- Audit log for key rotations
 CREATE TABLE tee_key_rotation_log (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    old_epoch INT NOT NULL,
-    new_epoch INT NOT NULL,
-    rotation_time TIMESTAMP NOT NULL,
-    affected_entries INT,                     -- Number of entries to migrate
-    migration_completed_at TIMESTAMP
+    old_epoch INTEGER NOT NULL,
+    new_epoch INTEGER NOT NULL,
+    rotation_time TIMESTAMP DEFAULT NOW(),
+    affected_entries INTEGER NOT NULL         -- Number of entries to migrate
 );
 
 CREATE INDEX idx_republish_due ON ipns_republish_schedule(next_republish_at);
@@ -949,14 +949,16 @@ Week 8: Old epoch deprecated
 ```rust
 pub fn republish_ipns_fallback(&self, request: IpnsRequest) -> Result<IpnsRecord, Error> {
     // Try current epoch first, fallback to previous
-    let key = self.decrypt_epoch(&request.current_key, request.current_epoch)
+    let mut key = self.decrypt_epoch(&request.current_key, request.current_epoch)
         .or_else(|_| self.decrypt_epoch(&request.prev_key, request.prev_epoch))?;
 
     let signature = self.sign_ipns(&record, &key)?;
-    self.zero_memory(&mut key);  // Immediately discard key
 
     // Re-encrypt with current epoch for seamless migration
     let re_encrypted = self.encrypt_current_epoch(&key)?;
+
+    // Zero key from memory AFTER all operations complete
+    self.zero_memory(&mut key);
 
     Ok(IpnsRecord {
         signature,
@@ -1009,9 +1011,9 @@ async republishIpns() {
                 UPDATE ipns_republish_schedule SET
                     retry_count = retry_count + 1,
                     last_error = $1,
-                    next_republish_at = NOW() + INTERVAL '${delay} seconds'
+                    next_republish_at = NOW() + make_interval(secs => $3)
                 WHERE id = $2
-            `, [error.message, entry.id]);
+            `, [error.message, entry.id, delay]);
         }
     }
 }

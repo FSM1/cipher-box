@@ -16,7 +16,7 @@ CipherBox is a **technology demonstrator** for privacy-first encrypted cloud sto
 
 ## Version Management
 
-**Current Version:** 1.11.0
+**Current Version:** 1.11.1
 
 ### Version Bump Rule
 

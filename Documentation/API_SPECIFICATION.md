@@ -1,5 +1,5 @@
 ---
-version: 1.11.0
+version: 1.11.1
 last_updated: 2026-01-20
 status: Active
 ai_context: API specification for CipherBox backend. Contains all endpoints, request/response formats, database schema, and rate limits. For system design see TECHNICAL_ARCHITECTURE.md.
@@ -215,7 +215,13 @@ Exchange refresh token for new token pair.
 ```json
 {
   "accessToken": "eyJhbGciOiJSUzI1NiIs...",
-  "refreshToken": "def456..."
+  "refreshToken": "def456...",
+  "teeKeys": {
+    "currentEpoch": 42,
+    "currentPublicKey": "BGFkZWZn...",
+    "previousEpoch": 41,
+    "previousPublicKey": "BHlpcGpr..."
+  }
 }
 ```
 
@@ -226,6 +232,7 @@ Exchange refresh token for new token pair.
 **Notes:**
 - Old refresh token is invalidated
 - New refresh token has fresh 7-day expiry
+- TEE keys included to ensure clients always have current keys after token refresh
 
 ---
 
