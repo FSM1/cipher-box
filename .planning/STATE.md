@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 ## Current Position
 
 Phase: 4.1 of 11 (API Service Testing)
-Plan: 2 of 3 in Phase 4.1 complete
-Status: In progress - VaultService tests complete
-Last activity: 2026-01-20 - Completed 04.1-02-PLAN.md (VaultService unit tests)
+Plan: 1 of 3 in Phase 4.1 complete
+Status: In progress - Auth services tests complete
+Last activity: 2026-01-21 - Completed 04.1-01-PLAN.md (Auth services unit tests)
 
-Progress: [####......] 36% (16 of 44 plans)
+Progress: [####......] 34% (15 of 44 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 16
-- Average duration: 4.8 min
-- Total execution time: 1.3 hours
+- Total plans completed: 15
+- Average duration: 4.9 min
+- Total execution time: 1.2 hours
 
 **By Phase:**
 
@@ -32,11 +32,11 @@ Progress: [####......] 36% (16 of 44 plans)
 | 02-authentication        | 4/4   | 18 min | 4.5 min  |
 | 03-core-encryption       | 3/3   | 18 min | 6 min    |
 | 04-file-storage          | 4/4   | 17 min | 4.3 min  |
-| 04.1-api-service-testing | 2/3   | 8 min  | 4 min    |
+| 04.1-api-service-testing | 1/3   | 5 min  | 5 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 6m, 4m, 3m, 5m, 3m
+- Last 5 plans: 4m, 3m, 5m, 3m, 5m
 - Trend: Consistent (fast)
 
 _Updated after each plan completion_
@@ -98,9 +98,9 @@ Recent decisions affecting current work:
 | Pinata gateway direct fetch for downloads            | 04-04   | No backend relay needed for reading public IPFS content                   |
 | Stream progress only with Content-Length             | 04-04   | Falls back to simple arrayBuffer if header not present                    |
 | File key cleared after decryption                    | 04-04   | Security - clearBytes() called in finally block                           |
-| Fresh mock objects per test for isolation            | 04.1-02 | Initialize mocks in beforeEach to avoid state leakage                     |
-| QueryBuilder chain mocking with mockReturnThis()     | 04.1-02 | Simulates TypeORM QueryBuilder method chaining                            |
-| Test private methods indirectly via public API       | 04.1-02 | Maintains encapsulation while ensuring coverage                           |
+| Jose module mock via moduleNameMapper                | 04.1-01 | ESM jose module mocked to avoid transformation issues                     |
+| Real argon2 in tests for correctness                 | 04.1-01 | Per TESTING.md, don't mock crypto - accept slower tests for correctness   |
+| Test.createTestingModule for constructor tests       | 04.1-01 | Validates constructor throws when config missing                          |
 
 ### Pending Todos
 
@@ -124,11 +124,11 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-20
-Stopped at: Completed 04.1-02-PLAN.md (VaultService unit tests)
+Last session: 2026-01-21
+Stopped at: Completed 04.1-01-PLAN.md (Auth services unit tests)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-20 after 04.1-02 completion_
+_Last updated: 2026-01-21 after 04.1-01 completion_
