@@ -88,3 +88,18 @@ Do not implement or suggest implementations for:
 - Search/indexing
 - Collaborative editing
 - Team accounts
+
+## Git Workflow
+
+**Branch Protection Rules:**
+- **NEVER push directly to `main` branch** - all changes must go through feature branches and PRs
+- Create feature branches with descriptive names (e.g., `feat/add-auth`, `fix/ipns-publish`)
+- All commits should be made on feature branches first
+- Merge to main only via pull requests
+
+**Branch Naming:**
+- `feat/` - New features
+- `fix/` - Bug fixes
+- `docs/` - Documentation updates
+- `refactor/` - Code refactoring
+- `chore/` - Maintenance tasks
