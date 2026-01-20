@@ -10,9 +10,7 @@ export const customInstance = async <T>(config: {
 }): Promise<T> => {
   const { url, method, params, data, headers, signal } = config;
 
-  const queryString = params
-    ? '?' + new URLSearchParams(params).toString()
-    : '';
+  const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
 
   const response = await fetch(`${BASE_URL}${url}${queryString}`, {
     method,

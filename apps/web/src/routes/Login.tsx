@@ -15,9 +15,7 @@ export function Login() {
       <button onClick={handleLogin} className="login-button">
         Connect Wallet
       </button>
-      <p className="login-note">
-        Web3Auth integration coming in Phase 2
-      </p>
+      <p className="login-note">Web3Auth integration coming in Phase 2</p>
     </div>
   );
 }

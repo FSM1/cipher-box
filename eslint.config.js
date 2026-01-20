@@ -4,7 +4,16 @@ import tseslint from 'typescript-eslint';
 import pluginPrettier from 'eslint-plugin-prettier/recommended';
 
 export default [
-  { ignores: ['**/dist/**', '**/node_modules/**', '**/.planning/**'] },
+  {
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/.planning/**',
+      '**/.claude/**',
+      '**/00-Preliminary-R&D/**',
+      '**/Preliminary/**',
+    ],
+  },
   { files: ['**/*.{js,mjs,cjs,ts,tsx}'] },
   { languageOptions: { globals: { ...globals.browser, ...globals.node } } },
   pluginJs.configs.recommended,

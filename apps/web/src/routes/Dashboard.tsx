@@ -5,7 +5,9 @@ export function Dashboard() {
     <div className="dashboard-container">
       <header className="dashboard-header">
         <h1>My Vault</h1>
-        <Link to="/login" className="logout-link">Logout</Link>
+        <Link to="/login" className="logout-link">
+          Logout
+        </Link>
       </header>
       <main className="dashboard-main">
         <aside className="folder-sidebar">
