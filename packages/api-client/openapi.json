@@ -11,18 +11,108 @@
           }
         },
         "summary": "Get API info",
-        "tags": [
-          "Root"
-        ]
+        "tags": ["Root"]
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "operationId": "AuthController_login",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid Web3Auth token"
+          }
+        },
+        "summary": "Authenticate user with Web3Auth ID token",
+        "tags": ["Auth"]
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "operationId": "AuthController_refresh",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tokens refreshed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired refresh token"
+          }
+        },
+        "summary": "Refresh access token using refresh token",
+        "tags": ["Auth"]
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "AuthController_logout",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successfully logged out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogoutResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Logout user and invalidate all refresh tokens",
+        "tags": ["Auth"]
       }
     },
     "/health": {
       "get": {
         "operationId": "HealthController_check",
         "summary": "Check API and database health",
-        "tags": [
-          "Health"
-        ],
+        "tags": ["Health"],
         "responses": {
           "200": {
             "description": "Health check passed",
@@ -106,6 +196,88 @@
         "type": "http"
       }
     },
-    "schemas": {}
+    "schemas": {
+      "LoginDto": {
+        "type": "object",
+        "properties": {
+          "idToken": {
+            "type": "string",
+            "description": "JWT ID token from Web3Auth",
+            "example": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9..."
+          },
+          "publicKey": {
+            "type": "string",
+            "description": "secp256k1 public key (social) or Ethereum address (external wallet)",
+            "example": "0x04..."
+          },
+          "loginType": {
+            "type": "string",
+            "description": "Type of login used",
+            "enum": ["social", "external_wallet"],
+            "example": "social"
+          }
+        },
+        "required": ["idToken", "publicKey", "loginType"]
+      },
+      "LoginResponseDto": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "JWT access token for API requests",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+          },
+          "refreshToken": {
+            "type": "string",
+            "description": "Refresh token for obtaining new access tokens",
+            "example": "a1b2c3d4e5f6..."
+          },
+          "isNewUser": {
+            "type": "boolean",
+            "description": "Whether this is a new user registration",
+            "example": false
+          }
+        },
+        "required": ["accessToken", "refreshToken", "isNewUser"]
+      },
+      "RefreshDto": {
+        "type": "object",
+        "properties": {
+          "refreshToken": {
+            "type": "string",
+            "description": "Refresh token to exchange for new tokens",
+            "example": "a1b2c3d4e5f6..."
+          }
+        },
+        "required": ["refreshToken"]
+      },
+      "TokenResponseDto": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "New JWT access token",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+          },
+          "refreshToken": {
+            "type": "string",
+            "description": "New refresh token (old one is invalidated)",
+            "example": "b2c3d4e5f6g7..."
+          }
+        },
+        "required": ["accessToken", "refreshToken"]
+      },
+      "LogoutResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether logout was successful",
+            "example": true
+          }
+        },
+        "required": ["success"]
+      }
+    }
   }
 }

@@ -4,6 +4,10 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { HealthModule } from './health/health.module';
+import { AuthModule } from './auth/auth.module';
+import { User } from './auth/entities/user.entity';
+import { RefreshToken } from './auth/entities/refresh-token.entity';
+import { AuthMethod } from './auth/entities/auth-method.entity';
 
 @Module({
   imports: [
@@ -19,13 +23,14 @@ import { HealthModule } from './health/health.module';
         username: configService.get<string>('DB_USERNAME', 'postgres'),
         password: configService.get<string>('DB_PASSWORD', 'postgres'),
         database: configService.get<string>('DB_DATABASE', 'cipherbox'),
-        entities: [],
+        entities: [User, RefreshToken, AuthMethod],
         synchronize: configService.get<string>('NODE_ENV') !== 'production',
         logging: configService.get<string>('NODE_ENV') === 'development',
       }),
       inject: [ConfigService],
     }),
     HealthModule,
+    AuthModule,
   ],
   controllers: [AppController],
   providers: [AppService],
