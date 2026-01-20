@@ -38,6 +38,9 @@ export function Dashboard() {
         <h1>CipherBox</h1>
         <div className="user-info">
           {userInfo?.email && <span className="user-email">{userInfo.email}</span>}
+          <button onClick={() => navigate('/settings')} className="settings-link">
+            Settings
+          </button>
           <LogoutButton />
         </div>
       </header>

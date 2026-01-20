@@ -15,6 +15,19 @@ type TokenResponse = {
   accessToken: string;
 };
 
+export type AuthMethod = {
+  id: string;
+  type: 'google' | 'apple' | 'github' | 'email_passwordless' | 'external_wallet';
+  identifier: string;
+  lastUsedAt: string | null;
+  createdAt: string;
+};
+
+type LinkMethodRequest = {
+  idToken: string;
+  loginType: 'social' | 'external_wallet';
+};
+
 export const authApi = {
   /**
    * Authenticate user with Web3Auth ID token.
@@ -42,5 +55,31 @@ export const authApi = {
    */
   logout: async (): Promise<void> => {
     await apiClient.post('/auth/logout');
+  },
+
+  /**
+   * Get all linked auth methods for the current user.
+   */
+  getMethods: async (): Promise<AuthMethod[]> => {
+    const response = await apiClient.get<AuthMethod[]>('/auth/methods');
+    return response.data;
+  },
+
+  /**
+   * Link a new auth method to the current user account.
+   * The new auth method's publicKey must match the user's publicKey
+   * (via Web3Auth group connections).
+   */
+  linkMethod: async (data: LinkMethodRequest): Promise<AuthMethod[]> => {
+    const response = await apiClient.post<AuthMethod[]>('/auth/link', data);
+    return response.data;
+  },
+
+  /**
+   * Unlink an auth method from the current user account.
+   * Cannot unlink the last remaining auth method.
+   */
+  unlinkMethod: async (methodId: string): Promise<void> => {
+    await apiClient.post('/auth/unlink', { methodId });
   },
 };
