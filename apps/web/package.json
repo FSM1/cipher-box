@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "eslint src/**/*.{ts,tsx}",
-    "api:generate": "orval"
+    "api:generate": "orval && node scripts/fix-orval-imports.mjs"
   },
   "dependencies": {
     "@noble/secp256k1": "^3.0.0",
