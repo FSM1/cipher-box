@@ -57,6 +57,22 @@ Always use consistent terminology:
 7. **Always** encrypt `ipnsPrivateKey` with TEE public key before sending for republishing
 8. TEE decrypts IPNS keys in hardware only, signs, and immediately discards
 
+## API Development Workflow
+
+When working on `apps/api` code:
+
+1. **After modifying API endpoints, DTOs, or controllers**, regenerate the API client to keep the web app in sync:
+
+   ```bash
+   pnpm api:generate
+   ```
+
+   This command generates the OpenAPI spec from the API, creates the typed client for the web app, and runs lint fixes.
+
+2. **Always run `pnpm api:generate` before completing a feature** that touches the API to ensure type safety across the monorepo.
+
+3. **Commit the regenerated client files** (`apps/web/src/api/`) along with your API changes.
+
 ## Code Generation Guidelines
 
 When generating code for CipherBox:
