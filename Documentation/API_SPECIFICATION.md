@@ -1,15 +1,15 @@
 ---
-version: 1.9.0
-last_updated: 2026-01-18
+version: 1.11.1
+last_updated: 2026-01-20
 status: Active
 ai_context: API specification for CipherBox backend. Contains all endpoints, request/response formats, database schema, and rate limits. For system design see TECHNICAL_ARCHITECTURE.md.
 ---
 
 # CipherBox - API Specification
 
-**Document Type:** API Specification  
-**Status:** Active  
-**Last Updated:** January 18, 2026  
+**Document Type:** API Specification
+**Status:** Active
+**Last Updated:** January 20, 2026
 **Base URL:** `https://api.cipherbox.io`
 
 ---
@@ -35,6 +35,8 @@ ai_context: API specification for CipherBox backend. Contains all endpoints, req
 | Folder encryption key | `folderKey` | Per-folder AES-256 key |
 | File encryption key | `fileKey` | Per-file AES-256 key |
 | IPNS signing key | `ipnsPrivateKey` | Ed25519, stored encrypted |
+| TEE key rotation epoch | `keyEpoch` | Integer epoch for TEE key rotation |
+| TEE-encrypted IPNS key | `encryptedIpnsPrivateKey` | IPNS private key encrypted with TEE public key |
 
 **Naming Conventions:**
 - API fields: `camelCase`
@@ -159,9 +161,20 @@ Authenticate user and obtain tokens.
   "accessToken": "eyJhbGciOiJSUzI1NiIs...",
   "refreshToken": "abc123...",
   "userId": "550e8400-e29b-41d4-a716-446655440000",
-  "publicKey": "0x04abc123..."
+  "publicKey": "0x04abc123...",
+  "teeKeys": {
+    "currentEpoch": 1,
+    "currentPublicKey": "base64...",
+    "previousEpoch": 0,
+    "previousPublicKey": "base64..."
+  }
 }
 ```
+
+**Notes:**
+- `teeKeys` contains the current and previous TEE public keys for IPNS key encryption
+- Clients should encrypt IPNS private keys with `currentPublicKey` and include `currentEpoch`
+- `previousPublicKey` is provided for key rotation transitions (may be null if no previous epoch)
 
 **Errors:**
 - `400 Bad Request` - Invalid signature or malformed request
@@ -202,7 +215,13 @@ Exchange refresh token for new token pair.
 ```json
 {
   "accessToken": "eyJhbGciOiJSUzI1NiIs...",
-  "refreshToken": "def456..."
+  "refreshToken": "def456...",
+  "teeKeys": {
+    "currentEpoch": 42,
+    "currentPublicKey": "BGFkZWZn...",
+    "previousEpoch": 41,
+    "previousPublicKey": "BHlpcGpr..."
+  }
 }
 ```
 
@@ -213,6 +232,7 @@ Exchange refresh token for new token pair.
 **Notes:**
 - Old refresh token is invalidated
 - New refresh token has fresh 7-day expiry
+- TEE keys included to ensure clients always have current keys after token refresh
 
 ---
 
@@ -547,7 +567,7 @@ Resolve IPNS name to current CID via backend relay.
 
 #### POST /ipns/publish
 
-Relay a client-signed IPNS record to the IPFS/IPNS network.
+Relay a client-signed IPNS record to the IPFS/IPNS network and optionally register for TEE-based republishing.
 
 **Request:**
 ```json
@@ -555,7 +575,9 @@ Relay a client-signed IPNS record to the IPFS/IPNS network.
   "ipnsName": "k51qzi5uqu5dlvj55...",
   "ipnsRecord": "BASE64_ENCODED_SIGNED_RECORD",
   "sequenceNumber": 42,
-  "ttlSeconds": 3600
+  "ttlSeconds": 3600,
+  "encryptedIpnsPrivateKey": "0x...",
+  "keyEpoch": 1
 }
 ```
 
@@ -565,7 +587,8 @@ Relay a client-signed IPNS record to the IPFS/IPNS network.
   "published": true,
   "ipnsName": "k51qzi5uqu5dlvj55...",
   "sequenceNumber": 42,
-  "publishedAt": "2026-01-18T12:00:00Z"
+  "publishedAt": "2026-01-20T12:00:00Z",
+  "republishScheduled": true
 }
 ```
 
@@ -575,6 +598,13 @@ Relay a client-signed IPNS record to the IPFS/IPNS network.
 - `409 Conflict` - Sequence number too low
 - `429 Too Many Requests` - Rate limited
 - `502 Bad Gateway` - IPNS relay failed
+
+**Notes:**
+- `encryptedIpnsPrivateKey` is the IPNS Ed25519 private key encrypted with the TEE's current public key
+- `keyEpoch` must match the current TEE epoch (obtained from `/auth/login` response)
+- When `encryptedIpnsPrivateKey` is provided, the backend schedules automatic IPNS republishing
+- The TEE will decrypt the key and re-sign IPNS records before TTL expiry
+- If `keyEpoch` does not match current epoch, returns `400` with `KEY_EPOCH_MISMATCH` error
 
 ---
 
@@ -696,6 +726,113 @@ CREATE INDEX idx_pinned_cids_user_id ON pinned_cids(user_id);
 
 ---
 
+### 4.7 IPNS Republish Schedule Table
+
+Stores IPNS entries scheduled for automatic TEE-based republishing.
+
+```sql
+CREATE TABLE ipns_republish_schedule (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ipns_name VARCHAR(255) NOT NULL,
+  latest_cid VARCHAR(255) NOT NULL,
+  sequence_number BIGINT NOT NULL,
+  encrypted_ipns_key BYTEA NOT NULL,
+  key_epoch INTEGER NOT NULL,
+  encrypted_ipns_key_prev BYTEA,
+  key_epoch_prev INTEGER,
+  next_republish_at TIMESTAMP NOT NULL,
+  retry_count INTEGER DEFAULT 0,
+  last_error TEXT,
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE(user_id, ipns_name)
+);
+
+CREATE INDEX idx_ipns_republish_next ON ipns_republish_schedule(next_republish_at);
+CREATE INDEX idx_ipns_republish_user ON ipns_republish_schedule(user_id);
+```
+
+**Notes:**
+- `encrypted_ipns_key` is the IPNS private key encrypted with TEE's current public key
+- `encrypted_ipns_key_prev` stores the key encrypted with previous TEE epoch (for rotation transitions)
+- `next_republish_at` is set to ~80% of TTL to ensure republish before expiry
+- `retry_count` tracks failed republish attempts (max 3 before marking as failed)
+
+---
+
+### 4.8 TEE Key State Table
+
+Tracks the current TEE key epoch and public keys.
+
+```sql
+CREATE TABLE tee_key_state (
+  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  current_epoch INTEGER NOT NULL,
+  public_key_current BYTEA NOT NULL,
+  public_key_previous BYTEA,
+  previous_epoch INTEGER,
+  last_updated TIMESTAMP DEFAULT NOW(),
+  phala_block_height BIGINT
+);
+```
+
+**Notes:**
+- Single-row table (enforced by `CHECK (id = 1)`)
+- `phala_block_height` tracks the Phala blockchain height when key was last synced
+- `public_key_previous` allows clients to verify during key rotation transitions
+
+---
+
+### 4.9 TEE Key Rotation Log Table
+
+Audit log for TEE key rotation events.
+
+```sql
+CREATE TABLE tee_key_rotation_log (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  old_epoch INTEGER NOT NULL,
+  new_epoch INTEGER NOT NULL,
+  rotation_time TIMESTAMP DEFAULT NOW(),
+  affected_entries INTEGER NOT NULL
+);
+
+CREATE INDEX idx_tee_rotation_time ON tee_key_rotation_log(rotation_time);
+```
+
+**Notes:**
+- `affected_entries` is the count of `ipns_republish_schedule` rows that were re-encrypted
+- Used for auditing and debugging key rotation issues
+
+---
+
+### 4.10 IPFS Operations Log Table
+
+Tracks IPFS/IPNS operations for monitoring and debugging.
+
+```sql
+CREATE TABLE ipfs_operations_log (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  operation_type VARCHAR(50) NOT NULL,
+  ipns_name_or_cid VARCHAR(255),
+  status VARCHAR(20) NOT NULL,
+  latency_ms INTEGER,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_ipfs_ops_user ON ipfs_operations_log(user_id);
+CREATE INDEX idx_ipfs_ops_created ON ipfs_operations_log(created_at);
+CREATE INDEX idx_ipfs_ops_type ON ipfs_operations_log(operation_type);
+```
+
+**Notes:**
+- `operation_type` values: `ipfs_add`, `ipfs_cat`, `ipns_resolve`, `ipns_publish`, `ipns_republish`
+- `status` values: `success`, `failed`, `timeout`
+- Used for monitoring IPFS gateway health and debugging issues
+
+---
+
 ## 5. Rate Limiting
 
 ### 5.1 Rate Limits by Endpoint
@@ -771,6 +908,7 @@ All errors follow this format:
 | `QUOTA_EXCEEDED` | 507 | Storage quota exceeded |
 | `IPFS_RELAY_FAILED` | 502 | IPFS relay failed |
 | `IPNS_RELAY_FAILED` | 502 | IPNS relay failed |
+| `KEY_EPOCH_MISMATCH` | 400 | TEE key epoch does not match current epoch |
 | `INTERNAL_ERROR` | 500 | Unexpected server error |
 
 ---
