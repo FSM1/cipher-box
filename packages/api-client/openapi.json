@@ -313,7 +313,7 @@
           },
           "publicKey": {
             "type": "string",
-            "description": "secp256k1 public key (social) or Ethereum address (external wallet)",
+            "description": "secp256k1 public key for social login, or signature-derived public key for external wallet (ADR-001)",
             "example": "0x04..."
           },
           "loginType": {
@@ -321,6 +321,17 @@
             "description": "Type of login used",
             "enum": ["social", "external_wallet"],
             "example": "social"
+          },
+          "walletAddress": {
+            "type": "string",
+            "description": "Wallet address for external wallet users. Used for JWT verification. The publicKey field contains the derived key.",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f..."
+          },
+          "derivationVersion": {
+            "type": "number",
+            "description": "Key derivation version for external wallet users (ADR-001). Required for external_wallet loginType.",
+            "example": 1,
+            "minimum": 1
           }
         },
         "required": ["idToken", "publicKey", "loginType"]

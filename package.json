@@ -6,6 +6,7 @@
     "dev": "pnpm --parallel -r run dev",
     "build": "pnpm --parallel -r run build",
     "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "test": "pnpm --parallel -r run test",
     "openapi:generate": "pnpm --filter @cipherbox/api openapi:generate",
     "api:generate": "pnpm openapi:generate && pnpm --filter @cipherbox/web api:generate",
