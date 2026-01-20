@@ -9,7 +9,7 @@
     "lint:fix": "eslint . --fix",
     "test": "pnpm --parallel -r run test",
     "openapi:generate": "pnpm --filter @cipherbox/api openapi:generate",
-    "api:generate": "pnpm openapi:generate && pnpm --filter @cipherbox/web api:generate",
+    "api:generate": "pnpm openapi:generate && pnpm --filter @cipherbox/web api:generate && pnpm lint:fix",
     "prepare": "husky"
   },
   "devDependencies": {

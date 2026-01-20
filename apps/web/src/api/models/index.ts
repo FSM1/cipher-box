@@ -6,18 +6,26 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './addResponseDto';
 export * from './authMethodResponseDto';
 export * from './authMethodResponseDtoType';
 export * from './healthControllerCheck200';
 export * from './healthControllerCheck200Info';
 export * from './healthControllerCheck200InfoDatabase';
+export * from './initVaultDto';
+export * from './ipfsControllerAddBody';
 export * from './linkMethodDto';
 export * from './linkMethodDtoLoginType';
 export * from './loginDto';
 export * from './loginDtoLoginType';
 export * from './loginResponseDto';
 export * from './logoutResponseDto';
+export * from './quotaResponseDto';
 export * from './refreshDto';
 export * from './tokenResponseDto';
 export * from './unlinkMethodDto';
 export * from './unlinkMethodResponseDto';
+export * from './unpinDto';
+export * from './unpinResponseDto';
+export * from './vaultResponseDto';
+export * from './vaultResponseDtoInitializedAt';
