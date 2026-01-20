@@ -103,14 +103,14 @@ Plans:
 4. User can bulk upload multiple files
 5. User can bulk delete multiple files
 6. Storage quota enforces 500 MiB limit with clear error on exceed
-   **Plans**: TBD
+   **Plans**: 4 plans
 
 Plans:
 
-- [ ] 04-01: Backend IPFS relay endpoints (add, unpin)
-- [ ] 04-02: Backend vault and storage quota management
-- [ ] 04-03: Frontend file upload with encryption
-- [ ] 04-04: Frontend file download with decryption
+- [ ] 04-01-PLAN.md — Backend IPFS relay endpoints (add, unpin)
+- [ ] 04-02-PLAN.md — Backend vault and storage quota management
+- [ ] 04-03-PLAN.md — Frontend file upload with encryption
+- [ ] 04-04-PLAN.md — Frontend file download with decryption
 
 ### Phase 5: Folder System
 
@@ -269,7 +269,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 1. Foundation        | 3/3            | Complete    | 2026-01-20 |
 | 2. Authentication    | 4/4            | Complete    | 2026-01-20 |
 | 3. Core Encryption   | 3/3            | Complete    | 2026-01-20 |
-| 4. File Storage      | 0/4            | Not started | -          |
+| 4. File Storage      | 0/4            | Planned     | -          |
 | 5. Folder System     | 0/4            | Not started | -          |
 | 6. File Browser UI   | 0/4            | Not started | -          |
 | 7. Multi-Device Sync | 0/3            | Not started | -          |
@@ -287,4 +287,5 @@ _Phase 2 planned: 2026-01-20_
 _Phase 2 complete: 2026-01-20_
 _Phase 3 planned: 2026-01-20_
 _Phase 3 complete: 2026-01-20_
+_Phase 4 planned: 2026-01-20_
 _Total phases: 11 | Total plans: 41 | Depth: Comprehensive_
