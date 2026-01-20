@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 3 - Core Encryption (in progress)
+**Current focus:** Phase 3 - Core Encryption (complete)
 
 ## Current Position
 
 Phase: 3 of 11 (Core Encryption)
-Plan: 2 of 3 in Phase 3 (complete)
-Status: Phase 3 in progress, Plan 02 complete
-Last activity: 2026-01-20 - Completed 03-02-PLAN.md (Ed25519 and IPNS signing)
+Plan: 3 of 3 in Phase 3 (complete)
+Status: Phase 3 complete
+Last activity: 2026-01-20 - Completed 03-03-PLAN.md (Vault initialization and key hierarchy)
 
-Progress: [####......] 22% (9 of 41 plans)
+Progress: [####......] 24% (10 of 41 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 9
+- Total plans completed: 10
 - Average duration: 5.2 min
-- Total execution time: 0.8 hours
+- Total execution time: 0.9 hours
 
 **By Phase:**
 
@@ -30,11 +30,11 @@ Progress: [####......] 22% (9 of 41 plans)
 | ------------------ | ----- | ------ | -------- |
 | 01-foundation      | 3/3   | 20 min | 7 min    |
 | 02-authentication  | 4/4   | 18 min | 4.5 min  |
-| 03-core-encryption | 2/3   | 13 min | 6.5 min  |
+| 03-core-encryption | 3/3   | 18 min | 6 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 5m, 5m, 5m, 6m, 7m
+- Last 5 plans: 5m, 5m, 6m, 7m, 5m
 - Trend: Consistent
 
 _Updated after each plan completion_
@@ -78,6 +78,10 @@ Recent decisions affecting current work:
 | Ed25519 verification returns false for invalid       | 03-02 | Returns boolean, not exception - consistent with oracle attack prevention |
 | IPNS signature prefix per IPFS spec                  | 03-02 | "ipns-signature:" concatenated before signing CBOR data                   |
 | Deterministic Ed25519 signatures                     | 03-02 | Same key + same message always produces identical signature               |
+| CipherBox-v1 salt for HKDF                           | 03-03 | Static salt provides domain separation for all key derivations            |
+| Folder keys are random not derived                   | 03-03 | Per CONTEXT.md, folder keys randomly generated then ECIES-wrapped         |
+| File keys random per-file                            | 03-03 | No deduplication per CRYPT-06 - each file gets unique random key          |
+| VaultInit vs EncryptedVaultKeys separation           | 03-03 | Clear distinction between in-memory keys and server storage format        |
 
 ### Pending Todos
 
@@ -96,10 +100,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-20
-Stopped at: Completed 03-02-PLAN.md - Ed25519 and IPNS signing
+Stopped at: Completed 03-03-PLAN.md - Vault initialization and key hierarchy (Phase 3 complete)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-20 after 03-02-PLAN.md completion_
+_Last updated: 2026-01-20 after 03-03-PLAN.md completion_
