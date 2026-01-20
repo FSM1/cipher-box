@@ -56,9 +56,12 @@ export class CryptoError extends Error {
     this.name = 'CryptoError';
     this.code = code;
 
-    // Maintain proper stack trace for V8
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, CryptoError);
+    // Maintain proper stack trace for V8 (Node.js-specific)
+    const ErrorWithCapture = Error as typeof Error & {
+      captureStackTrace?: (target: object, constructor: unknown) => void;
+    };
+    if (ErrorWithCapture.captureStackTrace) {
+      ErrorWithCapture.captureStackTrace(this, CryptoError);
     }
   }
 }
