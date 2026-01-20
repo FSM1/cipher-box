@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 4.1 API Service Testing in progress
+**Current focus:** Phase 4.1 API Service Testing complete - ready for Phase 5
 
 ## Current Position
 
 Phase: 4.1 of 11 (API Service Testing)
-Plan: 1 of 3 in Phase 4.1 complete
-Status: In progress - Auth services tests complete
-Last activity: 2026-01-21 - Completed 04.1-01-PLAN.md (Auth services unit tests)
+Plan: 3 of 3 in Phase 4.1 complete
+Status: Phase complete - All API services and controllers tested
+Last activity: 2026-01-21 - Completed 04.1-03-PLAN.md (Controller tests and coverage thresholds)
 
-Progress: [####......] 34% (15 of 44 plans)
+Progress: [####......] 39% (17 of 44 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 15
-- Average duration: 4.9 min
-- Total execution time: 1.2 hours
+- Total plans completed: 17
+- Average duration: 4.6 min
+- Total execution time: 1.3 hours
 
 **By Phase:**
 
@@ -32,11 +32,11 @@ Progress: [####......] 34% (15 of 44 plans)
 | 02-authentication        | 4/4   | 18 min | 4.5 min  |
 | 03-core-encryption       | 3/3   | 18 min | 6 min    |
 | 04-file-storage          | 4/4   | 17 min | 4.3 min  |
-| 04.1-api-service-testing | 1/3   | 5 min  | 5 min    |
+| 04.1-api-service-testing | 3/3   | 11 min | 3.7 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 3m, 5m, 3m, 5m
+- Last 5 plans: 5m, 3m, 5m, 3m, 3m
 - Trend: Consistent (fast)
 
 _Updated after each plan completion_
@@ -101,6 +101,10 @@ Recent decisions affecting current work:
 | Jose module mock via moduleNameMapper                | 04.1-01 | ESM jose module mocked to avoid transformation issues                     |
 | Real argon2 in tests for correctness                 | 04.1-01 | Per TESTING.md, don't mock crypto - accept slower tests for correctness   |
 | Test.createTestingModule for constructor tests       | 04.1-01 | Validates constructor throws when config missing                          |
+| Controller tests mock service layer completely       | 04.1-03 | Controllers are thin wiring layers; tests verify request handling         |
+| Auth service branch threshold 84% (actual 84.61%)    | 04.1-03 | One edge case in derivationVersion null check uncovered                   |
+| Controller branch threshold 65%                      | 04.1-03 | Swagger decorators inflate uncovered branches in coverage                 |
+| Coverage exclusions for modules, DTOs, entities      | 04.1-03 | These are configuration/definitions, not logic requiring tests            |
 
 ### Pending Todos
 
@@ -125,10 +129,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-21
-Stopped at: Completed 04.1-01-PLAN.md (Auth services unit tests)
+Stopped at: Completed 04.1-03-PLAN.md (Controller tests and coverage thresholds)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-21 after 04.1-01 completion_
+_Last updated: 2026-01-21 after 04.1-03 completion_
