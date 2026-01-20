@@ -34,12 +34,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   2. React frontend scaffold runs with Vite dev server
   3. CI/CD pipeline runs tests and linting on push
   4. Local development environment has Pinata sandbox access
-**Plans**: TBD
+**Plans**: 3 plans
 
 Plans:
-- [ ] 01-01: Backend scaffold with NestJS, PostgreSQL, and health check
-- [ ] 01-02: Frontend scaffold with React 18, Vite, and routing
-- [ ] 01-03: CI/CD pipeline and development environment setup
+- [ ] 01-01-PLAN.md — pnpm workspace + NestJS backend + health endpoint
+- [ ] 01-02-PLAN.md — React 18 frontend with Vite and routing
+- [ ] 01-03-PLAN.md — CI/CD pipeline + Docker Compose + linting/formatting
 
 ### Phase 2: Authentication
 **Goal**: Users can securely sign in and get tokens for API access
@@ -212,7 +212,7 @@ Decimal phases (if any) execute between their surrounding integers.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 0/3 | Not started | - |
+| 1. Foundation | 0/3 | Planned | - |
 | 2. Authentication | 0/4 | Not started | - |
 | 3. Core Encryption | 0/3 | Not started | - |
 | 4. File Storage | 0/4 | Not started | - |
@@ -225,4 +225,5 @@ Decimal phases (if any) execute between their surrounding integers.
 
 ---
 *Roadmap created: 2026-01-20*
+*Phase 1 planned: 2026-01-20*
 *Total phases: 10 | Total plans: 37 | Depth: Comprehensive*
