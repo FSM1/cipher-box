@@ -10,31 +10,31 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 ## Current Position
 
 Phase: 2 of 10 (Authentication)
-Plan: 2 of 4 in current phase (02-01, 02-02 complete)
+Plan: 3 of 4 in current phase (02-01, 02-02, 02-03 complete)
 Status: In progress
-Last activity: 2026-01-20 - Completed 02-01-PLAN.md (Task 3)
+Last activity: 2026-01-20 - Completed 02-03-PLAN.md
 
-Progress: [#####.....] 16%
+Progress: [######....] 19%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 5
+- Total plans completed: 6
 - Average duration: 5 min
-- Total execution time: 0.45 hours
+- Total execution time: 0.5 hours
 
 **By Phase:**
 
 | Phase             | Plans | Total  | Avg/Plan |
 | ----------------- | ----- | ------ | -------- |
 | 01-foundation     | 3/3   | 20 min | 7 min    |
-| 02-authentication | 2/4   | 8 min  | 4 min    |
+| 02-authentication | 3/4   | 13 min | 4 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 12m, 3m, 5m, 3m, 5m
-- Trend: Consistent (02-01 task 3 added 5min)
+- Last 5 plans: 3m, 5m, 3m, 5m, 5m
+- Trend: Consistent
 
 _Updated after each plan completion_
 
@@ -62,6 +62,8 @@ Recent decisions affecting current work:
 | Dual JWKS endpoints for Web3Auth                    | 02-01 | Different endpoints for social vs external wallet logins             |
 | Refresh tokens searchable without access token      | 02-01 | Better UX - can refresh even with expired access token               |
 | Token rotation on every refresh                     | 02-01 | Security - prevents token reuse attacks                              |
+| HTTP-only cookie with path=/auth for refresh token  | 02-03 | Refresh token only sent to auth endpoints, XSS prevention            |
+| CORS credentials enabled                            | 02-03 | Cross-origin cookie handling between frontend and backend            |
 
 ### Pending Todos
 
@@ -80,10 +82,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-20
-Stopped at: Completed 02-01-PLAN.md (all 3 tasks)
+Stopped at: Completed 02-03-PLAN.md (all 3 tasks)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-20 after 02-01 completion_
+_Last updated: 2026-01-20 after 02-03 completion_
