@@ -160,70 +160,70 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| AUTH-01 | TBD | Pending |
-| AUTH-02 | TBD | Pending |
-| AUTH-03 | TBD | Pending |
-| AUTH-04 | TBD | Pending |
-| AUTH-05 | TBD | Pending |
-| AUTH-06 | TBD | Pending |
-| AUTH-07 | TBD | Pending |
-| CRYPT-01 | TBD | Pending |
-| CRYPT-02 | TBD | Pending |
-| CRYPT-03 | TBD | Pending |
-| CRYPT-04 | TBD | Pending |
-| CRYPT-05 | TBD | Pending |
-| CRYPT-06 | TBD | Pending |
-| FILE-01 | TBD | Pending |
-| FILE-02 | TBD | Pending |
-| FILE-03 | TBD | Pending |
-| FILE-04 | TBD | Pending |
-| FILE-05 | TBD | Pending |
-| FILE-06 | TBD | Pending |
-| FILE-07 | TBD | Pending |
-| FOLD-01 | TBD | Pending |
-| FOLD-02 | TBD | Pending |
-| FOLD-03 | TBD | Pending |
-| FOLD-04 | TBD | Pending |
-| FOLD-05 | TBD | Pending |
-| FOLD-06 | TBD | Pending |
-| API-01 | TBD | Pending |
-| API-02 | TBD | Pending |
-| API-03 | TBD | Pending |
-| API-04 | TBD | Pending |
-| API-05 | TBD | Pending |
-| API-06 | TBD | Pending |
-| API-07 | TBD | Pending |
-| API-08 | TBD | Pending |
-| SYNC-01 | TBD | Pending |
-| SYNC-02 | TBD | Pending |
-| SYNC-03 | TBD | Pending |
-| TEE-01 | TBD | Pending |
-| TEE-02 | TBD | Pending |
-| TEE-03 | TBD | Pending |
-| TEE-04 | TBD | Pending |
-| TEE-05 | TBD | Pending |
-| WEB-01 | TBD | Pending |
-| WEB-02 | TBD | Pending |
-| WEB-03 | TBD | Pending |
-| WEB-04 | TBD | Pending |
-| WEB-05 | TBD | Pending |
-| WEB-06 | TBD | Pending |
-| DESK-01 | TBD | Pending |
-| DESK-02 | TBD | Pending |
-| DESK-03 | TBD | Pending |
-| DESK-04 | TBD | Pending |
-| DESK-05 | TBD | Pending |
-| DESK-06 | TBD | Pending |
-| DESK-07 | TBD | Pending |
-| PORT-01 | TBD | Pending |
-| PORT-02 | TBD | Pending |
-| PORT-03 | TBD | Pending |
+| AUTH-01 | Phase 2 | Pending |
+| AUTH-02 | Phase 2 | Pending |
+| AUTH-03 | Phase 2 | Pending |
+| AUTH-04 | Phase 2 | Pending |
+| AUTH-05 | Phase 2 | Pending |
+| AUTH-06 | Phase 2 | Pending |
+| AUTH-07 | Phase 2 | Pending |
+| CRYPT-01 | Phase 3 | Pending |
+| CRYPT-02 | Phase 3 | Pending |
+| CRYPT-03 | Phase 3 | Pending |
+| CRYPT-04 | Phase 3 | Pending |
+| CRYPT-05 | Phase 3 | Pending |
+| CRYPT-06 | Phase 3 | Pending |
+| FILE-01 | Phase 4 | Pending |
+| FILE-02 | Phase 4 | Pending |
+| FILE-03 | Phase 4 | Pending |
+| FILE-04 | Phase 5 | Pending |
+| FILE-05 | Phase 5 | Pending |
+| FILE-06 | Phase 4 | Pending |
+| FILE-07 | Phase 4 | Pending |
+| FOLD-01 | Phase 5 | Pending |
+| FOLD-02 | Phase 5 | Pending |
+| FOLD-03 | Phase 5 | Pending |
+| FOLD-04 | Phase 5 | Pending |
+| FOLD-05 | Phase 5 | Pending |
+| FOLD-06 | Phase 5 | Pending |
+| API-01 | Phase 2 | Pending |
+| API-02 | Phase 2 | Pending |
+| API-03 | Phase 4 | Pending |
+| API-04 | Phase 4 | Pending |
+| API-05 | Phase 5 | Pending |
+| API-06 | Phase 4 | Pending |
+| API-07 | Phase 4 | Pending |
+| API-08 | Phase 8 | Pending |
+| SYNC-01 | Phase 7 | Pending |
+| SYNC-02 | Phase 7 | Pending |
+| SYNC-03 | Phase 7 | Pending |
+| TEE-01 | Phase 8 | Pending |
+| TEE-02 | Phase 8 | Pending |
+| TEE-03 | Phase 8 | Pending |
+| TEE-04 | Phase 8 | Pending |
+| TEE-05 | Phase 8 | Pending |
+| WEB-01 | Phase 6 | Pending |
+| WEB-02 | Phase 6 | Pending |
+| WEB-03 | Phase 6 | Pending |
+| WEB-04 | Phase 6 | Pending |
+| WEB-05 | Phase 6 | Pending |
+| WEB-06 | Phase 6 | Pending |
+| DESK-01 | Phase 9 | Pending |
+| DESK-02 | Phase 9 | Pending |
+| DESK-03 | Phase 9 | Pending |
+| DESK-04 | Phase 9 | Pending |
+| DESK-05 | Phase 9 | Pending |
+| DESK-06 | Phase 9 | Pending |
+| DESK-07 | Phase 9 | Pending |
+| PORT-01 | Phase 10 | Pending |
+| PORT-02 | Phase 10 | Pending |
+| PORT-03 | Phase 10 | Pending |
 
 **Coverage:**
 - v1 requirements: 52 total
-- Mapped to phases: 0
-- Unmapped: 52
+- Mapped to phases: 52
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-01-20*
-*Last updated: 2026-01-20 after initial definition*
+*Last updated: 2026-01-20 after roadmap creation*
