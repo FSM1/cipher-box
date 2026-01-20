@@ -1,15 +1,15 @@
 ---
-version: 1.9.0
-last_updated: 2026-01-18
+version: 1.11.0
+last_updated: 2026-01-20
 status: Active
 ai_context: Client application specifications for CipherBox. Contains Web UI and Desktop app requirements. For system design see TECHNICAL_ARCHITECTURE.md.
 ---
 
 # CipherBox - Client Specification
 
-**Document Type:** Client Application Specification  
-**Status:** Active  
-**Last Updated:** January 18, 2026  
+**Document Type:** Client Application Specification
+**Status:** Active
+**Last Updated:** January 20, 2026  
 
 ---
 
@@ -184,16 +184,24 @@ interface AppState {
   privateKey: Uint8Array | null;  // RAM only, never persisted
   publicKey: string | null;
   accessToken: string | null;
-  
+
+  // TEE Keys (for IPNS republishing)
+  teeKeys: {
+    currentEpoch: number;
+    currentPublicKey: Uint8Array;
+    previousEpoch: number | null;
+    previousPublicKey: Uint8Array | null;
+  } | null;
+
   // Vault
   rootFolderKey: Uint8Array | null;
   rootIpnsName: string | null;
-  
+
   // UI
   currentPath: string[];
   fileTree: FolderNode | null;
   selectedItems: string[];
-  
+
   // Sync
   lastSyncTime: Date | null;
   isSyncing: boolean;
@@ -293,10 +301,10 @@ sequenceDiagram
     participant W as Web3Auth
     participant B as Backend
     participant K as OS Keychain
-    
+
     U->>App: Launch app
     App->>K: Check for refresh token
-    
+
     alt No token found
         App->>App: Show login window
         App->>W: Open auth flow (system browser)
@@ -306,16 +314,29 @@ sequenceDiagram
     else Token found
         App->>K: Retrieve refresh token
         App->>B: POST /auth/refresh
-        B->>App: New access token
+        B->>App: New access token + TEE keys
     end
-    
+
     App->>B: GET /my-vault
-    B->>App: {encryptedRootFolderKey, rootIpnsName}
+    B->>App: {encryptedRootFolderKey, rootIpnsName, teeKeys}
     App->>App: Decrypt rootFolderKey
+    App->>App: Store TEE keys in memory
     App->>App: Mount FUSE at ~/CipherVault
     App->>App: Start background sync daemon
     App->>App: Show tray icon
 ```
+
+**TEE Keys Response:**
+```typescript
+interface TeeKeysResponse {
+  currentEpoch: number;           // Current TEE key epoch
+  currentPublicKey: string;       // Base64-encoded TEE public key
+  previousEpoch: number | null;   // Previous epoch (for rotation grace period)
+  previousPublicKey: string | null; // Previous TEE public key
+}
+```
+
+The client stores TEE keys in memory and uses them to encrypt IPNS private keys before sending to the republishing service.
 
 ### 2.5 Background Sync
 
@@ -395,17 +416,20 @@ interface CryptoModule {
     iv: Uint8Array;
     tag: Uint8Array;
   }>;
-  
+
   decryptFile(ciphertext: Uint8Array, key: Uint8Array, iv: Uint8Array): Promise<Uint8Array>;
-  
+
   // ECIES
   encryptKey(key: Uint8Array, publicKey: Uint8Array): Promise<Uint8Array>;
   decryptKey(encryptedKey: Uint8Array, privateKey: Uint8Array): Promise<Uint8Array>;
-  
+
   // Key generation
   generateFileKey(): Uint8Array;
   generateIv(): Uint8Array;
   generateIpnsKeypair(): { publicKey: Uint8Array; privateKey: Uint8Array };
+
+  // TEE key encryption
+  encryptForTee(ipnsPrivateKey: Uint8Array, teePublicKey: Uint8Array): Promise<Uint8Array>;
 }
 ```
 
@@ -416,10 +440,17 @@ interface IpfsModule {
   // Content operations
   add(content: Uint8Array): Promise<string>; // Returns CID
   get(cid: string): Promise<Uint8Array>;
-  
+
   // IPNS operations
   resolveIpns(name: string): Promise<string>; // Returns CID
-  publishIpnsRecord(base64IpnsRecord: string, ipnsName: string, sequenceNumber: number, ttlSeconds: number): Promise<void>; // base64IpnsRecord is BASE64-encoded signed IPNS record
+  publishIpnsRecord(
+    base64IpnsRecord: string,       // BASE64-encoded signed IPNS record
+    ipnsName: string,
+    sequenceNumber: number,
+    ttlSeconds: number,
+    encryptedIpnsPrivateKey: Uint8Array,  // Encrypted with TEE public key
+    keyEpoch: number                       // Current TEE epoch
+  ): Promise<void>;
 }
 ```
 
@@ -510,6 +541,12 @@ interface VaultModule {
 | How are concurrent edits resolved across devices? | Conflict policy | Medium |
 | When is encrypted cache invalidated on IPNS updates? | Cache consistency | Medium |
 | What is the offline write queue behavior? | Reliability | Medium |
+
+### 4.8 TEE Resilience
+
+| Question | Context | Answer |
+|----------|---------|--------|
+| What if TEE is unavailable during republish? | IPNS republishing service | 4-week grace period for key rotation, fallback to AWS Nitro |
 
 ---
 

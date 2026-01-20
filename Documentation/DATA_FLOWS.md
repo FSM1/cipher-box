@@ -1,6 +1,6 @@
 ---
-version: 1.10.0
-last_updated: 2026-01-19
+version: 1.11.0
+last_updated: 2026-01-20
 status: Active
 ai_context: Data flow diagrams and test vectors for CipherBox. Contains Mermaid sequence diagrams for all major operations. For system design see TECHNICAL_ARCHITECTURE.md.
 ---
@@ -9,7 +9,7 @@ ai_context: Data flow diagrams and test vectors for CipherBox. Contains Mermaid 
 
 **Document Type:** Implementation Reference
 **Status:** Active
-**Last Updated:** January 19, 2026  
+**Last Updated:** January 20, 2026  
 
 ---
 
@@ -23,6 +23,8 @@ ai_context: Data flow diagrams and test vectors for CipherBox. Contains Mermaid 
 6. [Write Operations](#6-write-operations)
 7. [Test Vectors](#7-test-vectors)
 8. [Console PoC Harness Flow](#8-console-poc-harness-flow)
+9. [Encryption Mode Selection (v1.1 Roadmap)](#9-encryption-mode-selection-v11-roadmap)
+10. [TEE-Based IPNS Republishing](#10-tee-based-ipns-republishing)
 
 ---
 
@@ -36,6 +38,8 @@ ai_context: Data flow diagrams and test vectors for CipherBox. Contains Mermaid 
 | IPNS identifier | `ipnsName` | IPNS name |
 | Folder encryption key | `folderKey` | folder key |
 | File encryption key | `fileKey` | file key |
+| TEE key rotation epoch | `keyEpoch` | key epoch |
+| IPNS private key encrypted with TEE public key | `encryptedIpnsPrivateKey` | encrypted IPNS private key |
 
 ---
 
@@ -800,6 +804,79 @@ sequenceDiagram
 - Missing `encryptionMode` field → defaults to "GCM"
 - All v1.0 files work unchanged in v1.1
 - No data migration required
+
+---
+
+## 10. TEE-Based IPNS Republishing
+
+### 10.1 IPNS Publish with TEE Key Registration Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as CipherBox Backend
+    participant DB as PostgreSQL
+    participant IPFS as IPFS Network
+
+    Note over C: After login, client has TEE keys
+    C->>C: Encrypt ipnsPrivateKey with teeKeys.currentPublicKey
+    C->>C: Sign IPNS record (Ed25519)
+    C->>B: POST /ipns/publish {ipnsRecord, encryptedIpnsPrivateKey, keyEpoch}
+    B->>IPFS: Publish IPNS record immediately
+    B->>DB: INSERT/UPDATE ipns_republish_schedule
+    B->>C: {published: true}
+```
+
+### 10.2 TEE Republishing Cron Flow (every 3h)
+
+```mermaid
+sequenceDiagram
+    participant Cron as Backend Cron
+    participant DB as PostgreSQL
+    participant TEE as Phala TEE
+    participant IPFS as IPFS Network
+
+    Cron->>DB: SELECT entries WHERE next_republish_at < NOW()
+    loop For each entry
+        Cron->>TEE: POST /republish {encryptedIpnsKey, keyEpoch, cid}
+        TEE->>TEE: Decrypt IPNS key (in hardware)
+        TEE->>TEE: Sign IPNS record
+        TEE->>TEE: Zero memory (discard key)
+        TEE->>Cron: {signature, encryptedKeyUpgraded?, epochUpgraded?}
+        Cron->>IPFS: Publish signed IPNS record
+        Cron->>DB: UPDATE next_republish_at, upgrade key epoch if needed
+    end
+```
+
+### 10.3 TEE Key Rotation Flow
+
+```mermaid
+sequenceDiagram
+    participant Cron as Backend Hourly Cron
+    participant DB as PostgreSQL
+    participant TEE as Phala TEE
+
+    Cron->>TEE: GET /key-mgmt {currentEpoch, epochPublicKeys}
+    TEE->>Cron: {currentEpoch: 2, epochPublicKeys: {...}}
+    Cron->>DB: UPDATE tee_key_state SET current_epoch, public_keys...
+    Cron->>DB: INSERT tee_key_rotation_log if epoch changed
+```
+
+### 10.4 Login with TEE Keys Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as CipherBox Backend
+    participant DB as PostgreSQL
+
+    C->>B: POST /auth/login {idToken, publicKey}
+    B->>B: Verify JWT
+    B->>DB: Find/create user
+    B->>DB: SELECT * FROM tee_key_state
+    B->>C: {accessToken, refreshToken, teeKeys: {currentEpoch, currentPublicKey, previousEpoch, previousPublicKey}}
+    C->>C: Store teeKeys for IPNS publish
+```
 
 ---
 
