@@ -115,6 +115,8 @@ CipherBox shall employ a **Test Pyramid** approach with comprehensive coverage a
 
 ### Framework Requirements
 
+*Note: This section specifies framework choices and requirements. Concrete configuration files and implementation examples will be created when the testing infrastructure is implemented.*
+
 **Backend (NestJS):**
 - Test Runner: Jest (NestJS default)
 - Mocking: `@nestjs/testing` module with Jest mocks
@@ -307,7 +309,7 @@ Based on project criticality:
 4. **User Journeys (E2E)**
    - Login → Create Vault → Upload File → Download File → Logout
    - Folder creation and navigation
-   - File sharing flows
+   - Multi-device sync across devices
 
 ---
 
