@@ -18,6 +18,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Core Encryption** - Shared crypto module and vault initialization
 - [x] **Phase 4: File Storage** - Upload/download encrypted files via IPFS relay
 - [x] **Phase 4.1: API Service Testing** - Unit tests for backend services per TESTING.md (INSERTED)
+- [ ] **Phase 4.2: Local IPFS Testing Infrastructure** - Add local IPFS node to Docker for offline testing (INSERTED)
 - [ ] **Phase 5: Folder System** - IPNS metadata, folder hierarchy, and operations
 - [ ] **Phase 6: File Browser UI** - Web interface for file management
 - [ ] **Phase 7: Multi-Device Sync** - IPNS polling and sync state management
@@ -133,6 +134,23 @@ Plans:
 - [x] 04.1-01-PLAN.md — Auth service unit tests (AuthService, TokenService, Web3AuthVerifierService, JwtStrategy)
 - [x] 04.1-02-PLAN.md — Vault service unit tests (VaultService with QueryBuilder mocking)
 - [x] 04.1-03-PLAN.md — Controller tests + Jest coverage thresholds configuration
+
+### Phase 4.2: Local IPFS Testing Infrastructure (INSERTED)
+
+**Goal**: Enable offline integration/E2E testing with local IPFS node
+**Depends on**: Phase 4
+**Requirements**: Testing infrastructure improvement
+**Success Criteria** (what must be TRUE):
+
+1. Local IPFS node (Kubo) runs in Docker Compose stack
+2. Backend IPFS service works with both local node and Pinata
+3. Configuration switches IPFS backend via environment variable
+4. Integration tests can run without external network dependencies
+   **Plans**: TBD
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 4.2 to break down)
 
 ### Phase 5: Folder System
 
@@ -293,6 +311,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 3. Core Encryption      | 3/3            | Complete    | 2026-01-20 |
 | 4. File Storage         | 4/4            | Complete    | 2026-01-20 |
 | 4.1 API Service Testing | 3/3            | Complete    | 2026-01-21 |
+| 4.2 Local IPFS Testing  | 0/TBD          | Not started | -          |
 | 5. Folder System        | 0/4            | Not started | -          |
 | 6. File Browser UI      | 0/4            | Not started | -          |
 | 7. Multi-Device Sync    | 0/3            | Not started | -          |
