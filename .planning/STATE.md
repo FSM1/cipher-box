@@ -5,38 +5,39 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 4 complete - ready for Phase 4.1 (API Service Testing)
+**Current focus:** Phase 4.1 API Service Testing in progress
 
 ## Current Position
 
-Phase: 4 of 11 (File Storage complete)
-Plan: 4 of 4 in Phase 4 complete
-Status: Phase 4 complete - ready for Phase 4.1
-Last activity: 2026-01-20 - Completed 04-04-PLAN.md (Frontend download with decryption)
+Phase: 4.1 of 11 (API Service Testing)
+Plan: 2 of 3 in Phase 4.1 complete
+Status: In progress - VaultService tests complete
+Last activity: 2026-01-20 - Completed 04.1-02-PLAN.md (VaultService unit tests)
 
-Progress: [####......] 34% (14 of 41 plans)
+Progress: [####......] 36% (16 of 44 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 14
-- Average duration: 5.0 min
-- Total execution time: 1.1 hours
+- Total plans completed: 16
+- Average duration: 4.8 min
+- Total execution time: 1.3 hours
 
 **By Phase:**
 
-| Phase              | Plans | Total  | Avg/Plan |
-| ------------------ | ----- | ------ | -------- |
-| 01-foundation      | 3/3   | 20 min | 7 min    |
-| 02-authentication  | 4/4   | 18 min | 4.5 min  |
-| 03-core-encryption | 3/3   | 18 min | 6 min    |
-| 04-file-storage    | 4/4   | 17 min | 4.3 min  |
+| Phase                    | Plans | Total  | Avg/Plan |
+| ------------------------ | ----- | ------ | -------- |
+| 01-foundation            | 3/3   | 20 min | 7 min    |
+| 02-authentication        | 4/4   | 18 min | 4.5 min  |
+| 03-core-encryption       | 3/3   | 18 min | 6 min    |
+| 04-file-storage          | 4/4   | 17 min | 4.3 min  |
+| 04.1-api-service-testing | 2/3   | 8 min  | 4 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 7m, 5m, 6m, 4m, 3m
-- Trend: Consistent (improving)
+- Last 5 plans: 6m, 4m, 3m, 5m, 3m
+- Trend: Consistent (fast)
 
 _Updated after each plan completion_
 
@@ -47,56 +48,59 @@ _Updated after each plan completion_
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-| Decision                                             | Phase | Rationale                                                                 |
-| ---------------------------------------------------- | ----- | ------------------------------------------------------------------------- |
-| Override moduleResolution to 'node' for NestJS apps  | 01-01 | Base tsconfig uses bundler which is incompatible with CommonJS            |
-| Generate OpenAPI spec using minimal module           | 01-01 | Avoids requiring live database during build                               |
-| Pre-configure API tags in OpenAPI                    | 01-01 | Placeholder tags for Auth, Vault, Files, IPFS, IPNS                       |
-| Use React 18.3.1 per project spec                    | 01-02 | Not React 19 - staying on stable LTS version                              |
-| orval tags-split mode for API client                 | 01-02 | Generates separate files per API tag for better organization              |
-| Custom fetch instance for API calls                  | 01-02 | Allows future auth header injection without modifying generated code      |
-| ESLint 9 flat config format                          | 01-03 | Modern, simpler configuration at monorepo root                            |
-| CI api-spec job verifies generated files             | 01-03 | Ensures OpenAPI spec and API client stay in sync                          |
-| PostgreSQL 16-alpine for Docker                      | 01-03 | Lightweight image with latest stable Postgres                             |
-| Detect social vs wallet via authConnection           | 02-02 | Web3Auth v10 uses authConnection, not deprecated typeOfLogin              |
-| Auth token in memory only (Zustand)                  | 02-02 | XSS prevention - no localStorage for sensitive tokens                     |
-| Token refresh queue pattern                          | 02-02 | Handle concurrent 401s without race conditions                            |
-| Dual JWKS endpoints for Web3Auth                     | 02-01 | Different endpoints for social vs external wallet logins                  |
-| Refresh tokens searchable without access token       | 02-01 | Better UX - can refresh even with expired access token                    |
-| Token rotation on every refresh                      | 02-01 | Security - prevents token reuse attacks                                   |
-| HTTP-only cookie with path=/auth for refresh token   | 02-03 | Refresh token only sent to auth endpoints, XSS prevention                 |
-| CORS credentials enabled                             | 02-03 | Cross-origin cookie handling between frontend and backend                 |
-| ADR-001: Signature-derived keys for external wallets | 02-04 | EIP-712 signature + HKDF derives secp256k1 keypair for ECIES              |
-| Chain-agnostic EIP-712 domain                        | 02-04 | No chainId ensures consistent key derivation across networks              |
-| Memory-only derived key storage                      | 02-04 | Re-derive keypair on page refresh, never persist to storage               |
-| Account linking via Web3Auth grouped connections     | 02-04 | No custom implementation needed - handled at authentication layer         |
-| ADR-002: Web3Auth MFA scoped for post-v1.0           | 02-04 | Phase 11 - passkey, TOTP, recovery phrase via tKey SDK                    |
-| eciesjs for ECIES operations                         | 03-01 | Built on audited @noble/curves, single function API                       |
-| Buffer to Uint8Array conversion in crypto            | 03-01 | eciesjs returns Buffer; convert for consistent API                        |
-| ArrayBuffer casting for TypeScript 5.9               | 03-01 | Web Crypto API requires explicit ArrayBuffer type                         |
-| Uncompressed public keys (65 bytes, 0x04 prefix)     | 03-01 | secp256k1 standard format, validated before crypto ops                    |
-| Generic error messages in crypto                     | 03-01 | Prevent oracle attacks - all failures say "Encryption/Decryption failed"  |
-| Ed25519 verification returns false for invalid       | 03-02 | Returns boolean, not exception - consistent with oracle attack prevention |
-| IPNS signature prefix per IPFS spec                  | 03-02 | "ipns-signature:" concatenated before signing CBOR data                   |
-| Deterministic Ed25519 signatures                     | 03-02 | Same key + same message always produces identical signature               |
-| CipherBox-v1 salt for HKDF                           | 03-03 | Static salt provides domain separation for all key derivations            |
-| Folder keys are random not derived                   | 03-03 | Per CONTEXT.md, folder keys randomly generated then ECIES-wrapped         |
-| File keys random per-file                            | 03-03 | No deduplication per CRYPT-06 - each file gets unique random key          |
-| VaultInit vs EncryptedVaultKeys separation           | 03-03 | Clear distinction between in-memory keys and server storage format        |
-| fetch + form-data for Pinata API                     | 04-01 | SDK adds overhead; direct API calls are simpler                           |
-| CIDv1 always for IPFS pins                           | 04-01 | Modern IPFS standard, future-proof                                        |
-| 404 as success for unpin                             | 04-01 | Idempotent behavior - if already unpinned, operation succeeded            |
-| Vault stores encrypted keys as BYTEA                 | 04-02 | Direct binary storage, hex encoding only at API boundary                  |
-| PinnedCid sizeBytes as bigint                        | 04-02 | TypeORM returns as string to avoid JavaScript precision issues            |
-| Quota calculated on-demand via SUM                   | 04-02 | No cached field, acceptable for 500 MiB limit                             |
-| VaultService exported from module                    | 04-02 | Allows IpfsModule to use recordPin/recordUnpin                            |
-| Sequential file uploads                              | 04-03 | One file at a time per CONTEXT.md (parallel deferred)                     |
-| ArrayBuffer cast for TypeScript 5.9                  | 04-03 | Uint8Array.buffer returns ArrayBufferLike, explicit cast for Blob         |
-| Pre-check quota before upload                        | 04-03 | Fail fast if total file size exceeds remaining quota                      |
-| axios CancelToken for upload cancellation            | 04-03 | Standard pattern for aborting in-flight requests                          |
-| Pinata gateway direct fetch for downloads            | 04-04 | No backend relay needed for reading public IPFS content                   |
-| Stream progress only with Content-Length             | 04-04 | Falls back to simple arrayBuffer if header not present                    |
-| File key cleared after decryption                    | 04-04 | Security - clearBytes() called in finally block                           |
+| Decision                                             | Phase   | Rationale                                                                 |
+| ---------------------------------------------------- | ------- | ------------------------------------------------------------------------- |
+| Override moduleResolution to 'node' for NestJS apps  | 01-01   | Base tsconfig uses bundler which is incompatible with CommonJS            |
+| Generate OpenAPI spec using minimal module           | 01-01   | Avoids requiring live database during build                               |
+| Pre-configure API tags in OpenAPI                    | 01-01   | Placeholder tags for Auth, Vault, Files, IPFS, IPNS                       |
+| Use React 18.3.1 per project spec                    | 01-02   | Not React 19 - staying on stable LTS version                              |
+| orval tags-split mode for API client                 | 01-02   | Generates separate files per API tag for better organization              |
+| Custom fetch instance for API calls                  | 01-02   | Allows future auth header injection without modifying generated code      |
+| ESLint 9 flat config format                          | 01-03   | Modern, simpler configuration at monorepo root                            |
+| CI api-spec job verifies generated files             | 01-03   | Ensures OpenAPI spec and API client stay in sync                          |
+| PostgreSQL 16-alpine for Docker                      | 01-03   | Lightweight image with latest stable Postgres                             |
+| Detect social vs wallet via authConnection           | 02-02   | Web3Auth v10 uses authConnection, not deprecated typeOfLogin              |
+| Auth token in memory only (Zustand)                  | 02-02   | XSS prevention - no localStorage for sensitive tokens                     |
+| Token refresh queue pattern                          | 02-02   | Handle concurrent 401s without race conditions                            |
+| Dual JWKS endpoints for Web3Auth                     | 02-01   | Different endpoints for social vs external wallet logins                  |
+| Refresh tokens searchable without access token       | 02-01   | Better UX - can refresh even with expired access token                    |
+| Token rotation on every refresh                      | 02-01   | Security - prevents token reuse attacks                                   |
+| HTTP-only cookie with path=/auth for refresh token   | 02-03   | Refresh token only sent to auth endpoints, XSS prevention                 |
+| CORS credentials enabled                             | 02-03   | Cross-origin cookie handling between frontend and backend                 |
+| ADR-001: Signature-derived keys for external wallets | 02-04   | EIP-712 signature + HKDF derives secp256k1 keypair for ECIES              |
+| Chain-agnostic EIP-712 domain                        | 02-04   | No chainId ensures consistent key derivation across networks              |
+| Memory-only derived key storage                      | 02-04   | Re-derive keypair on page refresh, never persist to storage               |
+| Account linking via Web3Auth grouped connections     | 02-04   | No custom implementation needed - handled at authentication layer         |
+| ADR-002: Web3Auth MFA scoped for post-v1.0           | 02-04   | Phase 11 - passkey, TOTP, recovery phrase via tKey SDK                    |
+| eciesjs for ECIES operations                         | 03-01   | Built on audited @noble/curves, single function API                       |
+| Buffer to Uint8Array conversion in crypto            | 03-01   | eciesjs returns Buffer; convert for consistent API                        |
+| ArrayBuffer casting for TypeScript 5.9               | 03-01   | Web Crypto API requires explicit ArrayBuffer type                         |
+| Uncompressed public keys (65 bytes, 0x04 prefix)     | 03-01   | secp256k1 standard format, validated before crypto ops                    |
+| Generic error messages in crypto                     | 03-01   | Prevent oracle attacks - all failures say "Encryption/Decryption failed"  |
+| Ed25519 verification returns false for invalid       | 03-02   | Returns boolean, not exception - consistent with oracle attack prevention |
+| IPNS signature prefix per IPFS spec                  | 03-02   | "ipns-signature:" concatenated before signing CBOR data                   |
+| Deterministic Ed25519 signatures                     | 03-02   | Same key + same message always produces identical signature               |
+| CipherBox-v1 salt for HKDF                           | 03-03   | Static salt provides domain separation for all key derivations            |
+| Folder keys are random not derived                   | 03-03   | Per CONTEXT.md, folder keys randomly generated then ECIES-wrapped         |
+| File keys random per-file                            | 03-03   | No deduplication per CRYPT-06 - each file gets unique random key          |
+| VaultInit vs EncryptedVaultKeys separation           | 03-03   | Clear distinction between in-memory keys and server storage format        |
+| fetch + form-data for Pinata API                     | 04-01   | SDK adds overhead; direct API calls are simpler                           |
+| CIDv1 always for IPFS pins                           | 04-01   | Modern IPFS standard, future-proof                                        |
+| 404 as success for unpin                             | 04-01   | Idempotent behavior - if already unpinned, operation succeeded            |
+| Vault stores encrypted keys as BYTEA                 | 04-02   | Direct binary storage, hex encoding only at API boundary                  |
+| PinnedCid sizeBytes as bigint                        | 04-02   | TypeORM returns as string to avoid JavaScript precision issues            |
+| Quota calculated on-demand via SUM                   | 04-02   | No cached field, acceptable for 500 MiB limit                             |
+| VaultService exported from module                    | 04-02   | Allows IpfsModule to use recordPin/recordUnpin                            |
+| Sequential file uploads                              | 04-03   | One file at a time per CONTEXT.md (parallel deferred)                     |
+| ArrayBuffer cast for TypeScript 5.9                  | 04-03   | Uint8Array.buffer returns ArrayBufferLike, explicit cast for Blob         |
+| Pre-check quota before upload                        | 04-03   | Fail fast if total file size exceeds remaining quota                      |
+| axios CancelToken for upload cancellation            | 04-03   | Standard pattern for aborting in-flight requests                          |
+| Pinata gateway direct fetch for downloads            | 04-04   | No backend relay needed for reading public IPFS content                   |
+| Stream progress only with Content-Length             | 04-04   | Falls back to simple arrayBuffer if header not present                    |
+| File key cleared after decryption                    | 04-04   | Security - clearBytes() called in finally block                           |
+| Fresh mock objects per test for isolation            | 04.1-02 | Initialize mocks in beforeEach to avoid state leakage                     |
+| QueryBuilder chain mocking with mockReturnThis()     | 04.1-02 | Simulates TypeORM QueryBuilder method chaining                            |
+| Test private methods indirectly via public API       | 04.1-02 | Maintains encapsulation while ensuring coverage                           |
 
 ### Pending Todos
 
@@ -121,10 +125,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-20
-Stopped at: Completed 04-04-PLAN.md (Frontend download with decryption)
+Stopped at: Completed 04.1-02-PLAN.md (VaultService unit tests)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-20 after 04-04 completion_
+_Last updated: 2026-01-20 after 04.1-02 completion_
