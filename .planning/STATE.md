@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 4 - File Storage (next)
+**Current focus:** Phase 4 - File Storage (in progress)
 
 ## Current Position
 
-Phase: 3 of 11 complete (Core Encryption done)
-Plan: 3 of 3 in Phase 3 (all complete)
-Status: Phase 3 complete, Phase 4 not started
-Last activity: 2026-01-20 - Completed Phase 3 (crypto package v0.2.0, 88 tests)
+Phase: 4 of 11 (File Storage in progress)
+Plan: 2 of 4 in Phase 4 complete
+Status: Phase 4 in progress
+Last activity: 2026-01-20 - Completed 04-02-PLAN.md (VaultModule with quota tracking)
 
-Progress: [####......] 24% (10 of 41 plans)
+Progress: [####......] 27% (11 of 41 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 10
+- Total plans completed: 11
 - Average duration: 5.2 min
-- Total execution time: 0.9 hours
+- Total execution time: 1.0 hours
 
 **By Phase:**
 
@@ -31,10 +31,11 @@ Progress: [####......] 24% (10 of 41 plans)
 | 01-foundation      | 3/3   | 20 min | 7 min    |
 | 02-authentication  | 4/4   | 18 min | 4.5 min  |
 | 03-core-encryption | 3/3   | 18 min | 6 min    |
+| 04-file-storage    | 1/4   | 6 min  | 6 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 5m, 5m, 6m, 7m, 5m
+- Last 5 plans: 5m, 6m, 7m, 5m, 6m
 - Trend: Consistent
 
 _Updated after each plan completion_
@@ -82,6 +83,10 @@ Recent decisions affecting current work:
 | Folder keys are random not derived                   | 03-03 | Per CONTEXT.md, folder keys randomly generated then ECIES-wrapped         |
 | File keys random per-file                            | 03-03 | No deduplication per CRYPT-06 - each file gets unique random key          |
 | VaultInit vs EncryptedVaultKeys separation           | 03-03 | Clear distinction between in-memory keys and server storage format        |
+| Vault stores encrypted keys as BYTEA                 | 04-02 | Direct binary storage, hex encoding only at API boundary                  |
+| PinnedCid sizeBytes as bigint                        | 04-02 | TypeORM returns as string to avoid JavaScript precision issues            |
+| Quota calculated on-demand via SUM                   | 04-02 | No cached field, acceptable for 500 MiB limit                             |
+| VaultService exported from module                    | 04-02 | Allows IpfsModule to use recordPin/recordUnpin                            |
 
 ### Pending Todos
 
@@ -100,10 +105,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-20
-Stopped at: Phase 3 complete - ready for Phase 4
+Stopped at: Completed 04-02-PLAN.md (VaultModule with quota tracking)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-20 after Phase 3 completion_
+_Last updated: 2026-01-20 after 04-02 completion_
