@@ -1,0 +1,87 @@
+.login-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 2rem;
+  text-align: center;
+}
+
+.login-container h1 {
+  font-size: 3rem;
+  margin-bottom: 0.5rem;
+}
+
+.login-container p {
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 2rem;
+}
+
+.login-button {
+  padding: 1rem 2rem;
+  font-size: 1.1rem;
+  font-weight: 500;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.login-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 20px rgba(102, 126, 234, 0.4);
+}
+
+.login-note {
+  margin-top: 2rem;
+  font-size: 0.875rem;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.dashboard-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.logout-link {
+  color: rgba(255, 255, 255, 0.6);
+  text-decoration: none;
+}
+
+.logout-link:hover {
+  color: white;
+}
+
+.dashboard-main {
+  display: flex;
+  flex: 1;
+}
+
+.folder-sidebar {
+  width: 250px;
+  padding: 1rem;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.file-browser {
+  flex: 1;
+  padding: 1rem;
+}
+
+.placeholder-text {
+  color: rgba(255, 255, 255, 0.3);
+  font-style: italic;
+  margin-top: 1rem;
+}
