@@ -1,10 +1,17 @@
 import { NestFactory } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  app.enableCors();
+  app.use(cookieParser());
+  app.enableCors({
+    origin: process.env.WEB_APP_URL
+      ? process.env.WEB_APP_URL.split(',')
+      : ['http://localhost:5173', 'http://localhost:4173'],
+    credentials: true,
+  });
 
   const config = new DocumentBuilder()
     .setTitle('CipherBox API')

@@ -8,6 +8,86 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // Full process polyfill with nextTick - must run before any modules
+      (function() {
+        function nextTick(fn) {
+          var args = new Array(arguments.length - 1);
+          if (arguments.length > 1) {
+            for (var i = 1; i < arguments.length; i++) {
+              args[i - 1] = arguments[i];
+            }
+          }
+          queue.push(new Item(fn, args));
+          if (!draining) {
+            setTimeout(drainQueue, 0);
+          }
+        }
+        var queue = [];
+        var draining = false;
+        var currentQueue;
+        var queueIndex = -1;
+        function cleanUpNextTick() {
+          if (!draining || !currentQueue) return;
+          draining = false;
+          if (currentQueue.length) {
+            queue = currentQueue.concat(queue);
+          } else {
+            queueIndex = -1;
+          }
+          if (queue.length) drainQueue();
+        }
+        function drainQueue() {
+          if (draining) return;
+          var timeout = setTimeout(cleanUpNextTick, 0);
+          draining = true;
+          var len = queue.length;
+          while (len) {
+            currentQueue = queue;
+            queue = [];
+            while (++queueIndex < len) {
+              if (currentQueue) currentQueue[queueIndex].run();
+            }
+            queueIndex = -1;
+            len = queue.length;
+          }
+          currentQueue = null;
+          draining = false;
+          clearTimeout(timeout);
+        }
+        function Item(fun, array) {
+          this.fun = fun;
+          this.array = array;
+        }
+        Item.prototype.run = function() {
+          this.fun.apply(null, this.array);
+        };
+
+        var process = {
+          nextTick: nextTick,
+          title: 'browser',
+          browser: true,
+          env: {},
+          argv: [],
+          version: '',
+          versions: {},
+          on: function() {},
+          addListener: function() {},
+          once: function() {},
+          off: function() {},
+          removeListener: function() {},
+          removeAllListeners: function() {},
+          emit: function() {},
+          binding: function() { throw new Error('process.binding is not supported'); },
+          cwd: function() { return '/'; },
+          chdir: function() { throw new Error('process.chdir is not supported'); },
+          umask: function() { return 0; }
+        };
+
+        globalThis.process = process;
+        window.process = process;
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

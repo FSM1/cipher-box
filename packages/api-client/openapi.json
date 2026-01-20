@@ -11,18 +11,214 @@
           }
         },
         "summary": "Get API info",
-        "tags": [
-          "Root"
-        ]
+        "tags": ["Root"]
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "operationId": "AuthController_login",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid Web3Auth token"
+          }
+        },
+        "summary": "Authenticate user with Web3Auth ID token",
+        "tags": ["Auth"]
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "operationId": "AuthController_refresh",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Tokens refreshed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired refresh token"
+          }
+        },
+        "summary": "Refresh access token using HTTP-only refresh token cookie",
+        "tags": ["Auth"]
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "AuthController_logout",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successfully logged out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogoutResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Logout user and invalidate all refresh tokens",
+        "tags": ["Auth"]
+      }
+    },
+    "/auth/methods": {
+      "get": {
+        "operationId": "AuthController_getMethods",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "List of linked auth methods",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuthMethodResponseDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get all linked auth methods for the current user",
+        "tags": ["Auth"]
+      }
+    },
+    "/auth/link": {
+      "post": {
+        "operationId": "AuthController_linkMethod",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkMethodDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Auth method linked successfully, returns updated list of methods",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuthMethodResponseDto"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Auth method already linked or publicKey mismatch"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Link a new auth method to the current user account",
+        "tags": ["Auth"]
+      }
+    },
+    "/auth/unlink": {
+      "post": {
+        "operationId": "AuthController_unlinkMethod",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnlinkMethodDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Auth method unlinked successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnlinkMethodResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Cannot unlink last auth method or method not found"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Unlink an auth method from the current user account",
+        "tags": ["Auth"]
       }
     },
     "/health": {
       "get": {
         "operationId": "HealthController_check",
         "summary": "Check API and database health",
-        "tags": [
-          "Health"
-        ],
+        "tags": ["Health"],
         "responses": {
           "200": {
             "description": "Health check passed",
@@ -106,6 +302,137 @@
         "type": "http"
       }
     },
-    "schemas": {}
+    "schemas": {
+      "LoginDto": {
+        "type": "object",
+        "properties": {
+          "idToken": {
+            "type": "string",
+            "description": "JWT ID token from Web3Auth",
+            "example": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9..."
+          },
+          "publicKey": {
+            "type": "string",
+            "description": "secp256k1 public key for social login, or signature-derived public key for external wallet (ADR-001)",
+            "example": "0x04..."
+          },
+          "loginType": {
+            "type": "string",
+            "description": "Type of login used",
+            "enum": ["social", "external_wallet"],
+            "example": "social"
+          },
+          "walletAddress": {
+            "type": "string",
+            "description": "Wallet address for external wallet users. Used for JWT verification. The publicKey field contains the derived key.",
+            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f..."
+          },
+          "derivationVersion": {
+            "type": "number",
+            "description": "Key derivation version for external wallet users (ADR-001). Required for external_wallet loginType.",
+            "example": 1,
+            "minimum": 1
+          }
+        },
+        "required": ["idToken", "publicKey", "loginType"]
+      },
+      "LoginResponseDto": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "JWT access token for API requests",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+          },
+          "isNewUser": {
+            "type": "boolean",
+            "description": "Whether this is a new user registration",
+            "example": false
+          }
+        },
+        "required": ["accessToken", "isNewUser"]
+      },
+      "TokenResponseDto": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "New JWT access token",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+          }
+        },
+        "required": ["accessToken"]
+      },
+      "LogoutResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether logout was successful",
+            "example": true
+          }
+        },
+        "required": ["success"]
+      },
+      "AuthMethodResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["google", "apple", "github", "email_passwordless", "external_wallet"]
+          },
+          "identifier": {
+            "type": "string",
+            "description": "Email or wallet address"
+          },
+          "lastUsedAt": {
+            "format": "date-time",
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": ["id", "type", "identifier", "lastUsedAt", "createdAt"]
+      },
+      "LinkMethodDto": {
+        "type": "object",
+        "properties": {
+          "idToken": {
+            "type": "string",
+            "description": "Web3Auth ID token from the new auth method"
+          },
+          "loginType": {
+            "type": "string",
+            "description": "Login type",
+            "enum": ["social", "external_wallet"]
+          }
+        },
+        "required": ["idToken", "loginType"]
+      },
+      "UnlinkMethodDto": {
+        "type": "object",
+        "properties": {
+          "methodId": {
+            "type": "string"
+          }
+        },
+        "required": ["methodId"]
+      },
+      "UnlinkMethodResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": ["success"]
+      }
+    }
   }
 }

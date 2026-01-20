@@ -7,9 +7,4 @@ vite.config.js
 vite.config.d.ts
 vite.config.d.ts.map
 
-# Generated API client (regenerated from OpenAPI spec)
-src/api/health/
-src/api/root/
-src/api/models/
-# Keep custom-instance.ts as it's hand-written
-!src/api/custom-instance.ts
+# Keep custom-instance.ts as it's hand-written (other API files are generated but tracked)

@@ -70,6 +70,11 @@ jobs:
           DB_DATABASE: cipherbox_test
           NODE_ENV: test
 
+      - name: Format generated files
+        run: |
+          pnpm eslint --fix apps/web/src/api/ || true
+          pnpm prettier --write packages/api-client/openapi.json apps/web/src/api/
+
       - name: Verify no uncommitted changes to generated files
         run: |
           git diff --exit-code packages/api-client/openapi.json || (echo "OpenAPI spec is out of date. Run 'pnpm api:generate' and commit changes." && exit 1)

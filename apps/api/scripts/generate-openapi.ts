@@ -14,11 +14,54 @@ import { join } from 'path';
 // Import controllers that define the API
 import { AppController } from '../src/app.controller';
 import { AppService } from '../src/app.service';
+import { AuthController } from '../src/auth/auth.controller';
+import { AuthService } from '../src/auth/auth.service';
+import { Web3AuthVerifierService } from '../src/auth/services/web3auth-verifier.service';
+import { TokenService } from '../src/auth/services/token.service';
+
+// Mock providers for OpenAPI generation - these won't be called
+const mockRepository = {
+  provide: 'UserRepository',
+  useValue: {},
+};
+
+const mockAuthMethodRepository = {
+  provide: 'AuthMethodRepository',
+  useValue: {},
+};
+
+const mockRefreshTokenRepository = {
+  provide: 'RefreshTokenRepository',
+  useValue: {},
+};
+
+const mockJwtService = {
+  provide: 'JwtService',
+  useValue: { sign: () => '' },
+};
 
 // Minimal module for OpenAPI generation - no database connection needed
 @Module({
-  controllers: [AppController],
-  providers: [AppService],
+  controllers: [AppController, AuthController],
+  providers: [
+    AppService,
+    {
+      provide: AuthService,
+      useValue: {},
+    },
+    {
+      provide: Web3AuthVerifierService,
+      useValue: {},
+    },
+    {
+      provide: TokenService,
+      useValue: {},
+    },
+    mockRepository,
+    mockAuthMethodRepository,
+    mockRefreshTokenRepository,
+    mockJwtService,
+  ],
 })
 class OpenApiGeneratorModule {}
 
