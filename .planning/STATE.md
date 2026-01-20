@@ -100,7 +100,9 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-None yet.
+1 pending todo(s):
+
+- `2026-01-21-local-ipfs-node-for-testing.md` — Add local IPFS node to Docker stack for testing (area: api)
 
 ### Blockers/Concerns
 
