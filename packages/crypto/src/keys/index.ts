@@ -5,3 +5,4 @@
  */
 
 export { deriveKey, type DeriveKeyParams } from './derive';
+export { deriveContextKey, generateFolderKey, generateFileKey } from './hierarchy';
