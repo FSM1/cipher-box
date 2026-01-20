@@ -1,0 +1,111 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/": {
+      "get": {
+        "operationId": "AppController_getRoot",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Returns API version info"
+          }
+        },
+        "summary": "Get API info",
+        "tags": [
+          "Root"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "HealthController_check",
+        "summary": "Check API and database health",
+        "tags": [
+          "Health"
+        ],
+        "responses": {
+          "200": {
+            "description": "Health check passed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "info": {
+                      "type": "object",
+                      "properties": {
+                        "database": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "example": "up"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Health check failed"
+          }
+        }
+      }
+    }
+  },
+  "info": {
+    "title": "CipherBox API",
+    "description": "Zero-knowledge encrypted cloud storage API",
+    "version": "0.1.0",
+    "contact": {}
+  },
+  "tags": [
+    {
+      "name": "Health",
+      "description": "Health check endpoints"
+    },
+    {
+      "name": "Root",
+      "description": "API root endpoints"
+    },
+    {
+      "name": "Auth",
+      "description": "Authentication endpoints"
+    },
+    {
+      "name": "Vault",
+      "description": "Vault management endpoints"
+    },
+    {
+      "name": "Files",
+      "description": "File operations endpoints"
+    },
+    {
+      "name": "IPFS",
+      "description": "IPFS relay endpoints"
+    },
+    {
+      "name": "IPNS",
+      "description": "IPNS relay endpoints"
+    }
+  ],
+  "servers": [],
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "type": "http"
+      }
+    },
+    "schemas": {}
+  }
+}
