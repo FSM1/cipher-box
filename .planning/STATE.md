@@ -5,35 +5,36 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 2 - Authentication (next)
+**Current focus:** Phase 2 - Authentication (in progress)
 
 ## Current Position
 
 Phase: 2 of 10 (Authentication)
-Plan: 0 of 4 in current phase
-Status: Ready to plan
-Last activity: 2026-01-20 - Phase 1 (Foundation) verified and complete
+Plan: 2 of 4 in current phase
+Status: In progress
+Last activity: 2026-01-20 - Completed 02-02-PLAN.md
 
-Progress: [###.......] 10%
+Progress: [#####.....] 14%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 3
-- Average duration: 7 min
-- Total execution time: 0.33 hours
+- Total plans completed: 5
+- Average duration: 5 min
+- Total execution time: 0.42 hours
 
 **By Phase:**
 
-| Phase         | Plans | Total  | Avg/Plan |
-| ------------- | ----- | ------ | -------- |
-| 01-foundation | 3/3   | 20 min | 7 min    |
+| Phase             | Plans | Total  | Avg/Plan |
+| ----------------- | ----- | ------ | -------- |
+| 01-foundation     | 3/3   | 20 min | 7 min    |
+| 02-authentication | 2/4   | 5 min  | 2.5 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 12m, 3m, 5m
-- Trend: Consistent (scaffold/infra tasks)
+- Last 5 plans: 12m, 3m, 5m, 2m, 3m
+- Trend: Fast (02-01/02-02 had some work pre-done)
 
 _Updated after each plan completion_
 
@@ -55,6 +56,9 @@ Recent decisions affecting current work:
 | ESLint 9 flat config format                         | 01-03 | Modern, simpler configuration at monorepo root                       |
 | CI api-spec job verifies generated files            | 01-03 | Ensures OpenAPI spec and API client stay in sync                     |
 | PostgreSQL 16-alpine for Docker                     | 01-03 | Lightweight image with latest stable Postgres                        |
+| Detect social vs wallet via authConnection          | 02-02 | Web3Auth v10 uses authConnection, not deprecated typeOfLogin         |
+| Auth token in memory only (Zustand)                 | 02-02 | XSS prevention - no localStorage for sensitive tokens                |
+| Token refresh queue pattern                         | 02-02 | Handle concurrent 401s without race conditions                       |
 
 ### Pending Todos
 
@@ -73,10 +77,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-20
-Stopped at: Phase 1 complete, ready for Phase 2 planning
+Stopped at: Completed 02-02-PLAN.md
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-20 after Phase 1 verification_
+_Last updated: 2026-01-20 after 02-02 completion_

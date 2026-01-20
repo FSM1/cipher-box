@@ -63,8 +63,8 @@ Plans:
 
 Plans:
 
-- [ ] 02-01-PLAN.md — Backend auth module with entities, JWT verification, and endpoints
-- [ ] 02-02-PLAN.md — Web3Auth modal integration with auth state management
+- [x] 02-01-PLAN.md — Backend auth module with entities, JWT verification, and endpoints
+- [x] 02-02-PLAN.md — Web3Auth modal integration with auth state management
 - [ ] 02-03-PLAN.md — Complete login/logout flow with HTTP-only cookie tokens
 - [ ] 02-04-PLAN.md — Account linking and settings page
 
@@ -244,7 +244,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | Phase                | Plans Complete | Status      | Completed  |
 | -------------------- | -------------- | ----------- | ---------- |
 | 1. Foundation        | 3/3            | Complete    | 2026-01-20 |
-| 2. Authentication    | 0/4            | Planned     | -          |
+| 2. Authentication    | 2/4            | In progress | -          |
 | 3. Core Encryption   | 0/3            | Not started | -          |
 | 4. File Storage      | 0/4            | Not started | -          |
 | 5. Folder System     | 0/4            | Not started | -          |
