@@ -113,8 +113,10 @@ export function useAuth() {
         authMethod = connectorName || 'external_wallet';
       } else {
         // Social login: check multiple fields for the auth provider
-        authMethod =
-          userInfo?.typeOfLogin || userInfo?.verifier || userInfo?.authConnection || 'google';
+        // Note: typeOfLogin and verifier are legacy Web3Auth properties, may not exist in v10+ types
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const info = userInfo as Record<string, any>;
+        authMethod = info?.typeOfLogin || info?.verifier || info?.authConnection || 'google';
       }
       setLastAuthMethod(authMethod);
 
