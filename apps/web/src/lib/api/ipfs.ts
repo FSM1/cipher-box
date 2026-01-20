@@ -3,7 +3,12 @@ import { useAuthStore } from '../../stores/auth.store';
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
+// Pinata gateway URL from environment
+const GATEWAY_URL = import.meta.env.VITE_PINATA_GATEWAY_URL || 'https://gateway.pinata.cloud/ipfs';
+
 export type AddResponse = { cid: string; size: number };
+
+export type DownloadProgressCallback = (loaded: number, total: number) => void;
 
 /**
  * Upload encrypted file to IPFS via backend relay.
@@ -43,4 +48,59 @@ export async function unpinFromIpfs(cid: string): Promise<void> {
     { cid },
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
+}
+
+/**
+ * Fetch encrypted file from IPFS gateway.
+ * Supports progress tracking for larger files.
+ *
+ * @param cid - IPFS CID of the file
+ * @param onProgress - Optional callback for download progress
+ * @returns Encrypted file content as Uint8Array
+ */
+export async function fetchFromIpfs(
+  cid: string,
+  onProgress?: DownloadProgressCallback
+): Promise<Uint8Array> {
+  const response = await fetch(`${GATEWAY_URL}/${cid}`);
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch from IPFS: ${response.status}`);
+  }
+
+  // If no progress callback or no content-length, just return arrayBuffer
+  const contentLength = response.headers.get('Content-Length');
+  if (!onProgress || !contentLength) {
+    const buffer = await response.arrayBuffer();
+    return new Uint8Array(buffer);
+  }
+
+  // Stream with progress
+  const total = parseInt(contentLength, 10);
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error('ReadableStream not supported');
+  }
+
+  const chunks: Uint8Array[] = [];
+  let loaded = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    chunks.push(value);
+    loaded += value.length;
+    onProgress(loaded, total);
+  }
+
+  // Combine chunks
+  const result = new Uint8Array(loaded);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  return result;
 }
