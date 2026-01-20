@@ -82,13 +82,13 @@ Plans:
 3. Ed25519 keypairs generate and sign IPNS records correctly
 4. Private key exists only in RAM and never persists to storage
 5. Each file uses unique random key and IV (no nonce reuse)
-   **Plans**: TBD
+   **Plans**: 3 plans
 
 Plans:
 
-- [ ] 03-01: Crypto module with AES-256-GCM and ECIES
-- [ ] 03-02: Ed25519 IPNS signing and key generation
-- [ ] 03-03: Vault initialization and key management
+- [ ] 03-01-PLAN.md — AES-256-GCM and ECIES encryption primitives
+- [ ] 03-02-PLAN.md — Ed25519 IPNS signing and key generation
+- [ ] 03-03-PLAN.md — Vault initialization and key management
 
 ### Phase 4: File Storage
 
@@ -268,7 +268,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | -------------------- | -------------- | ----------- | ---------- |
 | 1. Foundation        | 3/3            | Complete    | 2026-01-20 |
 | 2. Authentication    | 4/4            | Complete    | 2026-01-20 |
-| 3. Core Encryption   | 0/3            | Not started | -          |
+| 3. Core Encryption   | 0/3            | Planned     | -          |
 | 4. File Storage      | 0/4            | Not started | -          |
 | 5. Folder System     | 0/4            | Not started | -          |
 | 6. File Browser UI   | 0/4            | Not started | -          |
@@ -285,4 +285,5 @@ _Phase 1 planned: 2026-01-20_
 _Phase 1 complete: 2026-01-20_
 _Phase 2 planned: 2026-01-20_
 _Phase 2 complete: 2026-01-20_
+_Phase 3 planned: 2026-01-20_
 _Total phases: 11 | Total plans: 41 | Depth: Comprehensive_
