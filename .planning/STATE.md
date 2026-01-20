@@ -83,6 +83,9 @@ Recent decisions affecting current work:
 | Folder keys are random not derived                   | 03-03 | Per CONTEXT.md, folder keys randomly generated then ECIES-wrapped         |
 | File keys random per-file                            | 03-03 | No deduplication per CRYPT-06 - each file gets unique random key          |
 | VaultInit vs EncryptedVaultKeys separation           | 03-03 | Clear distinction between in-memory keys and server storage format        |
+| fetch + form-data for Pinata API                     | 04-01 | SDK adds overhead; direct API calls are simpler                           |
+| CIDv1 always for IPFS pins                           | 04-01 | Modern IPFS standard, future-proof                                        |
+| 404 as success for unpin                             | 04-01 | Idempotent behavior - if already unpinned, operation succeeded            |
 | Vault stores encrypted keys as BYTEA                 | 04-02 | Direct binary storage, hex encoding only at API boundary                  |
 | PinnedCid sizeBytes as bigint                        | 04-02 | TypeORM returns as string to avoid JavaScript precision issues            |
 | Quota calculated on-demand via SUM                   | 04-02 | No cached field, acceptable for 500 MiB limit                             |
