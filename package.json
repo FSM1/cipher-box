@@ -1,0 +1,14 @@
+{
+  "name": "cipher-box",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --parallel -r run dev",
+    "build": "pnpm --parallel -r run build",
+    "lint": "pnpm --parallel -r run lint",
+    "test": "pnpm --parallel -r run test",
+    "openapi:generate": "pnpm --filter @cipherbox/api openapi:generate"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
