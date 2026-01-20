@@ -10,6 +10,7 @@
 All files in `Preliminary/Documentation/` are **FINALIZED** specifications (version 1.10.0, status: Finalized). These documents represent the agreed-upon design and should **NOT** be modified.
 
 **If you need to make changes:**
+
 - New implementation documentation should be created in a separate location
 - Working notes and updates belong in `.planning/` or project-specific directories
 - Do not modify version numbers or content in `Preliminary/Documentation/`
@@ -26,14 +27,14 @@ All files in `Preliminary/Documentation/` are **FINALIZED** specifications (vers
 
 ## Documentation Structure
 
-| Document                                                                                  | Purpose                                    |
-| ----------------------------------------------------------------------------------------- | ------------------------------------------ |
-| [PRD.md](../Preliminary/Documentation/PRD.md)                                             | Product requirements, user journeys, scope |
-| [TECHNICAL_ARCHITECTURE.md](../Preliminary/Documentation/TECHNICAL_ARCHITECTURE.md)       | Encryption, key hierarchy, system design   |
-| [API_SPECIFICATION.md](../Preliminary/Documentation/API_SPECIFICATION.md)                 | Backend endpoints, database schema         |
-| [DATA_FLOWS.md](../Preliminary/Documentation/DATA_FLOWS.md)                               | Sequence diagrams, test vectors            |
-| [CLIENT_SPECIFICATION.md](../Preliminary/Documentation/CLIENT_SPECIFICATION.md)           | Web UI, desktop app specs                  |
-| [IMPLEMENTATION_ROADMAP.md](../Preliminary/Documentation/IMPLEMENTATION_ROADMAP.md)       | Week-by-week development plan              |
+| Document                                                                            | Purpose                                    |
+| ----------------------------------------------------------------------------------- | ------------------------------------------ |
+| [PRD.md](../Preliminary/Documentation/PRD.md)                                       | Product requirements, user journeys, scope |
+| [TECHNICAL_ARCHITECTURE.md](../Preliminary/Documentation/TECHNICAL_ARCHITECTURE.md) | Encryption, key hierarchy, system design   |
+| [API_SPECIFICATION.md](../Preliminary/Documentation/API_SPECIFICATION.md)           | Backend endpoints, database schema         |
+| [DATA_FLOWS.md](../Preliminary/Documentation/DATA_FLOWS.md)                         | Sequence diagrams, test vectors            |
+| [CLIENT_SPECIFICATION.md](../Preliminary/Documentation/CLIENT_SPECIFICATION.md)     | Web UI, desktop app specs                  |
+| [IMPLEMENTATION_ROADMAP.md](../Preliminary/Documentation/IMPLEMENTATION_ROADMAP.md) | Week-by-week development plan              |
 
 ---
 
@@ -76,7 +77,7 @@ Each folder has its own IPNS entry containing encrypted metadata. This design en
 ```typescript
 interface DecryptedFolderMetadata {
   children: Array<{
-    type: "file" | "folder";
+    type: 'file' | 'folder';
     nameEncrypted: string; // AES-256-GCM(name, folderKey)
     nameIv: string;
     cid?: string; // For files: IPFS CID
@@ -117,6 +118,22 @@ interface DecryptedFolderMetadata {
 
 ## Development Patterns
 
+### API Development Workflow
+
+When working on `apps/api` code:
+
+1. **After modifying API endpoints, DTOs, or controllers**, regenerate the API client to keep the web app in sync:
+
+   ```bash
+   pnpm api:generate
+   ```
+
+   This command generates the OpenAPI spec from the API, creates the typed client for the web app, and runs lint fixes.
+
+2. **Always run `pnpm api:generate` before completing a feature** that touches the API to ensure type safety across the monorepo.
+
+3. **Commit the regenerated client files** (`apps/web/src/api/`) along with your API changes.
+
 ### File Upload Flow (Reference Implementation)
 
 ```typescript
@@ -126,8 +143,8 @@ const fileIV = crypto.getRandomValues(new Uint8Array(12)); // GCM uses 96-bit IV
 
 // 2. Encrypt file content
 const encryptedFile = await crypto.subtle.encrypt(
-  { name: "AES-GCM", iv: fileIV },
-  await crypto.subtle.importKey("raw", fileKey, "AES-GCM", false, ["encrypt"]),
+  { name: 'AES-GCM', iv: fileIV },
+  await crypto.subtle.importKey('raw', fileKey, 'AES-GCM', false, ['encrypt']),
   fileContent
 );
 
@@ -135,7 +152,7 @@ const encryptedFile = await crypto.subtle.encrypt(
 const encryptedFileKey = await eciesEncrypt(fileKey, userPublicKey);
 
 // 4. Upload encrypted file to backend → Pinata → get CID
-const { cid } = await api.post("/vault/upload", {
+const { cid } = await api.post('/vault/upload', {
   encryptedFile: new Blob([encryptedFile]),
   fileName: file.name, // plaintext OK for server audit
   iv: bytesToHex(fileIV),
@@ -143,7 +160,7 @@ const { cid } = await api.post("/vault/upload", {
 
 // 5. Add to folder metadata (all encrypted)
 const fileEntry = {
-  type: "file",
+  type: 'file',
   nameEncrypted: await aesEncrypt(file.name, folderKey),
   nameIv: crypto.getRandomValues(new Uint8Array(12)),
   cid,
@@ -195,22 +212,22 @@ if (error.response?.status === 401) {
 
    ```typescript
    // WRONG
-   localStorage.setItem("privateKey", privateKeyHex);
+   localStorage.setItem('privateKey', privateKeyHex);
    ```
 
 2. **Logging sensitive data**
 
    ```typescript
    // WRONG
-   console.log("User private key:", privateKey);
-   console.log("Decrypted file:", fileContent);
+   console.log('User private key:', privateKey);
+   console.log('Decrypted file:', fileContent);
    ```
 
 3. **Sending plaintext to server**
 
    ```typescript
    // WRONG
-   await api.post("/vault/upload", { fileContent: file });
+   await api.post('/vault/upload', { fileContent: file });
    ```
 
 4. **Using sync crypto in main thread**
@@ -225,9 +242,7 @@ if (error.response?.status === 401) {
 
    ```typescript
    // React context for session-scoped state
-   const [ecdsaPrivateKey, setEcdsaPrivateKey] = useState<Uint8Array | null>(
-     null
-   );
+   const [ecdsaPrivateKey, setEcdsaPrivateKey] = useState<Uint8Array | null>(null);
 
    const logout = () => {
      setEcdsaPrivateKey(null); // Cleared from memory
@@ -238,7 +253,7 @@ if (error.response?.status === 401) {
 2. **Use Web Workers for large file encryption**
 
    ```typescript
-   const worker = new Worker("./crypto-worker.js");
+   const worker = new Worker('./crypto-worker.js');
    worker.postMessage({ fileData, key });
    worker.onmessage = (e) => {
      const encrypted = e.data;
@@ -248,12 +263,8 @@ if (error.response?.status === 401) {
 3. **Always validate IPNS signatures client-side**
    ```typescript
    const messageHash = await sha256(signedEntry.encryptedMetadata);
-   const isValid = await ecdsaVerify(
-     messageHash,
-     signedEntry.signature,
-     userPubkey
-   );
-   if (!isValid) throw new Error("Metadata tampering detected");
+   const isValid = await ecdsaVerify(messageHash, signedEntry.signature, userPubkey);
+   if (!isValid) throw new Error('Metadata tampering detected');
    ```
 
 ## MVP Scope Boundaries (v1.0)
@@ -352,14 +363,14 @@ cipherbox-aggregate (group ID)
 ### Client Integration
 
 ```typescript
-import { Web3Auth } from "@web3auth/modal";
+import { Web3Auth } from '@web3auth/modal';
 
 const web3auth = new Web3Auth({
-  clientId: "YOUR_CLIENT_ID",
-  web3AuthNetwork: "sapphire_mainnet", // or testnet
+  clientId: 'YOUR_CLIENT_ID',
+  web3AuthNetwork: 'sapphire_mainnet', // or testnet
   chainConfig: {
-    chainNamespace: "eip155",
-    chainId: "0x1", // Ethereum mainnet (or any chain)
+    chainNamespace: 'eip155',
+    chainId: '0x1', // Ethereum mainnet (or any chain)
   },
 });
 
@@ -368,7 +379,7 @@ const web3authProvider = await web3auth.connect();
 
 // Get private key (use sparingly, clear from memory ASAP)
 const privateKey = await web3authProvider.request({
-  method: "eth_private_key",
+  method: 'eth_private_key',
 });
 
 // Get ID token for CipherBox backend auth
