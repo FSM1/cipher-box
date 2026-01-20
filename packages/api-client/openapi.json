@@ -214,6 +214,95 @@
         "tags": ["Auth"]
       }
     },
+    "/ipfs/add": {
+      "post": {
+        "description": "Upload an encrypted file blob to IPFS via Pinata. Returns the CID and size.",
+        "operationId": "IpfsController_add",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Encrypted file blob (max 100MB)"
+                  }
+                },
+                "required": ["file"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "File pinned successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          },
+          "413": {
+            "description": "Payload too large - file exceeds 100MB limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Pin encrypted file to IPFS",
+        "tags": ["IPFS"]
+      }
+    },
+    "/ipfs/unpin": {
+      "post": {
+        "description": "Remove a pinned file from IPFS via Pinata using its CID.",
+        "operationId": "IpfsController_unpin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnpinDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "File unpinned successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnpinResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Unpin file from IPFS",
+        "tags": ["IPFS"]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "HealthController_check",
@@ -429,6 +518,44 @@
         "properties": {
           "success": {
             "type": "boolean"
+          }
+        },
+        "required": ["success"]
+      },
+      "AddResponseDto": {
+        "type": "object",
+        "properties": {
+          "cid": {
+            "type": "string",
+            "description": "The IPFS CID of the pinned file",
+            "example": "bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi"
+          },
+          "size": {
+            "type": "number",
+            "description": "The size of the pinned file in bytes",
+            "example": 1024
+          }
+        },
+        "required": ["cid", "size"]
+      },
+      "UnpinDto": {
+        "type": "object",
+        "properties": {
+          "cid": {
+            "type": "string",
+            "description": "The IPFS CID of the file to unpin",
+            "example": "bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi"
+          }
+        },
+        "required": ["cid"]
+      },
+      "UnpinResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the unpin operation was successful",
+            "example": true
           }
         },
         "required": ["success"]
