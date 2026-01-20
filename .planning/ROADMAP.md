@@ -17,6 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Authentication** - Web3Auth integration with backend token management
 - [x] **Phase 3: Core Encryption** - Shared crypto module and vault initialization
 - [x] **Phase 4: File Storage** - Upload/download encrypted files via IPFS relay
+- [ ] **Phase 4.1: API Service Testing** - Unit tests for backend services per TESTING.md (INSERTED)
 - [ ] **Phase 5: Folder System** - IPNS metadata, folder hierarchy, and operations
 - [ ] **Phase 6: File Browser UI** - Web interface for file management
 - [ ] **Phase 7: Multi-Device Sync** - IPNS polling and sync state management
@@ -112,10 +113,31 @@ Plans:
 - [x] 04-03-PLAN.md — Frontend file upload with encryption
 - [x] 04-04-PLAN.md — Frontend file download with decryption
 
+### Phase 4.1: API Service Testing (INSERTED)
+
+**Goal**: Backend services have comprehensive unit test coverage per TESTING.md
+**Depends on**: Phase 4
+**Requirements**: Per .planning/codebase/TESTING.md coverage thresholds
+**Success Criteria** (what must be TRUE):
+
+1. Auth services have 90% line coverage, 85% branch coverage
+2. Vault services have 90% line coverage, 85% branch coverage
+3. IPFS services have 85% line coverage, 80% branch coverage
+4. All controllers have 80% line coverage, 75% branch coverage
+5. Overall backend coverage meets 85% line, 80% branch minimum
+6. TDD workflow established for future development
+   **Plans**: 3 plans
+
+Plans:
+
+- [ ] 04.1-01-PLAN.md — Auth service unit tests (AuthService, TokenService, Web3AuthVerifierService, JwtStrategy)
+- [ ] 04.1-02-PLAN.md — Vault service unit tests (VaultService with QueryBuilder mocking)
+- [ ] 04.1-03-PLAN.md — Controller tests + Jest coverage thresholds configuration
+
 ### Phase 5: Folder System
 
 **Goal**: Users can organize files in encrypted folder hierarchy
-**Depends on**: Phase 4
+**Depends on**: Phase 4.1
 **Requirements**: FOLD-01, FOLD-02, FOLD-03, FOLD-04, FOLD-05, FOLD-06, FILE-04, FILE-05, API-05
 **Success Criteria** (what must be TRUE):
 
@@ -264,19 +286,20 @@ Plans:
 Phases execute in numeric order: 1 -> 2 -> 3 -> ... -> 10 (v1.0), then 11 (post-v1.0)
 Decimal phases (if any) execute between their surrounding integers.
 
-| Phase                | Plans Complete | Status      | Completed  |
-| -------------------- | -------------- | ----------- | ---------- |
-| 1. Foundation        | 3/3            | Complete    | 2026-01-20 |
-| 2. Authentication    | 4/4            | Complete    | 2026-01-20 |
-| 3. Core Encryption   | 3/3            | Complete    | 2026-01-20 |
-| 4. File Storage      | 4/4            | Complete    | 2026-01-20 |
-| 5. Folder System     | 0/4            | Not started | -          |
-| 6. File Browser UI   | 0/4            | Not started | -          |
-| 7. Multi-Device Sync | 0/3            | Not started | -          |
-| 8. TEE Integration   | 0/4            | Not started | -          |
-| 9. Desktop Client    | 0/5            | Not started | -          |
-| 10. Data Portability | 0/3            | Not started | -          |
-| 11. Security (MFA)   | 0/4            | Post-v1.0   | -          |
+| Phase                   | Plans Complete | Status      | Completed  |
+| ----------------------- | -------------- | ----------- | ---------- |
+| 1. Foundation           | 3/3            | Complete    | 2026-01-20 |
+| 2. Authentication       | 4/4            | Complete    | 2026-01-20 |
+| 3. Core Encryption      | 3/3            | Complete    | 2026-01-20 |
+| 4. File Storage         | 4/4            | Complete    | 2026-01-20 |
+| 4.1 API Service Testing | 0/3            | Not started | -          |
+| 5. Folder System        | 0/4            | Not started | -          |
+| 6. File Browser UI      | 0/4            | Not started | -          |
+| 7. Multi-Device Sync    | 0/3            | Not started | -          |
+| 8. TEE Integration      | 0/4            | Not started | -          |
+| 9. Desktop Client       | 0/5            | Not started | -          |
+| 10. Data Portability    | 0/3            | Not started | -          |
+| 11. Security (MFA)      | 0/4            | Post-v1.0   | -          |
 
 ---
 
@@ -289,4 +312,5 @@ _Phase 3 planned: 2026-01-20_
 _Phase 3 complete: 2026-01-20_
 _Phase 4 planned: 2026-01-20_
 _Phase 4 complete: 2026-01-20_
+_Phase 4.1 planned: 2026-01-20_
 _Total phases: 11 | Total plans: 41 | Depth: Comprehensive_
