@@ -1219,19 +1219,288 @@ jobs:
           files: ./tee/cobertura.xml
 ```
 
-### Pre-commit Hooks
+---
 
-```yaml
-# .husky/pre-commit
-#!/bin/sh
+## Automated Linting & Pre-commit Hooks
+
+### Overview
+
+All code must pass automated linting and testing before commit. Pre-commit hooks **enforce** these standards automatically - commits are blocked if checks fail.
+
+### Husky Setup
+
+```bash
+# Install husky
+npm install -D husky
+
+# Initialize husky
+npx husky init
+
+# Add pre-commit hook
+echo '#!/bin/sh
 . "$(dirname "$0")/_/husky.sh"
 
-# Run unit tests for changed files
-npm run test:changed
-
-# Lint staged files
+# Run lint-staged for linting and formatting
 npx lint-staged
+
+# Run tests for changed files
+npm run test:changed --if-present
+' > .husky/pre-commit
+
+# Add pre-push hook (runs full test suite)
+echo '#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+# Run full test suite before push
+npm run test:ci
+' > .husky/pre-push
+
+chmod +x .husky/pre-commit .husky/pre-push
 ```
+
+### lint-staged Configuration
+
+```javascript
+// lint-staged.config.js
+module.exports = {
+  // Backend TypeScript files
+  'apps/api/**/*.ts': [
+    'eslint --fix --max-warnings 0',
+    'prettier --write',
+    'jest --bail --findRelatedTests --passWithNoTests',
+  ],
+
+  // Frontend TypeScript/React files
+  'apps/web/**/*.{ts,tsx}': [
+    'eslint --fix --max-warnings 0',
+    'prettier --write',
+  ],
+
+  // Rust files (TEE)
+  'tee/**/*.rs': [
+    'cargo fmt --check',
+    'cargo clippy -- -D warnings',
+  ],
+
+  // JSON, YAML, Markdown
+  '**/*.{json,yaml,yml}': ['prettier --write'],
+  '**/*.md': ['prettier --write --prose-wrap always'],
+};
+```
+
+### ESLint Configuration (Backend)
+
+```javascript
+// apps/api/.eslintrc.js
+module.exports = {
+  parser: '@typescript-eslint/parser',
+  parserOptions: {
+    project: 'tsconfig.json',
+    tsconfigRootDir: __dirname,
+    sourceType: 'module',
+  },
+  plugins: ['@typescript-eslint/eslint-plugin', 'jest'],
+  extends: [
+    'plugin:@typescript-eslint/recommended',
+    'plugin:@typescript-eslint/recommended-requiring-type-checking',
+    'plugin:jest/recommended',
+    'prettier',
+  ],
+  root: true,
+  env: {
+    node: true,
+    jest: true,
+  },
+  ignorePatterns: ['.eslintrc.js', 'dist/', 'coverage/'],
+  rules: {
+    // Enforce strict typing
+    '@typescript-eslint/explicit-function-return-type': 'error',
+    '@typescript-eslint/explicit-module-boundary-types': 'error',
+    '@typescript-eslint/no-explicit-any': 'error',
+    '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+
+    // Security rules
+    '@typescript-eslint/no-unsafe-assignment': 'error',
+    '@typescript-eslint/no-unsafe-member-access': 'error',
+    '@typescript-eslint/no-unsafe-call': 'error',
+
+    // Code quality
+    'no-console': ['error', { allow: ['warn', 'error'] }],
+    'prefer-const': 'error',
+    'no-var': 'error',
+
+    // Jest rules
+    'jest/no-disabled-tests': 'error',
+    'jest/no-focused-tests': 'error',
+    'jest/valid-expect': 'error',
+  },
+};
+```
+
+### ESLint Configuration (Frontend)
+
+```javascript
+// apps/web/.eslintrc.js
+module.exports = {
+  extends: [
+    'react-app',
+    'react-app/jest',
+    'plugin:@typescript-eslint/recommended',
+    'plugin:jsx-a11y/recommended',
+    'prettier',
+  ],
+  plugins: ['@typescript-eslint', 'jsx-a11y'],
+  rules: {
+    // React best practices
+    'react/jsx-key': 'error',
+    'react/no-array-index-key': 'warn',
+    'react-hooks/rules-of-hooks': 'error',
+    'react-hooks/exhaustive-deps': 'warn',
+
+    // Accessibility
+    'jsx-a11y/alt-text': 'error',
+    'jsx-a11y/click-events-have-key-events': 'error',
+
+    // TypeScript
+    '@typescript-eslint/no-explicit-any': 'warn',
+    '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+  },
+};
+```
+
+### Prettier Configuration
+
+```json
+// .prettierrc
+{
+  "semi": true,
+  "singleQuote": true,
+  "trailingComma": "all",
+  "printWidth": 100,
+  "tabWidth": 2,
+  "useTabs": false,
+  "bracketSpacing": true,
+  "arrowParens": "always",
+  "endOfLine": "lf"
+}
+```
+
+### Pre-commit Hook Behavior
+
+| Check | Backend | Frontend | TEE | Blocks Commit |
+|-------|---------|----------|-----|---------------|
+| ESLint | Yes | Yes | N/A | **Yes** |
+| Prettier | Yes | Yes | N/A | **Yes** |
+| Cargo fmt | N/A | N/A | Yes | **Yes** |
+| Cargo clippy | N/A | N/A | Yes | **Yes** |
+| Unit tests (changed files) | Yes | No | Yes | **Yes** |
+| Type checking | Yes | Yes | Yes | **Yes** |
+
+### Pre-push Hook Behavior
+
+| Check | Scope | Blocks Push |
+|-------|-------|-------------|
+| Full unit test suite | All | **Yes** |
+| Integration tests | Backend | **Yes** |
+| Coverage thresholds | All | **Yes** |
+| Build verification | All | **Yes** |
+
+### Enforcement Rules
+
+1. **Zero Tolerance for Lint Errors**
+   - `--max-warnings 0` ensures warnings are treated as errors
+   - No `eslint-disable` comments without justification in PR
+
+2. **No Skipped Tests in Main**
+   - `jest/no-disabled-tests: error` prevents `.skip()` or `xit()`
+   - `jest/no-focused-tests: error` prevents `.only()` or `fit()`
+
+3. **Automated Fixes Applied**
+   - Fixable issues (formatting, import order) are auto-corrected
+   - Only unfixable issues block the commit
+
+4. **Related Tests Must Pass**
+   - `jest --findRelatedTests` runs tests affected by staged changes
+   - Prevents breaking changes from being committed
+
+### Bypassing Hooks (Emergency Only)
+
+```bash
+# Skip pre-commit hooks (use sparingly, requires justification in PR)
+git commit --no-verify -m "emergency fix: <description>"
+
+# Skip pre-push hooks
+git push --no-verify
+```
+
+**Warning:** Bypassing hooks requires explicit justification in the pull request. CI will still run all checks - bypassing locally only delays failure.
+
+### CI Verification
+
+Pre-commit checks are duplicated in CI to catch bypassed hooks:
+
+```yaml
+# .github/workflows/lint.yml
+name: Lint
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run ESLint
+        run: npm run lint -- --max-warnings 0
+
+      - name: Check Prettier formatting
+        run: npm run format:check
+
+      - name: TypeScript type check
+        run: npm run typecheck
+
+  lint-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --check
+        working-directory: ./tee
+
+      - name: Run Clippy
+        run: cargo clippy -- -D warnings
+        working-directory: ./tee
+```
+
+### Package.json Scripts
+
+```json
+{
+  "scripts": {
+    "lint": "eslint . --ext .ts,.tsx",
+    "lint:fix": "eslint . --ext .ts,.tsx --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test:changed": "jest --bail --findRelatedTests --passWithNoTests",
+    "test:ci": "jest --ci --coverage --runInBand",
+    "prepare": "husky"
+  }
+}
+```
+
+---
 
 ### Jest Configuration (Backend)
 
