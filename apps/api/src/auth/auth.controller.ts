@@ -1,14 +1,35 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, UseGuards, Request } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Body,
+  HttpCode,
+  HttpStatus,
+  UseGuards,
+  Request,
+  Res,
+  Req,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { Response, Request as ExpressRequest } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto, LoginResponseDto } from './dto/login.dto';
-import { RefreshDto, TokenResponseDto, LogoutResponseDto } from './dto/token.dto';
+import { TokenResponseDto, LogoutResponseDto } from './dto/token.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { User } from './entities/user.entity';
 
 interface RequestWithUser extends Request {
   user: User;
 }
+
+// Cookie configuration
+const REFRESH_TOKEN_COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'lax' as const,
+  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+  path: '/auth', // Only sent to auth endpoints
+};
 
 @ApiTags('Auth')
 @Controller('auth')
@@ -24,44 +45,49 @@ export class AuthController {
     type: LoginResponseDto,
   })
   @ApiResponse({ status: 401, description: 'Invalid Web3Auth token' })
-  async login(@Body() loginDto: LoginDto): Promise<LoginResponseDto> {
-    return this.authService.login(loginDto);
+  async login(
+    @Body() loginDto: LoginDto,
+    @Res({ passthrough: true }) res: Response
+  ): Promise<LoginResponseDto> {
+    const result = await this.authService.login(loginDto);
+
+    // Set refresh token in HTTP-only cookie
+    res.cookie('refresh_token', result.refreshToken, REFRESH_TOKEN_COOKIE_OPTIONS);
+
+    // Return only accessToken and isNewUser (refreshToken goes in cookie)
+    return {
+      accessToken: result.accessToken,
+      isNewUser: result.isNewUser,
+    };
   }
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Refresh access token using refresh token' })
+  @ApiOperation({ summary: 'Refresh access token using HTTP-only refresh token cookie' })
   @ApiResponse({
     status: 200,
     description: 'Tokens refreshed successfully',
     type: TokenResponseDto,
   })
   @ApiResponse({ status: 401, description: 'Invalid or expired refresh token' })
-  async refresh(@Body() refreshDto: RefreshDto): Promise<TokenResponseDto> {
-    // For refresh, we need to decode the access token to get userId
-    // Since the access token might be expired, we'll need to verify refresh token
-    // by checking against all user tokens and extract userId from matching token
-    // This is handled in TokenService.rotateRefreshToken
+  async refresh(
+    @Req() req: ExpressRequest,
+    @Res({ passthrough: true }) res: Response
+  ): Promise<TokenResponseDto> {
+    const refreshToken = req.cookies?.['refresh_token'];
+    if (!refreshToken) {
+      throw new UnauthorizedException('No refresh token');
+    }
 
-    // For now, refresh requires a valid (possibly expired) access token in header
-    // to identify the user. Alternative: Include userId in refresh DTO.
-    // Following spec: we verify refresh token against stored hashes for the user.
+    const result = await this.authService.refreshByToken(refreshToken);
 
-    // The spec says POST /auth/refresh accepts { refreshToken } and rotates.
-    // We need to find which user owns this token by checking all active tokens.
-    // This is O(n*m) but refresh tokens are short-lived and users have few active tokens.
+    // Set new refresh token in HTTP-only cookie (rotation)
+    res.cookie('refresh_token', result.refreshToken, REFRESH_TOKEN_COOKIE_OPTIONS);
 
-    // For simplicity, let's modify to accept userId in body as well,
-    // or search across all users. The second is more standard for refresh flows.
-
-    // Actually, looking at the plan more carefully:
-    // The plan says "rotates refresh token" which implies we know the user.
-    // Most auth flows either:
-    // 1. Include the access token (even if expired) to get user identity
-    // 2. Search all tokens to find the owner
-
-    // Let's implement option 2 for better UX (no expired token needed)
-    return this.authService.refreshByToken(refreshDto.refreshToken);
+    // Return only accessToken (new refreshToken goes in cookie)
+    return {
+      accessToken: result.accessToken,
+    };
   }
 
   @Post('logout')
@@ -75,7 +101,13 @@ export class AuthController {
     type: LogoutResponseDto,
   })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async logout(@Request() req: RequestWithUser): Promise<LogoutResponseDto> {
+  async logout(
+    @Request() req: RequestWithUser,
+    @Res({ passthrough: true }) res: Response
+  ): Promise<LogoutResponseDto> {
+    // Clear the refresh token cookie
+    res.clearCookie('refresh_token', { path: '/auth' });
+
     return this.authService.logout(req.user.id);
   }
 }

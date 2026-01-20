@@ -1,2 +1,2 @@
-export { LoginDto, LoginResponseDto, type LoginType } from './login.dto';
-export { RefreshDto, TokenResponseDto, LogoutResponseDto } from './token.dto';
+export { LoginDto, LoginResponseDto, type LoginType, type LoginServiceResult } from './login.dto';
+export { TokenResponseDto, LogoutResponseDto, type RefreshServiceResult } from './token.dto';

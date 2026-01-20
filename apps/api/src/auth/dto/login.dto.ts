@@ -31,14 +31,15 @@ export class LoginResponseDto {
   accessToken!: string;
 
   @ApiProperty({
-    description: 'Refresh token for obtaining new access tokens',
-    example: 'a1b2c3d4e5f6...',
-  })
-  refreshToken!: string;
-
-  @ApiProperty({
     description: 'Whether this is a new user registration',
     example: false,
   })
   isNewUser!: boolean;
 }
+
+// Internal type for service layer (includes refreshToken for cookie)
+export type LoginServiceResult = {
+  accessToken: string;
+  refreshToken: string;
+  isNewUser: boolean;
+};

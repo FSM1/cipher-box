@@ -7,8 +7,8 @@ import { AuthMethod } from './entities/auth-method.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { Web3AuthVerifierService } from './services/web3auth-verifier.service';
 import { TokenService } from './services/token.service';
-import { LoginDto, LoginResponseDto } from './dto/login.dto';
-import { TokenResponseDto, LogoutResponseDto } from './dto/token.dto';
+import { LoginDto, LoginServiceResult } from './dto/login.dto';
+import { RefreshServiceResult, LogoutResponseDto } from './dto/token.dto';
 
 @Injectable()
 export class AuthService {
@@ -23,7 +23,7 @@ export class AuthService {
     private refreshTokenRepository: Repository<RefreshToken>
   ) {}
 
-  async login(loginDto: LoginDto): Promise<LoginResponseDto> {
+  async login(loginDto: LoginDto): Promise<LoginServiceResult> {
     // 1. Verify Web3Auth token
     const payload = await this.web3AuthVerifier.verifyIdToken(
       loginDto.idToken,
@@ -80,7 +80,7 @@ export class AuthService {
     refreshToken: string,
     userId: string,
     publicKey: string
-  ): Promise<TokenResponseDto> {
+  ): Promise<RefreshServiceResult> {
     const tokens = await this.tokenService.rotateRefreshToken(refreshToken, userId, publicKey);
 
     return {
@@ -98,7 +98,7 @@ export class AuthService {
    * Refresh tokens by searching for the matching refresh token across all users.
    * This allows refresh without requiring the (possibly expired) access token.
    */
-  async refreshByToken(refreshToken: string): Promise<TokenResponseDto> {
+  async refreshByToken(refreshToken: string): Promise<RefreshServiceResult> {
     // Find all non-revoked, non-expired tokens
     const tokens = await this.refreshTokenRepository.find({
       where: {
