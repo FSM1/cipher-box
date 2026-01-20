@@ -247,6 +247,38 @@ describe('TokenService', () => {
         service.rotateRefreshToken('some-token', 'user-123', 'public-key')
       ).rejects.toThrow(UnauthorizedException);
     });
+
+    it('should continue checking tokens when argon2.verify returns false', async () => {
+      const correctToken = 'correct-token';
+      const correctTokenHash = await argon2.hash(correctToken);
+      const wrongTokenHash = await argon2.hash('wrong-token');
+
+      const tokens = [
+        {
+          id: 'token-1',
+          userId: 'user-123',
+          tokenHash: wrongTokenHash, // This won't match
+          expiresAt: new Date(Date.now() + 86400000),
+          revokedAt: null,
+        },
+        {
+          id: 'token-2',
+          userId: 'user-123',
+          tokenHash: correctTokenHash, // This will match
+          expiresAt: new Date(Date.now() + 86400000),
+          revokedAt: null,
+        },
+      ];
+
+      refreshTokenRepo.find.mockResolvedValue(tokens);
+      refreshTokenRepo.save.mockResolvedValue({ ...tokens[1], revokedAt: new Date() });
+
+      const result = await service.rotateRefreshToken(correctToken, 'user-123', 'public-key');
+
+      // Should find the second token and rotate successfully
+      expect(result.accessToken).toBeDefined();
+      expect(result.refreshToken).toBeDefined();
+    });
   });
 
   describe('revokeAllUserTokens', () => {
