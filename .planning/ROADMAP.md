@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Foundation** - Project scaffolding, CI/CD, development environment
 - [x] **Phase 2: Authentication** - Web3Auth integration with backend token management
 - [x] **Phase 3: Core Encryption** - Shared crypto module and vault initialization
-- [ ] **Phase 4: File Storage** - Upload/download encrypted files via IPFS relay
+- [x] **Phase 4: File Storage** - Upload/download encrypted files via IPFS relay
 - [ ] **Phase 5: Folder System** - IPNS metadata, folder hierarchy, and operations
 - [ ] **Phase 6: File Browser UI** - Web interface for file management
 - [ ] **Phase 7: Multi-Device Sync** - IPNS polling and sync state management
@@ -107,10 +107,10 @@ Plans:
 
 Plans:
 
-- [ ] 04-01-PLAN.md — Backend IPFS relay endpoints (add, unpin)
-- [ ] 04-02-PLAN.md — Backend vault and storage quota management
-- [ ] 04-03-PLAN.md — Frontend file upload with encryption
-- [ ] 04-04-PLAN.md — Frontend file download with decryption
+- [x] 04-01-PLAN.md — Backend IPFS relay endpoints (add, unpin)
+- [x] 04-02-PLAN.md — Backend vault and storage quota management
+- [x] 04-03-PLAN.md — Frontend file upload with encryption
+- [x] 04-04-PLAN.md — Frontend file download with decryption
 
 ### Phase 5: Folder System
 
@@ -269,7 +269,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 1. Foundation        | 3/3            | Complete    | 2026-01-20 |
 | 2. Authentication    | 4/4            | Complete    | 2026-01-20 |
 | 3. Core Encryption   | 3/3            | Complete    | 2026-01-20 |
-| 4. File Storage      | 0/4            | Planned     | -          |
+| 4. File Storage      | 4/4            | Complete    | 2026-01-20 |
 | 5. Folder System     | 0/4            | Not started | -          |
 | 6. File Browser UI   | 0/4            | Not started | -          |
 | 7. Multi-Device Sync | 0/3            | Not started | -          |
@@ -288,4 +288,5 @@ _Phase 2 complete: 2026-01-20_
 _Phase 3 planned: 2026-01-20_
 _Phase 3 complete: 2026-01-20_
 _Phase 4 planned: 2026-01-20_
+_Phase 4 complete: 2026-01-20_
 _Total phases: 11 | Total plans: 41 | Depth: Comprehensive_
