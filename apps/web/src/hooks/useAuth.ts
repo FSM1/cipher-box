@@ -118,7 +118,17 @@ export function useAuth() {
       setAccessToken(response.accessToken);
 
       // 6. Remember auth method for "Continue with..." UX
-      const authMethod = userInfo?.authConnection || 'unknown';
+      let authMethod: string;
+      if (isExternal) {
+        // External wallet: use connector name
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const connectorName = (web3Auth as any)?.connectedConnectorName;
+        authMethod = connectorName || 'external_wallet';
+      } else {
+        // Social login: check multiple fields for the auth provider
+        authMethod =
+          userInfo?.typeOfLogin || userInfo?.verifier || userInfo?.authConnection || 'google';
+      }
       setLastAuthMethod(authMethod);
 
       // 7. Close modal (Web3Auth SDK sometimes leaves it open)
