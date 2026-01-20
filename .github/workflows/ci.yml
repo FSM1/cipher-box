@@ -71,7 +71,9 @@ jobs:
           NODE_ENV: test
 
       - name: Format generated files
-        run: pnpm prettier --write packages/api-client/openapi.json apps/web/src/api/
+        run: |
+          pnpm eslint --fix apps/web/src/api/ || true
+          pnpm prettier --write packages/api-client/openapi.json apps/web/src/api/
 
       - name: Verify no uncommitted changes to generated files
         run: |
