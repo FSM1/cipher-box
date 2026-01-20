@@ -14,7 +14,7 @@ CipherBox v1.0 delivers zero-knowledge encrypted cloud storage with IPFS/IPNS an
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation** - Project scaffolding, CI/CD, development environment
-- [ ] **Phase 2: Authentication** - Web3Auth integration with backend token management
+- [x] **Phase 2: Authentication** - Web3Auth integration with backend token management
 - [ ] **Phase 3: Core Encryption** - Shared crypto module and vault initialization
 - [ ] **Phase 4: File Storage** - Upload/download encrypted files via IPFS relay
 - [ ] **Phase 5: Folder System** - IPNS metadata, folder hierarchy, and operations
@@ -23,6 +23,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 8: TEE Integration** - Auto-republishing via Phala Cloud
 - [ ] **Phase 9: Desktop Client** - Tauri app with FUSE mount for macOS
 - [ ] **Phase 10: Data Portability** - Vault export and documentation
+- [ ] **Phase 11: Security Enhancements** - Web3Auth MFA (post-v1.0)
 
 ## Phase Details
 
@@ -57,16 +58,17 @@ Plans:
 3. User can sign in with magic link and receive tokens
 4. User can sign in with external wallet (MetaMask) and receive tokens
 5. User session persists via refresh tokens (access token refresh works)
-6. User can link multiple auth methods to the same vault
+6. User can link multiple auth methods to the same vault (via Web3Auth grouped connections - no custom implementation needed)
 7. User can log out and all keys are cleared from memory
+8. External wallet users can authenticate via signature-derived keys (ADR-001)
    **Plans**: 4 plans
 
 Plans:
 
 - [x] 02-01-PLAN.md — Backend auth module with entities, JWT verification, and endpoints
 - [x] 02-02-PLAN.md — Web3Auth modal integration with auth state management
-- [ ] 02-03-PLAN.md — Complete login/logout flow with HTTP-only cookie tokens
-- [ ] 02-04-PLAN.md — Account linking and settings page
+- [x] 02-03-PLAN.md — Complete login/logout flow with HTTP-only cookie tokens
+- [x] 02-04-PLAN.md — Account linking and settings page
 
 ### Phase 3: Core Encryption
 
@@ -235,16 +237,37 @@ Plans:
 - [ ] 10-02: Export format documentation
 - [ ] 10-03: Final polish and edge case handling
 
+### Phase 11: Security Enhancements (Post-v1.0)
+
+**Goal**: Optional MFA for users requiring stronger authentication guarantees
+**Depends on**: Phase 10 (v1.0 complete)
+**Requirements**: None (post-v1.0 enhancement)
+**Success Criteria** (what must be TRUE):
+
+1. User can optionally enable MFA in settings
+2. User can enroll passkey/WebAuthn as second factor
+3. User can enroll authenticator app (TOTP) as second factor
+4. User can generate recovery phrase for account recovery
+5. MFA-enabled users prompted for second factor on login
+   **Plans**: TBD (see ADR-002)
+
+Plans:
+
+- [ ] 11-01: MFA enrollment UI in settings page
+- [ ] 11-02: Passkey/WebAuthn integration with Web3Auth tKey
+- [ ] 11-03: TOTP authenticator support
+- [ ] 11-04: Recovery phrase generation and recovery flows
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> ... -> 10
+Phases execute in numeric order: 1 -> 2 -> 3 -> ... -> 10 (v1.0), then 11 (post-v1.0)
 Decimal phases (if any) execute between their surrounding integers.
 
 | Phase                | Plans Complete | Status      | Completed  |
 | -------------------- | -------------- | ----------- | ---------- |
 | 1. Foundation        | 3/3            | Complete    | 2026-01-20 |
-| 2. Authentication    | 2/4            | In progress | -          |
+| 2. Authentication    | 4/4            | Complete    | 2026-01-20 |
 | 3. Core Encryption   | 0/3            | Not started | -          |
 | 4. File Storage      | 0/4            | Not started | -          |
 | 5. Folder System     | 0/4            | Not started | -          |
@@ -253,6 +276,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 8. TEE Integration   | 0/4            | Not started | -          |
 | 9. Desktop Client    | 0/5            | Not started | -          |
 | 10. Data Portability | 0/3            | Not started | -          |
+| 11. Security (MFA)   | 0/4            | Post-v1.0   | -          |
 
 ---
 
@@ -260,4 +284,5 @@ _Roadmap created: 2026-01-20_
 _Phase 1 planned: 2026-01-20_
 _Phase 1 complete: 2026-01-20_
 _Phase 2 planned: 2026-01-20_
-_Total phases: 10 | Total plans: 37 | Depth: Comprehensive_
+_Phase 2 complete: 2026-01-20_
+_Total phases: 11 | Total plans: 41 | Depth: Comprehensive_
