@@ -62,15 +62,11 @@ export function useAuth() {
       // 3. Handle key derivation based on login type
       if (isExternal) {
         // ADR-001: External wallet - derive keypair from signature
-        console.log('=== External Wallet Login ===');
-        console.log('Requesting signature for key derivation...');
-
         // Get wallet address first (needed for JWT verification on backend)
         walletAddress = (await getWalletAddress(connectedProvider)) ?? undefined;
         if (!walletAddress) {
           throw new Error('Failed to get wallet address');
         }
-        console.log('Wallet Address:', walletAddress);
 
         const derivedKeypair = await deriveKeypairForExternalWallet(connectedProvider);
         if (!derivedKeypair) {
@@ -83,19 +79,10 @@ export function useAuth() {
 
         // Use derived public key for backend authentication
         publicKey = getDerivedPublicKeyHex(derivedKeypair);
-
-        console.log('Key derivation successful');
-        console.log('Derived Public Key:', publicKey);
-        console.log('=============================');
       } else {
         // Social login - get public key directly from Web3Auth
         publicKey = await getPublicKey(connectedProvider);
         setIsExternalWallet(false);
-
-        console.log('=== Social Login ===');
-        console.log('Login Type:', loginType);
-        console.log('Public Key:', publicKey);
-        console.log('====================');
       }
 
       if (!idToken || !publicKey) {
