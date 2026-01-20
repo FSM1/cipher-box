@@ -17,7 +17,8 @@ CipherBox is a **technology demonstrator** for privacy-first encrypted cloud sto
 
 ## Finalized Specifications
 
-**Current Version:** 1.10.0
+<<<<<<< HEAD
+**Current Version:** 1.11.1
 **Status:** Finalized (2026-01-20)
 
 ### ⚠️ IMPORTANT: Do Not Edit Preliminary/Documentation Files
@@ -42,6 +43,9 @@ Always use consistent terminology:
 | `ipnsRecord` | IPNS entry (for data structure) |
 | `folderKey` | `subfolderKey` (unless specifically for subfolder) |
 | `fileKey` | `file_key` |
+| `keyEpoch` | `epoch`, `key_epoch` |
+| `encryptedIpnsPrivateKey` | `encrypted_ipns_key`, `ipns_key_encrypted` |
+| `teePublicKey` | `tee_pubkey`, `TEE_public_key` |
 
 ## Critical Security Rules
 
@@ -51,6 +55,8 @@ Always use consistent terminology:
 4. **Always** use ECIES for key wrapping
 5. **Always** use AES-256-GCM for content encryption
 6. The server NEVER has access to plaintext or unencrypted keys
+7. **Always** encrypt `ipnsPrivateKey` with TEE public key before sending for republishing
+8. TEE decrypts IPNS keys in hardware only, signs, and immediately discards
 
 ## Code Generation Guidelines
 
@@ -70,6 +76,8 @@ When generating code for CipherBox:
 - **Encryption:** Client-side only, server is zero-knowledge
 - **Sync:** IPNS polling (30s interval), no push infrastructure
 - **Desktop:** FUSE mount for transparent file access
+- **TEE Republishing:** Phala Cloud (primary) / AWS Nitro (fallback) for automatic IPNS republishing every 3 hours
+- **Key Epochs:** TEE public keys rotate with 4-week grace period for seamless migration
 
 ## Out of Scope (v1.0)
 

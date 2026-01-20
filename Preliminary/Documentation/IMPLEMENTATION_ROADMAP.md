@@ -1,5 +1,5 @@
 ---
-version: 1.10.0
+version: 1.11.0
 last_updated: 2026-01-20
 status: Finalized
 ai_context: Implementation roadmap for CipherBox v1.0. Includes week-by-week plan, deliverables, and testing milestones.
@@ -297,6 +297,22 @@ IPNS signing keys are managed entirely client-side; backend relays signed record
 
 ***
 
+## TEE IPNS Republishing (Week 6-12)
+
+### TEE Deployment Timeline
+
+| Week | Task | Details |
+|------|------|---------|
+| W6 | Client publish endpoint | Update /ipns/publish to accept encryptedIpnsPrivateKey and keyEpoch |
+| W7 | tee_key_state table + epoch cron | Add database table, hourly cron to sync TEE public keys from Phala |
+| W8 | Login returns TEE keys | Update /auth/login to return teeKeys in response |
+| W9 | Phala contract deployment | Deploy CipherBox TEE contract to Phala Cloud |
+| W10 | Republish cron | 3-hour republish cron job, batch processing (100 entries/batch) |
+| W11 | Retry + alerting | Exponential backoff retry, monitoring alerts (<99% success rate) |
+| W12 | E2E tests | Full integration tests for TEE republishing flow |
+
+***
+
 ## 📊 Milestones \& Go/No-Go
 
 ### **Week 4 End: Auth Complete** ✅
@@ -335,6 +351,15 @@ IPNS signing keys are managed entirely client-side; backend relays signed record
 ```
 
 
+### **Week 12 End: TEE Republishing Complete** ✅
+```
+[ ] IPNS records auto-republish every 3 hours
+[ ] Key rotation with 4-week grace period
+[ ] Fallback to AWS Nitro tested
+[ ] 99.9% republish success rate
+```
+
+
 ***
 
 ## 👥 Team Allocation (Total: 800 hours)
@@ -360,6 +385,8 @@ Frontend focuses on signing and relay integration.
 | IPFS/IPNS relay reliability | Medium | Week 2 relay endpoint load testing + retry strategy |
 | Security audit | Low | Continuous review, 2-week buffer |
 | Desktop complexity | Medium | macOS first, others v1.1 |
+| TEE provider issues | Medium | Phala primary, AWS Nitro fallback ready |
+| Key rotation complexity | Low | 4-week grace period, automatic migration |
 
 
 ***
@@ -381,6 +408,8 @@ You're right - context limit cut it off. Here's the **COMPLETE IMPLEMENTATION_RO
 | **FUSE Mount** | <3s startup |
 | **Uptime** | 99.5% |
 | **Test Coverage** | >85% |
+| **TEE Republish Success Rate** | 99.9% |
+| **Key Rotation Lag** | <5min |
 
 ***
 

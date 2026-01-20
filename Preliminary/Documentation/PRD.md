@@ -1,5 +1,5 @@
 ---
-version: 1.10.0
+version: 1.11.0
 last_updated: 2026-01-20
 status: Finalized
 ai_context: Product requirements for CipherBox. Tech demonstrator - not commercial. See TECHNICAL_ARCHITECTURE.md for implementation details, API_SPECIFICATION.md for backend contract, DATA_FLOWS.md for sequences.
@@ -11,7 +11,7 @@ ai_context: Product requirements for CipherBox. Tech demonstrator - not commerci
 **Type:** Technology Demonstrator
 **Status:** Specification Document
 **Created:** January 14, 2026
-**Last Updated:** January 19, 2026  
+**Last Updated:** January 20, 2026  
 
 ---
 
@@ -73,6 +73,7 @@ Core pillars:
 - **Decentralized storage:** Files stored on IPFS (peer-to-peer, immutable)
 - **Transparent access:** Web UI and desktop mount hide IPFS complexity
 - **Data portability:** Users can export vault and decrypt independently
+- **TEE-based availability:** IPNS records auto-republished via trusted execution environments, ensuring vault accessibility even when all user devices are offline
 
 ### 1.4 Target Audience
 
@@ -164,6 +165,7 @@ Core pillars:
 | E2E encryption | AES-256-GCM for files, ECIES for key wrapping |
 | Encryption mode metadata | `encryptionMode` field in file metadata (foundation for v1.1 streaming) |
 | Data portability | Vault export for independent recovery |
+| TEE IPNS republishing | Automatic IPNS record republishing via Phala TEE (3h interval) to prevent 24h expiry |
 
 ### 4.2 Out of Scope (v1.0)
 
@@ -213,6 +215,8 @@ To de-risk the key hierarchy, IPNS publishing, and file system flows, the projec
 | F3 | Files sync across devices within 30 seconds | Multi-device test |
 | F4 | Vault export enables independent recovery | Recovery test without backend |
 | F5 | Desktop FUSE mount shows decrypted file names | macOS integration test |
+| F6 | IPNS records auto-republish every 3 hours | TEE integration test |
+| F7 | Vault remains accessible when user is offline for 24h+ | Manual offline test |
 
 ### 5.2 Security Criteria
 
@@ -298,6 +302,8 @@ See [TECHNICAL_ARCHITECTURE.md](./TECHNICAL_ARCHITECTURE.md#acceptance-criteria)
 | **IPNS** | IPFS Name System. Mutable pointers to immutable IPFS content. |
 | **Web3Auth** | Distributed key derivation service. Derives deterministic ECDSA keypairs from various auth methods. |
 | **Zero-Knowledge** | Architecture where server has no knowledge of user data or encryption keys. |
+| **TEE** | Trusted Execution Environment. Hardware-isolated computing environment (Phala Cloud/AWS Nitro) that can decrypt IPNS keys in hardware for republishing without exposing plaintext keys. |
+| **Key Epoch** | TEE key rotation period. Keys rotate with 4-week grace period for seamless migration. |
 
 ---
 
@@ -340,6 +346,10 @@ A: IPFS provides redundancy (data on multiple nodes), no vendor lock-in (data ex
 **Q: What if Web3Auth becomes unavailable?**
 
 A: Users can export their Web3Auth private key and vault data. A future version could implement direct key import, bypassing Web3Auth entirely for recovery scenarios.
+
+**Q: What happens if I'm offline for more than 24 hours?**
+
+A: CipherBox uses TEE-based IPNS republishing to keep your vault accessible. Every 3 hours, a trusted execution environment (Phala Cloud or AWS Nitro) republishes your IPNS records without ever seeing your plaintext keys. Your IPNS private key is encrypted with the TEE's public key, decrypted only in hardware, used to sign the record, and immediately discarded. This means your vault stays accessible even if all your devices are offline for weeks.
 
 ---
 
