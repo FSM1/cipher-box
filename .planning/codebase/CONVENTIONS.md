@@ -4,9 +4,24 @@
 
 ## Naming Patterns
 
-**Files:**
-- TypeScript source files: `kebab-case.ts` or `camelCase.ts` (e.g., `gen-private-key.ts`, `index.ts`)
+**Files (NestJS Backend):**
+- All files: lowercase with hyphens (`kebab-case.ts`)
+- Pattern: `PascalCaseSuffix` class → `pascal-case.suffix.ts` file
+- Services: `[name].service.ts` (e.g., `vault.service.ts`)
+- Controllers: `[name].controller.ts` (e.g., `auth.controller.ts`)
+- Modules: `[name].module.ts` (e.g., `ipfs.module.ts`)
+- DTOs: `[action]-[entity].dto.ts` (e.g., `create-vault.dto.ts`)
+- Guards: `[name].guard.ts` (e.g., `jwt-auth.guard.ts`)
+- Pipes: `[name].pipe.ts` (e.g., `validation.pipe.ts`)
+- Unit tests: `[name].spec.ts` beside implementation
+- E2E tests: `[name].e2e-spec.ts` in `test/` directory
 - Single entry point per module directory: `index.ts`
+
+**Folders (NestJS Backend):**
+- Domain folders: singular (`user/`, `vault/`, `ipfs/`)
+- Reusable code folders: plural (`guards/`, `pipes/`, `utils/`, `filters/`)
+
+**Files (PoC/Scripts):**
 - Scripts use descriptive hyphenated names: `gen-private-key.ts`
 
 **Functions:**
@@ -23,6 +38,7 @@
 - PascalCase for types and interfaces: `FolderEntry`, `FileEntry`, `FolderMetadata`
 - Use `type` keyword (not interfaces) for data shapes
 - Suffixed with purpose: `Entry` for items, `State` for stateful objects, `Config` for configuration
+- Prefer the use of string literals over Typescript enums 
 
 **API Fields vs Database Columns (per project rules):**
 - API fields: camelCase (`publicKey`, `rootFolderKey`, `ipnsName`)
@@ -32,9 +48,9 @@
 
 **Formatting:**
 - No explicit formatter config detected (ESLint present but minimal config)
-- 4-space indentation in TypeScript files
+- 2-space indentation in TypeScript files
 - Semicolons required at statement ends
-- Double quotes for strings
+- single quotes for strings
 
 **Linting:**
 - ESLint 8.x configured via `package.json` script
@@ -104,7 +120,83 @@ main().catch((error) => {
 
 ## Logging
 
-**Framework:** Native `console` methods
+### Backend Server Logging (NestJS)
+
+**Framework:** Winston with structured JSON logging
+
+**Transport Configuration by Environment:**
+
+| Environment | Transports | Format |
+|-------------|------------|--------|
+| Local | Console (pretty-print) | Human-readable with colors |
+| Development | Console + Datadog/Splunk | JSON structured |
+| Production | Datadog/Splunk (no console) | JSON structured |
+
+**Log Levels:**
+- `error` - Critical failures requiring immediate attention
+- `warn` - Recoverable issues, degraded functionality
+- `info` - Significant business events (auth, API calls, IPFS operations)
+- `debug` - Detailed diagnostic information (dev/local only)
+
+**Structured Log Fields:**
+```typescript
+// Required fields in all log entries
+{
+  timestamp: string;      // ISO 8601 format
+  level: string;          // error, warn, info, debug
+  message: string;        // Human-readable description
+  service: 'cipherbox-api';
+  environment: string;    // local, development, production
+  correlationId?: string; // Request tracking across services
+}
+
+// Context-specific fields
+{
+  userId?: string;        // Authenticated user (never log keys!)
+  operation?: string;     // e.g., 'ipfs.add', 'vault.create'
+  duration?: number;      // Operation duration in ms
+  ipfsCid?: string;       // IPFS content identifier
+  error?: {               // Error details (errors only)
+    name: string;
+    message: string;
+    stack?: string;       // Dev/local only, never in prod logs
+  };
+}
+```
+
+**Security Requirements:**
+- NEVER log `privateKey`, `folderKey`, `fileKey`, or any encryption keys
+- NEVER log full request/response bodies containing sensitive data
+- Sanitize user input before logging
+- Stack traces only in local/dev environments
+
+**Winston Setup Example:**
+```typescript
+import { WinstonModule } from 'nest-winston';
+import * as winston from 'winston';
+
+// Configure based on NODE_ENV
+const transports: winston.transport[] = [];
+
+if (process.env.NODE_ENV === 'local') {
+  transports.push(new winston.transports.Console({
+    format: winston.format.combine(
+      winston.format.colorize(),
+      winston.format.simple(),
+    ),
+  }));
+} else {
+  // Dev/Prod: JSON format for log aggregation
+  transports.push(new winston.transports.Console({
+    format: winston.format.json(),
+  }));
+  // Add Datadog/Splunk transport here
+}
+```
+
+### PoC/Script Logging
+
+**Framework:** Native `console` methods (PoC only)
 
 **Patterns:**
 - Use `console.log()` for standard output and progress

@@ -67,9 +67,11 @@ CipherBox is a **technology demonstrator** in early development. Currently, only
 
 **Planned Production:**
 - `@web3auth/modal` - Auth and key derivation
-- `libsodium.js` - Ed25519 IPNS signing
 - `jose` - JWT verification (backend)
 - PostgreSQL client - Database access (backend)
+- `winston` - Structured logging framework (backend)
+- `nest-winston` - NestJS Winston integration (backend)
+- Datadog/Splunk transport - Log aggregation for dev/prod environments
 
 ## Configuration
 
