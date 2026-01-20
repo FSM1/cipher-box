@@ -59,14 +59,14 @@ Plans:
 5. User session persists via refresh tokens (access token refresh works)
 6. User can link multiple auth methods to the same vault
 7. User can log out and all keys are cleared from memory
-   **Plans**: TBD
+   **Plans**: 4 plans
 
 Plans:
 
-- [ ] 02-01: Backend auth endpoints (nonce, login, refresh, logout)
-- [ ] 02-02: Web3Auth modal integration in frontend
-- [ ] 02-03: Token management and auth state handling
-- [ ] 02-04: Account linking and multi-auth support
+- [ ] 02-01-PLAN.md — Backend auth module with entities, JWT verification, and endpoints
+- [ ] 02-02-PLAN.md — Web3Auth modal integration with auth state management
+- [ ] 02-03-PLAN.md — Complete login/logout flow with HTTP-only cookie tokens
+- [ ] 02-04-PLAN.md — Account linking and settings page
 
 ### Phase 3: Core Encryption
 
@@ -244,7 +244,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | Phase                | Plans Complete | Status      | Completed  |
 | -------------------- | -------------- | ----------- | ---------- |
 | 1. Foundation        | 3/3            | Complete    | 2026-01-20 |
-| 2. Authentication    | 0/4            | Not started | -          |
+| 2. Authentication    | 0/4            | Planned     | -          |
 | 3. Core Encryption   | 0/3            | Not started | -          |
 | 4. File Storage      | 0/4            | Not started | -          |
 | 5. Folder System     | 0/4            | Not started | -          |
@@ -259,4 +259,5 @@ Decimal phases (if any) execute between their surrounding integers.
 _Roadmap created: 2026-01-20_
 _Phase 1 planned: 2026-01-20_
 _Phase 1 complete: 2026-01-20_
+_Phase 2 planned: 2026-01-20_
 _Total phases: 10 | Total plans: 37 | Depth: Comprehensive_
