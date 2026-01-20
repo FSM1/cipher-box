@@ -86,8 +86,8 @@ Plans:
 
 Plans:
 
-- [ ] 03-01-PLAN.md — AES-256-GCM and ECIES encryption primitives
-- [ ] 03-02-PLAN.md — Ed25519 IPNS signing and key generation
+- [x] 03-01-PLAN.md — AES-256-GCM and ECIES encryption primitives
+- [x] 03-02-PLAN.md — Ed25519 IPNS signing and key generation
 - [ ] 03-03-PLAN.md — Vault initialization and key management
 
 ### Phase 4: File Storage
@@ -268,7 +268,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | -------------------- | -------------- | ----------- | ---------- |
 | 1. Foundation        | 3/3            | Complete    | 2026-01-20 |
 | 2. Authentication    | 4/4            | Complete    | 2026-01-20 |
-| 3. Core Encryption   | 0/3            | Planned     | -          |
+| 3. Core Encryption   | 2/3            | In progress | -          |
 | 4. File Storage      | 0/4            | Not started | -          |
 | 5. Folder System     | 0/4            | Not started | -          |
 | 6. File Browser UI   | 0/4            | Not started | -          |
