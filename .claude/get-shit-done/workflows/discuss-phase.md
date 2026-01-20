@@ -24,12 +24,14 @@ You are a thinking partner, not an interviewer. The user is the visionary — yo
 **User = founder/visionary. Claude = builder.**
 
 The user knows:
+
 - How they imagine it working
 - What it should look/feel like
 - What's essential vs nice-to-have
 - Specific behaviors or references they have in mind
 
 The user doesn't know (and shouldn't be asked):
+
 - Codebase patterns (researcher reads the code)
 - Technical risks (researcher identifies these)
 - Implementation approach (planner figures this out)
@@ -44,11 +46,13 @@ Ask about vision and implementation choices. Capture decisions for downstream ag
 The phase boundary comes from ROADMAP.md and is FIXED. Discussion clarifies HOW to implement what's scoped, never WHETHER to add new capabilities.
 
 **Allowed (clarifying ambiguity):**
+
 - "How should posts be displayed?" (layout, density, info shown)
 - "What happens on empty state?" (within the feature)
 - "Pull to refresh or manual?" (behavior choice)
 
 **Not allowed (scope creep):**
+
 - "Should we also add comments?" (new capability)
 - "What about search/filtering?" (new capability)
 - "Maybe include bookmarking?" (new capability)
@@ -56,6 +60,7 @@ The phase boundary comes from ROADMAP.md and is FIXED. Discussion clarifies HOW 
 **The heuristic:** Does this clarify how we implement what's already in the phase, or does it add a new capability that could be its own phase?
 
 **When user suggests scope creep:**
+
 ```
 "[Feature X] would be a new capability — that's its own phase.
 Want me to note it for the roadmap backlog?
@@ -99,11 +104,12 @@ Phase: "API documentation"
 **The key question:** What decisions would change the outcome that the user should weigh in on?
 
 **Claude handles these (don't ask):**
+
 - Technical implementation details
 - Architecture patterns
 - Performance optimization
 - Scope (roadmap defines this)
-</gray_area_identification>
+  </gray_area_identification>
 
 <process>
 
@@ -111,19 +117,60 @@ Phase: "API documentation"
 Phase number from argument (required).
 
 Load and validate:
+
 - Read `.planning/ROADMAP.md`
 - Find phase entry
 - Extract: number, name, description, status
 
 **If phase not found:**
+
 ```
 Phase [X] not found in roadmap.
 
 Use /gsd:progress to see available phases.
 ```
+
 Exit workflow.
 
-**If phase found:** Continue to analyze_phase.
+**If phase found:** Continue to create_phase_branch.
+</step>
+
+<step name="create_phase_branch">
+Create a dedicated branch for all phase work before any changes.
+
+```bash
+# Get current branch
+CURRENT_BRANCH=$(git branch --show-current)
+
+# Extract phase name from roadmap
+PHASE_NAME=$(grep -E "^\*?\*?Phase ${PHASE}:" .planning/ROADMAP.md | sed -E 's/.*Phase [0-9]+: //' | sed 's/\*//g' | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | cut -d'-' -f1-3)
+PADDED_PHASE=$(printf "%02d" ${PHASE})
+BRANCH_NAME="feat/phase-${PADDED_PHASE}-${PHASE_NAME}"
+
+# Check if already on this phase branch (resuming)
+if [ "$CURRENT_BRANCH" = "$BRANCH_NAME" ]; then
+  echo "Already on phase branch: $BRANCH_NAME"
+else
+  # Check if branch already exists
+  if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
+    echo "Switching to existing phase branch: $BRANCH_NAME"
+    git checkout "$BRANCH_NAME"
+  else
+    echo "Creating phase branch from main: $BRANCH_NAME"
+    git checkout main
+    git pull origin main
+    git checkout -b "$BRANCH_NAME"
+  fi
+fi
+```
+
+**Skip conditions:**
+
+- Already on the correct phase branch (resuming discussion)
+
+Report: "Working on branch: {branch_name}"
+
+Continue to check_existing.
 </step>
 
 <step name="check_existing">
@@ -137,6 +184,7 @@ ls .planning/phases/${PADDED_PHASE}-*/CONTEXT.md .planning/phases/${PADDED_PHASE
 
 **If exists:**
 Use AskUserQuestion:
+
 - header: "Existing context"
 - question: "Phase [X] already has context. What do you want to do?"
 - options:
@@ -165,6 +213,7 @@ Analyze the phase to identify gray areas worth discussing.
 **Output your analysis internally, then present to user.**
 
 Example analysis for "Post Feed" phase:
+
 ```
 Domain: Displaying posts from followed users
 Gray areas:
@@ -174,12 +223,14 @@ Gray areas:
 - Empty State: What shows when no posts exist
 - Content: What metadata displays (time, author, reactions count)
 ```
+
 </step>
 
 <step name="present_gray_areas">
 Present the domain boundary and gray areas to user.
 
 **First, state the boundary:**
+
 ```
 Phase [X]: [Name]
 Domain: [What this phase delivers — from your analysis]
@@ -189,6 +240,7 @@ We'll clarify HOW to implement this.
 ```
 
 **Then use AskUserQuestion (multiSelect: true):**
+
 - header: "Discuss"
 - question: "Which areas do you want to discuss for [phase name]?"
 - options: Generate 3-4 phase-specific gray areas, each formatted as:
@@ -200,6 +252,7 @@ We'll clarify HOW to implement this.
 **Examples by domain:**
 
 For "Post Feed" (visual feature):
+
 ```
 ☐ Layout style — Cards vs list vs timeline? Information density?
 ☐ Loading behavior — Infinite scroll or pagination? Pull to refresh?
@@ -208,6 +261,7 @@ For "Post Feed" (visual feature):
 ```
 
 For "Database backup CLI" (command-line tool):
+
 ```
 ☐ Output format — JSON, table, or plain text? Verbosity levels?
 ☐ Flag design — Short flags, long flags, or both? Required vs optional?
@@ -216,6 +270,7 @@ For "Database backup CLI" (command-line tool):
 ```
 
 For "Organize photo library" (organization task):
+
 ```
 ☐ Grouping criteria — By date, location, faces, or events?
 ☐ Duplicate handling — Keep best, keep all, or prompt each time?
@@ -236,6 +291,7 @@ Ask 4 questions per area before offering to continue or move on. Each answer oft
 **For each area:**
 
 1. **Announce the area:**
+
    ```
    Let's talk about [Area].
    ```
@@ -260,12 +316,14 @@ Ask 4 questions per area before offering to continue or move on. Each answer oft
    - options: "Create context" / "Revisit an area"
 
 **Question design:**
+
 - Options should be concrete, not abstract ("Cards" not "Option A")
 - Each answer should inform the next question
 - If user picks "Other", receive their input, reflect it back, confirm
 
 **Scope creep handling:**
 If user mentions something outside the phase domain:
+
 ```
 "[Feature] sounds like a new capability — that belongs in its own phase.
 I'll note it as a deferred idea.
@@ -314,13 +372,16 @@ fi
 ## Implementation Decisions
 
 ### [Category 1 that was discussed]
+
 - [Decision or preference captured]
 - [Another decision if applicable]
 
 ### [Category 2 that was discussed]
+
 - [Decision or preference captured]
 
 ### Claude's Discretion
+
 [Areas where user said "you decide" — note that Claude has flexibility here]
 
 </decisions>
@@ -345,8 +406,8 @@ fi
 
 ---
 
-*Phase: XX-name*
-*Context gathered: [date]*
+_Phase: XX-name_
+_Context gathered: [date]_
 ```
 
 Write file.
@@ -388,6 +449,7 @@ Created: .planning/phases/${PADDED_PHASE}-${SLUG}/${PADDED_PHASE}-CONTEXT.md
 
 ---
 ```
+
 </step>
 
 <step name="git_commit">
@@ -411,6 +473,7 @@ Confirm: "Committed: docs(${PADDED_PHASE}): capture phase context"
 </process>
 
 <success_criteria>
+
 - Phase validated against roadmap
 - Gray areas identified through intelligent analysis (not generic questions)
 - User selected which areas to discuss
@@ -419,4 +482,4 @@ Confirm: "Committed: docs(${PADDED_PHASE}): capture phase context"
 - CONTEXT.md captures actual decisions, not vague vision
 - Deferred ideas preserved for future phases
 - User knows next steps
-</success_criteria>
+  </success_criteria>
