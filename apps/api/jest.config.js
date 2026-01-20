@@ -9,4 +9,10 @@ module.exports = {
   collectCoverageFrom: ['**/*.(t|j)s'],
   coverageDirectory: '../coverage',
   testEnvironment: 'node',
+  // Transform ESM modules like jose
+  transformIgnorePatterns: ['/node_modules/(?!(jose)/)'],
+  // Mock jose module for tests that don't directly test Web3AuthVerifierService
+  moduleNameMapper: {
+    '^jose$': '<rootDir>/../test/__mocks__/jose.ts',
+  },
 };
