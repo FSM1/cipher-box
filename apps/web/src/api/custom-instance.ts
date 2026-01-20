@@ -6,8 +6,9 @@ export const customInstance = async <T>(config: {
   params?: Record<string, string>;
   data?: unknown;
   headers?: Record<string, string>;
+  signal?: AbortSignal;
 }): Promise<T> => {
-  const { url, method, params, data, headers } = config;
+  const { url, method, params, data, headers, signal } = config;
 
   const queryString = params
     ? '?' + new URLSearchParams(params).toString()
@@ -20,6 +21,7 @@ export const customInstance = async <T>(config: {
       ...headers,
     },
     body: data ? JSON.stringify(data) : undefined,
+    signal,
   });
 
   if (!response.ok) {
