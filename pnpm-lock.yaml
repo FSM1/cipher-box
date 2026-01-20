@@ -149,6 +149,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@cipherbox/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@noble/secp256k1':
         specifier: ^3.0.0
         version: 3.0.0
