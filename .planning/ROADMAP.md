@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation** - Project scaffolding, CI/CD, development environment
 - [x] **Phase 2: Authentication** - Web3Auth integration with backend token management
-- [ ] **Phase 3: Core Encryption** - Shared crypto module and vault initialization
+- [x] **Phase 3: Core Encryption** - Shared crypto module and vault initialization
 - [ ] **Phase 4: File Storage** - Upload/download encrypted files via IPFS relay
 - [ ] **Phase 5: Folder System** - IPNS metadata, folder hierarchy, and operations
 - [ ] **Phase 6: File Browser UI** - Web interface for file management
@@ -88,7 +88,7 @@ Plans:
 
 - [x] 03-01-PLAN.md — AES-256-GCM and ECIES encryption primitives
 - [x] 03-02-PLAN.md — Ed25519 IPNS signing and key generation
-- [ ] 03-03-PLAN.md — Vault initialization and key management
+- [x] 03-03-PLAN.md — Vault initialization and key management
 
 ### Phase 4: File Storage
 
@@ -268,7 +268,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | -------------------- | -------------- | ----------- | ---------- |
 | 1. Foundation        | 3/3            | Complete    | 2026-01-20 |
 | 2. Authentication    | 4/4            | Complete    | 2026-01-20 |
-| 3. Core Encryption   | 2/3            | In progress | -          |
+| 3. Core Encryption   | 3/3            | Complete    | 2026-01-20 |
 | 4. File Storage      | 0/4            | Not started | -          |
 | 5. Folder System     | 0/4            | Not started | -          |
 | 6. File Browser UI   | 0/4            | Not started | -          |
@@ -286,4 +286,5 @@ _Phase 1 complete: 2026-01-20_
 _Phase 2 planned: 2026-01-20_
 _Phase 2 complete: 2026-01-20_
 _Phase 3 planned: 2026-01-20_
+_Phase 3 complete: 2026-01-20_
 _Total phases: 11 | Total plans: 41 | Depth: Comprehensive_
