@@ -1,5 +1,4 @@
 ---
-=======
 version: 1.11.1
 last_updated: 2026-01-20
 status: Finalized
