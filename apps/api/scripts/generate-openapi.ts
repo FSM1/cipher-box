@@ -20,6 +20,8 @@ import { Web3AuthVerifierService } from '../src/auth/services/web3auth-verifier.
 import { TokenService } from '../src/auth/services/token.service';
 import { IpfsController } from '../src/ipfs/ipfs.controller';
 import { IpfsService } from '../src/ipfs/ipfs.service';
+import { VaultController } from '../src/vault/vault.controller';
+import { VaultService } from '../src/vault/vault.service';
 
 // Mock providers for OpenAPI generation - these won't be called
 const mockRepository = {
@@ -49,7 +51,7 @@ const mockConfigService = {
 
 // Minimal module for OpenAPI generation - no database connection needed
 @Module({
-  controllers: [AppController, AuthController, IpfsController],
+  controllers: [AppController, AuthController, IpfsController, VaultController],
   providers: [
     AppService,
     {
@@ -66,6 +68,10 @@ const mockConfigService = {
     },
     {
       provide: IpfsService,
+      useValue: {},
+    },
+    {
+      provide: VaultService,
       useValue: {},
     },
     mockRepository,
