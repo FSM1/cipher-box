@@ -2,16 +2,21 @@
  * @cipherbox/crypto
  *
  * Shared cryptographic utilities for CipherBox.
- * Provides AES-256-GCM encryption, ECIES key wrapping, and Ed25519 signing.
+ * Provides AES-256-GCM encryption, ECIES key wrapping, Ed25519 signing,
+ * vault initialization, and key hierarchy management.
  *
  * Security principles:
  * - All operations use Web Crypto API or audited libraries (@noble/*, eciesjs)
  * - Error messages are generic to prevent oracle attacks
  * - Keys are Uint8Array - never convert to/from strings for sensitive data
+ * - Private keys exist in memory only - never persisted to storage
  *
  * @example
  * ```typescript
  * import {
+ *   initializeVault,
+ *   encryptVaultKeys,
+ *   decryptVaultKeys,
  *   generateFileKey,
  *   generateIv,
  *   encryptAesGcm,
@@ -19,6 +24,10 @@
  *   wrapKey,
  *   unwrapKey
  * } from '@cipherbox/crypto';
+ *
+ * // Initialize vault on first sign-in
+ * const vault = await initializeVault();
+ * const encrypted = await encryptVaultKeys(vault, userPublicKey);
  *
  * // Encrypt file content
  * const fileKey = generateFileKey();
@@ -34,7 +43,19 @@
  * ```
  */
 
-export const CRYPTO_VERSION = '0.1.0';
+export const CRYPTO_VERSION = '0.2.0';
+
+// Vault initialization and key management
+export {
+  initializeVault,
+  encryptVaultKeys,
+  decryptVaultKeys,
+  type VaultInit,
+  type EncryptedVaultKeys,
+} from './vault';
+
+// Key hierarchy and derivation
+export { deriveKey, deriveContextKey, generateFolderKey, type DeriveKeyParams } from './keys';
 
 // AES-256-GCM symmetric encryption
 export { encryptAesGcm, decryptAesGcm } from './aes';
