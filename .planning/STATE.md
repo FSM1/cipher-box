@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 ## Current Position
 
 Phase: 2 of 10 (Authentication)
-Plan: 2 of 4 in current phase
+Plan: 2 of 4 in current phase (02-01, 02-02 complete)
 Status: In progress
-Last activity: 2026-01-20 - Completed 02-02-PLAN.md
+Last activity: 2026-01-20 - Completed 02-01-PLAN.md (Task 3)
 
-Progress: [#####.....] 14%
+Progress: [#####.....] 16%
 
 ## Performance Metrics
 
@@ -22,19 +22,19 @@ Progress: [#####.....] 14%
 
 - Total plans completed: 5
 - Average duration: 5 min
-- Total execution time: 0.42 hours
+- Total execution time: 0.45 hours
 
 **By Phase:**
 
 | Phase             | Plans | Total  | Avg/Plan |
 | ----------------- | ----- | ------ | -------- |
 | 01-foundation     | 3/3   | 20 min | 7 min    |
-| 02-authentication | 2/4   | 5 min  | 2.5 min  |
+| 02-authentication | 2/4   | 8 min  | 4 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 12m, 3m, 5m, 2m, 3m
-- Trend: Fast (02-01/02-02 had some work pre-done)
+- Last 5 plans: 12m, 3m, 5m, 3m, 5m
+- Trend: Consistent (02-01 task 3 added 5min)
 
 _Updated after each plan completion_
 
@@ -59,6 +59,9 @@ Recent decisions affecting current work:
 | Detect social vs wallet via authConnection          | 02-02 | Web3Auth v10 uses authConnection, not deprecated typeOfLogin         |
 | Auth token in memory only (Zustand)                 | 02-02 | XSS prevention - no localStorage for sensitive tokens                |
 | Token refresh queue pattern                         | 02-02 | Handle concurrent 401s without race conditions                       |
+| Dual JWKS endpoints for Web3Auth                    | 02-01 | Different endpoints for social vs external wallet logins             |
+| Refresh tokens searchable without access token      | 02-01 | Better UX - can refresh even with expired access token               |
+| Token rotation on every refresh                     | 02-01 | Security - prevents token reuse attacks                              |
 
 ### Pending Todos
 
@@ -77,10 +80,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-20
-Stopped at: Completed 02-02-PLAN.md
+Stopped at: Completed 02-01-PLAN.md (all 3 tasks)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-20 after 02-02 completion_
+_Last updated: 2026-01-20 after 02-01 completion_
