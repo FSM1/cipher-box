@@ -34,7 +34,7 @@ This is **not a preliminary design document**—it's a **complete blueprint** wi
 2. **README.md** - Tech stack & architecture overview
 
 
-### Specifications (`Documentation/`)
+### Specifications (`00-Preliminary-R&D/Documentation/`)
 3. **IMPLEMENTATION_ROADMAP.md** - 12-week development timeline
 4. **PRD.md** - Product requirements, user journeys, scope
 5. **TECHNICAL_ARCHITECTURE.md** - Encryption, key hierarchy, system design
@@ -44,7 +44,7 @@ This is **not a preliminary design document**—it's a **complete blueprint** wi
 
 ***
 
-## 🎯 5 Key Architectural Decisions
+## 🎯 6 Key Architectural Decisions
 
 ### 1. **Web3Auth for Key Derivation**
 
@@ -77,6 +77,23 @@ Signed IPNS records relayed by CipherBox API; no direct client publishing
 
 Server stores **only encrypted keys** - never plaintext
 
+### 6. **TEE-Based IPNS Republishing**
+
+**Automatic IPNS record refresh via Trusted Execution Environment**
+
+```
+Problem: IPNS records expire after ~24 hours
+Solution: TEE republishes every 3 hours, even when all devices are offline
+
+Flow:
+1. Client encrypts ipnsPrivateKey with TEE public key (ECIES)
+2. Backend stores encrypted key (cannot decrypt without TEE hardware)
+3. TEE cron decrypts in hardware, signs new IPNS record, zeroes key immediately
+4. Zero-knowledge preserved: TEE keys exist in memory only for milliseconds
+```
+
+**Providers:** Phala Cloud (primary) / AWS Nitro (fallback)
+
 ***
 
 ## 🧪 Console PoC Harness (Validation-First)
@@ -95,6 +112,7 @@ To de-risk the crypto and IPFS/IPNS assumptions, a single-user Node.js console h
 - Web UI (React)
 - Desktop mount (macOS FUSE)
 - Multi-device sync (IPNS polling)
+- TEE-based IPNS republishing (Phala Cloud / AWS Nitro)
 - Vault export (portability)
 - **Zero-knowledge** (private keys never on server)
 
@@ -125,6 +143,7 @@ To de-risk the crypto and IPFS/IPNS assumptions, a single-user Node.js console h
 | **Storage** | IPFS via Pinata (v1) |
 | **Database** | PostgreSQL |
 | **Desktop** | Tauri/Electron + FUSE |
+| **TEE** | Phala Cloud (primary) / AWS Nitro (fallback) |
 
 
 ***
@@ -147,6 +166,7 @@ Week 11-12: Testing & Launch
 
 ✅ **Zero-Knowledge**: Private keys never on server
 ✅ **E2E Encryption**: AES-256-GCM + ECIES secp256k1
+✅ **TEE Republishing**: IPNS keys decrypted only in hardware enclaves (Phala/Nitro)
 ✅ **Data Portability**: Export vault, recover independently
 ✅ **No Tracking**: No analytics, no telemetry
 ✅ **GDPR Ready**: Privacy policy framework included

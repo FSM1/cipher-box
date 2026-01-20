@@ -24,8 +24,9 @@
 - **AES-256-GCM + ECIES secp256k1** for layered E2E encryption
 - **React web UI** + **FUSE desktop mount** (macOS v1)
 - **Automatic multi-device sync** via IPNS polling
+- **TEE-based IPNS republishing** via Phala Cloud / AWS Nitro (zero-knowledge)
 
-**PoC Focus:** A single-user, console-based harness validates IPFS/IPNS flows end-to-end without Web3Auth or backend dependencies. Each run performs a full file/folder flow, verifies correctness via IPNS resolution, measures propagation delay, and unpins all created CIDs during teardown.
+**PoC Focus:** A single-user, console-based harness validates IPFS/IPNS flows end-to-end without Web3Auth or backend dependencies. Each run performs a full file/folder flow, verifies correctness via IPNS resolution, measures propagation delay, and unpins all created CIDs during teardown. The PoC was purely meant to validate the core assumption that the file system operations would work as intended and all encryption and decryption flows on IPFS/IPNS were sound. It is not production-ready code, and lacks lots of the actual flows defined in the V1 scope.
 
 **Target:** Developers and technical users interested in cryptography, IPFS, and privacy-preserving architectures.
 
@@ -58,6 +59,7 @@ Encryption: AES-256-GCM files + ECIES key wrapping
 Web UI: React file browser, drag-drop, folder ops
 Desktop: macOS FUSE mount + background sync
 Sync: IPNS polling (~30s eventual consistency)
+TEE Republishing: Phala Cloud (primary) / AWS Nitro (fallback), every 3h
 Portability: Vault export + independent recovery
 ```
 
@@ -83,6 +85,7 @@ v2: File versioning, folder sharing, search
 | **Key Derivation** | Web3Auth Network | Deterministic across auth methods |
 | **Storage** | IPFS via Pinata | Redundant, decentralized |
 | **Desktop** | Tauri/Electron + FUSE | Transparent file access |
+| **TEE** | Phala Cloud / AWS Nitro | Zero-knowledge IPNS republishing |
 
 
 ***
@@ -99,13 +102,17 @@ Web3Auth Network (Key Derivation)
 User Device ← Vault Data ← PostgreSQL
         ↓ Encrypted Keys
 IPFS (Pinata) ← Encrypted Files
+        ↑
+TEE (Phala/Nitro) ← IPNS Republish (every 3h)
 ```
 
-**Key Property:** Same user + any auth method → same keypair → same vault
+**Key Properties:**
+- Same user + any auth method → same keypair → same vault
+- TEE republishes IPNS records even when all devices are offline
 
 ***
 
-## 📊 5 Key Decisions
+## 📊 6 Key Decisions
 
 ### 1. **Web3Auth for Key Derivation**
 
@@ -140,6 +147,16 @@ Root IPNS → Folder1 IPNS → Folder2 IPNS (modular sharing-ready)
 ```
 Server holds: Encrypted root key only
 Client holds: Private key (RAM only)
+```
+
+
+### 6. **TEE-Based IPNS Republishing**
+
+```
+IPNS records expire after ~24h → TEE republishes every 3h
+Client encrypts ipnsPrivateKey with TEE public key (ECIES)
+TEE decrypts in hardware, signs, zeroes key immediately
+Providers: Phala Cloud (primary) / AWS Nitro (fallback)
 ```
 
 
@@ -179,6 +196,7 @@ Team: 3 people | Total: 12 weeks
 ```
 ✅ Zero-Knowledge: Private keys never on server
 ✅ E2E Encryption: AES-256-GCM + ECIES secp256k1
+✅ TEE Republishing: IPNS keys decrypted only in hardware enclaves
 ✅ Data Portability: Export vault, recover independently
 ✅ No Tracking: No analytics/telemetry
 ✅ Threat Model: See TECHNICAL_ARCHITECTURE.md
