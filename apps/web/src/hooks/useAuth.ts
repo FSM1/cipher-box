@@ -16,6 +16,7 @@ export function useAuth() {
     disconnect,
     getIdToken,
     getPublicKey,
+    getWalletAddress,
     getLoginType,
     isSocialLogin,
     deriveKeypairForExternalWallet,
@@ -56,12 +57,20 @@ export function useAuth() {
       const isExternal = !isSocialLogin();
 
       let publicKey: string | null = null;
+      let walletAddress: string | undefined = undefined;
 
       // 3. Handle key derivation based on login type
       if (isExternal) {
         // ADR-001: External wallet - derive keypair from signature
         console.log('=== External Wallet Login ===');
         console.log('Requesting signature for key derivation...');
+
+        // Get wallet address first (needed for JWT verification on backend)
+        walletAddress = (await getWalletAddress(connectedProvider)) ?? undefined;
+        if (!walletAddress) {
+          throw new Error('Failed to get wallet address');
+        }
+        console.log('Wallet Address:', walletAddress);
 
         const derivedKeypair = await deriveKeypairForExternalWallet(connectedProvider);
         if (!derivedKeypair) {
@@ -98,8 +107,11 @@ export function useAuth() {
         idToken,
         publicKey,
         loginType,
-        // ADR-001: Include derivation version for external wallet users
-        ...(isExternal && { derivationVersion: getDerivationVersion() }),
+        // ADR-001: Include wallet address and derivation version for external wallet users
+        ...(isExternal && {
+          walletAddress,
+          derivationVersion: getDerivationVersion(),
+        }),
       });
 
       // 5. Store access token (refresh token is in HTTP-only cookie)
@@ -131,6 +143,7 @@ export function useAuth() {
     connect,
     getIdToken,
     getPublicKey,
+    getWalletAddress,
     getLoginType,
     isSocialLogin,
     deriveKeypairForExternalWallet,

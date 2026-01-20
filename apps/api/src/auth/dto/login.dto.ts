@@ -25,6 +25,13 @@ export class LoginDto {
 
   @ApiPropertyOptional({
     description:
+      'Wallet address for external wallet users. Used for JWT verification. The publicKey field contains the derived key.',
+    example: '0x742d35Cc6634C0532925a3b844Bc9e7595f...',
+  })
+  walletAddress?: string;
+
+  @ApiPropertyOptional({
+    description:
       'Key derivation version for external wallet users (ADR-001). Required for external_wallet loginType.',
     example: 1,
     minimum: 1,

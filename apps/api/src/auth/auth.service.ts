@@ -26,9 +26,15 @@ export class AuthService {
 
   async login(loginDto: LoginDto): Promise<LoginServiceResult> {
     // 1. Verify Web3Auth token
+    // For external wallets, verify against wallet address (from JWT), not derived public key
+    const verificationKey =
+      loginDto.loginType === 'external_wallet' && loginDto.walletAddress
+        ? loginDto.walletAddress
+        : loginDto.publicKey;
+
     const payload = await this.web3AuthVerifier.verifyIdToken(
       loginDto.idToken,
-      loginDto.publicKey,
+      verificationKey,
       loginDto.loginType
     );
 

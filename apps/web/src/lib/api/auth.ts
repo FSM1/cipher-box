@@ -4,6 +4,8 @@ type LoginRequest = {
   idToken: string;
   publicKey: string;
   loginType: 'social' | 'external_wallet';
+  /** ADR-001: Wallet address for external wallet JWT verification */
+  walletAddress?: string;
   /** ADR-001: Key derivation version for external wallet users */
   derivationVersion?: number;
 };
