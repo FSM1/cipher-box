@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import * as argon2 from 'argon2';
@@ -9,6 +9,7 @@ import { Web3AuthVerifierService } from './services/web3auth-verifier.service';
 import { TokenService } from './services/token.service';
 import { LoginDto, LoginServiceResult } from './dto/login.dto';
 import { RefreshServiceResult, LogoutResponseDto } from './dto/token.dto';
+import { LinkMethodDto, AuthMethodResponseDto } from './dto/link-method.dto';
 
 @Injectable()
 export class AuthService {
@@ -143,5 +144,100 @@ export class AuthService {
       accessToken: newTokens.accessToken,
       refreshToken: newTokens.refreshToken,
     };
+  }
+
+  /**
+   * Get all linked auth methods for a user.
+   */
+  async getLinkedMethods(userId: string): Promise<AuthMethodResponseDto[]> {
+    const methods = await this.authMethodRepository.find({
+      where: { userId },
+      order: { createdAt: 'ASC' },
+    });
+
+    return methods.map((method) => ({
+      id: method.id,
+      type: method.type,
+      identifier: method.identifier,
+      lastUsedAt: method.lastUsedAt,
+      createdAt: method.createdAt,
+    }));
+  }
+
+  /**
+   * Link a new auth method to an existing user account.
+   * CRITICAL: The new auth method's publicKey must match the user's publicKey
+   * (ensuring both auth methods derive the same keypair via Web3Auth group connections)
+   */
+  async linkMethod(userId: string, linkDto: LinkMethodDto): Promise<AuthMethodResponseDto[]> {
+    // 1. Get the user to find their publicKey
+    const user = await this.userRepository.findOne({ where: { id: userId } });
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    // 2. Verify the new idToken with Web3AuthVerifierService
+    // This also validates that the new token's publicKey matches the user's publicKey
+    const payload = await this.web3AuthVerifier.verifyIdToken(
+      linkDto.idToken,
+      user.publicKey,
+      linkDto.loginType
+    );
+
+    // 3. Extract type and identifier from token payload
+    const authMethodType = this.web3AuthVerifier.extractAuthMethodType(payload, linkDto.loginType);
+    const identifier = this.web3AuthVerifier.extractIdentifier(payload);
+
+    // 4. Check if this exact method (type + identifier) is already linked
+    const existingMethod = await this.authMethodRepository.findOne({
+      where: {
+        userId,
+        type: authMethodType,
+        identifier,
+      },
+    });
+
+    if (existingMethod) {
+      throw new BadRequestException('This auth method is already linked to your account');
+    }
+
+    // 5. Create new AuthMethod entity
+    await this.authMethodRepository.save({
+      userId,
+      type: authMethodType,
+      identifier,
+      lastUsedAt: new Date(),
+    });
+
+    // 6. Return updated list of methods
+    return this.getLinkedMethods(userId);
+  }
+
+  /**
+   * Unlink an auth method from a user account.
+   * Cannot unlink the last remaining auth method.
+   */
+  async unlinkMethod(userId: string, methodId: string): Promise<void> {
+    // 1. Find the method by id and userId
+    const method = await this.authMethodRepository.findOne({
+      where: { id: methodId, userId },
+    });
+
+    if (!method) {
+      throw new BadRequestException('Auth method not found');
+    }
+
+    // 2. Count remaining methods for user
+    const methodCount = await this.authMethodRepository.count({
+      where: { userId },
+    });
+
+    // 3. Cannot unlink if only 1 method remains
+    if (methodCount <= 1) {
+      throw new BadRequestException('Cannot unlink your last auth method');
+    }
+
+    // 4. Delete the method
+    await this.authMethodRepository.remove(method);
   }
 }

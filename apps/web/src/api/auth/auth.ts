@@ -5,15 +5,32 @@
  * Zero-knowledge encrypted cloud storage API
  * OpenAPI spec version: 0.1.0
  */
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import type {
+  DataTag,
+  DefinedInitialDataOptions,
+  DefinedUseQueryResult,
   MutationFunction,
   QueryClient,
+  QueryFunction,
+  QueryKey,
+  UndefinedInitialDataOptions,
   UseMutationOptions,
   UseMutationResult,
+  UseQueryOptions,
+  UseQueryResult,
 } from '@tanstack/react-query';
 
-import type { LoginDto, LoginResponseDto, LogoutResponseDto, TokenResponseDto } from '.././models';
+import type {
+  AuthMethodResponseDto,
+  LinkMethodDto,
+  LoginDto,
+  LoginResponseDto,
+  LogoutResponseDto,
+  TokenResponseDto,
+  UnlinkMethodDto,
+  UnlinkMethodResponseDto,
+} from '.././models';
 
 import { customInstance } from '.././custom-instance';
 
@@ -216,6 +233,277 @@ export const useAuthControllerLogout = <TError = void, TContext = unknown>(
   queryClient?: QueryClient
 ): UseMutationResult<Awaited<ReturnType<typeof authControllerLogout>>, TError, void, TContext> => {
   const mutationOptions = getAuthControllerLogoutMutationOptions(options);
+
+  return useMutation(mutationOptions, queryClient);
+};
+/**
+ * @summary Get all linked auth methods for the current user
+ */
+export const authControllerGetMethods = (signal?: AbortSignal) => {
+  return customInstance<AuthMethodResponseDto[]>({ url: `/auth/methods`, method: 'GET', signal });
+};
+
+export const getAuthControllerGetMethodsQueryKey = () => {
+  return [`/auth/methods`] as const;
+};
+
+export const getAuthControllerGetMethodsQueryOptions = <
+  TData = Awaited<ReturnType<typeof authControllerGetMethods>>,
+  TError = void,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<Awaited<ReturnType<typeof authControllerGetMethods>>, TError, TData>
+  >;
+}) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getAuthControllerGetMethodsQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof authControllerGetMethods>>> = ({
+    signal,
+  }) => authControllerGetMethods(signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof authControllerGetMethods>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type AuthControllerGetMethodsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof authControllerGetMethods>>
+>;
+export type AuthControllerGetMethodsQueryError = void;
+
+export function useAuthControllerGetMethods<
+  TData = Awaited<ReturnType<typeof authControllerGetMethods>>,
+  TError = void,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof authControllerGetMethods>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof authControllerGetMethods>>,
+          TError,
+          Awaited<ReturnType<typeof authControllerGetMethods>>
+        >,
+        'initialData'
+      >;
+  },
+  queryClient?: QueryClient
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useAuthControllerGetMethods<
+  TData = Awaited<ReturnType<typeof authControllerGetMethods>>,
+  TError = void,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof authControllerGetMethods>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof authControllerGetMethods>>,
+          TError,
+          Awaited<ReturnType<typeof authControllerGetMethods>>
+        >,
+        'initialData'
+      >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useAuthControllerGetMethods<
+  TData = Awaited<ReturnType<typeof authControllerGetMethods>>,
+  TError = void,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof authControllerGetMethods>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary Get all linked auth methods for the current user
+ */
+
+export function useAuthControllerGetMethods<
+  TData = Awaited<ReturnType<typeof authControllerGetMethods>>,
+  TError = void,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof authControllerGetMethods>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getAuthControllerGetMethodsQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  query.queryKey = queryOptions.queryKey;
+
+  return query;
+}
+
+/**
+ * @summary Link a new auth method to the current user account
+ */
+export const authControllerLinkMethod = (linkMethodDto: LinkMethodDto, signal?: AbortSignal) => {
+  return customInstance<AuthMethodResponseDto[]>({
+    url: `/auth/link`,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    data: linkMethodDto,
+    signal,
+  });
+};
+
+export const getAuthControllerLinkMethodMutationOptions = <
+  TError = void,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof authControllerLinkMethod>>,
+    TError,
+    { data: LinkMethodDto },
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof authControllerLinkMethod>>,
+  TError,
+  { data: LinkMethodDto },
+  TContext
+> => {
+  const mutationKey = ['authControllerLinkMethod'];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof authControllerLinkMethod>>,
+    { data: LinkMethodDto }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return authControllerLinkMethod(data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AuthControllerLinkMethodMutationResult = NonNullable<
+  Awaited<ReturnType<typeof authControllerLinkMethod>>
+>;
+export type AuthControllerLinkMethodMutationBody = LinkMethodDto;
+export type AuthControllerLinkMethodMutationError = void;
+
+/**
+ * @summary Link a new auth method to the current user account
+ */
+export const useAuthControllerLinkMethod = <TError = void, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof authControllerLinkMethod>>,
+      TError,
+      { data: LinkMethodDto },
+      TContext
+    >;
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof authControllerLinkMethod>>,
+  TError,
+  { data: LinkMethodDto },
+  TContext
+> => {
+  const mutationOptions = getAuthControllerLinkMethodMutationOptions(options);
+
+  return useMutation(mutationOptions, queryClient);
+};
+/**
+ * @summary Unlink an auth method from the current user account
+ */
+export const authControllerUnlinkMethod = (
+  unlinkMethodDto: UnlinkMethodDto,
+  signal?: AbortSignal
+) => {
+  return customInstance<UnlinkMethodResponseDto>({
+    url: `/auth/unlink`,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    data: unlinkMethodDto,
+    signal,
+  });
+};
+
+export const getAuthControllerUnlinkMethodMutationOptions = <
+  TError = void,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof authControllerUnlinkMethod>>,
+    TError,
+    { data: UnlinkMethodDto },
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof authControllerUnlinkMethod>>,
+  TError,
+  { data: UnlinkMethodDto },
+  TContext
+> => {
+  const mutationKey = ['authControllerUnlinkMethod'];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof authControllerUnlinkMethod>>,
+    { data: UnlinkMethodDto }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return authControllerUnlinkMethod(data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AuthControllerUnlinkMethodMutationResult = NonNullable<
+  Awaited<ReturnType<typeof authControllerUnlinkMethod>>
+>;
+export type AuthControllerUnlinkMethodMutationBody = UnlinkMethodDto;
+export type AuthControllerUnlinkMethodMutationError = void;
+
+/**
+ * @summary Unlink an auth method from the current user account
+ */
+export const useAuthControllerUnlinkMethod = <TError = void, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof authControllerUnlinkMethod>>,
+      TError,
+      { data: UnlinkMethodDto },
+      TContext
+    >;
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof authControllerUnlinkMethod>>,
+  TError,
+  { data: UnlinkMethodDto },
+  TContext
+> => {
+  const mutationOptions = getAuthControllerUnlinkMethodMutationOptions(options);
 
   return useMutation(mutationOptions, queryClient);
 };

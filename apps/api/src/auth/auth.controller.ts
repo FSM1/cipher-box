@@ -1,6 +1,7 @@
 import {
   Controller,
   Post,
+  Get,
   Body,
   HttpCode,
   HttpStatus,
@@ -15,6 +16,12 @@ import { Response, Request as ExpressRequest } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto, LoginResponseDto } from './dto/login.dto';
 import { TokenResponseDto, LogoutResponseDto } from './dto/token.dto';
+import {
+  LinkMethodDto,
+  AuthMethodResponseDto,
+  UnlinkMethodDto,
+  UnlinkMethodResponseDto,
+} from './dto/link-method.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { User } from './entities/user.entity';
 
@@ -109,5 +116,58 @@ export class AuthController {
     res.clearCookie('refresh_token', { path: '/auth' });
 
     return this.authService.logout(req.user.id);
+  }
+
+  @Get('methods')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get all linked auth methods for the current user' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of linked auth methods',
+    type: [AuthMethodResponseDto],
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async getMethods(@Request() req: RequestWithUser): Promise<AuthMethodResponseDto[]> {
+    return this.authService.getLinkedMethods(req.user.id);
+  }
+
+  @Post('link')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Link a new auth method to the current user account' })
+  @ApiResponse({
+    status: 200,
+    description: 'Auth method linked successfully, returns updated list of methods',
+    type: [AuthMethodResponseDto],
+  })
+  @ApiResponse({ status: 400, description: 'Auth method already linked or publicKey mismatch' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async linkMethod(
+    @Request() req: RequestWithUser,
+    @Body() linkDto: LinkMethodDto
+  ): Promise<AuthMethodResponseDto[]> {
+    return this.authService.linkMethod(req.user.id, linkDto);
+  }
+
+  @Post('unlink')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Unlink an auth method from the current user account' })
+  @ApiResponse({
+    status: 200,
+    description: 'Auth method unlinked successfully',
+    type: UnlinkMethodResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Cannot unlink last auth method or method not found' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async unlinkMethod(
+    @Request() req: RequestWithUser,
+    @Body() unlinkDto: UnlinkMethodDto
+  ): Promise<UnlinkMethodResponseDto> {
+    await this.authService.unlinkMethod(req.user.id, unlinkDto.methodId);
+    return { success: true };
   }
 }
