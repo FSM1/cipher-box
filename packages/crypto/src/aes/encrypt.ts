@@ -36,10 +36,15 @@ export async function encryptAesGcm(
   }
 
   try {
+    // Copy to ensure proper ArrayBuffer (not SharedArrayBuffer)
+    const keyBuffer = new Uint8Array(key).buffer as ArrayBuffer;
+    const ivBuffer = new Uint8Array(iv).buffer as ArrayBuffer;
+    const plaintextBuffer = new Uint8Array(plaintext).buffer as ArrayBuffer;
+
     // Import key for encryption
     const cryptoKey = await crypto.subtle.importKey(
       'raw',
-      key,
+      keyBuffer,
       { name: AES_GCM_ALGORITHM },
       false,
       ['encrypt']
@@ -47,9 +52,9 @@ export async function encryptAesGcm(
 
     // Encrypt - Web Crypto appends 16-byte auth tag to ciphertext
     const ciphertext = await crypto.subtle.encrypt(
-      { name: AES_GCM_ALGORITHM, iv },
+      { name: AES_GCM_ALGORITHM, iv: ivBuffer },
       cryptoKey,
-      plaintext
+      plaintextBuffer
     );
 
     return new Uint8Array(ciphertext);

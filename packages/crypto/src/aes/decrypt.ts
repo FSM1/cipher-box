@@ -36,10 +36,15 @@ export async function decryptAesGcm(
   }
 
   try {
+    // Copy to ensure proper ArrayBuffer (not SharedArrayBuffer)
+    const keyBuffer = new Uint8Array(key).buffer as ArrayBuffer;
+    const ivBuffer = new Uint8Array(iv).buffer as ArrayBuffer;
+    const ciphertextBuffer = new Uint8Array(ciphertext).buffer as ArrayBuffer;
+
     // Import key for decryption
     const cryptoKey = await crypto.subtle.importKey(
       'raw',
-      key,
+      keyBuffer,
       { name: AES_GCM_ALGORITHM },
       false,
       ['decrypt']
@@ -47,9 +52,9 @@ export async function decryptAesGcm(
 
     // Decrypt - Web Crypto verifies auth tag and throws on mismatch
     const plaintext = await crypto.subtle.decrypt(
-      { name: AES_GCM_ALGORITHM, iv },
+      { name: AES_GCM_ALGORITHM, iv: ivBuffer },
       cryptoKey,
-      ciphertext
+      ciphertextBuffer
     );
 
     return new Uint8Array(plaintext);
