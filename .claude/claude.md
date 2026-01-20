@@ -6,14 +6,14 @@ CipherBox is a **technology demonstrator** for privacy-first encrypted cloud sto
 
 ## Documentation Structure
 
-| Document | Purpose |
-|----------|---------|
-| `Preliminary/Documentation/PRD.md` | Product requirements, user journeys, scope |
-| `Preliminary/Documentation/TECHNICAL_ARCHITECTURE.md` | Encryption, key hierarchy, system design |
-| `Preliminary/Documentation/API_SPECIFICATION.md` | Backend endpoints, database schema |
-| `Preliminary/Documentation/DATA_FLOWS.md` | Sequence diagrams, test vectors |
-| `Preliminary/Documentation/CLIENT_SPECIFICATION.md` | Web UI, desktop app specs |
-| `Preliminary/Documentation/IMPLEMENTATION_ROADMAP.md` | Week-by-week development plan |
+| Document                                                     | Purpose                                    |
+| ------------------------------------------------------------ | ------------------------------------------ |
+| `00-Preliminary-R&D/Documentation/PRD.md`                    | Product requirements, user journeys, scope |
+| `00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md` | Encryption, key hierarchy, system design   |
+| `00-Preliminary-R&D/Documentation/API_SPECIFICATION.md`      | Backend endpoints, database schema         |
+| `00-Preliminary-R&D/Documentation/DATA_FLOWS.md`             | Sequence diagrams, test vectors            |
+| `00-Preliminary-R&D/Documentation/CLIENT_SPECIFICATION.md`   | Web UI, desktop app specs                  |
+| `00-Preliminary-R&D/Documentation/IMPLEMENTATION_ROADMAP.md` | Week-by-week development plan              |
 
 ## Finalized Specifications
 
@@ -22,29 +22,29 @@ CipherBox is a **technology demonstrator** for privacy-first encrypted cloud sto
 
 ### ⚠️ IMPORTANT: Do Not Edit Preliminary/Documentation Files
 
-All files in `Preliminary/Documentation/` are **FINALIZED** specifications (version 1.10.0, status: Finalized). These documents represent the agreed-upon design and should **NOT** be modified.
-
+All files in `00-Preliminary-R&D/Documentation/` are **FINALIZED** specifications (version 1.10.0, status: Finalized). These documents represent the agreed-upon design and should **NOT** be modified.
 **If you need to make changes:**
+
 - New implementation documentation should be created in a separate location
 - Working notes and updates belong in `.planning/` or project-specific directories
-- Do not modify version numbers or content in `Preliminary/Documentation/`
+- Do not modify version numbers or content in `00-Preliminary-R&D/Documentation/` unless explicityly authorized.
 
 ## Terminology Standards
 
 Always use consistent terminology:
 
-| Correct | Avoid |
-|---------|-------|
-| `publicKey` | `pubkey`, `user_pubkey`, `ownerPublicKey` |
-| `privateKey` | `privkey`, `user_private_key` |
-| `rootFolderKey` | `rootKey`, `root_folder_key` |
-| `ipnsName` | IPNS entry (for identifier) |
-| `ipnsRecord` | IPNS entry (for data structure) |
-| `folderKey` | `subfolderKey` (unless specifically for subfolder) |
-| `fileKey` | `file_key` |
-| `keyEpoch` | `epoch`, `key_epoch` |
-| `encryptedIpnsPrivateKey` | `encrypted_ipns_key`, `ipns_key_encrypted` |
-| `teePublicKey` | `tee_pubkey`, `TEE_public_key` |
+| Correct                   | Avoid                                              |
+| ------------------------- | -------------------------------------------------- |
+| `publicKey`               | `pubkey`, `user_pubkey`, `ownerPublicKey`          |
+| `privateKey`              | `privkey`, `user_private_key`                      |
+| `rootFolderKey`           | `rootKey`, `root_folder_key`                       |
+| `ipnsName`                | IPNS entry (for identifier)                        |
+| `ipnsRecord`              | IPNS entry (for data structure)                    |
+| `folderKey`               | `subfolderKey` (unless specifically for subfolder) |
+| `fileKey`                 | `file_key`                                         |
+| `keyEpoch`                | `epoch`, `key_epoch`                               |
+| `encryptedIpnsPrivateKey` | `encrypted_ipns_key`, `ipns_key_encrypted`         |
+| `teePublicKey`            | `tee_pubkey`, `TEE_public_key`                     |
 
 ## Critical Security Rules
 
@@ -81,6 +81,7 @@ When generating code for CipherBox:
 ## Out of Scope (v1.0)
 
 Do not implement or suggest implementations for:
+
 - Billing/payments
 - File versioning
 - File/folder sharing
@@ -92,12 +93,14 @@ Do not implement or suggest implementations for:
 ## Git Workflow
 
 **Branch Protection Rules:**
+
 - **NEVER push directly to `main` branch** - all changes must go through feature branches and PRs
 - Create feature branches with descriptive names (e.g., `feat/add-auth`, `fix/ipns-publish`)
 - All commits should be made on feature branches first
 - Merge to main only via pull requests
 
 **Branch Naming:**
+
 - `feat/` - New features
 - `fix/` - Bug fixes
 - `docs/` - Documentation updates
