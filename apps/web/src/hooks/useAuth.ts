@@ -10,6 +10,7 @@ export function useAuth() {
     isConnected,
     isLoading: web3AuthLoading,
     userInfo,
+    web3Auth,
     connect,
     disconnect,
     getIdToken,
@@ -36,17 +37,27 @@ export function useAuth() {
 
     setIsLoggingIn(true);
     try {
-      // 1. Open Web3Auth modal
-      await connect();
+      // 1. Open Web3Auth modal (configured with grouped connection)
+      const connectedProvider = await connect();
+
+      if (!connectedProvider) {
+        throw new Error('Web3Auth connection cancelled or failed');
+      }
 
       // 2. Get credentials from Web3Auth
       const idToken = await getIdToken();
-      const publicKey = await getPublicKey();
+      const publicKey = await getPublicKey(connectedProvider);
       const loginType = getLoginType();
 
       if (!idToken || !publicKey) {
         throw new Error('Failed to get credentials from Web3Auth');
       }
+
+      // Log for verification of grouped connections
+      console.log('=== Login Verification ===');
+      console.log('Login Type:', loginType);
+      console.log('Public Key:', publicKey);
+      console.log('========================');
 
       // 3. Authenticate with backend
       const response = await authApi.login({
@@ -62,7 +73,15 @@ export function useAuth() {
       const authMethod = userInfo?.authConnection || 'unknown';
       setLastAuthMethod(authMethod);
 
-      // 6. Navigate to dashboard
+      // 6. Close modal (Web3Auth SDK sometimes leaves it open)
+      try {
+        // @ts-expect-error - loginModal exists at runtime
+        web3Auth?.loginModal?.closeModal?.();
+      } catch {
+        // Ignore if method doesn't exist
+      }
+
+      // 7. Navigate to dashboard
       navigate('/dashboard');
     } catch (error) {
       console.error('Login failed:', error);
@@ -72,6 +91,7 @@ export function useAuth() {
     }
   }, [
     isLoggingIn,
+    web3Auth,
     connect,
     getIdToken,
     getPublicKey,

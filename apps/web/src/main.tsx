@@ -1,7 +1,8 @@
+import './polyfills';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Web3AuthProviderWrapper } from './lib/web3auth/provider';
+import { Web3AuthProviderWrapper, WagmiProvider } from './lib/web3auth/provider';
 import App from './App';
 import './index.css';
 
@@ -21,7 +22,9 @@ createRoot(rootElement).render(
   <StrictMode>
     <Web3AuthProviderWrapper>
       <QueryClientProvider client={queryClient}>
-        <App />
+        <WagmiProvider>
+          <App />
+        </WagmiProvider>
       </QueryClientProvider>
     </Web3AuthProviderWrapper>
   </StrictMode>
