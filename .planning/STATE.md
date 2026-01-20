@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 4 - File Storage (in progress)
+**Current focus:** Phase 4 complete - ready for Phase 5 (Folder Operations)
 
 ## Current Position
 
-Phase: 4 of 11 (File Storage in progress)
-Plan: 3 of 4 in Phase 4 complete
-Status: Phase 4 in progress
-Last activity: 2026-01-20 - Completed 04-03-PLAN.md (Frontend upload with encryption)
+Phase: 4 of 11 (File Storage complete)
+Plan: 4 of 4 in Phase 4 complete
+Status: Phase 4 complete - ready for Phase 5
+Last activity: 2026-01-20 - Completed 04-04-PLAN.md (Frontend download with decryption)
 
-Progress: [####......] 29% (12 of 41 plans)
+Progress: [####......] 32% (13 of 41 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 12
-- Average duration: 5.2 min
-- Total execution time: 1.0 hours
+- Total plans completed: 13
+- Average duration: 5.0 min
+- Total execution time: 1.1 hours
 
 **By Phase:**
 
@@ -31,12 +31,12 @@ Progress: [####......] 29% (12 of 41 plans)
 | 01-foundation      | 3/3   | 20 min | 7 min    |
 | 02-authentication  | 4/4   | 18 min | 4.5 min  |
 | 03-core-encryption | 3/3   | 18 min | 6 min    |
-| 04-file-storage    | 2/4   | 10 min | 5 min    |
+| 04-file-storage    | 4/4   | 17 min | 4.3 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 6m, 7m, 5m, 6m, 4m
-- Trend: Consistent
+- Last 5 plans: 7m, 5m, 6m, 4m, 3m
+- Trend: Consistent (improving)
 
 _Updated after each plan completion_
 
@@ -94,6 +94,9 @@ Recent decisions affecting current work:
 | ArrayBuffer cast for TypeScript 5.9                  | 04-03 | Uint8Array.buffer returns ArrayBufferLike, explicit cast for Blob         |
 | Pre-check quota before upload                        | 04-03 | Fail fast if total file size exceeds remaining quota                      |
 | axios CancelToken for upload cancellation            | 04-03 | Standard pattern for aborting in-flight requests                          |
+| Pinata gateway direct fetch for downloads            | 04-04 | No backend relay needed for reading public IPFS content                   |
+| Stream progress only with Content-Length             | 04-04 | Falls back to simple arrayBuffer if header not present                    |
+| File key cleared after decryption                    | 04-04 | Security - clearBytes() called in finally block                           |
 
 ### Pending Todos
 
@@ -112,10 +115,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-20
-Stopped at: Completed 04-03-PLAN.md (Frontend upload with encryption)
+Stopped at: Completed 04-04-PLAN.md (Frontend download with decryption)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-20 after 04-03 completion_
+_Last updated: 2026-01-20 after 04-04 completion_
