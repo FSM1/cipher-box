@@ -1,7 +1,7 @@
 ---
 version: 1.11.1
 last_updated: 2026-01-20
-status: Active
+status: Finalized
 ai_context: Data flow diagrams and test vectors for CipherBox. Contains Mermaid sequence diagrams for all major operations. For system design see TECHNICAL_ARCHITECTURE.md.
 ---
 

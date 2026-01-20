@@ -1,7 +1,7 @@
 ---
 version: 1.11.1
 last_updated: 2026-01-20
-status: Active
+status: Finalized
 ai_context: Client application specifications for CipherBox. Contains Web UI and Desktop app requirements. For system design see TECHNICAL_ARCHITECTURE.md.
 ---
 
