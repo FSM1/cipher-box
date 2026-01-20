@@ -17,7 +17,6 @@ CipherBox is a **technology demonstrator** for privacy-first encrypted cloud sto
 
 ## Finalized Specifications
 
-<<<<<<< HEAD
 **Current Version:** 1.11.1
 **Status:** Finalized (2026-01-20)
 
