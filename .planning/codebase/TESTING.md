@@ -38,6 +38,309 @@ CipherBox employs a **Test Pyramid** approach with comprehensive coverage at all
 
 ---
 
+## Test Execution Environments
+
+Each layer of the test pyramid runs in a specific environment with different dependencies and infrastructure requirements.
+
+### Environment Matrix
+
+| Test Level | Local Dev | CI Pipeline | Staging | Production |
+|------------|-----------|-------------|---------|------------|
+| Unit Tests | Yes | Yes | No | No |
+| Integration Tests | Yes | Yes | No | No |
+| API E2E Tests | Yes | Yes | Optional | No |
+| Frontend E2E Tests | Yes | Yes | **Yes** | No |
+| Smoke Tests | No | No | Yes | Yes |
+
+### Unit Tests
+
+**Environment:** Isolated, no external dependencies
+
+| Aspect | Configuration |
+|--------|---------------|
+| **Where** | Developer machine, CI runners |
+| **Dependencies** | All mocked (database, IPFS, external APIs) |
+| **Database** | None (mocked via Jest) |
+| **Network** | None required |
+| **Secrets** | None required |
+| **Speed** | < 5ms per test |
+| **Parallelization** | Full parallel execution |
+
+```bash
+# Local execution
+npm run test                    # All unit tests
+npm run test:watch              # Watch mode for TDD
+npm run test -- --grep "Vault"  # Specific tests
+
+# CI execution
+npm run test:ci                 # With coverage, single thread
+```
+
+### Integration Tests
+
+**Environment:** Real database, mocked external services
+
+| Aspect | Configuration |
+|--------|---------------|
+| **Where** | Developer machine (Docker), CI runners |
+| **Dependencies** | Real database, mocked IPFS/Pinata |
+| **Database** | PostgreSQL in Docker (test database) |
+| **Network** | Localhost only |
+| **Secrets** | Test credentials (not production) |
+| **Speed** | 50-500ms per test |
+| **Parallelization** | Sequential (shared database state) |
+
+**Local Setup (Docker Compose):**
+
+```yaml
+# docker-compose.test.yml
+version: '3.8'
+services:
+  postgres-test:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: cipherbox_test
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+    ports:
+      - "5433:5432"  # Different port to avoid conflicts
+    tmpfs:
+      - /var/lib/postgresql/data  # RAM disk for speed
+
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+```
+
+```bash
+# Start test infrastructure
+docker-compose -f docker-compose.test.yml up -d
+
+# Run integration tests
+DATABASE_URL=postgresql://test:test@localhost:5433/cipherbox_test \
+  npm run test:integration
+
+# Teardown
+docker-compose -f docker-compose.test.yml down -v
+```
+
+**CI Setup (GitHub Actions):**
+
+```yaml
+services:
+  postgres:
+    image: postgres:15
+    env:
+      POSTGRES_DB: cipherbox_test
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+    ports:
+      - 5432:5432
+    options: >-
+      --health-cmd pg_isready
+      --health-interval 10s
+      --health-timeout 5s
+      --health-retries 5
+```
+
+### API E2E Tests
+
+**Environment:** Full backend stack, mocked external services
+
+| Aspect | Configuration |
+|--------|---------------|
+| **Where** | Developer machine, CI runners, optionally staging |
+| **Dependencies** | Full NestJS app, real database, mocked IPFS |
+| **Database** | PostgreSQL (test database, reset between suites) |
+| **Network** | HTTP requests to localhost API |
+| **Secrets** | Test JWT keys, mock Web3Auth |
+| **Speed** | 100ms - 2s per test |
+| **Parallelization** | Sequential (API state) |
+
+```bash
+# Local execution
+npm run test:e2e
+
+# Against staging (optional)
+API_URL=https://staging-api.cipherbox.io npm run test:e2e:staging
+```
+
+### Frontend E2E Tests (Cypress)
+
+**Environment:** Full application stack
+
+| Aspect | Configuration |
+|--------|---------------|
+| **Where** | Developer machine, CI runners, **staging environment** |
+| **Dependencies** | Frontend app + Backend API + Database |
+| **Database** | Test database (seeded with fixtures) |
+| **Network** | Full HTTP/WebSocket to backend |
+| **Secrets** | Test accounts, mock Web3Auth provider |
+| **Speed** | 2-30s per test |
+| **Parallelization** | Parallel specs (Cypress Cloud) |
+| **Browsers** | Chrome (primary), Firefox, Edge |
+
+**Local Development:**
+
+```bash
+# Terminal 1: Start backend
+docker-compose up -d
+npm run start:dev --prefix apps/api
+
+# Terminal 2: Start frontend
+npm run dev --prefix apps/web
+
+# Terminal 3: Run Cypress
+npm run cy:open --prefix apps/web
+```
+
+**CI Pipeline:**
+
+```yaml
+steps:
+  - name: Start services
+    run: |
+      docker-compose -f docker-compose.test.yml up -d
+      npm run build --prefix apps/api
+      npm run start:prod --prefix apps/api &
+      npm run build --prefix apps/web
+      npm run start --prefix apps/web &
+      npx wait-on http://localhost:3000 http://localhost:4000/health
+
+  - name: Run Cypress
+    uses: cypress-io/github-action@v6
+    with:
+      browser: chrome
+      record: true
+    env:
+      CYPRESS_BASE_URL: http://localhost:3000
+      CYPRESS_API_URL: http://localhost:4000
+```
+
+**Staging Environment:**
+
+```bash
+# Run against staging (nightly or pre-release)
+CYPRESS_BASE_URL=https://staging.cipherbox.io \
+CYPRESS_API_URL=https://staging-api.cipherbox.io \
+  npm run cy:run -- --env environment=staging
+```
+
+### TEE Tests
+
+**Environment:** Mock enclave locally, real enclave in staging
+
+| Aspect | Local | CI | Staging |
+|--------|-------|-----|---------|
+| **Enclave** | Mock | Mock | Real (Phala testnet) |
+| **Attestation** | Skipped | Skipped | Verified |
+| **Key Material** | Test keys | Test keys | Test keys (not prod) |
+
+```bash
+# Local/CI - mock enclave
+cargo test
+
+# Staging - real enclave (manual trigger)
+ENCLAVE_URL=https://testnet.phala.network \
+  cargo test --features real-enclave
+```
+
+### Environment Variables by Test Level
+
+```bash
+# .env.test (unit + integration)
+NODE_ENV=test
+DATABASE_URL=postgresql://test:test@localhost:5433/cipherbox_test
+JWT_SECRET=test-jwt-secret-do-not-use-in-prod
+LOG_LEVEL=error
+
+# .env.test.e2e (API E2E)
+NODE_ENV=test
+DATABASE_URL=postgresql://test:test@localhost:5433/cipherbox_test
+JWT_SECRET=test-jwt-secret-do-not-use-in-prod
+IPFS_API_URL=http://localhost:5001
+IPFS_MOCK=true
+WEB3AUTH_MOCK=true
+
+# cypress.env.json (Frontend E2E)
+{
+  "apiUrl": "http://localhost:4000",
+  "testUserEmail": "test@example.com",
+  "testUserPassword": "test-password",
+  "mockWeb3Auth": true
+}
+```
+
+### Test Data Lifecycle
+
+| Test Level | Data Setup | Data Cleanup | Isolation |
+|------------|------------|--------------|-----------|
+| Unit | In-memory mocks | Automatic (GC) | Per test |
+| Integration | Migrations + seeds | Truncate tables | Per suite |
+| API E2E | Fixtures via API | Truncate tables | Per suite |
+| Frontend E2E | Seeded database | Reset to snapshot | Per spec file |
+
+**Database Reset Strategy:**
+
+```typescript
+// test/setup.ts (Integration + E2E)
+beforeAll(async () => {
+  // Run migrations
+  await prisma.$executeRaw`SELECT 1`; // Verify connection
+});
+
+beforeEach(async () => {
+  // Truncate all tables (fast reset)
+  const tables = await prisma.$queryRaw<{ tablename: string }[]>`
+    SELECT tablename FROM pg_tables WHERE schemaname = 'public'
+  `;
+
+  for (const { tablename } of tables) {
+    if (tablename !== '_prisma_migrations') {
+      await prisma.$executeRawUnsafe(`TRUNCATE TABLE "${tablename}" CASCADE`);
+    }
+  }
+});
+
+afterAll(async () => {
+  await prisma.$disconnect();
+});
+```
+
+### CI Pipeline Stages
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        CI PIPELINE                              │
+├─────────────────────────────────────────────────────────────────┤
+│  Stage 1: Lint & Type Check (parallel)                          │
+│  ├── ESLint (Backend)                                           │
+│  ├── ESLint (Frontend)                                          │
+│  ├── Prettier Check                                             │
+│  ├── TypeScript (Backend)                                       │
+│  ├── TypeScript (Frontend)                                      │
+│  └── Cargo fmt + Clippy (TEE)                                   │
+├─────────────────────────────────────────────────────────────────┤
+│  Stage 2: Unit Tests (parallel)                                 │
+│  ├── Backend Unit Tests          ← No services needed           │
+│  ├── TEE Unit Tests              ← No services needed           │
+│  └── Frontend Unit Tests         ← No services needed           │
+├─────────────────────────────────────────────────────────────────┤
+│  Stage 3: Integration Tests                                     │
+│  └── Backend Integration         ← PostgreSQL service           │
+├─────────────────────────────────────────────────────────────────┤
+│  Stage 4: E2E Tests (parallel)                                  │
+│  ├── API E2E Tests               ← Full backend + PostgreSQL    │
+│  └── Frontend E2E (Cypress)      ← Full stack                   │
+├─────────────────────────────────────────────────────────────────┤
+│  Stage 5: Build & Deploy (on success)                           │
+│  └── Deploy to staging (main branch only)                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Test Frameworks & Tools
 
 ### Backend (NestJS)
