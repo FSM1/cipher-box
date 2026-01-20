@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 4 - File Storage (next)
+**Current focus:** Phase 4 complete - ready for Phase 4.1 (API Service Testing)
 
 ## Current Position
 
-Phase: 3 of 11 complete (Core Encryption done)
-Plan: 3 of 3 in Phase 3 (all complete)
-Status: Phase 3 complete, Phase 4 not started
-Last activity: 2026-01-20 - Completed Phase 3 (crypto package v0.2.0, 88 tests)
+Phase: 4 of 11 (File Storage complete)
+Plan: 4 of 4 in Phase 4 complete
+Status: Phase 4 complete - ready for Phase 4.1
+Last activity: 2026-01-20 - Completed 04-04-PLAN.md (Frontend download with decryption)
 
-Progress: [####......] 24% (10 of 41 plans)
+Progress: [####......] 34% (14 of 41 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 10
-- Average duration: 5.2 min
-- Total execution time: 0.9 hours
+- Total plans completed: 14
+- Average duration: 5.0 min
+- Total execution time: 1.1 hours
 
 **By Phase:**
 
@@ -31,11 +31,12 @@ Progress: [####......] 24% (10 of 41 plans)
 | 01-foundation      | 3/3   | 20 min | 7 min    |
 | 02-authentication  | 4/4   | 18 min | 4.5 min  |
 | 03-core-encryption | 3/3   | 18 min | 6 min    |
+| 04-file-storage    | 4/4   | 17 min | 4.3 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 5m, 5m, 6m, 7m, 5m
-- Trend: Consistent
+- Last 5 plans: 7m, 5m, 6m, 4m, 3m
+- Trend: Consistent (improving)
 
 _Updated after each plan completion_
 
@@ -82,6 +83,20 @@ Recent decisions affecting current work:
 | Folder keys are random not derived                   | 03-03 | Per CONTEXT.md, folder keys randomly generated then ECIES-wrapped         |
 | File keys random per-file                            | 03-03 | No deduplication per CRYPT-06 - each file gets unique random key          |
 | VaultInit vs EncryptedVaultKeys separation           | 03-03 | Clear distinction between in-memory keys and server storage format        |
+| fetch + form-data for Pinata API                     | 04-01 | SDK adds overhead; direct API calls are simpler                           |
+| CIDv1 always for IPFS pins                           | 04-01 | Modern IPFS standard, future-proof                                        |
+| 404 as success for unpin                             | 04-01 | Idempotent behavior - if already unpinned, operation succeeded            |
+| Vault stores encrypted keys as BYTEA                 | 04-02 | Direct binary storage, hex encoding only at API boundary                  |
+| PinnedCid sizeBytes as bigint                        | 04-02 | TypeORM returns as string to avoid JavaScript precision issues            |
+| Quota calculated on-demand via SUM                   | 04-02 | No cached field, acceptable for 500 MiB limit                             |
+| VaultService exported from module                    | 04-02 | Allows IpfsModule to use recordPin/recordUnpin                            |
+| Sequential file uploads                              | 04-03 | One file at a time per CONTEXT.md (parallel deferred)                     |
+| ArrayBuffer cast for TypeScript 5.9                  | 04-03 | Uint8Array.buffer returns ArrayBufferLike, explicit cast for Blob         |
+| Pre-check quota before upload                        | 04-03 | Fail fast if total file size exceeds remaining quota                      |
+| axios CancelToken for upload cancellation            | 04-03 | Standard pattern for aborting in-flight requests                          |
+| Pinata gateway direct fetch for downloads            | 04-04 | No backend relay needed for reading public IPFS content                   |
+| Stream progress only with Content-Length             | 04-04 | Falls back to simple arrayBuffer if header not present                    |
+| File key cleared after decryption                    | 04-04 | Security - clearBytes() called in finally block                           |
 
 ### Pending Todos
 
@@ -97,13 +112,17 @@ None yet.
 - Phala Cloud API integration may need deeper research during Phase 8
 - macOS FUSE complexity - consider FUSE-T for Phase 9
 
+### Roadmap Evolution
+
+- Phase 4.1 inserted after Phase 4: API Service Testing (URGENT) - Add unit tests for backend services per .planning/codebase/TESTING.md coverage thresholds before continuing to Phase 5
+
 ## Session Continuity
 
 Last session: 2026-01-20
-Stopped at: Phase 3 complete - ready for Phase 4
+Stopped at: Completed 04-04-PLAN.md (Frontend download with decryption)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-20 after Phase 3 completion_
+_Last updated: 2026-01-20 after 04-04 completion_

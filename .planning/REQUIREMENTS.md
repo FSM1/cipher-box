@@ -9,13 +9,13 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Authentication
 
-- [ ] **AUTH-01**: User can sign up with email and password via Web3Auth
-- [ ] **AUTH-02**: User can sign in with OAuth (Google, Apple, GitHub) via Web3Auth
-- [ ] **AUTH-03**: User can sign in with magic link (passwordless email) via Web3Auth
-- [ ] **AUTH-04**: User can sign in with external wallet (MetaMask, WalletConnect) via Web3Auth
-- [ ] **AUTH-05**: User session persists via access token (15min) and refresh token (7 days)
-- [ ] **AUTH-06**: User can link multiple auth methods to the same vault
-- [ ] **AUTH-07**: User can log out and all keys are cleared from memory
+- [x] **AUTH-01**: User can sign up with email and password via Web3Auth
+- [x] **AUTH-02**: User can sign in with OAuth (Google, Apple, GitHub) via Web3Auth
+- [x] **AUTH-03**: User can sign in with magic link (passwordless email) via Web3Auth
+- [x] **AUTH-04**: User can sign in with external wallet (MetaMask, WalletConnect) via Web3Auth
+- [x] **AUTH-05**: User session persists via access token (15min) and refresh token (7 days)
+- [x] **AUTH-06**: User can link multiple auth methods to the same vault
+- [x] **AUTH-07**: User can log out and all keys are cleared from memory
 
 ### Encryption
 
@@ -28,13 +28,13 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### File Operations
 
-- [ ] **FILE-01**: User can upload files up to 100MB
-- [ ] **FILE-02**: User can download and decrypt files
-- [ ] **FILE-03**: User can delete files (with IPFS unpin)
+- [x] **FILE-01**: User can upload files up to 100MB
+- [x] **FILE-02**: User can download and decrypt files
+- [x] **FILE-03**: User can delete files (with IPFS unpin)
 - [ ] **FILE-04**: User can rename files
 - [ ] **FILE-05**: User can move files between folders
-- [ ] **FILE-06**: User can select multiple files for bulk upload
-- [ ] **FILE-07**: User can select multiple files for bulk delete
+- [x] **FILE-06**: User can select multiple files for bulk upload
+- [x] **FILE-07**: User can select multiple files for bulk delete
 
 ### Folder Operations
 
@@ -47,13 +47,13 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Backend API
 
-- [ ] **API-01**: Backend verifies Web3Auth JWT via JWKS endpoint
-- [ ] **API-02**: Backend issues and rotates access/refresh tokens
-- [ ] **API-03**: Backend relays encrypted blobs to Pinata (POST /ipfs/add)
-- [ ] **API-04**: Backend relays unpin requests to Pinata (POST /vault/unpin)
+- [x] **API-01**: Backend verifies Web3Auth JWT via JWKS endpoint
+- [x] **API-02**: Backend issues and rotates access/refresh tokens
+- [x] **API-03**: Backend relays encrypted blobs to Pinata (POST /ipfs/add)
+- [x] **API-04**: Backend relays unpin requests to Pinata (POST /vault/unpin)
 - [ ] **API-05**: Backend relays pre-signed IPNS records (POST /ipns/publish)
-- [ ] **API-06**: Backend stores encrypted vault keys (rootFolderKey, ipnsPrivateKey)
-- [ ] **API-07**: Backend enforces 500 MiB storage quota per user
+- [x] **API-06**: Backend stores encrypted vault keys (rootFolderKey, ipnsPrivateKey)
+- [x] **API-07**: Backend enforces 500 MiB storage quota per user
 - [ ] **API-08**: Backend returns TEE public keys on login
 
 ### Multi-Device Sync
@@ -160,39 +160,39 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase    | Status   |
 | ----------- | -------- | -------- |
-| AUTH-01     | Phase 2  | Pending  |
-| AUTH-02     | Phase 2  | Pending  |
-| AUTH-03     | Phase 2  | Pending  |
-| AUTH-04     | Phase 2  | Pending  |
-| AUTH-05     | Phase 2  | Pending  |
-| AUTH-06     | Phase 2  | Pending  |
-| AUTH-07     | Phase 2  | Pending  |
+| AUTH-01     | Phase 2  | Complete |
+| AUTH-02     | Phase 2  | Complete |
+| AUTH-03     | Phase 2  | Complete |
+| AUTH-04     | Phase 2  | Complete |
+| AUTH-05     | Phase 2  | Complete |
+| AUTH-06     | Phase 2  | Complete |
+| AUTH-07     | Phase 2  | Complete |
 | CRYPT-01    | Phase 3  | Complete |
 | CRYPT-02    | Phase 3  | Complete |
 | CRYPT-03    | Phase 3  | Complete |
 | CRYPT-04    | Phase 3  | Complete |
 | CRYPT-05    | Phase 3  | Complete |
 | CRYPT-06    | Phase 3  | Complete |
-| FILE-01     | Phase 4  | Pending  |
-| FILE-02     | Phase 4  | Pending  |
-| FILE-03     | Phase 4  | Pending  |
+| FILE-01     | Phase 4  | Complete |
+| FILE-02     | Phase 4  | Complete |
+| FILE-03     | Phase 4  | Complete |
 | FILE-04     | Phase 5  | Pending  |
 | FILE-05     | Phase 5  | Pending  |
-| FILE-06     | Phase 4  | Pending  |
-| FILE-07     | Phase 4  | Pending  |
+| FILE-06     | Phase 4  | Complete |
+| FILE-07     | Phase 4  | Complete |
 | FOLD-01     | Phase 5  | Pending  |
 | FOLD-02     | Phase 5  | Pending  |
 | FOLD-03     | Phase 5  | Pending  |
 | FOLD-04     | Phase 5  | Pending  |
 | FOLD-05     | Phase 5  | Pending  |
 | FOLD-06     | Phase 5  | Pending  |
-| API-01      | Phase 2  | Pending  |
-| API-02      | Phase 2  | Pending  |
-| API-03      | Phase 4  | Pending  |
-| API-04      | Phase 4  | Pending  |
+| API-01      | Phase 2  | Complete |
+| API-02      | Phase 2  | Complete |
+| API-03      | Phase 4  | Complete |
+| API-04      | Phase 4  | Complete |
 | API-05      | Phase 5  | Pending  |
-| API-06      | Phase 4  | Pending  |
-| API-07      | Phase 4  | Pending  |
+| API-06      | Phase 4  | Complete |
+| API-07      | Phase 4  | Complete |
 | API-08      | Phase 8  | Pending  |
 | SYNC-01     | Phase 7  | Pending  |
 | SYNC-02     | Phase 7  | Pending  |
@@ -228,4 +228,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 ---
 
 _Requirements defined: 2026-01-20_
-_Last updated: 2026-01-20 after roadmap creation_
+_Last updated: 2026-01-20 after Phase 4 completion_

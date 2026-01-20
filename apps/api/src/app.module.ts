@@ -5,9 +5,12 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { HealthModule } from './health/health.module';
 import { AuthModule } from './auth/auth.module';
+import { IpfsModule } from './ipfs/ipfs.module';
+import { VaultModule } from './vault/vault.module';
 import { User } from './auth/entities/user.entity';
 import { RefreshToken } from './auth/entities/refresh-token.entity';
 import { AuthMethod } from './auth/entities/auth-method.entity';
+import { Vault, PinnedCid } from './vault/entities';
 
 @Module({
   imports: [
@@ -23,7 +26,7 @@ import { AuthMethod } from './auth/entities/auth-method.entity';
         username: configService.get<string>('DB_USERNAME', 'postgres'),
         password: configService.get<string>('DB_PASSWORD', 'postgres'),
         database: configService.get<string>('DB_DATABASE', 'cipherbox'),
-        entities: [User, RefreshToken, AuthMethod],
+        entities: [User, RefreshToken, AuthMethod, Vault, PinnedCid],
         synchronize: configService.get<string>('NODE_ENV') !== 'production',
         logging: configService.get<string>('NODE_ENV') === 'development',
       }),
@@ -31,6 +34,8 @@ import { AuthMethod } from './auth/entities/auth-method.entity';
     }),
     HealthModule,
     AuthModule,
+    IpfsModule,
+    VaultModule,
   ],
   controllers: [AppController],
   providers: [AppService],

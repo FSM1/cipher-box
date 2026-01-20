@@ -3,26 +3,27 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm --parallel -r run dev",
-    "build": "pnpm --parallel -r run build",
+    "dev": "concurrently --kill-others -n api,web -c blue,green \"pnpm --filter @cipherbox/api dev\" \"pnpm --filter @cipherbox/web dev\"",
+    "build": "pnpm -r run build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "pnpm --parallel -r run test",
     "openapi:generate": "pnpm --filter @cipherbox/api openapi:generate",
-    "api:generate": "pnpm openapi:generate && pnpm --filter @cipherbox/web api:generate",
+    "api:generate": "pnpm openapi:generate && pnpm --filter @cipherbox/web api:generate && pnpm lint:fix",
     "prepare": "husky"
   },
   "devDependencies": {
-    "typescript": "^5.9.3",
-    "eslint": "^9.18.0",
     "@eslint/js": "^9.18.0",
-    "typescript-eslint": "^8.21.0",
-    "eslint-plugin-prettier": "^5.2.3",
+    "concurrently": "^9.2.1",
+    "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
-    "prettier": "^3.4.2",
+    "eslint-plugin-prettier": "^5.2.3",
+    "globals": "^15.14.0",
     "husky": "^9.1.7",
     "lint-staged": "^15.4.3",
-    "globals": "^15.14.0"
+    "prettier": "^3.4.2",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.21.0"
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx}": [

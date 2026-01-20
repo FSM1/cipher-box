@@ -214,6 +214,198 @@
         "tags": ["Auth"]
       }
     },
+    "/ipfs/add": {
+      "post": {
+        "description": "Upload an encrypted file blob to IPFS via Pinata. Returns the CID and size.",
+        "operationId": "IpfsController_add",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Encrypted file blob (max 100MB)"
+                  }
+                },
+                "required": ["file"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "File pinned successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          },
+          "413": {
+            "description": "Payload too large - file exceeds 100MB limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Pin encrypted file to IPFS",
+        "tags": ["IPFS"]
+      }
+    },
+    "/ipfs/unpin": {
+      "post": {
+        "description": "Remove a pinned file from IPFS via Pinata using its CID.",
+        "operationId": "IpfsController_unpin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnpinDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "File unpinned successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnpinResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Unpin file from IPFS",
+        "tags": ["IPFS"]
+      }
+    },
+    "/vault/init": {
+      "post": {
+        "description": "Create a new vault with encrypted keys on first sign-in. Returns 409 Conflict if vault already exists.",
+        "operationId": "VaultController_initializeVault",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InitVaultDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Vault initialized successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          },
+          "409": {
+            "description": "Conflict - Vault already exists for this user"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Initialize user vault",
+        "tags": ["Vault"]
+      }
+    },
+    "/vault": {
+      "get": {
+        "description": "Retrieve the vault for the authenticated user.",
+        "operationId": "VaultController_getVault",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Vault retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          },
+          "404": {
+            "description": "Not Found - Vault does not exist"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get user vault",
+        "tags": ["Vault"]
+      }
+    },
+    "/vault/quota": {
+      "get": {
+        "description": "Get current storage usage and limits. Limit is 500 MiB (524,288,000 bytes).",
+        "operationId": "VaultController_getQuota",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Quota retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuotaResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get storage quota",
+        "tags": ["Vault"]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "HealthController_check",
@@ -432,6 +624,147 @@
           }
         },
         "required": ["success"]
+      },
+      "AddResponseDto": {
+        "type": "object",
+        "properties": {
+          "cid": {
+            "type": "string",
+            "description": "The IPFS CID of the pinned file",
+            "example": "bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi"
+          },
+          "size": {
+            "type": "number",
+            "description": "The size of the pinned file in bytes",
+            "example": 1024
+          }
+        },
+        "required": ["cid", "size"]
+      },
+      "UnpinDto": {
+        "type": "object",
+        "properties": {
+          "cid": {
+            "type": "string",
+            "description": "The IPFS CID of the file to unpin",
+            "example": "bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi"
+          }
+        },
+        "required": ["cid"]
+      },
+      "UnpinResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the unpin operation was successful",
+            "example": true
+          }
+        },
+        "required": ["success"]
+      },
+      "InitVaultDto": {
+        "type": "object",
+        "properties": {
+          "ownerPublicKey": {
+            "type": "string",
+            "description": "User secp256k1 public key (uncompressed, 65 bytes, hex-encoded)",
+            "example": "04a1b2c3d4e5f6...(130 hex characters for 65 bytes with 0x04 prefix)"
+          },
+          "encryptedRootFolderKey": {
+            "type": "string",
+            "description": "ECIES-wrapped root folder AES-256 key (hex-encoded)",
+            "example": "a1b2c3d4e5f6..."
+          },
+          "encryptedRootIpnsPrivateKey": {
+            "type": "string",
+            "description": "ECIES-wrapped Ed25519 IPNS private key (hex-encoded)",
+            "example": "a1b2c3d4e5f6..."
+          },
+          "rootIpnsName": {
+            "type": "string",
+            "description": "IPNS name (libp2p-key multihash, base58btc or base36)",
+            "example": "k51qzi5uqu5dg..."
+          }
+        },
+        "required": [
+          "ownerPublicKey",
+          "encryptedRootFolderKey",
+          "encryptedRootIpnsPrivateKey",
+          "rootIpnsName"
+        ]
+      },
+      "VaultResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Vault UUID",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "ownerPublicKey": {
+            "type": "string",
+            "description": "User secp256k1 public key (uncompressed, 65 bytes, hex-encoded)",
+            "example": "04a1b2c3d4e5f6...(130 hex characters for 65 bytes with 0x04 prefix)"
+          },
+          "encryptedRootFolderKey": {
+            "type": "string",
+            "description": "ECIES-wrapped root folder AES-256 key (hex-encoded)",
+            "example": "a1b2c3d4e5f6..."
+          },
+          "encryptedRootIpnsPrivateKey": {
+            "type": "string",
+            "description": "ECIES-wrapped Ed25519 IPNS private key (hex-encoded)",
+            "example": "a1b2c3d4e5f6..."
+          },
+          "rootIpnsName": {
+            "type": "string",
+            "description": "IPNS name for root folder",
+            "example": "k51qzi5uqu5dg..."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "description": "Vault creation timestamp",
+            "example": "2026-01-20T12:00:00.000Z"
+          },
+          "initializedAt": {
+            "type": "object",
+            "description": "When vault was first used (first file uploaded), null if unused",
+            "example": "2026-01-20T13:00:00.000Z",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "ownerPublicKey",
+          "encryptedRootFolderKey",
+          "encryptedRootIpnsPrivateKey",
+          "rootIpnsName",
+          "createdAt",
+          "initializedAt"
+        ]
+      },
+      "QuotaResponseDto": {
+        "type": "object",
+        "properties": {
+          "usedBytes": {
+            "type": "number",
+            "description": "Current storage usage in bytes",
+            "example": 104857600
+          },
+          "limitBytes": {
+            "type": "number",
+            "description": "Maximum storage limit in bytes (500 MiB)",
+            "example": 524288000
+          },
+          "remainingBytes": {
+            "type": "number",
+            "description": "Remaining storage in bytes",
+            "example": 419430400
+          }
+        },
+        "required": ["usedBytes", "limitBytes", "remainingBytes"]
       }
     }
   }

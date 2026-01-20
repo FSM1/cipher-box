@@ -18,6 +18,10 @@ import { AuthController } from '../src/auth/auth.controller';
 import { AuthService } from '../src/auth/auth.service';
 import { Web3AuthVerifierService } from '../src/auth/services/web3auth-verifier.service';
 import { TokenService } from '../src/auth/services/token.service';
+import { IpfsController } from '../src/ipfs/ipfs.controller';
+import { IpfsService } from '../src/ipfs/ipfs.service';
+import { VaultController } from '../src/vault/vault.controller';
+import { VaultService } from '../src/vault/vault.service';
 
 // Mock providers for OpenAPI generation - these won't be called
 const mockRepository = {
@@ -40,9 +44,14 @@ const mockJwtService = {
   useValue: { sign: () => '' },
 };
 
+const mockConfigService = {
+  provide: 'ConfigService',
+  useValue: { get: () => 'mock-value' },
+};
+
 // Minimal module for OpenAPI generation - no database connection needed
 @Module({
-  controllers: [AppController, AuthController],
+  controllers: [AppController, AuthController, IpfsController, VaultController],
   providers: [
     AppService,
     {
@@ -57,10 +66,19 @@ const mockJwtService = {
       provide: TokenService,
       useValue: {},
     },
+    {
+      provide: IpfsService,
+      useValue: {},
+    },
+    {
+      provide: VaultService,
+      useValue: {},
+    },
     mockRepository,
     mockAuthMethodRepository,
     mockRefreshTokenRepository,
     mockJwtService,
+    mockConfigService,
   ],
 })
 class OpenApiGeneratorModule {}
