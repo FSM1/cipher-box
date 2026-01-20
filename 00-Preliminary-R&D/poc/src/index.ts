@@ -83,31 +83,9 @@ const formatBytes = (value: number): string => {
     return `${mb.toFixed(2)} MiB`;
 };
 
-const getRecordSize = (record: unknown): number | null => {
-    if (record instanceof Uint8Array) {
-        return record.byteLength;
-    }
-    if (record && typeof record === "object" && "value" in record) {
-        const value = (record as { value?: unknown }).value;
-        if (value instanceof Uint8Array) {
-            return value.byteLength;
-        }
-    }
-    return null;
-};
-
-const logIpnsRecordSize = async (ctx: HarnessContext, ipnsName: string, label: string): Promise<void> => {
-    try {
-        const record = await ctx.ipfs.routing.get(ipnsName);
-        const size = getRecordSize(record);
-        if (size === null) {
-            console.warn(`IPNS record size unavailable for ${label}`);
-            return;
-        }
-        console.log(`IPNS record size for ${label}: ${formatBytes(size)}`);
-    } catch (error) {
-        console.warn(`IPNS record size fetch failed for ${label}: ${(error as Error).message}`);
-    }
+const logIpnsRecordSize = async (_ctx: HarnessContext, _ipnsName: string, _label: string): Promise<void> => {
+    // The routing API is not available in ipfs-http-client v60.
+    // IPNS record size logging is disabled.
 };
 
 const hexToBytes = (hex: string): Uint8Array => {
