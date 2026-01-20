@@ -5,13 +5,13 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 4 complete - ready for Phase 5 (Folder Operations)
+**Current focus:** Phase 4 complete - ready for Phase 4.1 (API Service Testing)
 
 ## Current Position
 
 Phase: 4 of 11 (File Storage complete)
 Plan: 4 of 4 in Phase 4 complete
-Status: Phase 4 complete - ready for Phase 5
+Status: Phase 4 complete - ready for Phase 4.1
 Last activity: 2026-01-20 - Completed 04-04-PLAN.md (Frontend download with decryption)
 
 Progress: [####......] 34% (14 of 41 plans)
@@ -111,6 +111,10 @@ None yet.
 - IPNS resolution latency (~30s) may need deeper investigation during Phase 7
 - Phala Cloud API integration may need deeper research during Phase 8
 - macOS FUSE complexity - consider FUSE-T for Phase 9
+
+### Roadmap Evolution
+
+- Phase 4.1 inserted after Phase 4: API Service Testing (URGENT) - Add unit tests for backend services per .planning/codebase/TESTING.md coverage thresholds before continuing to Phase 5
 
 ## Session Continuity
 
