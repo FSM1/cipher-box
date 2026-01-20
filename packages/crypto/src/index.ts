@@ -2,12 +2,99 @@
  * @cipherbox/crypto
  *
  * Shared cryptographic utilities for CipherBox.
- * This package provides AES-256-GCM encryption and ECIES key wrapping.
+ * Provides AES-256-GCM encryption, ECIES key wrapping, Ed25519 signing,
+ * vault initialization, and key hierarchy management.
  *
- * Implemented in Phase 3.
+ * Security principles:
+ * - All operations use Web Crypto API or audited libraries (@noble/*, eciesjs)
+ * - Error messages are generic to prevent oracle attacks
+ * - Keys are Uint8Array - never convert to/from strings for sensitive data
+ * - Private keys exist in memory only - never persisted to storage
+ *
+ * @example
+ * ```typescript
+ * import {
+ *   initializeVault,
+ *   encryptVaultKeys,
+ *   decryptVaultKeys,
+ *   generateFileKey,
+ *   generateIv,
+ *   encryptAesGcm,
+ *   decryptAesGcm,
+ *   wrapKey,
+ *   unwrapKey
+ * } from '@cipherbox/crypto';
+ *
+ * // Initialize vault on first sign-in
+ * const vault = await initializeVault();
+ * const encrypted = await encryptVaultKeys(vault, userPublicKey);
+ *
+ * // Encrypt file content
+ * const fileKey = generateFileKey();
+ * const iv = generateIv();
+ * const ciphertext = await encryptAesGcm(plaintext, fileKey, iv);
+ *
+ * // Wrap file key with user's public key
+ * const wrappedKey = await wrapKey(fileKey, vaultKey.publicKey);
+ *
+ * // Unwrap and decrypt
+ * const unwrappedKey = await unwrapKey(wrappedKey, vaultKey.privateKey);
+ * const decrypted = await decryptAesGcm(ciphertext, unwrappedKey, iv);
+ * ```
  */
 
-export const CRYPTO_VERSION = '0.0.1';
+export const CRYPTO_VERSION = '0.2.0';
 
-// Placeholder exports - real implementation in Phase 3
-export type CryptoKey = Uint8Array;
+// Vault initialization and key management
+export {
+  initializeVault,
+  encryptVaultKeys,
+  decryptVaultKeys,
+  type VaultInit,
+  type EncryptedVaultKeys,
+} from './vault';
+
+// Key hierarchy and derivation
+export { deriveKey, deriveContextKey, generateFolderKey, type DeriveKeyParams } from './keys';
+
+// AES-256-GCM symmetric encryption
+export { encryptAesGcm, decryptAesGcm, sealAesGcm, unsealAesGcm } from './aes';
+
+// ECIES secp256k1 key wrapping
+export { wrapKey, unwrapKey } from './ecies';
+
+// Ed25519 signing for IPNS
+export { generateEd25519Keypair, type Ed25519Keypair } from './ed25519';
+export { signEd25519, verifyEd25519 } from './ed25519/sign';
+
+// IPNS record signing utilities
+export { signIpnsData, IPNS_SIGNATURE_PREFIX } from './ipns';
+
+// Utility functions (only safe public utilities)
+export {
+  hexToBytes,
+  bytesToHex,
+  concatBytes,
+  clearBytes,
+  clearAll,
+  generateRandomBytes,
+  generateFileKey,
+  generateIv,
+} from './utils';
+
+// Types
+export { CryptoError, type CryptoErrorCode, type VaultKey, type EncryptedData } from './types';
+
+// Constants
+export {
+  AES_KEY_SIZE,
+  AES_IV_SIZE,
+  AES_TAG_SIZE,
+  SECP256K1_PUBLIC_KEY_SIZE,
+  SECP256K1_PRIVATE_KEY_SIZE,
+  ECIES_MIN_CIPHERTEXT_SIZE,
+  AES_GCM_ALGORITHM,
+  ED25519_PUBLIC_KEY_SIZE,
+  ED25519_PRIVATE_KEY_SIZE,
+  ED25519_SIGNATURE_SIZE,
+} from './constants';
