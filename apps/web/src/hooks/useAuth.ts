@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthFlow } from '../lib/web3auth/hooks';
 import { authApi } from '../lib/api/auth';
 import { useAuthStore } from '../stores/auth.store';
+import { getDerivationVersion } from '../lib/crypto/signatureKeyDerivation';
 
 export function useAuth() {
   const navigate = useNavigate();
@@ -16,6 +17,9 @@ export function useAuth() {
     getIdToken,
     getPublicKey,
     getLoginType,
+    isSocialLogin,
+    deriveKeypairForExternalWallet,
+    getDerivedPublicKeyHex,
   } = useAuthFlow();
   const {
     accessToken,
@@ -23,6 +27,8 @@ export function useAuth() {
     lastAuthMethod,
     setAccessToken,
     setLastAuthMethod,
+    setDerivedKeypair,
+    setIsExternalWallet,
     logout: clearAuthState,
   } = useAuthStore();
 
@@ -31,7 +37,7 @@ export function useAuth() {
 
   const isLoading = web3AuthLoading || isLoggingIn || isLoggingOut;
 
-  // Complete login: Web3Auth -> Backend
+  // Complete login: Web3Auth -> (Optional Key Derivation) -> Backend
   const login = useCallback(async () => {
     if (isLoggingIn) return;
 
@@ -46,42 +52,72 @@ export function useAuth() {
 
       // 2. Get credentials from Web3Auth
       const idToken = await getIdToken();
-      const publicKey = await getPublicKey(connectedProvider);
       const loginType = getLoginType();
+      const isExternal = !isSocialLogin();
+
+      let publicKey: string | null = null;
+
+      // 3. Handle key derivation based on login type
+      if (isExternal) {
+        // ADR-001: External wallet - derive keypair from signature
+        console.log('=== External Wallet Login ===');
+        console.log('Requesting signature for key derivation...');
+
+        const derivedKeypair = await deriveKeypairForExternalWallet(connectedProvider);
+        if (!derivedKeypair) {
+          throw new Error('Failed to derive keypair from wallet signature');
+        }
+
+        // Store derived keypair in auth store (memory-only)
+        setDerivedKeypair(derivedKeypair);
+        setIsExternalWallet(true);
+
+        // Use derived public key for backend authentication
+        publicKey = getDerivedPublicKeyHex(derivedKeypair);
+
+        console.log('Key derivation successful');
+        console.log('Derived Public Key:', publicKey);
+        console.log('=============================');
+      } else {
+        // Social login - get public key directly from Web3Auth
+        publicKey = await getPublicKey(connectedProvider);
+        setIsExternalWallet(false);
+
+        console.log('=== Social Login ===');
+        console.log('Login Type:', loginType);
+        console.log('Public Key:', publicKey);
+        console.log('====================');
+      }
 
       if (!idToken || !publicKey) {
         throw new Error('Failed to get credentials from Web3Auth');
       }
 
-      // Log for verification of grouped connections
-      console.log('=== Login Verification ===');
-      console.log('Login Type:', loginType);
-      console.log('Public Key:', publicKey);
-      console.log('========================');
-
-      // 3. Authenticate with backend
+      // 4. Authenticate with backend
       const response = await authApi.login({
         idToken,
         publicKey,
         loginType,
+        // ADR-001: Include derivation version for external wallet users
+        ...(isExternal && { derivationVersion: getDerivationVersion() }),
       });
 
-      // 4. Store access token (refresh token is in HTTP-only cookie)
+      // 5. Store access token (refresh token is in HTTP-only cookie)
       setAccessToken(response.accessToken);
 
-      // 5. Remember auth method for "Continue with..." UX
+      // 6. Remember auth method for "Continue with..." UX
       const authMethod = userInfo?.authConnection || 'unknown';
       setLastAuthMethod(authMethod);
 
-      // 6. Close modal (Web3Auth SDK sometimes leaves it open)
+      // 7. Close modal (Web3Auth SDK sometimes leaves it open)
       try {
-        // @ts-expect-error - loginModal exists at runtime
-        web3Auth?.loginModal?.closeModal?.();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (web3Auth as any)?.loginModal?.closeModal?.();
       } catch {
         // Ignore if method doesn't exist
       }
 
-      // 7. Navigate to dashboard
+      // 8. Navigate to dashboard
       navigate('/dashboard');
     } catch (error) {
       console.error('Login failed:', error);
@@ -96,6 +132,11 @@ export function useAuth() {
     getIdToken,
     getPublicKey,
     getLoginType,
+    isSocialLogin,
+    deriveKeypairForExternalWallet,
+    getDerivedPublicKeyHex,
+    setDerivedKeypair,
+    setIsExternalWallet,
     userInfo,
     setAccessToken,
     setLastAuthMethod,

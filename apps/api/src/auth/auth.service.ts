@@ -37,11 +37,20 @@ export class AuthService {
       where: { publicKey: loginDto.publicKey },
     });
 
+    // Determine derivation version for external wallets (ADR-001)
+    const derivationVersion =
+      loginDto.loginType === 'external_wallet' ? (loginDto.derivationVersion ?? 1) : null;
+
     const isNewUser = !user;
     if (!user) {
       user = await this.userRepository.save({
         publicKey: loginDto.publicKey,
+        derivationVersion,
       });
+    } else if (user.derivationVersion !== derivationVersion) {
+      // Update derivation version if changed (e.g., migration to v2)
+      user.derivationVersion = derivationVersion;
+      await this.userRepository.save(user);
     }
 
     // 3. Find or create auth method

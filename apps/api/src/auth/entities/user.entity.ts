@@ -17,6 +17,17 @@ export class User {
   @Column({ unique: true })
   publicKey!: string;
 
+  /**
+   * ADR-001: Key derivation version for external wallet users.
+   * - Version 1: EIP-712 signature-derived keys (current)
+   * - Future versions may use different derivation methods
+   *
+   * This allows cryptographic agility if vulnerabilities are found.
+   * null = social login (no derivation), 1+ = external wallet derivation version
+   */
+  @Column({ type: 'int', nullable: true, default: null })
+  derivationVersion!: number | null;
+
   @CreateDateColumn()
   createdAt!: Date;
 

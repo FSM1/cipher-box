@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export type LoginType = 'social' | 'external_wallet';
 
@@ -10,7 +10,8 @@ export class LoginDto {
   idToken!: string;
 
   @ApiProperty({
-    description: 'secp256k1 public key (social) or Ethereum address (external wallet)',
+    description:
+      'secp256k1 public key for social login, or signature-derived public key for external wallet (ADR-001)',
     example: '0x04...',
   })
   publicKey!: string;
@@ -21,6 +22,14 @@ export class LoginDto {
     example: 'social',
   })
   loginType!: LoginType;
+
+  @ApiPropertyOptional({
+    description:
+      'Key derivation version for external wallet users (ADR-001). Required for external_wallet loginType.',
+    example: 1,
+    minimum: 1,
+  })
+  derivationVersion?: number;
 }
 
 export class LoginResponseDto {

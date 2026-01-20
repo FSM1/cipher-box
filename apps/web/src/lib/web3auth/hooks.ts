@@ -7,6 +7,11 @@ import {
 } from '@web3auth/modal/react';
 import type { IProvider, AuthUserInfo } from '@web3auth/modal';
 import * as secp256k1 from '@noble/secp256k1';
+import {
+  deriveKeypairFromWallet,
+  bytesToHex as signatureBytesToHex,
+  type EIP1193Provider,
+} from '../crypto/signatureKeyDerivation';
 
 // External wallet auth connection types
 const EXTERNAL_WALLET_CONNECTIONS = [
@@ -29,10 +34,11 @@ export function useAuthFlow() {
 
   const getIdToken = async (): Promise<string | null> => {
     try {
-      // Try authenticateUser directly
+      // Try authenticateUser directly (method exists at runtime but not in types)
       if (web3Auth) {
         try {
-          const authUser = await web3Auth.authenticateUser();
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const authUser = await (web3Auth as any).authenticateUser();
           if (authUser?.idToken) {
             return authUser.idToken;
           }
@@ -51,8 +57,9 @@ export function useAuthFlow() {
   // Determine if this is a social login or external wallet
   const isSocialLogin = (): boolean => {
     // Check web3Auth connector name first (most reliable after connection)
-    // @ts-expect-error - connectedConnectorName exists at runtime
-    const connectorName = web3Auth?.connectedConnectorName?.toLowerCase() || '';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const connectorName = ((web3Auth as any)?.connectedConnectorName?.toLowerCase() ||
+      '') as string;
     if (connectorName) {
       // 'auth' connector is for social logins, others are external wallets
       return connectorName === 'auth';
@@ -64,6 +71,12 @@ export function useAuthFlow() {
     return !EXTERNAL_WALLET_CONNECTIONS.some((wallet) => connection.includes(wallet));
   };
 
+  /**
+   * Get the public key for authentication.
+   * - Social logins: Derived from Web3Auth MPC private key
+   * - External wallets: Must use deriveKeypairForExternalWallet() first,
+   *   then pass the derived keypair's public key to the backend
+   */
   const getPublicKey = async (connectedProvider?: IProvider | null): Promise<string | null> => {
     const currentProvider = connectedProvider || web3Auth?.provider;
     if (!currentProvider) {
@@ -72,7 +85,6 @@ export function useAuthFlow() {
 
     try {
       // For social logins, derive from private key
-      // For external wallets, use eth_accounts
       if (isSocialLogin()) {
         const privateKey = await getPrivateKey(currentProvider);
         if (privateKey) {
@@ -80,7 +92,7 @@ export function useAuthFlow() {
         }
       }
 
-      // External wallet: get address from eth_accounts
+      // External wallet: return wallet address (caller should derive keypair separately)
       const accounts = await currentProvider.request<unknown, string[]>({
         method: 'eth_accounts',
       });
@@ -88,6 +100,68 @@ export function useAuthFlow() {
     } catch {
       return null;
     }
+  };
+
+  /**
+   * Get the wallet address for external wallet users.
+   * This is used as input for signature-derived key derivation.
+   */
+  const getWalletAddress = async (connectedProvider?: IProvider | null): Promise<string | null> => {
+    const currentProvider = connectedProvider || web3Auth?.provider;
+    if (!currentProvider) {
+      return null;
+    }
+
+    try {
+      const accounts = await currentProvider.request<unknown, string[]>({
+        method: 'eth_accounts',
+      });
+      return accounts?.[0] ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  /**
+   * ADR-001: Derive keypair for external wallet users via signature.
+   * This prompts the user's wallet to sign an EIP-712 message,
+   * then derives a secp256k1 keypair from the signature.
+   *
+   * The derived keypair is used for ECIES operations (encryption/decryption)
+   * since external wallets never expose their private keys.
+   *
+   * @returns Derived keypair with publicKey and privateKey as Uint8Array
+   */
+  const deriveKeypairForExternalWallet = async (
+    connectedProvider?: IProvider | null
+  ): Promise<{ publicKey: Uint8Array; privateKey: Uint8Array } | null> => {
+    const currentProvider = connectedProvider || web3Auth?.provider;
+    if (!currentProvider) {
+      return null;
+    }
+
+    // Get wallet address
+    const walletAddress = await getWalletAddress(currentProvider);
+    if (!walletAddress) {
+      return null;
+    }
+
+    // Derive keypair from EIP-712 signature
+    // This will prompt the wallet to sign
+    const keypair = await deriveKeypairFromWallet(
+      currentProvider as unknown as EIP1193Provider,
+      walletAddress
+    );
+
+    return keypair;
+  };
+
+  /**
+   * Get the public key as hex string from a derived keypair.
+   * Used after deriveKeypairForExternalWallet() to get the publicKey for backend auth.
+   */
+  const getDerivedPublicKeyHex = (keypair: { publicKey: Uint8Array }): string => {
+    return signatureBytesToHex(keypair.publicKey);
   };
 
   // Get login type for backend authentication
@@ -106,7 +180,11 @@ export function useAuthFlow() {
     disconnect,
     getIdToken,
     getPublicKey,
+    getWalletAddress,
     getLoginType,
+    isSocialLogin,
+    deriveKeypairForExternalWallet,
+    getDerivedPublicKeyHex,
   };
 }
 
