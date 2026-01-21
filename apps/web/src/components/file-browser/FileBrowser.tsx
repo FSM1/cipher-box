@@ -1,4 +1,4 @@
-import { useState, useCallback, type DragEvent, type MouseEvent } from 'react';
+import { useState, useCallback, useEffect, type DragEvent, type MouseEvent } from 'react';
 import type { FolderChild, FileEntry } from '@cipherbox/crypto';
 import { useFolderNavigation } from '../../hooks/useFolderNavigation';
 import { useFolder } from '../../hooks/useFolder';
@@ -56,6 +56,18 @@ type DialogState = {
  * }
  * ```
  */
+/**
+ * Mobile breakpoint (px) - matches CSS media query.
+ */
+const MOBILE_BREAKPOINT = 768;
+
+/**
+ * Check if viewport is mobile width.
+ */
+function isMobileViewport(): boolean {
+  return typeof window !== 'undefined' && window.innerWidth < MOBILE_BREAKPOINT;
+}
+
 export function FileBrowser() {
   // Navigation state from hook
   const { currentFolderId, currentFolder, breadcrumbs, isLoading, navigateTo, navigateUp } =
@@ -77,13 +89,48 @@ export function FileBrowser() {
   const [confirmDialog, setConfirmDialog] = useState<DialogState>({ open: false, item: null });
   const [renameDialog, setRenameDialog] = useState<DialogState>({ open: false, item: null });
 
+  // Mobile sidebar state - closed by default on mobile, open on desktop
+  const [sidebarOpen, setSidebarOpen] = useState(() => !isMobileViewport());
+  const [isMobile, setIsMobile] = useState(() => isMobileViewport());
+
+  // Track viewport changes
+  useEffect(() => {
+    const handleResize = () => {
+      const mobile = isMobileViewport();
+      setIsMobile(mobile);
+      // Auto-open sidebar when transitioning from mobile to desktop
+      if (!mobile) {
+        setSidebarOpen(true);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Toggle sidebar (mobile)
+  const toggleSidebar = useCallback(() => {
+    setSidebarOpen((prev) => !prev);
+  }, []);
+
+  // Close sidebar (mobile)
+  const closeSidebar = useCallback(() => {
+    if (isMobile) {
+      setSidebarOpen(false);
+    }
+  }, [isMobile]);
+
   // Clear selection when navigating to a new folder
   const handleNavigate = useCallback(
     (folderId: string) => {
       setSelectedItemId(null);
       navigateTo(folderId);
+      // Close sidebar on mobile after navigation
+      if (isMobile) {
+        setSidebarOpen(false);
+      }
     },
-    [navigateTo]
+    [navigateTo, isMobile]
   );
 
   // Handle item selection
@@ -211,10 +258,32 @@ export function FileBrowser() {
       ? `Are you sure you want to delete "${confirmDialog.item?.name}"? This will also delete all files and subfolders inside. This cannot be undone.`
       : `Are you sure you want to delete "${confirmDialog.item?.name}"? This cannot be undone.`;
 
+  // Sidebar classes based on state
+  const sidebarClassName = [
+    'file-browser-sidebar',
+    sidebarOpen ? 'file-browser-sidebar--open' : 'file-browser-sidebar--closed',
+  ].join(' ');
+
   return (
     <div className="file-browser">
+      {/* Mobile backdrop when sidebar is open */}
+      {isMobile && sidebarOpen && (
+        <div className="file-browser-backdrop" onClick={closeSidebar} aria-hidden="true" />
+      )}
+
       {/* Sidebar with folder tree */}
-      <aside className="file-browser-sidebar">
+      <aside className={sidebarClassName}>
+        {/* Close button for mobile */}
+        {isMobile && (
+          <button
+            type="button"
+            className="file-browser-sidebar-close"
+            onClick={closeSidebar}
+            aria-label="Close sidebar"
+          >
+            &#10005;
+          </button>
+        )}
         <FolderTree
           currentFolderId={currentFolderId}
           onNavigate={handleNavigate}
@@ -226,6 +295,18 @@ export function FileBrowser() {
       <main className="file-browser-main">
         {/* Breadcrumbs + upload zone in toolbar area */}
         <div className="file-browser-toolbar">
+          {/* Mobile hamburger toggle */}
+          {isMobile && (
+            <button
+              type="button"
+              className="file-browser-toggle"
+              onClick={toggleSidebar}
+              aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
+              aria-expanded={sidebarOpen}
+            >
+              &#9776;
+            </button>
+          )}
           <Breadcrumbs
             breadcrumbs={breadcrumbs}
             onNavigate={handleNavigate}

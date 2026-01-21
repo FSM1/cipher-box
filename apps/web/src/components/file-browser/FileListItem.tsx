@@ -1,6 +1,11 @@
-import { useCallback, type DragEvent, type MouseEvent } from 'react';
+import { useCallback, useRef, type DragEvent, type MouseEvent, type TouchEvent } from 'react';
 import type { FolderChild, FileEntry, FolderEntry } from '@cipherbox/crypto';
 import { formatBytes, formatDate } from '../../utils/format';
+
+/**
+ * Long press duration in milliseconds for touch context menu.
+ */
+const LONG_PRESS_DURATION = 500;
 
 type FileListItemProps = {
   /** The file or folder item to display */
@@ -75,6 +80,10 @@ export function FileListItem({
   onContextMenu,
   onDragStart,
 }: FileListItemProps) {
+  // Ref for long press timer
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
+
   /**
    * Handle single click - select the item.
    */
@@ -122,6 +131,70 @@ export function FileListItem({
     [item, parentId, onDragStart]
   );
 
+  /**
+   * Clear long press timer.
+   */
+  const clearLongPressTimer = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    touchStartPosRef.current = null;
+  }, []);
+
+  /**
+   * Handle touch start - begin long press detection.
+   */
+  const handleTouchStart = useCallback(
+    (e: TouchEvent) => {
+      const touch = e.touches[0];
+      if (!touch) return;
+
+      // Store touch position for move detection
+      touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
+
+      // Start long press timer
+      longPressTimerRef.current = setTimeout(() => {
+        // Create synthetic mouse event for context menu
+        const syntheticEvent = {
+          preventDefault: () => {},
+          clientX: touch.clientX,
+          clientY: touch.clientY,
+        } as unknown as MouseEvent;
+        onContextMenu(syntheticEvent, item);
+        clearLongPressTimer();
+      }, LONG_PRESS_DURATION);
+    },
+    [item, onContextMenu, clearLongPressTimer]
+  );
+
+  /**
+   * Handle touch move - cancel long press if moved too far.
+   */
+  const handleTouchMove = useCallback(
+    (e: TouchEvent) => {
+      if (!touchStartPosRef.current || !longPressTimerRef.current) return;
+
+      const touch = e.touches[0];
+      if (!touch) return;
+
+      // Cancel if moved more than 10px
+      const dx = Math.abs(touch.clientX - touchStartPosRef.current.x);
+      const dy = Math.abs(touch.clientY - touchStartPosRef.current.y);
+      if (dx > 10 || dy > 10) {
+        clearLongPressTimer();
+      }
+    },
+    [clearLongPressTimer]
+  );
+
+  /**
+   * Handle touch end - clear long press timer.
+   */
+  const handleTouchEnd = useCallback(() => {
+    clearLongPressTimer();
+  }, [clearLongPressTimer]);
+
   // Display size only for files
   const sizeDisplay = isFile(item) ? formatBytes(item.size) : '-';
 
@@ -136,6 +209,10 @@ export function FileListItem({
       onContextMenu={handleContextMenu}
       draggable
       onDragStart={handleDragStart}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
       role="row"
       tabIndex={0}
       onKeyDown={(e) => {

@@ -1,0 +1,223 @@
+/**
+ * Responsive Styles
+ *
+ * Mobile-first responsive design for the file browser.
+ * Breakpoint: 768px (tablet/desktop boundary)
+ *
+ * Mobile features:
+ * - Sidebar slides in as overlay
+ * - Hamburger toggle in toolbar
+ * - Backdrop behind sidebar
+ * - Touch-friendly sizing
+ */
+
+/* ==========================================================================
+   Mobile Hamburger Toggle
+   ========================================================================== */
+
+.file-browser-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 1.25rem;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.file-browser-toggle:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.file-browser-toggle:focus {
+  outline: 2px solid rgba(102, 126, 234, 0.6);
+  outline-offset: 2px;
+}
+
+/* ==========================================================================
+   Mobile Sidebar Overlay
+   ========================================================================== */
+
+/* Backdrop when sidebar is open */
+.file-browser-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 99;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Sidebar close button (mobile) */
+.file-browser-sidebar-close {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 1.25rem;
+  cursor: pointer;
+  transition: color 0.15s ease;
+  z-index: 1;
+}
+
+.file-browser-sidebar-close:hover {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+/* ==========================================================================
+   Mobile Layout Overrides
+   ========================================================================== */
+
+@media (max-width: 768px) {
+  /* Sidebar: fixed position overlay */
+  .file-browser-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 280px;
+    max-width: 85vw;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+    z-index: 100;
+    background: #1a1a2e;
+    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.3);
+  }
+
+  .file-browser-sidebar--open {
+    transform: translateX(0);
+  }
+
+  .file-browser-sidebar--closed {
+    transform: translateX(-100%);
+  }
+
+  /* Adjust folder tree header for close button */
+  .folder-tree-header {
+    padding-right: 3rem;
+  }
+
+  /* Main content: full width */
+  .file-browser-main {
+    padding: 0.75rem;
+  }
+
+  /* Toolbar: add gap for hamburger */
+  .file-browser-toolbar {
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  /* File list: hide date column, reduce size column */
+  .file-list-header,
+  .file-list-item {
+    grid-template-columns: 1fr 80px;
+    gap: 0.5rem;
+  }
+
+  .file-list-header-date,
+  .file-list-item-date {
+    display: none;
+  }
+
+  /* File list items: touch-friendly sizing */
+  .file-list-item {
+    padding: 0.875rem 1rem;
+    min-height: 3rem;
+  }
+
+  /* Empty state: smaller margins */
+  .empty-state {
+    margin: 1rem;
+    min-height: 200px;
+  }
+
+  /* Context menu: touch-friendly */
+  .context-menu {
+    min-width: 180px;
+  }
+
+  .context-menu-item {
+    padding: 0.875rem 1rem;
+    font-size: 1rem;
+  }
+
+  /* Dialogs: full width on small screens */
+  .modal-content {
+    max-width: calc(100vw - 2rem);
+    margin: 1rem;
+  }
+}
+
+/* ==========================================================================
+   Desktop Layout (default)
+   ========================================================================== */
+
+@media (min-width: 769px) {
+  /* Sidebar always visible on desktop */
+  .file-browser-sidebar {
+    position: relative;
+    transform: none;
+  }
+
+  .file-browser-sidebar--open,
+  .file-browser-sidebar--closed {
+    transform: none;
+  }
+
+  /* Hide mobile-only elements */
+  .file-browser-toggle,
+  .file-browser-backdrop,
+  .file-browser-sidebar-close {
+    display: none;
+  }
+}
+
+/* ==========================================================================
+   Touch Interactions
+   ========================================================================== */
+
+/* Prevent text selection during long-press */
+.file-list-item {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Visual feedback for touch */
+@media (pointer: coarse) {
+  .file-list-item:active {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  .folder-tree-item:active {
+    background: rgba(255, 255, 255, 0.15);
+  }
+}
