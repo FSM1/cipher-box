@@ -6,7 +6,17 @@
 
 **Privacy-first cloud storage with decentralized persistence**
 
-***
+<p align="center">
+  <strong>API</strong>&nbsp;
+  <img src="https://img.shields.io/badge/lines-100%25-brightgreen" alt="API Lines">
+  <img src="https://img.shields.io/badge/branches-80%25-green" alt="API Branches">
+  &nbsp;&nbsp;
+  <strong>Crypto</strong>&nbsp;
+  <img src="https://img.shields.io/badge/lines-87%25-green" alt="Crypto Lines">
+  <img src="https://img.shields.io/badge/branches-91%25-brightgreen" alt="Crypto Branches">
+</p>
+
+---
 
 ## 📄 Overview
 
@@ -30,7 +40,7 @@
 
 **Target:** Developers and technical users interested in cryptography, IPFS, and privacy-preserving architectures.
 
-***
+---
 
 ## 🎯 Vision
 
@@ -45,8 +55,7 @@
 ✓ Transparent UX (hide IPFS complexity)
 ```
 
-
-***
+---
 
 ## 📦 MVP Scope (v1.0)
 
@@ -63,7 +72,6 @@ TEE Republishing: Phala Cloud (primary) / AWS Nitro (fallback), every 3h
 Portability: Vault export + independent recovery
 ```
 
-
 ### ⏱️ **Deferred**
 
 ```
@@ -71,24 +79,22 @@ v1.1: Billing, Linux/Windows desktop, mobile apps
 v2: File versioning, folder sharing, search
 ```
 
-
-***
+---
 
 ## 🏗️ Technology Stack
 
-| Component | Technology | Why |
-| :-- | :-- | :-- |
-| **Frontend** | React 18 + TypeScript | Modern crypto UI |
-| **Web Crypto** | Web Crypto API | Native browser encryption |
-| **Backend** | Node.js + NestJS + TypeScript | Type-safe APIs |
-| **Database** | PostgreSQL | ACID audit trail |
-| **Key Derivation** | Web3Auth Network | Deterministic across auth methods |
-| **Storage** | IPFS via Pinata | Redundant, decentralized |
-| **Desktop** | Tauri/Electron + FUSE | Transparent file access |
-| **TEE** | Phala Cloud / AWS Nitro | Zero-knowledge IPNS republishing |
+| Component          | Technology                    | Why                               |
+| :----------------- | :---------------------------- | :-------------------------------- |
+| **Frontend**       | React 18 + TypeScript         | Modern crypto UI                  |
+| **Web Crypto**     | Web Crypto API                | Native browser encryption         |
+| **Backend**        | Node.js + NestJS + TypeScript | Type-safe APIs                    |
+| **Database**       | PostgreSQL                    | ACID audit trail                  |
+| **Key Derivation** | Web3Auth Network              | Deterministic across auth methods |
+| **Storage**        | IPFS via Pinata               | Redundant, decentralized          |
+| **Desktop**        | Tauri/Electron + FUSE         | Transparent file access           |
+| **TEE**            | Phala Cloud / AWS Nitro       | Zero-knowledge IPNS republishing  |
 
-
-***
+---
 
 ## 🔐 Architecture Summary
 
@@ -107,10 +113,11 @@ TEE (Phala/Nitro) ← IPNS Republish (every 3h)
 ```
 
 **Key Properties:**
+
 - Same user + any auth method → same keypair → same vault
 - TEE republishes IPNS records even when all devices are offline
 
-***
+---
 
 ## 📊 6 Key Decisions
 
@@ -120,13 +127,11 @@ TEE (Phala/Nitro) ← IPNS Republish (every 3h)
 Email/Password/OAuth/Magic Link/External Wallet → Web3Auth → Same ECDSA keypair
 ```
 
-
 ### 2. **Layered Encryption**
 
 ```
 File (AES-256-GCM) → Metadata (AES-256-GCM) → Keys (ECIES)
 ```
-
 
 ### 3. **Per-Folder IPNS**
 
@@ -134,13 +139,11 @@ File (AES-256-GCM) → Metadata (AES-256-GCM) → Keys (ECIES)
 Root IPNS → Folder1 IPNS → Folder2 IPNS (modular sharing-ready)
 ```
 
-
 ### 4. **IPNS Polling Sync**
 
 ```
 30s polling, no push infrastructure (MVP simple)
 ```
-
 
 ### 5. **Zero-Knowledge Keys**
 
@@ -148,7 +151,6 @@ Root IPNS → Folder1 IPNS → Folder2 IPNS (modular sharing-ready)
 Server holds: Encrypted root key only
 Client holds: Private key (RAM only)
 ```
-
 
 ### 6. **TEE-Based IPNS Republishing**
 
@@ -159,8 +161,7 @@ TEE decrypts in hardware, signs, zeroes key immediately
 Providers: Phala Cloud (primary) / AWS Nitro (fallback)
 ```
 
-
-***
+---
 
 ## 🛤️ User Journey (Example)
 
@@ -173,8 +174,7 @@ Providers: Phala Cloud (primary) / AWS Nitro (fallback)
 6. CipherBox gone? → Use export + private key → Full recovery
 ```
 
-
-***
+---
 
 ## 📈 Timeline
 
@@ -188,8 +188,7 @@ Week 11-12: Testing + security audit + launch
 Team: 3 people | Total: 12 weeks
 ```
 
-
-***
+---
 
 ## 🔐 Security
 
@@ -202,22 +201,20 @@ Team: 3 people | Total: 12 weeks
 ✅ Threat Model: See TECHNICAL_ARCHITECTURE.md
 ```
 
-
-***
+---
 
 ## 📋 Success Criteria (Tech Demo)
 
-| Criterion | Target |
-| :-- | :-- |
-| **Privacy** | Private keys never on server (cryptographically enforced) |
-| **Encryption** | AES-256-GCM + ECIES correctly implemented |
-| **Key Derivation** | Same user + any auth method → same keypair |
-| **Multi-Device Sync** | <30s via IPNS polling |
-| **Data Recovery** | Vault export enables independent recovery |
-| **Zero Dependencies** | Can decrypt vault without CipherBox service |
+| Criterion             | Target                                                    |
+| :-------------------- | :-------------------------------------------------------- |
+| **Privacy**           | Private keys never on server (cryptographically enforced) |
+| **Encryption**        | AES-256-GCM + ECIES correctly implemented                 |
+| **Key Derivation**    | Same user + any auth method → same keypair                |
+| **Multi-Device Sync** | <30s via IPNS polling                                     |
+| **Data Recovery**     | Vault export enables independent recovery                 |
+| **Zero Dependencies** | Can decrypt vault without CipherBox service               |
 
-
-***
+---
 
 ## 📚 Documentation
 
@@ -231,4 +228,4 @@ Documentation/CLIENT_SPECIFICATION.md    ← Web UI & desktop specs
 IMMPLEMENTATION_ROADMAP.md    ← Week-by-week plan
 ```
 
-***
+---
