@@ -1,1 +1,2 @@
+./scripts/check-api-client.sh
 pnpm lint-staged
