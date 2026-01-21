@@ -1,0 +1,85 @@
+/**
+ * Breadcrumb Navigation Styles
+ *
+ * Per CONTEXT.md: Simple back navigation with current folder name
+ * Structure supports future dropdown-per-segment enhancement
+ */
+
+/* ==========================================================================
+   Breadcrumbs Container
+   ========================================================================== */
+
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  font-size: 1rem;
+  min-height: 2.5rem;
+}
+
+/* ==========================================================================
+   Back Button
+   ========================================================================== */
+
+.breadcrumbs-back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.breadcrumbs-back:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.breadcrumbs-back:focus {
+  outline: 2px solid rgba(102, 126, 234, 0.6);
+  outline-offset: 2px;
+}
+
+.breadcrumbs-back:active {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.breadcrumbs-back-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* ==========================================================================
+   Current Folder Name
+   ========================================================================== */
+
+.breadcrumbs-current {
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.95);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300px;
+}
+
+/* ==========================================================================
+   Mobile Responsive
+   ========================================================================== */
+
+@media (max-width: 768px) {
+  .breadcrumbs {
+    padding: 0.5rem;
+  }
+
+  .breadcrumbs-current {
+    max-width: 200px;
+    font-size: 0.9375rem;
+  }
+}

@@ -12,6 +12,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { RenameDialog } from './RenameDialog';
 import { UploadZone } from './UploadZone';
 import { UploadModal } from './UploadModal';
+import { Breadcrumbs } from './Breadcrumbs';
 
 /**
  * Type guard for file entries.
@@ -57,7 +58,8 @@ type DialogState = {
  */
 export function FileBrowser() {
   // Navigation state from hook
-  const { currentFolderId, currentFolder, isLoading, navigateTo } = useFolderNavigation();
+  const { currentFolderId, currentFolder, breadcrumbs, isLoading, navigateTo, navigateUp } =
+    useFolderNavigation();
 
   // Folder operations
   const { renameItem, moveItem, deleteItem, isLoading: isOperating } = useFolder();
@@ -222,8 +224,13 @@ export function FileBrowser() {
 
       {/* Main content area */}
       <main className="file-browser-main">
-        {/* Upload zone in toolbar area */}
+        {/* Breadcrumbs + upload zone in toolbar area */}
         <div className="file-browser-toolbar">
+          <Breadcrumbs
+            breadcrumbs={breadcrumbs}
+            onNavigate={handleNavigate}
+            onNavigateUp={navigateUp}
+          />
           <UploadZone folderId={currentFolderId} />
         </div>
 

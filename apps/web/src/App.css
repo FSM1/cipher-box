@@ -1,5 +1,6 @@
 /* Import component styles */
 @import './styles/file-browser.css';
+@import './styles/breadcrumbs.css';
 
 .login-container {
   display: flex;

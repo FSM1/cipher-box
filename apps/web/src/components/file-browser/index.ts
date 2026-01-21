@@ -14,3 +14,4 @@ export { UploadItem } from './UploadItem';
 export { ContextMenu } from './ContextMenu';
 export { ConfirmDialog } from './ConfirmDialog';
 export { RenameDialog } from './RenameDialog';
+export { Breadcrumbs } from './Breadcrumbs';

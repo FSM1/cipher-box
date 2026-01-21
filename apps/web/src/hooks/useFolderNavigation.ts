@@ -5,7 +5,7 @@ import { useVaultStore } from '../stores/vault.store';
 /**
  * Breadcrumb entry for navigation.
  */
-type Breadcrumb = {
+export type Breadcrumb = {
   id: string;
   name: string;
 };
