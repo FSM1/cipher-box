@@ -18,6 +18,7 @@ module.exports = {
     '!health/**', // Exclude health check (infrastructure)
   ],
   coverageDirectory: '../coverage',
+  coverageReporters: ['text', 'lcov', 'json-summary'],
   testEnvironment: 'node',
   // Transform ESM modules like jose
   transformIgnorePatterns: ['/node_modules/(?!(jose)/)'],
