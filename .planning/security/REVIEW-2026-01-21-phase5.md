@@ -4,6 +4,7 @@
 **Scope:** Phase 5 - Folder System
 **Reviewer:** Claude (security:review command)
 **Status:** REMEDIATED (2026-01-21)
+**Verification Pass:** 2026-01-21 (PR review)
 
 ## Executive Summary
 
@@ -378,6 +379,67 @@ describe('IPNS API Security Tests', () => {
    - Implement test suite from suggested test cases
    - Consider defense-in-depth for key material clearing
    - Document security limitations in user-facing docs
+
+---
+
+## Verification Pass (2026-01-21)
+
+A second security review was conducted to verify all fixes and check for new issues introduced in the PR.
+
+### Verification Results
+
+**All CRITICAL, HIGH, and MEDIUM issues confirmed fixed.**
+
+| Issue                                 | Verification Status                                                             |
+| ------------------------------------- | ------------------------------------------------------------------------------- |
+| CRITICAL-01: ValidationPipe           | VERIFIED - Correctly configured with whitelist, forbidNonWhitelisted, transform |
+| HIGH-02: Logout Key Clearing          | VERIFIED - clearFolders() and clearVaultKeys() called before clearAuthState()   |
+| HIGH-03: Token Refresh Key Clearing   | VERIFIED - Clears all crypto stores before logout on refresh failure            |
+| HIGH-04: Rate Limiting                | VERIFIED - ThrottlerModule + @Throttle decorator on publish endpoint            |
+| MEDIUM-05: Private Key Clearing       | VERIFIED - libp2pKeyBytes.fill(0) with error handling                           |
+| MEDIUM-06: Sequence Number Validation | VERIFIED - Rejects negative values with CryptoError                             |
+| MEDIUM-07: Unsafe Type Casting        | VERIFIED - validateFolderMetadata() validates structure                         |
+| MEDIUM-08: Large Data Base64          | VERIFIED - uint8ArrayToBase64() uses 32KB chunks                                |
+| MEDIUM-09: encryptedIpnsPrivateKey    | VERIFIED - Hex format, MinLength(100), MaxLength(1000)                          |
+| MEDIUM-10: metadataCid                | VERIFIED - CID format regex, MaxLength(100)                                     |
+| MEDIUM-11: Error Message Sanitization | VERIFIED - Generic BAD_GATEWAY messages to client                               |
+| MEDIUM-12: ipnsName Validation        | VERIFIED - Strict k51 CIDv1 regex with MaxLength(70)                            |
+
+### New Issues Identified (All LOW Severity)
+
+| Issue                             | Location                                       | Description                                           | Impact                                           |
+| --------------------------------- | ---------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------ |
+| Missing @Min on keyEpoch          | `apps/api/src/ipns/dto/publish.dto.ts:75-77`   | Accepts negative values                               | Semantically invalid but no security risk        |
+| Record MaxLength generous         | `apps/api/src/ipns/dto/publish.dto.ts:34`      | 10KB generous for IPNS (~500 bytes typical)           | Could tighten to 2KB                             |
+| btoa() spread in ipns.service     | `apps/web/src/services/ipns.service.ts:45`     | Could hit argument limits for large records           | IPNS records are small, unlikely issue           |
+| Incomplete FolderEntry validation | `packages/crypto/src/folder/metadata.ts:49-59` | Only validates type/id/name, not cid/fileKeyEncrypted | Defense-in-depth only, data is authenticated     |
+| No weak key detection             | `packages/crypto/src/ipns/create-record.ts:53` | Doesn't reject all-zeros key                          | User would need to deliberately provide weak key |
+
+These LOW severity issues have been added to `LOW-SEVERITY-BACKLOG.md` for future consideration.
+
+### Test Coverage Gaps
+
+| Scenario                                    | Status         | Recommendation                             |
+| ------------------------------------------- | -------------- | ------------------------------------------ |
+| Token refresh failure clearing crypto state | NOT TESTED     | Add integration test for axios interceptor |
+| Rate limiting behavior                      | WEAK ASSERTION | Strengthen test to verify 429 responses    |
+
+### Compliance Checklist (Re-verified)
+
+| Rule                                         | Status |
+| -------------------------------------------- | ------ |
+| No privateKey in localStorage/sessionStorage | PASS   |
+| No sensitive keys logged                     | PASS   |
+| No unencrypted keys sent to server           | PASS   |
+| ECIES used for key wrapping                  | PASS   |
+| AES-256-GCM used for content encryption      | PASS   |
+| Server has zero knowledge of plaintext       | PASS   |
+| IPNS keys encrypted with TEE public key      | PASS   |
+| Keys cleared on logout                       | PASS   |
+
+**Overall Risk Level: LOW**
+
+All security-critical issues have been properly remediated. The implementation correctly follows cryptographic best practices and maintains the zero-knowledge architecture.
 
 ---
 

@@ -148,6 +148,99 @@ Promise.all(
 
 ---
 
+---
+
+## 8. Missing @Min validation on keyEpoch
+
+**Location:** `apps/api/src/ipns/dto/publish.dto.ts:75-77`
+**Added:** 2026-01-21 (Verification Pass)
+
+**Issue:** The `keyEpoch` field accepts any number, including negative values.
+While business logic may handle this gracefully, explicit validation would be more defensive.
+
+**Suggested Fix:**
+
+```typescript
+@IsNumber()
+@IsOptional()
+@Min(0, { message: 'keyEpoch must be a non-negative integer' })
+@IsInt({ message: 'keyEpoch must be an integer' })
+keyEpoch?: number;
+```
+
+---
+
+## 9. Record MaxLength could be more restrictive
+
+**Location:** `apps/api/src/ipns/dto/publish.dto.ts:34`
+**Added:** 2026-01-21 (Verification Pass)
+
+**Issue:** 10KB (`@MaxLength(10000)`) is generous for IPNS records. Typical signed
+IPNS records are ~300-500 bytes when base64 encoded. A lower limit would provide
+better protection against abuse.
+
+**Suggested Fix:** Reduce to `@MaxLength(2000)` for tighter validation.
+
+---
+
+## 10. btoa() spread operator in ipns.service.ts
+
+**Location:** `apps/web/src/services/ipns.service.ts:45`
+**Added:** 2026-01-21 (Verification Pass)
+
+**Issue:** Uses `btoa(String.fromCharCode(...recordBytes))` which may hit JavaScript's
+argument limit for very large arrays. IPNS records are typically small so unlikely
+to be an issue in practice.
+
+**Suggested Fix:** Use chunked encoding like `uint8ArrayToBase64()` in metadata.ts.
+
+---
+
+## 11. Incomplete FolderEntry/FileEntry field validation
+
+**Location:** `packages/crypto/src/folder/metadata.ts:49-59`
+**Added:** 2026-01-21 (Verification Pass)
+
+**Issue:** The `validateFolderMetadata()` function only validates `type`, `id`, and
+`name` fields. Additional fields specific to each type (e.g., `cid`, `fileKeyEncrypted`,
+`ipnsName`, `folderKeyEncrypted`) are not validated.
+
+**Impact:** Defense-in-depth only. The metadata is already decrypted with the correct
+key (authenticated), so malformed data would cause runtime errors rather than security issues.
+
+**Suggested Fix:**
+
+```typescript
+if (entry.type === 'file') {
+  if (typeof entry.cid !== 'string' || typeof entry.fileKeyEncrypted !== 'string') {
+    throw new CryptoError('Invalid file entry: missing required fields', 'DECRYPTION_FAILED');
+  }
+}
+```
+
+---
+
+## 12. No weak key detection in create-record.ts
+
+**Location:** `packages/crypto/src/ipns/create-record.ts:53`
+**Added:** 2026-01-21 (Verification Pass)
+
+**Issue:** While private key size is validated, the key bytes could still be all
+zeros or another weak pattern. The `@noble/ed25519` library does not reject weak keys.
+
+**Impact:** A user would need to deliberately provide a weak key, and this is a
+single-user system where the key comes from Web3Auth derivation.
+
+**Suggested Fix:**
+
+```typescript
+if (ed25519PrivateKey.every((b) => b === 0)) {
+  throw new CryptoError('Invalid private key: all zeros', 'INVALID_PRIVATE_KEY_SIZE');
+}
+```
+
+---
+
 ## Priority Notes
 
 These issues are LOW severity because:
