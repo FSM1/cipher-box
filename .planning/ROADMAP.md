@@ -200,7 +200,7 @@ Plans:
 
 ### Phase 6.1: Webapp Automation Testing (INSERTED)
 
-**Goal**: E2E UI testing with automation framework validates critical user flows
+**Goal**: E2E UI testing with Playwright validates critical user flows
 **Depends on**: Phase 6
 **Requirements**: Testing infrastructure
 **Success Criteria** (what must be TRUE):
@@ -209,11 +209,16 @@ Plans:
 2. Critical user flows covered by automated tests
 3. Tests run in CI pipeline
 4. Test reports generated on failure
-   **Plans**: TBD
+   **Plans**: 6 plans
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 6.1 to break down)
+- [ ] 06.1-01-PLAN.md — Playwright setup and base infrastructure
+- [ ] 06.1-02-PLAN.md — Page objects for File Browser components
+- [ ] 06.1-03-PLAN.md — Auth flow tests (login, logout, session)
+- [ ] 06.1-04-PLAN.md — File operations tests (upload, download, rename, delete)
+- [ ] 06.1-05-PLAN.md — Folder operations tests (create, rename, delete, navigate)
+- [ ] 06.1-06-PLAN.md — CI integration with GitHub Actions
 
 ### Phase 7: Multi-Device Sync
 
@@ -333,7 +338,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 4.2 Local IPFS Testing  | 2/2            | Complete    | 2026-01-21 |
 | 5. Folder System        | 4/4            | Complete    | 2026-01-21 |
 | 6. File Browser UI      | 0/4            | Not started | -          |
-| 6.1 Webapp Automation   | 0/TBD          | Not started | -          |
+| 6.1 Webapp Automation   | 0/6            | Not started | -          |
 | 7. Multi-Device Sync    | 0/3            | Not started | -          |
 | 8. TEE Integration      | 0/4            | Not started | -          |
 | 9. Desktop Client       | 0/5            | Not started | -          |
@@ -358,4 +363,5 @@ _Phase 5 complete: 2026-01-21_
 _Phase 4.2 complete: 2026-01-21_
 _Phase 6.1 inserted: 2026-01-21_
 _Phase 6 planned: 2026-01-21_
-_Total phases: 12 | Total plans: 47 | Depth: Comprehensive_
+_Phase 6.1 planned: 2026-01-22_
+_Total phases: 12 | Total plans: 53 | Depth: Comprehensive_
