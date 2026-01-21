@@ -356,3 +356,233 @@ export async function deleteFileFromFolder(params: {
     params.unpinCid(cidToUnpin).catch(() => {});
   }
 }
+
+/**
+ * Calculate the maximum depth of a folder's subtree.
+ *
+ * Used to check if moving a folder would exceed the depth limit.
+ *
+ * @param folderId - Folder ID to calculate subtree depth for
+ * @param folders - Current folder tree
+ * @returns Maximum depth in the subtree (0 if folder has no children)
+ */
+export function calculateSubtreeDepth(
+  folderId: string,
+  folders: Record<string, FolderNode>
+): number {
+  const folder = folders[folderId];
+  if (!folder) return 0;
+
+  let maxChildDepth = 0;
+  for (const child of folder.children) {
+    if (child.type === 'folder') {
+      const childDepth = 1 + calculateSubtreeDepth(child.id, folders);
+      maxChildDepth = Math.max(maxChildDepth, childDepth);
+    }
+  }
+
+  return maxChildDepth;
+}
+
+/**
+ * Check if a folder is a descendant of a potential ancestor.
+ *
+ * Used to prevent moving a folder into itself or its descendants.
+ *
+ * @param folderId - Folder to check
+ * @param potentialAncestorId - Potential ancestor folder ID
+ * @param folders - Current folder tree
+ * @returns true if folderId is a descendant of potentialAncestorId
+ */
+export function isDescendantOf(
+  folderId: string,
+  potentialAncestorId: string,
+  folders: Record<string, FolderNode>
+): boolean {
+  let currentId: string | null = folderId;
+
+  while (currentId !== null) {
+    if (currentId === potentialAncestorId) return true;
+    const currentFolder: FolderNode | undefined = folders[currentId];
+    if (!currentFolder) break;
+    currentId = currentFolder.parentId;
+  }
+
+  return false;
+}
+
+/**
+ * Move a folder from one parent to another.
+ *
+ * Uses add-before-remove pattern to prevent data loss on failure.
+ * Validates depth limit and prevents moving folder into itself.
+ *
+ * @param params.folderId - ID of folder to move
+ * @param params.sourceFolderState - Current parent folder
+ * @param params.destFolderState - Destination parent folder
+ * @param params.folders - Full folder tree (for depth calculation)
+ * @throws Error if folder not found, name collision, depth limit exceeded,
+ *         or attempting to move folder into itself/descendant
+ */
+export async function moveFolder(params: {
+  folderId: string;
+  sourceFolderState: FolderNode;
+  destFolderState: FolderNode;
+  folders: Record<string, FolderNode>;
+}): Promise<void> {
+  // 1. Find folder in source
+  const folder = params.sourceFolderState.children.find(
+    (c) => c.type === 'folder' && c.id === params.folderId
+  ) as FolderEntry | undefined;
+
+  if (!folder) throw new Error('Folder not found');
+
+  // 2. Check name collision in destination
+  const nameExists = params.destFolderState.children.some((c) => c.name === folder.name);
+  if (nameExists) throw new Error('An item with this name already exists in destination');
+
+  // 3. Check depth limit (20 levels max)
+  const destDepth = getDepth(params.destFolderState.id, params.folders);
+  const folderSubtreeDepth = calculateSubtreeDepth(params.folderId, params.folders);
+  if (destDepth + 1 + folderSubtreeDepth > MAX_FOLDER_DEPTH) {
+    throw new Error(`Cannot move: would exceed maximum folder depth of ${MAX_FOLDER_DEPTH}`);
+  }
+
+  // 4. Prevent moving folder into itself or its descendants
+  if (isDescendantOf(params.destFolderState.id, params.folderId, params.folders)) {
+    throw new Error('Cannot move folder into itself or its subfolder');
+  }
+
+  // 5. ADD to destination FIRST (add-before-remove pattern)
+  const destChildren = [
+    ...params.destFolderState.children,
+    {
+      ...folder,
+      modifiedAt: Date.now(),
+    },
+  ];
+
+  await updateFolderMetadata({
+    folderId: params.destFolderState.id,
+    children: destChildren,
+    folderKey: params.destFolderState.folderKey,
+    ipnsPrivateKey: params.destFolderState.ipnsPrivateKey,
+    ipnsName: params.destFolderState.ipnsName,
+    sequenceNumber: params.destFolderState.sequenceNumber,
+  });
+
+  // 6. REMOVE from source AFTER destination confirmed
+  const sourceChildren = params.sourceFolderState.children.filter(
+    (c) => !(c.type === 'folder' && c.id === params.folderId)
+  );
+
+  await updateFolderMetadata({
+    folderId: params.sourceFolderState.id,
+    children: sourceChildren,
+    folderKey: params.sourceFolderState.folderKey,
+    ipnsPrivateKey: params.sourceFolderState.ipnsPrivateKey,
+    ipnsName: params.sourceFolderState.ipnsName,
+    sequenceNumber: params.sourceFolderState.sequenceNumber,
+  });
+}
+
+/**
+ * Move a file from one folder to another.
+ *
+ * Uses add-before-remove pattern to prevent data loss on failure.
+ *
+ * @param params.fileId - ID of file to move
+ * @param params.sourceFolderState - Current parent folder
+ * @param params.destFolderState - Destination folder
+ * @throws Error if file not found or name collision exists
+ */
+export async function moveFile(params: {
+  fileId: string;
+  sourceFolderState: FolderNode;
+  destFolderState: FolderNode;
+}): Promise<void> {
+  // 1. Find file in source
+  const file = params.sourceFolderState.children.find(
+    (c) => c.type === 'file' && c.id === params.fileId
+  ) as FileEntry | undefined;
+
+  if (!file) throw new Error('File not found');
+
+  // 2. Check name collision in destination
+  const nameExists = params.destFolderState.children.some((c) => c.name === file.name);
+  if (nameExists) throw new Error('An item with this name already exists in destination');
+
+  // 3. ADD to destination FIRST
+  const destChildren = [
+    ...params.destFolderState.children,
+    {
+      ...file,
+      modifiedAt: Date.now(),
+    },
+  ];
+
+  await updateFolderMetadata({
+    folderId: params.destFolderState.id,
+    children: destChildren,
+    folderKey: params.destFolderState.folderKey,
+    ipnsPrivateKey: params.destFolderState.ipnsPrivateKey,
+    ipnsName: params.destFolderState.ipnsName,
+    sequenceNumber: params.destFolderState.sequenceNumber,
+  });
+
+  // 4. REMOVE from source AFTER
+  const sourceChildren = params.sourceFolderState.children.filter(
+    (c) => !(c.type === 'file' && c.id === params.fileId)
+  );
+
+  await updateFolderMetadata({
+    folderId: params.sourceFolderState.id,
+    children: sourceChildren,
+    folderKey: params.sourceFolderState.folderKey,
+    ipnsPrivateKey: params.sourceFolderState.ipnsPrivateKey,
+    ipnsName: params.sourceFolderState.ipnsName,
+    sequenceNumber: params.sourceFolderState.sequenceNumber,
+  });
+}
+
+/**
+ * Rename a file within its parent folder.
+ *
+ * Updates the file entry's name in the parent's metadata and publishes
+ * an updated IPNS record for the parent folder.
+ *
+ * @param params.fileId - ID of file to rename
+ * @param params.newName - New name for the file
+ * @param params.parentFolderState - Parent folder containing this file
+ * @throws Error if file not found or name collision exists
+ */
+export async function renameFile(params: {
+  fileId: string;
+  newName: string;
+  parentFolderState: FolderNode;
+}): Promise<void> {
+  const children = [...params.parentFolderState.children];
+  const fileIndex = children.findIndex((c) => c.type === 'file' && c.id === params.fileId);
+
+  if (fileIndex === -1) throw new Error('File not found');
+
+  // Check name collision
+  const nameExists = children.some((c) => c.name === params.newName && c.id !== params.fileId);
+  if (nameExists) throw new Error('An item with this name already exists');
+
+  const file = children[fileIndex] as FileEntry;
+  children[fileIndex] = {
+    ...file,
+    name: params.newName,
+    modifiedAt: Date.now(),
+  };
+
+  await updateFolderMetadata({
+    folderId: params.parentFolderState.id,
+    children,
+    folderKey: params.parentFolderState.folderKey,
+    ipnsPrivateKey: params.parentFolderState.ipnsPrivateKey,
+    ipnsName: params.parentFolderState.ipnsName,
+    sequenceNumber: params.parentFolderState.sequenceNumber,
+  });
+}
