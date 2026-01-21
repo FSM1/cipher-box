@@ -13,6 +13,6 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "node \"$PWD/.claude/hooks/statusline.js\""
+    "command": "~/.claude/hooks/statusline.js"
   }
 }
