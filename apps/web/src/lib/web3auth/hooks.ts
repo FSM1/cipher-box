@@ -169,6 +169,39 @@ export function useAuthFlow() {
     return isSocialLogin() ? 'social' : 'external_wallet';
   };
 
+  /**
+   * Get secp256k1 keypair for vault operations (encryption/decryption).
+   * For social logins: derives from Web3Auth private key
+   * For external wallets: must use separately derived keypair from signature
+   *
+   * @returns Keypair with uncompressed public key (65 bytes) and private key (32 bytes)
+   */
+  const getKeypairForVault = async (
+    connectedProvider?: IProvider | null
+  ): Promise<{ publicKey: Uint8Array; privateKey: Uint8Array } | null> => {
+    const currentProvider = connectedProvider || web3Auth?.provider;
+    if (!currentProvider) {
+      return null;
+    }
+
+    // Only works for social logins - external wallets must use deriveKeypairForExternalWallet
+    if (!isSocialLogin()) {
+      return null;
+    }
+
+    const privateKeyHex = await getPrivateKey(currentProvider);
+    if (!privateKeyHex) {
+      return null;
+    }
+
+    const privKeyHex = privateKeyHex.startsWith('0x') ? privateKeyHex.slice(2) : privateKeyHex;
+    const privateKey = hexToBytes(privKeyHex);
+    // Get uncompressed public key (65 bytes with 0x04 prefix) for ECIES operations
+    const publicKey = secp256k1.getPublicKey(privateKey, false);
+
+    return { publicKey, privateKey };
+  };
+
   return {
     isConnected,
     isLoading,
@@ -185,6 +218,7 @@ export function useAuthFlow() {
     isSocialLogin,
     deriveKeypairForExternalWallet,
     getDerivedPublicKeyHex,
+    getKeypairForVault,
   };
 }
 

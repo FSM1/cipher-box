@@ -36,6 +36,7 @@ describe('VaultService', () => {
   const testEncryptedRootFolderKey = 'b'.repeat(64);
   const testEncryptedRootIpnsPrivateKey = 'c'.repeat(128);
   const testRootIpnsName = 'k51qzi5uqu5dg12345';
+  const testRootIpnsPublicKey = 'd'.repeat(64); // 32-byte Ed25519 public key
 
   const mockVaultEntity: Vault = {
     id: testVaultId,
@@ -44,6 +45,7 @@ describe('VaultService', () => {
     encryptedRootFolderKey: Buffer.from(testEncryptedRootFolderKey, 'hex'),
     encryptedRootIpnsPrivateKey: Buffer.from(testEncryptedRootIpnsPrivateKey, 'hex'),
     rootIpnsName: testRootIpnsName,
+    rootIpnsPublicKey: Buffer.from(testRootIpnsPublicKey, 'hex'),
     createdAt: new Date('2026-01-20T12:00:00.000Z'),
     initializedAt: null,
     updatedAt: new Date('2026-01-20T12:00:00.000Z'),
@@ -55,6 +57,7 @@ describe('VaultService', () => {
     encryptedRootFolderKey: testEncryptedRootFolderKey,
     encryptedRootIpnsPrivateKey: testEncryptedRootIpnsPrivateKey,
     rootIpnsName: testRootIpnsName,
+    rootIpnsPublicKey: testRootIpnsPublicKey,
   };
 
   beforeEach(async () => {
@@ -127,6 +130,7 @@ describe('VaultService', () => {
         encryptedRootFolderKey: Buffer.from(testEncryptedRootFolderKey, 'hex'),
         encryptedRootIpnsPrivateKey: Buffer.from(testEncryptedRootIpnsPrivateKey, 'hex'),
         rootIpnsName: testRootIpnsName,
+        rootIpnsPublicKey: Buffer.from(testRootIpnsPublicKey, 'hex'),
         initializedAt: null,
       });
       expect(mockVaultRepo.save).toHaveBeenCalled();
@@ -166,6 +170,7 @@ describe('VaultService', () => {
         encryptedRootFolderKey: 'ccdd',
         encryptedRootIpnsPrivateKey: 'eeff',
         rootIpnsName: testRootIpnsName,
+        rootIpnsPublicKey: '1122',
       };
 
       const shortVault = {
@@ -173,6 +178,7 @@ describe('VaultService', () => {
         ownerPublicKey: Buffer.from('aabb', 'hex'),
         encryptedRootFolderKey: Buffer.from('ccdd', 'hex'),
         encryptedRootIpnsPrivateKey: Buffer.from('eeff', 'hex'),
+        rootIpnsPublicKey: Buffer.from('1122', 'hex'),
       };
 
       mockVaultRepo.findOne.mockResolvedValue(null);
@@ -202,6 +208,7 @@ describe('VaultService', () => {
         encryptedRootFolderKey: testEncryptedRootFolderKey,
         encryptedRootIpnsPrivateKey: testEncryptedRootIpnsPrivateKey,
         rootIpnsName: testRootIpnsName,
+        rootIpnsPublicKey: testRootIpnsPublicKey,
         createdAt: mockVaultEntity.createdAt,
         initializedAt: null,
       });

@@ -45,6 +45,13 @@ export class Vault {
   encryptedRootIpnsPrivateKey!: Buffer;
 
   /**
+   * Ed25519 IPNS public key (32 bytes)
+   * Stored in plaintext (not secret) - needed to reconstruct keypair after decryption
+   */
+  @Column({ type: 'bytea', name: 'root_ipns_public_key' })
+  rootIpnsPublicKey!: Buffer;
+
+  /**
    * IPNS name (libp2p-key multihash of public key)
    * Used to identify the root folder's IPNS record
    */

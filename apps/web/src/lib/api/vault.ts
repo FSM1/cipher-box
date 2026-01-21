@@ -7,9 +7,11 @@ export type QuotaResponse = {
 };
 
 export type VaultResponse = {
+  id: string;
   ownerPublicKey: string;
   encryptedRootFolderKey: string;
   encryptedRootIpnsPrivateKey: string;
+  rootIpnsPublicKey: string;
   rootIpnsName: string;
 };
 
@@ -17,6 +19,7 @@ export type InitVaultDto = {
   ownerPublicKey: string;
   encryptedRootFolderKey: string;
   encryptedRootIpnsPrivateKey: string;
+  rootIpnsPublicKey: string;
   rootIpnsName: string;
 };
 

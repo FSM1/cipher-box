@@ -2,10 +2,19 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthFlow } from '../lib/web3auth/hooks';
 import { authApi } from '../lib/api/auth';
+import { vaultApi } from '../lib/api/vault';
 import { useAuthStore } from '../stores/auth.store';
 import { useVaultStore } from '../stores/vault.store';
 import { useFolderStore } from '../stores/folder.store';
 import { getDerivationVersion } from '../lib/crypto/signatureKeyDerivation';
+import {
+  initializeVault,
+  encryptVaultKeys,
+  decryptVaultKeys,
+  deriveIpnsName,
+  hexToBytes,
+  bytesToHex,
+} from '@cipherbox/crypto';
 
 export function useAuth() {
   const navigate = useNavigate();
@@ -23,6 +32,7 @@ export function useAuth() {
     isSocialLogin,
     deriveKeypairForExternalWallet,
     getDerivedPublicKeyHex,
+    getKeypairForVault,
   } = useAuthFlow();
   const {
     accessToken,
@@ -39,6 +49,91 @@ export function useAuth() {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const isLoading = web3AuthLoading || isLoggingIn || isLoggingOut;
+
+  // Get vault store actions
+  const setVaultKeys = useVaultStore((state) => state.setVaultKeys);
+
+  /**
+   * Initialize vault for new users or load existing vault keys.
+   * Called after successful backend authentication.
+   */
+  const initializeOrLoadVault = useCallback(
+    async (connectedProvider: unknown, isExternalWallet: boolean): Promise<void> => {
+      // Get user's secp256k1 keypair for vault operations
+      let userKeypair: { publicKey: Uint8Array; privateKey: Uint8Array } | null = null;
+
+      if (isExternalWallet) {
+        // For external wallets, use the derived keypair stored in auth store
+        const derivedKeypair = useAuthStore.getState().derivedKeypair;
+        if (derivedKeypair) {
+          userKeypair = derivedKeypair;
+        }
+      } else {
+        // For social logins, get keypair from Web3Auth
+        userKeypair = await getKeypairForVault(
+          connectedProvider as Parameters<typeof getKeypairForVault>[0]
+        );
+      }
+
+      if (!userKeypair) {
+        console.error('Failed to get user keypair for vault operations');
+        return;
+      }
+
+      try {
+        // Try to fetch existing vault
+        const existingVault = await vaultApi.getVault();
+
+        // Vault exists - decrypt keys and load into store
+        const decryptedVault = await decryptVaultKeys(
+          {
+            encryptedRootFolderKey: hexToBytes(existingVault.encryptedRootFolderKey),
+            encryptedIpnsPrivateKey: hexToBytes(existingVault.encryptedRootIpnsPrivateKey),
+            rootIpnsPublicKey: hexToBytes(existingVault.rootIpnsPublicKey),
+          },
+          userKeypair.privateKey
+        );
+
+        setVaultKeys({
+          rootFolderKey: decryptedVault.rootFolderKey,
+          rootIpnsKeypair: decryptedVault.rootIpnsKeypair,
+          rootIpnsName: existingVault.rootIpnsName,
+          vaultId: existingVault.id,
+        });
+      } catch (error) {
+        // Check if it's a 404 (vault not found)
+        const is404 = (error as { response?: { status?: number } })?.response?.status === 404;
+
+        if (is404) {
+          // New user - initialize vault
+          const newVault = await initializeVault();
+          const encryptedVault = await encryptVaultKeys(newVault, userKeypair.publicKey);
+          const rootIpnsName = await deriveIpnsName(newVault.rootIpnsKeypair.publicKey);
+
+          // Store vault on server
+          const storedVault = await vaultApi.initVault({
+            ownerPublicKey: bytesToHex(userKeypair.publicKey),
+            encryptedRootFolderKey: bytesToHex(encryptedVault.encryptedRootFolderKey),
+            encryptedRootIpnsPrivateKey: bytesToHex(encryptedVault.encryptedIpnsPrivateKey),
+            rootIpnsPublicKey: bytesToHex(encryptedVault.rootIpnsPublicKey),
+            rootIpnsName,
+          });
+
+          // Load decrypted keys into store
+          setVaultKeys({
+            rootFolderKey: newVault.rootFolderKey,
+            rootIpnsKeypair: newVault.rootIpnsKeypair,
+            rootIpnsName,
+            vaultId: storedVault.id,
+          });
+        } else {
+          // Other error - log but don't block login
+          console.error('Failed to load vault:', error);
+        }
+      }
+    },
+    [getKeypairForVault, setVaultKeys]
+  );
 
   // Complete login: Web3Auth -> (Optional Key Derivation) -> Backend
   const login = useCallback(async () => {
@@ -106,7 +201,10 @@ export function useAuth() {
       // 5. Store access token (refresh token is in HTTP-only cookie)
       setAccessToken(response.accessToken);
 
-      // 6. Remember auth method for "Continue with..." UX
+      // 6. Initialize or load vault
+      await initializeOrLoadVault(connectedProvider, isExternal);
+
+      // 7. Remember auth method for "Continue with..." UX
       let authMethod: string;
       if (isExternal) {
         // External wallet: use connector name
@@ -206,6 +304,11 @@ export function useAuth() {
           // Try to refresh using the HTTP-only cookie
           const response = await authApi.refresh();
           setAccessToken(response.accessToken);
+
+          // After successful session restore, initialize/load vault
+          // Check if external wallet via auth store flag (persisted from original login)
+          const isExternal = useAuthStore.getState().isExternalWallet;
+          await initializeOrLoadVault(web3Auth?.provider, isExternal);
         } catch {
           // No valid session, stay on login page
           // Don't clear anything - user may just need to re-authenticate
@@ -213,7 +316,14 @@ export function useAuth() {
       }
     };
     restoreSession();
-  }, [isConnected, isAuthenticated, isLoggingIn, setAccessToken]);
+  }, [
+    isConnected,
+    isAuthenticated,
+    isLoggingIn,
+    setAccessToken,
+    web3Auth?.provider,
+    initializeOrLoadVault,
+  ]);
 
   return {
     isLoading,
