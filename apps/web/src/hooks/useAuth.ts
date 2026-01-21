@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useAuthFlow } from '../lib/web3auth/hooks';
 import { authApi } from '../lib/api/auth';
 import { useAuthStore } from '../stores/auth.store';
+import { useVaultStore } from '../stores/vault.store';
+import { useFolderStore } from '../stores/folder.store';
 import { getDerivationVersion } from '../lib/crypto/signatureKeyDerivation';
 
 export function useAuth() {
@@ -174,6 +176,10 @@ export function useAuth() {
       await disconnect();
 
       // 3. Clear local state
+      // [SECURITY: HIGH-02] Clear vault and folder stores BEFORE auth state
+      // This ensures all cryptographic keys are zeroed from memory on logout
+      useFolderStore.getState().clearFolders();
+      useVaultStore.getState().clearVaultKeys();
       clearAuthState();
 
       // 4. Navigate to login
@@ -181,6 +187,9 @@ export function useAuth() {
     } catch (error) {
       console.error('Logout failed:', error);
       // Still clear state even if backend fails
+      // [SECURITY: HIGH-02] Clear all stores including crypto keys
+      useFolderStore.getState().clearFolders();
+      useVaultStore.getState().clearVaultKeys();
       clearAuthState();
       navigate('/');
     } finally {

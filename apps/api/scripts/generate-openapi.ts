@@ -8,6 +8,7 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { Module } from '@nestjs/common';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
@@ -22,6 +23,8 @@ import { IpfsController } from '../src/ipfs/ipfs.controller';
 import { IPFS_PROVIDER } from '../src/ipfs/providers';
 import { VaultController } from '../src/vault/vault.controller';
 import { VaultService } from '../src/vault/vault.service';
+import { IpnsController } from '../src/ipns/ipns.controller';
+import { IpnsService } from '../src/ipns/ipns.service';
 
 // Mock providers for OpenAPI generation - these won't be called
 const mockRepository = {
@@ -51,7 +54,11 @@ const mockConfigService = {
 
 // Minimal module for OpenAPI generation - no database connection needed
 @Module({
-  controllers: [AppController, AuthController, IpfsController, VaultController],
+  imports: [
+    // ThrottlerModule is required because IpnsController uses ThrottlerGuard
+    ThrottlerModule.forRoot([{ ttl: 60000, limit: 10 }]),
+  ],
+  controllers: [AppController, AuthController, IpfsController, VaultController, IpnsController],
   providers: [
     AppService,
     {
@@ -72,6 +79,10 @@ const mockConfigService = {
     },
     {
       provide: VaultService,
+      useValue: {},
+    },
+    {
+      provide: IpnsService,
       useValue: {},
     },
     mockRepository,

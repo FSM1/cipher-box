@@ -406,6 +406,51 @@
         "tags": ["Vault"]
       }
     },
+    "/ipns/publish": {
+      "post": {
+        "description": "Relay a pre-signed IPNS record to the IPFS network via delegated routing. The client signs the record locally; backend relays to delegated-ipfs.dev and tracks the folder for TEE republishing.",
+        "operationId": "IpnsController_publishRecord",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishIpnsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "IPNS record published successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishIpnsResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request - Invalid record format or missing required fields"
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          },
+          "502": {
+            "description": "Bad Gateway - Failed to publish to delegated routing"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Publish IPNS record",
+        "tags": ["IPNS"]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "HealthController_check",
@@ -765,6 +810,58 @@
           }
         },
         "required": ["usedBytes", "limitBytes", "remainingBytes"]
+      },
+      "PublishIpnsDto": {
+        "type": "object",
+        "properties": {
+          "ipnsName": {
+            "type": "string",
+            "description": "IPNS name (k51... CIDv1 format)",
+            "example": "k51qzi5uqu5dkkciu33khkzbcmxtyhn2hgdqyp6rv7s5egjlsdj6a2xpz9lxvz"
+          },
+          "record": {
+            "type": "string",
+            "description": "Base64-encoded marshaled IPNS record",
+            "example": "CiQBqKAFp..."
+          },
+          "metadataCid": {
+            "type": "string",
+            "description": "CID of the encrypted metadata this record points to",
+            "example": "bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4"
+          },
+          "encryptedIpnsPrivateKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES-wrapped Ed25519 private key for TEE republishing (required on first publish)",
+            "example": "04abcd1234..."
+          },
+          "keyEpoch": {
+            "type": "number",
+            "description": "TEE key epoch (required with encryptedIpnsPrivateKey)",
+            "example": 1
+          }
+        },
+        "required": ["ipnsName", "record", "metadataCid"]
+      },
+      "PublishIpnsResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the publish operation succeeded",
+            "example": true
+          },
+          "ipnsName": {
+            "type": "string",
+            "description": "IPNS name that was published",
+            "example": "k51qzi5uqu5dkkciu33khkzbcmxtyhn2hgdqyp6rv7s5egjlsdj6a2xpz9lxvz"
+          },
+          "sequenceNumber": {
+            "type": "string",
+            "description": "Current sequence number (bigint as string)",
+            "example": "1"
+          }
+        },
+        "required": ["success", "ipnsName", "sequenceNumber"]
       }
     }
   }

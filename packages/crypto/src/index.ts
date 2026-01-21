@@ -67,8 +67,27 @@ export { wrapKey, unwrapKey } from './ecies';
 export { generateEd25519Keypair, type Ed25519Keypair } from './ed25519';
 export { signEd25519, verifyEd25519 } from './ed25519/sign';
 
-// IPNS record signing utilities
-export { signIpnsData, IPNS_SIGNATURE_PREFIX } from './ipns';
+// IPNS record creation and signing utilities
+export {
+  createIpnsRecord,
+  deriveIpnsName,
+  marshalIpnsRecord,
+  unmarshalIpnsRecord,
+  signIpnsData,
+  IPNS_SIGNATURE_PREFIX,
+  type IPNSRecord,
+} from './ipns';
+
+// Folder metadata types and encryption
+export {
+  encryptFolderMetadata,
+  decryptFolderMetadata,
+  type FolderMetadata,
+  type FolderChild,
+  type FolderEntry,
+  type FileEntry,
+  type EncryptedFolderMetadata,
+} from './folder';
 
 // Utility functions (only safe public utilities)
 export {
