@@ -9,38 +9,39 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 
 ## Current Position
 
-Phase: 6 of 11 (File Browser UI)
-Plan: 3 of 4 in Phase 6 complete
-Status: In progress - Context menu and file actions complete
-Last activity: 2026-01-21 - Completed 06-03-PLAN.md
+Phase: 6.1 of 11 (Webapp Automation Testing)
+Plan: 2 of 6 in Phase 6.1 complete
+Status: In progress - File Browser page objects complete
+Last activity: 2026-01-22 - Completed 06.1-02-PLAN.md
 
-Progress: [######....] 60% (28 of 47 plans)
+Progress: [######....] 62% (30 of 48 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 28
-- Average duration: 4.3 min
-- Total execution time: 2.0 hours
+- Total plans completed: 30
+- Average duration: 4.2 min
+- Total execution time: 2.1 hours
 
 **By Phase:**
 
-| Phase                    | Plans | Total  | Avg/Plan |
-| ------------------------ | ----- | ------ | -------- |
-| 01-foundation            | 3/3   | 20 min | 7 min    |
-| 02-authentication        | 4/4   | 18 min | 4.5 min  |
-| 03-core-encryption       | 3/3   | 18 min | 6 min    |
-| 04-file-storage          | 4/4   | 17 min | 4.3 min  |
-| 04.1-api-service-testing | 3/3   | 11 min | 3.7 min  |
-| 04.2-local-ipfs-testing  | 2/2   | 14 min | 7 min    |
-| 05-folder-system         | 4/4   | 18 min | 4.5 min  |
-| 06-file-browser-ui       | 3/4   | 17 min | 5.7 min  |
+| Phase                          | Plans | Total  | Avg/Plan |
+| ------------------------------ | ----- | ------ | -------- |
+| 01-foundation                  | 3/3   | 20 min | 7 min    |
+| 02-authentication              | 4/4   | 18 min | 4.5 min  |
+| 03-core-encryption             | 3/3   | 18 min | 6 min    |
+| 04-file-storage                | 4/4   | 17 min | 4.3 min  |
+| 04.1-api-service-testing       | 3/3   | 11 min | 3.7 min  |
+| 04.2-local-ipfs-testing        | 2/2   | 14 min | 7 min    |
+| 05-folder-system               | 4/4   | 18 min | 4.5 min  |
+| 06-file-browser-ui             | 3/4   | 17 min | 5.7 min  |
+| 06.1-webapp-automation-testing | 2/6   | 7 min  | 3.5 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 6m, 6m, 6m, 5m
-- Trend: Consistent
+- Last 5 plans: 6m, 6m, 5m, 4m, 3m
+- Trend: Improving (faster execution)
 
 _Updated after each plan completion_
 
@@ -142,6 +143,9 @@ Recent decisions affecting current work:
 | Delete always confirms with modal dialog             | 06-03   | Per CONTEXT.md - prevents accidental data loss                            |
 | Folder delete warning includes contents              | 06-03   | Users need to know subfolders/files will also be deleted                  |
 | FileEntry to FileMetadata field mapping              | 06-03   | Download service expects different field names than folder metadata       |
+| Class selectors for E2E locators                     | 06.1-02 | Components lack data-testid, use class names matching actual DOM          |
+| setInputFiles over drag-drop simulation              | 06.1-02 | Playwright setInputFiles more reliable than OS drag-drop simulation       |
+| Reusable dialog page objects                         | 06.1-02 | ConfirmDialog and RenameDialog shared across all file/folder tests        |
 
 ### Pending Todos
 
@@ -167,8 +171,8 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-21
-Stopped at: Completed 06-03-PLAN.md (Context Menu & File Actions)
+Last session: 2026-01-22
+Stopped at: Completed 06.1-02-PLAN.md (File Browser Page Objects)
 Resume file: None
 
 ---
