@@ -310,6 +310,9 @@ importers:
       '@playwright/test':
         specifier: ^1.48.0
         version: 1.57.0
+      '@types/node':
+        specifier: ^22.19.7
+        version: 22.19.7
       dotenv:
         specifier: ^16.4.0
         version: 16.6.1
