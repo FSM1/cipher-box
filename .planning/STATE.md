@@ -11,8 +11,8 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 
 Phase: 6 of 11 (File Browser UI)
 Plan: 2 of 4 in Phase 6 complete
-Status: In progress - Upload zone and modal complete
-Last activity: 2026-01-21 - Completed 06-02-PLAN.md
+Status: In progress - Core file browser layout and upload functionality complete
+Last activity: 2026-01-21 - Completed 06-01-PLAN.md
 
 Progress: [######....] 57% (27 of 47 plans)
 
@@ -130,6 +130,10 @@ Recent decisions affecting current work:
 | add-before-remove pattern for moves                  | 05-04   | Prevents data loss - add to dest first, then remove from source           |
 | Fire-and-forget unpin on delete                      | 05-04   | Don't block user on IPFS cleanup                                          |
 | isDescendantOf prevents circular moves               | 05-04   | Prevents moving folder into itself or descendants                         |
+| Single selection mode per CONTEXT.md                 | 06-01   | No multi-select for v1 - keep UI simple                                   |
+| Folders sorted first then files alphabetically       | 06-01   | Standard file manager behavior using localeCompare                        |
+| CSS Grid for file list columns                       | 06-01   | Name flex, size 100px, date 150px - responsive layout                     |
+| Mobile sidebar overlay at 768px breakpoint           | 06-01   | Per CONTEXT.md auto-collapse on mobile                                    |
 | Portal-based Modal renders outside component tree    | 06-02   | Avoid z-index and overflow issues                                         |
 | Focus trap in Modal                                  | 06-02   | Accessibility - prevent tab from leaving modal                            |
 | 100MB maxSize in react-dropzone                      | 06-02   | Per FILE-01 spec, enforced at library level                               |
@@ -160,10 +164,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-21
-Stopped at: Completed 06-02-PLAN.md (Upload Zone & Progress Modal)
+Stopped at: Completed 06-01-PLAN.md (Core File Browser Layout)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-21 after 06-02 completion_
+_Last updated: 2026-01-21 after 06-01 completion_
