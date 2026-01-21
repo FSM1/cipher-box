@@ -8,6 +8,8 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "pnpm --parallel -r run test",
+    "test:e2e": "pnpm --filter @cipherbox/e2e test",
+    "test:e2e:headed": "pnpm --filter @cipherbox/e2e test:headed",
     "openapi:generate": "pnpm --filter @cipherbox/api openapi:generate",
     "api:generate": "pnpm openapi:generate && pnpm --filter @cipherbox/web api:generate && pnpm lint:fix",
     "prepare": "husky"
