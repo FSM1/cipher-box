@@ -8,6 +8,7 @@ import 'reflect-metadata';
 import { NestFactory } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { Module } from '@nestjs/common';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
@@ -53,6 +54,10 @@ const mockConfigService = {
 
 // Minimal module for OpenAPI generation - no database connection needed
 @Module({
+  imports: [
+    // ThrottlerModule is required because IpnsController uses ThrottlerGuard
+    ThrottlerModule.forRoot([{ ttl: 60000, limit: 10 }]),
+  ],
   controllers: [AppController, AuthController, IpfsController, VaultController, IpnsController],
   providers: [
     AppService,
