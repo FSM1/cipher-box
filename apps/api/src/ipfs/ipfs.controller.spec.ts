@@ -1,24 +1,25 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { IpfsController } from './ipfs.controller';
-import { IpfsService } from './ipfs.service';
+import { IPFS_PROVIDER, IpfsProvider } from './providers';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 describe('IpfsController', () => {
   let controller: IpfsController;
-  let ipfsService: jest.Mocked<IpfsService>;
+  let ipfsProvider: jest.Mocked<IpfsProvider>;
 
   beforeEach(async () => {
-    const mockIpfsService = {
+    const mockIpfsProvider: jest.Mocked<IpfsProvider> = {
       pinFile: jest.fn(),
       unpinFile: jest.fn(),
+      getFile: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [IpfsController],
       providers: [
         {
-          provide: IpfsService,
-          useValue: mockIpfsService,
+          provide: IPFS_PROVIDER,
+          useValue: mockIpfsProvider,
         },
       ],
     })
@@ -27,7 +28,7 @@ describe('IpfsController', () => {
       .compile();
 
     controller = module.get<IpfsController>(IpfsController);
-    ipfsService = module.get(IpfsService);
+    ipfsProvider = module.get(IPFS_PROVIDER);
   });
 
   afterEach(() => {
@@ -38,7 +39,7 @@ describe('IpfsController', () => {
     const mockCid = 'bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi';
     const mockSize = 1024;
 
-    it('should call ipfsService.pinFile with file.buffer', async () => {
+    it('should call ipfsProvider.pinFile with file.buffer', async () => {
       const mockFile = {
         buffer: Buffer.from('encrypted file content'),
         originalname: 'test.enc',
@@ -46,11 +47,11 @@ describe('IpfsController', () => {
         size: 22,
       } as Express.Multer.File;
 
-      ipfsService.pinFile.mockResolvedValue({ cid: mockCid, size: mockSize });
+      ipfsProvider.pinFile.mockResolvedValue({ cid: mockCid, size: mockSize });
 
       await controller.add(mockFile);
 
-      expect(ipfsService.pinFile).toHaveBeenCalledWith(mockFile.buffer);
+      expect(ipfsProvider.pinFile).toHaveBeenCalledWith(mockFile.buffer);
     });
 
     it('should return { cid, size }', async () => {
@@ -61,7 +62,7 @@ describe('IpfsController', () => {
         size: 22,
       } as Express.Multer.File;
 
-      ipfsService.pinFile.mockResolvedValue({ cid: mockCid, size: mockSize });
+      ipfsProvider.pinFile.mockResolvedValue({ cid: mockCid, size: mockSize });
 
       const result = await controller.add(mockFile);
 
@@ -77,11 +78,11 @@ describe('IpfsController', () => {
         size: fileContent.length,
       } as Express.Multer.File;
 
-      ipfsService.pinFile.mockResolvedValue({ cid: mockCid, size: fileContent.length });
+      ipfsProvider.pinFile.mockResolvedValue({ cid: mockCid, size: fileContent.length });
 
       await controller.add(mockFile);
 
-      const calledBuffer = ipfsService.pinFile.mock.calls[0][0];
+      const calledBuffer = ipfsProvider.pinFile.mock.calls[0][0];
       expect(calledBuffer.toString()).toBe(fileContent);
     });
   });
@@ -89,34 +90,34 @@ describe('IpfsController', () => {
   describe('unpin', () => {
     const mockCid = 'bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi';
 
-    it('should call ipfsService.unpinFile with dto.cid', async () => {
+    it('should call ipfsProvider.unpinFile with dto.cid', async () => {
       const unpinDto = { cid: mockCid };
 
-      ipfsService.unpinFile.mockResolvedValue(undefined);
+      ipfsProvider.unpinFile.mockResolvedValue(undefined);
 
       await controller.unpin(unpinDto);
 
-      expect(ipfsService.unpinFile).toHaveBeenCalledWith(mockCid);
+      expect(ipfsProvider.unpinFile).toHaveBeenCalledWith(mockCid);
     });
 
     it('should return { success: true }', async () => {
       const unpinDto = { cid: mockCid };
 
-      ipfsService.unpinFile.mockResolvedValue(undefined);
+      ipfsProvider.unpinFile.mockResolvedValue(undefined);
 
       const result = await controller.unpin(unpinDto);
 
       expect(result).toEqual({ success: true });
     });
 
-    it('should call service exactly once', async () => {
+    it('should call provider exactly once', async () => {
       const unpinDto = { cid: mockCid };
 
-      ipfsService.unpinFile.mockResolvedValue(undefined);
+      ipfsProvider.unpinFile.mockResolvedValue(undefined);
 
       await controller.unpin(unpinDto);
 
-      expect(ipfsService.unpinFile).toHaveBeenCalledTimes(1);
+      expect(ipfsProvider.unpinFile).toHaveBeenCalledTimes(1);
     });
   });
 });

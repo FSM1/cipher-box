@@ -445,7 +445,7 @@ describe('AuthService', () => {
   describe('linkMethod', () => {
     const linkDto = {
       idToken: 'new-token',
-      loginType: 'github' as const,
+      loginType: 'social' as const,
     };
 
     it('should verify token and create new auth method', async () => {
@@ -469,7 +469,7 @@ describe('AuthService', () => {
 
       const result = await service.linkMethod('user-id', linkDto);
 
-      expect(web3AuthVerifier.verifyIdToken).toHaveBeenCalledWith('new-token', 'pub-key', 'github');
+      expect(web3AuthVerifier.verifyIdToken).toHaveBeenCalledWith('new-token', 'pub-key', 'social');
       expect(authMethodRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: 'user-id',

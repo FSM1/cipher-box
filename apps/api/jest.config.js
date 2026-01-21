@@ -54,7 +54,11 @@ module.exports = {
       lines: 90,
       branches: 85,
     },
-    '**/ipfs/ipfs.service.ts': {
+    '**/ipfs/providers/pinata.provider.ts': {
+      lines: 85,
+      branches: 80,
+    },
+    '**/ipfs/providers/local.provider.ts': {
       lines: 85,
       branches: 80,
     },

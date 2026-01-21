@@ -1,12 +1,11 @@
 import {
-  Injectable,
   InternalServerErrorException,
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import FormData from 'form-data';
 import { Readable } from 'stream';
+import { IpfsProvider } from './ipfs-provider.interface';
 
 interface PinataResponse {
   IpfsHash: string;
@@ -14,17 +13,14 @@ interface PinataResponse {
   Timestamp: string;
 }
 
-@Injectable()
-export class IpfsService {
-  private readonly pinataJwt: string;
+export class PinataProvider implements IpfsProvider {
   private readonly pinataBaseUrl = 'https://api.pinata.cloud';
+  private readonly gatewayBaseUrl = 'https://gateway.pinata.cloud';
 
-  constructor(private readonly configService: ConfigService) {
-    const jwt = this.configService.get<string>('PINATA_JWT');
-    if (!jwt) {
-      throw new Error('PINATA_JWT environment variable is required');
+  constructor(private readonly pinataJwt: string) {
+    if (!pinataJwt) {
+      throw new Error('Pinata JWT is required');
     }
-    this.pinataJwt = jwt;
   }
 
   /**
@@ -135,6 +131,46 @@ export class IpfsService {
       }
       throw new InternalServerErrorException(
         `Failed to unpin file from IPFS: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Get a file from IPFS via Pinata gateway.
+   * @param cid - The CID of the file to retrieve
+   * @returns The file content as a Buffer
+   */
+  async getFile(cid: string): Promise<Buffer> {
+    if (!cid || typeof cid !== 'string') {
+      throw new BadRequestException('CID is required');
+    }
+
+    try {
+      const response = await fetch(`${this.gatewayBaseUrl}/ipfs/${cid}`);
+
+      if (response.status === 404) {
+        throw new NotFoundException(`File not found: ${cid}`);
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new InternalServerErrorException(
+          `Pinata fetch failed: ${response.status} - ${errorText}`
+        );
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      return Buffer.from(arrayBuffer);
+    } catch (error) {
+      if (
+        error instanceof BadRequestException ||
+        error instanceof InternalServerErrorException ||
+        error instanceof NotFoundException
+      ) {
+        throw error;
+      }
+      throw new InternalServerErrorException(
+        `Failed to get file from IPFS: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }

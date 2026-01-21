@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 4.1 API Service Testing complete - ready for Phase 5
+**Current focus:** Phase 4.2 Local IPFS Testing Infrastructure - COMPLETE
 
 ## Current Position
 
-Phase: 4.1 of 11 (API Service Testing)
-Plan: 3 of 3 in Phase 4.1 complete
-Status: Phase complete - All API services and controllers tested
-Last activity: 2026-01-21 - Completed 04.1-03-PLAN.md (Controller tests and coverage thresholds)
+Phase: 4.2 of 11 (Local IPFS Testing) - COMPLETE
+Plan: 2 of 2 in Phase 4.2 complete
+Status: Phase 4.2 complete - Local IPFS testing infrastructure ready
+Last activity: 2026-01-21 - Completed 04.2-02-PLAN.md (CI service containers + tests)
 
-Progress: [####......] 39% (17 of 44 plans)
+Progress: [####......] 42% (19 of 45 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 17
+- Total plans completed: 19
 - Average duration: 4.6 min
-- Total execution time: 1.3 hours
+- Total execution time: 1.5 hours
 
 **By Phase:**
 
@@ -33,11 +33,12 @@ Progress: [####......] 39% (17 of 44 plans)
 | 03-core-encryption       | 3/3   | 18 min | 6 min    |
 | 04-file-storage          | 4/4   | 17 min | 4.3 min  |
 | 04.1-api-service-testing | 3/3   | 11 min | 3.7 min  |
+| 04.2-local-ipfs-testing  | 2/2   | 14 min | 7 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 5m, 3m, 5m, 3m, 3m
-- Trend: Consistent (fast)
+- Last 5 plans: 5m, 3m, 3m, 8m, 6m
+- Trend: Consistent
 
 _Updated after each plan completion_
 
@@ -105,12 +106,17 @@ Recent decisions affecting current work:
 | Auth service branch threshold 84% (actual 84.61%)    | 04.1-03 | One edge case in derivationVersion null check uncovered                   |
 | Controller branch threshold 65%                      | 04.1-03 | Swagger decorators inflate uncovered branches in coverage                 |
 | Coverage exclusions for modules, DTOs, entities      | 04.1-03 | These are configuration/definitions, not logic requiring tests            |
+| Provider pattern for IPFS backends                   | 04.2-01 | IpfsProvider interface with PinataProvider and LocalProvider              |
+| @Inject(IPFS_PROVIDER) token injection               | 04.2-01 | Avoids silent failures with class-based injection                         |
+| Kubo API POST for all operations                     | 04.2-01 | Kubo RPC uses POST (not REST), even for cat and unpin                     |
+| IPFS_PROVIDER env var for backend selection          | 04.2-01 | 'local' or 'pinata' switches provider implementation                      |
+| Kubo API port localhost-only                         | 04.2-01 | 5001 bound to 127.0.0.1 for security (admin-level access)                 |
 
 ### Pending Todos
 
-1 pending todo(s):
+0 pending todo(s):
 
-- `2026-01-21-local-ipfs-node-for-testing.md` — Add local IPFS node to Docker stack for testing (area: api)
+- ~~`2026-01-21-local-ipfs-node-for-testing.md` — Add local IPFS node to Docker stack for testing (area: api)~~ - **COMPLETED: Phase 4.2**
 
 ### Blockers/Concerns
 
@@ -130,10 +136,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-21
-Stopped at: Completed 04.1-03-PLAN.md (Controller tests and coverage thresholds)
+Stopped at: Completed Phase 4.2 (Local IPFS Testing Infrastructure)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-21 after 04.1-03 completion_
+_Last updated: 2026-01-21 after 04.2-02 completion_
