@@ -14,6 +14,7 @@ import {
   encryptFolderMetadata,
   type FolderMetadata,
   type FolderEntry,
+  type FileEntry,
   type FolderChild,
 } from '@cipherbox/crypto';
 import { addToIpfs } from '../lib/api/ipfs';
@@ -199,4 +200,159 @@ export async function updateFolderMetadata(params: {
   });
 
   return { cid, newSequenceNumber: newSeq };
+}
+
+/**
+ * Rename a folder within its parent.
+ *
+ * Updates the folder entry's name in the parent's metadata and publishes
+ * an updated IPNS record for the parent folder.
+ *
+ * @param params.folderId - ID of folder to rename
+ * @param params.newName - New name for the folder
+ * @param params.parentFolderState - Parent folder containing this folder
+ * @throws Error if folder not found or name collision exists
+ */
+export async function renameFolder(params: {
+  folderId: string;
+  newName: string;
+  parentFolderState: FolderNode;
+}): Promise<void> {
+  // 1. Find folder entry in parent's children
+  const children = [...params.parentFolderState.children];
+  const folderIndex = children.findIndex((c) => c.type === 'folder' && c.id === params.folderId);
+
+  if (folderIndex === -1) throw new Error('Folder not found');
+
+  // 2. Check for name collision
+  const nameExists = children.some((c) => c.name === params.newName && c.id !== params.folderId);
+  if (nameExists) throw new Error('An item with this name already exists');
+
+  // 3. Update name and modifiedAt
+  const folder = children[folderIndex] as FolderEntry;
+  children[folderIndex] = {
+    ...folder,
+    name: params.newName,
+    modifiedAt: Date.now(),
+  };
+
+  // 4. Update parent folder metadata and publish
+  await updateFolderMetadata({
+    folderId: params.parentFolderState.id,
+    children,
+    folderKey: params.parentFolderState.folderKey,
+    ipnsPrivateKey: params.parentFolderState.ipnsPrivateKey,
+    ipnsName: params.parentFolderState.ipnsName,
+    sequenceNumber: params.parentFolderState.sequenceNumber,
+  });
+}
+
+/**
+ * Delete a folder and all its contents recursively.
+ *
+ * Collects all file CIDs from the folder and its subfolders,
+ * removes the folder from the parent's metadata, publishes the update,
+ * and unpins all file CIDs in the background.
+ *
+ * @param params.folderId - ID of folder to delete
+ * @param params.parentFolderState - Parent folder containing this folder
+ * @param params.getFolderState - Function to get folder state by ID (for recursion)
+ * @param params.unpinCid - Function to unpin a CID from IPFS
+ * @throws Error if folder not found
+ */
+export async function deleteFolder(params: {
+  folderId: string;
+  parentFolderState: FolderNode;
+  getFolderState: (id: string) => FolderNode | undefined;
+  unpinCid: (cid: string) => Promise<void>;
+}): Promise<string[]> {
+  // 1. Find folder in parent's children
+  const children = [...params.parentFolderState.children];
+  const folderIndex = children.findIndex((c) => c.type === 'folder' && c.id === params.folderId);
+
+  if (folderIndex === -1) throw new Error('Folder not found');
+
+  // 2. Recursively collect all CIDs to unpin (files in this folder and subfolders)
+  const cidsToUnpin: string[] = [];
+  const collectCids = (folderId: string) => {
+    const folder = params.getFolderState(folderId);
+    if (!folder) return;
+
+    for (const child of folder.children) {
+      if (child.type === 'file') {
+        cidsToUnpin.push(child.cid);
+      } else if (child.type === 'folder') {
+        collectCids(child.id);
+      }
+    }
+  };
+
+  collectCids(params.folderId);
+
+  // 3. Remove folder from parent's children
+  children.splice(folderIndex, 1);
+
+  // 4. Update parent folder metadata and publish
+  await updateFolderMetadata({
+    folderId: params.parentFolderState.id,
+    children,
+    folderKey: params.parentFolderState.folderKey,
+    ipnsPrivateKey: params.parentFolderState.ipnsPrivateKey,
+    ipnsName: params.parentFolderState.ipnsName,
+    sequenceNumber: params.parentFolderState.sequenceNumber,
+  });
+
+  // 5. Unpin all collected CIDs (fire and forget, don't block)
+  Promise.all(cidsToUnpin.map((cid) => params.unpinCid(cid).catch(() => {})));
+
+  // Return CIDs for caller to track/log
+  return cidsToUnpin;
+}
+
+/**
+ * Delete a file from its parent folder.
+ *
+ * Removes the file from the parent's metadata, publishes the update,
+ * and unpins the file CID in the background.
+ *
+ * Note: This handles folder metadata update. Use delete.service.ts deleteFile
+ * for direct IPFS unpin with quota update.
+ *
+ * @param params.fileId - ID of file to delete
+ * @param params.parentFolderState - Parent folder containing this file
+ * @param params.unpinCid - Optional function to unpin a CID from IPFS
+ * @throws Error if file not found
+ */
+export async function deleteFileFromFolder(params: {
+  fileId: string;
+  parentFolderState: FolderNode;
+  unpinCid?: (cid: string) => Promise<void>;
+}): Promise<void> {
+  // 1. Find file in parent's children
+  const children = [...params.parentFolderState.children];
+  const fileIndex = children.findIndex((c) => c.type === 'file' && c.id === params.fileId);
+
+  if (fileIndex === -1) throw new Error('File not found');
+
+  // 2. Get file CID for unpinning
+  const file = children[fileIndex] as FileEntry;
+  const cidToUnpin = file.cid;
+
+  // 3. Remove file from parent's children
+  children.splice(fileIndex, 1);
+
+  // 4. Update parent folder metadata and publish
+  await updateFolderMetadata({
+    folderId: params.parentFolderState.id,
+    children,
+    folderKey: params.parentFolderState.folderKey,
+    ipnsPrivateKey: params.parentFolderState.ipnsPrivateKey,
+    ipnsName: params.parentFolderState.ipnsName,
+    sequenceNumber: params.parentFolderState.sequenceNumber,
+  });
+
+  // 5. Unpin file CID (fire and forget, don't block)
+  if (params.unpinCid) {
+    params.unpinCid(cidToUnpin).catch(() => {});
+  }
 }

@@ -54,6 +54,8 @@ type FolderState = {
   setBreadcrumbs: (breadcrumbs: Breadcrumb[]) => void;
   addPendingPublish: (folderId: string) => void;
   removePendingPublish: (folderId: string) => void;
+  removeFolder: (folderId: string) => void;
+  updateFolderName: (folderId: string, newName: string) => void;
   clearFolders: () => void;
 };
 
@@ -108,6 +110,36 @@ export const useFolderStore = create<FolderState>((set, get) => ({
       const newPending = new Set(state.pendingPublishes);
       newPending.delete(folderId);
       return { pendingPublishes: newPending };
+    }),
+
+  // Remove a folder from local state (after deletion)
+  // Also clears the folder's key material from memory
+  removeFolder: (folderId) =>
+    set((state) => {
+      const folder = state.folders[folderId];
+      if (!folder) return state;
+
+      // Zero-fill keys before removing
+      if (folder.folderKey) folder.folderKey.fill(0);
+      if (folder.ipnsPrivateKey) folder.ipnsPrivateKey.fill(0);
+
+      const { [folderId]: _removed, ...remainingFolders } = state.folders;
+      void _removed; // Intentionally destructured to remove from object
+      return { folders: remainingFolders };
+    }),
+
+  // Update a folder's name in local state
+  updateFolderName: (folderId, newName) =>
+    set((state) => {
+      const folder = state.folders[folderId];
+      if (!folder) return state;
+
+      return {
+        folders: {
+          ...state.folders,
+          [folderId]: { ...folder, name: newName },
+        },
+      };
     }),
 
   // [SECURITY: MEDIUM-02] Zero-fill sensitive key material before clearing
