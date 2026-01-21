@@ -1,0 +1,310 @@
+/* Upload Zone Styles */
+
+.upload-zone-wrapper {
+  width: 100%;
+}
+
+.upload-zone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  padding: 2rem;
+  border: 2px dashed var(--upload-border, #d1d5db);
+  border-radius: 8px;
+  background-color: var(--upload-bg, #f9fafb);
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.upload-zone:hover {
+  border-color: var(--upload-border-hover, #9ca3af);
+  background-color: var(--upload-bg-hover, #f3f4f6);
+}
+
+.upload-zone:focus-within {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+/* Active drop state */
+.upload-zone-active {
+  border-color: var(--upload-border-active, #3b82f6);
+  border-style: solid;
+  background-color: var(--upload-bg-active, #eff6ff);
+}
+
+/* Uploading state */
+.upload-zone-uploading {
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* Content */
+.upload-zone-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: center;
+  color: var(--upload-text, #6b7280);
+}
+
+.upload-zone-icon {
+  font-size: 2.5rem;
+  line-height: 1;
+  opacity: 0.6;
+}
+
+.upload-zone-text {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+/* Error message */
+.upload-zone-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  color: var(--upload-error-text, #991b1b);
+  background-color: var(--upload-error-bg, #fef2f2);
+  border: 1px solid var(--upload-error-border, #fecaca);
+  border-radius: 4px;
+}
+
+.upload-zone-error-dismiss {
+  padding: 0;
+  font-size: 1.25rem;
+  font-weight: 400;
+  line-height: 1;
+  color: inherit;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  opacity: 0.7;
+}
+
+.upload-zone-error-dismiss:hover {
+  opacity: 1;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .upload-zone {
+    --upload-border: #4b5563;
+    --upload-bg: #1f2937;
+    --upload-border-hover: #6b7280;
+    --upload-bg-hover: #374151;
+    --upload-border-active: #60a5fa;
+    --upload-bg-active: #1e3a5f;
+    --upload-text: #9ca3af;
+  }
+
+  .upload-zone-error {
+    --upload-error-text: #fca5a5;
+    --upload-error-bg: #450a0a;
+    --upload-error-border: #7f1d1d;
+  }
+}
+
+/* ============================================
+   Upload Modal Styles
+   ============================================ */
+
+.upload-modal-content {
+  min-width: 400px;
+}
+
+.upload-modal-progress {
+  margin-bottom: 1rem;
+}
+
+.upload-modal-overall {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--modal-text, #6b7280);
+}
+
+/* Upload item list */
+.upload-item-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* Individual upload item */
+.upload-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background-color: var(--upload-item-bg, #f9fafb);
+  border-radius: 4px;
+}
+
+.upload-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.upload-item-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0; /* Allow text truncation */
+}
+
+.upload-item-icon {
+  flex-shrink: 0;
+  font-size: 1rem;
+  opacity: 0.6;
+}
+
+.upload-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.875rem;
+  color: var(--modal-text, #374151);
+}
+
+.upload-item-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.upload-item-cancel,
+.upload-item-retry {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  border: none;
+  border-radius: 4px;
+  transition: background-color 0.15s ease;
+}
+
+.upload-item-cancel {
+  color: var(--cancel-text, #6b7280);
+  background-color: var(--cancel-bg, #e5e7eb);
+}
+
+.upload-item-cancel:hover {
+  background-color: var(--cancel-bg-hover, #d1d5db);
+}
+
+.upload-item-retry {
+  color: var(--retry-text, #1d4ed8);
+  background-color: var(--retry-bg, #dbeafe);
+}
+
+.upload-item-retry:hover {
+  background-color: var(--retry-bg-hover, #bfdbfe);
+}
+
+/* Progress bar */
+.upload-item-progress-bar {
+  height: 4px;
+  background-color: var(--progress-bg, #e5e7eb);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.upload-item-progress-fill {
+  height: 100%;
+  background-color: var(--progress-fill, #3b82f6);
+  transition: width 0.2s ease;
+}
+
+.upload-item-progress-fill[data-status='complete'] {
+  background-color: var(--progress-complete, #22c55e);
+}
+
+.upload-item-progress-fill[data-status='error'] {
+  background-color: var(--progress-error, #ef4444);
+}
+
+/* Status text */
+.upload-item-status {
+  font-size: 0.75rem;
+  color: var(--status-text, #6b7280);
+}
+
+.upload-item-status[data-status='complete'] {
+  color: var(--status-complete, #16a34a);
+}
+
+.upload-item-status[data-status='error'] {
+  color: var(--status-error, #dc2626);
+}
+
+/* Modal actions */
+.upload-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--modal-border, #e5e7eb);
+}
+
+.upload-modal-btn {
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+  border: none;
+  border-radius: 4px;
+  transition: background-color 0.15s ease;
+}
+
+.upload-modal-btn-cancel {
+  color: var(--modal-text, #374151);
+  background-color: var(--btn-cancel-bg, #e5e7eb);
+}
+
+.upload-modal-btn-cancel:hover {
+  background-color: var(--btn-cancel-bg-hover, #d1d5db);
+}
+
+.upload-modal-btn-close {
+  color: white;
+  background-color: var(--btn-close-bg, #3b82f6);
+}
+
+.upload-modal-btn-close:hover {
+  background-color: var(--btn-close-bg-hover, #2563eb);
+}
+
+/* Dark mode for upload modal */
+@media (prefers-color-scheme: dark) {
+  .upload-item {
+    --upload-item-bg: #374151;
+  }
+
+  .upload-item-progress-bar {
+    --progress-bg: #4b5563;
+  }
+
+  .upload-modal-actions {
+    --modal-border: #4b5563;
+  }
+
+  .upload-modal-btn-cancel {
+    --btn-cancel-bg: #4b5563;
+    --btn-cancel-bg-hover: #6b7280;
+  }
+}
