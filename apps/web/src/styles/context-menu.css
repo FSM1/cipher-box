@@ -1,0 +1,89 @@
+/* Context Menu Container */
+.context-menu {
+  position: absolute;
+  z-index: 1100;
+  min-width: 160px;
+  padding: 4px 0;
+  overflow: hidden;
+  background-color: var(--context-menu-bg, #ffffff);
+  border: 1px solid var(--context-menu-border, #e5e7eb);
+  border-radius: 6px;
+  box-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .context-menu {
+    --context-menu-bg: #1f2937;
+    --context-menu-border: #374151;
+    --context-menu-text: #f9fafb;
+    --context-menu-hover: #374151;
+    --context-menu-destructive: #ef4444;
+    --context-menu-destructive-hover: rgba(239, 68, 68, 0.1);
+  }
+}
+
+/* Light mode defaults */
+:root {
+  --context-menu-bg: #ffffff;
+  --context-menu-border: #e5e7eb;
+  --context-menu-text: #374151;
+  --context-menu-hover: #f3f4f6;
+  --context-menu-destructive: #dc2626;
+  --context-menu-destructive-hover: rgba(220, 38, 38, 0.1);
+}
+
+/* Menu Item */
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 0.875rem;
+  color: var(--context-menu-text);
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: none;
+  transition: background-color 0.15s ease;
+}
+
+.context-menu-item:hover,
+.context-menu-item:focus {
+  background-color: var(--context-menu-hover);
+  outline: none;
+}
+
+.context-menu-item:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: -2px;
+}
+
+/* Menu Item Icon */
+.context-menu-item-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  font-size: 0.875rem;
+}
+
+/* Destructive Action (Delete) */
+.context-menu-item--destructive {
+  color: var(--context-menu-destructive);
+}
+
+.context-menu-item--destructive:hover,
+.context-menu-item--destructive:focus {
+  background-color: var(--context-menu-destructive-hover);
+}
+
+/* Divider */
+.context-menu-divider {
+  height: 1px;
+  margin: 4px 0;
+  background-color: var(--context-menu-border);
+}

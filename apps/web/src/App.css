@@ -1,3 +1,8 @@
+/* Import component styles */
+@import './styles/file-browser.css';
+@import './styles/breadcrumbs.css';
+@import './styles/responsive.css';
+
 .login-container {
   display: flex;
   flex-direction: column;
@@ -69,16 +74,7 @@
   flex: 1;
 }
 
-.folder-sidebar {
-  width: 250px;
-  padding: 1rem;
-  border-right: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.file-browser {
-  flex: 1;
-  padding: 1rem;
-}
+/* Note: file-browser and folder-tree styles are in file-browser.css */
 
 .placeholder-text {
   color: rgba(255, 255, 255, 0.3);

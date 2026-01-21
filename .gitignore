@@ -27,3 +27,9 @@ yarn-error.log*
 
 # Test coverage
 coverage/
+
+# Playwright screenshots
+.playwright-mcp/*.png
+
+# Temporary files
+temp/*

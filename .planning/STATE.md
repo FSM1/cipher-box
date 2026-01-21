@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 5 Folder System - COMPLETE
+**Current focus:** Phase 6 File Browser UI - In Progress
 
 ## Current Position
 
-Phase: 5 of 11 (Folder System) - COMPLETE
-Plan: 4 of 4 in Phase 5 complete
-Status: Phase 5 complete - folder system infrastructure ready
-Last activity: 2026-01-21 - Phase 5 verified and complete
+Phase: 6 of 11 (File Browser UI)
+Plan: 3 of 4 in Phase 6 complete
+Status: In progress - Context menu and file actions complete
+Last activity: 2026-01-21 - Completed 06-03-PLAN.md
 
-Progress: [#####.....] 53% (25 of 47 plans)
+Progress: [######....] 60% (28 of 47 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 25
-- Average duration: 4.4 min
-- Total execution time: 1.7 hours
+- Total plans completed: 28
+- Average duration: 4.3 min
+- Total execution time: 2.0 hours
 
 **By Phase:**
 
@@ -35,10 +35,11 @@ Progress: [#####.....] 53% (25 of 47 plans)
 | 04.1-api-service-testing | 3/3   | 11 min | 3.7 min  |
 | 04.2-local-ipfs-testing  | 2/2   | 14 min | 7 min    |
 | 05-folder-system         | 4/4   | 18 min | 4.5 min  |
+| 06-file-browser-ui       | 3/4   | 17 min | 5.7 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 6m, 4m, 6m, 4m, 4m
+- Last 5 plans: 4m, 6m, 6m, 6m, 5m
 - Trend: Consistent
 
 _Updated after each plan completion_
@@ -129,6 +130,18 @@ Recent decisions affecting current work:
 | add-before-remove pattern for moves                  | 05-04   | Prevents data loss - add to dest first, then remove from source           |
 | Fire-and-forget unpin on delete                      | 05-04   | Don't block user on IPFS cleanup                                          |
 | isDescendantOf prevents circular moves               | 05-04   | Prevents moving folder into itself or descendants                         |
+| Single selection mode per CONTEXT.md                 | 06-01   | No multi-select for v1 - keep UI simple                                   |
+| Folders sorted first then files alphabetically       | 06-01   | Standard file manager behavior using localeCompare                        |
+| CSS Grid for file list columns                       | 06-01   | Name flex, size 100px, date 150px - responsive layout                     |
+| Mobile sidebar overlay at 768px breakpoint           | 06-01   | Per CONTEXT.md auto-collapse on mobile                                    |
+| Portal-based Modal renders outside component tree    | 06-02   | Avoid z-index and overflow issues                                         |
+| Focus trap in Modal                                  | 06-02   | Accessibility - prevent tab from leaving modal                            |
+| 100MB maxSize in react-dropzone                      | 06-02   | Per FILE-01 spec, enforced at library level                               |
+| V1 simplified upload modal                           | 06-02   | Per CONTEXT.md "keep v1 simple" - shows current file only                 |
+| floating-ui/react for context menu positioning       | 06-03   | Built-in flip/shift middleware handles edge detection                     |
+| Delete always confirms with modal dialog             | 06-03   | Per CONTEXT.md - prevents accidental data loss                            |
+| Folder delete warning includes contents              | 06-03   | Users need to know subfolders/files will also be deleted                  |
+| FileEntry to FileMetadata field mapping              | 06-03   | Download service expects different field names than folder metadata       |
 
 ### Pending Todos
 
@@ -155,10 +168,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-21
-Stopped at: Completed Phase 5 (Folder System)
+Stopped at: Completed 06-03-PLAN.md (Context Menu & File Actions)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-21 after Phase 5 completion_
+_Last updated: 2026-01-21 after 06-03 completion_

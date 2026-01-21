@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LogoutButton } from '../components/auth/LogoutButton';
+import { FileBrowser } from '../components/file-browser';
 import { useAuth } from '../hooks/useAuth';
 
 /**
@@ -45,14 +46,7 @@ export function Dashboard() {
         </div>
       </header>
       <main className="dashboard-main">
-        <aside className="folder-sidebar">
-          <h2>Folders</h2>
-          <p className="placeholder-text">Folder tree coming in Phase 5</p>
-        </aside>
-        <section className="file-area">
-          <h2>Files</h2>
-          <p className="placeholder-text">File browser coming in Phase 6</p>
-        </section>
+        <FileBrowser />
       </main>
     </div>
   );

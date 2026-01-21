@@ -19,6 +19,7 @@ describe('VaultController', () => {
     encryptedRootFolderKey: 'encrypted-folder-key-hex',
     encryptedRootIpnsPrivateKey: 'encrypted-ipns-key-hex',
     rootIpnsName: 'k51qzi5uqu5test',
+    rootIpnsPublicKey: 'd'.repeat(64), // 32-byte Ed25519 public key
     createdAt: new Date('2026-01-20T00:00:00Z'),
     initializedAt: null,
   };
@@ -58,6 +59,7 @@ describe('VaultController', () => {
       encryptedRootFolderKey: 'encrypted-folder-key-hex',
       encryptedRootIpnsPrivateKey: 'encrypted-ipns-key-hex',
       rootIpnsName: 'k51qzi5uqu5test',
+      rootIpnsPublicKey: 'd'.repeat(64), // 32-byte Ed25519 public key
     };
 
     it('should call vaultService.initializeVault with user.id and dto', async () => {
