@@ -78,6 +78,17 @@ export {
   type IPNSRecord,
 } from './ipns';
 
+// Folder metadata types and encryption
+export {
+  encryptFolderMetadata,
+  decryptFolderMetadata,
+  type FolderMetadata,
+  type FolderChild,
+  type FolderEntry,
+  type FileEntry,
+  type EncryptedFolderMetadata,
+} from './folder';
+
 // Utility functions (only safe public utilities)
 export {
   hexToBytes,
