@@ -21,9 +21,13 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@libp2p/crypto": "^5.1.13",
+    "@libp2p/peer-id": "^6.0.4",
     "@noble/ed25519": "^2.2.3",
     "@noble/hashes": "^1.7.1",
-    "eciesjs": "^0.4.16"
+    "eciesjs": "^0.4.16",
+    "ipns": "^10.1.3",
+    "multiformats": "^13.4.2"
   },
   "devDependencies": {
     "@noble/secp256k1": "^2.2.3",
