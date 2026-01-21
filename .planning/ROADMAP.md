@@ -18,9 +18,10 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Core Encryption** - Shared crypto module and vault initialization
 - [x] **Phase 4: File Storage** - Upload/download encrypted files via IPFS relay
 - [x] **Phase 4.1: API Service Testing** - Unit tests for backend services per TESTING.md (INSERTED)
-- [ ] **Phase 4.2: Local IPFS Testing Infrastructure** - Add local IPFS node to Docker for offline testing (INSERTED)
+- [x] **Phase 4.2: Local IPFS Testing Infrastructure** - Add local IPFS node to Docker for offline testing (INSERTED)
 - [x] **Phase 5: Folder System** - IPNS metadata, folder hierarchy, and operations
 - [ ] **Phase 6: File Browser UI** - Web interface for file management
+- [ ] **Phase 6.1: Webapp Automation Testing** - E2E UI testing with automation framework (INSERTED)
 - [ ] **Phase 7: Multi-Device Sync** - IPNS polling and sync state management
 - [ ] **Phase 8: TEE Integration** - Auto-republishing via Phala Cloud
 - [ ] **Phase 9: Desktop Client** - Tauri app with FUSE mount for macOS
@@ -150,8 +151,8 @@ Plans:
 
 Plans:
 
-- [ ] 04.2-01-PLAN.md — Docker + Provider Abstraction (Kubo service, IpfsProvider interface, PinataProvider, LocalProvider)
-- [ ] 04.2-02-PLAN.md — Integration Tests + CI (IPFS service container, LocalProvider tests, E2E tests)
+- [x] 04.2-01-PLAN.md — Docker + Provider Abstraction (Kubo service, IpfsProvider interface, PinataProvider, LocalProvider)
+- [x] 04.2-02-PLAN.md — Integration Tests + CI (IPFS service container, LocalProvider tests, E2E tests)
 
 ### Phase 5: Folder System
 
@@ -196,6 +197,23 @@ Plans:
 - [ ] 06-02: File browser layout with folder tree sidebar
 - [ ] 06-03: Drag-drop upload and context menus
 - [ ] 06-04: Responsive design and breadcrumb navigation
+
+### Phase 6.1: Webapp Automation Testing (INSERTED)
+
+**Goal**: E2E UI testing with automation framework validates critical user flows
+**Depends on**: Phase 6
+**Requirements**: Testing infrastructure
+**Success Criteria** (what must be TRUE):
+
+1. E2E test framework configured and running
+2. Critical user flows covered by automated tests
+3. Tests run in CI pipeline
+4. Test reports generated on failure
+   **Plans**: TBD
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 6.1 to break down)
 
 ### Phase 7: Multi-Device Sync
 
@@ -312,9 +330,10 @@ Decimal phases (if any) execute between their surrounding integers.
 | 3. Core Encryption      | 3/3            | Complete    | 2026-01-20 |
 | 4. File Storage         | 4/4            | Complete    | 2026-01-20 |
 | 4.1 API Service Testing | 3/3            | Complete    | 2026-01-21 |
-| 4.2 Local IPFS Testing  | 0/TBD          | Not started | -          |
+| 4.2 Local IPFS Testing  | 2/2            | Complete    | 2026-01-21 |
 | 5. Folder System        | 4/4            | Complete    | 2026-01-21 |
 | 6. File Browser UI      | 0/4            | Not started | -          |
+| 6.1 Webapp Automation   | 0/TBD          | Not started | -          |
 | 7. Multi-Device Sync    | 0/3            | Not started | -          |
 | 8. TEE Integration      | 0/4            | Not started | -          |
 | 9. Desktop Client       | 0/5            | Not started | -          |
@@ -336,4 +355,6 @@ _Phase 4.1 planned: 2026-01-20_
 _Phase 4.1 complete: 2026-01-21_
 _Phase 5 planned: 2026-01-21_
 _Phase 5 complete: 2026-01-21_
-_Total phases: 11 | Total plans: 45 | Depth: Comprehensive_
+_Phase 4.2 complete: 2026-01-21_
+_Phase 6.1 inserted: 2026-01-21_
+_Total phases: 12 | Total plans: 47 | Depth: Comprehensive_
