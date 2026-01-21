@@ -174,7 +174,7 @@ describe('Web3AuthVerifierService', () => {
     });
 
     it('should return wallet address if no verifierId', () => {
-      const payload = { wallets: [{ address: '0x123abc' }] };
+      const payload = { wallets: [{ type: 'ethereum', address: '0x123abc' }] };
 
       const result = service.extractIdentifier(payload);
 
@@ -182,7 +182,7 @@ describe('Web3AuthVerifierService', () => {
     });
 
     it('should return public key as last resort', () => {
-      const payload = { wallets: [{ public_key: 'pubkey123' }] };
+      const payload = { wallets: [{ type: 'ethereum', public_key: 'pubkey123' }] };
 
       const result = service.extractIdentifier(payload);
 
