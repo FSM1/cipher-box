@@ -125,6 +125,7 @@ None yet.
 ### Roadmap Evolution
 
 - Phase 4.1 inserted after Phase 4: API Service Testing (URGENT) - Add unit tests for backend services per .planning/codebase/TESTING.md coverage thresholds before continuing to Phase 5
+- Phase 4.2 inserted: Local IPFS Testing Infrastructure - Add local IPFS node to Docker for offline testing (parallel work via worktree at ../cipher-box-phase-4.2)
 
 ## Session Continuity
 
