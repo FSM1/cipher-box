@@ -7,6 +7,7 @@ import {
   UploadedFile,
   ParseFilePipe,
   MaxFileSizeValidator,
+  Inject,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
@@ -18,7 +19,7 @@ import {
   ApiBearerAuth,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { IpfsService } from './ipfs.service';
+import { IPFS_PROVIDER, IpfsProvider } from './providers';
 import { AddResponseDto, UnpinDto, UnpinResponseDto } from './dto';
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
@@ -28,7 +29,7 @@ const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 @UseGuards(JwtAuthGuard)
 @Controller('ipfs')
 export class IpfsController {
-  constructor(private readonly ipfsService: IpfsService) {}
+  constructor(@Inject(IPFS_PROVIDER) private readonly ipfsProvider: IpfsProvider) {}
 
   @Post('add')
   @ApiOperation({
@@ -75,7 +76,7 @@ export class IpfsController {
     )
     file: Express.Multer.File
   ): Promise<AddResponseDto> {
-    const result = await this.ipfsService.pinFile(file.buffer);
+    const result = await this.ipfsProvider.pinFile(file.buffer);
     return result;
   }
 
@@ -94,7 +95,7 @@ export class IpfsController {
     description: 'Unauthorized - JWT token required',
   })
   async unpin(@Body() dto: UnpinDto): Promise<UnpinResponseDto> {
-    await this.ipfsService.unpinFile(dto.cid);
+    await this.ipfsProvider.unpinFile(dto.cid);
     return { success: true };
   }
 }

@@ -45,6 +45,17 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      ipfs:
+        image: ipfs/kubo:v0.34.0
+        ports:
+          - 5001:5001
+          - 8080:8080
+        options: >-
+          --health-cmd "ipfs id"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 30s
     steps:
       - uses: actions/checkout@v4
 
@@ -69,6 +80,9 @@ jobs:
           DB_PASSWORD: postgres
           DB_DATABASE: cipherbox_test
           NODE_ENV: test
+          IPFS_PROVIDER: local
+          IPFS_LOCAL_API_URL: http://localhost:5001
+          IPFS_LOCAL_GATEWAY_URL: http://localhost:8080
 
       - name: Format generated files
         run: |
@@ -97,6 +111,17 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      ipfs:
+        image: ipfs/kubo:v0.34.0
+        ports:
+          - 5001:5001
+          - 8080:8080
+        options: >-
+          --health-cmd "ipfs id"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 30s
     steps:
       - uses: actions/checkout@v4
 
@@ -121,6 +146,9 @@ jobs:
           DB_PASSWORD: postgres
           DB_DATABASE: cipherbox_test
           NODE_ENV: test
+          IPFS_PROVIDER: local
+          IPFS_LOCAL_API_URL: http://localhost:5001
+          IPFS_LOCAL_GATEWAY_URL: http://localhost:8080
 
       - name: Run Crypto tests with coverage
         run: pnpm --filter @cipherbox/crypto test:coverage

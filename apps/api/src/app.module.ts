@@ -34,7 +34,7 @@ import { Vault, PinnedCid } from './vault/entities';
     }),
     HealthModule,
     AuthModule,
-    IpfsModule,
+    IpfsModule.forRootAsync(),
     VaultModule,
   ],
   controllers: [AppController],

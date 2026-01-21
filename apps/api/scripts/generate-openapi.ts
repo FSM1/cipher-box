@@ -19,7 +19,7 @@ import { AuthService } from '../src/auth/auth.service';
 import { Web3AuthVerifierService } from '../src/auth/services/web3auth-verifier.service';
 import { TokenService } from '../src/auth/services/token.service';
 import { IpfsController } from '../src/ipfs/ipfs.controller';
-import { IpfsService } from '../src/ipfs/ipfs.service';
+import { IPFS_PROVIDER } from '../src/ipfs/providers';
 import { VaultController } from '../src/vault/vault.controller';
 import { VaultService } from '../src/vault/vault.service';
 
@@ -67,7 +67,7 @@ const mockConfigService = {
       useValue: {},
     },
     {
-      provide: IpfsService,
+      provide: IPFS_PROVIDER,
       useValue: {},
     },
     {
