@@ -146,11 +146,12 @@ Plans:
 2. Backend IPFS service works with both local node and Pinata
 3. Configuration switches IPFS backend via environment variable
 4. Integration tests can run without external network dependencies
-   **Plans**: TBD
+   **Plans**: 2 plans
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 4.2 to break down)
+- [ ] 04.2-01-PLAN.md — Docker + Provider Abstraction (Kubo service, IpfsProvider interface, PinataProvider, LocalProvider)
+- [ ] 04.2-02-PLAN.md — Integration Tests + CI (IPFS service container, LocalProvider tests, E2E tests)
 
 ### Phase 5: Folder System
 
@@ -311,7 +312,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 3. Core Encryption      | 3/3            | Complete    | 2026-01-20 |
 | 4. File Storage         | 4/4            | Complete    | 2026-01-20 |
 | 4.1 API Service Testing | 3/3            | Complete    | 2026-01-21 |
-| 4.2 Local IPFS Testing  | 0/TBD          | Not started | -          |
+| 4.2 Local IPFS Testing  | 0/2            | Not started | -          |
 | 5. Folder System        | 0/4            | Not started | -          |
 | 6. File Browser UI      | 0/4            | Not started | -          |
 | 7. Multi-Device Sync    | 0/3            | Not started | -          |
@@ -333,4 +334,5 @@ _Phase 4 planned: 2026-01-20_
 _Phase 4 complete: 2026-01-20_
 _Phase 4.1 planned: 2026-01-20_
 _Phase 4.1 complete: 2026-01-21_
-_Total phases: 11 | Total plans: 41 | Depth: Comprehensive_
+_Phase 4.2 planned: 2026-01-21_
+_Total phases: 11 | Total plans: 43 | Depth: Comprehensive_
