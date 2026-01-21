@@ -189,14 +189,14 @@ Plans:
 4. User can right-click for context menu with rename, delete, move options
 5. UI is responsive and usable on mobile web
 6. User can navigate folder hierarchy with breadcrumbs
-   **Plans**: TBD
+   **Plans**: 4 plans
 
 Plans:
 
-- [ ] 06-01: Login page with Web3Auth modal
-- [ ] 06-02: File browser layout with folder tree sidebar
-- [ ] 06-03: Drag-drop upload and context menus
-- [ ] 06-04: Responsive design and breadcrumb navigation
+- [ ] 06-01-PLAN.md — File browser layout with folder tree sidebar and file list
+- [ ] 06-02-PLAN.md — Upload zone with drag-drop and progress modal
+- [ ] 06-03-PLAN.md — Context menu with rename, delete, download actions
+- [ ] 06-04-PLAN.md — Responsive design and breadcrumb navigation
 
 ### Phase 6.1: Webapp Automation Testing (INSERTED)
 
@@ -357,4 +357,5 @@ _Phase 5 planned: 2026-01-21_
 _Phase 5 complete: 2026-01-21_
 _Phase 4.2 complete: 2026-01-21_
 _Phase 6.1 inserted: 2026-01-21_
+_Phase 6 planned: 2026-01-21_
 _Total phases: 12 | Total plans: 47 | Depth: Comprehensive_
