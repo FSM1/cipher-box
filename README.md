@@ -7,13 +7,8 @@
 **Privacy-first cloud storage with decentralized persistence**
 
 <p align="center">
-  <strong>API</strong>&nbsp;
-  <img src="https://img.shields.io/badge/lines-100%25-brightgreen" alt="API Lines">
-  <img src="https://img.shields.io/badge/branches-80%25-green" alt="API Branches">
-  &nbsp;&nbsp;
-  <strong>Crypto</strong>&nbsp;
-  <img src="https://img.shields.io/badge/lines-87%25-green" alt="Crypto Lines">
-  <img src="https://img.shields.io/badge/branches-91%25-brightgreen" alt="Crypto Branches">
+  <a href="https://codecov.io/gh/FSM1/cipher-box"><img src="https://codecov.io/gh/FSM1/cipher-box/graph/badge.svg?flag=api" alt="API Coverage"></a>
+  <a href="https://codecov.io/gh/FSM1/cipher-box"><img src="https://codecov.io/gh/FSM1/cipher-box/graph/badge.svg?flag=crypto" alt="Crypto Coverage"></a>
 </p>
 
 ---
