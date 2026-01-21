@@ -31,19 +31,19 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **FILE-01**: User can upload files up to 100MB
 - [x] **FILE-02**: User can download and decrypt files
 - [x] **FILE-03**: User can delete files (with IPFS unpin)
-- [ ] **FILE-04**: User can rename files
-- [ ] **FILE-05**: User can move files between folders
+- [x] **FILE-04**: User can rename files
+- [x] **FILE-05**: User can move files between folders
 - [x] **FILE-06**: User can select multiple files for bulk upload
 - [x] **FILE-07**: User can select multiple files for bulk delete
 
 ### Folder Operations
 
-- [ ] **FOLD-01**: User can create folders
-- [ ] **FOLD-02**: User can delete folders (recursive)
-- [ ] **FOLD-03**: User can nest folders up to 20 levels deep
-- [ ] **FOLD-04**: User can rename folders
-- [ ] **FOLD-05**: User can move folders between parent folders
-- [ ] **FOLD-06**: Each folder has its own IPNS keypair for metadata
+- [x] **FOLD-01**: User can create folders
+- [x] **FOLD-02**: User can delete folders (recursive)
+- [x] **FOLD-03**: User can nest folders up to 20 levels deep
+- [x] **FOLD-04**: User can rename folders
+- [x] **FOLD-05**: User can move folders between parent folders
+- [x] **FOLD-06**: Each folder has its own IPNS keypair for metadata
 
 ### Backend API
 
@@ -51,7 +51,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **API-02**: Backend issues and rotates access/refresh tokens
 - [x] **API-03**: Backend relays encrypted blobs to Pinata (POST /ipfs/add)
 - [x] **API-04**: Backend relays unpin requests to Pinata (POST /vault/unpin)
-- [ ] **API-05**: Backend relays pre-signed IPNS records (POST /ipns/publish)
+- [x] **API-05**: Backend relays pre-signed IPNS records (POST /ipns/publish)
 - [x] **API-06**: Backend stores encrypted vault keys (rootFolderKey, ipnsPrivateKey)
 - [x] **API-07**: Backend enforces 500 MiB storage quota per user
 - [ ] **API-08**: Backend returns TEE public keys on login
@@ -176,21 +176,21 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FILE-01     | Phase 4  | Complete |
 | FILE-02     | Phase 4  | Complete |
 | FILE-03     | Phase 4  | Complete |
-| FILE-04     | Phase 5  | Pending  |
-| FILE-05     | Phase 5  | Pending  |
+| FILE-04     | Phase 5  | Complete |
+| FILE-05     | Phase 5  | Complete |
 | FILE-06     | Phase 4  | Complete |
 | FILE-07     | Phase 4  | Complete |
-| FOLD-01     | Phase 5  | Pending  |
-| FOLD-02     | Phase 5  | Pending  |
-| FOLD-03     | Phase 5  | Pending  |
-| FOLD-04     | Phase 5  | Pending  |
-| FOLD-05     | Phase 5  | Pending  |
-| FOLD-06     | Phase 5  | Pending  |
+| FOLD-01     | Phase 5  | Complete |
+| FOLD-02     | Phase 5  | Complete |
+| FOLD-03     | Phase 5  | Complete |
+| FOLD-04     | Phase 5  | Complete |
+| FOLD-05     | Phase 5  | Complete |
+| FOLD-06     | Phase 5  | Complete |
 | API-01      | Phase 2  | Complete |
 | API-02      | Phase 2  | Complete |
 | API-03      | Phase 4  | Complete |
 | API-04      | Phase 4  | Complete |
-| API-05      | Phase 5  | Pending  |
+| API-05      | Phase 5  | Complete |
 | API-06      | Phase 4  | Complete |
 | API-07      | Phase 4  | Complete |
 | API-08      | Phase 8  | Pending  |

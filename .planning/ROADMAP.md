@@ -19,7 +19,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 4: File Storage** - Upload/download encrypted files via IPFS relay
 - [x] **Phase 4.1: API Service Testing** - Unit tests for backend services per TESTING.md (INSERTED)
 - [ ] **Phase 4.2: Local IPFS Testing Infrastructure** - Add local IPFS node to Docker for offline testing (INSERTED)
-- [ ] **Phase 5: Folder System** - IPNS metadata, folder hierarchy, and operations
+- [x] **Phase 5: Folder System** - IPNS metadata, folder hierarchy, and operations
 - [ ] **Phase 6: File Browser UI** - Web interface for file management
 - [ ] **Phase 7: Multi-Device Sync** - IPNS polling and sync state management
 - [ ] **Phase 8: TEE Integration** - Auto-republishing via Phala Cloud
@@ -170,10 +170,10 @@ Plans:
 
 Plans:
 
-- [ ] 05-01-PLAN.md — Backend IPNS relay endpoints and FolderIpns entity
-- [ ] 05-02-PLAN.md — Crypto module IPNS record creation and folder metadata types
-- [ ] 05-03-PLAN.md — Frontend vault/folder stores and IPNS publishing service
-- [ ] 05-04-PLAN.md — Frontend folder CRUD operations (create, rename, delete, move)
+- [x] 05-01-PLAN.md — Backend IPNS relay endpoints and FolderIpns entity
+- [x] 05-02-PLAN.md — Crypto module IPNS record creation and folder metadata types
+- [x] 05-03-PLAN.md — Frontend vault/folder stores and IPNS publishing service
+- [x] 05-04-PLAN.md — Frontend folder CRUD operations (create, rename, delete, move)
 
 ### Phase 6: File Browser UI
 
@@ -313,7 +313,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 4. File Storage         | 4/4            | Complete    | 2026-01-20 |
 | 4.1 API Service Testing | 3/3            | Complete    | 2026-01-21 |
 | 4.2 Local IPFS Testing  | 0/TBD          | Not started | -          |
-| 5. Folder System        | 0/4            | Planned     | -          |
+| 5. Folder System        | 4/4            | Complete    | 2026-01-21 |
 | 6. File Browser UI      | 0/4            | Not started | -          |
 | 7. Multi-Device Sync    | 0/3            | Not started | -          |
 | 8. TEE Integration      | 0/4            | Not started | -          |
@@ -335,4 +335,5 @@ _Phase 4 complete: 2026-01-20_
 _Phase 4.1 planned: 2026-01-20_
 _Phase 4.1 complete: 2026-01-21_
 _Phase 5 planned: 2026-01-21_
+_Phase 5 complete: 2026-01-21_
 _Total phases: 11 | Total plans: 45 | Depth: Comprehensive_
