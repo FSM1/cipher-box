@@ -25,6 +25,29 @@ describe('createIpnsRecord', () => {
     expect(record.sequence).toBe(seq);
   });
 
+  it('should handle sequence number 0', async () => {
+    const keypair = generateEd25519Keypair();
+    const value = '/ipfs/bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4';
+
+    const record = await createIpnsRecord(keypair.privateKey, value, 0n);
+
+    expect(record.sequence).toBe(0n);
+    expect(record.value).toBe(value);
+  });
+
+  it('should reject negative sequence numbers', async () => {
+    const keypair = generateEd25519Keypair();
+    const value = '/ipfs/bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4';
+
+    await expect(createIpnsRecord(keypair.privateKey, value, -1n)).rejects.toThrow(
+      'Sequence number must be non-negative'
+    );
+
+    await expect(createIpnsRecord(keypair.privateKey, value, -100n)).rejects.toThrow(
+      'Sequence number must be non-negative'
+    );
+  });
+
   it('respects sequence number', async () => {
     const keypair = generateEd25519Keypair();
     const value = '/ipfs/bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4';

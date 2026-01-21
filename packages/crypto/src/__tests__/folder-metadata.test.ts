@@ -216,6 +216,59 @@ describe('decryptFolderMetadata', () => {
 });
 
 describe('Folder Metadata Security', () => {
+  it('should handle large folder metadata', async () => {
+    const folderKey = generateFileKey();
+
+    // Create a large folder with 100 children (mixed files and folders)
+    const children: (FolderEntry | FileEntry)[] = [];
+
+    for (let i = 0; i < 50; i++) {
+      children.push({
+        type: 'folder',
+        id: `folder-uuid-${i}`,
+        name: `Subfolder ${i} with a reasonably long name to simulate real usage`,
+        ipnsName: `k51qzi5uqu5dh9jhgjfghjdfgh${i.toString().padStart(10, '0')}`,
+        ipnsPrivateKeyEncrypted: 'a'.repeat(200), // Simulate ECIES ciphertext
+        folderKeyEncrypted: 'b'.repeat(200),
+        createdAt: Date.now() - i * 1000,
+        modifiedAt: Date.now(),
+      } as FolderEntry);
+
+      children.push({
+        type: 'file',
+        id: `file-uuid-${i}`,
+        name: `document-${i}-with-a-long-descriptive-filename.pdf`,
+        cid: `bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4${i}`,
+        fileKeyEncrypted: 'c'.repeat(200),
+        fileIv: '001122334455667788990011',
+        encryptionMode: 'GCM',
+        size: 1024 * 1024 * (i + 1), // Varying file sizes
+        createdAt: Date.now() - i * 1000,
+        modifiedAt: Date.now(),
+      } as FileEntry);
+    }
+
+    const metadata: FolderMetadata = {
+      version: 'v1',
+      children,
+    };
+
+    // Encrypt and decrypt large metadata
+    const encrypted = await encryptFolderMetadata(metadata, folderKey);
+    const decrypted = await decryptFolderMetadata(encrypted, folderKey);
+
+    // Verify all children preserved
+    expect(decrypted.children).toHaveLength(100);
+    expect(decrypted.children.filter((c) => c.type === 'folder')).toHaveLength(50);
+    expect(decrypted.children.filter((c) => c.type === 'file')).toHaveLength(50);
+
+    // Verify first and last entries preserved correctly
+    expect(decrypted.children[0].name).toBe(
+      'Subfolder 0 with a reasonably long name to simulate real usage'
+    );
+    expect(decrypted.children[99].name).toBe('document-49-with-a-long-descriptive-filename.pdf');
+  });
+
   it('different folder keys produce different ciphertext', async () => {
     const folderKey1 = generateFileKey();
     const folderKey2 = generateFileKey();
