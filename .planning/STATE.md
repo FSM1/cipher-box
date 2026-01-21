@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 ## Current Position
 
 Phase: 6.1 of 11 (Webapp Automation Testing)
-Plan: 2 of 6 in Phase 6.1 complete
-Status: In progress - File Browser page objects complete
-Last activity: 2026-01-22 - Completed 06.1-02-PLAN.md
+Plan: 1 of 6 in Phase 6.1 complete
+Status: In progress - Playwright infrastructure setup complete
+Last activity: 2026-01-22 - Completed 06.1-01-PLAN.md
 
-Progress: [######....] 62% (30 of 48 plans)
+Progress: [######....] 60% (29 of 48 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 30
-- Average duration: 4.2 min
+- Total plans completed: 29
+- Average duration: 4.3 min
 - Total execution time: 2.1 hours
 
 **By Phase:**
@@ -36,12 +36,12 @@ Progress: [######....] 62% (30 of 48 plans)
 | 04.2-local-ipfs-testing        | 2/2   | 14 min | 7 min    |
 | 05-folder-system               | 4/4   | 18 min | 4.5 min  |
 | 06-file-browser-ui             | 3/4   | 17 min | 5.7 min  |
-| 06.1-webapp-automation-testing | 2/6   | 7 min  | 3.5 min  |
+| 06.1-webapp-automation-testing | 1/6   | 4 min  | 4 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 6m, 6m, 5m, 4m, 3m
-- Trend: Improving (faster execution)
+- Last 5 plans: 6m, 6m, 5m, 6m, 4m
+- Trend: Consistent
 
 _Updated after each plan completion_
 
@@ -143,9 +143,11 @@ Recent decisions affecting current work:
 | Delete always confirms with modal dialog             | 06-03   | Per CONTEXT.md - prevents accidental data loss                            |
 | Folder delete warning includes contents              | 06-03   | Users need to know subfolders/files will also be deleted                  |
 | FileEntry to FileMetadata field mapping              | 06-03   | Download service expects different field names than folder metadata       |
-| Class selectors for E2E locators                     | 06.1-02 | Components lack data-testid, use class names matching actual DOM          |
-| setInputFiles over drag-drop simulation              | 06.1-02 | Playwright setInputFiles more reliable than OS drag-drop simulation       |
-| Reusable dialog page objects                         | 06.1-02 | ConfirmDialog and RenameDialog shared across all file/folder tests        |
+| Playwright as E2E framework                          | 06.1-01 | Chromium-only testing per CONTEXT.md for simplicity                       |
+| Sequential test execution (workers: 1)               | 06.1-01 | Start simple before parallelization per CONTEXT.md                        |
+| No automatic retries (retries: 0)                    | 06.1-01 | Catch flakiness immediately per CONTEXT.md                                |
+| Video recording on failure only                      | 06.1-01 | Reduces CI artifact storage, captures debugging info when needed          |
+| Page Object Model with fixtures                      | 06.1-01 | Established pattern for consistent test organization                      |
 
 ### Pending Todos
 
@@ -172,10 +174,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-22
-Stopped at: Completed 06.1-02-PLAN.md (File Browser Page Objects)
+Stopped at: Completed 06.1-01-PLAN.md (Playwright Testing Infrastructure)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-21 after 06-03 completion_
+_Last updated: 2026-01-22 after 06.1-01 completion_
