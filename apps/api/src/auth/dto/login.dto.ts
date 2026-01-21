@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsString, IsNotEmpty, IsIn, IsOptional, IsInt, Min } from 'class-validator';
 
 export type LoginType = 'social' | 'external_wallet';
 
@@ -7,6 +8,8 @@ export class LoginDto {
     description: 'JWT ID token from Web3Auth',
     example: 'eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9...',
   })
+  @IsString()
+  @IsNotEmpty()
   idToken!: string;
 
   @ApiProperty({
@@ -14,6 +17,8 @@ export class LoginDto {
       'secp256k1 public key for social login, or signature-derived public key for external wallet (ADR-001)',
     example: '0x04...',
   })
+  @IsString()
+  @IsNotEmpty()
   publicKey!: string;
 
   @ApiProperty({
@@ -21,6 +26,8 @@ export class LoginDto {
     enum: ['social', 'external_wallet'],
     example: 'social',
   })
+  @IsString()
+  @IsIn(['social', 'external_wallet'])
   loginType!: LoginType;
 
   @ApiPropertyOptional({
@@ -28,6 +35,8 @@ export class LoginDto {
       'Wallet address for external wallet users. Used for JWT verification. The publicKey field contains the derived key.',
     example: '0x742d35Cc6634C0532925a3b844Bc9e7595f...',
   })
+  @IsOptional()
+  @IsString()
   walletAddress?: string;
 
   @ApiPropertyOptional({
@@ -36,6 +45,9 @@ export class LoginDto {
     example: 1,
     minimum: 1,
   })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
   derivationVersion?: number;
 }
 

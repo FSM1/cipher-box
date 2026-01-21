@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useFolderStore, type FolderNode } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 
@@ -119,8 +119,11 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
   const currentFolder =
     currentFolderId === 'root' ? getRootFolder(vaultState, folders) : folders[currentFolderId];
 
-  // Build breadcrumbs whenever current folder changes
-  const breadcrumbs = buildBreadcrumbs(currentFolderId, folders, vaultState);
+  // Build breadcrumbs whenever current folder changes (memoized to avoid recreating array)
+  const breadcrumbs = useMemo(
+    () => buildBreadcrumbs(currentFolderId, folders, vaultState),
+    [currentFolderId, folders, vaultState]
+  );
 
   // Initialize root folder in store if vault is ready but root not in store
   useEffect(() => {
@@ -135,7 +138,7 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
   // Update store breadcrumbs when local breadcrumbs change
   useEffect(() => {
     setBreadcrumbs(breadcrumbs);
-  }, [currentFolderId, setBreadcrumbs, breadcrumbs]);
+  }, [breadcrumbs, setBreadcrumbs]);
 
   /**
    * Navigate to a specific folder.
