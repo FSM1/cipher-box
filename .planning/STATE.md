@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 5 Folder System - Plan 03 complete
+**Current focus:** Phase 5 Folder System - Plan 04 complete
 
 ## Current Position
 
 Phase: 5 of 11 (Folder System) - IN PROGRESS
-Plan: 3 of 5 in Phase 5 complete
-Status: Frontend folder state and services ready, continuing to UI components
-Last activity: 2026-01-21 - Completed 05-03-PLAN.md (Frontend Folder State)
+Plan: 4 of 5 in Phase 5 complete
+Status: Folder CRUD operations complete, useFolder hook ready for UI
+Last activity: 2026-01-21 - Completed 05-04-PLAN.md (Folder CRUD Operations)
 
-Progress: [#####.....] 49% (22 of 45 plans)
+Progress: [#####.....] 51% (23 of 45 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 22
-- Average duration: 4.5 min
-- Total execution time: 1.65 hours
+- Total plans completed: 23
+- Average duration: 4.4 min
+- Total execution time: 1.7 hours
 
 **By Phase:**
 
@@ -34,11 +34,11 @@ Progress: [#####.....] 49% (22 of 45 plans)
 | 04-file-storage          | 4/4   | 17 min | 4.3 min  |
 | 04.1-api-service-testing | 3/3   | 11 min | 3.7 min  |
 | 04.2-local-ipfs-testing  | 2/2   | 14 min | 7 min    |
-| 05-folder-system         | 3/5   | 14 min | 4.7 min  |
+| 05-folder-system         | 4/5   | 18 min | 4.5 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 8m, 6m, 4m, 6m, 4m
+- Last 5 plans: 6m, 4m, 6m, 4m, 4m
 - Trend: Consistent
 
 _Updated after each plan completion_
@@ -125,6 +125,10 @@ Recent decisions affecting current work:
 | FolderNode includes decrypted keys                   | 05-03   | Enable folder operations without re-deriving                              |
 | Local IPNS signing with backend relay                | 05-03   | Server never sees IPNS private keys                                       |
 | MAX_FOLDER_DEPTH=20 in createFolder                  | 05-03   | Enforces FOLD-03 depth limit                                              |
+| deleteFileFromFolder renamed                         | 05-04   | Avoid export conflict with delete.service.ts                              |
+| add-before-remove pattern for moves                  | 05-04   | Prevents data loss - add to dest first, then remove from source           |
+| Fire-and-forget unpin on delete                      | 05-04   | Don't block user on IPFS cleanup                                          |
+| isDescendantOf prevents circular moves               | 05-04   | Prevents moving folder into itself or descendants                         |
 
 ### Pending Todos
 
@@ -150,10 +154,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-21
-Stopped at: Completed 05-03-PLAN.md (Frontend Folder State)
+Stopped at: Completed 05-04-PLAN.md (Folder CRUD Operations)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-21 after 05-03 completion_
+_Last updated: 2026-01-21 after 05-04 completion_
