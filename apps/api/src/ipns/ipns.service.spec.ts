@@ -5,6 +5,7 @@ import { BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
 import { IpnsService } from './ipns.service';
 import { FolderIpns } from './entities/folder-ipns.entity';
 import { PublishIpnsDto } from './dto';
+import { User } from '../auth/entities/user.entity';
 
 describe('IpnsService', () => {
   let service: IpnsService;
@@ -38,6 +39,7 @@ describe('IpnsService', () => {
     isRoot: false,
     createdAt: new Date('2026-01-20T12:00:00.000Z'),
     updatedAt: new Date('2026-01-20T12:00:00.000Z'),
+    user: {} as User,
   };
 
   // Mock fetch
