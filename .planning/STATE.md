@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 5 Folder System - COMPLETE
+**Current focus:** Phase 6 File Browser UI - In Progress
 
 ## Current Position
 
-Phase: 5 of 11 (Folder System) - COMPLETE
-Plan: 4 of 4 in Phase 5 complete
-Status: Phase 5 complete - folder system infrastructure ready
-Last activity: 2026-01-21 - Phase 5 verified and complete
+Phase: 6 of 11 (File Browser UI)
+Plan: 2 of 4 in Phase 6 complete
+Status: In progress - Upload zone and modal complete
+Last activity: 2026-01-21 - Completed 06-02-PLAN.md
 
-Progress: [#####.....] 53% (25 of 47 plans)
+Progress: [######....] 57% (27 of 47 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 25
-- Average duration: 4.4 min
-- Total execution time: 1.7 hours
+- Total plans completed: 27
+- Average duration: 4.3 min
+- Total execution time: 1.9 hours
 
 **By Phase:**
 
@@ -35,10 +35,11 @@ Progress: [#####.....] 53% (25 of 47 plans)
 | 04.1-api-service-testing | 3/3   | 11 min | 3.7 min  |
 | 04.2-local-ipfs-testing  | 2/2   | 14 min | 7 min    |
 | 05-folder-system         | 4/4   | 18 min | 4.5 min  |
+| 06-file-browser-ui       | 2/4   | 12 min | 6 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 6m, 4m, 6m, 4m, 4m
+- Last 5 plans: 4m, 4m, 6m, 6m, 6m
 - Trend: Consistent
 
 _Updated after each plan completion_
@@ -129,6 +130,10 @@ Recent decisions affecting current work:
 | add-before-remove pattern for moves                  | 05-04   | Prevents data loss - add to dest first, then remove from source           |
 | Fire-and-forget unpin on delete                      | 05-04   | Don't block user on IPFS cleanup                                          |
 | isDescendantOf prevents circular moves               | 05-04   | Prevents moving folder into itself or descendants                         |
+| Portal-based Modal renders outside component tree    | 06-02   | Avoid z-index and overflow issues                                         |
+| Focus trap in Modal                                  | 06-02   | Accessibility - prevent tab from leaving modal                            |
+| 100MB maxSize in react-dropzone                      | 06-02   | Per FILE-01 spec, enforced at library level                               |
+| V1 simplified upload modal                           | 06-02   | Per CONTEXT.md "keep v1 simple" - shows current file only                 |
 
 ### Pending Todos
 
@@ -155,10 +160,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-21
-Stopped at: Completed Phase 5 (Folder System)
+Stopped at: Completed 06-02-PLAN.md (Upload Zone & Progress Modal)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-21 after Phase 5 completion_
+_Last updated: 2026-01-21 after 06-02 completion_
