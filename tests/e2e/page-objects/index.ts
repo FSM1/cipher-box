@@ -15,12 +15,7 @@ export { LoginPage } from './login.page';
 export { DashboardPage } from './dashboard.page';
 
 // File browser page objects
-export {
-  FileListPage,
-  FolderTreePage,
-  ContextMenuPage,
-  UploadZonePage,
-} from './file-browser';
+export { FileListPage, FolderTreePage, ContextMenuPage, UploadZonePage } from './file-browser';
 
 // Dialog page objects
 export { ConfirmDialogPage, RenameDialogPage } from './dialogs';
