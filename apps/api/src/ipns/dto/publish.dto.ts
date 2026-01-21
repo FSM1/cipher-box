@@ -1,5 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBase64, Matches } from 'class-validator';
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  IsNumber,
+  IsBase64,
+  Matches,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 export class PublishIpnsDto {
   @ApiProperty({
@@ -8,7 +17,11 @@ export class PublishIpnsDto {
   })
   @IsString()
   @IsNotEmpty()
-  @Matches(/^k51/, { message: 'ipnsName must start with k51 (CIDv1 libp2p-key)' })
+  // [SECURITY: MEDIUM-12] Stricter IPNS name validation - must be valid k51 CIDv1 libp2p-key
+  @Matches(/^k51qzi5uqu5[a-z0-9]{40,60}$/, {
+    message: 'ipnsName must be a valid k51 CIDv1 libp2p-key (e.g., k51qzi5uqu5...)',
+  })
+  @MaxLength(70)
   ipnsName!: string;
 
   @ApiProperty({
@@ -18,6 +31,7 @@ export class PublishIpnsDto {
   @IsString()
   @IsNotEmpty()
   @IsBase64()
+  @MaxLength(10000) // IPNS records should be small
   record!: string;
 
   @ApiProperty({
@@ -26,6 +40,11 @@ export class PublishIpnsDto {
   })
   @IsString()
   @IsNotEmpty()
+  // [SECURITY: MEDIUM-10] Validate CID format - must start with bafy/bafk (CIDv1) or Qm (CIDv0)
+  @Matches(/^(bafy|bafk|Qm)[a-zA-Z0-9]+$/, {
+    message: 'metadataCid must be a valid CID (bafy..., bafk..., or Qm...)',
+  })
+  @MaxLength(100)
   metadataCid!: string;
 
   @ApiProperty({
@@ -36,6 +55,16 @@ export class PublishIpnsDto {
   })
   @IsString()
   @IsOptional()
+  // [SECURITY: MEDIUM-09] Validate hex format and reasonable length for ECIES ciphertext
+  @Matches(/^[0-9a-fA-F]+$/, {
+    message: 'encryptedIpnsPrivateKey must be hex-encoded',
+  })
+  @MinLength(100, {
+    message: 'encryptedIpnsPrivateKey too short for ECIES ciphertext',
+  })
+  @MaxLength(1000, {
+    message: 'encryptedIpnsPrivateKey too long',
+  })
   encryptedIpnsPrivateKey?: string;
 
   @ApiProperty({

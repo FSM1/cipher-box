@@ -39,16 +39,28 @@ export async function createIpnsRecord(
     throw new CryptoError('Invalid Ed25519 private key size', 'INVALID_PRIVATE_KEY_SIZE');
   }
 
+  // [SECURITY: MEDIUM-06] Validate sequence number is non-negative
+  if (sequenceNumber < 0n) {
+    throw new CryptoError('Sequence number must be non-negative', 'SIGNING_FAILED');
+  }
+
+  // Intermediate key material buffer - we'll zero this after use
+  let libp2pKeyBytes: Uint8Array | null = null;
+
   try {
     // Convert 32-byte @noble/ed25519 private key to libp2p format:
     // libp2p expects 64 bytes: [privateKey (32) + publicKey (32)]
     const publicKey = ed.getPublicKey(ed25519PrivateKey);
-    const libp2pKeyBytes = new Uint8Array(64);
+    libp2pKeyBytes = new Uint8Array(64);
     libp2pKeyBytes.set(ed25519PrivateKey, 0);
     libp2pKeyBytes.set(publicKey, 32);
 
     // Convert to libp2p PrivateKey object
     const libp2pPrivateKey = privateKeyFromRaw(libp2pKeyBytes);
+
+    // [SECURITY: MEDIUM-05] Clear intermediate key material immediately after conversion
+    libp2pKeyBytes.fill(0);
+    libp2pKeyBytes = null;
 
     // Create IPNS record using the ipns package
     // v1Compatible: true creates both V1 and V2 signatures for maximum compatibility
@@ -58,6 +70,11 @@ export async function createIpnsRecord(
 
     return record;
   } catch (error) {
+    // [SECURITY: MEDIUM-05] Ensure key material is cleared even on error
+    if (libp2pKeyBytes) {
+      libp2pKeyBytes.fill(0);
+    }
+
     // Re-throw CryptoErrors as-is
     if (error instanceof CryptoError) {
       throw error;

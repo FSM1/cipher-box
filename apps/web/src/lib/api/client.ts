@@ -1,5 +1,7 @@
 import axios from 'axios';
 import { useAuthStore } from '../../stores/auth.store';
+import { useVaultStore } from '../../stores/vault.store';
+import { useFolderStore } from '../../stores/folder.store';
 
 let isRefreshing = false;
 let failedQueue: Array<{ resolve: (token: string) => void; reject: (error: Error) => void }> = [];
@@ -57,6 +59,9 @@ apiClient.interceptors.response.use(
         return apiClient(originalRequest);
       } catch (refreshError) {
         processQueue(refreshError as Error, null);
+        // [SECURITY: HIGH-03] Clear all stores including crypto keys on token refresh failure
+        useFolderStore.getState().clearFolders();
+        useVaultStore.getState().clearVaultKeys();
         useAuthStore.getState().logout();
         // Redirect to login will be handled by route guard
         throw refreshError;

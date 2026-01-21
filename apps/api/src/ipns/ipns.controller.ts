@@ -1,5 +1,6 @@
 import { Controller, Post, Body, UseGuards, Request } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { IpnsService } from './ipns.service';
 import { PublishIpnsDto, PublishIpnsResponseDto } from './dto';
@@ -12,11 +13,14 @@ interface RequestWithUser extends Request {
 
 @ApiTags('IPNS')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ThrottlerGuard)
 @Controller('ipns')
 export class IpnsController {
   constructor(private readonly ipnsService: IpnsService) {}
 
+  // [SECURITY: HIGH-04] Rate limit IPNS publish to prevent abuse
+  // Each publish makes external HTTP calls to delegated-ipfs.dev
+  @Throttle({ default: { limit: 10, ttl: 60000 } }) // 10 publishes per minute per user
   @Post('publish')
   @ApiOperation({
     summary: 'Publish IPNS record',

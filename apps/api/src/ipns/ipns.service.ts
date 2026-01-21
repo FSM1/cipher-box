@@ -105,8 +105,12 @@ export class IpnsService {
         }
 
         // Non-retryable error
+        // [SECURITY: MEDIUM-11] Log full error details but don't expose to client
         const errorText = await response.text();
-        throw new Error(`Delegated routing returned ${response.status}: ${errorText}`);
+        this.logger.error(
+          `Delegated routing returned ${response.status} for ${ipnsName}: ${errorText}`
+        );
+        throw new Error(`Delegated routing returned ${response.status}`);
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
 
@@ -115,8 +119,9 @@ export class IpnsService {
           lastError.message.includes('Delegated routing returned') &&
           !lastError.message.includes('429')
         ) {
+          // [SECURITY: MEDIUM-11] Generic error message to avoid leaking internal details
           throw new HttpException(
-            `Failed to publish IPNS record: ${lastError.message}`,
+            'Failed to publish IPNS record to routing network',
             HttpStatus.BAD_GATEWAY
           );
         }
@@ -132,8 +137,12 @@ export class IpnsService {
       }
     }
 
+    // [SECURITY: MEDIUM-11] Log full error, return generic message
+    this.logger.error(
+      `Failed to publish IPNS record after ${this.maxRetries} attempts: ${lastError?.message}`
+    );
     throw new HttpException(
-      `Failed to publish IPNS record after ${this.maxRetries} attempts: ${lastError?.message}`,
+      'Failed to publish IPNS record to routing network after multiple attempts',
       HttpStatus.BAD_GATEWAY
     );
   }
