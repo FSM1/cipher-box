@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 4.2 Local IPFS Testing Infrastructure - COMPLETE
+**Current focus:** Phase 5 Folder System - Plan 01 complete
 
 ## Current Position
 
-Phase: 4.2 of 11 (Local IPFS Testing) - COMPLETE
-Plan: 2 of 2 in Phase 4.2 complete
-Status: Phase 4.2 complete - Local IPFS testing infrastructure ready
-Last activity: 2026-01-21 - Completed 04.2-02-PLAN.md (CI service containers + tests)
+Phase: 5 of 11 (Folder System) - IN PROGRESS
+Plan: 1 of 5 in Phase 5 complete
+Status: Backend IPNS module ready, continuing to client-side IPNS
+Last activity: 2026-01-21 - Completed 05-01-PLAN.md (Backend IPNS Module)
 
-Progress: [####......] 42% (19 of 45 plans)
+Progress: [####......] 44% (20 of 45 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 19
-- Average duration: 4.6 min
+- Total plans completed: 20
+- Average duration: 4.5 min
 - Total execution time: 1.5 hours
 
 **By Phase:**
@@ -34,10 +34,11 @@ Progress: [####......] 42% (19 of 45 plans)
 | 04-file-storage          | 4/4   | 17 min | 4.3 min  |
 | 04.1-api-service-testing | 3/3   | 11 min | 3.7 min  |
 | 04.2-local-ipfs-testing  | 2/2   | 14 min | 7 min    |
+| 05-folder-system         | 1/5   | 4 min  | 4 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 5m, 3m, 3m, 8m, 6m
+- Last 5 plans: 3m, 3m, 8m, 6m, 4m
 - Trend: Consistent
 
 _Updated after each plan completion_
@@ -111,6 +112,10 @@ Recent decisions affecting current work:
 | Kubo API POST for all operations                     | 04.2-01 | Kubo RPC uses POST (not REST), even for cat and unpin                     |
 | IPFS_PROVIDER env var for backend selection          | 04.2-01 | 'local' or 'pinata' switches provider implementation                      |
 | Kubo API port localhost-only                         | 04.2-01 | 5001 bound to 127.0.0.1 for security (admin-level access)                 |
+| Unique (userId, ipnsName) constraint                 | 05-01   | Ensures each folder tracked uniquely per user                             |
+| sequenceNumber as bigint string                      | 05-01   | TypeORM returns bigint as string; service uses BigInt() for increment     |
+| encryptedIpnsPrivateKey only on first publish        | 05-01   | Reduces payload; key stored once for TEE republishing                     |
+| Exponential backoff for delegated routing            | 05-01   | Max 3 retries with increasing delay for rate limits                       |
 
 ### Pending Todos
 
@@ -136,10 +141,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-21
-Stopped at: Completed Phase 4.2 (Local IPFS Testing Infrastructure)
+Stopped at: Completed 05-01-PLAN.md (Backend IPNS Module)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-21 after 04.2-02 completion_
+_Last updated: 2026-01-21 after 05-01 completion_
