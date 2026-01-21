@@ -128,9 +128,10 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           files: ./apps/api/coverage/lcov.info,./packages/crypto/coverage/lcov.info
           flags: api,crypto
-          fail_ci_if_error: true
+          fail_ci_if_error: false
 
   build:
     name: Build
