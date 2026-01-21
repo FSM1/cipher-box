@@ -20,6 +20,8 @@ export * from './loginDto';
 export * from './loginDtoLoginType';
 export * from './loginResponseDto';
 export * from './logoutResponseDto';
+export * from './publishIpnsDto';
+export * from './publishIpnsResponseDto';
 export * from './quotaResponseDto';
 export * from './refreshDto';
 export * from './tokenResponseDto';
