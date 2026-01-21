@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 ## Current Position
 
 Phase: 6 of 11 (File Browser UI)
-Plan: 2 of 4 in Phase 6 complete
-Status: In progress - Core file browser layout and upload functionality complete
-Last activity: 2026-01-21 - Completed 06-01-PLAN.md
+Plan: 3 of 4 in Phase 6 complete
+Status: In progress - Context menu and file actions complete
+Last activity: 2026-01-21 - Completed 06-03-PLAN.md
 
-Progress: [######....] 57% (27 of 47 plans)
+Progress: [######....] 60% (28 of 47 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 27
+- Total plans completed: 28
 - Average duration: 4.3 min
-- Total execution time: 1.9 hours
+- Total execution time: 2.0 hours
 
 **By Phase:**
 
@@ -35,11 +35,11 @@ Progress: [######....] 57% (27 of 47 plans)
 | 04.1-api-service-testing | 3/3   | 11 min | 3.7 min  |
 | 04.2-local-ipfs-testing  | 2/2   | 14 min | 7 min    |
 | 05-folder-system         | 4/4   | 18 min | 4.5 min  |
-| 06-file-browser-ui       | 2/4   | 12 min | 6 min    |
+| 06-file-browser-ui       | 3/4   | 17 min | 5.7 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 4m, 6m, 6m, 6m
+- Last 5 plans: 4m, 6m, 6m, 6m, 5m
 - Trend: Consistent
 
 _Updated after each plan completion_
@@ -138,6 +138,10 @@ Recent decisions affecting current work:
 | Focus trap in Modal                                  | 06-02   | Accessibility - prevent tab from leaving modal                            |
 | 100MB maxSize in react-dropzone                      | 06-02   | Per FILE-01 spec, enforced at library level                               |
 | V1 simplified upload modal                           | 06-02   | Per CONTEXT.md "keep v1 simple" - shows current file only                 |
+| floating-ui/react for context menu positioning       | 06-03   | Built-in flip/shift middleware handles edge detection                     |
+| Delete always confirms with modal dialog             | 06-03   | Per CONTEXT.md - prevents accidental data loss                            |
+| Folder delete warning includes contents              | 06-03   | Users need to know subfolders/files will also be deleted                  |
+| FileEntry to FileMetadata field mapping              | 06-03   | Download service expects different field names than folder metadata       |
 
 ### Pending Todos
 
@@ -164,10 +168,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-21
-Stopped at: Completed 06-01-PLAN.md (Core File Browser Layout)
+Stopped at: Completed 06-03-PLAN.md (Context Menu & File Actions)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-21 after 06-01 completion_
+_Last updated: 2026-01-21 after 06-03 completion_
