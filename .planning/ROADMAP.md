@@ -230,13 +230,13 @@ Plans:
 1. Changes made on one device appear on another within ~30 seconds
 2. User sees loading state during IPNS resolution
 3. Desktop sync daemon runs in background while app is open
-   **Plans**: TBD
+   **Plans**: 3 plans
 
 Plans:
 
-- [ ] 07-01: IPNS polling infrastructure with 30s interval
-- [ ] 07-02: Sync state management and optimistic UI
-- [ ] 07-03: Loading states and conflict handling
+- [ ] 07-01-PLAN.md — Backend IPNS resolution endpoint and sync state store
+- [ ] 07-02-PLAN.md — Polling infrastructure hooks (useInterval, useVisibility, useOnlineStatus, useSyncPolling)
+- [ ] 07-03-PLAN.md — Frontend integration with SyncIndicator and OfflineBanner UI
 
 ### Phase 8: TEE Integration
 
@@ -365,4 +365,5 @@ _Phase 6.1 inserted: 2026-01-21_
 _Phase 6 planned: 2026-01-21_
 _Phase 6.1 planned: 2026-01-22_
 _Phase 6.1 complete: 2026-01-22_
+_Phase 7 planned: 2026-01-22_
 _Total phases: 12 | Total plans: 53 | Depth: Comprehensive_

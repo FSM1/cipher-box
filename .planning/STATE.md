@@ -154,8 +154,9 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-0 pending todo(s):
+1 pending todo(s):
 
+- `2026-01-22-atomic-file-upload-flow.md` — Atomic file upload flow with client-side CID (area: api)
 - ~~`2026-01-21-local-ipfs-node-for-testing.md` — Add local IPFS node to Docker stack for testing (area: api)~~ - **COMPLETED: Phase 4.2**
 
 ### Blockers/Concerns
