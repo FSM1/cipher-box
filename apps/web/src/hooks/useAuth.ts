@@ -309,18 +309,9 @@ export function useAuth() {
           const response = await authApi.refresh();
           setAccessToken(response.accessToken);
 
-          // Restore keypair for crypto operations (needed for uploads, folder ops, etc.)
-          const isExternal = useAuthStore.getState().isExternalWallet;
-          if (!isExternal && isSocialLogin()) {
-            // Social login - restore keypair from Web3Auth
-            const socialKeypair = await getKeypairForVault(web3Auth?.provider);
-            if (socialKeypair) {
-              setDerivedKeypair(socialKeypair);
-            }
-          }
-          // Note: External wallet keypairs cannot be restored without user signing again
-
           // After successful session restore, initialize/load vault
+          // Check if external wallet via auth store flag (persisted from original login)
+          const isExternal = useAuthStore.getState().isExternalWallet;
           await initializeOrLoadVault(web3Auth?.provider, isExternal);
         } catch {
           // No valid session, stay on login page
@@ -334,9 +325,6 @@ export function useAuth() {
     isAuthenticated,
     isLoggingIn,
     setAccessToken,
-    setDerivedKeypair,
-    isSocialLogin,
-    getKeypairForVault,
     web3Auth?.provider,
     initializeOrLoadVault,
   ]);
