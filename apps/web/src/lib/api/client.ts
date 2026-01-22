@@ -34,8 +34,11 @@ apiClient.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
 
-    // Only handle 401 errors, and only retry once
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    // Don't retry refresh endpoint to avoid infinite loop
+    const isRefreshRequest = originalRequest?.url?.includes('/auth/refresh');
+
+    // Only handle 401 errors, and only retry once (but never retry refresh endpoint)
+    if (error.response?.status === 401 && !originalRequest._retry && !isRefreshRequest) {
       if (isRefreshing) {
         // Another refresh is in progress, queue this request
         return new Promise<string>((resolve, reject) => {
