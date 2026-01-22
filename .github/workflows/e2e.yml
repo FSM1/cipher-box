@@ -82,6 +82,9 @@ jobs:
           # API configuration
           JWT_SECRET: e2e-test-jwt-secret-key-for-ci
           WEB_APP_URL: http://localhost:5173
+          # Web app configuration (needed for Web3Auth initialization)
+          VITE_WEB3AUTH_CLIENT_ID: ${{ secrets.VITE_WEB3AUTH_CLIENT_ID }}
+          VITE_API_URL: http://localhost:3000
           # Web3Auth test credentials for automated login
           WEB3AUTH_TEST_EMAIL: ${{ secrets.WEB3AUTH_TEST_EMAIL }}
           WEB3AUTH_TEST_OTP: ${{ secrets.WEB3AUTH_TEST_OTP }}
