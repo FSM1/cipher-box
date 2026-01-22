@@ -1,4 +1,6 @@
-const BASE_URL = '/api';
+import { useAuthStore } from '../stores/auth.store';
+
+const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
 export const customInstance = async <T>(config: {
   url: string;
@@ -10,12 +12,16 @@ export const customInstance = async <T>(config: {
 }): Promise<T> => {
   const { url, method, params, data, headers, signal } = config;
 
+  // Get auth token from store
+  const accessToken = useAuthStore.getState().accessToken;
+
   const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
 
   const response = await fetch(`${BASE_URL}${url}${queryString}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       ...headers,
     },
     body: data ? JSON.stringify(data) : undefined,

@@ -177,7 +177,11 @@ export function useAuth() {
         // Use derived public key for backend authentication
         publicKey = getDerivedPublicKeyHex(derivedKeypair);
       } else {
-        // Social login - get public key directly from Web3Auth
+        // Social login - get keypair from Web3Auth and store for crypto operations
+        const socialKeypair = await getKeypairForVault(connectedProvider);
+        if (socialKeypair) {
+          setDerivedKeypair(socialKeypair);
+        }
         publicKey = await getPublicKey(connectedProvider);
         setIsExternalWallet(false);
       }
@@ -305,9 +309,18 @@ export function useAuth() {
           const response = await authApi.refresh();
           setAccessToken(response.accessToken);
 
-          // After successful session restore, initialize/load vault
-          // Check if external wallet via auth store flag (persisted from original login)
+          // Restore keypair for crypto operations (needed for uploads, folder ops, etc.)
           const isExternal = useAuthStore.getState().isExternalWallet;
+          if (!isExternal && isSocialLogin()) {
+            // Social login - restore keypair from Web3Auth
+            const socialKeypair = await getKeypairForVault(web3Auth?.provider);
+            if (socialKeypair) {
+              setDerivedKeypair(socialKeypair);
+            }
+          }
+          // Note: External wallet keypairs cannot be restored without user signing again
+
+          // After successful session restore, initialize/load vault
           await initializeOrLoadVault(web3Auth?.provider, isExternal);
         } catch {
           // No valid session, stay on login page
@@ -321,6 +334,9 @@ export function useAuth() {
     isAuthenticated,
     isLoggingIn,
     setAccessToken,
+    setDerivedKeypair,
+    isSocialLogin,
+    getKeypairForVault,
     web3Auth?.provider,
     initializeOrLoadVault,
   ]);

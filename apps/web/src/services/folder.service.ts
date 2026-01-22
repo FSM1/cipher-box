@@ -358,6 +358,66 @@ export async function deleteFileFromFolder(params: {
 }
 
 /**
+ * Add a file to a folder after successful upload.
+ *
+ * Creates a FileEntry from the upload result and adds it to the folder's
+ * children array, then publishes the updated metadata to IPNS.
+ *
+ * @param params.parentFolderState - Parent folder to add file to
+ * @param params.cid - IPFS CID of the encrypted file
+ * @param params.fileKeyEncrypted - Hex-encoded ECIES-wrapped file key
+ * @param params.fileIv - Hex-encoded IV used for encryption
+ * @param params.name - Original file name
+ * @param params.size - Original file size in bytes
+ * @returns Created file entry
+ * @throws Error if name collision exists
+ */
+export async function addFileToFolder(params: {
+  parentFolderState: FolderNode;
+  cid: string;
+  fileKeyEncrypted: string;
+  fileIv: string;
+  name: string;
+  size: number;
+}): Promise<FileEntry> {
+  // 1. Check for name collision
+  const nameExists = params.parentFolderState.children.some((c) => c.name === params.name);
+  if (nameExists) {
+    throw new Error('A file with this name already exists');
+  }
+
+  // 2. Create file entry
+  const now = Date.now();
+  const fileEntry: FileEntry = {
+    type: 'file',
+    id: crypto.randomUUID(),
+    name: params.name,
+    cid: params.cid,
+    fileKeyEncrypted: params.fileKeyEncrypted,
+    fileIv: params.fileIv,
+    encryptionMode: 'GCM',
+    size: params.size,
+    createdAt: now,
+    modifiedAt: now,
+  };
+
+  // 3. Add to parent's children
+  const children = [...params.parentFolderState.children, fileEntry];
+
+  // 4. Update parent folder metadata and publish IPNS
+  await updateFolderMetadata({
+    folderId: params.parentFolderState.id,
+    children,
+    folderKey: params.parentFolderState.folderKey,
+    ipnsPrivateKey: params.parentFolderState.ipnsPrivateKey,
+    ipnsName: params.parentFolderState.ipnsName,
+    sequenceNumber: params.parentFolderState.sequenceNumber,
+  });
+
+  return fileEntry;
+}
+
+/**
  * Calculate the maximum depth of a folder's subtree.
  *
  * Used to check if moving a folder would exceed the depth limit.

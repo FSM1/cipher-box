@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Vault } from './entities/vault.entity';
 import { PinnedCid } from './entities/pinned-cid.entity';
+import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
 import { InitVaultDto, VaultResponseDto } from './dto/init-vault.dto';
 import { QuotaResponseDto } from './dto/quota.dto';
 
@@ -17,7 +18,9 @@ export class VaultService {
     @InjectRepository(Vault)
     private readonly vaultRepository: Repository<Vault>,
     @InjectRepository(PinnedCid)
-    private readonly pinnedCidRepository: Repository<PinnedCid>
+    private readonly pinnedCidRepository: Repository<PinnedCid>,
+    @InjectRepository(FolderIpns)
+    private readonly folderIpnsRepository: Repository<FolderIpns>
   ) {}
 
   /**
@@ -48,6 +51,20 @@ export class VaultService {
     });
 
     const savedVault = await this.vaultRepository.save(vault);
+
+    // Create root folder IPNS entry for publish tracking
+    // This allows IPNS publishes to work without requiring TEE fields on every publish
+    const rootFolderIpns = this.folderIpnsRepository.create({
+      userId,
+      ipnsName: dto.rootIpnsName,
+      latestCid: null, // No content yet
+      sequenceNumber: '0',
+      encryptedIpnsPrivateKey: null, // TEE key added when TEE is implemented
+      keyEpoch: null,
+      isRoot: true,
+    });
+    await this.folderIpnsRepository.save(rootFolderIpns);
+
     return this.toVaultResponse(savedVault);
   }
 

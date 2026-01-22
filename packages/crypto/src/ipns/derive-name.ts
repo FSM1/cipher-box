@@ -6,6 +6,7 @@
 
 import { publicKeyFromRaw } from '@libp2p/crypto/keys';
 import { peerIdFromPublicKey } from '@libp2p/peer-id';
+import { base36 } from 'multiformats/bases/base36';
 import { CryptoError } from '../types';
 import { ED25519_PUBLIC_KEY_SIZE } from '../constants';
 
@@ -35,8 +36,8 @@ export async function deriveIpnsName(ed25519PublicKey: Uint8Array): Promise<stri
     // Create PeerId from the public key
     const peerId = peerIdFromPublicKey(libp2pPublicKey);
 
-    // Return CIDv1 string representation (k51... format)
-    return peerId.toCID().toString();
+    // Return CIDv1 string representation in base36 (k51... format)
+    return peerId.toCID().toString(base36);
   } catch (error) {
     // Re-throw CryptoErrors as-is
     if (error instanceof CryptoError) {
