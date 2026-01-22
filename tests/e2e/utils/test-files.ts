@@ -1,5 +1,10 @@
 import { writeFileSync, unlinkSync, existsSync } from 'fs';
-import { resolve } from 'path';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+// ESM compatibility - __dirname is not available in ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 /**
  * Utilities for creating and managing test files.
