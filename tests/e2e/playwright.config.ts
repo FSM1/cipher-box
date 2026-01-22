@@ -3,6 +3,9 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './tests',
 
+  // Global setup to prepare test environment
+  globalSetup: './global-setup.ts',
+
   // Run tests sequentially initially (per CONTEXT.md)
   fullyParallel: false,
   workers: 1,
@@ -30,7 +33,12 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+        // Use storage state for authenticated tests
+        // Global setup ensures this file exists (placeholder or real)
+        storageState: '.auth/user.json',
+      },
     },
   ],
 
