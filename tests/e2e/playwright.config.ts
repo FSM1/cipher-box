@@ -13,10 +13,10 @@ config({ path: resolve(__dirname, '.env') });
 export default defineConfig({
   testDir: './tests',
 
-  // Global setup to prepare test environment
-  globalSetup: './global-setup.ts',
+  // No global setup needed - tests handle their own authentication
+  // (Removed globalSetup: './global-setup.ts')
 
-  // Run tests sequentially initially (per CONTEXT.md)
+  // Run tests sequentially (single session approach)
   fullyParallel: false,
   workers: 1,
 
@@ -45,9 +45,7 @@ export default defineConfig({
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
-        // Use storage state for authenticated tests
-        // Global setup ensures this file exists (placeholder or real)
-        storageState: '.auth/user.json',
+        // No storage state - tests handle their own authentication in a single session
       },
     },
   ],

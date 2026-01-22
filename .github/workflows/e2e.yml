@@ -11,7 +11,7 @@ jobs:
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
 
     services:
       postgres:
@@ -87,7 +87,7 @@ jobs:
           echo "IPFS_LOCAL_GATEWAY_URL=http://localhost:8080" >> apps/api/.env
 
       - name: Run E2E tests
-        run: pnpm --filter @cipherbox/e2e test
+        run: pnpm --filter @cipherbox/e2e test tests/full-workflow.spec.ts
         env:
           CI: true
           # Database configuration

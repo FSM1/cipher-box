@@ -19,9 +19,10 @@ export class UploadZonePage {
 
   /**
    * Get the hidden file input element (used by react-dropzone).
+   * Uses first() as there may be multiple upload zones on the page.
    */
   private fileInput(): Locator {
-    return this.page.locator('.upload-zone input[type="file"]');
+    return this.page.locator('.upload-zone input[type="file"]').first();
   }
 
   /**
