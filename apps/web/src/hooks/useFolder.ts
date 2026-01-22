@@ -117,9 +117,10 @@ export function useFolder() {
           throw new Error(`Cannot create folder: maximum depth of ${MAX_FOLDER_DEPTH} exceeded`);
         }
 
-        // Get user's public key for ECIES wrapping (stored during login for both social and external wallet)
+        // Get user's ECIES keypair for vault cryptographic operations (public + private keys stored in memory after login)
+        // The public key is used here for key wrapping; the private key remains client-side for decryption operations.
         if (!auth.derivedKeypair) {
-          throw new Error('No public key available - please log in again');
+          throw new Error('No ECIES keypair available - please log in again');
         }
         const userPublicKey = auth.derivedKeypair.publicKey;
 
@@ -406,7 +407,7 @@ export function useFolder() {
         }
 
         // Add file to folder
-        const fileEntry = await folderService.addFileToFolder({
+        const { fileEntry, newSequenceNumber } = await folderService.addFileToFolder({
           parentFolderState: parentFolder,
           cid: fileData.cid,
           fileKeyEncrypted: fileData.wrappedKey,
@@ -415,9 +416,11 @@ export function useFolder() {
           size: fileData.originalSize,
         });
 
-        // Update local state with new child
+        // Update local state with new child and sequence number
         const updatedChildren = [...parentFolder.children, fileEntry];
-        useFolderStore.getState().updateFolderChildren(parentId, updatedChildren);
+        const store = useFolderStore.getState();
+        store.updateFolderChildren(parentId, updatedChildren);
+        store.updateFolderSequence(parentId, newSequenceNumber);
 
         setState({ isLoading: false, error: null });
         return fileEntry;

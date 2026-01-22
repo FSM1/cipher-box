@@ -70,14 +70,29 @@ export function UploadZone({ folderId, onUploadComplete }: UploadZoneProps) {
         const uploadedFiles = await upload(acceptedFiles);
 
         // Register each uploaded file in the folder metadata
+        // Handle partial failures gracefully - continue with remaining files if one fails
+        const failedRegistrations: string[] = [];
         for (const uploaded of uploadedFiles) {
-          await addFile(folderId, {
-            cid: uploaded.cid,
-            wrappedKey: uploaded.wrappedKey,
-            iv: uploaded.iv,
-            originalName: uploaded.originalName,
-            originalSize: uploaded.originalSize,
-          });
+          try {
+            await addFile(folderId, {
+              cid: uploaded.cid,
+              wrappedKey: uploaded.wrappedKey,
+              iv: uploaded.iv,
+              originalName: uploaded.originalName,
+              originalSize: uploaded.originalSize,
+            });
+          } catch {
+            // Keep going, but remember which files failed to register
+            failedRegistrations.push(uploaded.originalName ?? 'Unnamed file');
+          }
+        }
+
+        if (failedRegistrations.length > 0) {
+          setError(
+            `Some files were uploaded but could not be added to this folder: ${failedRegistrations.join(
+              ', '
+            )}`
+          );
         }
 
         onUploadComplete?.();

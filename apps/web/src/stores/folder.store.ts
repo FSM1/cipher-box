@@ -50,6 +50,7 @@ type FolderState = {
   // Actions
   setFolder: (folder: FolderNode) => void;
   updateFolderChildren: (folderId: string, children: FolderChild[]) => void;
+  updateFolderSequence: (folderId: string, sequenceNumber: bigint) => void;
   setCurrentFolder: (folderId: string | null) => void;
   setBreadcrumbs: (breadcrumbs: Breadcrumb[]) => void;
   addPendingPublish: (folderId: string) => void;
@@ -90,6 +91,19 @@ export const useFolderStore = create<FolderState>((set, get) => ({
         folders: {
           ...state.folders,
           [folderId]: { ...folder, children },
+        },
+      };
+    }),
+
+  updateFolderSequence: (folderId, sequenceNumber) =>
+    set((state) => {
+      const folder = state.folders[folderId];
+      if (!folder) return state;
+
+      return {
+        folders: {
+          ...state.folders,
+          [folderId]: { ...folder, sequenceNumber },
         },
       };
     }),

@@ -369,7 +369,7 @@ export async function deleteFileFromFolder(params: {
  * @param params.fileIv - Hex-encoded IV used for encryption
  * @param params.name - Original file name
  * @param params.size - Original file size in bytes
- * @returns Created file entry
+ * @returns Created file entry and new sequence number
  * @throws Error if name collision exists
  */
 export async function addFileToFolder(params: {
@@ -379,7 +379,7 @@ export async function addFileToFolder(params: {
   fileIv: string;
   name: string;
   size: number;
-}): Promise<FileEntry> {
+}): Promise<{ fileEntry: FileEntry; newSequenceNumber: bigint }> {
   // 1. Check for name collision
   const nameExists = params.parentFolderState.children.some((c) => c.name === params.name);
   if (nameExists) {
@@ -405,7 +405,7 @@ export async function addFileToFolder(params: {
   const children = [...params.parentFolderState.children, fileEntry];
 
   // 4. Update parent folder metadata and publish IPNS
-  await updateFolderMetadata({
+  const { newSequenceNumber } = await updateFolderMetadata({
     folderId: params.parentFolderState.id,
     children,
     folderKey: params.parentFolderState.folderKey,
@@ -414,7 +414,7 @@ export async function addFileToFolder(params: {
     sequenceNumber: params.parentFolderState.sequenceNumber,
   });
 
-  return fileEntry;
+  return { fileEntry, newSequenceNumber };
 }
 
 /**

@@ -18,6 +18,8 @@ export class PublishIpnsDto {
   @IsString()
   @IsNotEmpty()
   // [SECURITY: MEDIUM-12] IPNS name validation - accept k51 (base36) or bafzaa (base32) CIDv1 libp2p-key
+  // Both formats are accepted for forward compatibility and external tool support.
+  // Client code generates base36 (k51...) format, but we accept base32 (bafzaa...) for interoperability.
   @Matches(/^(k51qzi5uqu5[a-z0-9]{40,60}|bafzaa[a-z2-7]{50,70})$/, {
     message: 'ipnsName must be a valid CIDv1 libp2p-key (k51qzi5uqu5... or bafzaa...)',
   })
