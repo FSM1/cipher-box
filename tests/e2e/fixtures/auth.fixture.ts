@@ -54,24 +54,16 @@ function hasValidAuthState(): boolean {
  * Test fixture that provides an authenticated page.
  * The page will be on the dashboard and ready for testing.
  *
- * Authentication is handled by global-setup.ts which performs automated login
- * using Web3Auth test credentials and saves the auth state.
+ * Authentication is handled by:
+ * 1. global-setup.ts which performs automated login and saves auth state
+ * 2. playwright.config.ts which loads storageState for all tests
+ *
+ * This fixture just navigates to dashboard and verifies authentication.
  */
 export const authenticatedTest = base.extend<AuthenticatedFixtures>({
   authenticatedPage: async ({ page }, use) => {
     // Check if we have valid auth state (with actual cookies, not placeholder)
-    if (hasValidAuthState()) {
-      // Fast path: Load saved authentication state
-      const storageState = JSON.parse(readFileSync(AUTH_STATE_FILE, 'utf-8'));
-      await page.context().addCookies(storageState.cookies);
-
-      // Navigate to dashboard
-      await page.goto('/dashboard');
-
-      // Verify authentication by checking for logout button
-      await page.waitForSelector('button:has-text("Logout")', { timeout: 10000 });
-    } else {
-      // No valid auth state available
+    if (!hasValidAuthState()) {
       throw new Error(`
         Valid authentication state not found at ${AUTH_STATE_FILE}
 
@@ -86,6 +78,13 @@ export const authenticatedTest = base.extend<AuthenticatedFixtures>({
         - For CI, ensure GitHub Secrets are configured
       `);
     }
+
+    // Storage state (cookies + localStorage) is already loaded by playwright.config.ts
+    // Just navigate to dashboard and verify authentication
+    await page.goto('/dashboard');
+
+    // Verify authentication by checking for logout button
+    await page.waitForSelector('button:has-text("Logout")', { timeout: 10000 });
 
     // Use the authenticated page
     await use(page);
