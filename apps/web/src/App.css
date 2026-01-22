@@ -81,3 +81,35 @@
   font-style: italic;
   margin-top: 1rem;
 }
+
+/* API Status Indicator */
+.api-status {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-dot.online {
+  background-color: #22c55e;
+  box-shadow: 0 0 6px #22c55e;
+}
+
+.status-dot.offline {
+  background-color: #ef4444;
+  box-shadow: 0 0 6px #ef4444;
+}
+
+.status-dot.loading {
+  background-color: #6b7280;
+}
