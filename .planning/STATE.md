@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 Phase: 6.1 of 11 (Webapp Automation Testing) - COMPLETE
 Plan: 6 of 6 in Phase 6.1 complete
 Status: Complete - All E2E tests and CI integration done
-Last activity: 2026-01-22 - Completed Phase 6.1 verification
+Last activity: 2026-01-22 - Completed quick task 001: API status indicator on login page
 
 Progress: [#######...] 72% (34 of 47 plans)
 
@@ -163,6 +163,12 @@ Recent decisions affecting current work:
 - Must be generated once manually via `pnpm test:headed` and completing Web3Auth login
 - CI environments need pre-generated auth state or API-based test authentication
 - Options: (1) commit auth state as CI secret, (2) create test auth endpoint, (3) mock Web3Auth
+
+### Quick Tasks Completed
+
+| #   | Description                            | Date       | Commit  | Directory                                                                           |
+| --- | -------------------------------------- | ---------- | ------- | ----------------------------------------------------------------------------------- |
+| 001 | Add API status indicator on login page | 2026-01-22 | 929143e | [001-login-page-api-status-indicator](./quick/001-login-page-api-status-indicator/) |
 
 ### Research Flags (from research phase)
 
