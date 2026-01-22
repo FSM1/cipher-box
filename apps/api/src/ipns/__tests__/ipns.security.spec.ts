@@ -151,7 +151,7 @@ describe('IPNS API Security Tests', () => {
       const messages = Array.isArray(response.body.message)
         ? response.body.message.join(' ')
         : response.body.message;
-      expect(messages).toContain('ipnsName must be a valid k51 CIDv1');
+      expect(messages).toContain('ipnsName must be a valid CIDv1 libp2p-key');
     });
 
     it('should reject ipnsName that is too short', async () => {

@@ -48,16 +48,18 @@ export class FolderIpns {
   /**
    * ECIES-wrapped Ed25519 private key for TEE republishing
    * Encrypted with TEE public key, only decryptable by TEE
+   * Nullable until TEE integration is implemented (Phase 7+)
    */
-  @Column({ type: 'bytea', name: 'encrypted_ipns_private_key' })
-  encryptedIpnsPrivateKey!: Buffer;
+  @Column({ type: 'bytea', name: 'encrypted_ipns_private_key', nullable: true })
+  encryptedIpnsPrivateKey!: Buffer | null;
 
   /**
    * TEE key epoch the IPNS key was encrypted for
    * Used for key rotation tracking
+   * Nullable until TEE integration is implemented (Phase 7+)
    */
-  @Column({ type: 'int', name: 'key_epoch' })
-  keyEpoch!: number;
+  @Column({ type: 'int', name: 'key_epoch', nullable: true })
+  keyEpoch!: number | null;
 
   /**
    * Marks the root folder for this user's vault

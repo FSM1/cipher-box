@@ -29,7 +29,7 @@ yarn-error.log*
 coverage/
 
 # Playwright test results
-test-results/
+tests/e2e/test-results/*
 
 # Playwright screenshots
 .playwright-mcp/*.png
