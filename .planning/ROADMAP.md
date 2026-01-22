@@ -20,7 +20,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 4.1: API Service Testing** - Unit tests for backend services per TESTING.md (INSERTED)
 - [x] **Phase 4.2: Local IPFS Testing Infrastructure** - Add local IPFS node to Docker for offline testing (INSERTED)
 - [x] **Phase 5: Folder System** - IPNS metadata, folder hierarchy, and operations
-- [ ] **Phase 6: File Browser UI** - Web interface for file management
+- [x] **Phase 6: File Browser UI** - Web interface for file management
 - [x] **Phase 6.1: Webapp Automation Testing** - E2E UI testing with automation framework (INSERTED)
 - [ ] **Phase 7: Multi-Device Sync** - IPNS polling and sync state management
 - [ ] **Phase 8: TEE Integration** - Auto-republishing via Phala Cloud
@@ -193,10 +193,10 @@ Plans:
 
 Plans:
 
-- [ ] 06-01-PLAN.md — File browser layout with folder tree sidebar and file list
-- [ ] 06-02-PLAN.md — Upload zone with drag-drop and progress modal
-- [ ] 06-03-PLAN.md — Context menu with rename, delete, download actions
-- [ ] 06-04-PLAN.md — Responsive design and breadcrumb navigation
+- [x] 06-01-PLAN.md — File browser layout with folder tree sidebar and file list
+- [x] 06-02-PLAN.md — Upload zone with drag-drop and progress modal
+- [x] 06-03-PLAN.md — Context menu with rename, delete, download actions
+- [x] 06-04-PLAN.md — Responsive design and breadcrumb navigation
 
 ### Phase 6.1: Webapp Automation Testing (INSERTED)
 
@@ -337,7 +337,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 4.1 API Service Testing | 3/3            | Complete    | 2026-01-21 |
 | 4.2 Local IPFS Testing  | 2/2            | Complete    | 2026-01-21 |
 | 5. Folder System        | 4/4            | Complete    | 2026-01-21 |
-| 6. File Browser UI      | 0/4            | Not started | -          |
+| 6. File Browser UI      | 4/4            | Complete    | 2026-01-22 |
 | 6.1 Webapp Automation   | 6/6            | Complete    | 2026-01-22 |
 | 7. Multi-Device Sync    | 0/3            | Not started | -          |
 | 8. TEE Integration      | 0/4            | Not started | -          |

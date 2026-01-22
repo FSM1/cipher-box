@@ -35,13 +35,13 @@ Progress: [#######...] 72% (34 of 47 plans)
 | 04.1-api-service-testing | 3/3   | 11 min | 3.7 min  |
 | 04.2-local-ipfs-testing  | 2/2   | 14 min | 7 min    |
 | 05-folder-system         | 4/4   | 18 min | 4.5 min  |
-| 06-file-browser-ui       | 3/4   | 17 min | 5.7 min  |
+| 06-file-browser-ui       | 4/4   | 19 min | 4.8 min  |
 | 06.1-webapp-automation   | 6/6   | 25 min | 4.2 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 3m, 4m, 4m, 3m, 4m
-- Trend: Consistent
+- Last 5 plans: 4m, 4m, 3m, 4m, 2m
+- Trend: Consistent, improving
 
 _Updated after each plan completion_
 
@@ -143,6 +143,9 @@ Recent decisions affecting current work:
 | Delete always confirms with modal dialog             | 06-03   | Per CONTEXT.md - prevents accidental data loss                            |
 | Folder delete warning includes contents              | 06-03   | Users need to know subfolders/files will also be deleted                  |
 | FileEntry to FileMetadata field mapping              | 06-03   | Download service expects different field names than folder metadata       |
+| Simple back arrow breadcrumbs for v1                 | 06-04   | Per CONTEXT.md, full path dropdown deferred to future enhancement         |
+| 768px mobile breakpoint for responsive design        | 06-04   | Standard tablet breakpoint, sidebar overlay on mobile                     |
+| 500ms long-press for touch context menu              | 06-04   | Touch gesture threshold for mobile context menu activation                |
 | Storage state pattern for E2E auth                   | 06.1-03 | Manual login once, save state, reuse for fast tests                       |
 | Skip interactive Web3Auth tests in CI                | 06.1-03 | Email OTP requires manual entry; CI uses pre-generated storage state      |
 | ESM for E2E test files                               | 06.1-03 | Consistent with monorepo type:module, avoids require() issues             |
