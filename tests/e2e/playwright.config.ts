@@ -50,9 +50,19 @@ export default defineConfig({
     },
   ],
 
-  // Web server configuration - start both API and web app
+  // Web server configuration - start API, web app, and mock IPNS routing service
   // Note: Commands run from the workspace root (two levels up from tests/e2e)
   webServer: [
+    {
+      // Mock IPNS routing service - must start first as API depends on it
+      command: 'node tools/mock-ipns-routing/dist/index.js',
+      url: 'http://localhost:3001/health',
+      reuseExistingServer: !process.env.CI,
+      timeout: 30000,
+      cwd: resolve(__dirname, '../..'),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
     {
       command: 'pnpm --filter @cipherbox/api dev',
       url: 'http://localhost:3000/health',

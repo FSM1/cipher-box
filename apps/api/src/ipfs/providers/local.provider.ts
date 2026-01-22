@@ -3,8 +3,6 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
-import FormData from 'form-data';
-import { Readable } from 'stream';
 import { IpfsProvider } from './ipfs-provider.interface';
 
 interface KuboAddResponse {
@@ -39,19 +37,18 @@ export class LocalProvider implements IpfsProvider {
       throw new BadRequestException('File data cannot be empty');
     }
 
+    // Use native FormData (available in Node.js 18+) with Blob for compatibility with native fetch
     const formData = new FormData();
-    formData.append('file', Readable.from(data), {
-      filename: `file-${Date.now()}`,
-      contentType: 'application/octet-stream',
-    });
+    // Create Blob from Buffer - cast to satisfy TypeScript's strict typing
+    const blob = new Blob([data as unknown as BlobPart], { type: 'application/octet-stream' });
+    formData.append('file', blob, `file-${Date.now()}`);
 
     try {
       // Kubo API uses POST for all operations
       // pin=true ensures the file is pinned, cid-version=1 for CIDv1
       const response = await fetch(`${this.apiUrl}/api/v0/add?pin=true&cid-version=1`, {
         method: 'POST',
-        headers: formData.getHeaders(),
-        body: formData as unknown as BodyInit,
+        body: formData,
       });
 
       if (!response.ok) {
