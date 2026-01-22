@@ -58,7 +58,9 @@ function hasValidAuthState(): boolean {
  * 1. global-setup.ts which performs automated login and saves auth state
  * 2. playwright.config.ts which loads storageState for all tests
  *
- * This fixture just navigates to dashboard and verifies authentication.
+ * IMPORTANT: Web3Auth sessions may expire. If tests fail with auth errors,
+ * regenerate the auth state by running: pnpm test:e2e:headed
+ * and completing the Web3Auth login manually.
  */
 export const authenticatedTest = base.extend<AuthenticatedFixtures>({
   authenticatedPage: async ({ page }, use) => {
@@ -73,18 +75,44 @@ export const authenticatedTest = base.extend<AuthenticatedFixtures>({
         3. The auth state file contains only a placeholder
 
         To fix:
-        - Ensure .env file has WEB3AUTH_TEST_EMAIL and WEB3AUTH_TEST_OTP set
-        - Check global-setup.ts logs for login errors
+        - Run 'pnpm test:e2e:headed' and complete Web3Auth login manually
+        - Or ensure .env file has WEB3AUTH_TEST_EMAIL and WEB3AUTH_TEST_OTP set
         - For CI, ensure GitHub Secrets are configured
       `);
     }
 
     // Storage state (cookies + localStorage) is already loaded by playwright.config.ts
-    // Just navigate to dashboard and verify authentication
+    // Navigate to dashboard
     await page.goto('/dashboard');
 
-    // Verify authentication by checking for logout button
-    await page.waitForSelector('button:has-text("Logout")', { timeout: 10000 });
+    // Wait for either:
+    // 1. Logout button (authenticated) - success
+    // 2. Sign In button (redirected to login) - session expired
+    const result = await Promise.race([
+      page
+        .waitForSelector('button:has-text("Logout")', { timeout: 15000 })
+        .then(() => 'authenticated' as const),
+      page
+        .waitForSelector('button:has-text("Sign In")', { timeout: 15000 })
+        .then(() => 'login_page' as const),
+    ]);
+
+    if (result === 'login_page') {
+      throw new Error(`
+        Web3Auth session has expired or is invalid.
+
+        The storage state contains cookies, but Web3Auth doesn't recognize the session.
+        This typically happens when:
+        1. The Web3Auth session has expired (sessions last ~7 days)
+        2. The localStorage data is stale or corrupted
+
+        To fix:
+        1. Delete tests/e2e/.auth/user.json
+        2. Run 'pnpm test:e2e:headed tests/auth/login.spec.ts'
+        3. Complete the Web3Auth login manually in the browser
+        4. The new auth state will be saved automatically
+      `);
+    }
 
     // Use the authenticated page
     await use(page);
