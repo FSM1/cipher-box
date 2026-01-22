@@ -257,7 +257,10 @@ test.describe.serial('Full Workflow', () => {
     await expect(page).toHaveURL(/localhost:\d+\/?$/);
 
     // Verify Sign In button is visible (logged out state)
-    await expect(page.getByRole('button', { name: /sign in|login/i })).toBeVisible({
+    // The button text varies based on Web3Auth configuration - could be "Sign In", "Login", or "Continue with Google"
+    await expect(
+      page.getByRole('button', { name: /sign in|login|continue with google/i })
+    ).toBeVisible({
       timeout: 10000,
     });
   });
