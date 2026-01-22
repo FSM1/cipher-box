@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { ApiStatusIndicator } from '../components/ApiStatusIndicator';
 import { AuthButton } from '../components/auth/AuthButton';
 import { useAuth } from '../hooks/useAuth';
 
@@ -35,6 +36,7 @@ export function Login() {
         Your files, encrypted on your device. We never see your data.
       </p>
       <AuthButton />
+      <ApiStatusIndicator />
     </div>
   );
 }

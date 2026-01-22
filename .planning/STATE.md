@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 6 File Browser UI - In Progress
+**Current focus:** Phase 6.1 Complete - Ready for Phase 7 (Multi-Device Sync)
 
 ## Current Position
 
-Phase: 6 of 11 (File Browser UI)
-Plan: 3 of 4 in Phase 6 complete
-Status: In progress - Context menu and file actions complete
-Last activity: 2026-01-21 - Completed 06-03-PLAN.md
+Phase: 6.1 of 11 (Webapp Automation Testing) - COMPLETE
+Plan: 6 of 6 in Phase 6.1 complete
+Status: Complete - All E2E tests and CI integration done
+Last activity: 2026-01-22 - Completed quick task 001: API status indicator on login page
 
-Progress: [######....] 60% (28 of 47 plans)
+Progress: [#######...] 72% (34 of 47 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 28
-- Average duration: 4.3 min
-- Total execution time: 2.0 hours
+- Total plans completed: 34
+- Average duration: 5.1 min
+- Total execution time: 2.9 hours
 
 **By Phase:**
 
@@ -36,10 +36,11 @@ Progress: [######....] 60% (28 of 47 plans)
 | 04.2-local-ipfs-testing  | 2/2   | 14 min | 7 min    |
 | 05-folder-system         | 4/4   | 18 min | 4.5 min  |
 | 06-file-browser-ui       | 3/4   | 17 min | 5.7 min  |
+| 06.1-webapp-automation   | 6/6   | 25 min | 4.2 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 6m, 6m, 6m, 5m
+- Last 5 plans: 3m, 4m, 4m, 3m, 4m
 - Trend: Consistent
 
 _Updated after each plan completion_
@@ -142,6 +143,11 @@ Recent decisions affecting current work:
 | Delete always confirms with modal dialog             | 06-03   | Per CONTEXT.md - prevents accidental data loss                            |
 | Folder delete warning includes contents              | 06-03   | Users need to know subfolders/files will also be deleted                  |
 | FileEntry to FileMetadata field mapping              | 06-03   | Download service expects different field names than folder metadata       |
+| Storage state pattern for E2E auth                   | 06.1-03 | Manual login once, save state, reuse for fast tests                       |
+| Skip interactive Web3Auth tests in CI                | 06.1-03 | Email OTP requires manual entry; CI uses pre-generated storage state      |
+| ESM for E2E test files                               | 06.1-03 | Consistent with monorepo type:module, avoids require() issues             |
+| Separate E2E workspace package                       | 06.1-03 | Isolated dependencies, independent test execution from unit tests         |
+| Multi-browser testing (Chromium/Firefox/WebKit)      | 06.1-03 | Cross-browser compatibility validation catches browser-specific bugs      |
 
 ### Pending Todos
 
@@ -151,7 +157,18 @@ Recent decisions affecting current work:
 
 ### Blockers/Concerns
 
-None yet.
+**E2E Auth State Setup (06.1-03):**
+
+- E2E tests require `.auth/user.json` with authenticated session
+- Must be generated once manually via `pnpm test:headed` and completing Web3Auth login
+- CI environments need pre-generated auth state or API-based test authentication
+- Options: (1) commit auth state as CI secret, (2) create test auth endpoint, (3) mock Web3Auth
+
+### Quick Tasks Completed
+
+| #   | Description                            | Date       | Commit  | Directory                                                                           |
+| --- | -------------------------------------- | ---------- | ------- | ----------------------------------------------------------------------------------- |
+| 001 | Add API status indicator on login page | 2026-01-22 | 929143e | [001-login-page-api-status-indicator](./quick/001-login-page-api-status-indicator/) |
 
 ### Research Flags (from research phase)
 
@@ -167,11 +184,12 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-01-21
-Stopped at: Completed 06-03-PLAN.md (Context Menu & File Actions)
+Last session: 2026-01-22
+Stopped at: Phase 6.1 Complete - Webapp Automation Testing verified
 Resume file: None
+Next phase: Phase 7 (Multi-Device Sync) or complete Phase 6 (File Browser UI)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-21 after 06-03 completion_
+_Last updated: 2026-01-22 after 06.1-03 completion_
