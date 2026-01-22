@@ -21,27 +21,27 @@ Progress: [######....] 60% (29 of 48 plans)
 **Velocity:**
 
 - Total plans completed: 29
-- Average duration: 4.3 min
-- Total execution time: 2.1 hours
+- Average duration: 6.2 min
+- Total execution time: 3.0 hours
 
 **By Phase:**
 
-| Phase                          | Plans | Total  | Avg/Plan |
-| ------------------------------ | ----- | ------ | -------- |
-| 01-foundation                  | 3/3   | 20 min | 7 min    |
-| 02-authentication              | 4/4   | 18 min | 4.5 min  |
-| 03-core-encryption             | 3/3   | 18 min | 6 min    |
-| 04-file-storage                | 4/4   | 17 min | 4.3 min  |
-| 04.1-api-service-testing       | 3/3   | 11 min | 3.7 min  |
-| 04.2-local-ipfs-testing        | 2/2   | 14 min | 7 min    |
-| 05-folder-system               | 4/4   | 18 min | 4.5 min  |
-| 06-file-browser-ui             | 3/4   | 17 min | 5.7 min  |
-| 06.1-webapp-automation-testing | 1/6   | 4 min  | 4 min    |
+| Phase                    | Plans | Total  | Avg/Plan |
+| ------------------------ | ----- | ------ | -------- |
+| 01-foundation            | 3/3   | 20 min | 7 min    |
+| 02-authentication        | 4/4   | 18 min | 4.5 min  |
+| 03-core-encryption       | 3/3   | 18 min | 6 min    |
+| 04-file-storage          | 4/4   | 17 min | 4.3 min  |
+| 04.1-api-service-testing | 3/3   | 11 min | 3.7 min  |
+| 04.2-local-ipfs-testing  | 2/2   | 14 min | 7 min    |
+| 05-folder-system         | 4/4   | 18 min | 4.5 min  |
+| 06-file-browser-ui       | 3/4   | 17 min | 5.7 min  |
+| 06.1-webapp-automation   | 1/6   | 45 min | 45 min   |
 
 **Recent Trend:**
 
-- Last 5 plans: 6m, 6m, 5m, 6m, 4m
-- Trend: Consistent
+- Last 5 plans: 6m, 6m, 6m, 5m, 45m
+- Trend: Spike (infrastructure setup)
 
 _Updated after each plan completion_
 
@@ -143,11 +143,11 @@ Recent decisions affecting current work:
 | Delete always confirms with modal dialog             | 06-03   | Per CONTEXT.md - prevents accidental data loss                            |
 | Folder delete warning includes contents              | 06-03   | Users need to know subfolders/files will also be deleted                  |
 | FileEntry to FileMetadata field mapping              | 06-03   | Download service expects different field names than folder metadata       |
-| Playwright as E2E framework                          | 06.1-01 | Chromium-only testing per CONTEXT.md for simplicity                       |
-| Sequential test execution (workers: 1)               | 06.1-01 | Start simple before parallelization per CONTEXT.md                        |
-| No automatic retries (retries: 0)                    | 06.1-01 | Catch flakiness immediately per CONTEXT.md                                |
-| Video recording on failure only                      | 06.1-01 | Reduces CI artifact storage, captures debugging info when needed          |
-| Page Object Model with fixtures                      | 06.1-01 | Established pattern for consistent test organization                      |
+| Storage state pattern for E2E auth                   | 06.1-03 | Manual login once, save state, reuse for fast tests                       |
+| Skip interactive Web3Auth tests in CI                | 06.1-03 | Email OTP requires manual entry; CI uses pre-generated storage state      |
+| ESM for E2E test files                               | 06.1-03 | Consistent with monorepo type:module, avoids require() issues             |
+| Separate E2E workspace package                       | 06.1-03 | Isolated dependencies, independent test execution from unit tests         |
+| Multi-browser testing (Chromium/Firefox/WebKit)      | 06.1-03 | Cross-browser compatibility validation catches browser-specific bugs      |
 
 ### Pending Todos
 
@@ -157,7 +157,12 @@ Recent decisions affecting current work:
 
 ### Blockers/Concerns
 
-None yet.
+**E2E Auth State Setup (06.1-03):**
+
+- E2E tests require `.auth/user.json` with authenticated session
+- Must be generated once manually via `pnpm test:headed` and completing Web3Auth login
+- CI environments need pre-generated auth state or API-based test authentication
+- Options: (1) commit auth state as CI secret, (2) create test auth endpoint, (3) mock Web3Auth
 
 ### Research Flags (from research phase)
 
@@ -174,10 +179,10 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-01-22
-Stopped at: Completed 06.1-01-PLAN.md (Playwright Testing Infrastructure)
+Stopped at: Completed 06.1-03-PLAN.md (E2E Authentication Tests)
 Resume file: None
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-22 after 06.1-01 completion_
+_Last updated: 2026-01-22 after 06.1-03 completion_
