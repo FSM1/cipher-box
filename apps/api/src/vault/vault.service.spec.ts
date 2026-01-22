@@ -4,6 +4,7 @@ import { ConflictException, NotFoundException } from '@nestjs/common';
 import { VaultService, QUOTA_LIMIT_BYTES } from './vault.service';
 import { Vault } from './entities/vault.entity';
 import { PinnedCid } from './entities/pinned-cid.entity';
+import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
 import { InitVaultDto } from './dto/init-vault.dto';
 
 describe('VaultService', () => {
@@ -27,6 +28,10 @@ describe('VaultService', () => {
   let mockPinnedCidRepo: {
     createQueryBuilder: jest.Mock;
     delete: jest.Mock;
+  };
+  let mockFolderIpnsRepo: {
+    create: jest.Mock;
+    save: jest.Mock;
   };
 
   // Test data
@@ -85,6 +90,11 @@ describe('VaultService', () => {
       delete: jest.fn(),
     };
 
+    mockFolderIpnsRepo = {
+      create: jest.fn().mockImplementation((data) => data),
+      save: jest.fn().mockResolvedValue({}),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         VaultService,
@@ -95,6 +105,10 @@ describe('VaultService', () => {
         {
           provide: getRepositoryToken(PinnedCid),
           useValue: mockPinnedCidRepo,
+        },
+        {
+          provide: getRepositoryToken(FolderIpns),
+          useValue: mockFolderIpnsRepo,
         },
       ],
     }).compile();
@@ -134,6 +148,17 @@ describe('VaultService', () => {
         initializedAt: null,
       });
       expect(mockVaultRepo.save).toHaveBeenCalled();
+      // Verify root folder IPNS entry is created
+      expect(mockFolderIpnsRepo.create).toHaveBeenCalledWith({
+        userId: testUserId,
+        ipnsName: testRootIpnsName,
+        latestCid: null,
+        sequenceNumber: '0',
+        encryptedIpnsPrivateKey: null,
+        keyEpoch: null,
+        isRoot: true,
+      });
+      expect(mockFolderIpnsRepo.save).toHaveBeenCalled();
       expect(result.id).toBe(testVaultId);
       expect(result.ownerPublicKey).toBe(testOwnerPublicKey);
     });
@@ -162,6 +187,8 @@ describe('VaultService', () => {
       );
       expect(mockVaultRepo.create).not.toHaveBeenCalled();
       expect(mockVaultRepo.save).not.toHaveBeenCalled();
+      expect(mockFolderIpnsRepo.create).not.toHaveBeenCalled();
+      expect(mockFolderIpnsRepo.save).not.toHaveBeenCalled();
     });
 
     it('should handle valid hex strings of various lengths', async () => {
