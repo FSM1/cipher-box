@@ -151,25 +151,60 @@ describe('IpnsService', () => {
       );
     });
 
-    it('should throw BadRequestException if encryptedIpnsPrivateKey missing for new folder', async () => {
+    it('should allow publishing without encryptedIpnsPrivateKey for new folder (Phase 6 - TEE optional)', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockFetch.mockResolvedValue({ ok: true });
+      mockFolderIpnsRepo.create.mockReturnValue({
+        ...mockFolderEntity,
+        sequenceNumber: '0',
+        encryptedIpnsPrivateKey: null,
+        keyEpoch: null,
+      });
+      mockFolderIpnsRepo.save.mockResolvedValue({
+        ...mockFolderEntity,
+        sequenceNumber: '0',
+        encryptedIpnsPrivateKey: null,
+        keyEpoch: null,
+      });
 
-      const dto = createDto({ encryptedIpnsPrivateKey: undefined });
+      const dto = createDto({ encryptedIpnsPrivateKey: undefined, keyEpoch: undefined });
 
-      await expect(service.publishRecord(testUserId, dto)).rejects.toThrow(BadRequestException);
-      await expect(service.publishRecord(testUserId, dto)).rejects.toThrow(
-        'encryptedIpnsPrivateKey is required for first publish of a folder'
+      const result = await service.publishRecord(testUserId, dto);
+
+      expect(result.success).toBe(true);
+      expect(mockFolderIpnsRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          encryptedIpnsPrivateKey: null,
+          keyEpoch: null,
+        })
       );
     });
 
-    it('should throw BadRequestException if keyEpoch missing for new folder', async () => {
+    it('should allow publishing without keyEpoch for new folder (Phase 6 - TEE optional)', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockFetch.mockResolvedValue({ ok: true });
+      mockFolderIpnsRepo.create.mockReturnValue({
+        ...mockFolderEntity,
+        sequenceNumber: '0',
+        encryptedIpnsPrivateKey: Buffer.from(testEncryptedIpnsPrivateKey, 'hex'),
+        keyEpoch: null,
+      });
+      mockFolderIpnsRepo.save.mockResolvedValue({
+        ...mockFolderEntity,
+        sequenceNumber: '0',
+        encryptedIpnsPrivateKey: Buffer.from(testEncryptedIpnsPrivateKey, 'hex'),
+        keyEpoch: null,
+      });
 
       const dto = createDto({ keyEpoch: undefined });
 
-      await expect(service.publishRecord(testUserId, dto)).rejects.toThrow(BadRequestException);
-      await expect(service.publishRecord(testUserId, dto)).rejects.toThrow(
-        'keyEpoch is required for first publish of a folder'
+      const result = await service.publishRecord(testUserId, dto);
+
+      expect(result.success).toBe(true);
+      expect(mockFolderIpnsRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          keyEpoch: null,
+        })
       );
     });
 

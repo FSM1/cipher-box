@@ -3,8 +3,6 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
-import FormData from 'form-data';
-import { Readable } from 'stream';
 import { IpfsProvider } from './ipfs-provider.interface';
 
 interface PinataResponse {
@@ -37,11 +35,15 @@ export class PinataProvider implements IpfsProvider {
       throw new BadRequestException('File data cannot be empty');
     }
 
+    // Use native FormData (Node.js 18+) for compatibility with native fetch
     const formData = new FormData();
-    formData.append('file', Readable.from(data), {
-      filename: `encrypted-${Date.now()}`,
-      contentType: 'application/octet-stream',
-    });
+    // Convert Buffer to ArrayBuffer for Blob compatibility (TypeScript 5.9 strict typing)
+    const arrayBuffer = data.buffer.slice(
+      data.byteOffset,
+      data.byteOffset + data.byteLength
+    ) as ArrayBuffer;
+    const blob = new Blob([arrayBuffer], { type: 'application/octet-stream' });
+    formData.append('file', blob, `encrypted-${Date.now()}`);
 
     if (metadata) {
       formData.append(
@@ -65,9 +67,8 @@ export class PinataProvider implements IpfsProvider {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${this.pinataJwt}`,
-          ...formData.getHeaders(),
         },
-        body: formData as unknown as BodyInit,
+        body: formData,
       });
 
       if (!response.ok) {

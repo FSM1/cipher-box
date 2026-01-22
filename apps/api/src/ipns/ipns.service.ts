@@ -36,16 +36,10 @@ export class IpnsService {
       throw new BadRequestException('Invalid base64-encoded record');
     }
 
-    // Check if this is a new folder (needs encryptedIpnsPrivateKey)
-    const existingFolder = await this.getFolderIpns(userId, dto.ipnsName);
-    if (!existingFolder && !dto.encryptedIpnsPrivateKey) {
-      throw new BadRequestException(
-        'encryptedIpnsPrivateKey is required for first publish of a folder'
-      );
-    }
-    if (!existingFolder && dto.keyEpoch === undefined) {
-      throw new BadRequestException('keyEpoch is required for first publish of a folder');
-    }
+    // Note: TEE fields (encryptedIpnsPrivateKey, keyEpoch) are optional for Phase 6
+    // They will be required when TEE republishing is implemented (Phase 7+)
+    // For now, allow publishing without them - the folder will be created/updated
+    // via upsert and TEE fields can be added later when the client supports it
 
     // Publish to delegated routing API with retries
     await this.publishToDelegatedRouting(dto.ipnsName, recordBytes);
@@ -175,13 +169,16 @@ export class IpnsService {
     }
 
     // Create new entry
+    // TEE fields are optional for Phase 6 - will be null until TEE integration
     const folder = this.folderIpnsRepository.create({
       userId,
       ipnsName,
       latestCid: metadataCid,
       sequenceNumber: '0',
-      encryptedIpnsPrivateKey: Buffer.from(encryptedIpnsPrivateKey!, 'hex'),
-      keyEpoch: keyEpoch!,
+      encryptedIpnsPrivateKey: encryptedIpnsPrivateKey
+        ? Buffer.from(encryptedIpnsPrivateKey, 'hex')
+        : null,
+      keyEpoch: keyEpoch ?? null,
       isRoot: false, // Root folder is tracked in Vault entity
     });
 

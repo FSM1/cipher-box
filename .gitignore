@@ -30,7 +30,6 @@ coverage/
 
 # Playwright test results
 
-
 # Playwright screenshots
 .playwright-mcp/*.png
 

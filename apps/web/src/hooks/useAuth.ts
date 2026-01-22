@@ -177,7 +177,11 @@ export function useAuth() {
         // Use derived public key for backend authentication
         publicKey = getDerivedPublicKeyHex(derivedKeypair);
       } else {
-        // Social login - get public key directly from Web3Auth
+        // Social login - get keypair from Web3Auth and store for crypto operations
+        const socialKeypair = await getKeypairForVault(connectedProvider);
+        if (socialKeypair) {
+          setDerivedKeypair(socialKeypair);
+        }
         publicKey = await getPublicKey(connectedProvider);
         setIsExternalWallet(false);
       }

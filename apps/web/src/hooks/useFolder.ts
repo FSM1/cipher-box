@@ -5,7 +5,7 @@ import { useAuthStore } from '../stores/auth.store';
 import { unpinFromIpfs } from '../lib/api/ipfs';
 import * as folderService from '../services/folder.service';
 import type { FolderNode } from '../stores/folder.store';
-import type { FolderEntry } from '@cipherbox/crypto';
+import type { FolderEntry, FileEntry } from '@cipherbox/crypto';
 
 /** Maximum folder nesting depth per FOLD-03 */
 const MAX_FOLDER_DEPTH = 20;
@@ -117,16 +117,12 @@ export function useFolder() {
           throw new Error(`Cannot create folder: maximum depth of ${MAX_FOLDER_DEPTH} exceeded`);
         }
 
-        // Get user's public key for ECIES wrapping
-        let userPublicKey: Uint8Array | null = null;
-        if (auth.derivedKeypair) {
-          userPublicKey = auth.derivedKeypair.publicKey;
+        // Get user's ECIES keypair for vault cryptographic operations (public + private keys stored in memory after login)
+        // The public key is used here for key wrapping; the private key remains client-side for decryption operations.
+        if (!auth.derivedKeypair) {
+          throw new Error('No ECIES keypair available - please log in again');
         }
-        // TODO: For social logins, get public key from Web3Auth SDK
-
-        if (!userPublicKey) {
-          throw new Error('No public key available - please log in again');
-        }
+        const userPublicKey = auth.derivedKeypair.publicKey;
 
         // Create the folder (generates keys, wraps with user public key)
         const { folder, ipnsPrivateKey, folderKey } = await folderService.createFolder({
@@ -380,6 +376,64 @@ export function useFolder() {
   );
 
   /**
+   * Add a file to a folder after upload.
+   *
+   * @param parentId - Parent folder ID ('root' or folder UUID)
+   * @param fileData - Uploaded file data from upload service
+   * @returns Created file entry
+   */
+  const handleAddFile = useCallback(
+    async (
+      parentId: string,
+      fileData: {
+        cid: string;
+        wrappedKey: string;
+        iv: string;
+        originalName: string;
+        originalSize: number;
+      }
+    ): Promise<FileEntry> => {
+      setState({ isLoading: true, error: null });
+      try {
+        const folders = useFolderStore.getState().folders;
+        const vault = useVaultStore.getState();
+
+        // Get parent folder state
+        const parentFolder =
+          parentId === 'root' ? getRootFolderState(vault, folders) : folders[parentId];
+
+        if (!parentFolder) {
+          throw new Error('Parent folder not found or vault not initialized');
+        }
+
+        // Add file to folder
+        const { fileEntry, newSequenceNumber } = await folderService.addFileToFolder({
+          parentFolderState: parentFolder,
+          cid: fileData.cid,
+          fileKeyEncrypted: fileData.wrappedKey,
+          fileIv: fileData.iv,
+          name: fileData.originalName,
+          size: fileData.originalSize,
+        });
+
+        // Update local state with new child and sequence number
+        const updatedChildren = [...parentFolder.children, fileEntry];
+        const store = useFolderStore.getState();
+        store.updateFolderChildren(parentId, updatedChildren);
+        store.updateFolderSequence(parentId, newSequenceNumber);
+
+        setState({ isLoading: false, error: null });
+        return fileEntry;
+      } catch (err) {
+        const error = err instanceof Error ? err.message : 'Failed to add file';
+        setState({ isLoading: false, error });
+        throw err;
+      }
+    },
+    []
+  );
+
+  /**
    * Clear error state.
    */
   const clearError = useCallback(() => {
@@ -395,6 +449,7 @@ export function useFolder() {
     renameItem: handleRename,
     moveItem: handleMove,
     deleteItem: handleDelete,
+    addFile: handleAddFile,
 
     // Utilities
     clearError,

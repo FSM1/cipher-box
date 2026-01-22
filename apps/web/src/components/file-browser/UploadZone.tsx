@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useDropzone, FileRejection } from 'react-dropzone';
 import { useFileUpload } from '../../hooks/useFileUpload';
+import { useFolder } from '../../hooks/useFolder';
 import '../../styles/upload.css';
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per FILE-01
@@ -30,11 +31,8 @@ type UploadZoneProps = {
  */
 export function UploadZone({ folderId, onUploadComplete }: UploadZoneProps) {
   const { upload, canUpload, isUploading } = useFileUpload();
+  const { addFile } = useFolder();
   const [error, setError] = useState<string | null>(null);
-
-  // Suppress unused variable warning - folderId will be used in Phase 7
-  // when file upload integrates with folder metadata
-  void folderId;
 
   const handleDrop = useCallback(
     async (acceptedFiles: File[], rejectedFiles: FileRejection[]) => {
@@ -68,7 +66,35 @@ export function UploadZone({ folderId, onUploadComplete }: UploadZoneProps) {
       }
 
       try {
-        await upload(acceptedFiles);
+        // Upload files to IPFS
+        const uploadedFiles = await upload(acceptedFiles);
+
+        // Register each uploaded file in the folder metadata
+        // Handle partial failures gracefully - continue with remaining files if one fails
+        const failedRegistrations: string[] = [];
+        for (const uploaded of uploadedFiles) {
+          try {
+            await addFile(folderId, {
+              cid: uploaded.cid,
+              wrappedKey: uploaded.wrappedKey,
+              iv: uploaded.iv,
+              originalName: uploaded.originalName,
+              originalSize: uploaded.originalSize,
+            });
+          } catch {
+            // Keep going, but remember which files failed to register
+            failedRegistrations.push(uploaded.originalName ?? 'Unnamed file');
+          }
+        }
+
+        if (failedRegistrations.length > 0) {
+          setError(
+            `Some files were uploaded but could not be added to this folder: ${failedRegistrations.join(
+              ', '
+            )}`
+          );
+        }
+
         onUploadComplete?.();
       } catch (err) {
         // Error is already set in upload store
@@ -78,7 +104,7 @@ export function UploadZone({ folderId, onUploadComplete }: UploadZoneProps) {
         }
       }
     },
-    [upload, canUpload, onUploadComplete]
+    [upload, canUpload, addFile, folderId, onUploadComplete]
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
