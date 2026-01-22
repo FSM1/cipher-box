@@ -1,4 +1,14 @@
 import { defineConfig, devices } from '@playwright/test';
+import { config } from 'dotenv';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+// ESM compatibility
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Load environment variables from .env file
+config({ path: resolve(__dirname, '.env') });
 
 export default defineConfig({
   testDir: './tests',
@@ -42,11 +52,24 @@ export default defineConfig({
     },
   ],
 
-  // Web server configuration - automatically start web app
-  webServer: {
-    command: 'pnpm --filter @cipherbox/web dev',
-    url: 'http://localhost:5173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120000,
-  },
+  // Web server configuration - start both API and web app
+  // Note: Commands run from the workspace root (two levels up from tests/e2e)
+  webServer: [
+    {
+      command: 'pnpm --filter @cipherbox/api dev',
+      url: 'http://localhost:3000/health',
+      reuseExistingServer: !process.env.CI,
+      timeout: 120000,
+      cwd: resolve(__dirname, '../..'),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+    {
+      command: 'pnpm --filter @cipherbox/web dev',
+      url: 'http://localhost:5173',
+      reuseExistingServer: !process.env.CI,
+      timeout: 120000,
+      cwd: resolve(__dirname, '../..'),
+    },
+  ],
 });

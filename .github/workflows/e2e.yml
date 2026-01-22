@@ -68,15 +68,23 @@ jobs:
         run: pnpm --filter @cipherbox/e2e test
         env:
           CI: true
+          # Database configuration
           DB_HOST: localhost
           DB_PORT: 5432
           DB_USERNAME: postgres
           DB_PASSWORD: postgres
           DB_DATABASE: cipherbox_test
           NODE_ENV: test
+          # IPFS configuration
           IPFS_PROVIDER: local
           IPFS_LOCAL_API_URL: http://localhost:5001
           IPFS_LOCAL_GATEWAY_URL: http://localhost:8080
+          # API configuration
+          JWT_SECRET: e2e-test-jwt-secret-key-for-ci
+          WEB_APP_URL: http://localhost:5173
+          # Web3Auth test credentials for automated login
+          WEB3AUTH_TEST_EMAIL: ${{ secrets.WEB3AUTH_TEST_EMAIL }}
+          WEB3AUTH_TEST_OTP: ${{ secrets.WEB3AUTH_TEST_OTP }}
 
       - name: Upload Playwright report on failure
         if: failure()

@@ -1,11 +1,20 @@
 import { test, expect } from '@playwright/test';
-import { waitForWeb3AuthModal, loginViaEmail } from '../../utils/web3auth-helpers';
+import {
+  waitForWeb3AuthModal,
+  loginViaEmail,
+  TEST_CREDENTIALS,
+} from '../../utils/web3auth-helpers';
 
 /**
  * Login flow E2E tests.
  * Tests the complete authentication journey via Web3Auth.
+ *
+ * These tests need fresh browser context without any stored authentication,
+ * so we override the storageState from playwright.config.ts
  */
 test.describe('Login Flow', () => {
+  // Don't use stored authentication for login flow tests - start fresh
+  test.use({ storageState: { cookies: [], origins: [] } });
   test('shows login page for unauthenticated users', async ({ page }) => {
     // Navigate to root
     await page.goto('/');
@@ -28,14 +37,15 @@ test.describe('Login Flow', () => {
 
     // Wait for Web3Auth modal to appear
     try {
-      const modal = await waitForWeb3AuthModal(page);
+      const { locator: modal } = await waitForWeb3AuthModal(page);
 
-      // Verify modal content is visible
-      // Web3Auth modal should have login options
-      const modalContent = modal.locator('*').first();
-      await expect(modalContent).toBeVisible();
+      // Verify modal content is visible - look for email login option
+      const emailButton = modal.locator(
+        'button:has-text("Continue with Email"), button:has-text("Email")'
+      );
+      await expect(emailButton.first()).toBeVisible();
 
-      // Close modal by pressing Escape to clean up
+      // Close modal by pressing Escape or clicking outside
       await page.keyboard.press('Escape');
     } catch (error) {
       // If Web3Auth modal doesn't appear, it might be a configuration issue
@@ -44,22 +54,21 @@ test.describe('Login Flow', () => {
     }
   });
 
-  // This test requires manual OTP verification and should be skipped in CI
+  // This test uses Web3Auth test credentials with static OTP for automated login
   test('redirects to dashboard after successful login', async ({ page }) => {
-    test.skip(!!process.env.CI, 'Requires manual OTP entry, skip in CI');
+    // Skip if test credentials are not configured
+    test.skip(
+      !TEST_CREDENTIALS.email || !TEST_CREDENTIALS.otp,
+      'Web3Auth test credentials not configured (WEB3AUTH_TEST_EMAIL, WEB3AUTH_TEST_OTP)'
+    );
 
-    const testEmail = process.env.WEB3AUTH_TEST_EMAIL || 'test@example.com';
-
-    // Perform full login flow
+    // Perform full login flow with test credentials
     await page.goto('/');
-    await loginViaEmail(page, testEmail);
+    await loginViaEmail(page, TEST_CREDENTIALS.email, TEST_CREDENTIALS.otp);
 
     // Verify we're on the dashboard
     await expect(page).toHaveURL(/.*dashboard/);
     await expect(page.locator('button:has-text("Logout")')).toBeVisible();
-
-    // Note: This test requires manual OTP entry during execution
-    // For CI, use storage state or API-based auth instead
   });
 
   test('redirects unauthenticated users from protected routes to login', async ({ page }) => {
