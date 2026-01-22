@@ -303,6 +303,48 @@
         "tags": ["IPFS"]
       }
     },
+    "/ipfs/{cid}": {
+      "get": {
+        "description": "Download an encrypted file from IPFS via the configured gateway.",
+        "operationId": "IpfsController_get",
+        "parameters": [
+          {
+            "name": "cid",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File retrieved successfully",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          },
+          "404": {
+            "description": "File not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get file from IPFS",
+        "tags": ["IPFS"]
+      }
+    },
     "/vault/init": {
       "post": {
         "description": "Create a new vault with encrypted keys on first sign-in. Returns 409 Conflict if vault already exists.",

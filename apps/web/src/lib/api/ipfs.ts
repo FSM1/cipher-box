@@ -3,9 +3,6 @@ import { useAuthStore } from '../../stores/auth.store';
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
-// Pinata gateway URL from environment
-const GATEWAY_URL = import.meta.env.VITE_PINATA_GATEWAY_URL || 'https://gateway.pinata.cloud/ipfs';
-
 export type AddResponse = { cid: string; size: number };
 
 export type DownloadProgressCallback = (loaded: number, total: number) => void;
@@ -51,7 +48,7 @@ export async function unpinFromIpfs(cid: string): Promise<void> {
 }
 
 /**
- * Fetch encrypted file from IPFS gateway.
+ * Fetch encrypted file from IPFS via the API proxy.
  * Supports progress tracking for larger files.
  *
  * @param cid - IPFS CID of the file
@@ -62,7 +59,12 @@ export async function fetchFromIpfs(
   cid: string,
   onProgress?: DownloadProgressCallback
 ): Promise<Uint8Array> {
-  const response = await fetch(`${GATEWAY_URL}/${cid}`);
+  const { accessToken } = useAuthStore.getState();
+  const response = await fetch(`${BASE_URL}/ipfs/${cid}`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
 
   if (!response.ok) {
     throw new Error(`Failed to fetch from IPFS: ${response.status}`);
