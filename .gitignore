@@ -29,10 +29,11 @@ yarn-error.log*
 coverage/
 
 # Playwright test results
-test-results/
+
 
 # Playwright screenshots
 .playwright-mcp/*.png
 
 # Temporary files
 temp/*
+tests/e2e/test-results/*
