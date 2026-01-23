@@ -1,15 +1,59 @@
+/* ==========================================================================
+   Design Tokens - Terminal/Hacker Aesthetic
+   ========================================================================== */
+
 :root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  /* Color Primitives */
+  --color-black: #000000;
+  --color-green-primary: #00D084;
+  --color-green-dim: #006644;
+  --color-green-darker: #003322;
+  --color-green-glow: #00D08466; /* 40% opacity for shadows */
+
+  /* Semantic Colors - Error/Warning */
+  --color-error: #EF4444;
+  --color-error-dim: #7F1D1D;
+  --color-warning: #F59E0B;
+  --color-warning-dim: #78350F;
+
+  /* Background & Text */
+  --color-background: var(--color-black);
+  --color-border: var(--color-green-primary);
+  --color-border-dim: var(--color-green-darker);
+  --color-text-primary: var(--color-green-primary);
+  --color-text-secondary: var(--color-green-dim);
+
+  /* Typography */
+  --font-family-mono: "JetBrains Mono", monospace;
+  --font-size-xs: 10px;   /* Status text */
+  --font-size-sm: 11px;   /* Body, buttons, file list */
+  --font-size-md: 14px;   /* App name */
+  --font-size-lg: 18px;   /* Prompt symbol */
+  --font-size-xl: 24px;   /* Login logo */
+
+  /* Font Weights */
+  --font-weight-normal: 400;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Spacing (from design file) */
+  --spacing-xs: 8px;
+  --spacing-sm: 12px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+
+  /* Effects */
+  --glow-green: 0 0 10px var(--color-green-glow);
+  --border-thickness: 1px;
+
+  /* Remove color-scheme to enforce dark mode only */
+  color-scheme: dark;
 }
+
+/* ==========================================================================
+   Global Resets
+   ========================================================================== */
 
 * {
   box-sizing: border-box;
@@ -17,14 +61,50 @@
   padding: 0;
 }
 
+/* ==========================================================================
+   Base Styles
+   ========================================================================== */
+
+html {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  font-weight: var(--font-weight-normal);
+  color: var(--color-text-primary);
+  background-color: var(--color-background);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
 body {
   min-height: 100vh;
-  display: flex;
-  place-items: center;
-  justify-content: center;
 }
 
 #root {
   width: 100%;
   min-height: 100vh;
+}
+
+/* Links */
+a {
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Focus styles for accessibility */
+:focus-visible {
+  outline: 2px solid var(--color-green-primary);
+  outline-offset: 2px;
+}
+
+/* Selection */
+::selection {
+  background-color: var(--color-green-primary);
+  color: var(--color-black);
 }
