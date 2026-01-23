@@ -10,6 +10,7 @@ import { EmptyState } from './EmptyState';
 import { ContextMenu } from './ContextMenu';
 import { ConfirmDialog } from './ConfirmDialog';
 import { RenameDialog } from './RenameDialog';
+import { CreateFolderDialog } from './CreateFolderDialog';
 import { UploadZone } from './UploadZone';
 import { UploadModal } from './UploadModal';
 import { Breadcrumbs } from './Breadcrumbs';
@@ -74,7 +75,7 @@ export function FileBrowser() {
     useFolderNavigation();
 
   // Folder operations
-  const { renameItem, moveItem, deleteItem, isLoading: isOperating } = useFolder();
+  const { createFolder, renameItem, moveItem, deleteItem, isLoading: isOperating } = useFolder();
 
   // File download
   const { download, isDownloading } = useFileDownload();
@@ -88,6 +89,7 @@ export function FileBrowser() {
   // Dialog states
   const [confirmDialog, setConfirmDialog] = useState<DialogState>({ open: false, item: null });
   const [renameDialog, setRenameDialog] = useState<DialogState>({ open: false, item: null });
+  const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false);
 
   // Mobile sidebar state - closed by default on mobile, open on desktop
   const [sidebarOpen, setSidebarOpen] = useState(() => !isMobileViewport());
@@ -248,6 +250,27 @@ export function FileBrowser() {
     setRenameDialog({ open: false, item: null });
   }, []);
 
+  // Create folder handlers
+  const openCreateFolderDialog = useCallback(() => {
+    setCreateFolderDialogOpen(true);
+  }, []);
+
+  const closeCreateFolderDialog = useCallback(() => {
+    setCreateFolderDialogOpen(false);
+  }, []);
+
+  const handleCreateFolderConfirm = useCallback(
+    async (name: string) => {
+      try {
+        await createFolder(name, currentFolderId === 'root' ? null : currentFolderId);
+        setCreateFolderDialogOpen(false);
+      } catch (err) {
+        console.error('Create folder failed:', err);
+      }
+    },
+    [createFolder, currentFolderId]
+  );
+
   // Get current folder's children
   const children = currentFolder?.children ?? [];
   const hasChildren = children.length > 0;
@@ -312,7 +335,33 @@ export function FileBrowser() {
             onNavigate={handleNavigate}
             onNavigateUp={navigateUp}
           />
-          <UploadZone folderId={currentFolderId} />
+          <div className="file-browser-actions">
+            <button
+              type="button"
+              className="file-browser-new-folder-button"
+              onClick={openCreateFolderDialog}
+              disabled={isOperating}
+              aria-label="New Folder"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                <line x1="12" y1="11" x2="12" y2="17" />
+                <line x1="9" y1="14" x2="15" y2="14" />
+              </svg>
+              <span>New Folder</span>
+            </button>
+            <UploadZone folderId={currentFolderId} />
+          </div>
         </div>
 
         {/* Loading state */}
@@ -371,6 +420,14 @@ export function FileBrowser() {
         confirmLabel="Delete"
         isDestructive
         isLoading={isOperating || isDownloading}
+      />
+
+      {/* Create folder dialog */}
+      <CreateFolderDialog
+        open={createFolderDialogOpen}
+        onClose={closeCreateFolderDialog}
+        onConfirm={handleCreateFolderConfirm}
+        isLoading={isOperating}
       />
 
       {/* Upload modal (self-manages visibility) */}

@@ -161,4 +161,95 @@ export class FolderTreePage {
       .locator('.folder-tree-placeholder', { hasText: 'Loading folders...' })
       .isVisible();
   }
+
+  /**
+   * Get the drop target element for a folder.
+   * Used for drag-drop operations.
+   */
+  getDropTarget(name: string): import('@playwright/test').Locator {
+    return this.getFolder(name);
+  }
+
+  /**
+   * Simulate dropping an item onto a folder in the tree.
+   * This is used for move operations via drag-drop.
+   *
+   * @param targetFolderName - Name of the folder to drop onto
+   * @param dragData - JSON data representing the dragged item
+   */
+  async dropOnFolder(
+    targetFolderName: string,
+    dragData: { id: string; type: 'file' | 'folder'; parentId: string }
+  ): Promise<void> {
+    const targetFolder = this.getDropTarget(targetFolderName);
+
+    // Ensure target is visible
+    await targetFolder.waitFor({ state: 'visible' });
+
+    // Get bounding box for drop location
+    const box = await targetFolder.boundingBox();
+    if (!box) throw new Error(`Could not get bounding box for folder ${targetFolderName}`);
+
+    // Calculate center of target
+    const centerX = box.x + box.width / 2;
+    const centerY = box.y + box.height / 2;
+
+    // Dispatch dragenter and dragover events to prepare for drop
+    await targetFolder.dispatchEvent('dragenter', {
+      dataTransfer: { types: ['application/json'] },
+    });
+
+    await targetFolder.dispatchEvent('dragover', {
+      dataTransfer: { types: ['application/json'] },
+    });
+
+    // Create a DataTransfer-like object and dispatch drop event
+    // Note: Playwright doesn't fully support DataTransfer, so we use evaluate
+    await this.page.evaluate(
+      ({ folderName, data, x, y }) => {
+        // Find the folder by looking for the name element with matching text
+        const nameElements = document.querySelectorAll('.folder-tree-name');
+        let target: Element | null = null;
+
+        for (const nameEl of nameElements) {
+          if (nameEl.textContent?.trim() === folderName) {
+            // Get the parent folder-tree-item
+            target = nameEl.closest('.folder-tree-item');
+            break;
+          }
+        }
+
+        if (!target) throw new Error(`Drop target folder "${folderName}" not found`);
+
+        // Create a custom drop event with data
+        const dropEvent = new DragEvent('drop', {
+          bubbles: true,
+          cancelable: true,
+          clientX: x,
+          clientY: y,
+        });
+
+        // Override dataTransfer with our data
+        Object.defineProperty(dropEvent, 'dataTransfer', {
+          value: {
+            getData: (type: string) => (type === 'application/json' ? JSON.stringify(data) : ''),
+            types: ['application/json'],
+            effectAllowed: 'move',
+            dropEffect: 'move',
+          },
+        });
+
+        target.dispatchEvent(dropEvent);
+      },
+      {
+        folderName: targetFolderName,
+        data: dragData,
+        x: centerX,
+        y: centerY,
+      }
+    );
+
+    // Wait a bit for the move operation to complete
+    await this.page.waitForTimeout(500);
+  }
 }

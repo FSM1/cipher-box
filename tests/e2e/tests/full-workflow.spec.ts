@@ -4,18 +4,26 @@ import { createTestTextFile, cleanupTestFiles } from '../utils/test-files';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
 import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';
 import { ContextMenuPage } from '../page-objects/file-browser/context-menu.page';
+import { FolderTreePage } from '../page-objects/file-browser/folder-tree.page';
 import { RenameDialogPage } from '../page-objects/dialogs/rename-dialog.page';
 import { ConfirmDialogPage } from '../page-objects/dialogs/confirm-dialog.page';
+import { CreateFolderDialogPage } from '../page-objects/dialogs/create-folder-dialog.page';
 
 /**
  * Full Workflow E2E Test Suite
  *
- * Single sequential test session that:
+ * Comprehensive test session that:
  * 1. Logs in once via Web3Auth
- * 2. Performs all file/folder operations
- * 3. Cleans up and logs out
+ * 2. Creates a realistic folder hierarchy
+ * 3. Uploads multiple files at various folder levels (12+ files)
+ * 4. Moves files between folders
+ * 5. Edits a file (delete + re-upload with new content)
+ * 6. Cleans up and logs out
  *
- * This approach eliminates session expiry issues from storage-state-based tests.
+ * This approach tests a realistic user workflow with:
+ * - Nested folder structure (workspace/documents, workspace/images, workspace/projects/active, etc.)
+ * - Files distributed across the hierarchy
+ * - File operations including move and edit
  */
 test.describe.serial('Full Workflow', () => {
   let browser: Browser;
@@ -26,16 +34,54 @@ test.describe.serial('Full Workflow', () => {
   let fileList: FileListPage;
   let uploadZone: UploadZonePage;
   let contextMenu: ContextMenuPage;
+  let folderTree: FolderTreePage;
   let renameDialog: RenameDialogPage;
   let confirmDialog: ConfirmDialogPage;
+  let createFolderDialog: CreateFolderDialogPage;
 
-  // Track created items for cleanup
-  const createdFiles: string[] = [];
-  // const createdFolders: string[] = []; // TODO: Enable when folder tests are implemented
+  // Test data - unique names for this test run
+  const timestamp = Date.now();
 
-  // Test data
-  const testFileName = `test-file-${Date.now()}.txt`;
-  const renamedFileName = `renamed-file-${Date.now()}.txt`;
+  // Folder structure
+  const workspaceFolder = `workspace-${timestamp}`;
+  const documentsFolder = `documents-${timestamp}`;
+  const imagesFolder = `images-${timestamp}`;
+  const projectsFolder = `projects-${timestamp}`;
+  const activeFolder = `active-${timestamp}`;
+  const archiveFolder = `archive-${timestamp}`;
+
+  // Files to upload at various levels (12+ files total)
+  const rootFiles = [
+    { name: `readme-${timestamp}.txt`, content: 'Root level readme file' },
+    { name: `notes-${timestamp}.txt`, content: 'General notes at root' },
+    { name: `config-${timestamp}.txt`, content: 'Configuration settings' },
+  ];
+
+  const documentFiles = [
+    { name: `report-${timestamp}.txt`, content: 'Annual report document' },
+    { name: `memo-${timestamp}.txt`, content: 'Internal memo content' },
+    { name: `draft-${timestamp}.txt`, content: 'Work in progress draft' },
+  ];
+
+  const imageFiles = [
+    { name: `photo-info-${timestamp}.txt`, content: 'Photo metadata info' },
+    { name: `gallery-${timestamp}.txt`, content: 'Gallery description' },
+  ];
+
+  const activeProjectFiles = [
+    { name: `task-list-${timestamp}.txt`, content: 'Active project tasks' },
+    { name: `sprint-${timestamp}.txt`, content: 'Current sprint details' },
+  ];
+
+  const archiveProjectFiles = [
+    { name: `completed-${timestamp}.txt`, content: 'Completed project info' },
+    { name: `retrospective-${timestamp}.txt`, content: 'Project retrospective' },
+  ];
+
+  // File to be edited (re-uploaded with new content)
+  const editableFileName = `editable-${timestamp}.txt`;
+  const editableFileOriginalContent = 'Original content before edit';
+  const editableFileUpdatedContent = 'Updated content after edit - version 2';
 
   test.beforeAll(async ({ browser: testBrowser }) => {
     browser = testBrowser;
@@ -46,8 +92,10 @@ test.describe.serial('Full Workflow', () => {
     fileList = new FileListPage(page);
     uploadZone = new UploadZonePage(page);
     contextMenu = new ContextMenuPage(page);
+    folderTree = new FolderTreePage(page);
     renameDialog = new RenameDialogPage(page);
     confirmDialog = new ConfirmDialogPage(page);
+    createFolderDialog = new CreateFolderDialogPage(page);
   });
 
   test.afterAll(async () => {
@@ -61,61 +109,62 @@ test.describe.serial('Full Workflow', () => {
   });
 
   // ============================================
-  // Phase 1: Login
+  // Helper Functions
   // ============================================
 
-  test('1.1 Login with Web3Auth credentials', async () => {
-    // Verify test credentials are configured
-    expect(TEST_CREDENTIALS.email, 'WEB3AUTH_TEST_EMAIL must be set').toBeTruthy();
-    expect(TEST_CREDENTIALS.otp, 'WEB3AUTH_TEST_OTP must be set').toBeTruthy();
+  /**
+   * Create a folder in the current directory.
+   */
+  async function createFolder(name: string): Promise<void> {
+    const newFolderButton = page.locator('.file-browser-new-folder-button');
+    await newFolderButton.click();
+    await createFolderDialog.waitForOpen();
+    await createFolderDialog.createFolder(name);
+    await fileList.waitForItemToAppear(name, { timeout: 30000 });
+  }
 
-    // Navigate to login page
-    await page.goto('/');
+  /**
+   * Navigate into a folder by double-clicking.
+   */
+  async function navigateIntoFolder(name: string): Promise<void> {
+    await fileList.doubleClickFolder(name);
+    await expect(page.locator('.breadcrumbs-current', { hasText: name })).toBeVisible({
+      timeout: 10000,
+    });
+  }
 
-    // Perform login
-    await loginViaEmail(page, TEST_CREDENTIALS.email, TEST_CREDENTIALS.otp);
+  /**
+   * Navigate back to parent folder.
+   */
+  async function navigateBack(): Promise<void> {
+    await page.locator('.breadcrumbs-back').click();
+    await page.waitForTimeout(500); // Wait for navigation
+  }
 
-    // Verify we're on the dashboard
-    await expect(page).toHaveURL(/.*dashboard/);
+  /**
+   * Navigate to root folder.
+   */
+  async function navigateToRoot(): Promise<void> {
+    // Click My Vault in the folder tree
+    await folderTree.clickFolder('My Vault');
+    await expect(page.locator('.breadcrumbs-current', { hasText: 'My Vault' })).toBeVisible({
+      timeout: 10000,
+    });
+  }
 
-    // Verify logout button is visible (authenticated state)
-    await expect(page.getByRole('button', { name: /logout|sign out/i })).toBeVisible();
-  });
-
-  // ============================================
-  // Phase 2: Folders (placeholder for now)
-  // ============================================
-
-  test.skip('2.1 Create root-level folder', async () => {
-    // TODO: Implement when folder creation UI is available
-    // const folderName = `test-folder-${Date.now()}`;
-    // createdFolders.push(folderName);
-  });
-
-  test.skip('2.2 Create nested folder', async () => {
-    // TODO: Implement when folder creation UI is available
-  });
-
-  // ============================================
-  // Phase 3: Upload
-  // ============================================
-
-  test('3.1 Upload file to root folder', async () => {
-    // Create a test file
-    const testFile = createTestTextFile(testFileName, 'This is test content for E2E upload.');
-    createdFiles.push(testFileName);
-
-    // Wait for the upload zone to be visible (use first() as there may be multiple)
-    await expect(uploadZone.dropzone().first()).toBeVisible({ timeout: 10000 });
-
-    // Upload the file (uploadFile already handles the file input)
+  /**
+   * Upload a file and wait for it to appear in the list.
+   */
+  async function uploadFile(
+    fileName: string,
+    content: string
+  ): Promise<{ path: string; name: string }> {
+    const testFile = createTestTextFile(fileName, content);
     await uploadZone.uploadFile(testFile.path);
 
-    // Wait for either:
-    // 1. File to appear in list (success)
-    // 2. Error alert to appear (IPNS conflict - may happen with stale test account state)
+    // Wait for file to appear
     const result = await Promise.race([
-      fileList.waitForItemToAppear(testFileName, { timeout: 30000 }).then(() => 'success' as const),
+      fileList.waitForItemToAppear(fileName, { timeout: 30000 }).then(() => 'success' as const),
       page
         .locator('.upload-zone-error, [role="alert"]')
         .filter({ hasText: /could not be added/ })
@@ -124,144 +173,371 @@ test.describe.serial('Full Workflow', () => {
     ]);
 
     if (result === 'error') {
-      // This can happen when IPNS has stale state from previous test runs.
-      // The file was uploaded to IPFS but couldn't be added to folder metadata.
-      // This is a known limitation with IPNS sequence numbers.
       const errorText = await page.locator('[role="alert"]').textContent();
-      throw new Error(
-        `Upload succeeded but file could not be added to folder (IPNS conflict). ` +
-          `This typically happens when running tests multiple times with the same account. ` +
-          `Error: ${errorText}`
-      );
+      throw new Error(`Upload failed: ${errorText}`);
     }
 
-    // Verify file is visible
-    const isVisible = await fileList.isItemVisible(testFileName);
-    expect(isVisible).toBe(true);
-  });
+    return testFile;
+  }
 
-  // ============================================
-  // Phase 4: Operations
-  // ============================================
-
-  test('4.1 Rename file', async () => {
-    // Right-click the file to open context menu
-    await fileList.rightClickItem(testFileName);
-
-    // Wait for context menu to open
+  /**
+   * Delete an item (file or folder) via context menu.
+   */
+  async function deleteItem(name: string): Promise<void> {
+    await fileList.rightClickItem(name);
     await contextMenu.waitForOpen();
+    await contextMenu.clickDelete();
+    await confirmDialog.waitForOpen();
+    await confirmDialog.clickConfirm();
+    await confirmDialog.waitForClose({ timeout: 15000 });
+    await fileList.waitForItemToDisappear(name, { timeout: 15000 });
+  }
 
-    // Click rename option
-    await contextMenu.clickRename();
+  // ============================================
+  // Phase 1: Login
+  // ============================================
 
-    // Wait for rename dialog to open
-    await renameDialog.waitForOpen();
+  test('1.1 Login with Web3Auth credentials', async () => {
+    expect(TEST_CREDENTIALS.email, 'WEB3AUTH_TEST_EMAIL must be set').toBeTruthy();
+    expect(TEST_CREDENTIALS.otp, 'WEB3AUTH_TEST_OTP must be set').toBeTruthy();
 
-    // Enter new name and save
-    await renameDialog.rename(renamedFileName);
+    await page.goto('/');
+    await loginViaEmail(page, TEST_CREDENTIALS.email, TEST_CREDENTIALS.otp);
 
-    // Wait for file to appear with new name
-    await fileList.waitForItemToAppear(renamedFileName, { timeout: 15000 });
+    await expect(page).toHaveURL(/.*dashboard/);
+    await expect(page.getByRole('button', { name: /logout|sign out/i })).toBeVisible();
+  });
 
-    // Verify old name is gone
-    const oldNameVisible = await fileList.isItemVisible(testFileName);
-    expect(oldNameVisible).toBe(false);
+  // ============================================
+  // Phase 2: Create Folder Hierarchy
+  // ============================================
 
-    // Verify new name is visible
-    const newNameVisible = await fileList.isItemVisible(renamedFileName);
-    expect(newNameVisible).toBe(true);
+  test('2.1 Create workspace folder at root', async () => {
+    await createFolder(workspaceFolder);
+    expect(await fileList.isItemVisible(workspaceFolder)).toBe(true);
+  });
 
-    // Update tracking array
-    const index = createdFiles.indexOf(testFileName);
-    if (index > -1) {
-      createdFiles[index] = renamedFileName;
+  test('2.2 Create documents folder inside workspace', async () => {
+    await navigateIntoFolder(workspaceFolder);
+    await createFolder(documentsFolder);
+    expect(await fileList.isItemVisible(documentsFolder)).toBe(true);
+  });
+
+  test('2.3 Create images folder inside workspace', async () => {
+    // Still inside workspace
+    await createFolder(imagesFolder);
+    expect(await fileList.isItemVisible(imagesFolder)).toBe(true);
+  });
+
+  test('2.4 Create projects folder inside workspace', async () => {
+    await createFolder(projectsFolder);
+    expect(await fileList.isItemVisible(projectsFolder)).toBe(true);
+  });
+
+  test('2.5 Create active folder inside projects', async () => {
+    await navigateIntoFolder(projectsFolder);
+    await createFolder(activeFolder);
+    expect(await fileList.isItemVisible(activeFolder)).toBe(true);
+  });
+
+  test('2.6 Create archive folder inside projects', async () => {
+    // Still inside projects
+    await createFolder(archiveFolder);
+    expect(await fileList.isItemVisible(archiveFolder)).toBe(true);
+  });
+
+  // ============================================
+  // Phase 3: Upload Files at Various Levels (12+ files)
+  // ============================================
+
+  test('3.1 Upload files to root level (3 files)', async () => {
+    await navigateToRoot();
+
+    for (const file of rootFiles) {
+      await uploadFile(file.name, file.content);
+      expect(await fileList.isItemVisible(file.name)).toBe(true);
     }
   });
 
-  test('4.2 Download file', async () => {
-    // Set up download handler
+  test('3.2 Upload editable file to root (for later edit test)', async () => {
+    // This file will be edited later (deleted and re-uploaded with new content)
+    await uploadFile(editableFileName, editableFileOriginalContent);
+    expect(await fileList.isItemVisible(editableFileName)).toBe(true);
+  });
+
+  test('3.3 Upload files to documents folder (3 files)', async () => {
+    await navigateIntoFolder(workspaceFolder);
+    await navigateIntoFolder(documentsFolder);
+
+    for (const file of documentFiles) {
+      await uploadFile(file.name, file.content);
+      expect(await fileList.isItemVisible(file.name)).toBe(true);
+    }
+  });
+
+  test('3.4 Upload files to images folder (2 files)', async () => {
+    await navigateBack(); // Back to workspace
+    await navigateIntoFolder(imagesFolder);
+
+    for (const file of imageFiles) {
+      await uploadFile(file.name, file.content);
+      expect(await fileList.isItemVisible(file.name)).toBe(true);
+    }
+  });
+
+  test('3.5 Upload files to projects/active folder (2 files)', async () => {
+    await navigateBack(); // Back to workspace
+    await navigateIntoFolder(projectsFolder);
+    await navigateIntoFolder(activeFolder);
+
+    for (const file of activeProjectFiles) {
+      await uploadFile(file.name, file.content);
+      expect(await fileList.isItemVisible(file.name)).toBe(true);
+    }
+  });
+
+  test('3.6 Upload files to projects/archive folder (2 files)', async () => {
+    await navigateBack(); // Back to projects
+    await navigateIntoFolder(archiveFolder);
+
+    for (const file of archiveProjectFiles) {
+      await uploadFile(file.name, file.content);
+      expect(await fileList.isItemVisible(file.name)).toBe(true);
+    }
+  });
+
+  // ============================================
+  // Phase 4: Move Files Between Folders
+  // ============================================
+
+  test('4.1 Move file from root to documents folder', async () => {
+    // Navigate to root
+    await navigateToRoot();
+
+    // Verify file exists
+    const fileToMove = rootFiles[0].name;
+    expect(await fileList.isItemVisible(fileToMove)).toBe(true);
+
+    // Expand the workspace folder in the tree to see documents
+    await folderTree.expandFolder(workspaceFolder);
+
+    // Drag and drop file to documents folder in the tree
+    const itemType = await fileList.getItemType(fileToMove);
+    await folderTree.dropOnFolder(documentsFolder, {
+      id: fileToMove, // Note: actual ID won't match, but the drop handler uses the name lookup
+      type: itemType,
+      parentId: 'root',
+    });
+
+    // Wait for move to complete - file should disappear from current folder
+    await fileList.waitForItemToDisappear(fileToMove, { timeout: 15000 });
+
+    // Verify file is now in documents
+    await navigateIntoFolder(workspaceFolder);
+    await navigateIntoFolder(documentsFolder);
+    expect(await fileList.isItemVisible(fileToMove)).toBe(true);
+  });
+
+  test('4.2 Move file from documents to images folder', async () => {
+    // We're in documents folder from previous test
+    const fileToMove = documentFiles[0].name;
+    expect(await fileList.isItemVisible(fileToMove)).toBe(true);
+
+    // Move to images (sibling folder)
+    const itemType = await fileList.getItemType(fileToMove);
+    await folderTree.dropOnFolder(imagesFolder, {
+      id: fileToMove,
+      type: itemType,
+      parentId: documentsFolder,
+    });
+
+    await fileList.waitForItemToDisappear(fileToMove, { timeout: 15000 });
+
+    // Verify file is in images
+    await navigateBack(); // Back to workspace
+    await navigateIntoFolder(imagesFolder);
+    expect(await fileList.isItemVisible(fileToMove)).toBe(true);
+  });
+
+  test('4.3 Move file from images to projects/active folder', async () => {
+    // We're in images folder
+    const fileToMove = imageFiles[0].name;
+    expect(await fileList.isItemVisible(fileToMove)).toBe(true);
+
+    // Expand projects to see active
+    await folderTree.expandFolder(projectsFolder);
+
+    // Move to projects/active (nested folder)
+    const itemType = await fileList.getItemType(fileToMove);
+    await folderTree.dropOnFolder(activeFolder, {
+      id: fileToMove,
+      type: itemType,
+      parentId: imagesFolder,
+    });
+
+    await fileList.waitForItemToDisappear(fileToMove, { timeout: 15000 });
+
+    // Verify file is in projects/active
+    await navigateBack(); // Back to workspace
+    await navigateIntoFolder(projectsFolder);
+    await navigateIntoFolder(activeFolder);
+    expect(await fileList.isItemVisible(fileToMove)).toBe(true);
+  });
+
+  test('4.4 Move file between archive and active projects', async () => {
+    // Navigate to archive
+    await navigateBack(); // Back to projects
+    await navigateIntoFolder(archiveFolder);
+
+    const fileToMove = archiveProjectFiles[0].name;
+    expect(await fileList.isItemVisible(fileToMove)).toBe(true);
+
+    // Move to active folder
+    const itemType = await fileList.getItemType(fileToMove);
+    await folderTree.dropOnFolder(activeFolder, {
+      id: fileToMove,
+      type: itemType,
+      parentId: archiveFolder,
+    });
+
+    await fileList.waitForItemToDisappear(fileToMove, { timeout: 15000 });
+
+    // Verify file is in active
+    await navigateBack(); // Back to projects
+    await navigateIntoFolder(activeFolder);
+    expect(await fileList.isItemVisible(fileToMove)).toBe(true);
+  });
+
+  // ============================================
+  // Phase 5: Edit File (Overwrite with New Content)
+  // ============================================
+
+  test('5.1 Edit file by deleting and re-uploading with new content', async () => {
+    // Navigate to root where editable file is
+    await navigateToRoot();
+
+    // Verify original file exists
+    expect(await fileList.isItemVisible(editableFileName)).toBe(true);
+
+    // Download the file first to verify it's downloadable
     const downloadPromise = page.waitForEvent('download');
-
-    // Right-click the file to open context menu
-    await fileList.rightClickItem(renamedFileName);
-
-    // Wait for context menu to open
+    await fileList.rightClickItem(editableFileName);
     await contextMenu.waitForOpen();
-
-    // Click download option
     await contextMenu.clickDownload();
-
-    // Wait for download to start
     const download = await downloadPromise;
-
-    // Verify download started with correct filename
-    expect(download.suggestedFilename()).toBe(renamedFileName);
-
-    // Cancel the download (we don't need to save it)
+    expect(download.suggestedFilename()).toBe(editableFileName);
     await download.cancel();
+
+    // Delete the file
+    await deleteItem(editableFileName);
+
+    // Verify file is gone
+    expect(await fileList.isItemVisible(editableFileName)).toBe(false);
+
+    // Upload new version with same name but different content
+    await uploadFile(editableFileName, editableFileUpdatedContent);
+
+    // Verify new file exists
+    expect(await fileList.isItemVisible(editableFileName)).toBe(true);
+
+    // Download again to verify it's the new content (by checking download works)
+    const downloadPromise2 = page.waitForEvent('download');
+    await fileList.rightClickItem(editableFileName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickDownload();
+    const download2 = await downloadPromise2;
+    expect(download2.suggestedFilename()).toBe(editableFileName);
+    await download2.cancel();
   });
 
   // ============================================
-  // Phase 5: Cleanup
+  // Phase 6: Rename Operations
   // ============================================
 
-  test('5.1 Delete files', async () => {
-    // Delete each created file
-    for (const fileName of createdFiles) {
-      // Check if file still exists (might have been renamed)
+  test('6.1 Rename a file', async () => {
+    // We're at root, rename one of the remaining root files
+    const fileToRename = rootFiles[1].name;
+    const newFileName = `renamed-${timestamp}.txt`;
+
+    expect(await fileList.isItemVisible(fileToRename)).toBe(true);
+
+    await fileList.rightClickItem(fileToRename);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickRename();
+    await renameDialog.waitForOpen();
+    await renameDialog.rename(newFileName);
+
+    await fileList.waitForItemToAppear(newFileName, { timeout: 15000 });
+    expect(await fileList.isItemVisible(fileToRename)).toBe(false);
+    expect(await fileList.isItemVisible(newFileName)).toBe(true);
+
+    // Update the array for cleanup
+    rootFiles[1].name = newFileName;
+  });
+
+  test('6.2 Rename a folder', async () => {
+    // Navigate into workspace and rename one of the folders
+    await navigateIntoFolder(workspaceFolder);
+
+    const folderToRename = imagesFolder;
+    const newFolderName = `media-${timestamp}`;
+
+    expect(await fileList.isItemVisible(folderToRename)).toBe(true);
+
+    await fileList.rightClickItem(folderToRename);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickRename();
+    await renameDialog.waitForOpen();
+    await renameDialog.rename(newFolderName);
+
+    await fileList.waitForItemToAppear(newFolderName, { timeout: 15000 });
+    expect(await fileList.isItemVisible(folderToRename)).toBe(false);
+    expect(await fileList.isItemVisible(newFolderName)).toBe(true);
+  });
+
+  // ============================================
+  // Phase 7: Cleanup
+  // ============================================
+
+  test('7.1 Delete workspace folder (recursive delete)', async () => {
+    // Navigate to root
+    await navigateToRoot();
+
+    // Delete the workspace folder (should recursively delete all contents)
+    await deleteItem(workspaceFolder);
+
+    // Verify folder is gone
+    expect(await fileList.isItemVisible(workspaceFolder)).toBe(false);
+  });
+
+  test('7.2 Delete remaining root files', async () => {
+    // Delete remaining files at root
+    const filesToDelete = [
+      rootFiles[1].name, // This was renamed
+      rootFiles[2].name,
+      editableFileName,
+    ];
+
+    for (const fileName of filesToDelete) {
       const isVisible = await fileList.isItemVisible(fileName);
-      if (!isVisible) continue;
-
-      // Right-click to open context menu
-      await fileList.rightClickItem(fileName);
-      await contextMenu.waitForOpen();
-
-      // Click delete
-      await contextMenu.clickDelete();
-
-      // Wait for confirm dialog
-      await confirmDialog.waitForOpen();
-
-      // Confirm deletion
-      await confirmDialog.clickConfirm();
-
-      // Wait for dialog to close
-      await confirmDialog.waitForClose({ timeout: 15000 });
-
-      // Wait for file to disappear
-      await fileList.waitForItemToDisappear(fileName, { timeout: 15000 });
+      if (isVisible) {
+        await deleteItem(fileName);
+      }
     }
-
-    // Clear tracking array
-    createdFiles.length = 0;
-  });
-
-  test.skip('5.2 Delete folders', async () => {
-    // TODO: Implement when folder deletion is tested
-    // Delete folders in reverse order (nested first, then root)
-    // for (const folderName of createdFolders.reverse()) { ... }
   });
 
   // ============================================
-  // Phase 6: Logout
+  // Phase 8: Logout
   // ============================================
 
-  test('6.1 Logout', async () => {
-    // Click logout button
+  test('8.1 Logout', async () => {
     const logoutButton = page.getByRole('button', { name: /logout|sign out/i });
     await expect(logoutButton).toBeVisible();
     await logoutButton.click();
 
-    // Wait for redirect to login page (root URL or /login)
-    // The app redirects to "/" when logged out
     await expect(page).toHaveURL(/localhost:\d+\/?$/);
-
-    // Verify Sign In button is visible (logged out state)
-    // The button text varies based on Web3Auth configuration - could be "Sign In", "Login", or "Continue with Google"
     await expect(
       page.getByRole('button', { name: /sign in|login|continue with google/i })
-    ).toBeVisible({
-      timeout: 10000,
-    });
+    ).toBeVisible({ timeout: 10000 });
   });
 });

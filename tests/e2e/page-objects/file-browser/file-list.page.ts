@@ -147,4 +147,31 @@ export class FileListPage {
 
     return names;
   }
+
+  /**
+   * Get item ID by name by extracting it from the DOM.
+   * Note: This requires the ID to be accessible somehow. We'll use a workaround
+   * by triggering context menu and extracting from aria-label.
+   */
+  async getItemType(name: string): Promise<'file' | 'folder'> {
+    const item = this.getItem(name);
+    const sizeText = await item.locator('.file-list-item-size').textContent();
+    // Folders show "-" for size, files show actual size
+    return sizeText?.trim() === '-' ? 'folder' : 'file';
+  }
+
+  /**
+   * Perform a drag-drop move operation from the file list to a folder.
+   * Uses Playwright's built-in drag and drop.
+   *
+   * @param itemName - Name of the item to drag
+   * @param targetLocator - Locator for the drop target
+   */
+  async dragItemTo(
+    itemName: string,
+    targetLocator: import('@playwright/test').Locator
+  ): Promise<void> {
+    const sourceItem = this.getItem(itemName);
+    await sourceItem.dragTo(targetLocator);
+  }
 }
