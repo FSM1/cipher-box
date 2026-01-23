@@ -193,6 +193,24 @@ test.describe.serial('Full Workflow', () => {
     await fileList.waitForItemToDisappear(name, { timeout: 15000 });
   }
 
+  /**
+   * Get the current folder ID from the app's Zustand store.
+   * Returns 'root' for the root folder.
+   */
+  async function getCurrentFolderId(): Promise<string> {
+    const folderId = await page.evaluate(() => {
+      // Access the Zustand store - it's exposed on window in dev mode via devtools
+      // We need to access it through the store's getState method
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const folderStore = (window as any).__ZUSTAND_FOLDER_STORE__;
+      if (!folderStore) {
+        throw new Error('Folder store not found on window');
+      }
+      return folderStore.getState().currentFolderId ?? 'root';
+    });
+    return folderId;
+  }
+
   // ============================================
   // Phase 1: Login
   // ============================================
@@ -321,10 +339,13 @@ test.describe.serial('Full Workflow', () => {
     // Expand the workspace folder in the tree to see documents
     await folderTree.expandFolder(workspaceFolder);
 
-    // Drag and drop file to documents folder in the tree
+    // Get the actual item ID and type for the drag data
+    const itemId = await fileList.getItemId(fileToMove);
     const itemType = await fileList.getItemType(fileToMove);
+
+    // Drag and drop file to documents folder in the tree
     await folderTree.dropOnFolder(documentsFolder, {
-      id: fileToMove, // Note: actual ID won't match, but the drop handler uses the name lookup
+      id: itemId,
       type: itemType,
       parentId: 'root',
     });
@@ -343,12 +364,16 @@ test.describe.serial('Full Workflow', () => {
     const fileToMove = documentFiles[0].name;
     expect(await fileList.isItemVisible(fileToMove)).toBe(true);
 
-    // Move to images (sibling folder)
+    // Get the actual item ID, type, and parent folder ID for the drag data
+    const itemId = await fileList.getItemId(fileToMove);
     const itemType = await fileList.getItemType(fileToMove);
+    const parentId = await getCurrentFolderId();
+
+    // Move to images (sibling folder)
     await folderTree.dropOnFolder(imagesFolder, {
-      id: fileToMove,
+      id: itemId,
       type: itemType,
-      parentId: documentsFolder,
+      parentId,
     });
 
     await fileList.waitForItemToDisappear(fileToMove, { timeout: 15000 });
@@ -367,12 +392,16 @@ test.describe.serial('Full Workflow', () => {
     // Expand projects to see active
     await folderTree.expandFolder(projectsFolder);
 
-    // Move to projects/active (nested folder)
+    // Get the actual item ID, type, and parent folder ID for the drag data
+    const itemId = await fileList.getItemId(fileToMove);
     const itemType = await fileList.getItemType(fileToMove);
+    const parentId = await getCurrentFolderId();
+
+    // Move to projects/active (nested folder)
     await folderTree.dropOnFolder(activeFolder, {
-      id: fileToMove,
+      id: itemId,
       type: itemType,
-      parentId: imagesFolder,
+      parentId,
     });
 
     await fileList.waitForItemToDisappear(fileToMove, { timeout: 15000 });
@@ -392,12 +421,16 @@ test.describe.serial('Full Workflow', () => {
     const fileToMove = archiveProjectFiles[0].name;
     expect(await fileList.isItemVisible(fileToMove)).toBe(true);
 
-    // Move to active folder
+    // Get the actual item ID, type, and parent folder ID for the drag data
+    const itemId = await fileList.getItemId(fileToMove);
     const itemType = await fileList.getItemType(fileToMove);
+    const parentId = await getCurrentFolderId();
+
+    // Move to active folder
     await folderTree.dropOnFolder(activeFolder, {
-      id: fileToMove,
+      id: itemId,
       type: itemType,
-      parentId: archiveFolder,
+      parentId,
     });
 
     await fileList.waitForItemToDisappear(fileToMove, { timeout: 15000 });

@@ -149,15 +149,31 @@ export class FileListPage {
   }
 
   /**
-   * Get item ID by name by extracting it from the DOM.
-   * Note: This requires the ID to be accessible somehow. We'll use a workaround
-   * by triggering context menu and extracting from aria-label.
+   * Get item type (file or folder) by examining the size field.
+   * Folders show "-" for size, files show actual size.
    */
   async getItemType(name: string): Promise<'file' | 'folder'> {
     const item = this.getItem(name);
     const sizeText = await item.locator('.file-list-item-size').textContent();
     // Folders show "-" for size, files show actual size
     return sizeText?.trim() === '-' ? 'folder' : 'file';
+  }
+
+  /**
+   * Get the internal item ID from the DOM data-item-id attribute.
+   * This is the actual UUID used by the application, not the display name.
+   *
+   * @param name - Display name of the item
+   * @returns The internal UUID of the item
+   * @throws Error if item not found or doesn't have an ID
+   */
+  async getItemId(name: string): Promise<string> {
+    const item = this.getItem(name);
+    const itemId = await item.getAttribute('data-item-id');
+    if (!itemId) {
+      throw new Error(`Could not find item ID for "${name}"`);
+    }
+    return itemId;
   }
 
   /**
