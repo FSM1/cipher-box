@@ -1661,16 +1661,6 @@
                               "fontWeight": "normal"
                             }
                           ]
-                        },
-                        {
-                          "type": "text",
-                          "id": "UuUso",
-                          "name": "mRow2Size",
-                          "fill": "#006644",
-                          "content": "4.2 GB",
-                          "fontFamily": "JetBrains Mono",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -1680,23 +1670,24 @@
                       "name": "mRow2Bottom",
                       "width": "fill_container",
                       "gap": 12,
+                      "justifyContent": "space_between",
                       "children": [
-                        {
-                          "type": "text",
-                          "id": "Oczq6",
-                          "name": "mRow2Type",
-                          "fill": "#006644",
-                          "content": "dir",
-                          "fontFamily": "JetBrains Mono",
-                          "fontSize": 9,
-                          "fontWeight": "normal"
-                        },
                         {
                           "type": "text",
                           "id": "fISJ6",
                           "name": "mRow2Modified",
                           "fill": "#006644",
                           "content": "2026-01-20 14:32",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 9,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "bBDIP",
+                          "name": "mRow2Size",
+                          "fill": "#006644",
+                          "content": "4.2 GB",
                           "fontFamily": "JetBrains Mono",
                           "fontSize": 9,
                           "fontWeight": "normal"
@@ -1760,16 +1751,6 @@
                               "fontWeight": "normal"
                             }
                           ]
-                        },
-                        {
-                          "type": "text",
-                          "id": "quPft",
-                          "name": "mRow3Size",
-                          "fill": "#006644",
-                          "content": "1.8 GB",
-                          "fontFamily": "JetBrains Mono",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -1779,23 +1760,24 @@
                       "name": "mRow3Bottom",
                       "width": "fill_container",
                       "gap": 12,
+                      "justifyContent": "space_between",
                       "children": [
-                        {
-                          "type": "text",
-                          "id": "7wWjA",
-                          "name": "mRow3Type",
-                          "fill": "#006644",
-                          "content": "dir",
-                          "fontFamily": "JetBrains Mono",
-                          "fontSize": 9,
-                          "fontWeight": "normal"
-                        },
                         {
                           "type": "text",
                           "id": "4OQUu",
                           "name": "mRow3Modified",
                           "fill": "#006644",
                           "content": "2026-01-22 09:15",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 9,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "s2zqk",
+                          "name": "mRow3Size",
+                          "fill": "#006644",
+                          "content": "1.8 GB",
                           "fontFamily": "JetBrains Mono",
                           "fontSize": 9,
                           "fontWeight": "normal"
@@ -1859,16 +1841,6 @@
                               "fontWeight": "normal"
                             }
                           ]
-                        },
-                        {
-                          "type": "text",
-                          "id": "Lhljr",
-                          "name": "mRow4Size",
-                          "fill": "#006644",
-                          "content": "7.5 GB",
-                          "fontFamily": "JetBrains Mono",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -1878,23 +1850,24 @@
                       "name": "mRow4Bottom",
                       "width": "fill_container",
                       "gap": 12,
+                      "justifyContent": "space_between",
                       "children": [
-                        {
-                          "type": "text",
-                          "id": "CLjWS",
-                          "name": "mRow4Type",
-                          "fill": "#006644",
-                          "content": "dir",
-                          "fontFamily": "JetBrains Mono",
-                          "fontSize": 9,
-                          "fontWeight": "normal"
-                        },
                         {
                           "type": "text",
                           "id": "Yx41C",
                           "name": "mRow4Modified",
                           "fill": "#006644",
                           "content": "2026-01-23 11:45",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 9,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "rRWMs",
+                          "name": "mRow4Size",
+                          "fill": "#006644",
+                          "content": "7.5 GB",
                           "fontFamily": "JetBrains Mono",
                           "fontSize": 9,
                           "fontWeight": "normal"
@@ -1958,16 +1931,6 @@
                               "fontWeight": "normal"
                             }
                           ]
-                        },
-                        {
-                          "type": "text",
-                          "id": "85UJI",
-                          "name": "mRow5Size",
-                          "fill": "#006644",
-                          "content": "2.4 MB",
-                          "fontFamily": "JetBrains Mono",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -1977,23 +1940,24 @@
                       "name": "mRow5Bottom",
                       "width": "fill_container",
                       "gap": 12,
+                      "justifyContent": "space_between",
                       "children": [
-                        {
-                          "type": "text",
-                          "id": "2rycB",
-                          "name": "mRow5Type",
-                          "fill": "#006644",
-                          "content": "pdf",
-                          "fontFamily": "JetBrains Mono",
-                          "fontSize": 9,
-                          "fontWeight": "normal"
-                        },
                         {
                           "type": "text",
                           "id": "jcJiO",
                           "name": "mRow5Modified",
                           "fill": "#006644",
                           "content": "2026-01-21 16:20",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 9,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "vJoZq",
+                          "name": "mRow5Size",
+                          "fill": "#006644",
+                          "content": "2.4 MB",
                           "fontFamily": "JetBrains Mono",
                           "fontSize": 9,
                           "fontWeight": "normal"
@@ -2057,16 +2021,6 @@
                               "fontWeight": "normal"
                             }
                           ]
-                        },
-                        {
-                          "type": "text",
-                          "id": "qkRp0",
-                          "name": "mRow6Size",
-                          "fill": "#006644",
-                          "content": "856 KB",
-                          "fontFamily": "JetBrains Mono",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -2076,23 +2030,24 @@
                       "name": "mRow6Bottom",
                       "width": "fill_container",
                       "gap": 12,
+                      "justifyContent": "space_between",
                       "children": [
-                        {
-                          "type": "text",
-                          "id": "q9JhN",
-                          "name": "mRow6Type",
-                          "fill": "#006644",
-                          "content": "docx",
-                          "fontFamily": "JetBrains Mono",
-                          "fontSize": 9,
-                          "fontWeight": "normal"
-                        },
                         {
                           "type": "text",
                           "id": "P6ZHl",
                           "name": "mRow6Modified",
                           "fill": "#006644",
                           "content": "2026-01-22 13:08",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 9,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "MUupx",
+                          "name": "mRow6Size",
+                          "fill": "#006644",
+                          "content": "856 KB",
                           "fontFamily": "JetBrains Mono",
                           "fontSize": 9,
                           "fontWeight": "normal"
@@ -2156,16 +2111,6 @@
                               "fontWeight": "normal"
                             }
                           ]
-                        },
-                        {
-                          "type": "text",
-                          "id": "XLqMB",
-                          "name": "mRow7Size",
-                          "fill": "#006644",
-                          "content": "14.2 MB",
-                          "fontFamily": "JetBrains Mono",
-                          "fontSize": 10,
-                          "fontWeight": "normal"
                         }
                       ]
                     },
@@ -2175,23 +2120,24 @@
                       "name": "mRow7Bottom",
                       "width": "fill_container",
                       "gap": 12,
+                      "justifyContent": "space_between",
                       "children": [
-                        {
-                          "type": "text",
-                          "id": "OPhfh",
-                          "name": "mRow7Type",
-                          "fill": "#006644",
-                          "content": "csv",
-                          "fontFamily": "JetBrains Mono",
-                          "fontSize": 9,
-                          "fontWeight": "normal"
-                        },
                         {
                           "type": "text",
                           "id": "QnS6X",
                           "name": "mRow7Modified",
                           "fill": "#006644",
                           "content": "2026-01-19 08:42",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 9,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "gSbTn",
+                          "name": "mRow7Size",
+                          "fill": "#006644",
+                          "content": "14.2 MB",
                           "fontFamily": "JetBrains Mono",
                           "fontSize": 9,
                           "fontWeight": "normal"
