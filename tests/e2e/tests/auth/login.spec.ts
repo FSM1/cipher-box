@@ -20,8 +20,8 @@ test.describe('Login Flow', () => {
     await page.goto('/');
 
     // Verify login page is displayed
-    await expect(page.locator('h1:has-text("CipherBox")')).toBeVisible();
-    await expect(page.locator('text=Zero-knowledge encrypted cloud storage')).toBeVisible();
+    await expect(page.locator('h1:has-text("CIPHERBOX")')).toBeVisible();
+    await expect(page.locator('text=zero-knowledge encrypted storage')).toBeVisible();
     await expect(page.locator('button.auth-button')).toBeVisible();
 
     // Verify user is not authenticated (no logout button)
@@ -81,7 +81,7 @@ test.describe('Login Flow', () => {
 
     // Verify we're back on login page
     await expect(page.locator('button.auth-button')).toBeVisible();
-    await expect(page.locator('text=Zero-knowledge encrypted cloud storage')).toBeVisible();
+    await expect(page.locator('text=zero-knowledge encrypted storage')).toBeVisible();
   });
 
   test('redirects unauthenticated users from settings to login', async ({ page }) => {
