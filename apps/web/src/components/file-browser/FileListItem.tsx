@@ -39,80 +39,25 @@ function isFile(item: FolderChild): item is FileEntry {
 }
 
 /**
- * Get appropriate icon for item type.
+ * Get text prefix for item type (terminal-style).
  */
 function getItemIcon(item: FolderChild): string {
   if (isFolder(item)) {
-    return '📁';
+    return '[DIR]';
   }
-
-  // Simple file type detection by extension
-  const name = item.name.toLowerCase();
-  if (name.endsWith('.pdf')) return '📄';
-  if (name.endsWith('.doc') || name.endsWith('.docx')) return '📝';
-  if (name.endsWith('.xls') || name.endsWith('.xlsx')) return '📊';
-  if (
-    name.endsWith('.jpg') ||
-    name.endsWith('.jpeg') ||
-    name.endsWith('.png') ||
-    name.endsWith('.gif')
-  )
-    return '🖼️';
-  if (name.endsWith('.mp3') || name.endsWith('.wav') || name.endsWith('.flac')) return '🎵';
-  if (name.endsWith('.mp4') || name.endsWith('.mov') || name.endsWith('.avi')) return '🎬';
-  if (name.endsWith('.zip') || name.endsWith('.rar') || name.endsWith('.7z')) return '📦';
-
-  return '📄';
+  return '[FILE]';
 }
 
 /**
- * Get human-readable file type label.
+ * Extract file extension for TYPE column.
  */
-function getItemType(item: FolderChild): string {
-  if (isFolder(item)) {
-    return 'folder';
+function getFileExtension(filename: string): string {
+  const lastDot = filename.lastIndexOf('.');
+  if (lastDot === -1 || lastDot === filename.length - 1) {
+    return '-';
   }
-
-  // Extract extension
-  const name = item.name.toLowerCase();
-  const lastDot = name.lastIndexOf('.');
-  if (lastDot === -1 || lastDot === name.length - 1) {
-    return 'file';
-  }
-
-  const ext = name.substring(lastDot + 1);
-
-  // Map extensions to readable types
-  const typeMap: Record<string, string> = {
-    pdf: 'pdf',
-    doc: 'document',
-    docx: 'document',
-    xls: 'spreadsheet',
-    xlsx: 'spreadsheet',
-    jpg: 'image',
-    jpeg: 'image',
-    png: 'image',
-    gif: 'image',
-    mp3: 'audio',
-    wav: 'audio',
-    flac: 'audio',
-    mp4: 'video',
-    mov: 'video',
-    avi: 'video',
-    zip: 'archive',
-    rar: 'archive',
-    '7z': 'archive',
-    txt: 'text',
-    md: 'markdown',
-    json: 'json',
-    xml: 'xml',
-    html: 'html',
-    css: 'css',
-    js: 'javascript',
-    ts: 'typescript',
-  };
-
-  return typeMap[ext] ?? ext;
+  const ext = filename.substring(lastDot + 1);
+  return ext.toLowerCase();
 }
 
 /**
@@ -248,8 +193,8 @@ export function FileListItem({
   // Display size only for files
   const sizeDisplay = isFile(item) ? formatBytes(item.size) : '-';
 
-  // Display type
-  const typeDisplay = getItemType(item);
+  // Display type - 'dir' for folders, extension for files
+  const typeDisplay = isFolder(item) ? 'dir' : getFileExtension(item.name);
 
   // Display modified date
   const dateDisplay = formatDate(item.modifiedAt);
@@ -276,15 +221,20 @@ export function FileListItem({
         }
       }}
     >
+      {/* Row 1: Icon + Name (for mobile top row) */}
       <div className="file-list-item-row-top">
         <span className="file-list-item-icon">{getItemIcon(item)}</span>
         <span className="file-list-item-name">{item.name}</span>
       </div>
+
+      {/* Row 2: Date + Size (for mobile bottom row) */}
       <div className="file-list-item-row-bottom">
-        <div className="file-list-item-size">{sizeDisplay}</div>
-        <div className="file-list-item-type">{typeDisplay}</div>
-        <div className="file-list-item-date">{dateDisplay}</div>
+        <span className="file-list-item-date">{dateDisplay}</span>
+        <span className="file-list-item-size">{sizeDisplay}</span>
       </div>
+
+      {/* TYPE column - hidden on mobile via CSS */}
+      <span className="file-list-item-type">{typeDisplay}</span>
     </div>
   );
 }
