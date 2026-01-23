@@ -11,7 +11,7 @@ authenticatedTest.describe('Session Persistence', () => {
     await authenticatedPage.goto('/dashboard');
 
     // Verify we're authenticated
-    await expect(authenticatedPage.locator('button:has-text("Logout")')).toBeVisible();
+    await expect(authenticatedPage.locator('button.logout-button')).toBeVisible();
     await expect(authenticatedPage.locator('.user-info')).toBeVisible();
 
     // Reload the page
@@ -22,7 +22,7 @@ authenticatedTest.describe('Session Persistence', () => {
 
     // Verify we're still on dashboard (not redirected to login)
     await expect(authenticatedPage).toHaveURL(/.*dashboard/);
-    await expect(authenticatedPage.locator('button:has-text("Logout")')).toBeVisible();
+    await expect(authenticatedPage.locator('button.logout-button')).toBeVisible();
     await expect(authenticatedPage.locator('.user-info')).toBeVisible();
   });
 
@@ -31,17 +31,17 @@ authenticatedTest.describe('Session Persistence', () => {
     async ({ authenticatedPage }) => {
       // Start on dashboard
       await authenticatedPage.goto('/dashboard');
-      await expect(authenticatedPage.locator('button:has-text("Logout")')).toBeVisible();
+      await expect(authenticatedPage.locator('button.logout-button')).toBeVisible();
 
       // Navigate to settings
       await authenticatedPage.goto('/settings');
       await expect(authenticatedPage).toHaveURL(/.*settings/);
-      await expect(authenticatedPage.locator('button:has-text("Logout")')).toBeVisible();
+      await expect(authenticatedPage.locator('button.logout-button')).toBeVisible();
 
       // Navigate back to dashboard
       await authenticatedPage.goto('/dashboard');
       await expect(authenticatedPage).toHaveURL(/.*dashboard/);
-      await expect(authenticatedPage.locator('button:has-text("Logout")')).toBeVisible();
+      await expect(authenticatedPage.locator('button.logout-button')).toBeVisible();
 
       // Verify session remained valid throughout navigation
       await expect(authenticatedPage.locator('.user-info')).toBeVisible();
@@ -53,7 +53,7 @@ authenticatedTest.describe('Session Persistence', () => {
     async ({ authenticatedPage, context }) => {
       // Navigate to dashboard
       await authenticatedPage.goto('/dashboard');
-      await expect(authenticatedPage.locator('button:has-text("Logout")')).toBeVisible();
+      await expect(authenticatedPage.locator('button.logout-button')).toBeVisible();
 
       // Clear all cookies to simulate expired session
       await context.clearCookies();
@@ -69,7 +69,7 @@ authenticatedTest.describe('Session Persistence', () => {
 
       // Should be redirected to login page
       await authenticatedPage.waitForURL(/^(?!.*dashboard).*$/, { timeout: 5000 });
-      await expect(authenticatedPage.locator('button:has-text("Sign In")')).toBeVisible();
+      await expect(authenticatedPage.locator('button:has-text("[CONNECT]")')).toBeVisible();
     }
   );
 
@@ -78,7 +78,7 @@ authenticatedTest.describe('Session Persistence', () => {
     async ({ authenticatedPage }) => {
       // Start on dashboard
       await authenticatedPage.goto('/dashboard');
-      await expect(authenticatedPage.locator('button:has-text("Logout")')).toBeVisible();
+      await expect(authenticatedPage.locator('button.logout-button')).toBeVisible();
 
       // Navigate to settings
       await authenticatedPage.goto('/settings');
@@ -87,12 +87,12 @@ authenticatedTest.describe('Session Persistence', () => {
       // Use browser back button
       await authenticatedPage.goBack();
       await expect(authenticatedPage).toHaveURL(/.*dashboard/);
-      await expect(authenticatedPage.locator('button:has-text("Logout")')).toBeVisible();
+      await expect(authenticatedPage.locator('button.logout-button')).toBeVisible();
 
       // Use browser forward button
       await authenticatedPage.goForward();
       await expect(authenticatedPage).toHaveURL(/.*settings/);
-      await expect(authenticatedPage.locator('button:has-text("Logout")')).toBeVisible();
+      await expect(authenticatedPage.locator('button.logout-button')).toBeVisible();
     }
   );
 
@@ -101,7 +101,7 @@ authenticatedTest.describe('Session Persistence', () => {
     async ({ authenticatedPage, context }) => {
       // Navigate to dashboard in first tab
       await authenticatedPage.goto('/dashboard');
-      await expect(authenticatedPage.locator('button:has-text("Logout")')).toBeVisible();
+      await expect(authenticatedPage.locator('button.logout-button')).toBeVisible();
 
       // Open a new tab
       const newPage = await context.newPage();
@@ -109,7 +109,7 @@ authenticatedTest.describe('Session Persistence', () => {
 
       // New tab should also be authenticated
       await expect(newPage).toHaveURL(/.*dashboard/);
-      await expect(newPage.locator('button:has-text("Logout")')).toBeVisible();
+      await expect(newPage.locator('button.logout-button')).toBeVisible();
 
       // Cleanup
       await newPage.close();

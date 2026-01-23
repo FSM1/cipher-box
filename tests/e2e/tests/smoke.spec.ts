@@ -16,7 +16,12 @@ test.describe('Smoke Test', () => {
     await expect(page).toHaveTitle(/CipherBox|Cipher/i);
 
     // Verify the login button is visible
-    const loginButton = page.getByRole('button', { name: /login|sign in/i });
+    // Use class selector as button text might vary (connecting... vs [CONNECT])
+    const loginButton = page.locator('button.auth-button');
     await expect(loginButton).toBeVisible();
+
+    // Verify button text is either [CONNECT] or connecting...
+    const buttonText = await loginButton.textContent();
+    expect(buttonText).toMatch(/\[CONNECT\]|connecting\.\.\./i);
   });
 });

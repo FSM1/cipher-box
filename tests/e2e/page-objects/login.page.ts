@@ -7,9 +7,10 @@ import { BasePage } from './base.page';
 export class LoginPage extends BasePage {
   /**
    * Locator for the login button on the homepage
+   * Uses class selector for stability (text varies: [CONNECT] or connecting...)
    */
   private get loginButton() {
-    return this.page.getByRole('button', { name: /login|sign in/i });
+    return this.page.locator('button.auth-button');
   }
 
   /**

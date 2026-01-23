@@ -2,10 +2,10 @@ import { expect } from '@playwright/test';
 import { authenticatedTest } from '../../fixtures/auth.fixture';
 
 /**
- * Logout flow E2E tests.
+ * logout flow E2E tests.
  * Tests logout functionality and session clearing.
  */
-authenticatedTest.describe('Logout Flow', () => {
+authenticatedTest.describe('logout Flow', () => {
   authenticatedTest(
     'logout button is visible when authenticated',
     async ({ authenticatedPage }) => {
@@ -13,7 +13,7 @@ authenticatedTest.describe('Logout Flow', () => {
       await authenticatedPage.goto('/dashboard');
 
       // Verify logout button is visible
-      await expect(authenticatedPage.locator('button:has-text("Logout")')).toBeVisible();
+      await expect(authenticatedPage.locator('button.logout-button')).toBeVisible();
 
       // Verify user info is displayed (authenticated state)
       await expect(authenticatedPage.locator('.user-info')).toBeVisible();
@@ -27,17 +27,17 @@ authenticatedTest.describe('Logout Flow', () => {
       await authenticatedPage.goto('/dashboard');
 
       // Verify we're authenticated
-      await expect(authenticatedPage.locator('button:has-text("Logout")')).toBeVisible();
+      await expect(authenticatedPage.locator('button.logout-button')).toBeVisible();
 
       // Click logout button
-      await authenticatedPage.click('button:has-text("Logout")');
+      await authenticatedPage.click('button.logout-button');
 
       // Wait for redirect to login page
       await authenticatedPage.waitForURL(/^(?!.*dashboard).*$/);
 
       // Verify we're on login page
-      await expect(authenticatedPage.locator('button:has-text("Sign In")')).toBeVisible();
-      await expect(authenticatedPage.locator('button:has-text("Logout")')).not.toBeVisible();
+      await expect(authenticatedPage.locator('button:has-text("[CONNECT]")')).toBeVisible();
+      await expect(authenticatedPage.locator('button.logout-button')).not.toBeVisible();
     }
   );
 
@@ -47,8 +47,8 @@ authenticatedTest.describe('Logout Flow', () => {
       // Start on dashboard
       await authenticatedPage.goto('/dashboard');
 
-      // Logout
-      await authenticatedPage.click('button:has-text("Logout")');
+      // logout
+      await authenticatedPage.click('button.logout-button');
       await authenticatedPage.waitForURL(/^(?!.*dashboard).*$/);
 
       // Try to navigate to dashboard again
@@ -56,7 +56,7 @@ authenticatedTest.describe('Logout Flow', () => {
 
       // Should remain on login page (not dashboard)
       await authenticatedPage.waitForURL(/^(?!.*dashboard).*$/);
-      await expect(authenticatedPage.locator('button:has-text("Sign In")')).toBeVisible();
+      await expect(authenticatedPage.locator('button:has-text("[CONNECT]")')).toBeVisible();
     }
   );
 
@@ -76,8 +76,8 @@ authenticatedTest.describe('Logout Flow', () => {
     // We expect some items in localStorage when authenticated
     expect(localStorageBefore.itemCount).toBeGreaterThan(0);
 
-    // Logout
-    await authenticatedPage.click('button:has-text("Logout")');
+    // logout
+    await authenticatedPage.click('button.logout-button');
     await authenticatedPage.waitForURL(/^(?!.*dashboard).*$/);
 
     // Check localStorage after logout

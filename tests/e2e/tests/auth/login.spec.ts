@@ -22,18 +22,18 @@ test.describe('Login Flow', () => {
     // Verify login page is displayed
     await expect(page.locator('h1:has-text("CipherBox")')).toBeVisible();
     await expect(page.locator('text=Zero-knowledge encrypted cloud storage')).toBeVisible();
-    await expect(page.locator('button:has-text("Sign In")')).toBeVisible();
+    await expect(page.locator('button.auth-button')).toBeVisible();
 
     // Verify user is not authenticated (no logout button)
-    await expect(page.locator('button:has-text("Logout")')).not.toBeVisible();
+    await expect(page.locator('button.logout-button')).not.toBeVisible();
   });
 
   test('clicking login opens Web3Auth modal', async ({ page }) => {
     // Navigate to login page
     await page.goto('/');
 
-    // Click the Sign In button
-    await page.click('button:has-text("Sign In")');
+    // Click the [CONNECT] button
+    await page.click('button.auth-button');
 
     // Wait for Web3Auth modal to appear
     try {
@@ -68,7 +68,7 @@ test.describe('Login Flow', () => {
 
     // Verify we're on the dashboard
     await expect(page).toHaveURL(/.*dashboard/);
-    await expect(page.locator('button:has-text("Logout")')).toBeVisible();
+    await expect(page.locator('button.logout-button')).toBeVisible();
   });
 
   test('redirects unauthenticated users from protected routes to login', async ({ page }) => {
@@ -80,7 +80,7 @@ test.describe('Login Flow', () => {
     await page.waitForURL(/^(?!.*dashboard).*$/); // Wait for URL to not contain 'dashboard'
 
     // Verify we're back on login page
-    await expect(page.locator('button:has-text("Sign In")')).toBeVisible();
+    await expect(page.locator('button.auth-button')).toBeVisible();
     await expect(page.locator('text=Zero-knowledge encrypted cloud storage')).toBeVisible();
   });
 
@@ -92,6 +92,6 @@ test.describe('Login Flow', () => {
     await page.waitForURL(/^(?!.*settings).*$/);
 
     // Verify we're on login page
-    await expect(page.locator('button:has-text("Sign In")')).toBeVisible();
+    await expect(page.locator('button.auth-button')).toBeVisible();
   });
 });

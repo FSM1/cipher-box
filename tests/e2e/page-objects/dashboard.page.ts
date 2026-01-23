@@ -29,9 +29,10 @@ export class DashboardPage extends BasePage {
 
   /**
    * Locator for the logout button
+   * Uses class selector for stability
    */
   get logoutButton() {
-    return this.page.getByRole('button', { name: /logout|sign out/i });
+    return this.page.locator('button.logout-button');
   }
 
   /**
