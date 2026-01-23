@@ -223,20 +223,25 @@ Plans:
 
 ### Phase 6.2: Restyle App with Pencil Design (INSERTED)
 
-**Goal**: Complete UI redesign using Pencil design tool for modern, polished appearance
+**Goal**: Complete UI redesign with terminal/hacker aesthetic using Pencil design specifications
 **Depends on**: Phase 6.1
 **Requirements**: Visual refresh of all UI components
 **Success Criteria** (what must be TRUE):
 
-1. All UI components restyled with Pencil design system
-2. Consistent visual language across login, file browser, and settings pages
+1. All UI components restyled with terminal aesthetic (green-on-black, JetBrains Mono)
+2. Consistent visual language across login, file browser, and modals
 3. Responsive design maintained after restyle
 4. Existing E2E tests pass with new styling
-   **Plans**: TBD
+**Plans**: 6 plans
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 6.2 to break down)
+- [ ] 06.2-01-PLAN.md — Design tokens and typography foundation (JetBrains Mono, CSS variables, login page)
+- [ ] 06.2-02-PLAN.md — File browser and breadcrumbs restyle (sidebar, file list, toolbar)
+- [ ] 06.2-03-PLAN.md — Dialogs, context menus, modals, and upload UI restyle
+- [ ] 06.2-04-PLAN.md — Responsive styles and matrix background animation
+- [ ] 06.2-05-PLAN.md — Component updates ([DIR]/[FILE] prefixes, button text, headers)
+- [ ] 06.2-06-PLAN.md — E2E test updates and visual verification
 
 ### Phase 7: Multi-Device Sync
 
@@ -357,7 +362,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 5. Folder System        | 4/4            | Complete    | 2026-01-21 |
 | 6. File Browser UI      | 4/4            | Complete    | 2026-01-22 |
 | 6.1 Webapp Automation   | 6/6            | Complete    | 2026-01-22 |
-| 6.2 Pencil Restyle      | 0/?            | Not started | -          |
+| 6.2 Pencil Restyle      | 0/6            | Not started | -          |
 | 7. Multi-Device Sync    | 0/3            | Not started | -          |
 | 8. TEE Integration      | 0/4            | Not started | -          |
 | 9. Desktop Client       | 0/5            | Not started | -          |
@@ -385,4 +390,5 @@ _Phase 6 planned: 2026-01-21_
 _Phase 6.1 planned: 2026-01-22_
 _Phase 6.1 complete: 2026-01-22_
 _Phase 6.2 inserted: 2026-01-23_
-_Total phases: 13 | Total plans: 53 | Depth: Comprehensive_
+_Phase 6.2 planned: 2026-01-23_
+_Total phases: 13 | Total plans: 59 | Depth: Comprehensive_
