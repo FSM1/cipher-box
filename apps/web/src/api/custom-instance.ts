@@ -12,8 +12,9 @@ export const customInstance = async <T>(config: {
   data?: unknown;
   headers?: Record<string, string>;
   signal?: AbortSignal;
+  responseType?: 'json' | 'blob' | 'text';
 }): Promise<T> => {
-  const { url, method, params, data, headers, signal } = config;
+  const { url, method, params, data, headers, signal, responseType = 'json' } = config;
 
   // Get auth token from store
   const accessToken = useAuthStore.getState().accessToken;
@@ -23,7 +24,8 @@ export const customInstance = async <T>(config: {
   const response = await fetch(`${BASE_URL}${url}${queryString}`, {
     method,
     headers: {
-      'Content-Type': 'application/json',
+      // Only set Content-Type for JSON requests with body
+      ...(data && responseType === 'json' ? { 'Content-Type': 'application/json' } : {}),
       ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
       ...headers,
     },
@@ -35,6 +37,12 @@ export const customInstance = async <T>(config: {
     throw new Error(`HTTP error! status: ${response.status}`);
   }
 
+  // Return appropriate response type
+  if (responseType === 'blob') {
+    return response.blob() as Promise<T>;
+  } else if (responseType === 'text') {
+    return response.text() as Promise<T>;
+  }
   return response.json();
 };
 
