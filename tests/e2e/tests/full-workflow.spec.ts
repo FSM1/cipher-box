@@ -50,6 +50,14 @@ test.describe.serial('Full Workflow', () => {
   const activeFolder = `active-${timestamp}`;
   const archiveFolder = `archive-${timestamp}`;
 
+  // Track folder IDs when created (folder name → UUID)
+  // This avoids relying on window.__ZUSTAND_FOLDER_STORE__ which may not be available in CI
+  const folderIds: Record<string, string> = {};
+
+  // Track current folder name for parentId lookup using a navigation stack
+  const navigationStack: string[] = ['root'];
+  const getCurrentFolderName = () => navigationStack[navigationStack.length - 1];
+
   // Files to upload at various levels (12+ files total)
   const rootFiles = [
     { name: `readme-${timestamp}.txt`, content: 'Root level readme file' },
@@ -113,7 +121,7 @@ test.describe.serial('Full Workflow', () => {
   // ============================================
 
   /**
-   * Create a folder in the current directory.
+   * Create a folder in the current directory and store its ID.
    */
   async function createFolder(name: string): Promise<void> {
     const newFolderButton = page.locator('.file-browser-new-folder-button');
@@ -121,6 +129,9 @@ test.describe.serial('Full Workflow', () => {
     await createFolderDialog.waitForOpen();
     await createFolderDialog.createFolder(name);
     await fileList.waitForItemToAppear(name, { timeout: 30000 });
+
+    // Store the folder ID immediately after creation
+    folderIds[name] = await fileList.getItemId(name);
   }
 
   /**
@@ -131,6 +142,7 @@ test.describe.serial('Full Workflow', () => {
     await expect(page.locator('.breadcrumbs-current', { hasText: name })).toBeVisible({
       timeout: 10000,
     });
+    navigationStack.push(name);
   }
 
   /**
@@ -139,6 +151,9 @@ test.describe.serial('Full Workflow', () => {
   async function navigateBack(): Promise<void> {
     await page.locator('.breadcrumbs-back').click();
     await page.waitForTimeout(500); // Wait for navigation
+    if (navigationStack.length > 1) {
+      navigationStack.pop();
+    }
   }
 
   /**
@@ -150,6 +165,9 @@ test.describe.serial('Full Workflow', () => {
     await expect(page.locator('.breadcrumbs-current', { hasText: 'My Vault' })).toBeVisible({
       timeout: 10000,
     });
+    // Reset navigation stack to root
+    navigationStack.length = 0;
+    navigationStack.push('root');
   }
 
   /**
@@ -194,20 +212,20 @@ test.describe.serial('Full Workflow', () => {
   }
 
   /**
-   * Get the current folder ID from the app's Zustand store.
+   * Get the current folder ID from our tracked folder IDs.
    * Returns 'root' for the root folder.
    */
-  async function getCurrentFolderId(): Promise<string> {
-    const folderId = await page.evaluate(() => {
-      // Access the Zustand store - it's exposed on window in dev mode via devtools
-      // We need to access it through the store's getState method
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const folderStore = (window as any).__ZUSTAND_FOLDER_STORE__;
-      if (!folderStore) {
-        throw new Error('Folder store not found on window');
-      }
-      return folderStore.getState().currentFolderId ?? 'root';
-    });
+  function getTrackedFolderId(): string {
+    const folderName = getCurrentFolderName();
+    if (folderName === 'root') {
+      return 'root';
+    }
+    const folderId = folderIds[folderName];
+    if (!folderId) {
+      throw new Error(
+        `Folder ID not tracked for "${folderName}". Tracked folders: ${Object.keys(folderIds).join(', ')}`
+      );
+    }
     return folderId;
   }
 
@@ -367,7 +385,7 @@ test.describe.serial('Full Workflow', () => {
     // Get the actual item ID, type, and parent folder ID for the drag data
     const itemId = await fileList.getItemId(fileToMove);
     const itemType = await fileList.getItemType(fileToMove);
-    const parentId = await getCurrentFolderId();
+    const parentId = getTrackedFolderId();
 
     // Move to images (sibling folder)
     await folderTree.dropOnFolder(imagesFolder, {
@@ -395,7 +413,7 @@ test.describe.serial('Full Workflow', () => {
     // Get the actual item ID, type, and parent folder ID for the drag data
     const itemId = await fileList.getItemId(fileToMove);
     const itemType = await fileList.getItemType(fileToMove);
-    const parentId = await getCurrentFolderId();
+    const parentId = getTrackedFolderId();
 
     // Move to projects/active (nested folder)
     await folderTree.dropOnFolder(activeFolder, {
@@ -424,7 +442,7 @@ test.describe.serial('Full Workflow', () => {
     // Get the actual item ID, type, and parent folder ID for the drag data
     const itemId = await fileList.getItemId(fileToMove);
     const itemType = await fileList.getItemType(fileToMove);
-    const parentId = await getCurrentFolderId();
+    const parentId = getTrackedFolderId();
 
     // Move to active folder
     await folderTree.dropOnFolder(activeFolder, {
