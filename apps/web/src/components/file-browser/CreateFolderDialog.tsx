@@ -2,81 +2,71 @@ import { useState, useEffect, useRef, useCallback, type FormEvent } from 'react'
 import { Modal } from '../ui/Modal';
 import '../../styles/dialogs.css';
 
-type RenameDialogProps = {
+type CreateFolderDialogProps = {
   /** Whether the dialog is open */
   open: boolean;
   /** Callback when dialog is closed (cancel or backdrop click) */
   onClose: () => void;
-  /** Callback when rename is confirmed */
-  onConfirm: (newName: string) => void;
-  /** Current name of the item */
-  currentName: string;
-  /** Type of item being renamed */
-  itemType: 'file' | 'folder';
+  /** Callback when folder creation is confirmed */
+  onConfirm: (name: string) => void;
   /** Loading state - disables buttons */
   isLoading?: boolean;
 };
 
 /**
- * Dialog for renaming files and folders.
+ * Dialog for creating new folders.
  *
- * Shows an input field pre-filled with the current name, selected for easy replacement.
- * Validates that name is not empty and different from current.
+ * Shows an input field for the folder name, validates that name is not empty
+ * and doesn't contain invalid characters.
  *
  * @example
  * ```tsx
- * function RenameButton({ item }) {
+ * function NewFolderButton() {
  *   const [isOpen, setIsOpen] = useState(false);
+ *   const { createFolder } = useFolder();
  *
  *   return (
  *     <>
- *       <button onClick={() => setIsOpen(true)}>Rename</button>
- *       <RenameDialog
+ *       <button onClick={() => setIsOpen(true)}>New Folder</button>
+ *       <CreateFolderDialog
  *         open={isOpen}
  *         onClose={() => setIsOpen(false)}
- *         onConfirm={(newName) => { renameItem(newName); setIsOpen(false); }}
- *         currentName={item.name}
- *         itemType={item.type}
+ *         onConfirm={async (name) => {
+ *           await createFolder(name, currentFolderId);
+ *           setIsOpen(false);
+ *         }}
  *       />
  *     </>
  *   );
  * }
  * ```
  */
-export function RenameDialog({
+export function CreateFolderDialog({
   open,
   onClose,
   onConfirm,
-  currentName,
-  itemType,
   isLoading = false,
-}: RenameDialogProps) {
-  const [newName, setNewName] = useState(currentName);
+}: CreateFolderDialogProps) {
+  const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Reset form when dialog opens
   useEffect(() => {
     if (open) {
-      setNewName(currentName);
+      setName('');
       setError(null);
-      // Focus and select input after render
+      // Focus input after render
       setTimeout(() => {
-        if (inputRef.current) {
-          inputRef.current.focus();
-          inputRef.current.select();
-        }
+        inputRef.current?.focus();
       }, 0);
     }
-  }, [open, currentName]);
+  }, [open]);
 
-  const validate = (name: string): string | null => {
-    const trimmed = name.trim();
+  const validate = (value: string): string | null => {
+    const trimmed = value.trim();
     if (!trimmed) {
       return 'Name cannot be empty';
-    }
-    if (trimmed === currentName) {
-      return 'Name is the same as current';
     }
     // Check for invalid characters (basic)
     if (/[/\\:*?"<>|]/.test(trimmed)) {
@@ -88,16 +78,16 @@ export function RenameDialog({
   const handleSubmit = useCallback(
     (e: FormEvent) => {
       e.preventDefault();
-      const validationError = validate(newName);
+      const validationError = validate(name);
       if (validationError) {
         setError(validationError);
         return;
       }
       if (!isLoading) {
-        onConfirm(newName.trim());
+        onConfirm(name.trim());
       }
     },
-    [newName, currentName, isLoading, onConfirm]
+    [name, isLoading, onConfirm]
   );
 
   const handleCancel = useCallback(() => {
@@ -107,32 +97,31 @@ export function RenameDialog({
   }, [isLoading, onClose]);
 
   const handleChange = (value: string) => {
-    setNewName(value);
+    setName(value);
     // Clear error when user starts typing
     if (error) {
       setError(null);
     }
   };
 
-  const title = itemType === 'folder' ? 'Rename Folder' : 'Rename File';
-
   return (
-    <Modal open={open} onClose={handleCancel} title={title}>
+    <Modal open={open} onClose={handleCancel} title="New Folder">
       <form className="dialog-content" onSubmit={handleSubmit}>
         <div className="dialog-field">
-          <label htmlFor="rename-input" className="dialog-label">
-            New name
+          <label htmlFor="folder-name-input" className="dialog-label">
+            Folder name
           </label>
           <input
             ref={inputRef}
-            id="rename-input"
+            id="folder-name-input"
             type="text"
             className={`dialog-input ${error ? 'dialog-input--error' : ''}`}
-            value={newName}
+            value={name}
             onChange={(e) => handleChange(e.target.value)}
             disabled={isLoading}
             autoComplete="off"
             spellCheck={false}
+            placeholder="Enter folder name"
           />
           {error && <span className="dialog-error">{error}</span>}
         </div>
@@ -148,9 +137,9 @@ export function RenameDialog({
           <button
             type="submit"
             className="dialog-button dialog-button--primary"
-            disabled={isLoading || !!validate(newName)}
+            disabled={isLoading || !!validate(name)}
           >
-            {isLoading ? 'Renaming...' : 'Rename'}
+            {isLoading ? 'Creating...' : 'Create'}
           </button>
         </div>
       </form>

@@ -45,6 +45,24 @@ services:
           memory: 2G
           cpus: '1.0'
 
+  mock-ipns-routing:
+    build:
+      context: ../tools/mock-ipns-routing
+      dockerfile: Dockerfile
+    container_name: cipherbox-mock-ipns-routing
+    restart: unless-stopped
+    environment:
+      - HOST=0.0.0.0
+      - PORT=3001
+      - LOG_LEVEL=info
+    ports:
+      - '127.0.0.1:3001:3001'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q --spider http://localhost:3001/health || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
 volumes:
   postgres_data:
   ipfs_data:

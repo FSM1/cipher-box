@@ -5,12 +5,20 @@
  * Zero-knowledge encrypted cloud storage API
  * OpenAPI spec version: 0.1.0
  */
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import type {
+  DataTag,
+  DefinedInitialDataOptions,
+  DefinedUseQueryResult,
   MutationFunction,
   QueryClient,
+  QueryFunction,
+  QueryKey,
+  UndefinedInitialDataOptions,
   UseMutationOptions,
   UseMutationResult,
+  UseQueryOptions,
+  UseQueryResult,
 } from '@tanstack/react-query';
 
 import type { AddResponseDto, IpfsControllerAddBody, UnpinDto, UnpinResponseDto } from '../models';
@@ -173,3 +181,113 @@ export const useIpfsControllerUnpin = <TError = void, TContext = unknown>(
 
   return useMutation(mutationOptions, queryClient);
 };
+/**
+ * Download an encrypted file from IPFS via the configured gateway.
+ * @summary Get file from IPFS
+ */
+export const ipfsControllerGet = (cid: string, signal?: AbortSignal) => {
+  return customInstance<Blob>({ url: `/ipfs/${cid}`, method: 'GET', responseType: 'blob', signal });
+};
+
+export const getIpfsControllerGetQueryKey = (cid?: string) => {
+  return [`/ipfs/${cid}`] as const;
+};
+
+export const getIpfsControllerGetQueryOptions = <
+  TData = Awaited<ReturnType<typeof ipfsControllerGet>>,
+  TError = void,
+>(
+  cid: string,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof ipfsControllerGet>>, TError, TData>>;
+  }
+) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getIpfsControllerGetQueryKey(cid);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof ipfsControllerGet>>> = ({ signal }) =>
+    ipfsControllerGet(cid, signal);
+
+  return { queryKey, queryFn, enabled: !!cid, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof ipfsControllerGet>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type IpfsControllerGetQueryResult = NonNullable<
+  Awaited<ReturnType<typeof ipfsControllerGet>>
+>;
+export type IpfsControllerGetQueryError = void;
+
+export function useIpfsControllerGet<
+  TData = Awaited<ReturnType<typeof ipfsControllerGet>>,
+  TError = void,
+>(
+  cid: string,
+  options: {
+    query: Partial<UseQueryOptions<Awaited<ReturnType<typeof ipfsControllerGet>>, TError, TData>> &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof ipfsControllerGet>>,
+          TError,
+          Awaited<ReturnType<typeof ipfsControllerGet>>
+        >,
+        'initialData'
+      >;
+  },
+  queryClient?: QueryClient
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useIpfsControllerGet<
+  TData = Awaited<ReturnType<typeof ipfsControllerGet>>,
+  TError = void,
+>(
+  cid: string,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof ipfsControllerGet>>, TError, TData>> &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof ipfsControllerGet>>,
+          TError,
+          Awaited<ReturnType<typeof ipfsControllerGet>>
+        >,
+        'initialData'
+      >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useIpfsControllerGet<
+  TData = Awaited<ReturnType<typeof ipfsControllerGet>>,
+  TError = void,
+>(
+  cid: string,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof ipfsControllerGet>>, TError, TData>>;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary Get file from IPFS
+ */
+
+export function useIpfsControllerGet<
+  TData = Awaited<ReturnType<typeof ipfsControllerGet>>,
+  TError = void,
+>(
+  cid: string,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof ipfsControllerGet>>, TError, TData>>;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getIpfsControllerGetQueryOptions(cid, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  query.queryKey = queryOptions.queryKey;
+
+  return query;
+}

@@ -210,7 +210,7 @@ Plans:
 2. Critical user flows covered by automated tests
 3. Tests run in CI pipeline
 4. Test reports generated on failure
-   **Plans**: 6 plans
+   **Plans**: 7 plans
 
 Plans:
 
@@ -220,6 +220,7 @@ Plans:
 - [x] 06.1-04-PLAN.md — File operations tests (upload, download, rename, delete)
 - [x] 06.1-05-PLAN.md — Folder operations tests (create, rename, delete, navigate)
 - [x] 06.1-06-PLAN.md — CI integration with GitHub Actions
+- [x] 06.1-07-PLAN.md — Mock delegated routing service for IPNS E2E testing
 
 ### Phase 6.2: Restyle App with Pencil Design (INSERTED)
 
@@ -232,7 +233,7 @@ Plans:
 2. Consistent visual language across login, file browser, and modals
 3. Responsive design maintained after restyle
 4. Existing E2E tests pass with new styling
-**Plans**: 6 plans
+   **Plans**: 6 plans
 
 Plans:
 
@@ -253,13 +254,13 @@ Plans:
 1. Changes made on one device appear on another within ~30 seconds
 2. User sees loading state during IPNS resolution
 3. Desktop sync daemon runs in background while app is open
-   **Plans**: TBD
+   **Plans**: 3 plans
 
 Plans:
 
-- [ ] 07-01: IPNS polling infrastructure with 30s interval
-- [ ] 07-02: Sync state management and optimistic UI
-- [ ] 07-03: Loading states and conflict handling
+- [ ] 07-01-PLAN.md — Backend IPNS resolution endpoint and sync state store
+- [ ] 07-02-PLAN.md — Polling infrastructure hooks (useInterval, useVisibility, useOnlineStatus, useSyncPolling)
+- [ ] 07-03-PLAN.md — Frontend integration with SyncIndicator and OfflineBanner UI
 
 ### Phase 8: TEE Integration
 
@@ -391,4 +392,5 @@ _Phase 6.1 planned: 2026-01-22_
 _Phase 6.1 complete: 2026-01-22_
 _Phase 6.2 inserted: 2026-01-23_
 _Phase 6.2 planned: 2026-01-23_
-_Total phases: 13 | Total plans: 59 | Depth: Comprehensive_
+_Phase 7 planned: 2026-01-22_
+_Total phases: 12 | Total plans: 54 | Depth: Comprehensive_

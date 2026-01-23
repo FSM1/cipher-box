@@ -13,10 +13,10 @@ config({ path: resolve(__dirname, '.env') });
 export default defineConfig({
   testDir: './tests',
 
-  // Global setup to prepare test environment
-  globalSetup: './global-setup.ts',
+  // No global setup needed - tests handle their own authentication
+  // (Removed globalSetup: './global-setup.ts')
 
-  // Run tests sequentially initially (per CONTEXT.md)
+  // Run tests sequentially (single session approach)
   fullyParallel: false,
   workers: 1,
 
@@ -45,16 +45,24 @@ export default defineConfig({
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
-        // Use storage state for authenticated tests
-        // Global setup ensures this file exists (placeholder or real)
-        storageState: '.auth/user.json',
+        // No storage state - tests handle their own authentication in a single session
       },
     },
   ],
 
-  // Web server configuration - start both API and web app
+  // Web server configuration - start API, web app, and mock IPNS routing service
   // Note: Commands run from the workspace root (two levels up from tests/e2e)
   webServer: [
+    {
+      // Mock IPNS routing service - must start first as API depends on it
+      command: 'node tools/mock-ipns-routing/dist/index.js',
+      url: 'http://localhost:3001/health',
+      reuseExistingServer: !process.env.CI,
+      timeout: 30000,
+      cwd: resolve(__dirname, '../..'),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
     {
       command: 'pnpm --filter @cipherbox/api dev',
       url: 'http://localhost:3000/health',
