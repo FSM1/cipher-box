@@ -22,6 +22,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 5: Folder System** - IPNS metadata, folder hierarchy, and operations
 - [x] **Phase 6: File Browser UI** - Web interface for file management
 - [x] **Phase 6.1: Webapp Automation Testing** - E2E UI testing with automation framework (INSERTED)
+- [ ] **Phase 6.2: Restyle App with Pencil Design** - Complete UI redesign using Pencil design tool (INSERTED)
 - [ ] **Phase 7: Multi-Device Sync** - IPNS polling and sync state management
 - [ ] **Phase 8: TEE Integration** - Auto-republishing via Phala Cloud
 - [ ] **Phase 9: Desktop Client** - Tauri app with FUSE mount for macOS
@@ -220,6 +221,23 @@ Plans:
 - [x] 06.1-05-PLAN.md — Folder operations tests (create, rename, delete, navigate)
 - [x] 06.1-06-PLAN.md — CI integration with GitHub Actions
 
+### Phase 6.2: Restyle App with Pencil Design (INSERTED)
+
+**Goal**: Complete UI redesign using Pencil design tool for modern, polished appearance
+**Depends on**: Phase 6.1
+**Requirements**: Visual refresh of all UI components
+**Success Criteria** (what must be TRUE):
+
+1. All UI components restyled with Pencil design system
+2. Consistent visual language across login, file browser, and settings pages
+3. Responsive design maintained after restyle
+4. Existing E2E tests pass with new styling
+   **Plans**: TBD
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 6.2 to break down)
+
 ### Phase 7: Multi-Device Sync
 
 **Goal**: Changes sync across devices via IPNS polling
@@ -339,6 +357,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 5. Folder System        | 4/4            | Complete    | 2026-01-21 |
 | 6. File Browser UI      | 4/4            | Complete    | 2026-01-22 |
 | 6.1 Webapp Automation   | 6/6            | Complete    | 2026-01-22 |
+| 6.2 Pencil Restyle      | 0/?            | Not started | -          |
 | 7. Multi-Device Sync    | 0/3            | Not started | -          |
 | 8. TEE Integration      | 0/4            | Not started | -          |
 | 9. Desktop Client       | 0/5            | Not started | -          |
@@ -365,4 +384,5 @@ _Phase 6.1 inserted: 2026-01-21_
 _Phase 6 planned: 2026-01-21_
 _Phase 6.1 planned: 2026-01-22_
 _Phase 6.1 complete: 2026-01-22_
-_Total phases: 12 | Total plans: 53 | Depth: Comprehensive_
+_Phase 6.2 inserted: 2026-01-23_
+_Total phases: 13 | Total plans: 53 | Depth: Comprehensive_
