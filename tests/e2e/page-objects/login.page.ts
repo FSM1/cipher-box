@@ -10,7 +10,7 @@ export class LoginPage extends BasePage {
    * Uses class selector for stability (text varies: [CONNECT] or connecting...)
    */
   private get loginButton() {
-    return this.page.locator('button.auth-button');
+    return this.page.locator('button.login-button');
   }
 
   /**

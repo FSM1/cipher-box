@@ -17,7 +17,7 @@ export function AuthButton() {
   };
 
   return (
-    <button onClick={handleClick} disabled={isLoading} className="auth-button">
+    <button onClick={handleClick} disabled={isLoading} className="login-button">
       {isLoading ? 'connecting...' : '[CONNECT]'}
     </button>
   );

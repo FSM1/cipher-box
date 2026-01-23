@@ -32,7 +32,7 @@ export class DashboardPage extends BasePage {
    * Uses class selector for stability
    */
   get logoutButton() {
-    return this.page.locator('button.logout-button');
+    return this.page.locator('button.logout-link');
   }
 
   /**
