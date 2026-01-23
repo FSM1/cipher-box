@@ -67,20 +67,6 @@ jobs:
           npm install
           npm run build
 
-      - name: Start mock-ipns-routing service
-        run: |
-          cd tools/mock-ipns-routing
-          node dist/index.js &
-          # Wait for service to be healthy
-          for i in {1..30}; do
-            if curl -s http://localhost:3001/health > /dev/null; then
-              echo "Mock IPNS routing service is ready"
-              break
-            fi
-            echo "Waiting for mock-ipns-routing service... ($i/30)"
-            sleep 1
-          done
-
       - name: Build packages
         run: pnpm build
         env:
