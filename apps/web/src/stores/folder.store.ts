@@ -178,3 +178,9 @@ export const useFolderStore = create<FolderState>((set, get) => ({
     });
   },
 }));
+
+// Expose store on window for E2E testing (development only)
+if (typeof window !== 'undefined' && import.meta.env.DEV) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).__ZUSTAND_FOLDER_STORE__ = useFolderStore;
+}

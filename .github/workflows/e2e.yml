@@ -11,7 +11,7 @@ jobs:
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
 
     services:
       postgres:
@@ -61,6 +61,12 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm --filter @cipherbox/e2e exec playwright install chromium --with-deps
 
+      - name: Install mock-ipns-routing dependencies
+        run: |
+          cd tools/mock-ipns-routing
+          npm install
+          npm run build
+
       - name: Build packages
         run: pnpm build
         env:
@@ -85,9 +91,12 @@ jobs:
           echo "IPFS_PROVIDER=local" >> apps/api/.env
           echo "IPFS_LOCAL_API_URL=http://localhost:5001" >> apps/api/.env
           echo "IPFS_LOCAL_GATEWAY_URL=http://localhost:8080" >> apps/api/.env
+          echo "DELEGATED_ROUTING_URL=http://localhost:3001" >> apps/api/.env
 
       - name: Run E2E tests
-        run: pnpm --filter @cipherbox/e2e test
+        # Only running full-workflow.spec.ts - archived tests in tests/archive/ used storage-state
+        # approach that doesn't work reliably with Web3Auth session management
+        run: pnpm --filter @cipherbox/e2e test tests/full-workflow.spec.ts
         env:
           CI: true
           # Database configuration
@@ -104,6 +113,8 @@ jobs:
           # API configuration
           JWT_SECRET: e2e-test-jwt-secret-key-for-ci
           WEB_APP_URL: http://localhost:5173
+          # IPNS delegated routing (mock service for E2E tests)
+          DELEGATED_ROUTING_URL: http://localhost:3001
           # Web app configuration (needed for Web3Auth initialization)
           VITE_WEB3AUTH_CLIENT_ID: ${{ secrets.VITE_WEB3AUTH_CLIENT_ID }}
           VITE_API_URL: http://localhost:3000

@@ -161,4 +161,91 @@ export class FolderTreePage {
       .locator('.folder-tree-placeholder', { hasText: 'Loading folders...' })
       .isVisible();
   }
+
+  /**
+   * Get the drop target element for a folder.
+   * Used for drag-drop operations.
+   */
+  getDropTarget(name: string): import('@playwright/test').Locator {
+    return this.getFolder(name);
+  }
+
+  /**
+   * Simulate dropping an item onto a folder in the tree.
+   * This is used for move operations via drag-drop.
+   *
+   * @param targetFolderName - Name of the folder to drop onto
+   * @param dragData - JSON data representing the dragged item
+   */
+  async dropOnFolder(
+    targetFolderName: string,
+    dragData: { id: string; type: 'file' | 'folder'; parentId: string }
+  ): Promise<void> {
+    const targetFolder = this.getDropTarget(targetFolderName);
+
+    // Ensure target is visible
+    await targetFolder.waitFor({ state: 'visible' });
+
+    // Get bounding box for drop location
+    const box = await targetFolder.boundingBox();
+    if (!box) throw new Error(`Could not get bounding box for folder ${targetFolderName}`);
+
+    // Calculate center of target
+    const centerX = box.x + box.width / 2;
+    const centerY = box.y + box.height / 2;
+
+    // Dispatch all drag events inside page.evaluate to avoid DataTransfer construction issues
+    // Playwright's dispatchEvent doesn't fully support DataTransfer objects
+    await this.page.evaluate(
+      ({ folderName, data, x, y }) => {
+        // Find the folder by looking for the name element with matching text
+        const nameElements = document.querySelectorAll('.folder-tree-name');
+        let target: Element | null = null;
+
+        for (const nameEl of nameElements) {
+          if (nameEl.textContent?.trim() === folderName) {
+            // Get the parent folder-tree-item
+            target = nameEl.closest('.folder-tree-item');
+            break;
+          }
+        }
+
+        if (!target) throw new Error(`Drop target folder "${folderName}" not found`);
+
+        // Create mock dataTransfer object
+        const mockDataTransfer = {
+          getData: (type: string) => (type === 'application/json' ? JSON.stringify(data) : ''),
+          types: ['application/json'],
+          effectAllowed: 'move',
+          dropEffect: 'move',
+        };
+
+        // Helper to create drag event with mock dataTransfer
+        const createDragEvent = (type: string) => {
+          const event = new DragEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            clientX: x,
+            clientY: y,
+          });
+          Object.defineProperty(event, 'dataTransfer', { value: mockDataTransfer });
+          return event;
+        };
+
+        // Dispatch dragenter, dragover, and drop events
+        target.dispatchEvent(createDragEvent('dragenter'));
+        target.dispatchEvent(createDragEvent('dragover'));
+        target.dispatchEvent(createDragEvent('drop'));
+      },
+      {
+        folderName: targetFolderName,
+        data: dragData,
+        x: centerX,
+        y: centerY,
+      }
+    );
+
+    // Wait a bit for the move operation to complete
+    await this.page.waitForTimeout(500);
+  }
 }

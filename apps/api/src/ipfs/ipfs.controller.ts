@@ -1,6 +1,8 @@
 import {
   Controller,
   Post,
+  Get,
+  Param,
   Body,
   UseGuards,
   UseInterceptors,
@@ -8,7 +10,10 @@ import {
   ParseFilePipe,
   MaxFileSizeValidator,
   Inject,
+  Res,
+  StreamableFile,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags,
@@ -97,5 +102,42 @@ export class IpfsController {
   async unpin(@Body() dto: UnpinDto): Promise<UnpinResponseDto> {
     await this.ipfsProvider.unpinFile(dto.cid);
     return { success: true };
+  }
+
+  @Get(':cid')
+  @ApiOperation({
+    summary: 'Get file from IPFS',
+    description: 'Download an encrypted file from IPFS via the configured gateway.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'File retrieved successfully',
+    content: {
+      'application/octet-stream': {
+        schema: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized - JWT token required',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'File not found',
+  })
+  async get(
+    @Param('cid') cid: string,
+    @Res({ passthrough: true }) res: Response
+  ): Promise<StreamableFile> {
+    const buffer = await this.ipfsProvider.getFile(cid);
+    res.set({
+      'Content-Type': 'application/octet-stream',
+      'Content-Length': buffer.length.toString(),
+    });
+    return new StreamableFile(buffer);
   }
 }

@@ -204,6 +204,7 @@ export function FileListItem({
   return (
     <div
       className={`file-list-item ${isSelected ? 'file-list-item--selected' : ''}`}
+      data-item-id={item.id}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onContextMenu={handleContextMenu}

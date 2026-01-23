@@ -47,8 +47,26 @@ export function useAuth() {
 
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  // Track E2E session restoration - starts true if in E2E mode to prevent premature redirects
+  // Check for E2E mode - used to bypass Web3Auth initialization wait
+  const isE2EMode = useState(() => {
+    if (typeof sessionStorage !== 'undefined') {
+      return sessionStorage.getItem('__e2e_test_mode__') === 'true';
+    }
+    return false;
+  })[0];
 
-  const isLoading = web3AuthLoading || isLoggingIn || isLoggingOut;
+  const [isE2ERestoring, setIsE2ERestoring] = useState(() => {
+    // Check for E2E mode on initial render (before any effects run)
+    if (typeof sessionStorage !== 'undefined') {
+      return sessionStorage.getItem('__e2e_test_mode__') === 'true';
+    }
+    return false;
+  });
+
+  // In E2E mode, don't wait for Web3Auth initialization - we use backend-only auth
+  const isLoading =
+    (!isE2EMode && web3AuthLoading) || isLoggingIn || isLoggingOut || isE2ERestoring;
 
   // Get vault store actions
   const setVaultKeys = useVaultStore((state) => state.setVaultKeys);
@@ -283,6 +301,9 @@ export function useAuth() {
       useFolderStore.getState().clearFolders();
       useVaultStore.getState().clearVaultKeys();
       clearAuthState();
+      // Clear E2E test mode flags to prevent session restoration loop after logout
+      sessionStorage.removeItem('__e2e_test_mode__');
+      sessionStorage.removeItem('__e2e_cached_token__');
 
       // 4. Navigate to login
       navigate('/');
@@ -293,6 +314,9 @@ export function useAuth() {
       useFolderStore.getState().clearFolders();
       useVaultStore.getState().clearVaultKeys();
       clearAuthState();
+      // Clear E2E test mode flags to prevent session restoration loop after logout
+      sessionStorage.removeItem('__e2e_test_mode__');
+      sessionStorage.removeItem('__e2e_cached_token__');
       navigate('/');
     } finally {
       setIsLoggingOut(false);
@@ -302,7 +326,73 @@ export function useAuth() {
   // Try to restore session on mount
   useEffect(() => {
     const restoreSession = async () => {
-      // Only try to restore if Web3Auth is connected but we don't have an access token
+      // Check for E2E test mode: If there's a special sessionStorage flag set by test fixtures,
+      // try to restore session using just the refresh token (bypassing Web3Auth check).
+      // This is needed because Playwright's storageState doesn't fully restore Web3Auth's
+      // internal IndexedDB state, causing isConnected to be false even with valid cookies.
+      const isE2ETestMode = sessionStorage.getItem('__e2e_test_mode__') === 'true';
+      const hasE2EInjectedToken = sessionStorage.getItem('__e2e_access_token__');
+
+      // Debug logging for E2E test mode
+      if (isE2ETestMode) {
+        console.log('[useAuth] E2E test mode detected', {
+          isAuthenticated,
+          isLoggingIn,
+          hasE2EInjectedToken: !!hasE2EInjectedToken,
+          isConnected,
+        });
+      }
+
+      // Handle E2E injected access token
+      if (hasE2EInjectedToken && !isAuthenticated) {
+        setAccessToken(hasE2EInjectedToken);
+        sessionStorage.removeItem('__e2e_access_token__');
+        // Note: Vault loading won't work in E2E mode without Web3Auth connected,
+        // but tests can still verify authenticated UI state
+        return;
+      }
+
+      // In E2E test mode, try to restore session regardless of Web3Auth connection status
+      if (isE2ETestMode && !isAuthenticated && !isLoggingIn) {
+        console.log('[useAuth] E2E: Attempting session restoration');
+
+        // First check if we have a cached E2E token from a previous page load
+        const cachedE2EToken = sessionStorage.getItem('__e2e_cached_token__');
+        if (cachedE2EToken) {
+          console.log('[useAuth] E2E: Using cached token');
+          setAccessToken(cachedE2EToken);
+          setIsE2ERestoring(false);
+          return;
+        }
+
+        // No cached token, try to refresh from backend
+        console.log('[useAuth] E2E: No cached token, calling refresh API');
+        try {
+          const response = await authApi.refresh();
+          console.log('[useAuth] E2E: Refresh successful, got access token');
+          setAccessToken(response.accessToken);
+          // Cache the token for subsequent navigations in E2E mode
+          // This allows the token to survive page reloads during tests
+          sessionStorage.setItem('__e2e_cached_token__', response.accessToken);
+          // Note: Vault operations require Web3Auth for key derivation,
+          // so we skip vault initialization in E2E test mode
+        } catch (error) {
+          // No valid session, stay on login page
+          console.error('[useAuth] E2E: Refresh failed:', error);
+        } finally {
+          // Mark E2E restoration as complete
+          console.log('[useAuth] E2E: Setting isE2ERestoring to false');
+          setIsE2ERestoring(false);
+        }
+        return;
+      }
+
+      // If we're in E2E mode but already authenticated, just clear the flag
+      if (isE2ETestMode) {
+        setIsE2ERestoring(false);
+      }
+
+      // Normal mode: Only try to restore if Web3Auth is connected but we don't have an access token
       if (isConnected && !isAuthenticated && !isLoggingIn) {
         try {
           // Try to refresh using the HTTP-only cookie

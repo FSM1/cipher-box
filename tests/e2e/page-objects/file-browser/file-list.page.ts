@@ -147,4 +147,47 @@ export class FileListPage {
 
     return names;
   }
+
+  /**
+   * Get item type (file or folder) by examining the size field.
+   * Folders show "-" for size, files show actual size.
+   */
+  async getItemType(name: string): Promise<'file' | 'folder'> {
+    const item = this.getItem(name);
+    const sizeText = await item.locator('.file-list-item-size').textContent();
+    // Folders show "-" for size, files show actual size
+    return sizeText?.trim() === '-' ? 'folder' : 'file';
+  }
+
+  /**
+   * Get the internal item ID from the DOM data-item-id attribute.
+   * This is the actual UUID used by the application, not the display name.
+   *
+   * @param name - Display name of the item
+   * @returns The internal UUID of the item
+   * @throws Error if item not found or doesn't have an ID
+   */
+  async getItemId(name: string): Promise<string> {
+    const item = this.getItem(name);
+    const itemId = await item.getAttribute('data-item-id');
+    if (!itemId) {
+      throw new Error(`Could not find item ID for "${name}"`);
+    }
+    return itemId;
+  }
+
+  /**
+   * Perform a drag-drop move operation from the file list to a folder.
+   * Uses Playwright's built-in drag and drop.
+   *
+   * @param itemName - Name of the item to drag
+   * @param targetLocator - Locator for the drop target
+   */
+  async dragItemTo(
+    itemName: string,
+    targetLocator: import('@playwright/test').Locator
+  ): Promise<void> {
+    const sourceItem = this.getItem(itemName);
+    await sourceItem.dragTo(targetLocator);
+  }
 }

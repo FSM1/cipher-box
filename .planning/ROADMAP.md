@@ -210,7 +210,7 @@ Plans:
 2. Critical user flows covered by automated tests
 3. Tests run in CI pipeline
 4. Test reports generated on failure
-   **Plans**: 6 plans
+   **Plans**: 7 plans
 
 Plans:
 
@@ -220,6 +220,7 @@ Plans:
 - [x] 06.1-04-PLAN.md — File operations tests (upload, download, rename, delete)
 - [x] 06.1-05-PLAN.md — Folder operations tests (create, rename, delete, navigate)
 - [x] 06.1-06-PLAN.md — CI integration with GitHub Actions
+- [x] 06.1-07-PLAN.md — Mock delegated routing service for IPNS E2E testing
 
 ### Phase 6.2: Restyle App with Pencil Design (INSERTED)
 
@@ -248,13 +249,13 @@ Plans:
 1. Changes made on one device appear on another within ~30 seconds
 2. User sees loading state during IPNS resolution
 3. Desktop sync daemon runs in background while app is open
-   **Plans**: TBD
+   **Plans**: 3 plans
 
 Plans:
 
-- [ ] 07-01: IPNS polling infrastructure with 30s interval
-- [ ] 07-02: Sync state management and optimistic UI
-- [ ] 07-03: Loading states and conflict handling
+- [ ] 07-01-PLAN.md — Backend IPNS resolution endpoint and sync state store
+- [ ] 07-02-PLAN.md — Polling infrastructure hooks (useInterval, useVisibility, useOnlineStatus, useSyncPolling)
+- [ ] 07-03-PLAN.md — Frontend integration with SyncIndicator and OfflineBanner UI
 
 ### Phase 8: TEE Integration
 
@@ -356,8 +357,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 4.2 Local IPFS Testing  | 2/2            | Complete    | 2026-01-21 |
 | 5. Folder System        | 4/4            | Complete    | 2026-01-21 |
 | 6. File Browser UI      | 4/4            | Complete    | 2026-01-22 |
-| 6.1 Webapp Automation   | 6/6            | Complete    | 2026-01-22 |
-| 6.2 Pencil Restyle      | 0/?            | Not started | -          |
+| 6.1 Webapp Automation   | 7/7            | Complete    | 2026-01-22 |
 | 7. Multi-Device Sync    | 0/3            | Not started | -          |
 | 8. TEE Integration      | 0/4            | Not started | -          |
 | 9. Desktop Client       | 0/5            | Not started | -          |
@@ -384,5 +384,5 @@ _Phase 6.1 inserted: 2026-01-21_
 _Phase 6 planned: 2026-01-21_
 _Phase 6.1 planned: 2026-01-22_
 _Phase 6.1 complete: 2026-01-22_
-_Phase 6.2 inserted: 2026-01-23_
-_Total phases: 13 | Total plans: 53 | Depth: Comprehensive_
+_Phase 7 planned: 2026-01-22_
+_Total phases: 12 | Total plans: 54 | Depth: Comprehensive_

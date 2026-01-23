@@ -120,4 +120,60 @@ describe('IpfsController', () => {
       expect(ipfsProvider.unpinFile).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('get', () => {
+    const mockCid = 'bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi';
+    const mockContent = Buffer.from('encrypted file content');
+
+    it('should call ipfsProvider.getFile with cid', async () => {
+      const mockRes = {
+        set: jest.fn(),
+      } as unknown as import('express').Response;
+
+      ipfsProvider.getFile.mockResolvedValue(mockContent);
+
+      await controller.get(mockCid, mockRes);
+
+      expect(ipfsProvider.getFile).toHaveBeenCalledWith(mockCid);
+    });
+
+    it('should set correct response headers', async () => {
+      const mockRes = {
+        set: jest.fn(),
+      } as unknown as import('express').Response;
+
+      ipfsProvider.getFile.mockResolvedValue(mockContent);
+
+      await controller.get(mockCid, mockRes);
+
+      expect(mockRes.set).toHaveBeenCalledWith({
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': mockContent.length.toString(),
+      });
+    });
+
+    it('should return a StreamableFile with the buffer', async () => {
+      const mockRes = {
+        set: jest.fn(),
+      } as unknown as import('express').Response;
+
+      ipfsProvider.getFile.mockResolvedValue(mockContent);
+
+      const result = await controller.get(mockCid, mockRes);
+
+      expect(result).toBeInstanceOf((await import('@nestjs/common')).StreamableFile);
+    });
+
+    it('should call provider exactly once', async () => {
+      const mockRes = {
+        set: jest.fn(),
+      } as unknown as import('express').Response;
+
+      ipfsProvider.getFile.mockResolvedValue(mockContent);
+
+      await controller.get(mockCid, mockRes);
+
+      expect(ipfsProvider.getFile).toHaveBeenCalledTimes(1);
+    });
+  });
 });
