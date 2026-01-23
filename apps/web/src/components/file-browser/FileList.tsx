@@ -75,16 +75,16 @@ export function FileList({
       {/* Header row */}
       <div className="file-list-header" role="row">
         <div className="file-list-header-name" role="columnheader">
-          Name
+          NAME
         </div>
         <div className="file-list-header-size" role="columnheader">
-          Size
+          SIZE
         </div>
         <div className="file-list-header-type" role="columnheader">
-          Type
+          TYPE
         </div>
         <div className="file-list-header-date" role="columnheader">
-          Modified
+          MODIFIED
         </div>
       </div>
 
