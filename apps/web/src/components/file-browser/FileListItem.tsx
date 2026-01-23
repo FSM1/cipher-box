@@ -66,6 +66,56 @@ function getItemIcon(item: FolderChild): string {
 }
 
 /**
+ * Get human-readable file type label.
+ */
+function getItemType(item: FolderChild): string {
+  if (isFolder(item)) {
+    return 'folder';
+  }
+
+  // Extract extension
+  const name = item.name.toLowerCase();
+  const lastDot = name.lastIndexOf('.');
+  if (lastDot === -1 || lastDot === name.length - 1) {
+    return 'file';
+  }
+
+  const ext = name.substring(lastDot + 1);
+
+  // Map extensions to readable types
+  const typeMap: Record<string, string> = {
+    pdf: 'pdf',
+    doc: 'document',
+    docx: 'document',
+    xls: 'spreadsheet',
+    xlsx: 'spreadsheet',
+    jpg: 'image',
+    jpeg: 'image',
+    png: 'image',
+    gif: 'image',
+    mp3: 'audio',
+    wav: 'audio',
+    flac: 'audio',
+    mp4: 'video',
+    mov: 'video',
+    avi: 'video',
+    zip: 'archive',
+    rar: 'archive',
+    '7z': 'archive',
+    txt: 'text',
+    md: 'markdown',
+    json: 'json',
+    xml: 'xml',
+    html: 'html',
+    css: 'css',
+    js: 'javascript',
+    ts: 'typescript',
+  };
+
+  return typeMap[ext] ?? ext;
+}
+
+/**
  * Single row in the file list.
  *
  * Displays file/folder with icon, name, size, and date.
@@ -198,6 +248,9 @@ export function FileListItem({
   // Display size only for files
   const sizeDisplay = isFile(item) ? formatBytes(item.size) : '-';
 
+  // Display type
+  const typeDisplay = getItemType(item);
+
   // Display modified date
   const dateDisplay = formatDate(item.modifiedAt);
 
@@ -223,12 +276,15 @@ export function FileListItem({
         }
       }}
     >
-      <div className="file-list-item-name">
+      <div className="file-list-item-row-top">
         <span className="file-list-item-icon">{getItemIcon(item)}</span>
-        <span className="file-list-item-text">{item.name}</span>
+        <span className="file-list-item-name">{item.name}</span>
       </div>
-      <div className="file-list-item-size">{sizeDisplay}</div>
-      <div className="file-list-item-date">{dateDisplay}</div>
+      <div className="file-list-item-row-bottom">
+        <div className="file-list-item-size">{sizeDisplay}</div>
+        <div className="file-list-item-type">{typeDisplay}</div>
+        <div className="file-list-item-date">{dateDisplay}</div>
+      </div>
     </div>
   );
 }

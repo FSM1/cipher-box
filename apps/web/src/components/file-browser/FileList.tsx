@@ -80,6 +80,9 @@ export function FileList({
         <div className="file-list-header-size" role="columnheader">
           Size
         </div>
+        <div className="file-list-header-type" role="columnheader">
+          Type
+        </div>
         <div className="file-list-header-date" role="columnheader">
           Modified
         </div>
