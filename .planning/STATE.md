@@ -11,8 +11,8 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 
 Phase: 6.2 of 11 (Restyle App with Pencil Design) - IN PROGRESS
 Plan: 4 of 7 in Phase 6.2 complete
-Status: In progress - Mobile responsive and matrix background complete
-Last activity: 2026-01-23 - Completed 06.2-04-PLAN.md (Mobile Responsive & Matrix Background)
+Status: In progress - Overlay components styling complete
+Last activity: 2026-01-23 - Completed 06.2-03-PLAN.md (Overlay Components Styling)
 
 Progress: [########..] 77% (36 of 47 plans)
 
@@ -158,6 +158,10 @@ Recent decisions affecting current work:
 | Terminal prompt (>) via ::before pseudo-element      | 06.2-01 | CSS-only implementation, not hardcoded in JSX components                  |
 | Sharp corners (border-radius: 0) for terminal UX     | 06.2-01 | Matches terminal/hacker aesthetic, no rounded corners                     |
 | Green glow effects at 40% opacity                    | 06.2-01 | Hover states use box-shadow with --color-green-glow (40% alpha)           |
+| Terminal aesthetic for overlay components            | 06.2-03 | Context menus, dialogs, modals, upload UI match terminal theme            |
+| Remove light mode from overlays                      | 06.2-03 | Single dark theme reduces complexity, no prefers-color-scheme queries     |
+| Sharp corners on overlay components                  | 06.2-03 | border-radius: 0 on all overlays for consistent terminal aesthetic        |
+| Green glow on overlay focus states                   | 06.2-03 | var(--glow-green) box-shadow provides visual feedback                     |
 | Full animated matrix rain on login                   | 06.2-04 | 30fps canvas animation at 0.25 opacity, not static fallback               |
 | 2-row stacked file list on mobile                    | 06.2-04 | Icon+name row, date+size row; TYPE column hidden on mobile                |
 | Canvas animation cleanup pattern                     | 06.2-04 | requestAnimationFrame cancelled in useEffect return to prevent leaks      |
@@ -200,7 +204,7 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-01-23
-Stopped at: Completed 06.2-04-PLAN.md - Mobile Responsive & Matrix Background
+Stopped at: Completed 06.2-03-PLAN.md - Overlay Components Styling
 Resume file: None
 Next plan: 06.2-05 (Folder Tree Styling)
 
