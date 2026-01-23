@@ -157,7 +157,7 @@ Recent decisions affecting current work:
 4 pending todo(s):
 
 - `2026-01-22-atomic-file-upload-flow.md` — Atomic file upload flow with client-side CID (area: api)
-- `2026-01-23-native-file-overwrite-support.md` — Add native file overwrite/edit support (area: api)
+- `2026-01-23-pre-upload-file-validation.md` — Pre-upload file name validation and duplicate prevention (area: ui)
 - `2026-01-23-simple-text-file-editor-modal.md` — Add simple text file editor modal (area: ui)
 - ~~`2026-01-21-local-ipfs-node-for-testing.md` — Add local IPFS node to Docker stack for testing (area: api)~~ - **COMPLETED: Phase 4.2**
 
