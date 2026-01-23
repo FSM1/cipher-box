@@ -22,6 +22,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 5: Folder System** - IPNS metadata, folder hierarchy, and operations
 - [x] **Phase 6: File Browser UI** - Web interface for file management
 - [x] **Phase 6.1: Webapp Automation Testing** - E2E UI testing with automation framework (INSERTED)
+- [ ] **Phase 6.2: Restyle App with Pencil Design** - Complete UI redesign using Pencil design tool (INSERTED)
 - [ ] **Phase 7: Multi-Device Sync** - IPNS polling and sync state management
 - [ ] **Phase 8: TEE Integration** - Auto-republishing via Phala Cloud
 - [ ] **Phase 9: Desktop Client** - Tauri app with FUSE mount for macOS
@@ -220,6 +221,23 @@ Plans:
 - [x] 06.1-05-PLAN.md — Folder operations tests (create, rename, delete, navigate)
 - [x] 06.1-06-PLAN.md — CI integration with GitHub Actions
 - [x] 06.1-07-PLAN.md — Mock delegated routing service for IPNS E2E testing
+
+### Phase 6.2: Restyle App with Pencil Design (INSERTED)
+
+**Goal**: Complete UI redesign using Pencil design tool for modern, polished appearance
+**Depends on**: Phase 6.1
+**Requirements**: Visual refresh of all UI components
+**Success Criteria** (what must be TRUE):
+
+1. All UI components restyled with Pencil design system
+2. Consistent visual language across login, file browser, and settings pages
+3. Responsive design maintained after restyle
+4. Existing E2E tests pass with new styling
+   **Plans**: TBD
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 6.2 to break down)
 
 ### Phase 7: Multi-Device Sync
 
