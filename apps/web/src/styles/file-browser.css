@@ -1,5 +1,5 @@
 /**
- * File Browser Component Styles
+ * File Browser Component Styles - Terminal Aesthetic
  *
  * Styling for the file browser UI including:
  * - Main layout (sidebar + content)
@@ -15,32 +15,73 @@
 .file-browser {
   display: flex;
   flex: 1;
-  min-height: 0; /* Allow shrinking in flex container */
+  min-height: 0;
+  background-color: var(--color-background);
 }
 
 .file-browser-sidebar {
   width: 250px;
   min-width: 200px;
   max-width: 350px;
-  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  border-right: var(--border-thickness) solid var(--color-border);
   overflow-y: auto;
-  background: rgba(0, 0, 0, 0.2);
+  background-color: var(--color-background);
 }
 
 .file-browser-main {
   flex: 1;
-  min-width: 0; /* Allow shrinking in flex container */
+  min-width: 0;
   overflow-y: auto;
-  padding: 1rem;
+  padding: var(--spacing-md);
+  background-color: var(--color-background);
 }
 
 .file-browser-toolbar {
   display: flex;
   align-items: center;
-  gap: 1rem;
-  padding-bottom: 1rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  margin-bottom: 1rem;
+  gap: var(--spacing-md);
+  padding-bottom: var(--spacing-md);
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
+  margin-bottom: var(--spacing-md);
+}
+
+/* Toolbar buttons - Terminal flag style */
+.file-browser-toolbar button,
+.toolbar-button {
+  padding: var(--spacing-xs) var(--spacing-md);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-normal);
+  border-radius: 0;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease;
+}
+
+/* Primary action button (--upload) */
+.toolbar-button--primary,
+.file-browser-toolbar .btn-primary {
+  background-color: var(--color-green-primary);
+  color: var(--color-black);
+  border: none;
+  font-weight: var(--font-weight-semibold);
+}
+
+.toolbar-button--primary:hover,
+.file-browser-toolbar .btn-primary:hover {
+  box-shadow: var(--glow-green);
+}
+
+/* Secondary action buttons (--new-dir, --refresh) */
+.toolbar-button--secondary,
+.file-browser-toolbar .btn-secondary {
+  background-color: transparent;
+  color: var(--color-text-primary);
+  border: var(--border-thickness) solid var(--color-border);
+}
+
+.toolbar-button--secondary:hover,
+.file-browser-toolbar .btn-secondary:hover {
+  box-shadow: var(--glow-green);
 }
 
 .file-browser-loading {
@@ -48,11 +89,12 @@
   align-items: center;
   justify-content: center;
   height: 200px;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
 }
 
 .file-browser-loading-spinner {
-  font-size: 0.875rem;
+  font-size: var(--font-size-sm);
 }
 
 /* ==========================================================================
@@ -66,30 +108,31 @@
 }
 
 .folder-tree-header {
-  padding: 1rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding: var(--spacing-md);
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
 }
 
 .folder-tree-title {
   margin: 0;
-  font-size: 0.875rem;
-  font-weight: 600;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: rgba(255, 255, 255, 0.6);
+  letter-spacing: 0.1em;
+  color: var(--color-text-secondary);
 }
 
 .folder-tree-content {
   flex: 1;
   overflow-y: auto;
-  padding: 0.5rem 0;
+  padding: var(--spacing-xs) 0;
 }
 
 .folder-tree-placeholder {
-  padding: 1rem;
-  color: rgba(255, 255, 255, 0.4);
-  font-style: italic;
-  font-size: 0.875rem;
+  padding: var(--spacing-md);
+  color: var(--color-text-secondary);
+  font-style: normal;
+  font-size: var(--font-size-sm);
 }
 
 /* Folder Tree Node */
@@ -100,37 +143,40 @@
 .folder-tree-item {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
-  padding: 0.5rem 0.75rem;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
   cursor: pointer;
   transition: background-color 0.15s ease;
-  border-radius: 4px;
-  margin: 0 0.5rem;
+  border-radius: 0;
+  margin: 0 var(--spacing-xs);
+  border-left: 2px solid transparent;
 }
 
 .folder-tree-item:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background-color: var(--color-green-darker);
+  border-left-color: var(--color-green-dim);
 }
 
 .folder-tree-item--active {
-  background: rgba(102, 126, 234, 0.3);
+  background-color: var(--color-green-darker);
+  border-left-color: var(--color-green-primary);
 }
 
 .folder-tree-item--active:hover {
-  background: rgba(102, 126, 234, 0.4);
+  background-color: var(--color-green-darker);
 }
 
 .folder-tree-item--drag-over {
-  background: rgba(102, 126, 234, 0.5);
-  outline: 2px dashed rgba(102, 126, 234, 0.8);
-  outline-offset: -2px;
+  background-color: var(--color-green-darker);
+  border-left-color: var(--color-green-primary);
+  box-shadow: inset 0 0 0 1px var(--color-green-dim);
 }
 
 .folder-tree-toggle {
   width: 16px;
   flex-shrink: 0;
-  font-size: 0.625rem;
-  color: rgba(255, 255, 255, 0.5);
+  font-size: 10px;
+  color: var(--color-text-secondary);
   cursor: pointer;
 }
 
@@ -139,8 +185,9 @@
 }
 
 .folder-tree-icon {
-  font-size: 1rem;
+  font-size: var(--font-size-sm);
   flex-shrink: 0;
+  color: var(--color-text-primary);
 }
 
 .folder-tree-name {
@@ -148,17 +195,15 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 0.875rem;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
 }
 
 .folder-tree-loading {
-  color: rgba(255, 255, 255, 0.4);
-  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
   margin-left: auto;
-}
-
-.folder-tree-children {
-  /* Child indentation handled inline via paddingLeft */
 }
 
 /* ==========================================================================
@@ -168,84 +213,110 @@
 .file-list {
   display: flex;
   flex-direction: column;
+  border: var(--border-thickness) solid var(--color-border);
 }
 
 .file-list-header {
   display: grid;
-  grid-template-columns: 1fr 100px 150px;
-  gap: 1rem;
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  font-size: 0.75rem;
-  font-weight: 600;
+  grid-template-columns: 1fr 120px 120px 180px;
+  gap: var(--spacing-md);
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: var(--border-thickness) solid var(--color-border);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: rgba(255, 255, 255, 0.5);
-}
-
-.file-list-header-name,
-.file-list-header-size,
-.file-list-header-date {
-  /* Column styles */
+  letter-spacing: 0.1em;
+  color: var(--color-text-primary);
+  background-color: var(--color-background);
 }
 
 .file-list-body {
-  /* Container for items */
+  /* Container for file items */
 }
 
-/* File List Item */
+/* File List Item - Desktop uses grid, Mobile uses 2-row stacked layout */
 .file-list-item {
   display: grid;
-  grid-template-columns: 1fr 100px 150px;
-  gap: 1rem;
-  padding: 0.75rem 1rem;
+  grid-template-columns: 1fr 120px 120px 180px;
+  grid-template-areas: "name size type date";
+  gap: var(--spacing-md);
+  padding: var(--spacing-sm) var(--spacing-md);
   cursor: pointer;
   transition: background-color 0.15s ease;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
+  font-family: var(--font-family-mono);
+}
+
+.file-list-item:last-child {
+  border-bottom: none;
 }
 
 .file-list-item:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background-color: var(--color-green-darker);
 }
 
 .file-list-item--selected {
-  background: rgba(102, 126, 234, 0.2);
+  background-color: var(--color-green-darker);
+  border-left: 2px solid var(--color-green-primary);
 }
 
 .file-list-item--selected:hover {
-  background: rgba(102, 126, 234, 0.3);
+  background-color: var(--color-green-darker);
 }
 
-.file-list-item-name {
+/* Row wrappers - on desktop, these act as containers within grid */
+.file-list-item-row-top {
+  grid-area: name;
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  min-width: 0; /* Allow text truncation */
+  gap: 6px;
+  min-width: 0;
+}
+
+.file-list-item-row-bottom {
+  display: contents; /* Children participate directly in parent grid on desktop */
 }
 
 .file-list-item-icon {
-  font-size: 1.25rem;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
   flex-shrink: 0;
+  color: var(--color-text-primary);
 }
 
-.file-list-item-text {
+.file-list-item-name {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
 }
 
 .file-list-item-size {
+  grid-area: size;
   display: flex;
   align-items: center;
-  color: rgba(255, 255, 255, 0.6);
-  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.file-list-item-type {
+  grid-area: type;
+  display: flex;
+  align-items: center;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  text-transform: lowercase;
 }
 
 .file-list-item-date {
+  grid-area: date;
   display: flex;
   align-items: center;
-  color: rgba(255, 255, 255, 0.6);
-  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
 }
 
 /* ==========================================================================
@@ -257,43 +328,46 @@
   align-items: center;
   justify-content: center;
   min-height: 300px;
-  border: 2px dashed rgba(255, 255, 255, 0.2);
-  border-radius: 12px;
-  margin: 2rem;
+  border: var(--border-thickness) dashed var(--color-border);
+  border-radius: 0;
+  margin: var(--spacing-lg);
   cursor: pointer;
   transition: border-color 0.2s ease, background-color 0.2s ease;
 }
 
 .empty-state:hover {
-  border-color: rgba(102, 126, 234, 0.5);
-  background: rgba(102, 126, 234, 0.05);
+  border-color: var(--color-green-primary);
+  background-color: var(--color-green-darker);
 }
 
 .empty-state-content {
   text-align: center;
-  padding: 2rem;
+  padding: var(--spacing-lg);
 }
 
 .empty-state-icon {
-  font-size: 3rem;
+  font-size: 2rem;
   display: block;
-  margin-bottom: 1rem;
+  margin-bottom: var(--spacing-md);
+  color: var(--color-text-secondary);
 }
 
 .empty-state-text {
-  font-size: 1.125rem;
-  margin: 0 0 0.5rem 0;
-  color: rgba(255, 255, 255, 0.8);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  margin: 0 0 var(--spacing-xs) 0;
+  color: var(--color-text-primary);
 }
 
 .empty-state-hint {
-  font-size: 0.875rem;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
   margin: 0;
-  color: rgba(255, 255, 255, 0.4);
+  color: var(--color-text-secondary);
 }
 
 .empty-state-upload {
-  margin-top: 1.5rem;
+  margin-top: var(--spacing-md);
 }
 
 /* Note: Mobile responsive styles are in responsive.css */
