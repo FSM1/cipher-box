@@ -194,17 +194,8 @@ export class FolderTreePage {
     const centerX = box.x + box.width / 2;
     const centerY = box.y + box.height / 2;
 
-    // Dispatch dragenter and dragover events to prepare for drop
-    await targetFolder.dispatchEvent('dragenter', {
-      dataTransfer: { types: ['application/json'] },
-    });
-
-    await targetFolder.dispatchEvent('dragover', {
-      dataTransfer: { types: ['application/json'] },
-    });
-
-    // Create a DataTransfer-like object and dispatch drop event
-    // Note: Playwright doesn't fully support DataTransfer, so we use evaluate
+    // Dispatch all drag events inside page.evaluate to avoid DataTransfer construction issues
+    // Playwright's dispatchEvent doesn't fully support DataTransfer objects
     await this.page.evaluate(
       ({ folderName, data, x, y }) => {
         // Find the folder by looking for the name element with matching text
@@ -221,25 +212,30 @@ export class FolderTreePage {
 
         if (!target) throw new Error(`Drop target folder "${folderName}" not found`);
 
-        // Create a custom drop event with data
-        const dropEvent = new DragEvent('drop', {
-          bubbles: true,
-          cancelable: true,
-          clientX: x,
-          clientY: y,
-        });
+        // Create mock dataTransfer object
+        const mockDataTransfer = {
+          getData: (type: string) => (type === 'application/json' ? JSON.stringify(data) : ''),
+          types: ['application/json'],
+          effectAllowed: 'move',
+          dropEffect: 'move',
+        };
 
-        // Override dataTransfer with our data
-        Object.defineProperty(dropEvent, 'dataTransfer', {
-          value: {
-            getData: (type: string) => (type === 'application/json' ? JSON.stringify(data) : ''),
-            types: ['application/json'],
-            effectAllowed: 'move',
-            dropEffect: 'move',
-          },
-        });
+        // Helper to create drag event with mock dataTransfer
+        const createDragEvent = (type: string) => {
+          const event = new DragEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            clientX: x,
+            clientY: y,
+          });
+          Object.defineProperty(event, 'dataTransfer', { value: mockDataTransfer });
+          return event;
+        };
 
-        target.dispatchEvent(dropEvent);
+        // Dispatch dragenter, dragover, and drop events
+        target.dispatchEvent(createDragEvent('dragenter'));
+        target.dispatchEvent(createDragEvent('dragover'));
+        target.dispatchEvent(createDragEvent('drop'));
       },
       {
         folderName: targetFolderName,
