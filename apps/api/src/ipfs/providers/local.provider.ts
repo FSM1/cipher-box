@@ -39,8 +39,8 @@ export class LocalProvider implements IpfsProvider {
 
     // Use native FormData (available in Node.js 18+) with Blob for compatibility with native fetch
     const formData = new FormData();
-    // Create Blob from Buffer - cast to satisfy TypeScript's strict typing
-    const blob = new Blob([data as unknown as BlobPart], { type: 'application/octet-stream' });
+    // Create Blob from Buffer using explicit Uint8Array conversion for type safety
+    const blob = new Blob([new Uint8Array(data)], { type: 'application/octet-stream' });
     formData.append('file', blob, `file-${Date.now()}`);
 
     try {

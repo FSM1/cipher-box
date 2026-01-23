@@ -94,6 +94,8 @@ jobs:
           echo "DELEGATED_ROUTING_URL=http://localhost:3001" >> apps/api/.env
 
       - name: Run E2E tests
+        # Only running full-workflow.spec.ts - archived tests in tests/archive/ used storage-state
+        # approach that doesn't work reliably with Web3Auth session management
         run: pnpm --filter @cipherbox/e2e test tests/full-workflow.spec.ts
         env:
           CI: true
