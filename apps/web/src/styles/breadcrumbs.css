@@ -1,8 +1,8 @@
 /**
- * Breadcrumb Navigation Styles
+ * Breadcrumb Navigation Styles - Terminal Aesthetic
  *
- * Per CONTEXT.md: Simple back navigation with current folder name
- * Structure supports future dropdown-per-segment enhancement
+ * Per design: Terminal-style path display like ~/storage/documents/projects
+ * Shows current folder path with back navigation
  */
 
 /* ==========================================================================
@@ -12,10 +12,18 @@
 .breadcrumbs {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0;
-  font-size: 1rem;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
   min-height: 2.5rem;
+  color: var(--color-text-primary);
+}
+
+/* Terminal-style path prefix */
+.breadcrumbs::before {
+  content: "~/";
+  color: var(--color-text-secondary);
 }
 
 /* ==========================================================================
@@ -29,31 +37,49 @@
   width: 2rem;
   height: 2rem;
   padding: 0;
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
-  color: rgba(255, 255, 255, 0.8);
+  background-color: transparent;
+  border: var(--border-thickness) solid var(--color-border);
+  border-radius: 0;
+  color: var(--color-text-primary);
   cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .breadcrumbs-back:hover {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.3);
+  background-color: var(--color-green-darker);
+  box-shadow: var(--glow-green);
 }
 
 .breadcrumbs-back:focus {
-  outline: 2px solid rgba(102, 126, 234, 0.6);
+  outline: 2px solid var(--color-green-primary);
   outline-offset: 2px;
 }
 
 .breadcrumbs-back:active {
-  background: rgba(255, 255, 255, 0.15);
+  background-color: var(--color-green-darker);
 }
 
 .breadcrumbs-back-icon {
-  font-size: 1rem;
+  font-size: var(--font-size-sm);
   line-height: 1;
+}
+
+/* ==========================================================================
+   Path Segments
+   ========================================================================== */
+
+.breadcrumbs-separator {
+  color: var(--color-text-secondary);
+}
+
+.breadcrumbs-segment {
+  color: var(--color-text-secondary);
+  transition: color 0.15s ease;
+}
+
+.breadcrumbs-segment:hover {
+  color: var(--color-text-primary);
+  cursor: pointer;
 }
 
 /* ==========================================================================
@@ -61,8 +87,8 @@
    ========================================================================== */
 
 .breadcrumbs-current {
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.95);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -75,11 +101,11 @@
 
 @media (max-width: 768px) {
   .breadcrumbs {
-    padding: 0.5rem;
+    padding: var(--spacing-xs);
   }
 
   .breadcrumbs-current {
     max-width: 200px;
-    font-size: 0.9375rem;
+    font-size: var(--font-size-sm);
   }
 }
