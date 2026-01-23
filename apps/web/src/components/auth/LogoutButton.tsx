@@ -18,7 +18,7 @@ export function LogoutButton() {
 
   return (
     <button onClick={handleClick} disabled={isLoading} className="logout-button">
-      {isLoading ? 'Logging out...' : 'Logout'}
+      {isLoading ? 'logging out...' : 'logout'}
     </button>
   );
 }
