@@ -15,6 +15,8 @@ export function MatrixBackground() {
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    const targetCanvas: HTMLCanvasElement = canvas;
+    const context: CanvasRenderingContext2D = ctx;
 
     // Configuration
     const FONT_SIZE = 14;
@@ -30,11 +32,11 @@ export function MatrixBackground() {
 
     // Resize handler
     function resize() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      targetCanvas.width = window.innerWidth;
+      targetCanvas.height = window.innerHeight;
 
       // Initialize/reset columns
-      const columnCount = Math.floor(canvas.width / COLUMN_WIDTH);
+      const columnCount = Math.floor(targetCanvas.width / COLUMN_WIDTH);
       columns = Array(columnCount)
         .fill(0)
         .map(
@@ -52,11 +54,11 @@ export function MatrixBackground() {
       lastFrameTime = timestamp;
 
       // Fade previous frame (creates trail effect)
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      context.fillStyle = 'rgba(0, 0, 0, 0.05)';
+      context.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
 
       // Draw characters
-      ctx.font = `${FONT_SIZE}px "JetBrains Mono", monospace`;
+      context.font = `${FONT_SIZE}px "JetBrains Mono", monospace`;
 
       for (let i = 0; i < columns.length; i++) {
         const y = columns[i] * FONT_SIZE;
@@ -65,20 +67,20 @@ export function MatrixBackground() {
         const char = CHARACTERS[Math.floor(Math.random() * CHARACTERS.length)];
 
         // Leading character is brighter
-        ctx.fillStyle = PRIMARY_COLOR;
-        ctx.fillText(char, i * COLUMN_WIDTH, y);
+        context.fillStyle = PRIMARY_COLOR;
+        context.fillText(char, i * COLUMN_WIDTH, y);
 
         // Trail characters are dimmer
         if (Math.random() > 0.98) {
-          ctx.fillStyle = DIM_COLOR;
-          ctx.fillText(char, i * COLUMN_WIDTH, y - FONT_SIZE);
+          context.fillStyle = DIM_COLOR;
+          context.fillText(char, i * COLUMN_WIDTH, y - FONT_SIZE);
         }
 
         // Move column down
         columns[i]++;
 
         // Reset when reaching bottom (with random chance for variation)
-        if (y > canvas.height && Math.random() > 0.975) {
+        if (y > targetCanvas.height && Math.random() > 0.975) {
           columns[i] = 0;
         }
       }
