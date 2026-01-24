@@ -13,8 +13,8 @@ reviews:
     base_branches:
       - main
 
-  # Review profile (chill, assertive, default)
-  profile: default
+  # Review profile: chill (lenient) or assertive (strict)
+  profile: chill
 
   # Request changes when issues are found
   request_changes_workflow: false
