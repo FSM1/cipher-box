@@ -1,0 +1,79 @@
+# CodeRabbit Configuration
+# Documentation: https://docs.coderabbit.ai/guides/configure-coderabbit
+
+language: en-US
+
+reviews:
+  # Enable automatic reviews on pull requests
+  auto_review:
+    enabled: true
+    # Ignore drafts until ready for review
+    drafts: false
+    # Review based on changed files
+    base_branches:
+      - main
+
+  # Review profile: chill (lenient) or assertive (strict)
+  profile: chill
+
+  # Request changes when issues are found
+  request_changes_workflow: false
+
+  # High-level summary in PR comments
+  high_level_summary: true
+  high_level_summary_placeholder: '@coderabbitai summary'
+
+  # Generate poem in review (fun feature, can disable)
+  poem: false
+
+  # Review walkthrough
+  review_status: true
+  collapse_walkthrough: false
+
+  # Path-based instructions for specific areas
+  path_instructions:
+    - path: 'apps/api/**'
+      instructions: |
+        This is the NestJS backend API. Focus on:
+        - Security vulnerabilities and input validation
+        - Proper error handling
+        - Database query efficiency
+        - API contract consistency with OpenAPI spec
+
+    - path: 'apps/web/**'
+      instructions: |
+        This is the React/Next.js frontend. Focus on:
+        - Component reusability and React best practices
+        - Accessibility (a11y) concerns
+        - Performance optimizations
+        - Type safety with TypeScript
+
+    - path: 'packages/crypto/**'
+      instructions: |
+        This is a cryptography library. Focus on:
+        - Security best practices for cryptographic operations
+        - Proper key handling and memory management
+        - Algorithm correctness and standard compliance
+
+    - path: '**/*.test.ts'
+      instructions: |
+        Focus on test coverage, edge cases, and test quality.
+        Ensure tests are meaningful and not just for coverage metrics.
+
+  # Paths to ignore in reviews
+  path_filters:
+    - '!**/node_modules/**'
+    - '!**/dist/**'
+    - '!**/build/**'
+    - '!**/.next/**'
+    - '!**/coverage/**'
+    - '!**/pnpm-lock.yaml'
+    - '!**/*.lock'
+    - '!**/generated/**'
+
+chat:
+  # Enable chat interactions in PR comments
+  auto_reply: true
+
+# Early access features
+early_access: false
