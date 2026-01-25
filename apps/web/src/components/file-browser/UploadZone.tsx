@@ -132,11 +132,7 @@ export function UploadZone({ folderId, onUploadComplete }: UploadZoneProps) {
             {'\u2B06'}
           </span>
           <p className="upload-zone-text">
-            {isUploading
-              ? 'Uploading...'
-              : isDragActive
-                ? 'Drop files here'
-                : 'Drag files here or click to upload'}
+            {isUploading ? 'uploading...' : isDragActive ? 'drop files here' : '--upload'}
           </p>
         </div>
       </div>

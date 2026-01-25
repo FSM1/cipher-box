@@ -39,30 +39,25 @@ function isFile(item: FolderChild): item is FileEntry {
 }
 
 /**
- * Get appropriate icon for item type.
+ * Get text prefix for item type (terminal-style).
  */
 function getItemIcon(item: FolderChild): string {
   if (isFolder(item)) {
-    return '📁';
+    return '[DIR]';
   }
+  return '[FILE]';
+}
 
-  // Simple file type detection by extension
-  const name = item.name.toLowerCase();
-  if (name.endsWith('.pdf')) return '📄';
-  if (name.endsWith('.doc') || name.endsWith('.docx')) return '📝';
-  if (name.endsWith('.xls') || name.endsWith('.xlsx')) return '📊';
-  if (
-    name.endsWith('.jpg') ||
-    name.endsWith('.jpeg') ||
-    name.endsWith('.png') ||
-    name.endsWith('.gif')
-  )
-    return '🖼️';
-  if (name.endsWith('.mp3') || name.endsWith('.wav') || name.endsWith('.flac')) return '🎵';
-  if (name.endsWith('.mp4') || name.endsWith('.mov') || name.endsWith('.avi')) return '🎬';
-  if (name.endsWith('.zip') || name.endsWith('.rar') || name.endsWith('.7z')) return '📦';
-
-  return '📄';
+/**
+ * Extract file extension for TYPE column.
+ */
+function getFileExtension(filename: string): string {
+  const lastDot = filename.lastIndexOf('.');
+  if (lastDot === -1 || lastDot === filename.length - 1) {
+    return '-';
+  }
+  const ext = filename.substring(lastDot + 1);
+  return ext.toLowerCase();
 }
 
 /**
@@ -198,6 +193,9 @@ export function FileListItem({
   // Display size only for files
   const sizeDisplay = isFile(item) ? formatBytes(item.size) : '-';
 
+  // Display type - 'dir' for folders, extension for files
+  const typeDisplay = isFolder(item) ? 'dir' : getFileExtension(item.name);
+
   // Display modified date
   const dateDisplay = formatDate(item.modifiedAt);
 
@@ -224,12 +222,28 @@ export function FileListItem({
         }
       }}
     >
-      <div className="file-list-item-name">
-        <span className="file-list-item-icon">{getItemIcon(item)}</span>
-        <span className="file-list-item-text">{item.name}</span>
+      {/* Row 1: Icon + Name (for mobile top row) */}
+      <div className="file-list-item-row-top" role="gridcell">
+        <span className="file-list-item-icon" aria-hidden="true">
+          {getItemIcon(item)}
+        </span>
+        <span className="file-list-item-name">{item.name}</span>
       </div>
-      <div className="file-list-item-size">{sizeDisplay}</div>
-      <div className="file-list-item-date">{dateDisplay}</div>
+
+      {/* Row 2: Date + Size (for mobile bottom row) */}
+      <div className="file-list-item-row-bottom">
+        <span className="file-list-item-date" role="gridcell">
+          {dateDisplay}
+        </span>
+        <span className="file-list-item-size" role="gridcell">
+          {sizeDisplay}
+        </span>
+      </div>
+
+      {/* TYPE column - hidden on mobile via CSS */}
+      <span className="file-list-item-type" role="gridcell">
+        {typeDisplay}
+      </span>
     </div>
   );
 }

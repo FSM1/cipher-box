@@ -29,7 +29,7 @@ export class FileListPage {
    */
   getItem(name: string): Locator {
     return this.page.locator('.file-list-item', { hasText: name }).filter({
-      has: this.page.locator('.file-list-item-text', { hasText: name }),
+      has: this.page.locator('.file-list-item-name', { hasText: name }),
     });
   }
 
@@ -139,7 +139,7 @@ export class FileListPage {
     const names: string[] = [];
 
     for (let i = 0; i < count; i++) {
-      const nameText = await items.nth(i).locator('.file-list-item-text').textContent();
+      const nameText = await items.nth(i).locator('.file-list-item-name').textContent();
       if (nameText) {
         names.push(nameText);
       }

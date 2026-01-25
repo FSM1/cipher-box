@@ -36,11 +36,11 @@ export function Dashboard() {
   return (
     <div className="dashboard-container">
       <header className="dashboard-header">
-        <h1>CipherBox</h1>
+        <h1 className="app-title">&gt; CIPHERBOX</h1>
         <div className="user-info">
-          {userInfo?.email && <span className="user-email">{userInfo.email}</span>}
+          {userInfo?.email && <span className="user-email">{userInfo.email.toLowerCase()}</span>}
           <button onClick={() => navigate('/settings')} className="settings-link">
-            Settings
+            settings
           </button>
           <LogoutButton />
         </div>

@@ -146,7 +146,7 @@ export function FolderTreeNode({
         </span>
 
         {/* Folder icon */}
-        <span className="folder-tree-icon">{isExpanded && hasChildren ? '📂' : '📁'}</span>
+        <span className="folder-tree-icon">[DIR]</span>
 
         {/* Folder name */}
         <span className="folder-tree-name">{folder.name}</span>

@@ -1,4 +1,14 @@
-/* Modal Backdrop */
+/**
+ * Modal Styles - Terminal Aesthetic
+ *
+ * Modal overlay and container for dialogs
+ * Green border, black background, terminal feel
+ */
+
+/* ==========================================================================
+   Modal Backdrop
+   ========================================================================== */
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -6,49 +16,53 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(2px);
+  background-color: rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(4px);
 }
 
-/* Modal Container */
+/* ==========================================================================
+   Modal Container
+   ========================================================================== */
+
 .modal-container {
   position: relative;
   width: 100%;
   max-width: 500px;
   max-height: 90vh;
-  margin: 1rem;
+  margin: var(--spacing-md);
   overflow: hidden;
-  background-color: var(--modal-bg, #ffffff);
-  border-radius: 8px;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  background-color: var(--color-background);
+  border: var(--border-thickness) solid var(--color-border);
+  border-radius: 0;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), var(--glow-green);
 }
 
-/* Dark mode support */
-@media (prefers-color-scheme: dark) {
-  .modal-container {
-    --modal-bg: #1f2937;
-    --modal-text: #f9fafb;
-    --modal-border: #374151;
-  }
-}
+/* ==========================================================================
+   Modal Header
+   ========================================================================== */
 
-/* Modal Header */
 .modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 1rem 1.5rem;
-  border-bottom: 1px solid var(--modal-border, #e5e7eb);
+  padding: var(--spacing-md);
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
 }
 
 .modal-title {
   margin: 0;
-  font-size: 1.125rem;
-  font-weight: 600;
-  color: var(--modal-text, #111827);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-primary);
 }
 
-/* Modal Close Button */
+/* ==========================================================================
+   Modal Close Button
+   ========================================================================== */
+
 .modal-close {
   display: flex;
   align-items: center;
@@ -57,30 +71,34 @@
   height: 2rem;
   padding: 0;
   margin-left: auto;
-  font-size: 1.5rem;
-  font-weight: 400;
+  font-size: 1.25rem;
+  font-weight: var(--font-weight-normal);
   line-height: 1;
-  color: var(--modal-text, #6b7280);
+  color: var(--color-text-secondary);
   cursor: pointer;
   background: transparent;
-  border: none;
-  border-radius: 4px;
-  transition: background-color 0.15s ease;
+  border: var(--border-thickness) solid var(--color-border);
+  border-radius: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .modal-close:hover {
-  background-color: rgba(0, 0, 0, 0.1);
+  background-color: var(--color-green-darker);
+  color: var(--color-text-primary);
 }
 
 .modal-close:focus {
-  outline: 2px solid #3b82f6;
+  outline: 2px solid var(--color-green-primary);
   outline-offset: 2px;
 }
 
-/* Modal Body */
+/* ==========================================================================
+   Modal Body
+   ========================================================================== */
+
 .modal-body {
-  padding: 1.5rem;
+  padding: var(--spacing-md);
   overflow-y: auto;
   max-height: calc(90vh - 80px);
-  color: var(--modal-text, #374151);
+  color: var(--color-text-primary);
 }

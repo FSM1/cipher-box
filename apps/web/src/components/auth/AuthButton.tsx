@@ -1,5 +1,4 @@
 import { useAuth } from '../../hooks/useAuth';
-import { useAuthStore } from '../../stores/auth.store';
 
 /**
  * Sign In button that opens Web3Auth modal.
@@ -7,31 +6,6 @@ import { useAuthStore } from '../../stores/auth.store';
  */
 export function AuthButton() {
   const { login, isLoading } = useAuth();
-  const { lastAuthMethod } = useAuthStore();
-
-  // Format the button text based on last auth method
-  const formatAuthMethod = (method: string | null): string => {
-    if (!method) return 'Sign In';
-
-    // Format common auth methods for display
-    const methodMap: Record<string, string> = {
-      google: 'Google',
-      github: 'GitHub',
-      twitter: 'Twitter',
-      discord: 'Discord',
-      apple: 'Apple',
-      email_passwordless: 'Email',
-      metamask: 'MetaMask',
-      wallet_connect_v2: 'WalletConnect',
-      coinbase: 'Coinbase',
-      phantom: 'Phantom',
-    };
-
-    const displayName = methodMap[method.toLowerCase()] || method;
-    return `Continue with ${displayName}`;
-  };
-
-  const buttonText = formatAuthMethod(lastAuthMethod);
 
   const handleClick = async () => {
     try {
@@ -43,8 +17,8 @@ export function AuthButton() {
   };
 
   return (
-    <button onClick={handleClick} disabled={isLoading} className="auth-button">
-      {isLoading ? 'Connecting...' : buttonText}
+    <button onClick={handleClick} disabled={isLoading} className="login-button">
+      {isLoading ? 'connecting...' : '[CONNECT]'}
     </button>
   );
 }

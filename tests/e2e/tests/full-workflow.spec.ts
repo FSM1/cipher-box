@@ -289,6 +289,10 @@ test.describe.serial('Full Workflow', () => {
   test('3.1 Upload files to root level (3 files)', async () => {
     await navigateToRoot();
 
+    // Wait for file list to stabilize after navigation
+    // Ensure the workspace folder is visible (created in test 2.1)
+    await fileList.waitForItemToAppear(workspaceFolder, { timeout: 10000 });
+
     for (const file of rootFiles) {
       await uploadFile(file.name, file.content);
       expect(await fileList.isItemVisible(file.name)).toBe(true);
@@ -587,8 +591,8 @@ test.describe.serial('Full Workflow', () => {
     await logoutButton.click();
 
     await expect(page).toHaveURL(/localhost:\d+\/?$/);
-    await expect(
-      page.getByRole('button', { name: /sign in|login|continue with google/i })
-    ).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('button', { name: /\[CONNECT\]|sign in|login/i })).toBeVisible({
+      timeout: 10000,
+    });
   });
 });

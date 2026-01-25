@@ -1,166 +1,185 @@
-/* Dialog Content */
+/**
+ * Dialog Styles - Terminal Aesthetic
+ *
+ * Dialog content for rename, delete confirmation, etc.
+ * Green accents, monospace font, dark only
+ */
+
+/* ==========================================================================
+   Dialog Content
+   ========================================================================== */
+
 .dialog-content {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: var(--spacing-md);
 }
 
-/* Dialog Message */
+/* ==========================================================================
+   Dialog Message
+   ========================================================================== */
+
 .dialog-message {
   margin: 0;
-  font-size: 0.9375rem;
-  line-height: 1.5;
-  color: var(--dialog-text, #4b5563);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  color: var(--color-text-primary);
 }
 
-/* Dialog Field */
+/* ==========================================================================
+   Dialog Field
+   ========================================================================== */
+
 .dialog-field {
   display: flex;
   flex-direction: column;
-  gap: 0.375rem;
+  gap: var(--spacing-xs);
 }
 
-/* Dialog Label */
+/* ==========================================================================
+   Dialog Label
+   ========================================================================== */
+
 .dialog-label {
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: var(--dialog-text, #374151);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-secondary);
 }
 
-/* Dialog Input */
+/* ==========================================================================
+   Dialog Input
+   ========================================================================== */
+
 .dialog-input {
   width: 100%;
-  padding: 0.625rem 0.75rem;
-  font-size: 0.9375rem;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
   line-height: 1.5;
-  color: var(--dialog-text, #111827);
-  background-color: var(--dialog-input-bg, #ffffff);
-  border: 1px solid var(--dialog-input-border, #d1d5db);
-  border-radius: 6px;
+  color: var(--color-text-primary);
+  background-color: var(--color-background);
+  border: var(--border-thickness) solid var(--color-border);
+  border-radius: 0;
   outline: none;
-  transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .dialog-input:focus {
-  border-color: var(--dialog-input-focus, #3b82f6);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+  border-color: var(--color-green-primary);
+  box-shadow: var(--glow-green);
 }
 
 .dialog-input--error {
-  border-color: var(--dialog-error-color, #dc2626);
+  border-color: var(--color-error);
 }
 
 .dialog-input--error:focus {
-  border-color: var(--dialog-error-color, #dc2626);
-  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15);
+  border-color: var(--color-error);
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
 }
 
 .dialog-input:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
-/* Dialog Error */
-.dialog-error {
-  font-size: 0.8125rem;
-  color: var(--dialog-error-color, #dc2626);
+.dialog-input::placeholder {
+  color: var(--color-text-secondary);
 }
 
-/* Dialog Actions */
+/* ==========================================================================
+   Dialog Error
+   ========================================================================== */
+
+.dialog-error {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-error);
+}
+
+/* ==========================================================================
+   Dialog Actions
+   ========================================================================== */
+
 .dialog-actions {
   display: flex;
-  gap: 0.75rem;
+  gap: var(--spacing-sm);
   justify-content: flex-end;
-  margin-top: 0.5rem;
+  margin-top: var(--spacing-xs);
 }
 
-/* Dialog Button Base */
+/* ==========================================================================
+   Dialog Button Base
+   ========================================================================== */
+
 .dialog-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0.5rem 1rem;
-  font-size: 0.875rem;
-  font-weight: 500;
+  padding: var(--spacing-xs) var(--spacing-md);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-normal);
   line-height: 1.5;
   border: none;
-  border-radius: 6px;
+  border-radius: 0;
   cursor: pointer;
-  transition:
-    background-color 0.15s ease,
-    opacity 0.15s ease;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .dialog-button:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
 .dialog-button:focus-visible {
-  outline: 2px solid #3b82f6;
+  outline: 2px solid var(--color-green-primary);
   outline-offset: 2px;
 }
 
-/* Secondary Button */
+/* ==========================================================================
+   Secondary Button (Cancel)
+   ========================================================================== */
+
 .dialog-button--secondary {
-  color: var(--dialog-text, #374151);
-  background-color: var(--dialog-button-secondary-bg, #f3f4f6);
+  color: var(--color-text-primary);
+  background-color: transparent;
+  border: var(--border-thickness) solid var(--color-border);
 }
 
 .dialog-button--secondary:hover:not(:disabled) {
-  background-color: var(--dialog-button-secondary-hover, #e5e7eb);
+  background-color: var(--color-green-darker);
+  box-shadow: var(--glow-green);
 }
 
-/* Primary Button */
+/* ==========================================================================
+   Primary Button (Confirm)
+   ========================================================================== */
+
 .dialog-button--primary {
-  color: #ffffff;
-  background-color: var(--dialog-button-primary-bg, #3b82f6);
+  color: var(--color-black);
+  background-color: var(--color-green-primary);
+  font-weight: var(--font-weight-semibold);
 }
 
 .dialog-button--primary:hover:not(:disabled) {
-  background-color: var(--dialog-button-primary-hover, #2563eb);
+  box-shadow: var(--glow-green);
 }
 
-/* Destructive Button */
+/* ==========================================================================
+   Destructive Button (Delete)
+   ========================================================================== */
+
 .dialog-button--destructive {
-  color: #ffffff;
-  background-color: var(--dialog-button-destructive-bg, #dc2626);
+  color: var(--color-black);
+  background-color: var(--color-error);
+  font-weight: var(--font-weight-semibold);
 }
 
 .dialog-button--destructive:hover:not(:disabled) {
-  background-color: var(--dialog-button-destructive-hover, #b91c1c);
-}
-
-/* Dark mode support */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --dialog-text: #f9fafb;
-    --dialog-input-bg: #374151;
-    --dialog-input-border: #4b5563;
-    --dialog-input-focus: #60a5fa;
-    --dialog-error-color: #f87171;
-    --dialog-button-secondary-bg: #374151;
-    --dialog-button-secondary-hover: #4b5563;
-    --dialog-button-primary-bg: #3b82f6;
-    --dialog-button-primary-hover: #2563eb;
-    --dialog-button-destructive-bg: #dc2626;
-    --dialog-button-destructive-hover: #b91c1c;
-  }
-}
-
-/* Light mode defaults */
-:root {
-  --dialog-text: #374151;
-  --dialog-input-bg: #ffffff;
-  --dialog-input-border: #d1d5db;
-  --dialog-input-focus: #3b82f6;
-  --dialog-error-color: #dc2626;
-  --dialog-button-secondary-bg: #f3f4f6;
-  --dialog-button-secondary-hover: #e5e7eb;
-  --dialog-button-primary-bg: #3b82f6;
-  --dialog-button-primary-hover: #2563eb;
-  --dialog-button-destructive-bg: #dc2626;
-  --dialog-button-destructive-hover: #b91c1c;
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.6);
 }

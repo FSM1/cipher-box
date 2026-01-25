@@ -58,8 +58,8 @@ export async function waitForWeb3AuthModal(
 export async function loginViaEmail(page: Page, email: string, otp?: string): Promise<void> {
   const otpCode = otp || TEST_CREDENTIALS.otp;
 
-  // Click the Sign In button on the login page
-  await page.click('button:has-text("Sign In")');
+  // Click the [CONNECT] button on the login page
+  await page.click('button.login-button');
 
   // Wait for Web3Auth modal to appear
   await waitForWeb3AuthModal(page);
@@ -151,5 +151,5 @@ export async function getStorageState(page: Page): Promise<object> {
  */
 export async function waitForAuthentication(page: Page): Promise<void> {
   // Wait for logout button to appear (indicator of authenticated state)
-  await page.waitForSelector('button:has-text("Logout")', { timeout: 10000 });
+  await page.waitForSelector('button.logout-link', { timeout: 10000 });
 }

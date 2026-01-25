@@ -2,11 +2,12 @@ import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ApiStatusIndicator } from '../components/ApiStatusIndicator';
 import { AuthButton } from '../components/auth/AuthButton';
+import { MatrixBackground } from '../components/MatrixBackground';
 import { useAuth } from '../hooks/useAuth';
 
 /**
- * Login page with landing content and Sign In button.
- * Per 02-CONTEXT.md: Landing page first with brief intro/value prop and prominent Sign In button.
+ * Login page with terminal aesthetic and matrix background.
+ * Per design: > CIPHERBOX branding, [CONNECT] button, green-on-black theme.
  */
 export function Login() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -23,17 +24,19 @@ export function Login() {
   if (isLoading) {
     return (
       <div className="login-container">
-        <div className="loading">Loading...</div>
+        <MatrixBackground />
+        <div className="loading">initializing...</div>
       </div>
     );
   }
 
   return (
     <div className="login-container">
-      <h1>CipherBox</h1>
-      <p className="tagline">Zero-knowledge encrypted cloud storage</p>
+      <MatrixBackground />
+      <h1>CIPHERBOX</h1>
+      <p className="tagline">zero-knowledge encrypted storage</p>
       <p className="login-description">
-        Your files, encrypted on your device. We never see your data.
+        your files, encrypted on your device. we never see your data.
       </p>
       <AuthButton />
       <ApiStatusIndicator />
