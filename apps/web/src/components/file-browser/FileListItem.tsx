@@ -223,19 +223,27 @@ export function FileListItem({
       }}
     >
       {/* Row 1: Icon + Name (for mobile top row) */}
-      <div className="file-list-item-row-top">
-        <span className="file-list-item-icon">{getItemIcon(item)}</span>
+      <div className="file-list-item-row-top" role="gridcell">
+        <span className="file-list-item-icon" aria-hidden="true">
+          {getItemIcon(item)}
+        </span>
         <span className="file-list-item-name">{item.name}</span>
       </div>
 
       {/* Row 2: Date + Size (for mobile bottom row) */}
       <div className="file-list-item-row-bottom">
-        <span className="file-list-item-date">{dateDisplay}</span>
-        <span className="file-list-item-size">{sizeDisplay}</span>
+        <span className="file-list-item-date" role="gridcell">
+          {dateDisplay}
+        </span>
+        <span className="file-list-item-size" role="gridcell">
+          {sizeDisplay}
+        </span>
       </div>
 
       {/* TYPE column - hidden on mobile via CSS */}
-      <span className="file-list-item-type">{typeDisplay}</span>
+      <span className="file-list-item-type" role="gridcell">
+        {typeDisplay}
+      </span>
     </div>
   );
 }
