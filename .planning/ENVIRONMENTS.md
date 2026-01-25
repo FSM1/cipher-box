@@ -16,12 +16,12 @@ CipherBox requires isolated environments to prevent cross-environment interferen
 
 ## Environment Matrix
 
-| Environment | IPFS Mode | Web3Auth Network | IPNS Routing | Database | Isolation Level |
-|-------------|-----------|------------------|--------------|----------|-----------------|
-| **Local Dev** | Kubo (offline) | Sapphire Devnet | Mock service | Local Postgres | Full |
-| **CI E2E** | Kubo (offline) | Sapphire Devnet | Mock service (per-run) | Ephemeral Postgres | Full per-run |
-| **Staging** | Kubo (online) | Sapphire Devnet | delegated-ipfs.dev | Managed Postgres | Shared with Local/CI users |
-| **Production** | Pinata | Sapphire Mainnet | delegated-ipfs.dev | Production Postgres | Full |
+| Environment | IPFS Mode | Web3Auth Network | IPNS Routing | Database | TEE Republishing | Isolation Level |
+|-------------|-----------|------------------|--------------|----------|------------------|-----------------|
+| **Local Dev** | Kubo (offline) | Sapphire Devnet | Mock service | Local Postgres | **Disabled** | Full |
+| **CI E2E** | Kubo (offline) | Sapphire Devnet | Mock service (per-run) | Ephemeral Postgres | **Disabled** | Full per-run |
+| **Staging** | Kubo (online) | Sapphire Devnet | delegated-ipfs.dev | Managed Postgres | **Active** (testnet) | Shared with Local/CI users |
+| **Production** | Pinata | Sapphire Mainnet | delegated-ipfs.dev | Production Postgres | **Active** (mainnet) | Full |
 
 ## Solution: Environment-Aware Key Derivation
 
@@ -388,6 +388,263 @@ export const web3AuthOptions: Web3AuthOptions = {
 | `IPFS_PROVIDER` | local | local | local | pinata |
 | `DELEGATED_ROUTING_URL` | localhost:3001 | localhost:3001 | delegated-ipfs.dev | delegated-ipfs.dev |
 | `JWT_SECRET` | dev-secret | ci-secret | secrets.JWT_STAGING | secrets.JWT_PROD |
+| `TEE_ENABLED` | **false** | **false** | true | true |
+| `TEE_PROVIDER` | - | - | phala | phala |
+| `PHALA_API_URL` | - | - | testnet.phala.network | api.phala.network |
+
+## TEE Infrastructure by Environment
+
+The TEE (Trusted Execution Environment) layer handles IPNS republishing to prevent record expiry (24-hour TTL). This section defines TEE requirements per environment.
+
+### TEE Environment Matrix
+
+| Environment | TEE Infrastructure | IPNS Republishing | Monitoring | Cleanup |
+|-------------|-------------------|-------------------|------------|---------|
+| **Local Dev** | None | Not needed | None | User resets to clean slate |
+| **CI E2E** | None | Not needed | None | Ephemeral per-run |
+| **Staging** | Active (Phala testnet) | Every 3 hours | Integration tests | Periodic DHT cleanup |
+| **Production** | Active (Phala mainnet) | Every 3 hours | Full alerting | Automated stale detection |
+
+### Local Development: No TEE
+
+**Rationale:**
+- IPNS records stored in mock routing service (persistent volume)
+- No real DHT propagation = no expiry concerns
+- Users working on non-TEE features don't need republishing complexity
+- If IPNS state becomes corrupted, user can reset: `docker-compose down -v && docker-compose up`
+
+**Configuration:**
+```bash
+# apps/api/.env.local
+TEE_ENABLED=false
+# No TEE_* environment variables needed
+```
+
+**When working on TEE features locally:**
+- Use staging environment for TEE development/testing
+- Or run mock TEE service (future: `tools/mock-tee-service`)
+
+### CI E2E Testing: No TEE
+
+**Rationale:**
+- Test runs complete in minutes, well within 24-hour IPNS TTL
+- No benefit to republishing during test execution
+- Mock IPNS routing service resets per-run (no accumulated state)
+- Simpler CI pipeline without TEE service dependencies
+
+**Configuration:**
+```yaml
+# .github/workflows/e2e.yml
+env:
+  TEE_ENABLED: 'false'
+  # No TEE service container needed
+```
+
+**E2E Test Considerations:**
+- Tests should NOT depend on IPNS records surviving between test runs
+- Each test suite starts with fresh vault state
+- IPNS sequence numbers start at 1 for each test user
+
+### Staging Environment: Active TEE with Testnet
+
+**Purpose:** Integration testing of full CipherBox + TEE + public IPFS stack
+
+**Infrastructure:**
+```yaml
+# docker/docker-compose.staging.yml (additions)
+services:
+  # ... existing services ...
+
+  # Staging uses real Phala Cloud testnet
+  # TEE service is external - no local container
+
+# Backend cron jobs enabled
+```
+
+**Configuration:**
+```bash
+# apps/api/.env.staging
+TEE_ENABLED=true
+TEE_PROVIDER=phala
+PHALA_API_URL=https://testnet.phala.network/api/v1
+PHALA_CONTRACT_ID=${{ secrets.PHALA_CONTRACT_ID_STAGING }}
+PHALA_API_KEY=${{ secrets.PHALA_API_KEY_STAGING }}
+
+# Republish schedule (production-like)
+TEE_REPUBLISH_INTERVAL_HOURS=3
+TEE_KEY_EPOCH_ROTATION_WEEKS=4
+```
+
+**Staging-Specific Challenges:**
+
+1. **Web3Auth Testnet Instability**
+   - Sapphire Devnet may reset or have unstable user IDs
+   - User keypairs could change unexpectedly
+   - This orphans IPNS records (old keys, no one to republish)
+
+2. **DHT Pollution**
+   - Staging publishes to real public DHT
+   - Old test IPNS records accumulate
+   - No automatic cleanup (IPNS records naturally expire after 24h without republish)
+
+3. **TEE Key Epochs**
+   - Staging TEE uses testnet keys (may be rotated more frequently)
+   - 4-week grace period still applies
+
+**Staging Cleanup Strategy:**
+
+```typescript
+// tools/staging-cleanup/src/index.ts
+// Periodic job to clean up orphaned staging data
+
+interface CleanupJob {
+  // 1. Find IPNS records that haven't been republished in >48 hours
+  findStaleIpnsRecords(): Promise<FolderIpns[]>;
+
+  // 2. Check if owning user still exists and can republish
+  validateUserCanRepublish(record: FolderIpns): Promise<boolean>;
+
+  // 3. Mark orphaned records for cleanup (stop TEE republishing)
+  markOrphaned(recordIds: string[]): Promise<void>;
+
+  // 4. Unpin associated IPFS content after grace period
+  cleanupOrphanedContent(recordIds: string[], graceDays: number): Promise<void>;
+}
+
+// Run weekly in staging
+// Cron: 0 0 * * 0 (Sundays at midnight)
+```
+
+**Staging Integration Tests:**
+
+```typescript
+// tests/integration/tee-republish.test.ts
+describe('TEE IPNS Republishing', () => {
+  it('should republish IPNS record via TEE within 3 hours', async () => {
+    // 1. Create folder with IPNS record
+    // 2. Note initial sequence number
+    // 3. Wait for TEE republish cycle (or trigger manually)
+    // 4. Verify sequence number incremented
+    // 5. Verify IPNS resolves to correct CID
+  });
+
+  it('should handle TEE key epoch rotation', async () => {
+    // 1. Create folder with old epoch key
+    // 2. Trigger epoch rotation
+    // 3. Verify republishing continues with new epoch
+    // 4. Verify old epoch still works during grace period
+  });
+});
+```
+
+### Production Environment: Full TEE with Monitoring
+
+**Infrastructure:**
+- Phala Cloud mainnet contract
+- Dedicated republishing cron (scales with user count)
+- Full observability stack
+
+**Configuration:**
+```bash
+# apps/api/.env.production
+TEE_ENABLED=true
+TEE_PROVIDER=phala
+PHALA_API_URL=https://api.phala.network/v1
+PHALA_CONTRACT_ID=${{ secrets.PHALA_CONTRACT_ID_PROD }}
+PHALA_API_KEY=${{ secrets.PHALA_API_KEY_PROD }}
+
+# Production republish settings
+TEE_REPUBLISH_INTERVAL_HOURS=3
+TEE_KEY_EPOCH_ROTATION_WEEKS=4
+TEE_REPUBLISH_BATCH_SIZE=100
+TEE_REPUBLISH_CONCURRENCY=10
+
+# Monitoring
+TEE_METRICS_ENABLED=true
+TEE_ALERT_STALE_THRESHOLD_HOURS=12
+```
+
+**Production Monitoring Requirements:**
+
+1. **IPNS Staleness Detection**
+   ```sql
+   -- Alert: Records not republished in >12 hours
+   SELECT folder_ipns.*
+   FROM folder_ipns
+   WHERE last_republish_at < NOW() - INTERVAL '12 hours'
+     AND is_active = true;
+   ```
+
+2. **TEE Health Metrics**
+   - Republish success rate (target: >99.9%)
+   - Republish latency p50/p95/p99
+   - TEE API error rate
+   - Key epoch rotation completion rate
+
+3. **Alerting Thresholds**
+   | Metric | Warning | Critical |
+   |--------|---------|----------|
+   | Records not republished in X hours | 12h | 20h |
+   | TEE API error rate | >1% | >5% |
+   | Republish queue depth | >1000 | >5000 |
+   | Epoch rotation failures | Any | >10% |
+
+4. **Dashboard Panels**
+   - Active IPNS records by age since last republish
+   - TEE republish throughput (records/minute)
+   - Failed republish attempts (with error breakdown)
+   - Key epoch distribution (current vs grace period)
+
+**Production Incident Response:**
+
+```markdown
+## IPNS Staleness Incident Runbook
+
+### Symptoms
+- Users report "folder not found" or stale data
+- Monitoring shows records >20h since republish
+
+### Diagnosis
+1. Check TEE service health: `curl https://api.phala.network/health`
+2. Check backend cron status: `systemctl status cipherbox-republish`
+3. Query stale records: `SELECT COUNT(*) FROM folder_ipns WHERE last_republish_at < NOW() - INTERVAL '20 hours'`
+
+### Resolution
+1. If TEE service down: Wait for Phala recovery, records have 24h TTL buffer
+2. If cron stopped: Restart cron, monitor catch-up
+3. If specific records failing: Check encryptedIpnsPrivateKey validity, may need user to re-publish
+
+### User Communication
+- <20h stale: No user impact, monitor
+- 20-24h stale: Prepare user comms, accelerate fix
+- >24h stale: IPNS records expired, users must re-publish from client
+```
+
+### TEE Implementation Checklist
+
+#### Phase 1: Core TEE Infrastructure (Production + Staging)
+- [ ] Add `TEE_ENABLED` environment flag
+- [ ] Create `TeeService` with Phala Cloud client
+- [ ] Implement `ipns_republish_schedule` table
+- [ ] Create republish cron job (3-hour interval)
+- [ ] Add `encryptedIpnsPrivateKey` to folder publish flow
+
+#### Phase 2: Monitoring & Alerting (Production)
+- [ ] Add Prometheus metrics for TEE operations
+- [ ] Create Grafana dashboard for IPNS health
+- [ ] Configure PagerDuty/Opsgenie alerts for staleness
+- [ ] Write incident runbooks
+
+#### Phase 3: Staging Integration Testing
+- [ ] Deploy TEE to staging with testnet credentials
+- [ ] Create integration test suite for republishing
+- [ ] Implement staging cleanup job
+- [ ] Add CI job for periodic staging health check
+
+#### Phase 4: Local TEE Development (Optional)
+- [ ] Create mock TEE service (`tools/mock-tee-service`)
+- [ ] Add `docker-compose.tee-dev.yml` profile
+- [ ] Document TEE feature development workflow
 
 ## Appendix: Alternative Approaches Considered
 
@@ -424,3 +681,4 @@ export const web3AuthOptions: Web3AuthOptions = {
 ---
 
 *Document Status: Draft - Ready for implementation*
+*Last Updated: 2026-01-25 - Added TEE infrastructure analysis*
