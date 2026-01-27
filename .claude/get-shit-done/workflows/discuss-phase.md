@@ -472,6 +472,260 @@ Confirm: "Committed: docs(${PADDED_PHASE}): capture phase context"
 
 </process>
 
+<step name="detect_ui_phase">
+After analyzing the phase, determine if it involves UI work.
+
+**UI phase indicators:**
+
+- Phase name contains: "UI", "restyle", "design", "layout", "component", "page", "view", "browser", "dashboard"
+- Phase goal mentions: visual, styling, interface, appearance, frontend, display, screen
+- Phase involves: user-facing changes, forms, dialogs, navigation
+
+```bash
+# Check phase name and description for UI keywords
+PHASE_TEXT=$(grep -i "Phase ${PHASE}:" .planning/ROADMAP.md)
+if echo "$PHASE_TEXT" | grep -iqE "ui|restyle|design|layout|component|page|view|browser|dashboard|visual|interface|frontend|display|screen"; then
+  IS_UI_PHASE=true
+else
+  IS_UI_PHASE=false
+fi
+```
+
+**If UI phase:**
+
+1. Check for existing Pencil design file
+2. Load existing design tokens (colors, typography, spacing) if available
+3. Enable design mockup generation during discussion
+4. Note to user: "This is a UI phase — I can generate design mockups to help visualize options."
+</step>
+
+<step name="generate_design_mockups">
+**Only for UI phases.** After discussing gray areas, offer to generate design mockups.
+
+**Trigger:**
+After all areas discussed, before writing CONTEXT.md:
+
+```
+We've discussed the implementation details. Since this is a UI phase,
+I can generate design mockups in Pencil to visualize the options.
+
+Would you like me to create design mockups based on our discussion?
+```
+
+- Options: "Yes, generate mockups" / "Skip mockups"
+
+**If yes, generate mockups:**
+
+1. **Create draft frame in Pencil:**
+
+```typescript
+// Create a separate frame for draft designs (doesn't interfere with existing)
+mcp__pencil__create_design({
+  type: 'frame',
+  name: `Draft: Phase ${PHASE} - ${PHASE_NAME}`,
+  width: 1440,
+  height: 900,
+  fill: '#000000',  // Use existing design tokens
+  children: []
+});
+```
+
+2. **Generate design options based on discussion:**
+
+For each major UI decision, create visual options:
+
+```typescript
+// Example: Layout options discussed
+if (layoutDecision === 'needs_mockup') {
+  // Option A: Card layout
+  mcp__pencil__create_design({
+    parentFrame: `Draft: Phase ${PHASE}`,
+    type: 'frame',
+    name: 'Option A: Card Layout',
+    x: 0,
+    y: 0,
+    width: 400,
+    height: 300,
+    children: [/* card components */]
+  });
+
+  // Option B: List layout
+  mcp__pencil__create_design({
+    parentFrame: `Draft: Phase ${PHASE}`,
+    type: 'frame',
+    name: 'Option B: List Layout',
+    x: 420,
+    y: 0,
+    width: 400,
+    height: 300,
+    children: [/* list components */]
+  });
+}
+```
+
+3. **Use existing design tokens:**
+
+```bash
+# Extract tokens from existing design
+DESIGN_FILE=$(ls designs/*.pen 2>/dev/null | head -1)
+if [ -n "$DESIGN_FILE" ]; then
+  # Get color palette
+  COLORS=$(cat "$DESIGN_FILE" | jq -r '.. | .fill? // empty' | sort -u | grep "^#")
+  # Get typography
+  FONTS=$(cat "$DESIGN_FILE" | jq -r '.. | select(.type=="text") | .fontFamily' | sort -u | head -1)
+fi
+```
+
+Apply existing tokens to maintain visual consistency with the rest of the app.
+
+4. **Present options to user:**
+
+```
+I've created design mockups in Pencil:
+
+**Frame:** "Draft: Phase ${PHASE} - ${PHASE_NAME}"
+
+**Options generated:**
+- Option A: [Description] - [What it looks like]
+- Option B: [Description] - [What it looks like]
+- Option C: [Description] - [What it looks like]
+
+You can view these in Pencil. Which approach do you prefer?
+```
+
+Use AskUserQuestion:
+- header: "Design Options"
+- question: "Which design direction do you prefer?"
+- options: ["Option A: [name]", "Option B: [name]", "Option C: [name]", "Combine elements", "None - try different approach"]
+
+5. **Iterate if needed:**
+
+If user wants changes:
+- "Combine elements" → Ask which elements from which options
+- "None" → Ask what they'd like to see instead, generate new options
+
+6. **Finalize approved design:**
+
+Once user approves:
+
+```typescript
+// Rename approved design frame
+mcp__pencil__update_design({
+  frameId: approvedFrameId,
+  name: `Approved: Phase ${PHASE} - ${PHASE_NAME}`
+});
+
+// Or copy to main design area if user wants
+mcp__pencil__copy_frame({
+  sourceFrame: approvedFrameId,
+  targetParent: 'root',  // Main design area
+  newName: `Phase ${PHASE}: ${COMPONENT_NAME}`
+});
+```
+
+**Record in CONTEXT.md:**
+
+```markdown
+### Approved Design
+
+**Pencil frame:** "Approved: Phase ${PHASE} - ${PHASE_NAME}"
+**Design file:** designs/[filename].pen
+
+The approved design mockup captures:
+- [Key visual decision 1]
+- [Key visual decision 2]
+- [Key visual decision 3]
+
+This design serves as the source of truth for implementation.
+```
+</step>
+
+<step name="design_mockup_patterns">
+**Common mockup patterns for UI phases:**
+
+### File Browser / List View
+```typescript
+{
+  type: 'frame',
+  name: 'File List Option',
+  layout: 'vertical',
+  gap: 0,
+  children: [
+    // Header row
+    { type: 'frame', name: 'header', height: 40, layout: 'horizontal', children: [...] },
+    // File rows
+    { type: 'frame', name: 'row', height: 48, layout: 'horizontal', children: [...] }
+  ]
+}
+```
+
+### Card Grid
+```typescript
+{
+  type: 'frame',
+  name: 'Card Grid Option',
+  layout: 'horizontal',
+  wrap: true,
+  gap: 16,
+  children: [
+    { type: 'frame', name: 'card', width: 200, height: 150, cornerRadius: 8, children: [...] }
+  ]
+}
+```
+
+### Modal / Dialog
+```typescript
+{
+  type: 'frame',
+  name: 'Modal Option',
+  width: 400,
+  height: 300,
+  fill: '#111111',
+  stroke: { thickness: 1, fill: '#00D084' },
+  cornerRadius: 8,
+  children: [
+    { type: 'text', content: 'Title', fontSize: 16, fontWeight: '600' },
+    // Content
+    { type: 'frame', name: 'actions', layout: 'horizontal', gap: 12, children: [...] }
+  ]
+}
+```
+
+### Navigation / Sidebar
+```typescript
+{
+  type: 'frame',
+  name: 'Sidebar Option',
+  width: 240,
+  height: 'fill_container',
+  fill: '#0a0a0a',
+  layout: 'vertical',
+  padding: [16, 12],
+  gap: 8,
+  children: [
+    { type: 'text', content: 'Navigation', fontSize: 12, fontWeight: '600' },
+    // Nav items
+  ]
+}
+```
+
+### Empty State
+```typescript
+{
+  type: 'frame',
+  name: 'Empty State Option',
+  layout: 'vertical',
+  justifyContent: 'center',
+  alignItems: 'center',
+  gap: 16,
+  children: [
+    { type: 'text', content: 'No items yet', fontSize: 14, fill: '#666666' },
+    { type: 'frame', name: 'cta-button', children: [...] }
+  ]
+}
+```
+</step>
+
 <success_criteria>
 
 - Phase validated against roadmap
@@ -479,7 +733,9 @@ Confirm: "Committed: docs(${PADDED_PHASE}): capture phase context"
 - User selected which areas to discuss
 - Each selected area explored until user satisfied
 - Scope creep redirected to deferred ideas
+- **For UI phases:** Design mockups generated and user approved a direction
 - CONTEXT.md captures actual decisions, not vague vision
+- **For UI phases:** CONTEXT.md references approved Pencil design frame
 - Deferred ideas preserved for future phases
 - User knows next steps
   </success_criteria>
