@@ -1,3 +1,4 @@
+name: cipherbox-infrastructure
 services:
   postgres:
     image: postgres:16-alpine
@@ -29,10 +30,13 @@ services:
       # Swarm - P2P connections
       - '4001:4001/tcp'
       - '4001:4001/udp'
-      # API - localhost only for security
-      - '127.0.0.1:5001:5001'
-      # Gateway - localhost only for dev
-      - '127.0.0.1:8080:8080'
+      # TODO: Create environment-specific configs for staging/prod with:
+      #   - 127.0.0.1 bindings or reverse proxy with authentication
+      #   - IPFS API auth enabled
+      # API - bound to all interfaces for dev (VM/host access)
+      - '5001:5001'
+      # Gateway - bound to all interfaces for dev (VM/host access)
+      - '8080:8080'
     healthcheck:
       test: ['CMD-SHELL', 'ipfs id || exit 1']
       interval: 10s

@@ -214,13 +214,12 @@ Team: 3 people | Total: 12 weeks
 ## 📚 Documentation
 
 ```
-00_START_HERE.md              ← Quick overview
-Documentation/PRD.md          ← Product requirements
-Documentation/TECHNICAL_ARCHITECTURE.md  ← Encryption & system design
-Documentation/API_SPECIFICATION.md       ← Backend endpoints
-Documentation/DATA_FLOWS.md              ← Sequence diagrams
-Documentation/CLIENT_SPECIFICATION.md    ← Web UI & desktop specs
-IMMPLEMENTATION_ROADMAP.md    ← Week-by-week plan
+00_START_HERE.md                                                ← Quick overview
+00-Preliminary-R&D/Documentation/PRD.md                         ← Product requirements
+00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md      ← Encryption & system design
+00-Preliminary-R&D/Documentation/API_SPECIFICATION.md           ← Backend endpoints
+00-Preliminary-R&D/Documentation/DATA_FLOWS.md                  ← Sequence diagrams
+00-Preliminary-R&D/Documentation/CLIENT_SPECIFICATION.md        ← Web UI & desktop specs
 ```
 
 ---
