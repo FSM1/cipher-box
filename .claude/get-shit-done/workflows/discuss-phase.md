@@ -61,7 +61,7 @@ The phase boundary comes from ROADMAP.md and is FIXED. Discussion clarifies HOW 
 
 **When user suggests scope creep:**
 
-```
+```text
 "[Feature X] would be a new capability — that's its own phase.
 Want me to note it for the roadmap backlog?
 
@@ -87,7 +87,7 @@ Gray areas are **implementation decisions the user cares about** — things that
 
 **Don't use generic category labels** (UI, UX, Behavior). Generate specific gray areas:
 
-```
+```text
 Phase: "User authentication"
 → Session handling, Error responses, Multi-device policy, Recovery flow
 
@@ -214,7 +214,7 @@ Analyze the phase to identify gray areas worth discussing.
 
 Example analysis for "Post Feed" phase:
 
-```
+```text
 Domain: Displaying posts from followed users
 Gray areas:
 - UI: Layout style (cards vs timeline vs grid)
@@ -231,7 +231,7 @@ Present the domain boundary and gray areas to user.
 
 **First, state the boundary:**
 
-```
+```text
 Phase [X]: [Name]
 Domain: [What this phase delivers — from your analysis]
 
@@ -253,7 +253,7 @@ We'll clarify HOW to implement this.
 
 For "Post Feed" (visual feature):
 
-```
+```text
 ☐ Layout style — Cards vs list vs timeline? Information density?
 ☐ Loading behavior — Infinite scroll or pagination? Pull to refresh?
 ☐ Content ordering — Chronological, algorithmic, or user choice?
@@ -262,7 +262,7 @@ For "Post Feed" (visual feature):
 
 For "Database backup CLI" (command-line tool):
 
-```
+```text
 ☐ Output format — JSON, table, or plain text? Verbosity levels?
 ☐ Flag design — Short flags, long flags, or both? Required vs optional?
 ☐ Progress reporting — Silent, progress bar, or verbose logging?
@@ -271,7 +271,7 @@ For "Database backup CLI" (command-line tool):
 
 For "Organize photo library" (organization task):
 
-```
+```text
 ☐ Grouping criteria — By date, location, faces, or events?
 ☐ Duplicate handling — Keep best, keep all, or prompt each time?
 ☐ Naming convention — Original names, dates, or descriptive?
@@ -324,7 +324,7 @@ Ask 4 questions per area before offering to continue or move on. Each answer oft
 **Scope creep handling:**
 If user mentions something outside the phase domain:
 
-```
+```text
 "[Feature] sounds like a new capability — that belongs in its own phase.
 I'll note it as a deferred idea.
 
@@ -483,6 +483,11 @@ After analyzing the phase, determine if it involves UI work.
 
 ```bash
 # Check phase name and description for UI keywords
+# Note: This heuristic may produce false positives for phases that mention UI terms
+# but are primarily backend/infrastructure work. The workflow handles this by:
+# 1. Offering design mockup generation as optional (user can decline)
+# 2. Checking for existing design files before assuming UI work is needed
+# 3. Allowing "Skip mockups" option in the design generation step
 PHASE_TEXT=$(grep -i "Phase ${PHASE}:" .planning/ROADMAP.md)
 if echo "$PHASE_TEXT" | grep -iqE "ui|restyle|design|layout|component|page|view|browser|dashboard|visual|interface|frontend|display|screen"; then
   IS_UI_PHASE=true
@@ -505,7 +510,7 @@ fi
 **Trigger:**
 After all areas discussed, before writing CONTEXT.md:
 
-```
+```text
 We've discussed the implementation details. Since this is a UI phase,
 I can generate design mockups in Pencil to visualize the options.
 

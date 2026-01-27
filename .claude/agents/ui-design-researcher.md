@@ -303,7 +303,49 @@ const validation = await mcp__pencil__validate_consistency({
 
 if (!validation.passed) {
   console.warn('Consistency issues:', validation.issues);
-  // Fix before presenting to user
+
+  // Remediation steps for common validation failures:
+  for (const issue of validation.issues) {
+    switch (issue.type) {
+      case 'color_not_in_palette':
+        // Replace non-palette color with nearest palette match
+        await mcp__pencil__update_element({
+          frameId: 'Error Toast',
+          elementPath: issue.elementPath,
+          fill: findNearestPaletteColor(issue.value, existingTokens.colors)
+        });
+        break;
+
+      case 'font_mismatch':
+        // Replace with design system font
+        await mcp__pencil__update_element({
+          frameId: 'Error Toast',
+          elementPath: issue.elementPath,
+          fontFamily: existingTokens.typography.fontFamily
+        });
+        break;
+
+      case 'spacing_not_in_scale':
+        // Snap to nearest spacing scale value
+        await mcp__pencil__update_element({
+          frameId: 'Error Toast',
+          elementPath: issue.elementPath,
+          [issue.property]: findNearestSpacingValue(issue.value, existingTokens.spacing)
+        });
+        break;
+
+      default:
+        // Log unhandled issues for manual review
+        console.warn(`Manual fix required: ${issue.type} at ${issue.elementPath}`);
+    }
+  }
+
+  // Re-validate after fixes
+  const revalidation = await mcp__pencil__validate_consistency({...});
+  if (!revalidation.passed) {
+    // Flag remaining issues for user review
+    console.warn('Some issues require manual review:', revalidation.issues);
+  }
 }
 ```
 

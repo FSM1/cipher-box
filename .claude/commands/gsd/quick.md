@@ -82,12 +82,15 @@ slug=$(echo "$DESCRIPTION" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' 
 
 ---
 
-**Step 2b: Detect UI task and offer design workflow**
+### Step 2b: Detect UI task and offer design workflow
 
 Check if the task description involves UI work:
 
 ```bash
 # Check for UI keywords in description
+# Note: This heuristic may produce false positives for tasks that mention UI terms
+# in non-UI contexts (e.g., "update button text in config"). The user can always
+# select "Skip design - just implement" if the detection is incorrect.
 if echo "$DESCRIPTION" | grep -iqE "ui|style|design|layout|component|page|view|button|form|modal|dialog|sidebar|header|footer|nav|menu|card|list|table|icon|color|font|spacing|responsive|mobile|css|visual|appearance"; then
   IS_UI_TASK=true
 else
@@ -100,10 +103,13 @@ fi
 1. Check for existing Pencil design file:
 ```bash
 DESIGN_FILE=$(ls designs/*.pen 2>/dev/null | head -1)
+if [ -z "$DESIGN_FILE" ]; then
+  echo "No design file found in designs/. Will proceed without design reference."
+fi
 ```
 
 2. Offer design workflow:
-```
+```text
 AskUserQuestion(
   header: "UI Task Detected",
   question: "This looks like a UI task. How would you like to proceed?",
@@ -316,11 +322,11 @@ Note: For quick tasks producing multiple plans (rare), spawn executors in parall
 
 ---
 
-**Step 6b: Quick UI verification (for UI tasks only)**
+### Step 6b: Quick UI verification (for UI tasks only)
 
 If `IS_UI_TASK=true` and `DESIGN_CONTEXT` exists, offer quick verification:
 
-```
+```text
 AskUserQuestion(
   header: "UI Verification",
   question: "Task complete. Would you like me to verify the UI matches the design?",
@@ -361,12 +367,19 @@ const styles = await mcp__playwright__evaluate({
 // Load expected values from design
 const designSpecs = await mcp__pencil__get_frame({ frameId: DESIGN_FRAME });
 
-// Compare and report
-const discrepancies = compareStyles(styles, designSpecs);
+// Compare with tolerance for color format differences
+// RGB values are considered matching if they represent the same color:
+// - "#000000" matches "rgb(0, 0, 0)"
+// - "#00D084" matches "rgb(0, 208, 132)"
+// Spacing values must match exactly (no tolerance for pixel differences)
+const discrepancies = compareStyles(styles, designSpecs, {
+  colorTolerance: 'format-only',  // Allow rgb/hex format differences
+  spacingTolerance: 0,            // Exact pixel match required
+});
 ```
 
 3. **Report results:**
-```
+```markdown
 ## Quick Verification Results
 
 **Component:** ${COMPONENT_SELECTOR}
@@ -382,7 +395,7 @@ const discrepancies = compareStyles(styles, designSpecs);
 ```
 
 4. **If discrepancies found:**
-```
+```text
 AskUserQuestion(
   header: "Discrepancies Found",
   question: "Found ${count} discrepancies. What would you like to do?",

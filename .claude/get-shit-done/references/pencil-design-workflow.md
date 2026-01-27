@@ -206,13 +206,22 @@ cat designs/app-design.pen | jq '.. | .padding?, .gap?' | grep -v null | sort -u
 jq -r '.children[] | select(.type=="frame")' designs/app-design.pen
 
 # Generate CSS variables from design
+# Note: Colors are extracted with hex stripped from variable names
 cat designs/app-design.pen | jq -r '
   "/* Colors */",
-  (.. | .fill? // empty | select(. != null) | select(startswith("#")) | "--color-" + . + ": " + . + ";"),
+  (.. | .fill? // empty | select(. != null) | select(startswith("#")) | ltrimstr("#") | "--color-\(.): #\(.);"),
   "",
   "/* Font sizes */",
   (.. | select(.type=="text") | "--font-size-" + (.fontSize|tostring) + ": " + (.fontSize|tostring) + "px;")
 ' | sort -u
+
+# This generates valid CSS like:
+# --color-00D084: #00D084;
+# --color-000000: #000000;
+#
+# For semantic names, manually map hex values:
+# --color-primary: #00D084;
+# --color-background: #000000;
 ```
 
 ## Missing Design Handling
@@ -275,6 +284,8 @@ Ask user for design direction, implement, then request design review:
 ```
 
 ## Verification with Playwright MCP
+
+> **Note:** The examples below use hypothetical `mcp__playwright__*` functions to illustrate how a Playwright MCP integration would work. These are pseudocode patterns showing the intended verification workflow. If implementing with standard Playwright, use the equivalent `@playwright/test` API (e.g., `page.goto()`, `page.screenshot()`, `page.evaluate()`).
 
 ### Automated Visual Verification
 
