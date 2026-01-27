@@ -33,7 +33,7 @@ Pencil MCP provides tools for reading and manipulating design files. Use these t
 
 **Available MCP tools:**
 
-```
+```text
 mcp__pencil__read_design - Read a .pen file and get structured design data
 mcp__pencil__get_frame - Get a specific frame by ID or name
 mcp__pencil__get_colors - Extract all colors used in the design
@@ -179,7 +179,7 @@ For each relevant frame, document the component hierarchy:
 **Dimensions:** 1440 x 900
 
 **Structure:**
-```
+```text
 frame (bi8Au)
 ├── header (n386r)
 │   ├── headerLeft (zNr0C)

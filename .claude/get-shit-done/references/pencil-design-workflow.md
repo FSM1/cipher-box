@@ -8,7 +8,7 @@ Pencil is a design tool that produces `.pen` files (JSON format) containing UI s
 
 **Design-first workflow:**
 
-```
+```text
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
 │   Design    │───▶│  Research   │───▶│   Execute   │───▶│   Verify    │
 │  (Pencil)   │    │  (Extract)  │    │   (Build)   │    │  (Compare)  │
@@ -76,7 +76,7 @@ After execution, spawn `ui-design-verifier` to compare implementation against de
 
 ### If Pencil MCP is Available
 
-```
+```text
 mcp__pencil__read_design     - Read entire .pen file
 mcp__pencil__get_frame       - Get specific frame by ID
 mcp__pencil__get_colors      - Extract color palette
