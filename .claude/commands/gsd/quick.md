@@ -1,6 +1,6 @@
 ---
 name: gsd:quick
-description: Execute a quick task with GSD guarantees (atomic commits, state tracking) but skip optional agents
+description: Execute a quick task with GSD guarantees (atomic commits, state tracking) but skip optional agents. For UI tasks, supports Pencil design-first workflow.
 argument-hint: ""
 allowed-tools:
   - Read
@@ -11,6 +11,8 @@ allowed-tools:
   - Bash
   - Task
   - AskUserQuestion
+  - mcp__pencil__*
+  - mcp__playwright__*
 ---
 
 <objective>
@@ -21,6 +23,11 @@ Quick mode is the same system with a shorter path:
 - Skips gsd-phase-researcher, gsd-plan-checker, gsd-verifier
 - Quick tasks live in `.planning/quick/` separate from planned phases
 - Updates STATE.md "Quick Tasks Completed" table (NOT ROADMAP.md)
+
+**For UI tasks:**
+- Detects UI-related task descriptions
+- Offers to generate/use Pencil designs before planning
+- Optionally verifies against design with Playwright MCP after execution
 
 Use when: You know exactly what to do and the task is small enough to not need research or verification.
 </objective>
@@ -72,6 +79,68 @@ Generate slug from description:
 ```bash
 slug=$(echo "$DESCRIPTION" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | cut -c1-40)
 ```
+
+---
+
+**Step 2b: Detect UI task and offer design workflow**
+
+Check if the task description involves UI work:
+
+```bash
+# Check for UI keywords in description
+if echo "$DESCRIPTION" | grep -iqE "ui|style|design|layout|component|page|view|button|form|modal|dialog|sidebar|header|footer|nav|menu|card|list|table|icon|color|font|spacing|responsive|mobile|css|visual|appearance"; then
+  IS_UI_TASK=true
+else
+  IS_UI_TASK=false
+fi
+```
+
+**If UI task detected:**
+
+1. Check for existing Pencil design file:
+```bash
+DESIGN_FILE=$(ls designs/*.pen 2>/dev/null | head -1)
+```
+
+2. Offer design workflow:
+```
+AskUserQuestion(
+  header: "UI Task Detected",
+  question: "This looks like a UI task. How would you like to proceed?",
+  options: [
+    "Use existing Pencil design" (if design file exists),
+    "Generate new design mockup first",
+    "Skip design - just implement"
+  ]
+)
+```
+
+3. **If "Use existing design":**
+   - Load design tokens from existing `.pen` file
+   - Ask which frame/component to reference
+   - Store design reference for planner context
+
+4. **If "Generate new mockup":**
+   - Create draft frame in Pencil:
+   ```typescript
+   mcp__pencil__create_design({
+     type: 'frame',
+     name: `Quick: ${slug}`,
+     width: 800,
+     height: 600,
+     fill: '#000000',  // Use existing tokens if available
+     children: []
+   });
+   ```
+   - Generate mockup based on task description
+   - Present to user for approval
+   - Store approved design reference
+
+5. **If "Skip design":**
+   - Proceed without design reference
+   - Note: Verification against design will be skipped
+
+Store result as `$DESIGN_CONTEXT` for planner.
 
 ---
 
@@ -130,6 +199,16 @@ Task(
 **Project State:**
 @.planning/STATE.md
 
+${DESIGN_CONTEXT ? `
+**Design Reference (UI Task):**
+- Design file: ${DESIGN_FILE}
+- Frame: ${DESIGN_FRAME}
+- Design tokens: Use colors, typography, spacing from existing design
+
+Implementation must match Pencil design specifications exactly.
+Verification will compare against design frame.
+` : ''}
+
 </planning_context>
 
 <constraints>
@@ -137,6 +216,8 @@ Task(
 - Quick tasks should be atomic and self-contained
 - No research phase, no checker phase
 - Target ~30% context usage (simple, focused)
+${IS_UI_TASK ? '- Include CSS values from design specs in task descriptions' : ''}
+${IS_UI_TASK ? '- Add verification step to check implementation matches design' : ''}
 </constraints>
 
 <output>
@@ -190,6 +271,104 @@ After executor returns:
 If summary not found, error: "Executor failed to create ${next_num}-SUMMARY.md"
 
 Note: For quick tasks producing multiple plans (rare), spawn executors in parallel waves per execute-phase patterns.
+
+---
+
+**Step 6b: Quick UI verification (for UI tasks only)**
+
+If `IS_UI_TASK=true` and `DESIGN_CONTEXT` exists, offer quick verification:
+
+```
+AskUserQuestion(
+  header: "UI Verification",
+  question: "Task complete. Would you like me to verify the UI matches the design?",
+  options: ["Yes, verify against design", "Skip verification"]
+)
+```
+
+**If "Yes, verify":**
+
+1. **Use Playwright MCP to verify (if available):**
+```typescript
+// Navigate to the app
+await mcp__playwright__navigate({ url: 'http://localhost:5173' });
+
+// Capture screenshot
+await mcp__playwright__screenshot({
+  selector: '${COMPONENT_SELECTOR}',
+  name: 'quick-${next_num}-result'
+});
+
+// Verify computed styles match design
+const styles = await mcp__playwright__evaluate({
+  script: `
+    const el = document.querySelector('${COMPONENT_SELECTOR}');
+    const s = getComputedStyle(el);
+    return {
+      backgroundColor: s.backgroundColor,
+      color: s.color,
+      fontFamily: s.fontFamily,
+      padding: s.padding
+    };
+  `
+});
+```
+
+2. **Compare against design specs:**
+```typescript
+// Load expected values from design
+const designSpecs = await mcp__pencil__get_frame({ frameId: DESIGN_FRAME });
+
+// Compare and report
+const discrepancies = compareStyles(styles, designSpecs);
+```
+
+3. **Report results:**
+```
+## Quick Verification Results
+
+**Component:** ${COMPONENT_SELECTOR}
+**Design frame:** ${DESIGN_FRAME}
+
+| Property | Design | Implemented | Status |
+|----------|--------|-------------|--------|
+| background | #000000 | rgb(0,0,0) | ✓ |
+| color | #00D084 | rgb(0,208,132) | ✓ |
+| padding | 12px 24px | 12px 24px | ✓ |
+
+**Result:** [All specs match / X discrepancies found]
+```
+
+4. **If discrepancies found:**
+```
+AskUserQuestion(
+  header: "Discrepancies Found",
+  question: "Found ${count} discrepancies. What would you like to do?",
+  options: ["Fix now", "Accept as-is", "View details"]
+)
+```
+
+If "Fix now" → Re-run executor with fix instructions
+If "Accept as-is" → Continue to STATE.md update
+If "View details" → Show full discrepancy report
+
+**If Playwright MCP not available:**
+
+Document for manual verification:
+```
+## Manual Verification Required
+
+Playwright MCP not available. Please verify manually:
+
+1. Open http://localhost:5173
+2. Check ${COMPONENT_SELECTOR}
+3. Compare against design frame: ${DESIGN_FRAME}
+
+Expected:
+- Background: ${expected_bg}
+- Color: ${expected_color}
+- Padding: ${expected_padding}
+```
 
 ---
 
@@ -279,8 +458,11 @@ Ready for next task: /gsd:quick
 - [ ] Slug generated (lowercase, hyphens, max 40 chars)
 - [ ] Next number calculated (001, 002, 003...)
 - [ ] Directory created at `.planning/quick/NNN-slug/`
+- [ ] **For UI tasks:** Design workflow offered (use existing / generate / skip)
+- [ ] **For UI tasks:** Design context passed to planner if applicable
 - [ ] `${next_num}-PLAN.md` created by planner
 - [ ] `${next_num}-SUMMARY.md` created by executor
+- [ ] **For UI tasks:** Quick verification offered (Playwright MCP if available)
 - [ ] STATE.md updated with quick task row
 - [ ] Artifacts committed
 </success_criteria>
