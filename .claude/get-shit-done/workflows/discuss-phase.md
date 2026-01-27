@@ -61,7 +61,7 @@ The phase boundary comes from ROADMAP.md and is FIXED. Discussion clarifies HOW 
 
 **When user suggests scope creep:**
 
-```
+```text
 "[Feature X] would be a new capability — that's its own phase.
 Want me to note it for the roadmap backlog?
 
@@ -87,7 +87,7 @@ Gray areas are **implementation decisions the user cares about** — things that
 
 **Don't use generic category labels** (UI, UX, Behavior). Generate specific gray areas:
 
-```
+```text
 Phase: "User authentication"
 → Session handling, Error responses, Multi-device policy, Recovery flow
 
@@ -124,7 +124,7 @@ Load and validate:
 
 **If phase not found:**
 
-```
+```text
 Phase [X] not found in roadmap.
 
 Use /gsd:progress to see available phases.
@@ -214,7 +214,7 @@ Analyze the phase to identify gray areas worth discussing.
 
 Example analysis for "Post Feed" phase:
 
-```
+```text
 Domain: Displaying posts from followed users
 Gray areas:
 - UI: Layout style (cards vs timeline vs grid)
@@ -231,7 +231,7 @@ Present the domain boundary and gray areas to user.
 
 **First, state the boundary:**
 
-```
+```text
 Phase [X]: [Name]
 Domain: [What this phase delivers — from your analysis]
 
@@ -253,7 +253,7 @@ We'll clarify HOW to implement this.
 
 For "Post Feed" (visual feature):
 
-```
+```text
 ☐ Layout style — Cards vs list vs timeline? Information density?
 ☐ Loading behavior — Infinite scroll or pagination? Pull to refresh?
 ☐ Content ordering — Chronological, algorithmic, or user choice?
@@ -262,7 +262,7 @@ For "Post Feed" (visual feature):
 
 For "Database backup CLI" (command-line tool):
 
-```
+```text
 ☐ Output format — JSON, table, or plain text? Verbosity levels?
 ☐ Flag design — Short flags, long flags, or both? Required vs optional?
 ☐ Progress reporting — Silent, progress bar, or verbose logging?
@@ -271,7 +271,7 @@ For "Database backup CLI" (command-line tool):
 
 For "Organize photo library" (organization task):
 
-```
+```text
 ☐ Grouping criteria — By date, location, faces, or events?
 ☐ Duplicate handling — Keep best, keep all, or prompt each time?
 ☐ Naming convention — Original names, dates, or descriptive?
@@ -292,7 +292,7 @@ Ask 4 questions per area before offering to continue or move on. Each answer oft
 
 1. **Announce the area:**
 
-   ```
+   ```text
    Let's talk about [Area].
    ```
 
@@ -324,7 +324,7 @@ Ask 4 questions per area before offering to continue or move on. Each answer oft
 **Scope creep handling:**
 If user mentions something outside the phase domain:
 
-```
+```text
 "[Feature] sounds like a new capability — that belongs in its own phase.
 I'll note it as a deferred idea.
 
@@ -416,7 +416,7 @@ Write file.
 <step name="confirm_creation">
 Present summary and next steps:
 
-```
+```text
 Created: .planning/phases/${PADDED_PHASE}-${SLUG}/${PADDED_PHASE}-CONTEXT.md
 
 ## Decisions Captured
@@ -472,6 +472,406 @@ Confirm: "Committed: docs(${PADDED_PHASE}): capture phase context"
 
 </process>
 
+<step name="detect_ui_phase">
+After analyzing the phase, determine if it involves UI work.
+
+**UI phase indicators:**
+
+- Phase name contains: "UI", "restyle", "design", "layout", "component", "page", "view", "browser", "dashboard"
+- Phase goal mentions: visual, styling, interface, appearance, frontend, display, screen
+- Phase involves: user-facing changes, forms, dialogs, navigation
+
+```bash
+# Check phase name and description for UI keywords
+# Note: This heuristic may produce false positives for phases that mention UI terms
+# but are primarily backend/infrastructure work. The workflow handles this by:
+# 1. Offering design mockup generation as optional (user can decline)
+# 2. Checking for existing design files before assuming UI work is needed
+# 3. Allowing "Skip mockups" option in the design generation step
+PHASE_TEXT=$(grep -i "Phase ${PHASE}:" .planning/ROADMAP.md)
+if echo "$PHASE_TEXT" | grep -iqE "ui|restyle|design|layout|component|page|view|browser|dashboard|visual|interface|frontend|display|screen"; then
+  IS_UI_PHASE=true
+else
+  IS_UI_PHASE=false
+fi
+```
+
+**If UI phase:**
+
+1. Check for existing Pencil design file
+2. Load existing design tokens (colors, typography, spacing) if available
+3. Enable design mockup generation during discussion
+4. Note to user: "This is a UI phase — I can generate design mockups to help visualize options."
+   </step>
+
+<step name="generate_design_mockups">
+**Only for UI phases.** After discussing gray areas, offer to generate design mockups.
+
+**Trigger:**
+After all areas discussed, before writing CONTEXT.md:
+
+```text
+We've discussed the implementation details. Since this is a UI phase,
+I can generate design mockups in Pencil to visualize the options.
+
+Would you like me to create design mockups based on our discussion?
+```
+
+- Options: "Yes, generate mockups" / "Skip mockups"
+
+**If yes, generate mockups:**
+
+## Step 1: Load Existing Design Context (REQUIRED)
+
+Before creating ANY new design, load the existing design system:
+
+```typescript
+// Get existing design file
+const designFile = await mcp__pencil__read_design({ path: 'designs/*.pen' });
+
+// Extract established tokens
+const existingTokens = await mcp__pencil__get_design_tokens({
+  file: designFile.path,
+  extract: ['colors', 'typography', 'spacing', 'effects', 'borders'],
+});
+
+// Example extracted tokens:
+// {
+//   colors: {
+//     background: '#000000',
+//     primary: '#00D084',
+//     secondary: '#006644',
+//     border: '#003322',
+//     text: '#00D084',
+//     textMuted: '#006644'
+//   },
+//   typography: {
+//     fontFamily: 'JetBrains Mono',
+//     sizes: { xs: 10, sm: 11, base: 14, lg: 18, xl: 24 },
+//     weights: { normal: 400, semibold: 600, bold: 700 }
+//   },
+//   spacing: { xs: 8, sm: 12, md: 16, lg: 24, xl: 32 },
+//   borders: { thickness: 1, radius: 0 },
+//   effects: { glow: { blur: 10, color: '#00D08466' } }
+// }
+```
+
+## Step 2: Translate User Intent to Design Parameters
+
+Map discussion decisions to concrete design specs:
+
+```typescript
+// Capture user preferences from discussion
+const userIntent = {
+  // From discussion answers
+  layout: discussionAnswers.layoutStyle, // e.g., "cards", "list", "grid"
+  density: discussionAnswers.density, // e.g., "compact", "comfortable", "spacious"
+  emphasis: discussionAnswers.emphasis, // e.g., "content-first", "visual-heavy"
+  interactions: discussionAnswers.interactions, // e.g., "hover effects", "minimal"
+
+  // Quoted user statements (preserve exact wording)
+  userQuotes: [
+    'I want it to feel like a terminal',
+    'Green accents but not overwhelming',
+    'Clean and minimal',
+  ],
+};
+
+// Translate intent to design parameters
+function translateIntentToDesign(intent, existingTokens) {
+  const params = {
+    // Always use existing tokens for consistency
+    colors: existingTokens.colors,
+    typography: existingTokens.typography,
+    spacing: existingTokens.spacing,
+
+    // Derive layout from user preferences
+    layout: {
+      type: intent.layout,
+      gap:
+        intent.density === 'compact'
+          ? existingTokens.spacing.xs
+          : intent.density === 'spacious'
+            ? existingTokens.spacing.lg
+            : existingTokens.spacing.md,
+      padding: intent.density === 'compact' ? existingTokens.spacing.sm : existingTokens.spacing.md,
+    },
+
+    // Derive visual treatment from user quotes
+    visualStyle: {
+      useBorders: intent.userQuotes.some((q) => q.includes('terminal')),
+      useGlow: intent.userQuotes.some((q) => q.includes('accent')),
+      cornerRadius: intent.userQuotes.some((q) => q.includes('terminal')) ? 0 : 4,
+    },
+  };
+
+  return params;
+}
+
+const designParams = translateIntentToDesign(userIntent, existingTokens);
+```
+
+## Step 3: Create Design with Full Context
+
+Pass both user intent AND existing tokens to Pencil:
+
+```typescript
+// Create draft frame with consistency context
+const draftFrame = await mcp__pencil__create_design({
+  type: 'frame',
+  name: `Draft: Phase ${PHASE} - ${PHASE_NAME}`,
+  width: 1440,
+  height: 900,
+
+  // Use ONLY existing tokens
+  fill: existingTokens.colors.background,
+
+  // Pass context for AI-assisted design generation
+  designContext: {
+    // Existing design system (for consistency)
+    tokens: existingTokens,
+
+    // User's stated preferences (from discussion)
+    userIntent: userIntent,
+
+    // Translated parameters
+    derivedParams: designParams,
+
+    // Reference to existing components (match their patterns)
+    referenceFrames: ['Desktop File Browser', 'Login Screen'],
+
+    // Explicit consistency rules
+    consistencyRules: [
+      'Use ONLY colors from existing palette',
+      'Match typography scale exactly',
+      'Follow established spacing increments',
+      'Maintain border style (1px solid, sharp corners)',
+      'Apply glow effects consistently with existing usage',
+    ],
+  },
+});
+```
+
+## Step 4: Generate Options Based on User Preferences
+
+For each discussed gray area, generate options that respect both user intent AND existing design:
+
+```typescript
+// Example: User discussed layout preferences
+// Discussion captured: "cards vs list", user said "I like the density of lists but visual appeal of cards"
+
+const optionA = await mcp__pencil__create_design({
+  parentFrame: draftFrame.id,
+  type: 'frame',
+  name: 'Option A: Compact Cards',
+
+  // Derived from user intent: "density of lists" + "visual appeal of cards"
+  layout: 'grid',
+  gap: existingTokens.spacing.xs, // Compact like list
+
+  // Visual treatment from existing design
+  children: [
+    {
+      type: 'frame',
+      name: 'card',
+      width: 280,
+      height: 80, // Shorter than typical cards = more dense
+      fill: existingTokens.colors.background,
+      stroke: { thickness: 1, fill: existingTokens.colors.border },
+      // ... using existing tokens throughout
+    },
+  ],
+
+  // Document the reasoning
+  designNotes:
+    'Combines list density (compact height) with card visual structure. ' +
+    'Uses existing border style and spacing tokens.',
+});
+
+const optionB = await mcp__pencil__create_design({
+  parentFrame: draftFrame.id,
+  type: 'frame',
+  name: 'Option B: Dense List with Card Accents',
+
+  // Alternative interpretation of same user intent
+  layout: 'vertical',
+  gap: 0, // List-like, no gaps
+
+  children: [
+    {
+      type: 'frame',
+      name: 'row',
+      height: 48,
+      // Card-like visual: subtle background on hover, border-bottom
+      stroke: { thickness: 1, fill: existingTokens.colors.border, sides: ['bottom'] },
+    },
+  ],
+
+  designNotes:
+    'List structure with card-like visual treatment (borders, hover states). ' +
+    'Matches existing file browser row pattern.',
+});
+```
+
+## Step 5: Present with Design Rationale
+
+Show user how their input shaped each option:
+
+```markdown
+I've created design mockups based on our discussion:
+
+**Frame:** "Draft: Phase ${PHASE} - ${PHASE_NAME}"
+
+**Your preferences I incorporated:**
+
+- "${userQuote1}" → [how it influenced the design]
+- "${userQuote2}" → [how it influenced the design]
+- Layout: ${layoutChoice} → [specific implementation]
+
+**Design consistency maintained:**
+
+- Colors: Using existing palette (#000000, #00D084, #006644)
+- Typography: JetBrains Mono at established sizes
+- Spacing: Following 8/12/16/24/32px scale
+- Borders: 1px solid, sharp corners (terminal aesthetic)
+
+**Options generated:**
+
+**Option A: Compact Cards**
+
+- Addresses: "density of lists" + "visual appeal of cards"
+- Layout: Grid with 8px gaps
+- Cards: 280×80px (shorter than typical = more dense)
+
+**Option B: Dense List with Card Accents**
+
+- Addresses: Same preferences, different approach
+- Layout: Vertical list, no gaps
+- Visual: Card-like borders and hover states
+
+Which direction resonates more with your vision?
+```
+
+## Step 6: Iterate with Context Preserved
+
+If user wants changes, preserve all context:
+
+```typescript
+// User says: "I like Option A but want more breathing room"
+const revision = await mcp__pencil__create_design({
+  parentFrame: draftFrame.id,
+  type: 'frame',
+  name: 'Option A (Revised): Cards with More Space',
+
+  // Start from Option A
+  baseOn: optionA.id,
+
+  // Apply user's revision request
+  modifications: {
+    gap: existingTokens.spacing.sm, // Increased from xs
+    cardHeight: 96, // Slightly taller
+  },
+
+  // Track the iteration
+  designNotes:
+    'Revision of Option A per user feedback: "more breathing room". ' +
+    'Increased gap to 12px, card height to 96px. ' +
+    'Still within established spacing scale.',
+});
+```
+
+<step name="design_mockup_patterns">
+**Common mockup patterns for UI phases:**
+
+### File Browser / List View
+
+```typescript
+{
+  type: 'frame',
+  name: 'File List Option',
+  layout: 'vertical',
+  gap: 0,
+  children: [
+    // Header row
+    { type: 'frame', name: 'header', height: 40, layout: 'horizontal', children: [...] },
+    // File rows
+    { type: 'frame', name: 'row', height: 48, layout: 'horizontal', children: [...] }
+  ]
+}
+```
+
+### Card Grid
+
+```typescript
+{
+  type: 'frame',
+  name: 'Card Grid Option',
+  layout: 'horizontal',
+  wrap: true,
+  gap: 16,
+  children: [
+    { type: 'frame', name: 'card', width: 200, height: 150, cornerRadius: 8, children: [...] }
+  ]
+}
+```
+
+### Modal / Dialog
+
+```typescript
+{
+  type: 'frame',
+  name: 'Modal Option',
+  width: 400,
+  height: 300,
+  fill: '#111111',
+  stroke: { thickness: 1, fill: '#00D084' },
+  cornerRadius: 8,
+  children: [
+    { type: 'text', content: 'Title', fontSize: 16, fontWeight: '600' },
+    // Content
+    { type: 'frame', name: 'actions', layout: 'horizontal', gap: 12, children: [...] }
+  ]
+}
+```
+
+### Navigation / Sidebar
+
+```typescript
+{
+  type: 'frame',
+  name: 'Sidebar Option',
+  width: 240,
+  height: 'fill_container',
+  fill: '#0a0a0a',
+  layout: 'vertical',
+  padding: [16, 12],
+  gap: 8,
+  children: [
+    { type: 'text', content: 'Navigation', fontSize: 12, fontWeight: '600' },
+    // Nav items
+  ]
+}
+```
+
+### Empty State
+
+```typescript
+{
+  type: 'frame',
+  name: 'Empty State Option',
+  layout: 'vertical',
+  justifyContent: 'center',
+  alignItems: 'center',
+  gap: 16,
+  children: [
+    { type: 'text', content: 'No items yet', fontSize: 14, fill: '#666666' },
+    { type: 'frame', name: 'cta-button', children: [...] }
+  ]
+}
+```
+
+</step>
+
 <success_criteria>
 
 - Phase validated against roadmap
@@ -479,7 +879,9 @@ Confirm: "Committed: docs(${PADDED_PHASE}): capture phase context"
 - User selected which areas to discuss
 - Each selected area explored until user satisfied
 - Scope creep redirected to deferred ideas
+- **For UI phases:** Design mockups generated and user approved a direction
 - CONTEXT.md captures actual decisions, not vague vision
+- **For UI phases:** CONTEXT.md references approved Pencil design frame
 - Deferred ideas preserved for future phases
 - User knows next steps
   </success_criteria>

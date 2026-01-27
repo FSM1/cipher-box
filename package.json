@@ -7,6 +7,8 @@
     "build": "pnpm -r run build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "lint:md": "markdownlint '**/*.md' --ignore node_modules --ignore '**/node_modules/**'",
+    "lint:md:fix": "markdownlint '**/*.md' --ignore node_modules --ignore '**/node_modules/**' --fix",
     "test": "pnpm --parallel -r run test",
     "test:e2e": "DELEGATED_ROUTING_URL=http://localhost:3001 pnpm --filter @cipherbox/e2e test",
     "test:e2e:headed": "DELEGATED_ROUTING_URL=http://localhost:3001 pnpm --filter @cipherbox/e2e test:headed",
@@ -23,6 +25,7 @@
     "globals": "^15.14.0",
     "husky": "^9.1.7",
     "lint-staged": "^15.4.3",
+    "markdownlint-cli": "^0.47.0",
     "prettier": "^3.4.2",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.21.0"
@@ -32,7 +35,11 @@
       "eslint --fix",
       "prettier --write"
     ],
-    "*.{json,md,yml,yaml}": [
+    "*.{json,yml,yaml}": [
+      "prettier --write"
+    ],
+    "*.md": [
+      "markdownlint --fix",
       "prettier --write"
     ]
   }
