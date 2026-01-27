@@ -1,7 +1,7 @@
 ---
 name: gsd:quick
 description: Execute a quick task with GSD guarantees (atomic commits, state tracking) but skip optional agents. For UI tasks, supports Pencil design-first workflow.
-argument-hint: ""
+argument-hint: ''
 allowed-tools:
   - Read
   - Write
@@ -19,12 +19,14 @@ allowed-tools:
 Execute small, ad-hoc tasks with GSD guarantees (atomic commits, STATE.md tracking) while skipping optional agents (research, plan-checker, verifier).
 
 Quick mode is the same system with a shorter path:
+
 - Spawns gsd-planner (quick mode) + gsd-executor(s)
 - Skips gsd-phase-researcher, gsd-plan-checker, gsd-verifier
 - Quick tasks live in `.planning/quick/` separate from planned phases
 - Updates STATE.md "Quick Tasks Completed" table (NOT ROADMAP.md)
 
 **For UI tasks:**
+
 - Detects UI-related task descriptions
 - Offers to generate/use Pencil designs before planning
 - Optionally verifies against design with Playwright MCP after execution
@@ -41,7 +43,7 @@ Orchestration is inline - no separate workflow file. Quick mode is deliberately 
 </context>
 
 <process>
-**Step 1: Pre-flight validation**
+### Step 1: Pre-flight validation
 
 Check that an active GSD project exists:
 
@@ -59,11 +61,11 @@ Quick tasks can run mid-phase - validation only checks ROADMAP.md exists, not ph
 
 ---
 
-**Step 2: Get task description**
+### Step 2: Get task description
 
 Prompt user interactively for the task description:
 
-```
+```text
 AskUserQuestion(
   header: "Quick Task",
   question: "What do you want to do?",
@@ -76,6 +78,7 @@ Store response as `$DESCRIPTION`.
 If empty, re-prompt: "Please provide a task description."
 
 Generate slug from description:
+
 ```bash
 slug=$(echo "$DESCRIPTION" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | cut -c1-40)
 ```
@@ -101,6 +104,7 @@ fi
 **If UI task detected:**
 
 1. Check for existing Pencil design file:
+
 ```bash
 DESIGN_FILE=$(ls designs/*.pen 2>/dev/null | head -1)
 if [ -z "$DESIGN_FILE" ]; then
@@ -109,6 +113,7 @@ fi
 ```
 
 2. Offer design workflow:
+
 ```text
 AskUserQuestion(
   header: "UI Task Detected",
@@ -129,22 +134,24 @@ AskUserQuestion(
 4. **If "Generate new mockup":**
 
    First, load existing design context for consistency:
+
    ```typescript
    // Load existing design system
    const existingDesign = await mcp__pencil__read_design({ path: DESIGN_FILE });
    const tokens = await mcp__pencil__get_design_tokens({
      file: DESIGN_FILE,
-     extract: ['colors', 'typography', 'spacing', 'effects', 'borders']
+     extract: ['colors', 'typography', 'spacing', 'effects', 'borders'],
    });
    ```
 
    Then, translate user's task description to design parameters:
+
    ```typescript
    // Parse task description for design intent
    const taskIntent = {
-     description: DESCRIPTION,  // e.g., "Add a delete confirmation modal"
-     componentType: inferComponentType(DESCRIPTION),  // e.g., "modal"
-     action: inferAction(DESCRIPTION),  // e.g., "delete" → destructive styling
+     description: DESCRIPTION, // e.g., "Add a delete confirmation modal"
+     componentType: inferComponentType(DESCRIPTION), // e.g., "modal"
+     action: inferAction(DESCRIPTION), // e.g., "delete" → destructive styling
    };
 
    // Map to design parameters using existing tokens
@@ -157,6 +164,7 @@ AskUserQuestion(
    ```
 
    Create mockup with full context:
+
    ```typescript
    await mcp__pencil__create_design({
      type: 'frame',
@@ -169,15 +177,17 @@ AskUserQuestion(
      designContext: {
        tokens: tokens,
        taskIntent: taskIntent,
-       referenceFrames: existingDesign.frames.map(f => f.name),
+       referenceFrames: existingDesign.frames.map((f) => f.name),
        consistencyRules: [
          'Use ONLY colors from existing palette',
          'Match existing component patterns',
-         'Follow established spacing scale'
-       ]
+         'Follow established spacing scale',
+       ],
      },
 
-     children: [/* generated based on componentType */]
+     children: [
+       /* generated based on componentType */
+     ],
    });
    ```
 
@@ -192,7 +202,7 @@ Store result as `$DESIGN_CONTEXT` for planner.
 
 ---
 
-**Step 3: Calculate next quick task number**
+### Step 3: Calculate next quick task number
 
 Ensure `.planning/quick/` directory exists and find the next sequential number:
 
@@ -212,7 +222,7 @@ fi
 
 ---
 
-**Step 4: Create quick task directory**
+### Step 4: Create quick task directory
 
 Create the directory for this quick task:
 
@@ -222,7 +232,8 @@ mkdir -p "$QUICK_DIR"
 ```
 
 Report to user:
-```
+
+```text
 Creating quick task ${next_num}: ${DESCRIPTION}
 Directory: ${QUICK_DIR}
 ```
@@ -231,11 +242,11 @@ Store `$QUICK_DIR` for use in orchestration.
 
 ---
 
-**Step 5: Spawn planner (quick mode)**
+### Step 5: Spawn planner (quick mode)
 
 Spawn gsd-planner with quick mode context:
 
-```
+```text
 Task(
   prompt="
 <planning_context>
@@ -279,6 +290,7 @@ Return: ## PLANNING COMPLETE with plan path
 ```
 
 After planner returns:
+
 1. Verify plan exists at `${QUICK_DIR}/${next_num}-PLAN.md`
 2. Extract plan count (typically 1 for quick tasks)
 3. Report: "Plan created: ${QUICK_DIR}/${next_num}-PLAN.md"
@@ -287,11 +299,11 @@ If plan not found, error: "Planner failed to create ${next_num}-PLAN.md"
 
 ---
 
-**Step 6: Spawn executor**
+### Step 6: Spawn executor
 
 Spawn gsd-executor with plan reference:
 
-```
+```text
 Task(
   prompt="
 Execute quick task ${next_num}.
@@ -312,6 +324,7 @@ Project state: @.planning/STATE.md
 ```
 
 After executor returns:
+
 1. Verify summary exists at `${QUICK_DIR}/${next_num}-SUMMARY.md`
 2. Extract commit hash from executor output
 3. Report completion status
@@ -337,6 +350,7 @@ AskUserQuestion(
 **If "Yes, verify":**
 
 1. **Use Playwright MCP to verify (if available):**
+
 ```typescript
 // Navigate to the app
 await mcp__playwright__navigate({ url: 'http://localhost:5173' });
@@ -344,7 +358,7 @@ await mcp__playwright__navigate({ url: 'http://localhost:5173' });
 // Capture screenshot
 await mcp__playwright__screenshot({
   selector: '${COMPONENT_SELECTOR}',
-  name: 'quick-${next_num}-result'
+  name: 'quick-${next_num}-result',
 });
 
 // Verify computed styles match design
@@ -358,11 +372,12 @@ const styles = await mcp__playwright__evaluate({
       fontFamily: s.fontFamily,
       padding: s.padding
     };
-  `
+  `,
 });
 ```
 
 2. **Compare against design specs:**
+
 ```typescript
 // Load expected values from design
 const designSpecs = await mcp__pencil__get_frame({ frameId: DESIGN_FRAME });
@@ -373,28 +388,30 @@ const designSpecs = await mcp__pencil__get_frame({ frameId: DESIGN_FRAME });
 // - "#00D084" matches "rgb(0, 208, 132)"
 // Spacing values must match exactly (no tolerance for pixel differences)
 const discrepancies = compareStyles(styles, designSpecs, {
-  colorTolerance: 'format-only',  // Allow rgb/hex format differences
-  spacingTolerance: 0,            // Exact pixel match required
+  colorTolerance: 'format-only', // Allow rgb/hex format differences
+  spacingTolerance: 0, // Exact pixel match required
 });
 ```
 
 3. **Report results:**
+
 ```markdown
 ## Quick Verification Results
 
 **Component:** ${COMPONENT_SELECTOR}
 **Design frame:** ${DESIGN_FRAME}
 
-| Property | Design | Implemented | Status |
-|----------|--------|-------------|--------|
-| background | #000000 | rgb(0,0,0) | ✓ |
-| color | #00D084 | rgb(0,208,132) | ✓ |
-| padding | 12px 24px | 12px 24px | ✓ |
+| Property   | Design    | Implemented    | Status |
+| ---------- | --------- | -------------- | ------ |
+| background | #000000   | rgb(0,0,0)     | ✓      |
+| color      | #00D084   | rgb(0,208,132) | ✓      |
+| padding    | 12px 24px | 12px 24px      | ✓      |
 
 **Result:** [All specs match / X discrepancies found]
 ```
 
 4. **If discrepancies found:**
+
 ```text
 AskUserQuestion(
   header: "Discrepancies Found",
@@ -410,7 +427,8 @@ If "View details" → Show full discrepancy report
 **If Playwright MCP not available:**
 
 Document for manual verification:
-```
+
+```markdown
 ## Manual Verification Required
 
 Playwright MCP not available. Please verify manually:
@@ -420,6 +438,7 @@ Playwright MCP not available. Please verify manually:
 3. Compare against design frame: ${DESIGN_FRAME}
 
 Expected:
+
 - Background: ${expected_bg}
 - Color: ${expected_color}
 - Padding: ${expected_padding}
@@ -427,7 +446,7 @@ Expected:
 
 ---
 
-**Step 7: Update STATE.md**
+### Step 7: Update STATE.md
 
 Update STATE.md with quick task completion record.
 
@@ -442,8 +461,8 @@ Insert after `### Blockers/Concerns` section:
 ```markdown
 ### Quick Tasks Completed
 
-| # | Description | Date | Commit | Directory |
-|---|-------------|------|--------|-----------|
+| #   | Description | Date | Commit | Directory |
+| --- | ----------- | ---- | ------ | --------- |
 ```
 
 **7c. Append new row to table:**
@@ -455,7 +474,8 @@ Insert after `### Blockers/Concerns` section:
 **7d. Update "Last activity" line:**
 
 Find and update the line:
-```
+
+```text
 Last activity: $(date +%Y-%m-%d) - Completed quick task ${next_num}: ${DESCRIPTION}
 ```
 
@@ -463,7 +483,7 @@ Use Edit tool to make these changes atomically
 
 ---
 
-**Step 8: Final commit and completion**
+### Step 8: Final commit and completion
 
 Stage and commit quick task artifacts:
 
@@ -485,12 +505,14 @@ EOF
 ```
 
 Get final commit hash:
+
 ```bash
 commit_hash=$(git rev-parse --short HEAD)
 ```
 
 Display completion output:
-```
+
+```text
 ---
 
 GSD > QUICK TASK COMPLETE
@@ -508,6 +530,7 @@ Ready for next task: /gsd:quick
 </process>
 
 <success_criteria>
+
 - [ ] ROADMAP.md validation passes
 - [ ] User provides task description
 - [ ] Slug generated (lowercase, hyphens, max 40 chars)
@@ -520,4 +543,4 @@ Ready for next task: /gsd:quick
 - [ ] **For UI tasks:** Quick verification offered (Playwright MCP if available)
 - [ ] STATE.md updated with quick task row
 - [ ] Artifacts committed
-</success_criteria>
+      </success_criteria>

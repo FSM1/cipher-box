@@ -124,7 +124,7 @@ Load and validate:
 
 **If phase not found:**
 
-```
+```text
 Phase [X] not found in roadmap.
 
 Use /gsd:progress to see available phases.
@@ -292,7 +292,7 @@ Ask 4 questions per area before offering to continue or move on. Each answer oft
 
 1. **Announce the area:**
 
-   ```
+   ```text
    Let's talk about [Area].
    ```
 
@@ -416,7 +416,7 @@ Write file.
 <step name="confirm_creation">
 Present summary and next steps:
 
-```
+```text
 Created: .planning/phases/${PADDED_PHASE}-${SLUG}/${PADDED_PHASE}-CONTEXT.md
 
 ## Decisions Captured
@@ -502,7 +502,7 @@ fi
 2. Load existing design tokens (colors, typography, spacing) if available
 3. Enable design mockup generation during discussion
 4. Note to user: "This is a UI phase — I can generate design mockups to help visualize options."
-</step>
+   </step>
 
 <step name="generate_design_mockups">
 **Only for UI phases.** After discussing gray areas, offer to generate design mockups.
@@ -532,7 +532,7 @@ const designFile = await mcp__pencil__read_design({ path: 'designs/*.pen' });
 // Extract established tokens
 const existingTokens = await mcp__pencil__get_design_tokens({
   file: designFile.path,
-  extract: ['colors', 'typography', 'spacing', 'effects', 'borders']
+  extract: ['colors', 'typography', 'spacing', 'effects', 'borders'],
 });
 
 // Example extracted tokens:
@@ -564,17 +564,17 @@ Map discussion decisions to concrete design specs:
 // Capture user preferences from discussion
 const userIntent = {
   // From discussion answers
-  layout: discussionAnswers.layoutStyle,      // e.g., "cards", "list", "grid"
-  density: discussionAnswers.density,          // e.g., "compact", "comfortable", "spacious"
-  emphasis: discussionAnswers.emphasis,        // e.g., "content-first", "visual-heavy"
+  layout: discussionAnswers.layoutStyle, // e.g., "cards", "list", "grid"
+  density: discussionAnswers.density, // e.g., "compact", "comfortable", "spacious"
+  emphasis: discussionAnswers.emphasis, // e.g., "content-first", "visual-heavy"
   interactions: discussionAnswers.interactions, // e.g., "hover effects", "minimal"
 
   // Quoted user statements (preserve exact wording)
   userQuotes: [
-    "I want it to feel like a terminal",
-    "Green accents but not overwhelming",
-    "Clean and minimal"
-  ]
+    'I want it to feel like a terminal',
+    'Green accents but not overwhelming',
+    'Clean and minimal',
+  ],
 };
 
 // Translate intent to design parameters
@@ -588,19 +588,21 @@ function translateIntentToDesign(intent, existingTokens) {
     // Derive layout from user preferences
     layout: {
       type: intent.layout,
-      gap: intent.density === 'compact' ? existingTokens.spacing.xs :
-           intent.density === 'spacious' ? existingTokens.spacing.lg :
-           existingTokens.spacing.md,
-      padding: intent.density === 'compact' ? existingTokens.spacing.sm :
-               existingTokens.spacing.md
+      gap:
+        intent.density === 'compact'
+          ? existingTokens.spacing.xs
+          : intent.density === 'spacious'
+            ? existingTokens.spacing.lg
+            : existingTokens.spacing.md,
+      padding: intent.density === 'compact' ? existingTokens.spacing.sm : existingTokens.spacing.md,
     },
 
     // Derive visual treatment from user quotes
     visualStyle: {
-      useBorders: intent.userQuotes.some(q => q.includes('terminal')),
-      useGlow: intent.userQuotes.some(q => q.includes('accent')),
-      cornerRadius: intent.userQuotes.some(q => q.includes('terminal')) ? 0 : 4
-    }
+      useBorders: intent.userQuotes.some((q) => q.includes('terminal')),
+      useGlow: intent.userQuotes.some((q) => q.includes('accent')),
+      cornerRadius: intent.userQuotes.some((q) => q.includes('terminal')) ? 0 : 4,
+    },
   };
 
   return params;
@@ -644,9 +646,9 @@ const draftFrame = await mcp__pencil__create_design({
       'Match typography scale exactly',
       'Follow established spacing increments',
       'Maintain border style (1px solid, sharp corners)',
-      'Apply glow effects consistently with existing usage'
-    ]
-  }
+      'Apply glow effects consistently with existing usage',
+    ],
+  },
 });
 ```
 
@@ -665,7 +667,7 @@ const optionA = await mcp__pencil__create_design({
 
   // Derived from user intent: "density of lists" + "visual appeal of cards"
   layout: 'grid',
-  gap: existingTokens.spacing.xs,  // Compact like list
+  gap: existingTokens.spacing.xs, // Compact like list
 
   // Visual treatment from existing design
   children: [
@@ -673,16 +675,17 @@ const optionA = await mcp__pencil__create_design({
       type: 'frame',
       name: 'card',
       width: 280,
-      height: 80,  // Shorter than typical cards = more dense
+      height: 80, // Shorter than typical cards = more dense
       fill: existingTokens.colors.background,
       stroke: { thickness: 1, fill: existingTokens.colors.border },
       // ... using existing tokens throughout
-    }
+    },
   ],
 
   // Document the reasoning
-  designNotes: 'Combines list density (compact height) with card visual structure. ' +
-               'Uses existing border style and spacing tokens.'
+  designNotes:
+    'Combines list density (compact height) with card visual structure. ' +
+    'Uses existing border style and spacing tokens.',
 });
 
 const optionB = await mcp__pencil__create_design({
@@ -692,7 +695,7 @@ const optionB = await mcp__pencil__create_design({
 
   // Alternative interpretation of same user intent
   layout: 'vertical',
-  gap: 0,  // List-like, no gaps
+  gap: 0, // List-like, no gaps
 
   children: [
     {
@@ -701,11 +704,12 @@ const optionB = await mcp__pencil__create_design({
       height: 48,
       // Card-like visual: subtle background on hover, border-bottom
       stroke: { thickness: 1, fill: existingTokens.colors.border, sides: ['bottom'] },
-    }
+    },
   ],
 
-  designNotes: 'List structure with card-like visual treatment (borders, hover states). ' +
-               'Matches existing file browser row pattern.'
+  designNotes:
+    'List structure with card-like visual treatment (borders, hover states). ' +
+    'Matches existing file browser row pattern.',
 });
 ```
 
@@ -719,11 +723,13 @@ I've created design mockups based on our discussion:
 **Frame:** "Draft: Phase ${PHASE} - ${PHASE_NAME}"
 
 **Your preferences I incorporated:**
+
 - "${userQuote1}" → [how it influenced the design]
 - "${userQuote2}" → [how it influenced the design]
 - Layout: ${layoutChoice} → [specific implementation]
 
 **Design consistency maintained:**
+
 - Colors: Using existing palette (#000000, #00D084, #006644)
 - Typography: JetBrains Mono at established sizes
 - Spacing: Following 8/12/16/24/32px scale
@@ -732,11 +738,13 @@ I've created design mockups based on our discussion:
 **Options generated:**
 
 **Option A: Compact Cards**
+
 - Addresses: "density of lists" + "visual appeal of cards"
 - Layout: Grid with 8px gaps
 - Cards: 280×80px (shorter than typical = more dense)
 
 **Option B: Dense List with Card Accents**
+
 - Addresses: Same preferences, different approach
 - Layout: Vertical list, no gaps
 - Visual: Card-like borders and hover states
@@ -760,14 +768,15 @@ const revision = await mcp__pencil__create_design({
 
   // Apply user's revision request
   modifications: {
-    gap: existingTokens.spacing.sm,  // Increased from xs
-    cardHeight: 96,  // Slightly taller
+    gap: existingTokens.spacing.sm, // Increased from xs
+    cardHeight: 96, // Slightly taller
   },
 
   // Track the iteration
-  designNotes: 'Revision of Option A per user feedback: "more breathing room". ' +
-               'Increased gap to 12px, card height to 96px. ' +
-               'Still within established spacing scale.'
+  designNotes:
+    'Revision of Option A per user feedback: "more breathing room". ' +
+    'Increased gap to 12px, card height to 96px. ' +
+    'Still within established spacing scale.',
 });
 ```
 
@@ -775,6 +784,7 @@ const revision = await mcp__pencil__create_design({
 **Common mockup patterns for UI phases:**
 
 ### File Browser / List View
+
 ```typescript
 {
   type: 'frame',
@@ -791,6 +801,7 @@ const revision = await mcp__pencil__create_design({
 ```
 
 ### Card Grid
+
 ```typescript
 {
   type: 'frame',
@@ -805,6 +816,7 @@ const revision = await mcp__pencil__create_design({
 ```
 
 ### Modal / Dialog
+
 ```typescript
 {
   type: 'frame',
@@ -823,6 +835,7 @@ const revision = await mcp__pencil__create_design({
 ```
 
 ### Navigation / Sidebar
+
 ```typescript
 {
   type: 'frame',
@@ -841,6 +854,7 @@ const revision = await mcp__pencil__create_design({
 ```
 
 ### Empty State
+
 ```typescript
 {
   type: 'frame',
@@ -855,6 +869,7 @@ const revision = await mcp__pencil__create_design({
   ]
 }
 ```
+
 </step>
 
 <success_criteria>
