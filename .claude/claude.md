@@ -106,6 +106,72 @@ Do not implement or suggest implementations for:
 - Collaborative editing
 - Team accounts
 
+## Verification with MCP Tools
+
+### Playwright MCP Verification (REQUIRED)
+
+**ALWAYS attempt to verify application changes using Playwright MCP** when it is available. This ensures implemented features work correctly at runtime.
+
+**When to use Playwright MCP:**
+
+- After implementing UI components
+- After modifying styles or layouts
+- After adding new pages or routes
+- After any user-facing changes
+- During GSD verification phase
+
+**Verification workflow:**
+
+```typescript
+// 1. Navigate to the app
+await mcp__playwright__navigate({ url: 'http://localhost:5173' });
+
+// 2. Wait for page to load
+await mcp__playwright__wait({ selector: '[data-testid="app-loaded"]' });
+
+// 3. Capture screenshot for visual verification
+await mcp__playwright__screenshot({ fullPage: true, name: 'verification' });
+
+// 4. Verify element existence
+const exists = await mcp__playwright__evaluate({
+  script: `!!document.querySelector('.expected-element')`
+});
+
+// 5. Verify computed styles (for UI work)
+const styles = await mcp__playwright__evaluate({
+  script: `
+    const el = document.querySelector('.target');
+    const s = getComputedStyle(el);
+    return { backgroundColor: s.backgroundColor, color: s.color };
+  `
+});
+
+// 6. Test interactions
+await mcp__playwright__click({ selector: 'button.action' });
+await mcp__playwright__wait({ selector: '.result-element' });
+```
+
+**If Playwright MCP is not available:**
+
+- Document what needs human verification
+- Provide manual test steps
+- Flag items in VERIFICATION.md
+
+### Pencil MCP for Design Work
+
+**When working on UI phases**, use Pencil MCP (if available) or parse `.pen` files directly to extract design specifications as the source of truth.
+
+**Design files location:** `designs/*.pen`
+
+**Verification against design:**
+
+1. Extract design specs from Pencil file
+2. Verify CSS values match exactly (hex codes, pixel values)
+3. Use Playwright MCP to verify computed styles at runtime
+4. Document any discrepancies with file/line references
+
+**Reference:** See `.claude/get-shit-done/references/pencil-design-workflow.md`
+
 ## Git Workflow
 
 **Branch Protection Rules:**

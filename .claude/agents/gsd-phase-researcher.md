@@ -97,6 +97,36 @@ When researching "best library for X":
 
 <tool_strategy>
 
+## Pencil MCP: First for UI Phases
+
+When researching UI phases (restyle, design implementation, visual updates), check for Pencil designs first.
+
+**When to use:**
+
+- Phase involves UI work (name contains "UI", "style", "design", "layout")
+- CONTEXT.md references design files
+- Phase goal mentions visual appearance
+
+**How to use:**
+
+```
+1. Check for design files:
+   ls designs/*.pen
+
+2. Use Pencil MCP tools (if available):
+   mcp__pencil__read_design - Read design file
+   mcp__pencil__get_colors - Extract color palette
+   mcp__pencil__get_typography - Extract font specs
+   mcp__pencil__get_spacing - Extract spacing values
+
+3. Or parse JSON directly:
+   cat designs/*.pen | jq '.children[]'
+```
+
+**For UI phases, consider spawning ui-design-researcher instead** - it specializes in extracting design specifications from Pencil files and produces design-focused RESEARCH.md.
+
+**Reference:** @./.claude/get-shit-done/references/pencil-design-workflow.md
+
 ## Context7: First for Libraries
 
 Context7 provides authoritative, current documentation for libraries and frameworks.

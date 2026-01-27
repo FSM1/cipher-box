@@ -684,6 +684,299 @@ Automated checks passed. Awaiting human verification.
 
 </critical_rules>
 
+<ui_design_verification>
+
+## UI/Design Phase Verification
+
+When verifying phases that involve UI work (restyle, design implementation, component styling):
+
+### Detect UI Phase
+
+Check if phase involves UI:
+
+```bash
+# Check phase name/description for UI keywords
+grep -i "ui\|style\|design\|layout\|component\|visual" .planning/ROADMAP.md | grep "Phase ${PHASE_NUM}"
+
+# Check for design file references in RESEARCH.md
+grep -i "pencil\|\.pen\|design.*file" "${PHASE_DIR}"/*-RESEARCH.md
+```
+
+### Load Design Specifications
+
+If UI phase with Pencil design:
+
+```bash
+# Get design source from RESEARCH.md
+DESIGN_FILE=$(grep -o "designs/[^)]*\.pen" "${PHASE_DIR}"/*-RESEARCH.md | head -1)
+
+# Load design tokens
+cat "$DESIGN_FILE" | jq '.children[]'
+```
+
+### Design-Specific Truths
+
+For UI phases, derive truths from design specifications:
+
+```markdown
+### Observable Truths (Design-Derived)
+
+| # | Truth | Design Spec | Status |
+|---|-------|-------------|--------|
+| 1 | Header background is black | fill: #000000 (frame n386r) | ✓ |
+| 2 | Primary accent is correct green | fill: #00D084 | ✓ |
+| 3 | Typography uses JetBrains Mono | fontFamily: "JetBrains Mono" | ✗ |
+```
+
+### CSS Value Verification
+
+Verify exact CSS values match design:
+
+```bash
+verify_css_match() {
+  local css_file="$1"
+  local property="$2"
+  local expected="$3"
+
+  local actual=$(grep -o "$property: [^;]*" "$css_file" 2>/dev/null | head -1)
+
+  if [[ -z "$actual" ]]; then
+    echo "MISSING: $property not found in $css_file"
+  elif [[ "$actual" == *"$expected"* ]]; then
+    echo "MATCH: $property = $expected"
+  else
+    echo "MISMATCH: $property expected '$expected', found '$actual'"
+  fi
+}
+
+# Example checks
+verify_css_match "apps/web/src/index.css" "--color-primary" "#00D084"
+verify_css_match "apps/web/src/styles/file-browser.css" "background" "var(--color-background)"
+```
+
+### Use Playwright MCP for Runtime Verification
+
+**If Playwright MCP is available**, use it to verify computed styles:
+
+```typescript
+// Check if Playwright MCP tools are available
+// mcp__playwright__navigate, mcp__playwright__evaluate, etc.
+
+// Navigate to app
+await mcp__playwright__navigate({ url: 'http://localhost:5173' });
+
+// Verify computed styles
+const styles = await mcp__playwright__evaluate({
+  script: `
+    const el = document.querySelector('.app-header');
+    const s = getComputedStyle(el);
+    return {
+      backgroundColor: s.backgroundColor,
+      borderColor: s.borderBottomColor,
+      fontFamily: s.fontFamily
+    };
+  `
+});
+
+// Compare to design specs
+// backgroundColor should be rgb(0,0,0) for #000000
+// borderColor should be rgb(0,208,132) for #00D084
+```
+
+**If Playwright MCP not available**, flag for human verification:
+
+```markdown
+### Human Verification Required (Playwright MCP Not Available)
+
+**Runtime style verification needed:**
+
+1. Open http://localhost:5173 in browser
+2. Open DevTools → Computed Styles
+3. Verify:
+   - `.app-header` background-color = rgb(0, 0, 0)
+   - `.app-header` border-bottom-color = rgb(0, 208, 132)
+   - `.app-header` font-family includes "JetBrains Mono"
+```
+
+### Visual Regression (If Available)
+
+```typescript
+// Capture screenshot at design dimensions
+await mcp__playwright__set_viewport({ width: 1440, height: 900 });
+await mcp__playwright__screenshot({ fullPage: true, name: 'desktop-verification' });
+
+// Compare to baseline
+await mcp__playwright__visual_diff({
+  baseline: 'baselines/desktop.png',
+  current: 'screenshots/desktop-verification.png',
+  threshold: 0.02
+});
+```
+
+### Responsive Verification
+
+For mobile/tablet layouts:
+
+```bash
+# Check responsive CSS exists
+grep -l "@media.*768px\|@media.*390px" apps/web/src/styles/*.css
+
+# Verify mobile frame specs are implemented
+# Design: ZVAUX (390x844)
+```
+
+With Playwright:
+
+```typescript
+// Mobile verification
+await mcp__playwright__set_viewport({ width: 390, height: 844 });
+await mcp__playwright__screenshot({ name: 'mobile-verification' });
+```
+
+### Design Verification Output
+
+Add to VERIFICATION.md for UI phases:
+
+```markdown
+## Design Compliance
+
+**Design Source:** designs/cipher-box-design.pen
+**Verification Method:** [automated with Playwright MCP | manual CSS inspection]
+
+### Color Compliance
+
+| Token | Design | Implemented | Status |
+|-------|--------|-------------|--------|
+| --color-primary | #00D084 | #00D084 | ✓ |
+| --color-background | #000000 | #000000 | ✓ |
+
+### Typography Compliance
+
+| Property | Design | Implemented | Status |
+|----------|--------|-------------|--------|
+| font-family | JetBrains Mono | JetBrains Mono | ✓ |
+| font-size (body) | 11px | 11px | ✓ |
+
+### Spacing Compliance
+
+| Component | Design | Implemented | Status |
+|-----------|--------|-------------|--------|
+| Header padding | 12px 24px | 12px 24px | ✓ |
+
+### Responsive Compliance
+
+| Breakpoint | Design Frame | Verified | Status |
+|------------|--------------|----------|--------|
+| Desktop (1440px) | bi8Au | Yes | ✓ |
+| Mobile (390px) | ZVAUX | Yes | ✓ |
+
+### Visual Regression
+
+[Screenshots captured and compared - X% pixel difference]
+```
+
+</ui_design_verification>
+
+<playwright_mcp_verification>
+
+## Using Playwright MCP for Verification
+
+When Playwright MCP tools are available, ALWAYS use them for application verification.
+
+### Check Availability
+
+```bash
+# Check if Playwright MCP is configured
+# Look for mcp__playwright__* tools in available tools list
+```
+
+### Standard Verification Flow
+
+```typescript
+// 1. Ensure app is running
+// Check if dev server is up at expected URL
+
+// 2. Navigate to app
+await mcp__playwright__navigate({ url: 'http://localhost:5173' });
+
+// 3. Wait for app to load
+await mcp__playwright__wait({ selector: '[data-testid="app-loaded"]', timeout: 10000 });
+
+// 4. Capture baseline state
+await mcp__playwright__screenshot({ fullPage: true, name: 'verification-baseline' });
+
+// 5. Verify specific elements
+const elementExists = await mcp__playwright__evaluate({
+  script: `!!document.querySelector('.expected-element')`
+});
+
+// 6. Verify functionality
+await mcp__playwright__click({ selector: 'button.upload' });
+await mcp__playwright__wait({ selector: '.upload-modal' });
+
+// 7. Capture result
+await mcp__playwright__screenshot({ name: 'after-action' });
+```
+
+### Verification Patterns
+
+**Element existence:**
+```typescript
+const exists = await mcp__playwright__evaluate({
+  script: `!!document.querySelector('${selector}')`
+});
+```
+
+**Text content:**
+```typescript
+const text = await mcp__playwright__evaluate({
+  script: `document.querySelector('${selector}')?.textContent`
+});
+```
+
+**Computed styles:**
+```typescript
+const styles = await mcp__playwright__evaluate({
+  script: `
+    const el = document.querySelector('${selector}');
+    const s = getComputedStyle(el);
+    return { backgroundColor: s.backgroundColor, color: s.color };
+  `
+});
+```
+
+**Interactive verification:**
+```typescript
+// Click and verify result
+await mcp__playwright__click({ selector: 'button.submit' });
+await mcp__playwright__wait({ selector: '.success-message' });
+```
+
+### When Playwright MCP Not Available
+
+1. Document what WOULD be verified
+2. Flag items for human verification
+3. Provide manual test steps
+
+```markdown
+### Playwright MCP Not Available
+
+The following verifications require manual testing:
+
+1. **Header renders correctly**
+   - Open app in browser
+   - Check header is black with green border
+   - Verify logo shows "> CIPHERBOX"
+
+2. **File upload works**
+   - Click upload button
+   - Select a file
+   - Verify upload progress shows
+   - Verify file appears in list
+```
+
+</playwright_mcp_verification>
+
 <stub_detection_patterns>
 
 ## Universal Stub Patterns

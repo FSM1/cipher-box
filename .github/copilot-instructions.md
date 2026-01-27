@@ -386,6 +386,42 @@ const privateKey = await web3authProvider.request({
 const { idToken } = await web3auth.authenticateUser();
 ```
 
+## Verification Requirements
+
+### Playwright MCP for Application Testing
+
+**ALWAYS attempt to verify application changes using Playwright MCP** when it is available. This ensures implemented features work correctly at runtime.
+
+**Verification workflow:**
+
+1. Navigate to the app URL (typically `http://localhost:5173`)
+2. Wait for page elements to load
+3. Capture screenshots for visual verification
+4. Verify element existence and content
+5. Test interactive features (clicks, form submissions)
+6. Verify computed styles match design specifications
+
+**If Playwright MCP is not available:**
+
+- Document what needs manual verification
+- Provide step-by-step test instructions
+- Flag items that require human review
+
+### Pencil Design Verification
+
+For UI work, verify implementations against Pencil design files:
+
+1. **Design files are at:** `designs/*.pen` (JSON format)
+2. **Extract exact values:** Colors (hex), spacing (pixels), typography
+3. **Verify CSS matches:** Check both source CSS and computed styles
+4. **Document discrepancies:** Include file/line references for fixes
+
+**Key design specs:**
+
+- Colors: `#000000` (background), `#00D084` (primary green)
+- Font: JetBrains Mono (400, 600, 700 weights)
+- Spacing: 8px, 12px, 16px, 24px, 32px scale
+
 ## Questions to Ask When Unclear
 
 1. **Auth-related:** "Does this require Phase 1 (Web3Auth) or Phase 2 (CipherBox backend) authentication?"
