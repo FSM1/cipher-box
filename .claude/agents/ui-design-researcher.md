@@ -214,7 +214,39 @@ Check if designs exist for all required states:
 - Modal dialogs
 - Toast notifications
 
-If missing, document for user:
+If missing, attempt to create via Pencil MCP or document for user:
+
+**Option 1: Create via Pencil MCP (preferred)**
+
+```typescript
+// Create missing design using existing design tokens
+mcp__pencil__create_design({
+  type: 'frame',
+  name: 'Error Toast',
+  width: 320,
+  height: 48,
+  fill: '#000000',
+  stroke: { thickness: 1, fill: '#EF4444' },
+  children: [
+    {
+      type: 'text',
+      content: 'Error message',
+      fill: '#EF4444',
+      fontFamily: 'JetBrains Mono',
+      fontSize: 11,
+      fontWeight: '400'
+    }
+  ]
+});
+```
+
+When creating designs via MCP:
+- Use existing color palette from the design file
+- Match typography specs (font, sizes, weights)
+- Follow established spacing patterns
+- Document what was auto-generated for user review
+
+**Option 2: Document for user (if MCP creation not available)**
 
 ```markdown
 ## Missing Designs
@@ -225,7 +257,7 @@ These states need Pencil designs before implementation:
 2. **Error toast** - No design found
 3. **Empty folder state** - No design found
 
-**Recommendation:** Ask user to create these in Pencil or provide design direction.
+**Action:** Create these in Pencil using existing design tokens, or provide design direction.
 ```
 
 </extraction_protocol>
