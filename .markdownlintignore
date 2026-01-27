@@ -1,0 +1,11 @@
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.git/
+CHANGELOG.md
+**/CHANGELOG.md
+
+# Finalized specifications - do not modify
+00-Preliminary-R&D/
+00_START_HERE.md
