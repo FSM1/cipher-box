@@ -516,129 +516,255 @@ Would you like me to create design mockups based on our discussion?
 
 **If yes, generate mockups:**
 
-1. **Create draft frame in Pencil:**
+## Step 1: Load Existing Design Context (REQUIRED)
+
+Before creating ANY new design, load the existing design system:
 
 ```typescript
-// Create a separate frame for draft designs (doesn't interfere with existing)
-mcp__pencil__create_design({
+// Get existing design file
+const designFile = await mcp__pencil__read_design({ path: 'designs/*.pen' });
+
+// Extract established tokens
+const existingTokens = await mcp__pencil__get_design_tokens({
+  file: designFile.path,
+  extract: ['colors', 'typography', 'spacing', 'effects', 'borders']
+});
+
+// Example extracted tokens:
+// {
+//   colors: {
+//     background: '#000000',
+//     primary: '#00D084',
+//     secondary: '#006644',
+//     border: '#003322',
+//     text: '#00D084',
+//     textMuted: '#006644'
+//   },
+//   typography: {
+//     fontFamily: 'JetBrains Mono',
+//     sizes: { xs: 10, sm: 11, base: 14, lg: 18, xl: 24 },
+//     weights: { normal: 400, semibold: 600, bold: 700 }
+//   },
+//   spacing: { xs: 8, sm: 12, md: 16, lg: 24, xl: 32 },
+//   borders: { thickness: 1, radius: 0 },
+//   effects: { glow: { blur: 10, color: '#00D08466' } }
+// }
+```
+
+## Step 2: Translate User Intent to Design Parameters
+
+Map discussion decisions to concrete design specs:
+
+```typescript
+// Capture user preferences from discussion
+const userIntent = {
+  // From discussion answers
+  layout: discussionAnswers.layoutStyle,      // e.g., "cards", "list", "grid"
+  density: discussionAnswers.density,          // e.g., "compact", "comfortable", "spacious"
+  emphasis: discussionAnswers.emphasis,        // e.g., "content-first", "visual-heavy"
+  interactions: discussionAnswers.interactions, // e.g., "hover effects", "minimal"
+
+  // Quoted user statements (preserve exact wording)
+  userQuotes: [
+    "I want it to feel like a terminal",
+    "Green accents but not overwhelming",
+    "Clean and minimal"
+  ]
+};
+
+// Translate intent to design parameters
+function translateIntentToDesign(intent, existingTokens) {
+  const params = {
+    // Always use existing tokens for consistency
+    colors: existingTokens.colors,
+    typography: existingTokens.typography,
+    spacing: existingTokens.spacing,
+
+    // Derive layout from user preferences
+    layout: {
+      type: intent.layout,
+      gap: intent.density === 'compact' ? existingTokens.spacing.xs :
+           intent.density === 'spacious' ? existingTokens.spacing.lg :
+           existingTokens.spacing.md,
+      padding: intent.density === 'compact' ? existingTokens.spacing.sm :
+               existingTokens.spacing.md
+    },
+
+    // Derive visual treatment from user quotes
+    visualStyle: {
+      useBorders: intent.userQuotes.some(q => q.includes('terminal')),
+      useGlow: intent.userQuotes.some(q => q.includes('accent')),
+      cornerRadius: intent.userQuotes.some(q => q.includes('terminal')) ? 0 : 4
+    }
+  };
+
+  return params;
+}
+
+const designParams = translateIntentToDesign(userIntent, existingTokens);
+```
+
+## Step 3: Create Design with Full Context
+
+Pass both user intent AND existing tokens to Pencil:
+
+```typescript
+// Create draft frame with consistency context
+const draftFrame = await mcp__pencil__create_design({
   type: 'frame',
   name: `Draft: Phase ${PHASE} - ${PHASE_NAME}`,
   width: 1440,
   height: 900,
-  fill: '#000000',  // Use existing design tokens
-  children: []
+
+  // Use ONLY existing tokens
+  fill: existingTokens.colors.background,
+
+  // Pass context for AI-assisted design generation
+  designContext: {
+    // Existing design system (for consistency)
+    tokens: existingTokens,
+
+    // User's stated preferences (from discussion)
+    userIntent: userIntent,
+
+    // Translated parameters
+    derivedParams: designParams,
+
+    // Reference to existing components (match their patterns)
+    referenceFrames: ['Desktop File Browser', 'Login Screen'],
+
+    // Explicit consistency rules
+    consistencyRules: [
+      'Use ONLY colors from existing palette',
+      'Match typography scale exactly',
+      'Follow established spacing increments',
+      'Maintain border style (1px solid, sharp corners)',
+      'Apply glow effects consistently with existing usage'
+    ]
+  }
 });
 ```
 
-2. **Generate design options based on discussion:**
+## Step 4: Generate Options Based on User Preferences
 
-For each major UI decision, create visual options:
+For each discussed gray area, generate options that respect both user intent AND existing design:
 
 ```typescript
-// Example: Layout options discussed
-if (layoutDecision === 'needs_mockup') {
-  // Option A: Card layout
-  mcp__pencil__create_design({
-    parentFrame: `Draft: Phase ${PHASE}`,
-    type: 'frame',
-    name: 'Option A: Card Layout',
-    x: 0,
-    y: 0,
-    width: 400,
-    height: 300,
-    children: [/* card components */]
-  });
+// Example: User discussed layout preferences
+// Discussion captured: "cards vs list", user said "I like the density of lists but visual appeal of cards"
 
-  // Option B: List layout
-  mcp__pencil__create_design({
-    parentFrame: `Draft: Phase ${PHASE}`,
-    type: 'frame',
-    name: 'Option B: List Layout',
-    x: 420,
-    y: 0,
-    width: 400,
-    height: 300,
-    children: [/* list components */]
-  });
-}
+const optionA = await mcp__pencil__create_design({
+  parentFrame: draftFrame.id,
+  type: 'frame',
+  name: 'Option A: Compact Cards',
+
+  // Derived from user intent: "density of lists" + "visual appeal of cards"
+  layout: 'grid',
+  gap: existingTokens.spacing.xs,  // Compact like list
+
+  // Visual treatment from existing design
+  children: [
+    {
+      type: 'frame',
+      name: 'card',
+      width: 280,
+      height: 80,  // Shorter than typical cards = more dense
+      fill: existingTokens.colors.background,
+      stroke: { thickness: 1, fill: existingTokens.colors.border },
+      // ... using existing tokens throughout
+    }
+  ],
+
+  // Document the reasoning
+  designNotes: 'Combines list density (compact height) with card visual structure. ' +
+               'Uses existing border style and spacing tokens.'
+});
+
+const optionB = await mcp__pencil__create_design({
+  parentFrame: draftFrame.id,
+  type: 'frame',
+  name: 'Option B: Dense List with Card Accents',
+
+  // Alternative interpretation of same user intent
+  layout: 'vertical',
+  gap: 0,  // List-like, no gaps
+
+  children: [
+    {
+      type: 'frame',
+      name: 'row',
+      height: 48,
+      // Card-like visual: subtle background on hover, border-bottom
+      stroke: { thickness: 1, fill: existingTokens.colors.border, sides: ['bottom'] },
+    }
+  ],
+
+  designNotes: 'List structure with card-like visual treatment (borders, hover states). ' +
+               'Matches existing file browser row pattern.'
+});
 ```
 
-3. **Use existing design tokens:**
+## Step 5: Present with Design Rationale
 
-```bash
-# Extract tokens from existing design
-DESIGN_FILE=$(ls designs/*.pen 2>/dev/null | head -1)
-if [ -n "$DESIGN_FILE" ]; then
-  # Get color palette
-  COLORS=$(cat "$DESIGN_FILE" | jq -r '.. | .fill? // empty' | sort -u | grep "^#")
-  # Get typography
-  FONTS=$(cat "$DESIGN_FILE" | jq -r '.. | select(.type=="text") | .fontFamily' | sort -u | head -1)
-fi
-```
+Show user how their input shaped each option:
 
-Apply existing tokens to maintain visual consistency with the rest of the app.
-
-4. **Present options to user:**
-
-```
-I've created design mockups in Pencil:
+```markdown
+I've created design mockups based on our discussion:
 
 **Frame:** "Draft: Phase ${PHASE} - ${PHASE_NAME}"
 
-**Options generated:**
-- Option A: [Description] - [What it looks like]
-- Option B: [Description] - [What it looks like]
-- Option C: [Description] - [What it looks like]
+**Your preferences I incorporated:**
+- "${userQuote1}" → [how it influenced the design]
+- "${userQuote2}" → [how it influenced the design]
+- Layout: ${layoutChoice} → [specific implementation]
 
-You can view these in Pencil. Which approach do you prefer?
+**Design consistency maintained:**
+- Colors: Using existing palette (#000000, #00D084, #006644)
+- Typography: JetBrains Mono at established sizes
+- Spacing: Following 8/12/16/24/32px scale
+- Borders: 1px solid, sharp corners (terminal aesthetic)
+
+**Options generated:**
+
+**Option A: Compact Cards**
+- Addresses: "density of lists" + "visual appeal of cards"
+- Layout: Grid with 8px gaps
+- Cards: 280×80px (shorter than typical = more dense)
+
+**Option B: Dense List with Card Accents**
+- Addresses: Same preferences, different approach
+- Layout: Vertical list, no gaps
+- Visual: Card-like borders and hover states
+
+Which direction resonates more with your vision?
 ```
 
-Use AskUserQuestion:
-- header: "Design Options"
-- question: "Which design direction do you prefer?"
-- options: ["Option A: [name]", "Option B: [name]", "Option C: [name]", "Combine elements", "None - try different approach"]
+## Step 6: Iterate with Context Preserved
 
-5. **Iterate if needed:**
-
-If user wants changes:
-- "Combine elements" → Ask which elements from which options
-- "None" → Ask what they'd like to see instead, generate new options
-
-6. **Finalize approved design:**
-
-Once user approves:
+If user wants changes, preserve all context:
 
 ```typescript
-// Rename approved design frame
-mcp__pencil__update_design({
-  frameId: approvedFrameId,
-  name: `Approved: Phase ${PHASE} - ${PHASE_NAME}`
-});
+// User says: "I like Option A but want more breathing room"
+const revision = await mcp__pencil__create_design({
+  parentFrame: draftFrame.id,
+  type: 'frame',
+  name: 'Option A (Revised): Cards with More Space',
 
-// Or copy to main design area if user wants
-mcp__pencil__copy_frame({
-  sourceFrame: approvedFrameId,
-  targetParent: 'root',  // Main design area
-  newName: `Phase ${PHASE}: ${COMPONENT_NAME}`
+  // Start from Option A
+  baseOn: optionA.id,
+
+  // Apply user's revision request
+  modifications: {
+    gap: existingTokens.spacing.sm,  // Increased from xs
+    cardHeight: 96,  // Slightly taller
+  },
+
+  // Track the iteration
+  designNotes: 'Revision of Option A per user feedback: "more breathing room". ' +
+               'Increased gap to 12px, card height to 96px. ' +
+               'Still within established spacing scale.'
 });
 ```
-
-**Record in CONTEXT.md:**
-
-```markdown
-### Approved Design
-
-**Pencil frame:** "Approved: Phase ${PHASE} - ${PHASE_NAME}"
-**Design file:** designs/[filename].pen
-
-The approved design mockup captures:
-- [Key visual decision 1]
-- [Key visual decision 2]
-- [Key visual decision 3]
-
-This design serves as the source of truth for implementation.
-```
-</step>
 
 <step name="design_mockup_patterns">
 **Common mockup patterns for UI phases:**

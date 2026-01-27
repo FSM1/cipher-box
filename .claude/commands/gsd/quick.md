@@ -121,19 +121,61 @@ AskUserQuestion(
    - Store design reference for planner context
 
 4. **If "Generate new mockup":**
-   - Create draft frame in Pencil:
+
+   First, load existing design context for consistency:
    ```typescript
-   mcp__pencil__create_design({
+   // Load existing design system
+   const existingDesign = await mcp__pencil__read_design({ path: DESIGN_FILE });
+   const tokens = await mcp__pencil__get_design_tokens({
+     file: DESIGN_FILE,
+     extract: ['colors', 'typography', 'spacing', 'effects', 'borders']
+   });
+   ```
+
+   Then, translate user's task description to design parameters:
+   ```typescript
+   // Parse task description for design intent
+   const taskIntent = {
+     description: DESCRIPTION,  // e.g., "Add a delete confirmation modal"
+     componentType: inferComponentType(DESCRIPTION),  // e.g., "modal"
+     action: inferAction(DESCRIPTION),  // e.g., "delete" → destructive styling
+   };
+
+   // Map to design parameters using existing tokens
+   const designParams = {
+     colors: tokens.colors,
+     typography: tokens.typography,
+     // Adjust for context (e.g., destructive action = error color)
+     accentColor: taskIntent.action === 'delete' ? '#EF4444' : tokens.colors.primary,
+   };
+   ```
+
+   Create mockup with full context:
+   ```typescript
+   await mcp__pencil__create_design({
      type: 'frame',
      name: `Quick: ${slug}`,
      width: 800,
      height: 600,
-     fill: '#000000',  // Use existing tokens if available
-     children: []
+     fill: tokens.colors.background,
+
+     // Pass context for consistency
+     designContext: {
+       tokens: tokens,
+       taskIntent: taskIntent,
+       referenceFrames: existingDesign.frames.map(f => f.name),
+       consistencyRules: [
+         'Use ONLY colors from existing palette',
+         'Match existing component patterns',
+         'Follow established spacing scale'
+       ]
+     },
+
+     children: [/* generated based on componentType */]
    });
    ```
-   - Generate mockup based on task description
-   - Present to user for approval
+
+   - Present to user for approval with design rationale
    - Store approved design reference
 
 5. **If "Skip design":**
