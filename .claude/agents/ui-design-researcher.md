@@ -216,7 +216,7 @@ Check if designs exist for all required states:
 
 If missing, attempt to create via Pencil MCP or document for user:
 
-**Option 1: Create via Pencil MCP (preferred)**
+#### Option 1: Create via Pencil MCP (preferred)
 
 Before creating ANY design, load and respect existing design context:
 
@@ -356,7 +356,7 @@ When creating designs via MCP:
 - **Validate before presenting** - Check new design uses only existing tokens
 - **Flag for user review** - Auto-generated designs need human approval
 
-**Option 2: Document for user (if MCP creation not available)**
+#### Option 2: Document for user (if MCP creation not available)
 
 ```markdown
 ## Missing Designs
