@@ -392,6 +392,17 @@
   padding: var(--spacing-lg);
 }
 
+/* Terminal-style ASCII art for empty state */
+.empty-state-ascii {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.2;
+  color: var(--color-text-secondary);
+  margin: 0 0 var(--spacing-md) 0;
+  white-space: pre;
+}
+
+/* Old icon style - replaced by ASCII art */
 .empty-state-icon {
   font-size: 2rem;
   display: block;
@@ -411,6 +422,7 @@
   font-size: var(--font-size-xs);
   margin: 0;
   color: var(--color-text-secondary);
+  text-transform: lowercase;
 }
 
 .empty-state-upload {
