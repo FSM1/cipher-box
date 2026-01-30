@@ -1,6 +1,7 @@
 import { type DragEvent, type MouseEvent } from 'react';
 import type { FolderChild } from '@cipherbox/crypto';
 import { FileListItem } from './FileListItem';
+import { ParentDirRow } from './ParentDirRow';
 
 type FileListProps = {
   /** Items to display (files and folders) */
@@ -9,6 +10,10 @@ type FileListProps = {
   selectedId: string | null;
   /** Parent folder ID (for drag operations) */
   parentId: string;
+  /** Whether to show [..] PARENT_DIR row (non-root folders) */
+  showParentRow?: boolean;
+  /** Callback when [..] row is clicked to navigate up */
+  onNavigateUp?: () => void;
   /** Callback when an item is selected */
   onSelect: (itemId: string) => void;
   /** Callback when navigating into a folder */
@@ -63,6 +68,8 @@ export function FileList({
   items,
   selectedId,
   parentId,
+  showParentRow,
+  onNavigateUp,
   onSelect,
   onNavigate,
   onContextMenu,
@@ -75,21 +82,19 @@ export function FileList({
       {/* Header row */}
       <div className="file-list-header" role="row">
         <div className="file-list-header-name" role="columnheader">
-          NAME
+          [NAME]
         </div>
         <div className="file-list-header-size" role="columnheader">
-          SIZE
-        </div>
-        <div className="file-list-header-type" role="columnheader">
-          TYPE
+          [SIZE]
         </div>
         <div className="file-list-header-date" role="columnheader">
-          MODIFIED
+          [MODIFIED]
         </div>
       </div>
 
       {/* Item rows */}
       <div className="file-list-body" role="rowgroup">
+        {showParentRow && onNavigateUp && <ParentDirRow onClick={onNavigateUp} />}
         {sortedItems.map((item) => (
           <FileListItem
             key={item.id}
