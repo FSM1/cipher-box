@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 ## Current Position
 
 Phase: 6.3 of 11 (UI Structure Refactor)
-Plan: 3 of TBD in Phase 6.3 complete
-Status: In progress - File list components updated
-Last activity: 2026-01-30 - Completed 06.3-03-PLAN.md
+Plan: 4 of TBD in Phase 6.3 complete
+Status: In progress - FileBrowser integrated with in-place navigation
+Last activity: 2026-01-30 - Completed 06.3-04-PLAN.md
 
-Progress: [########..] 79% (37 of 47 plans)
+Progress: [########..] 80% (38 of 47 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 37
+- Total plans completed: 38
 - Average duration: 4.9 min
-- Total execution time: 3.02 hours
+- Total execution time: 3.12 hours
 
 **By Phase:**
 
@@ -37,12 +37,12 @@ Progress: [########..] 79% (37 of 47 plans)
 | 05-folder-system           | 4/4   | 18 min | 4.5 min  |
 | 06-file-browser-ui         | 4/4   | 19 min | 4.8 min  |
 | 06.1-webapp-automation     | 6/6   | 25 min | 4.2 min  |
-| 06.3-ui-structure-refactor | 3/?   | 7 min  | 2.3 min  |
+| 06.3-ui-structure-refactor | 4/?   | 13 min | 3.3 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 3m, 4m, 2m, 3m, 4m
-- Trend: Consistent, improving
+- Last 5 plans: 4m, 2m, 3m, 4m, 6m
+- Trend: Consistent, stable
 
 Updated after each plan completion.
 
@@ -162,6 +162,10 @@ Recent decisions affecting current work:
 | Parent navigation via [..] row not breadcrumb        | 06.3-03 | Back button removed from breadcrumbs, [..] row for parent navigation      |
 | Breadcrumbs show full path ~/root/path lowercase     | 06.3-03 | Terminal aesthetic with lowercase folder names                            |
 | ASCII art folder icon for empty state                | 06.3-03 | Terminal-style ASCII art instead of emoji for empty state                 |
+| FileBrowser removes FolderTree entirely              | 06.3-04 | Sidebar removed, in-place navigation via [..] row                         |
+| Deprecated components marked with @deprecated        | 06.3-04 | FolderTree, FolderTreeNode, ApiStatusIndicator for future cleanup         |
+| 2-column mobile file list                            | 06.3-04 | Date column hidden on mobile for space efficiency                         |
+| AppShell overlay sidebar pattern                     | 06.3-04 | Fixed position with translateX for mobile slide-in animation              |
 
 ### Pending Todos
 
@@ -204,11 +208,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-01-30
-Stopped at: Completed 06.3-03-PLAN.md - File list components updated
+Stopped at: Completed 06.3-04-PLAN.md - FileBrowser integrated with in-place navigation
 Resume file: None
-Next plan: 06.3-04-PLAN.md (Toolbar and integration)
+Next plan: 06.3-05-PLAN.md (if exists) or Phase 6.3 complete
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-30 after 06.3-03 completion_
+_Last updated: 2026-01-30 after 06.3-04 completion_
