@@ -266,6 +266,20 @@ await mcp__pencil__create_design({
 
 All draft mockups MUST be placed in a dedicated "Drafts" area of the canvas, separate from the main design.
 
+### Design Token Reference for Drafts Container
+
+Use tokens from DESIGN.md for visual consistency:
+
+```typescript
+// Tokens from DESIGN.md for drafts container styling
+const draftsTokens = {
+  background: '#000000', // tokens.colors.background
+  border: '#003322', // tokens.colors.borderMuted
+  headerText: '#006644', // tokens.colors.textMuted
+  labelText: '#00D084', // tokens.colors.primary (for option labels)
+};
+```
+
 ### Step 1: Find or Create Drafts Container
 
 ```typescript
@@ -285,7 +299,7 @@ if (!draftsFrame) {
     direction: 'right', // Place drafts to the right of main designs
   });
 
-  // Create drafts container at found position
+  // Create drafts container at found position using design system tokens
   await mcp__pencil__batch_design({
     filePath: 'designs/cipher-box-design.pen',
     operations: `
@@ -296,8 +310,8 @@ drafts=I(document, {
   y: ${emptySpace.y},
   width: 2000,
   height: 1500,
-  fill: "#0a0a0a",
-  stroke: { thickness: 2, fill: "#333333", dashPattern: [10, 5] },
+  fill: "#000000",
+  stroke: { thickness: 2, fill: "#003322", dashPattern: [10, 5] },
   layout: "horizontal",
   gap: 100,
   padding: 50
@@ -308,7 +322,7 @@ header=I(drafts, {
   fontFamily: "JetBrains Mono",
   fontSize: 24,
   fontWeight: 700,
-  fill: "#666666"
+  fill: "#006644"
 })
     `,
   });
@@ -367,32 +381,64 @@ PHASE_DIR=$(ls -d .planning/phases/${PADDED_PHASE}-* 2>/dev/null | head -1)
 mkdir -p "${PHASE_DIR}/screenshots"
 ```
 
-### Step 2: Capture Each Option
+### Step 2: Capture and Save Each Option
+
+The `mcp__pencil__get_screenshot` tool returns image data that must be written to disk using the Write tool with base64 encoding.
 
 ```typescript
-// Capture Option A
-await mcp__pencil__get_screenshot({
+// Capture Option A - screenshot returns as base64 PNG data
+const screenshotA = await mcp__pencil__get_screenshot({
   filePath: 'designs/cipher-box-design.pen',
   nodeId: optionA.id,
 });
-// Save to phase folder (screenshot is returned as image data)
+// Write screenshot to phase folder
+await write({
+  file_path: `${PHASE_DIR}/screenshots/option-a-${feature}.png`,
+  content: screenshotA.imageData, // base64 PNG data from get_screenshot
+  encoding: 'base64',
+});
 
 // Capture Option B
-await mcp__pencil__get_screenshot({
+const screenshotB = await mcp__pencil__get_screenshot({
   filePath: 'designs/cipher-box-design.pen',
   nodeId: optionB.id,
 });
+await write({
+  file_path: `${PHASE_DIR}/screenshots/option-b-${feature}.png`,
+  content: screenshotB.imageData,
+  encoding: 'base64',
+});
 
 // Capture in-context views
-await mcp__pencil__get_screenshot({
+const contextScreenshotA = await mcp__pencil__get_screenshot({
   filePath: 'designs/cipher-box-design.pen',
   nodeId: contextA.id,
 });
+await write({
+  file_path: `${PHASE_DIR}/screenshots/option-a-in-context.png`,
+  content: contextScreenshotA.imageData,
+  encoding: 'base64',
+});
+
+const contextScreenshotB = await mcp__pencil__get_screenshot({
+  filePath: 'designs/cipher-box-design.pen',
+  nodeId: contextB.id,
+});
+await write({
+  file_path: `${PHASE_DIR}/screenshots/option-b-in-context.png`,
+  content: contextScreenshotB.imageData,
+  encoding: 'base64',
+});
 ```
 
-### Step 3: Save Screenshots to Phase Folder
+### Step 3: Verify Screenshots Were Saved
 
-Screenshots should be saved with descriptive names:
+```bash
+# Verify screenshots exist
+ls -la "${PHASE_DIR}/screenshots/"
+```
+
+Expected output:
 
 ```text
 .planning/phases/07-upload-modal/screenshots/
@@ -469,7 +515,7 @@ notSelectedLabel=I("${nonSelectedOptionId}", {
   content: "NOT SELECTED",
   fontFamily: "JetBrains Mono",
   fontSize: 10,
-  fill: "#666666"
+  fill: "#006644"
 })
   `,
 });
@@ -477,14 +523,19 @@ notSelectedLabel=I("${nonSelectedOptionId}", {
 
 ### Step 3: Capture Final Screenshot
 
-After marking selection, capture the selected option:
+After marking selection, capture and save the selected option screenshot:
 
 ```typescript
-await mcp__pencil__get_screenshot({
+const selectedScreenshot = await mcp__pencil__get_screenshot({
   filePath: 'designs/cipher-box-design.pen',
   nodeId: selectedOptionId,
 });
-// Save as: selected-option-{letter}.png
+// Write screenshot to phase folder
+await write({
+  file_path: `${PHASE_DIR}/screenshots/selected-option-${letter}.png`,
+  content: selectedScreenshot.imageData,
+  encoding: 'base64',
+});
 ```
 
 ### Step 4: Update Drafts Container Label
@@ -597,12 +648,29 @@ mkdir -p "${PHASE_DIR}/screenshots"
 ```
 
 ```typescript
-// Capture each option and context view
-await mcp__pencil__get_screenshot({ nodeId: optionA.id });
-// Save to: ${PHASE_DIR}/screenshots/option-a-${feature}.png
+// Capture Option A and save to disk
+const screenshotA = await mcp__pencil__get_screenshot({
+  filePath: 'designs/cipher-box-design.pen',
+  nodeId: optionA.id,
+});
+await write({
+  file_path: `${PHASE_DIR}/screenshots/option-a-${feature}.png`,
+  content: screenshotA.imageData,
+  encoding: 'base64',
+});
 
-await mcp__pencil__get_screenshot({ nodeId: contextA.id });
-// Save to: ${PHASE_DIR}/screenshots/option-a-in-context.png
+// Capture in-context view and save to disk
+const contextScreenshotA = await mcp__pencil__get_screenshot({
+  filePath: 'designs/cipher-box-design.pen',
+  nodeId: contextA.id,
+});
+await write({
+  file_path: `${PHASE_DIR}/screenshots/option-a-in-context.png`,
+  content: contextScreenshotA.imageData,
+  encoding: 'base64',
+});
+
+// Repeat for Option B...
 ```
 
 ## Step 8: Compile Structured Return
