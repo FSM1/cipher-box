@@ -1,6 +1,8 @@
+import { StatusIndicator } from './StatusIndicator';
+
 /**
  * App footer component.
- * Contains copyright, links, and status indicator.
+ * Contains copyright, links, and connection status indicator.
  */
 export function AppFooter() {
   return (
@@ -8,8 +10,28 @@ export function AppFooter() {
       <div className="footer-left">
         <span className="footer-copyright">(c) 2026 CipherBox</span>
       </div>
-      <div className="footer-center">{/* Links will be added in Task 2 */}</div>
-      <div className="footer-right">{/* StatusIndicator will be added in Task 2 */}</div>
+      <div className="footer-center">
+        <a href="#" className="footer-link">
+          [help]
+        </a>
+        <a href="#" className="footer-link">
+          [privacy]
+        </a>
+        <a href="#" className="footer-link">
+          [terms]
+        </a>
+        <a
+          href="https://github.com/cipherbox"
+          className="footer-link"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          [github]
+        </a>
+      </div>
+      <div className="footer-right">
+        <StatusIndicator />
+      </div>
     </footer>
   );
 }

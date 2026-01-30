@@ -1,6 +1,8 @@
+import { UserMenu } from './UserMenu';
+
 /**
  * App header component.
- * Contains logo and user menu.
+ * Contains logo and user menu dropdown.
  */
 export function AppHeader() {
   return (
@@ -9,7 +11,9 @@ export function AppHeader() {
         <span className="header-prompt">&gt;</span>
         <span className="header-logo">CIPHERBOX</span>
       </div>
-      <div className="header-right">{/* UserMenu will be added in Task 2 */}</div>
+      <div className="header-right">
+        <UserMenu />
+      </div>
     </header>
   );
 }
