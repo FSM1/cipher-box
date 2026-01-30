@@ -5,45 +5,46 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 6.2 - Restyle App with Pencil Design (inserted)
+**Current focus:** Phase 6.3 - UI Structure Refactor (inserted)
 
 ## Current Position
 
-Phase: 6.1 of 11 (Webapp Automation Testing) - COMPLETE
-Plan: 6 of 6 in Phase 6.1 complete
-Status: Complete - All E2E tests and CI integration done
-Last activity: 2026-01-22 - Completed quick task 001: API status indicator on login page
+Phase: 6.3 of 11 (UI Structure Refactor)
+Plan: 1 of TBD in Phase 6.3 complete
+Status: In progress - AppShell layout components created
+Last activity: 2026-01-30 - Completed 06.3-01-PLAN.md
 
-Progress: [#######...] 72% (34 of 47 plans)
+Progress: [#######...] 74% (35 of 47 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 34
-- Average duration: 5.1 min
-- Total execution time: 2.9 hours
+- Total plans completed: 35
+- Average duration: 5.0 min
+- Total execution time: 2.95 hours
 
 **By Phase:**
 
-| Phase                    | Plans | Total  | Avg/Plan |
-| ------------------------ | ----- | ------ | -------- |
-| 01-foundation            | 3/3   | 20 min | 7 min    |
-| 02-authentication        | 4/4   | 18 min | 4.5 min  |
-| 03-core-encryption       | 3/3   | 18 min | 6 min    |
-| 04-file-storage          | 4/4   | 17 min | 4.3 min  |
-| 04.1-api-service-testing | 3/3   | 11 min | 3.7 min  |
-| 04.2-local-ipfs-testing  | 2/2   | 14 min | 7 min    |
-| 05-folder-system         | 4/4   | 18 min | 4.5 min  |
-| 06-file-browser-ui       | 4/4   | 19 min | 4.8 min  |
-| 06.1-webapp-automation   | 6/6   | 25 min | 4.2 min  |
+| Phase                      | Plans | Total  | Avg/Plan |
+| -------------------------- | ----- | ------ | -------- |
+| 01-foundation              | 3/3   | 20 min | 7 min    |
+| 02-authentication          | 4/4   | 18 min | 4.5 min  |
+| 03-core-encryption         | 3/3   | 18 min | 6 min    |
+| 04-file-storage            | 4/4   | 17 min | 4.3 min  |
+| 04.1-api-service-testing   | 3/3   | 11 min | 3.7 min  |
+| 04.2-local-ipfs-testing    | 2/2   | 14 min | 7 min    |
+| 05-folder-system           | 4/4   | 18 min | 4.5 min  |
+| 06-file-browser-ui         | 4/4   | 19 min | 4.8 min  |
+| 06.1-webapp-automation     | 6/6   | 25 min | 4.2 min  |
+| 06.3-ui-structure-refactor | 1/?   | 3 min  | 3 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 4m, 3m, 4m, 2m
+- Last 5 plans: 4m, 3m, 4m, 2m, 3m
 - Trend: Consistent, improving
 
-_Updated after each plan completion_
+Updated after each plan completion.
 
 ## Accumulated Context
 
@@ -151,6 +152,10 @@ Recent decisions affecting current work:
 | ESM for E2E test files                               | 06.1-03 | Consistent with monorepo type:module, avoids require() issues             |
 | Separate E2E workspace package                       | 06.1-03 | Isolated dependencies, independent test execution from unit tests         |
 | Multi-browser testing (Chromium/Firefox/WebKit)      | 06.1-03 | Cross-browser compatibility validation catches browser-specific bugs      |
+| CSS Grid with 180px sidebar                          | 06.3-01 | Fixed layout with header/sidebar/main/footer areas, only main scrolls     |
+| Hover-triggered UserMenu dropdown                    | 06.3-01 | Per CONTEXT.md decision, onMouseEnter/Leave not onClick                   |
+| Terminal ASCII icons [DIR] [CFG]                     | 06.3-01 | Nav items use bracket-wrapped labels for terminal aesthetic               |
+| Mobile breakpoint 768px hides sidebar                | 06.3-01 | Single column layout on mobile, sidebar removed from grid                 |
 
 ### Pending Todos
 
@@ -192,12 +197,12 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-01-22
-Stopped at: Phase 6.1 Complete - Webapp Automation Testing verified
+Last session: 2026-01-30
+Stopped at: Completed 06.3-01-PLAN.md - AppShell layout components
 Resume file: None
-Next phase: Phase 6.2 (Restyle App with Pencil Design)
+Next plan: 06.3-02-PLAN.md (Wire AppShell to routes)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-25 after Phase 6.3 insertion_
+_Last updated: 2026-01-30 after 06.3-01 completion_
