@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 ## Current Position
 
 Phase: 6.3 of 11 (UI Structure Refactor)
-Plan: 1 of TBD in Phase 6.3 complete
-Status: In progress - AppShell layout components created
-Last activity: 2026-01-30 - Completed 06.3-01-PLAN.md
+Plan: 3 of TBD in Phase 6.3 complete
+Status: In progress - File list components updated
+Last activity: 2026-01-30 - Completed 06.3-03-PLAN.md
 
-Progress: [#######...] 74% (35 of 47 plans)
+Progress: [########..] 79% (37 of 47 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 35
-- Average duration: 5.0 min
-- Total execution time: 2.95 hours
+- Total plans completed: 37
+- Average duration: 4.9 min
+- Total execution time: 3.02 hours
 
 **By Phase:**
 
@@ -37,11 +37,11 @@ Progress: [#######...] 74% (35 of 47 plans)
 | 05-folder-system           | 4/4   | 18 min | 4.5 min  |
 | 06-file-browser-ui         | 4/4   | 19 min | 4.8 min  |
 | 06.1-webapp-automation     | 6/6   | 25 min | 4.2 min  |
-| 06.3-ui-structure-refactor | 1/?   | 3 min  | 3 min    |
+| 06.3-ui-structure-refactor | 3/?   | 7 min  | 2.3 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 3m, 4m, 2m, 3m
+- Last 5 plans: 3m, 4m, 2m, 3m, 4m
 - Trend: Consistent, improving
 
 Updated after each plan completion.
@@ -156,6 +156,10 @@ Recent decisions affecting current work:
 | Hover-triggered UserMenu dropdown                    | 06.3-01 | Per CONTEXT.md decision, onMouseEnter/Leave not onClick                   |
 | Terminal ASCII icons [DIR] [CFG]                     | 06.3-01 | Nav items use bracket-wrapped labels for terminal aesthetic               |
 | Mobile breakpoint 768px hides sidebar                | 06.3-01 | Single column layout on mobile, sidebar removed from grid                 |
+| 3-column file list layout (Name/Size/Modified)       | 06.3-03 | TYPE column removed per CONTEXT.md decision                               |
+| Parent navigation via [..] row not breadcrumb        | 06.3-03 | Back button removed from breadcrumbs, [..] row for parent navigation      |
+| Breadcrumbs show full path ~/root/path lowercase     | 06.3-03 | Terminal aesthetic with lowercase folder names                            |
+| ASCII art folder icon for empty state                | 06.3-03 | Terminal-style ASCII art instead of emoji for empty state                 |
 
 ### Pending Todos
 
@@ -198,11 +202,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-01-30
-Stopped at: Completed 06.3-01-PLAN.md - AppShell layout components
+Stopped at: Completed 06.3-03-PLAN.md - File list components updated
 Resume file: None
-Next plan: 06.3-02-PLAN.md (Wire AppShell to routes)
+Next plan: 06.3-04-PLAN.md (Toolbar and integration)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-30 after 06.3-01 completion_
+_Last updated: 2026-01-30 after 06.3-03 completion_
