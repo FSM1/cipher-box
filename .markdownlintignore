@@ -9,3 +9,6 @@ CHANGELOG.md
 # Finalized specifications - do not modify
 00-Preliminary-R&D/
 00_START_HERE.md
+
+# Planning docs use custom heading structure with HTML tags
+.planning/
