@@ -1,4 +1,11 @@
-import { useCallback, useRef, type DragEvent, type MouseEvent, type TouchEvent } from 'react';
+import {
+  useState,
+  useCallback,
+  useRef,
+  type DragEvent,
+  type MouseEvent,
+  type TouchEvent,
+} from 'react';
 import type { FolderChild, FileEntry, FolderEntry } from '@cipherbox/crypto';
 import { formatBytes, formatDate } from '../../utils/format';
 
@@ -22,6 +29,8 @@ type FileListItemProps = {
   onContextMenu: (event: MouseEvent, item: FolderChild) => void;
   /** Callback when drag starts */
   onDragStart: (event: DragEvent, item: FolderChild) => void;
+  /** Callback when an item is dropped onto this folder (folders only) */
+  onDrop?: (sourceId: string, sourceType: 'file' | 'folder', sourceParentId: string) => void;
 };
 
 /**
@@ -64,10 +73,14 @@ export function FileListItem({
   onNavigate,
   onContextMenu,
   onDragStart,
+  onDrop,
 }: FileListItemProps) {
   // Ref for long press timer
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchStartPosRef = useRef<{ x: number; y: number } | null>(null);
+
+  // Drag-over state for folder drop targets
+  const [isDragOver, setIsDragOver] = useState(false);
 
   /**
    * Handle single click - select the item.
@@ -180,21 +193,94 @@ export function FileListItem({
     clearLongPressTimer();
   }, [clearLongPressTimer]);
 
+  /**
+   * Handle drag over - allow drop on folders.
+   */
+  const handleDragOver = useCallback(
+    (e: DragEvent) => {
+      // Only allow drop on folders
+      if (!isFolder(item)) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'move';
+      setIsDragOver(true);
+    },
+    [item]
+  );
+
+  /**
+   * Handle drag leave - clear drag-over state.
+   */
+  const handleDragLeave = useCallback((e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  }, []);
+
+  /**
+   * Handle drop - move item to this folder.
+   */
+  const handleDrop = useCallback(
+    (e: DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragOver(false);
+
+      // Only handle drop on folders
+      if (!isFolder(item) || !onDrop) return;
+
+      try {
+        const data = e.dataTransfer.getData('application/json');
+        if (!data) return;
+
+        const parsed = JSON.parse(data) as {
+          id: string;
+          type: 'file' | 'folder';
+          parentId: string;
+        };
+
+        // Don't allow dropping onto self
+        if (parsed.id === item.id) return;
+
+        // Don't allow dropping if already in this folder
+        if (parsed.parentId === item.id) return;
+
+        onDrop(parsed.id, parsed.type, parsed.parentId);
+      } catch {
+        // Invalid drag data, ignore
+      }
+    },
+    [item, onDrop]
+  );
+
   // Display size only for files (folders show "-")
   const sizeDisplay = isFile(item) ? formatBytes(item.size) : '-';
 
   // Display modified date
   const dateDisplay = formatDate(item.modifiedAt);
 
+  // Build class name with drag-over state
+  const className = [
+    'file-list-item',
+    isSelected ? 'file-list-item--selected' : '',
+    isDragOver && isFolder(item) ? 'file-list-item--drag-over' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
   return (
     <div
-      className={`file-list-item ${isSelected ? 'file-list-item--selected' : ''}`}
+      className={className}
       data-item-id={item.id}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onContextMenu={handleContextMenu}
       draggable
       onDragStart={handleDragStart}
+      onDragOver={isFolder(item) && onDrop ? handleDragOver : undefined}
+      onDragLeave={isFolder(item) && onDrop ? handleDragLeave : undefined}
+      onDrop={isFolder(item) && onDrop ? handleDrop : undefined}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}

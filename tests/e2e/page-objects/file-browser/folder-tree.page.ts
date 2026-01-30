@@ -1,10 +1,15 @@
 import { type Page, type Locator } from '@playwright/test';
 
 /**
- * Page object for FolderTree sidebar component interactions.
+ * @deprecated Phase 6.3: FolderTree component was removed from FileBrowser.
  *
- * Encapsulates folder tree navigation, expansion, and interaction.
- * Uses semantic selectors for maintainability.
+ * Navigation is now handled by:
+ * - Double-click folders in FileList to navigate into them
+ * - ParentDirRow ([..] PARENT_DIR) to navigate up
+ * - URL-based routing (/files/:folderId)
+ *
+ * This page object is kept for backward compatibility but should not be used
+ * in new tests. Move operations should use context menu or other approaches.
  */
 export class FolderTreePage {
   constructor(private readonly page: Page) {}

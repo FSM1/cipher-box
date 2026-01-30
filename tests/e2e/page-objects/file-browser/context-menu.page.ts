@@ -31,10 +31,17 @@ export class ContextMenuPage {
   }
 
   /**
-   * Get the Delete menu option.
+   * Get the Download menu option (files only).
    */
   downloadOption(): Locator {
     return this.menu().locator('button[role="menuitem"]', { hasText: 'Download' });
+  }
+
+  /**
+   * Get the Move menu option.
+   */
+  moveOption(): Locator {
+    return this.menu().locator('button[role="menuitem"]', { hasText: 'Move to...' });
   }
 
   /**
@@ -77,6 +84,13 @@ export class ContextMenuPage {
    */
   async clickDownload(): Promise<void> {
     await this.downloadOption().click();
+  }
+
+  /**
+   * Click the Move option.
+   */
+  async clickMove(): Promise<void> {
+    await this.moveOption().click();
   }
 
   /**

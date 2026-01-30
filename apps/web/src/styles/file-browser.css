@@ -223,6 +223,13 @@
   background-color: var(--color-green-darker);
 }
 
+/* Drag-drop target state for folders */
+.file-list-item--drag-over {
+  background-color: var(--color-green-darker);
+  outline: 1px dashed var(--color-green-primary);
+  outline-offset: -1px;
+}
+
 /* Parent directory row [..] PARENT_DIR */
 .file-list-item--parent {
   cursor: pointer;

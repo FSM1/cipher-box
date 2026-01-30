@@ -190,4 +190,17 @@ export class FileListPage {
     const sourceItem = this.getItem(itemName);
     await sourceItem.dragTo(targetLocator);
   }
+
+  /**
+   * Drag an item to a folder row in the file list.
+   * This performs a drag-and-drop from one file list item to a folder row.
+   *
+   * @param itemName - Name of the item to drag
+   * @param folderName - Name of the destination folder in the list
+   */
+  async dragToFolder(itemName: string, folderName: string): Promise<void> {
+    const sourceItem = this.getItem(itemName);
+    const targetFolder = this.getFolderItem(folderName);
+    await sourceItem.dragTo(targetFolder);
+  }
 }

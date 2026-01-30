@@ -22,6 +22,13 @@ type FileListProps = {
   onContextMenu: (event: MouseEvent, item: FolderChild) => void;
   /** Callback when drag starts */
   onDragStart: (event: DragEvent, item: FolderChild) => void;
+  /** Callback when an item is dropped onto a folder */
+  onDropOnFolder?: (
+    sourceId: string,
+    sourceType: 'file' | 'folder',
+    sourceParentId: string,
+    destFolderId: string
+  ) => void;
 };
 
 /**
@@ -74,6 +81,7 @@ export function FileList({
   onNavigate,
   onContextMenu,
   onDragStart,
+  onDropOnFolder,
 }: FileListProps) {
   const sortedItems = sortItems(items);
 
@@ -105,6 +113,12 @@ export function FileList({
             onNavigate={onNavigate}
             onContextMenu={onContextMenu}
             onDragStart={onDragStart}
+            onDrop={
+              onDropOnFolder && item.type === 'folder'
+                ? (sourceId, sourceType, sourceParentId) =>
+                    onDropOnFolder(sourceId, sourceType, sourceParentId, item.id)
+                : undefined
+            }
           />
         ))}
       </div>

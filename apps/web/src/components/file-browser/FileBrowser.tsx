@@ -10,6 +10,7 @@ import { ContextMenu } from './ContextMenu';
 import { ConfirmDialog } from './ConfirmDialog';
 import { RenameDialog } from './RenameDialog';
 import { CreateFolderDialog } from './CreateFolderDialog';
+import { MoveDialog } from './MoveDialog';
 import { UploadZone } from './UploadZone';
 import { UploadModal } from './UploadModal';
 import { Breadcrumbs } from './Breadcrumbs';
@@ -64,7 +65,7 @@ export function FileBrowser() {
     useFolderNavigation();
 
   // Folder operations
-  const { createFolder, renameItem, deleteItem, isLoading: isOperating } = useFolder();
+  const { createFolder, renameItem, moveItem, deleteItem, isLoading: isOperating } = useFolder();
 
   // File download
   const { download, isDownloading } = useFileDownload();
@@ -78,6 +79,7 @@ export function FileBrowser() {
   // Dialog states
   const [confirmDialog, setConfirmDialog] = useState<DialogState>({ open: false, item: null });
   const [renameDialog, setRenameDialog] = useState<DialogState>({ open: false, item: null });
+  const [moveDialog, setMoveDialog] = useState<DialogState>({ open: false, item: null });
   const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false);
 
   // Clear selection when navigating to a new folder
@@ -106,6 +108,23 @@ export function FileBrowser() {
   const handleDragStart = useCallback((_event: DragEvent, _item: FolderChild) => {
     // Drag data is set by FileListItem component
   }, []);
+
+  // Drop on folder handler
+  const handleDropOnFolder = useCallback(
+    async (
+      sourceId: string,
+      sourceType: 'file' | 'folder',
+      sourceParentId: string,
+      destFolderId: string
+    ) => {
+      try {
+        await moveItem(sourceId, sourceType, sourceParentId, destFolderId);
+      } catch (err) {
+        console.error('Move failed:', err);
+      }
+    },
+    [moveItem]
+  );
 
   // Download action handler
   const handleDownload = useCallback(async () => {
@@ -139,6 +158,13 @@ export function FileBrowser() {
     }
   }, [contextMenu.item]);
 
+  // Open move dialog
+  const handleMoveClick = useCallback(() => {
+    if (contextMenu.item) {
+      setMoveDialog({ open: true, item: contextMenu.item });
+    }
+  }, [contextMenu.item]);
+
   // Confirm rename
   const handleRenameConfirm = useCallback(
     async (newName: string) => {
@@ -168,6 +194,22 @@ export function FileBrowser() {
     }
   }, [confirmDialog.item, deleteItem, currentFolderId]);
 
+  // Confirm move
+  const handleMoveConfirm = useCallback(
+    async (destinationFolderId: string) => {
+      const item = moveDialog.item;
+      if (!item) return;
+
+      try {
+        await moveItem(item.id, item.type, currentFolderId, destinationFolderId);
+        setMoveDialog({ open: false, item: null });
+      } catch (err) {
+        console.error('Move failed:', err);
+      }
+    },
+    [moveDialog.item, moveItem, currentFolderId]
+  );
+
   // Close dialogs
   const closeConfirmDialog = useCallback(() => {
     setConfirmDialog({ open: false, item: null });
@@ -175,6 +217,10 @@ export function FileBrowser() {
 
   const closeRenameDialog = useCallback(() => {
     setRenameDialog({ open: false, item: null });
+  }, []);
+
+  const closeMoveDialog = useCallback(() => {
+    setMoveDialog({ open: false, item: null });
   }, []);
 
   // Create folder handlers
@@ -216,6 +262,7 @@ export function FileBrowser() {
           breadcrumbs={breadcrumbs}
           onNavigate={handleNavigate}
           onNavigateUp={navigateUp}
+          onDrop={handleDropOnFolder}
         />
         <div className="file-browser-actions">
           <button
@@ -265,6 +312,7 @@ export function FileBrowser() {
           onNavigate={handleNavigate}
           onContextMenu={handleContextMenu}
           onDragStart={handleDragStart}
+          onDropOnFolder={handleDropOnFolder}
         />
       )}
 
@@ -279,6 +327,7 @@ export function FileBrowser() {
           onClose={contextMenu.hide}
           onDownload={isFileEntry(contextMenu.item) ? handleDownload : undefined}
           onRename={handleRenameClick}
+          onMove={handleMoveClick}
           onDelete={handleDeleteClick}
         />
       )}
@@ -310,6 +359,16 @@ export function FileBrowser() {
         open={createFolderDialogOpen}
         onClose={closeCreateFolderDialog}
         onConfirm={handleCreateFolderConfirm}
+        isLoading={isOperating}
+      />
+
+      {/* Move dialog */}
+      <MoveDialog
+        open={moveDialog.open}
+        onClose={closeMoveDialog}
+        onConfirm={handleMoveConfirm}
+        item={moveDialog.item}
+        currentFolderId={currentFolderId}
         isLoading={isOperating}
       />
 
