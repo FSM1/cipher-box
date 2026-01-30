@@ -468,7 +468,7 @@ if [ "$IS_UI_PHASE" = true ]; then
   [ -d "${PHASE_DIR}/screenshots" ] && git add "${PHASE_DIR}/screenshots/"
 fi
 
-git commit -m "$(cat <<'EOF'
+git commit -m "$(cat <<EOF
 docs(${PADDED_PHASE}): capture phase context
 
 Phase ${PADDED_PHASE}: ${PHASE_NAME}

@@ -574,7 +574,7 @@ git add "${PHASE_DIR}/${PHASE}-RESEARCH.md"
 # If missing designs were created, add .pen file
 git diff --quiet designs/*.pen 2>/dev/null || git add designs/*.pen
 
-git commit -m "$(cat <<'EOF'
+git commit -m "$(cat <<EOF
 docs(${PHASE}): research UI design specifications
 
 Phase ${PHASE}: ${PHASE_NAME}
