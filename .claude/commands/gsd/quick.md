@@ -493,11 +493,17 @@ git add ${QUICK_DIR}/${next_num}-PLAN.md
 git add ${QUICK_DIR}/${next_num}-SUMMARY.md
 git add .planning/STATE.md
 
+# For UI tasks: add design file if modified
+if [ "$IS_UI_TASK" = true ]; then
+  git diff --quiet designs/*.pen 2>/dev/null || git add designs/*.pen
+fi
+
 # Commit with quick task format
 git commit -m "$(cat <<'EOF'
 docs(quick-${next_num}): ${DESCRIPTION}
 
 Quick task completed.
+${IS_UI_TASK:+- Design mockups added to .pen file}
 
 Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
 EOF
