@@ -668,18 +668,42 @@ We've iterated a few times. Let's capture the current direction
 in CONTEXT.md and refine during implementation if needed.
 ```
 
-## Step 6: Capture Approved Direction
+## Step 6: Mark Selection and Capture Final Screenshot
 
-Once user approves a direction:
+Once user approves a direction, re-spawn agent to mark the selection:
+
+```markdown
+## SELECTION CONFIRMATION
+
+**Selected option:** Option [A/B/C]
+**Frame ID:** [frame-id from previous return]
+**Phase directory:** ${PHASE_DIR}
+```
+
+The agent will:
+
+1. Add "✓ SELECTED" badge to chosen option frame
+2. Update stroke to 3px primary color (#00D084)
+3. Dim non-selected options (50% opacity)
+4. Update drafts container header with selection info
+5. Capture final screenshot: `${PHASE_DIR}/screenshots/selected-option-[letter].png`
+
+## Step 7: Capture Approved Direction
+
+After selection is marked:
 
 - Record the approved frame ID(s) for CONTEXT.md
 - Note any design decisions for DESIGN.md update
+- Include screenshot path for reference
 - Continue to write_context step
 
 ```markdown
 ### Approved Design Direction
 
 **Frame:** [Frame name] (ID: [frame-id])
+**Screenshot:** `.planning/phases/${PADDED_PHASE}-*/screenshots/selected-option-[letter].png`
+**Canvas location:** `Drafts - Phase [X]` (right side of main design)
+
 **Key design decisions:**
 
 - [Decision 1]
@@ -696,8 +720,11 @@ Once user approves a direction:
 - Each selected area explored until user satisfied
 - Scope creep redirected to deferred ideas
 - **For UI phases:** Design mockups generated and user approved a direction
+- **For UI phases:** Mockups placed in dedicated "Drafts - Phase N" canvas area
+- **For UI phases:** Screenshots saved to `.planning/phases/*/screenshots/`
+- **For UI phases:** Selected option visually marked in .pen file
 - CONTEXT.md captures actual decisions, not vague vision
-- **For UI phases:** CONTEXT.md references approved Pencil design frame
+- **For UI phases:** CONTEXT.md references approved Pencil design frame and screenshot
 - Deferred ideas preserved for future phases
 - User knows next steps
   </success_criteria>

@@ -260,6 +260,249 @@ await mcp__pencil__create_design({
 
 </prescriptive_prompts>
 
+<canvas_organization>
+
+## Canvas Organization
+
+All draft mockups MUST be placed in a dedicated "Drafts" area of the canvas, separate from the main design.
+
+### Step 1: Find or Create Drafts Container
+
+```typescript
+// Check if Drafts container exists
+const draftsFrame = await mcp__pencil__batch_get({
+  filePath: 'designs/cipher-box-design.pen',
+  patterns: [{ name: 'Drafts - Phase.*', type: 'frame' }],
+});
+
+// If not found, find empty space and create it
+if (!draftsFrame) {
+  const emptySpace = await mcp__pencil__find_empty_space_on_canvas({
+    filePath: 'designs/cipher-box-design.pen',
+    width: 2000,
+    height: 1500,
+    padding: 200,
+    direction: 'right', // Place drafts to the right of main designs
+  });
+
+  // Create drafts container at found position
+  await mcp__pencil__batch_design({
+    filePath: 'designs/cipher-box-design.pen',
+    operations: `
+drafts=I(document, {
+  type: "frame",
+  name: "Drafts - Phase ${PHASE}",
+  x: ${emptySpace.x},
+  y: ${emptySpace.y},
+  width: 2000,
+  height: 1500,
+  fill: "#0a0a0a",
+  stroke: { thickness: 2, fill: "#333333", dashPattern: [10, 5] },
+  layout: "horizontal",
+  gap: 100,
+  padding: 50
+})
+header=I(drafts, {
+  type: "text",
+  content: "DRAFTS - Phase ${PHASE}: ${PHASE_NAME}",
+  fontFamily: "JetBrains Mono",
+  fontSize: 24,
+  fontWeight: 700,
+  fill: "#666666"
+})
+    `,
+  });
+}
+```
+
+### Step 2: Place Options in Drafts Container
+
+All generated options go inside the Drafts container:
+
+```typescript
+// Insert options into drafts container
+await mcp__pencil__batch_design({
+  filePath: 'designs/cipher-box-design.pen',
+  operations: `
+optionA=I("${draftsFrameId}", {
+  type: "frame",
+  name: "Option A: ${optionName}",
+  width: 500,
+  height: "hug_contents",
+  fill: "#000000",
+  stroke: { thickness: 1, fill: "#00D084" },
+  // ... component content
+})
+labelA=I(optionA, {
+  type: "text",
+  content: "OPTION A",
+  fontFamily: "JetBrains Mono",
+  fontSize: 12,
+  fontWeight: 700,
+  fill: "#00D084"
+})
+  `,
+});
+```
+
+### Naming Convention
+
+- **Drafts container:** `Drafts - Phase {N}`
+- **Options:** `Option A: {Descriptive Name}`, `Option B: {Descriptive Name}`
+- **In-context views:** `In Context: Option A`, `In Context: Option B`
+- **Selected option:** `SELECTED: Option {X}`
+
+</canvas_organization>
+
+<screenshot_capture>
+
+## Screenshot Capture
+
+After generating mockups, capture screenshots and save them to the phase folder for visual reference.
+
+### Step 1: Create Screenshots Directory
+
+```bash
+PHASE_DIR=$(ls -d .planning/phases/${PADDED_PHASE}-* 2>/dev/null | head -1)
+mkdir -p "${PHASE_DIR}/screenshots"
+```
+
+### Step 2: Capture Each Option
+
+```typescript
+// Capture Option A
+await mcp__pencil__get_screenshot({
+  filePath: 'designs/cipher-box-design.pen',
+  nodeId: optionA.id,
+});
+// Save to phase folder (screenshot is returned as image data)
+
+// Capture Option B
+await mcp__pencil__get_screenshot({
+  filePath: 'designs/cipher-box-design.pen',
+  nodeId: optionB.id,
+});
+
+// Capture in-context views
+await mcp__pencil__get_screenshot({
+  filePath: 'designs/cipher-box-design.pen',
+  nodeId: contextA.id,
+});
+```
+
+### Step 3: Save Screenshots to Phase Folder
+
+Screenshots should be saved with descriptive names:
+
+```text
+.planning/phases/07-upload-modal/screenshots/
+├── option-a-progress-bar.png
+├── option-a-in-context.png
+├── option-b-progress-bar.png
+├── option-b-in-context.png
+└── selected-option-a.png  (after selection)
+```
+
+### Step 4: Include in Structured Return
+
+Add screenshot paths to the return format:
+
+```markdown
+### Screenshots
+
+Screenshots saved to `.planning/phases/${PADDED_PHASE}-*/screenshots/`:
+
+- `option-a-*.png` - Option A mockup
+- `option-b-*.png` - Option B mockup
+- `*-in-context.png` - Full app context views
+```
+
+</screenshot_capture>
+
+<selection_marking>
+
+## Selection Marking
+
+When user approves an option, mark it visually in the .pen file.
+
+### Step 1: Add Selection Indicator
+
+```typescript
+// Add visual marker to selected option
+await mcp__pencil__batch_design({
+  filePath: 'designs/cipher-box-design.pen',
+  operations: `
+U("${selectedOptionId}", {
+  name: "SELECTED: ${selectedOptionName}",
+  stroke: { thickness: 3, fill: "#00D084" }
+})
+badge=I("${selectedOptionId}", {
+  type: "frame",
+  name: "selection-badge",
+  fill: "#00D084",
+  padding: [4, 8],
+  children: [{
+    type: "text",
+    content: "✓ SELECTED",
+    fontFamily: "JetBrains Mono",
+    fontSize: 10,
+    fontWeight: 700,
+    fill: "#000000"
+  }]
+})
+  `,
+});
+```
+
+### Step 2: Dim Non-Selected Options
+
+```typescript
+// Reduce prominence of non-selected options
+await mcp__pencil__batch_design({
+  filePath: 'designs/cipher-box-design.pen',
+  operations: `
+U("${nonSelectedOptionId}", {
+  opacity: 0.5
+})
+notSelectedLabel=I("${nonSelectedOptionId}", {
+  type: "text",
+  content: "NOT SELECTED",
+  fontFamily: "JetBrains Mono",
+  fontSize: 10,
+  fill: "#666666"
+})
+  `,
+});
+```
+
+### Step 3: Capture Final Screenshot
+
+After marking selection, capture the selected option:
+
+```typescript
+await mcp__pencil__get_screenshot({
+  filePath: 'designs/cipher-box-design.pen',
+  nodeId: selectedOptionId,
+});
+// Save as: selected-option-{letter}.png
+```
+
+### Step 4: Update Drafts Container Label
+
+```typescript
+// Update drafts container to show which option was selected
+await mcp__pencil__batch_design({
+  filePath: 'designs/cipher-box-design.pen',
+  operations: `
+U("${draftsHeaderId}", {
+  content: "DRAFTS - Phase ${PHASE}: ${PHASE_NAME} [Selected: Option ${letter}]"
+})
+  `,
+});
+```
+
+</selection_marking>
+
 <execution_flow>
 
 ## Step 1: Receive Mockup Request
@@ -299,39 +542,75 @@ Break complex UI into components:
 3. [Compose together]
 ```
 
-## Step 4: Generate Options
+## Step 4: Set Up Canvas Organization
 
-Create 2-3 options that address user intent differently:
+Before generating options, set up the Drafts area (see canvas_organization section):
+
+1. Find or create `Drafts - Phase {N}` container
+2. Position it to the right of main designs (200px padding)
+3. Add header label with phase info
+
+## Step 5: Generate Options
+
+Create 2-3 options inside the Drafts container:
 
 ```typescript
-// Option A: One interpretation
-const optionA = await mcp__pencil__create_design({...});
+// Option A: One interpretation (inside drafts container)
+const optionA = await mcp__pencil__batch_design({
+  operations: `
+optionA=I("${draftsFrameId}", {...})
+labelA=I(optionA, { type: "text", content: "OPTION A", ... })
+  `,
+});
 
 // Option B: Alternative interpretation
-const optionB = await mcp__pencil__create_design({...});
+const optionB = await mcp__pencil__batch_design({...});
 
 // (Optional) Option C: Hybrid approach
-const optionC = await mcp__pencil__create_design({...});
+const optionC = await mcp__pencil__batch_design({...});
 ```
 
-## Step 5: Create Context Frames
+## Step 6: Create Context Frames
 
 For each option, create an "in-app" view showing the component within the app layout:
 
 ```typescript
-// Show Option A in context
-const contextA = await mcp__pencil__create_design({
-  name: 'In Context: Option A',
-  baseOn: 'bi8Au',
-  overlayComponent: { ... }
+// Show Option A in context (also inside drafts container)
+const contextA = await mcp__pencil__batch_design({
+  operations: `
+contextA=C("bi8Au", "${draftsFrameId}", {
+  name: "In Context: Option A",
+  positionDirection: "right",
+  positionPadding: 50
+})
+  `,
 });
 ```
 
-## Step 6: Compile Structured Return
+## Step 7: Capture Screenshots
+
+Save screenshots to the phase folder for visual reference:
+
+```bash
+# Create screenshots directory
+mkdir -p "${PHASE_DIR}/screenshots"
+```
+
+```typescript
+// Capture each option and context view
+await mcp__pencil__get_screenshot({ nodeId: optionA.id });
+// Save to: ${PHASE_DIR}/screenshots/option-a-${feature}.png
+
+await mcp__pencil__get_screenshot({ nodeId: contextA.id });
+// Save to: ${PHASE_DIR}/screenshots/option-a-in-context.png
+```
+
+## Step 8: Compile Structured Return
 
 Create summary for orchestrator (see structured_return section).
+Include screenshot paths in the return.
 
-## Step 7: Update Decision Log
+## Step 9: Update Decision Log
 
 If new design decisions were made, update DESIGN.md:
 
@@ -339,6 +618,36 @@ If new design decisions were made, update DESIGN.md:
 | Date       | Phase | Decision                    | Rationale            |
 | ---------- | ----- | --------------------------- | -------------------- |
 | 2026-01-30 | X     | Progress bar uses text only | User prefers minimal |
+```
+
+## Step 10: Mark Selection (After User Chooses)
+
+When orchestrator sends selection confirmation:
+
+1. Add "✓ SELECTED" badge to chosen option
+2. Update stroke to 3px primary color
+3. Dim non-selected options (50% opacity)
+4. Update drafts container header with selection
+5. Capture final screenshot of selected option
+6. Save as `selected-option-{letter}.png`
+
+## File Persistence Note
+
+Pencil MCP's `batch_design` tool writes directly to the .pen file specified in `filePath`.
+Changes are persisted automatically when the operation completes successfully.
+
+**Verification (optional):** After generating mockups, you can verify the frames exist:
+
+```typescript
+// Verify frames were created
+const verification = await mcp__pencil__batch_get({
+  filePath: 'designs/cipher-box-design.pen',
+  patterns: [{ name: 'Drafts - Phase.*' }, { name: 'Option.*' }],
+});
+
+if (verification.length === 0) {
+  console.error('WARNING: Frames may not have been saved correctly');
+}
 ```
 
 </execution_flow>
@@ -392,6 +701,21 @@ Each option is also shown within the app layout:
 
 - "In Context: Option A" (ID: [frame-id])
 - "In Context: Option B" (ID: [frame-id])
+
+### Screenshots Saved
+
+Screenshots saved to `.planning/phases/${PADDED_PHASE}-*/screenshots/`:
+
+| File                      | Description            |
+| ------------------------- | ---------------------- |
+| `option-a-[feature].png`  | Option A isolated view |
+| `option-a-in-context.png` | Option A in app layout |
+| `option-b-[feature].png`  | Option B isolated view |
+| `option-b-in-context.png` | Option B in app layout |
+
+### Canvas Location
+
+All drafts placed in: `Drafts - Phase [X]` container (right side of canvas)
 
 ### Design Decisions Made
 
@@ -515,18 +839,32 @@ Before returning to orchestrator:
 - [ ] DESIGN.md was loaded first
 - [ ] Complex request was decomposed into components
 - [ ] Each component uses ONLY design system tokens
+- [ ] "Drafts - Phase N" container created/found on canvas
+- [ ] All options placed inside drafts container (not scattered)
+- [ ] Options clearly labeled (Option A, Option B, etc.)
 - [ ] 2-3 options generated addressing user intent differently
 - [ ] Each option has "in-context" view showing app layout
-- [ ] Structured return format used exactly
+- [ ] Screenshots captured and saved to phase folder
+- [ ] Structured return format used exactly (includes screenshot paths)
 - [ ] User quotes preserved and mapped to design decisions
 - [ ] New design decisions logged to DESIGN.md
 - [ ] Return is concise (summary, not raw Pencil output)
 
+**After selection (when orchestrator confirms choice):**
+
+- [ ] Selected option marked with "✓ SELECTED" badge
+- [ ] Selected option has 3px primary border
+- [ ] Non-selected options dimmed (50% opacity)
+- [ ] Drafts container header updated with selection
+- [ ] Final screenshot of selected option saved
+
 **Quality indicators:**
 
 - **Consistent:** All mockups use design system tokens only
+- **Organized:** Drafts in dedicated canvas area, clearly labeled
 - **Decomposed:** Complex UIs built from individual components
 - **Contextual:** Options shown within app layout, not isolated
+- **Documented:** Screenshots saved for future reference
 - **Traceable:** User preferences clearly mapped to design choices
 - **Concise:** Return fits in orchestrator's context comfortably
 
