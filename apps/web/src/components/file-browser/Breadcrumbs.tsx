@@ -3,21 +3,21 @@ import type { Breadcrumb } from '../../hooks/useFolderNavigation';
 type BreadcrumbsProps = {
   /** Breadcrumb trail from root to current folder */
   breadcrumbs: Breadcrumb[];
-  /** Callback to navigate to a folder */
+  /** Callback to navigate to a folder (kept for potential future use) */
   onNavigate: (folderId: string) => void;
-  /** Callback to navigate up to parent folder */
+  /** Callback to navigate up to parent folder (kept for potential future use) */
   onNavigateUp: () => void;
 };
 
 /**
- * Breadcrumb navigation component.
+ * Breadcrumb navigation component - path format display.
  *
- * Per CONTEXT.md: "simple back navigation with current folder name and back arrow"
- * Structure allows future dropdown-per-segment enhancement.
+ * Per Phase 6.3 CONTEXT.md: Display path as ~/root/documents/projects format.
+ * Parent navigation is now handled by [..] PARENT_DIR row in file list.
  *
  * Display:
- * - At root: just "My Vault" (no back arrow)
- * - In subfolder: back arrow + current folder name
+ * - At root: ~/root
+ * - In subfolder: ~/root/foldername/subfolder
  *
  * @example
  * ```tsx
@@ -34,41 +34,14 @@ type BreadcrumbsProps = {
  * }
  * ```
  */
-export function Breadcrumbs({ breadcrumbs, onNavigateUp }: BreadcrumbsProps) {
-  // Get current folder (last in breadcrumbs)
-  const currentFolder = breadcrumbs[breadcrumbs.length - 1];
-
-  // Check if we're at root (only one breadcrumb)
-  const isAtRoot = breadcrumbs.length <= 1;
-
-  if (!currentFolder) {
-    return (
-      <nav className="breadcrumbs" aria-label="Folder navigation">
-        <span className="breadcrumbs-current">My Vault</span>
-      </nav>
-    );
-  }
+export function Breadcrumbs({ breadcrumbs }: BreadcrumbsProps) {
+  // Build path string from breadcrumbs
+  // Convert folder names to lowercase for terminal aesthetic
+  const pathString = '~/' + breadcrumbs.map((b) => b.name.toLowerCase()).join('/');
 
   return (
-    <nav className="breadcrumbs" aria-label="Folder navigation">
-      {/* Back button - hidden at root */}
-      {!isAtRoot && (
-        <button
-          type="button"
-          className="breadcrumbs-back"
-          onClick={onNavigateUp}
-          aria-label="Go back to parent folder"
-        >
-          <span className="breadcrumbs-back-icon" aria-hidden="true">
-            &#8592;
-          </span>
-        </button>
-      )}
-
-      {/* Current folder name */}
-      <span className="breadcrumbs-current" aria-current="location">
-        {currentFolder.name}
-      </span>
+    <nav className="breadcrumb-path" aria-label="Current location" data-testid="breadcrumbs">
+      <span className="breadcrumb-text">{pathString || '~/root'}</span>
     </nav>
   );
 }

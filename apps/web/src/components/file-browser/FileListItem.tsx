@@ -48,17 +48,7 @@ function getItemIcon(item: FolderChild): string {
   return '[FILE]';
 }
 
-/**
- * Extract file extension for TYPE column.
- */
-function getFileExtension(filename: string): string {
-  const lastDot = filename.lastIndexOf('.');
-  if (lastDot === -1 || lastDot === filename.length - 1) {
-    return '-';
-  }
-  const ext = filename.substring(lastDot + 1);
-  return ext.toLowerCase();
-}
+/* File extension helper removed - TYPE column no longer used */
 
 /**
  * Single row in the file list.
@@ -190,11 +180,8 @@ export function FileListItem({
     clearLongPressTimer();
   }, [clearLongPressTimer]);
 
-  // Display size only for files
+  // Display size only for files (folders show "-")
   const sizeDisplay = isFile(item) ? formatBytes(item.size) : '-';
-
-  // Display type - 'dir' for folders, extension for files
-  const typeDisplay = isFolder(item) ? 'dir' : getFileExtension(item.name);
 
   // Display modified date
   const dateDisplay = formatDate(item.modifiedAt);
@@ -230,20 +217,15 @@ export function FileListItem({
         <span className="file-list-item-name">{item.name}</span>
       </div>
 
-      {/* Row 2: Date + Size (for mobile bottom row) */}
+      {/* Row 2: Size + Date (for mobile bottom row) */}
       <div className="file-list-item-row-bottom">
-        <span className="file-list-item-date" role="gridcell">
-          {dateDisplay}
-        </span>
         <span className="file-list-item-size" role="gridcell">
           {sizeDisplay}
         </span>
+        <span className="file-list-item-date" role="gridcell">
+          {dateDisplay}
+        </span>
       </div>
-
-      {/* TYPE column - hidden on mobile via CSS */}
-      <span className="file-list-item-type" role="gridcell">
-        {typeDisplay}
-      </span>
     </div>
   );
 }

@@ -1,14 +1,36 @@
 /**
  * Breadcrumb Navigation Styles - Terminal Aesthetic
  *
- * Per design: Terminal-style path display like ~/storage/documents/projects
- * Shows current folder path with back navigation
+ * Per Phase 6.3 design: Terminal-style path display like ~/root/documents/projects
+ * Parent navigation is now handled by [..] PARENT_DIR row in file list
  */
 
 /* ==========================================================================
-   Breadcrumbs Container
+   Path Format Display
    ========================================================================== */
 
+.breadcrumb-path {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  padding: var(--spacing-xs) 0;
+  min-height: 2.5rem;
+  display: flex;
+  align-items: center;
+}
+
+.breadcrumb-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 400px;
+}
+
+/* ==========================================================================
+   Legacy Styles (deprecated - kept for reference)
+   ========================================================================== */
+
+/* Old breadcrumbs container - no longer used */
 .breadcrumbs {
   display: flex;
   align-items: center;
@@ -20,16 +42,7 @@
   color: var(--color-text-primary);
 }
 
-/* Terminal-style path prefix */
-.breadcrumbs::before {
-  content: "~/";
-  color: var(--color-text-secondary);
-}
-
-/* ==========================================================================
-   Back Button
-   ========================================================================== */
-
+/* Old back button - replaced by [..] PARENT_DIR row */
 .breadcrumbs-back {
   display: flex;
   align-items: center;
@@ -50,42 +63,6 @@
   box-shadow: var(--glow-green);
 }
 
-.breadcrumbs-back:focus {
-  outline: 2px solid var(--color-green-primary);
-  outline-offset: 2px;
-}
-
-.breadcrumbs-back:active {
-  background-color: var(--color-green-darker);
-}
-
-.breadcrumbs-back-icon {
-  font-size: var(--font-size-sm);
-  line-height: 1;
-}
-
-/* ==========================================================================
-   Path Segments
-   ========================================================================== */
-
-.breadcrumbs-separator {
-  color: var(--color-text-secondary);
-}
-
-.breadcrumbs-segment {
-  color: var(--color-text-secondary);
-  transition: color 0.15s ease;
-}
-
-.breadcrumbs-segment:hover {
-  color: var(--color-text-primary);
-  cursor: pointer;
-}
-
-/* ==========================================================================
-   Current Folder Name
-   ========================================================================== */
-
 .breadcrumbs-current {
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-primary);
@@ -100,11 +77,11 @@
    ========================================================================== */
 
 @media (max-width: 768px) {
-  .breadcrumbs {
+  .breadcrumb-path {
     padding: var(--spacing-xs);
   }
 
-  .breadcrumbs-current {
+  .breadcrumb-text {
     max-width: 200px;
     font-size: var(--font-size-sm);
   }
