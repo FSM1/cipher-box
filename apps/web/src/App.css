@@ -1,4 +1,5 @@
 /* Import component styles */
+@import './styles/layout.css';
 @import './styles/file-browser.css';
 @import './styles/breadcrumbs.css';
 @import './styles/responsive.css';
@@ -88,6 +89,8 @@
 
 /* ==========================================================================
    Dashboard Layout
+   @deprecated - Replaced by AppShell layout components (Phase 6.3)
+   These styles kept for reference during migration; can be removed later.
    ========================================================================== */
 
 .dashboard-container {
@@ -142,6 +145,7 @@
 
 /* ==========================================================================
    API Status Indicator
+   @deprecated - Replaced by StatusIndicator component in AppFooter
    ========================================================================== */
 
 .api-status {
@@ -175,4 +179,26 @@
 
 .status-dot.loading {
   background-color: var(--color-text-secondary);
+}
+
+/* ==========================================================================
+   Settings Page Styles
+   ========================================================================== */
+
+.settings-content {
+  padding: var(--spacing-lg);
+}
+
+.settings-title {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  margin-bottom: var(--spacing-lg);
+}
+
+.settings-section {
+  background-color: var(--color-background-dark);
+  border: var(--border-thickness) solid var(--color-border);
+  padding: var(--spacing-md);
 }
