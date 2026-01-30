@@ -51,11 +51,13 @@ The planner uses RESEARCH.md design specifications to create precise tasks:
 **Component:** header (n386r)
 
 **Implementation:**
+
 - Background: var(--color-background) → #000000
 - Border-bottom: var(--border-thickness) solid var(--color-border) → 1px #00D084
 - Padding: var(--spacing-sm) var(--spacing-lg) → 12px 24px
 
 **Verification:**
+
 - CSS file has correct values
 - Computed style matches at runtime (if Playwright available)
 ```
@@ -274,6 +276,7 @@ Ask user for design direction, implement, then request design review:
 **Component:** Error toast notification
 
 **Proposed approach (Claude's discretion):**
+
 - Position: Top-right, fixed
 - Background: #1a0000 (dark red tint)
 - Border: 1px solid #EF4444
@@ -441,10 +444,12 @@ Computed styles are the truth. CSS source might say one thing, but cascade/inher
 ## Related Files
 
 - **Agents:**
-  - `.claude/agents/ui-design-researcher.md` - Extracts design specs
-  - `.claude/agents/ui-design-verifier.md` - Verifies implementation
+  - `.claude/agents/ui-design-discusser.md` - Generates mockups during discuss-phase (isolated context)
+  - `.claude/agents/ui-design-researcher.md` - Extracts design specs for planning
+  - `.claude/agents/ui-design-verifier.md` - Verifies implementation against design
 - **Design files:**
   - `designs/*.pen` - Pencil design files
+  - `designs/DESIGN.md` - Design system tokens and patterns (loaded by agents)
 - **Research output:**
   - `.planning/phases/*/RESEARCH.md` - Extracted specifications
 - **Verification output:**

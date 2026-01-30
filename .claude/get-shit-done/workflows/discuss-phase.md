@@ -519,355 +519,171 @@ Would you like me to create design mockups based on our discussion?
 
 - Options: "Yes, generate mockups" / "Skip mockups"
 
-**If yes, generate mockups:**
+**If "Skip mockups":** Continue to write_context step.
 
-## Step 1: Load Existing Design Context (REQUIRED)
+**If "Yes, generate mockups":**
 
-Before creating ANY new design, load the existing design system:
+## Step 1: Validate Design Context
 
-```typescript
-// Get existing design file
-const designFile = await mcp__pencil__read_design({ path: 'designs/*.pen' });
+Check that design context exists before spawning the agent:
 
-// Extract established tokens
-const existingTokens = await mcp__pencil__get_design_tokens({
-  file: designFile.path,
-  extract: ['colors', 'typography', 'spacing', 'effects', 'borders'],
-});
+```bash
+# Check for DESIGN.md (required for consistent mockups)
+if [ ! -f "designs/DESIGN.md" ]; then
+  echo "WARNING: designs/DESIGN.md not found"
+  # Offer to create it or skip mockups
+fi
 
-// Example extracted tokens:
-// {
-//   colors: {
-//     background: '#000000',
-//     primary: '#00D084',
-//     secondary: '#006644',
-//     border: '#003322',
-//     text: '#00D084',
-//     textMuted: '#006644'
-//   },
-//   typography: {
-//     fontFamily: 'JetBrains Mono',
-//     sizes: { xs: 10, sm: 11, base: 14, lg: 18, xl: 24 },
-//     weights: { normal: 400, semibold: 600, bold: 700 }
-//   },
-//   spacing: { xs: 8, sm: 12, md: 16, lg: 24, xl: 32 },
-//   borders: { thickness: 1, radius: 0 },
-//   effects: { glow: { blur: 10, color: '#00D08466' } }
-// }
+# Check for existing .pen file
+ls designs/*.pen 2>/dev/null
 ```
 
-## Step 2: Translate User Intent to Design Parameters
+**If DESIGN.md missing:**
 
-Map discussion decisions to concrete design specs:
+Use AskUserQuestion:
 
-```typescript
-// Capture user preferences from discussion
-const userIntent = {
-  // From discussion answers
-  layout: discussionAnswers.layoutStyle, // e.g., "cards", "list", "grid"
-  density: discussionAnswers.density, // e.g., "compact", "comfortable", "spacious"
-  emphasis: discussionAnswers.emphasis, // e.g., "content-first", "visual-heavy"
-  interactions: discussionAnswers.interactions, // e.g., "hover effects", "minimal"
+- header: "Design context"
+- question: "Design system file (DESIGN.md) not found. How should we proceed?"
+- options:
+  - "Create DESIGN.md" — Extract tokens from existing .pen file
+  - "Skip mockups" — Continue without visual mockups
+  - "Describe in text" — I'll describe the design options verbally
 
-  // Quoted user statements (preserve exact wording)
-  userQuotes: [
-    'I want it to feel like a terminal',
-    'Green accents but not overwhelming',
-    'Clean and minimal',
-  ],
-};
+If "Create DESIGN.md": Run token extraction, then continue.
+If "Skip mockups": Continue to write_context.
+If "Describe in text": Provide text descriptions, then continue to write_context.
 
-// Translate intent to design parameters
-function translateIntentToDesign(intent, existingTokens) {
-  const params = {
-    // Always use existing tokens for consistency
-    colors: existingTokens.colors,
-    typography: existingTokens.typography,
-    spacing: existingTokens.spacing,
+## Step 2: Prepare Discussion Context Summary
 
-    // Derive layout from user preferences
-    layout: {
-      type: intent.layout,
-      gap:
-        intent.density === 'compact'
-          ? existingTokens.spacing.xs
-          : intent.density === 'spacious'
-            ? existingTokens.spacing.lg
-            : existingTokens.spacing.md,
-      padding: intent.density === 'compact' ? existingTokens.spacing.sm : existingTokens.spacing.md,
-    },
-
-    // Derive visual treatment from user quotes
-    visualStyle: {
-      useBorders: intent.userQuotes.some((q) => q.includes('terminal')),
-      useGlow: intent.userQuotes.some((q) => q.includes('accent')),
-      cornerRadius: intent.userQuotes.some((q) => q.includes('terminal')) ? 0 : 4,
-    },
-  };
-
-  return params;
-}
-
-const designParams = translateIntentToDesign(userIntent, existingTokens);
-```
-
-## Step 3: Create Design with Full Context
-
-Pass both user intent AND existing tokens to Pencil:
-
-```typescript
-// Create draft frame with consistency context
-const draftFrame = await mcp__pencil__create_design({
-  type: 'frame',
-  name: `Draft: Phase ${PHASE} - ${PHASE_NAME}`,
-  width: 1440,
-  height: 900,
-
-  // Use ONLY existing tokens
-  fill: existingTokens.colors.background,
-
-  // Pass context for AI-assisted design generation
-  designContext: {
-    // Existing design system (for consistency)
-    tokens: existingTokens,
-
-    // User's stated preferences (from discussion)
-    userIntent: userIntent,
-
-    // Translated parameters
-    derivedParams: designParams,
-
-    // Reference to existing components (match their patterns)
-    referenceFrames: ['Desktop File Browser', 'Login Screen'],
-
-    // Explicit consistency rules
-    consistencyRules: [
-      'Use ONLY colors from existing palette',
-      'Match typography scale exactly',
-      'Follow established spacing increments',
-      'Maintain border style (1px solid, sharp corners)',
-      'Apply glow effects consistently with existing usage',
-    ],
-  },
-});
-```
-
-## Step 4: Generate Options Based on User Preferences
-
-For each discussed gray area, generate options that respect both user intent AND existing design:
-
-```typescript
-// Example: User discussed layout preferences
-// Discussion captured: "cards vs list", user said "I like the density of lists but visual appeal of cards"
-
-const optionA = await mcp__pencil__create_design({
-  parentFrame: draftFrame.id,
-  type: 'frame',
-  name: 'Option A: Compact Cards',
-
-  // Derived from user intent: "density of lists" + "visual appeal of cards"
-  layout: 'grid',
-  gap: existingTokens.spacing.xs, // Compact like list
-
-  // Visual treatment from existing design
-  children: [
-    {
-      type: 'frame',
-      name: 'card',
-      width: 280,
-      height: 80, // Shorter than typical cards = more dense
-      fill: existingTokens.colors.background,
-      stroke: { thickness: 1, fill: existingTokens.colors.border },
-      // ... using existing tokens throughout
-    },
-  ],
-
-  // Document the reasoning
-  designNotes:
-    'Combines list density (compact height) with card visual structure. ' +
-    'Uses existing border style and spacing tokens.',
-});
-
-const optionB = await mcp__pencil__create_design({
-  parentFrame: draftFrame.id,
-  type: 'frame',
-  name: 'Option B: Dense List with Card Accents',
-
-  // Alternative interpretation of same user intent
-  layout: 'vertical',
-  gap: 0, // List-like, no gaps
-
-  children: [
-    {
-      type: 'frame',
-      name: 'row',
-      height: 48,
-      // Card-like visual: subtle background on hover, border-bottom
-      stroke: { thickness: 1, fill: existingTokens.colors.border, sides: ['bottom'] },
-    },
-  ],
-
-  designNotes:
-    'List structure with card-like visual treatment (borders, hover states). ' +
-    'Matches existing file browser row pattern.',
-});
-```
-
-## Step 5: Present with Design Rationale
-
-Show user how their input shaped each option:
+Compile the discussion context for the sub-agent:
 
 ```markdown
-I've created design mockups based on our discussion:
+## MOCKUP REQUEST
 
-**Frame:** "Draft: Phase ${PHASE} - ${PHASE_NAME}"
+**Phase:** ${PHASE} - ${PHASE_NAME}
+**Phase Goal:** [From ROADMAP.md]
 
-**Your preferences I incorporated:**
+### Discussion Summary
 
-- "${userQuote1}" → [how it influenced the design]
-- "${userQuote2}" → [how it influenced the design]
-- Layout: ${layoutChoice} → [specific implementation]
+**Gray areas discussed:**
 
-**Design consistency maintained:**
+- [Area 1]: [Decision made]
+- [Area 2]: [Decision made]
 
-- Colors: Using existing palette (#000000, #00D084, #006644)
-- Typography: JetBrains Mono at established sizes
-- Spacing: Following 8/12/16/24/32px scale
-- Borders: 1px solid, sharp corners (terminal aesthetic)
+**User quotes (preserve exact wording):**
 
-**Options generated:**
+- "[Quote 1]"
+- "[Quote 2]"
 
-**Option A: Compact Cards**
+**Key decisions:**
 
-- Addresses: "density of lists" + "visual appeal of cards"
-- Layout: Grid with 8px gaps
-- Cards: 280×80px (shorter than typical = more dense)
+- Layout: [choice]
+- Density: [choice]
+- Interactions: [choice]
 
-**Option B: Dense List with Card Accents**
+### Mockup Request
 
-- Addresses: Same preferences, different approach
-- Layout: Vertical list, no gaps
-- Visual: Card-like borders and hover states
-
-Which direction resonates more with your vision?
+Generate 2-3 options that visualize these decisions.
+Show each option within the app layout context.
 ```
 
-## Step 6: Iterate with Context Preserved
+## Step 3: Spawn ui-design-discusser Agent
 
-If user wants changes, preserve all context:
+Spawn the agent in its own context window to handle Pencil interactions:
 
-```typescript
-// User says: "I like Option A but want more breathing room"
-const revision = await mcp__pencil__create_design({
-  parentFrame: draftFrame.id,
-  type: 'frame',
-  name: 'Option A (Revised): Cards with More Space',
-
-  // Start from Option A
-  baseOn: optionA.id,
-
-  // Apply user's revision request
-  modifications: {
-    gap: existingTokens.spacing.sm, // Increased from xs
-    cardHeight: 96, // Slightly taller
-  },
-
-  // Track the iteration
-  designNotes:
-    'Revision of Option A per user feedback: "more breathing room". ' +
-    'Increased gap to 12px, card height to 96px. ' +
-    'Still within established spacing scale.',
-});
+```text
+Task(
+  subagent_type: "ui-design-discusser",
+  prompt: [Discussion context summary from Step 2],
+  description: "Generate UI mockups for Phase ${PHASE}"
+)
 ```
 
-<step name="design_mockup_patterns">
-**Common mockup patterns for UI phases:**
+**Files the agent will access:**
 
-### File Browser / List View
+- `designs/DESIGN.md` — Design system tokens (required)
+- `designs/*.pen` — Existing design file
+- `.planning/phases/${PADDED_PHASE}-*/CONTEXT.md` — If exists, for additional context
 
-```typescript
-{
-  type: 'frame',
-  name: 'File List Option',
-  layout: 'vertical',
-  gap: 0,
-  children: [
-    // Header row
-    { type: 'frame', name: 'header', height: 40, layout: 'horizontal', children: [...] },
-    // File rows
-    { type: 'frame', name: 'row', height: 48, layout: 'horizontal', children: [...] }
-  ]
-}
+## Step 4: Handle Agent Return
+
+The agent returns a structured summary (see ui-design-discusser.md for format).
+
+**Display to user:**
+
+```markdown
+[Agent's structured return - includes:]
+
+- Your preferences incorporated
+- Design consistency notes
+- Options generated with descriptions
+- In-context views available
+- Design decisions made
 ```
 
-### Card Grid
+**Use AskUserQuestion:**
 
-```typescript
-{
-  type: 'frame',
-  name: 'Card Grid Option',
-  layout: 'horizontal',
-  wrap: true,
-  gap: 16,
-  children: [
-    { type: 'frame', name: 'card', width: 200, height: 150, cornerRadius: 8, children: [...] }
-  ]
-}
+- header: "Design direction"
+- question: "Which direction resonates with your vision?"
+- options:
+  - "Option A" — [Brief description from agent return]
+  - "Option B" — [Brief description from agent return]
+  - "Refine" — I want to adjust one of these options
+  - "Neither" — Let me describe what I'm looking for
+
+## Step 5: Handle Iteration (if needed)
+
+**If "Refine":**
+
+Ask which option and what changes:
+
+```text
+Which option would you like to refine, and what changes?
 ```
 
-### Modal / Dialog
+Capture response and re-spawn agent with refinement context:
 
-```typescript
-{
-  type: 'frame',
-  name: 'Modal Option',
-  width: 400,
-  height: 300,
-  fill: '#111111',
-  stroke: { thickness: 1, fill: '#00D084' },
-  cornerRadius: 8,
-  children: [
-    { type: 'text', content: 'Title', fontSize: 16, fontWeight: '600' },
-    // Content
-    { type: 'frame', name: 'actions', layout: 'horizontal', gap: 12, children: [...] }
-  ]
-}
+```markdown
+## REFINEMENT REQUEST
+
+**Base option:** [Option A/B] (frame-id from previous return)
+**User feedback:** "[User's refinement request]"
+**Specific changes:** [If mentioned]
 ```
 
-### Navigation / Sidebar
+**If "Neither":**
 
-```typescript
-{
-  type: 'frame',
-  name: 'Sidebar Option',
-  width: 240,
-  height: 'fill_container',
-  fill: '#0a0a0a',
-  layout: 'vertical',
-  padding: [16, 12],
-  gap: 8,
-  children: [
-    { type: 'text', content: 'Navigation', fontSize: 12, fontWeight: '600' },
-    // Nav items
-  ]
-}
+Ask user to describe their vision:
+
+```text
+What are you looking for? Describe how you imagine it.
 ```
 
-### Empty State
+Capture response and re-spawn agent with new direction.
 
-```typescript
-{
-  type: 'frame',
-  name: 'Empty State Option',
-  layout: 'vertical',
-  justifyContent: 'center',
-  alignItems: 'center',
-  gap: 16,
-  children: [
-    { type: 'text', content: 'No items yet', fontSize: 14, fill: '#666666' },
-    { type: 'frame', name: 'cta-button', children: [...] }
-  ]
-}
+**Iteration limit:** Maximum 3 refinement rounds. After 3:
+
+```text
+We've iterated a few times. Let's capture the current direction
+in CONTEXT.md and refine during implementation if needed.
+```
+
+## Step 6: Capture Approved Direction
+
+Once user approves a direction:
+
+- Record the approved frame ID(s) for CONTEXT.md
+- Note any design decisions for DESIGN.md update
+- Continue to write_context step
+
+```markdown
+### Approved Design Direction
+
+**Frame:** [Frame name] (ID: [frame-id])
+**Key design decisions:**
+
+- [Decision 1]
+- [Decision 2]
 ```
 
 </step>
