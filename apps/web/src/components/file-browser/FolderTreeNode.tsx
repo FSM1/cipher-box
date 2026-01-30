@@ -1,3 +1,7 @@
+/**
+ * @deprecated This component is no longer used as of Phase 6.3.
+ * See FolderTree.tsx for details.
+ */
 import { useState, useCallback, type DragEvent } from 'react';
 import { useFolderStore, type FolderNode } from '../../stores/folder.store';
 import type { FolderChild } from '@cipherbox/crypto';

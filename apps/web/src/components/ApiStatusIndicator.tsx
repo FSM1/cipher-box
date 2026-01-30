@@ -1,3 +1,8 @@
+/**
+ * @deprecated This component is replaced by StatusIndicator in components/layout/.
+ * The status indicator is now in the app footer.
+ * This file is kept for reference and will be removed in a future cleanup.
+ */
 import { useHealthControllerCheck } from '../api/health/health';
 
 /**
