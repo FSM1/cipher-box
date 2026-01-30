@@ -156,6 +156,8 @@ Recent decisions affecting current work:
 | Hover-triggered UserMenu dropdown                    | 06.3-01 | Per CONTEXT.md decision, onMouseEnter/Leave not onClick                   |
 | Terminal ASCII icons [DIR] [CFG]                     | 06.3-01 | Nav items use bracket-wrapped labels for terminal aesthetic               |
 | Mobile breakpoint 768px hides sidebar                | 06.3-01 | Single column layout on mobile, sidebar removed from grid                 |
+| URL-based folder navigation via useParams            | 06.3-02 | Browser back/forward works for folder navigation history                  |
+| /files/:folderId? route pattern                      | 06.3-02 | Root folder at /files, subfolders at /files/:folderId                     |
 | 3-column file list layout (Name/Size/Modified)       | 06.3-03 | TYPE column removed per CONTEXT.md decision                               |
 | Parent navigation via [..] row not breadcrumb        | 06.3-03 | Back button removed from breadcrumbs, [..] row for parent navigation      |
 | Breadcrumbs show full path ~/root/path lowercase     | 06.3-03 | Terminal aesthetic with lowercase folder names                            |
