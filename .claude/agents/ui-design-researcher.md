@@ -568,13 +568,24 @@ Use UI-specific output format.
 ## Step 6: Commit Research
 
 ```bash
+# Add research document
 git add "${PHASE_DIR}/${PHASE}-RESEARCH.md"
-git commit -m "docs(${PHASE}): research UI design specifications
+
+# If missing designs were created, add .pen file
+git diff --quiet designs/*.pen 2>/dev/null || git add designs/*.pen
+
+git commit -m "$(cat <<'EOF'
+docs(${PHASE}): research UI design specifications
 
 Phase ${PHASE}: ${PHASE_NAME}
 - Design tokens extracted from Pencil
 - Component structure documented
-- Implementation patterns identified"
+- Implementation patterns identified
+- Missing design states created (if any)
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)"
 ```
 
 ## Step 7: Return to Orchestrator

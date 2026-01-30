@@ -453,16 +453,29 @@ Created: .planning/phases/${PADDED_PHASE}-${SLUG}/${PADDED_PHASE}-CONTEXT.md
 </step>
 
 <step name="git_commit">
-Commit phase context:
+Commit phase context and any design artifacts:
 
 ```bash
+# Always add context file
 git add "${PHASE_DIR}/${PADDED_PHASE}-CONTEXT.md"
+
+# For UI phases: add design file and screenshots if they exist
+if [ "$IS_UI_PHASE" = true ]; then
+  # Add .pen file if modified
+  git diff --quiet designs/*.pen 2>/dev/null || git add designs/*.pen
+
+  # Add screenshots directory if it exists
+  [ -d "${PHASE_DIR}/screenshots" ] && git add "${PHASE_DIR}/screenshots/"
+fi
+
 git commit -m "$(cat <<'EOF'
 docs(${PADDED_PHASE}): capture phase context
 
 Phase ${PADDED_PHASE}: ${PHASE_NAME}
 - Implementation decisions documented
 - Phase boundary established
+${IS_UI_PHASE:+- Design mockups added to .pen file}
+${IS_UI_PHASE:+- Screenshots saved for reference}
 EOF
 )"
 ```
