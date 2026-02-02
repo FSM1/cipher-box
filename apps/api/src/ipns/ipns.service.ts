@@ -5,6 +5,10 @@ import { ConfigService } from '@nestjs/config';
 import { FolderIpns } from './entities/folder-ipns.entity';
 import { PublishIpnsDto, PublishIpnsResponseDto } from './dto';
 
+// Dynamic import for ESM-only ipns package (loaded at runtime)
+type UnmarshalIPNSRecord = (bytes: Uint8Array) => { value: string; sequence: bigint };
+let unmarshalIPNSRecord: UnmarshalIPNSRecord | null = null;
+
 @Injectable()
 export class IpnsService {
   private readonly logger = new Logger(IpnsService.name);
@@ -232,9 +236,9 @@ export class IpnsService {
           // The delegated routing API returns the raw IPNS record
           // We need to parse it to extract the CID and sequence number
           const recordBytes = new Uint8Array(await response.arrayBuffer());
-          const parsed = this.parseIpnsRecord(recordBytes);
+          const parsed = await this.parseIpnsRecord(recordBytes);
 
-          this.logger.log(`IPNS name resolved successfully: ${ipnsName} -> ${parsed.cid}`);
+          this.logger.debug(`IPNS name resolved successfully: ${ipnsName} -> ${parsed.cid}`);
           return parsed;
         }
 
@@ -258,6 +262,11 @@ export class IpnsService {
         );
         throw new Error(`Delegated routing returned ${response.status}`);
       } catch (error) {
+        // Re-throw HttpException immediately (e.g., parsing errors) - don't retry
+        if (error instanceof HttpException) {
+          throw error;
+        }
+
         lastError = error instanceof Error ? error : new Error(String(error));
 
         // Only retry on network errors, not on HTTP errors
@@ -295,49 +304,42 @@ export class IpnsService {
 
   /**
    * Parse an IPNS record to extract CID and sequence number
-   * The record format follows the IPNS specification (protobuf/CBOR)
-   *
-   * Note: For simplicity, we parse the raw bytes directly.
-   * The IPNS record contains the "value" field (the CID path) and "sequence" field.
+   * Uses the ipns package to properly deserialize protobuf-encoded records
    */
-  private parseIpnsRecord(recordBytes: Uint8Array): { cid: string; sequenceNumber: string } {
-    // IPNS records are CBOR-encoded with a specific structure
-    // The value field contains the IPFS path (e.g., /ipfs/bafybeic...)
-    // The sequence field contains the record sequence number
+  private async parseIpnsRecord(
+    recordBytes: Uint8Array
+  ): Promise<{ cid: string; sequenceNumber: string }> {
+    try {
+      // Dynamically load ESM-only ipns package at runtime
+      if (!unmarshalIPNSRecord) {
+        const ipnsModule = await import('ipns');
+        unmarshalIPNSRecord = ipnsModule.unmarshalIPNSRecord;
+      }
 
-    // For robustness, we'll look for the CID pattern in the record
-    // The value is typically in format: /ipfs/<CID>
-    const recordStr = new TextDecoder().decode(recordBytes);
+      const record = unmarshalIPNSRecord(recordBytes);
 
-    // Extract CID from the record - look for /ipfs/ prefix
-    const ipfsPathMatch = recordStr.match(
-      /\/ipfs\/(bafy[a-zA-Z0-9]+|bafk[a-zA-Z0-9]+|Qm[a-zA-Z0-9]+)/
-    );
-    if (!ipfsPathMatch) {
-      this.logger.error('Failed to extract CID from IPNS record');
+      // Extract CID from the Value field (format: /ipfs/<cid>)
+      // The ipns package returns value as a string path (e.g., "/ipfs/bafy...")
+      const valuePath = record.value;
+      const cidMatch = valuePath.match(/\/ipfs\/([a-zA-Z0-9]+)/);
+      if (!cidMatch) {
+        this.logger.error('Failed to extract CID from IPNS record value');
+        throw new HttpException('Invalid IPNS record format', HttpStatus.BAD_GATEWAY);
+      }
+
+      const cid = cidMatch[1];
+      // Sequence is a bigint in the record structure
+      const sequenceNumber = String(record.sequence ?? 0n);
+
+      this.logger.debug(`Parsed IPNS record: cid=${cid}, sequenceNumber=${sequenceNumber}`);
+      return { cid, sequenceNumber };
+    } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      this.logger.error(`Failed to parse IPNS record: ${error}`);
       throw new HttpException('Invalid IPNS record format', HttpStatus.BAD_GATEWAY);
     }
-
-    const cid = ipfsPathMatch[1];
-
-    // Extract sequence number - it's typically encoded as a varint in the record
-    // For simplicity, we'll default to "0" if we can't parse it
-    // The actual sequence is in the CBOR structure
-    const sequenceNumber = '0';
-
-    // Look for sequence field in the record
-    // CBOR encodes it with a specific tag, but we can use a simple heuristic
-    // The sequence is usually after "Sequence" or "sequence" in debug output
-    // For production, consider using a proper CBOR/protobuf parser
-
-    // Try to find sequence in the binary data
-    // Sequence is typically a uint64 in the record
-    // For now, we'll return "0" and let the caller use the database sequence if needed
-    // This is acceptable because the backend tracks its own sequence numbers
-
-    this.logger.debug(`Parsed IPNS record: cid=${cid}, sequenceNumber=${sequenceNumber}`);
-
-    return { cid, sequenceNumber };
   }
 
   private delay(ms: number): Promise<void> {

@@ -8,7 +8,7 @@
 
 export type IpnsControllerResolveRecordParams = {
   /**
-   * IPNS name to resolve (k51... CIDv1 format)
+   * IPNS name to resolve. Supports CIDv1 IPNS names starting with "k51..." (PeerID-style) or "bafzaa..." (IPNS key CID).
    */
   ipnsName: string;
 };

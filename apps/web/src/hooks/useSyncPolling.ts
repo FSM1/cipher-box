@@ -29,14 +29,21 @@ export function useSyncPolling(onSync: () => Promise<void>): void {
   const prevOnline = useRef(isOnline);
   const prevVisible = useRef(isVisible);
 
+  // Guard against concurrent sync runs - multiple triggers can occur (interval + visibility + reconnect)
+  const isSyncingRef = useRef(false);
+
   // Keep sync store's isOnline in sync
   useEffect(() => {
     setOnline(isOnline);
   }, [isOnline, setOnline]);
 
-  // Wrapped sync callback that updates store state
+  // Wrapped sync callback that updates store state with concurrent execution guard
   const doSync = useCallback(async () => {
     if (!rootIpnsName || !isOnline) return;
+
+    // Skip if already syncing to prevent race conditions
+    if (isSyncingRef.current) return;
+    isSyncingRef.current = true;
 
     startSync();
     try {
@@ -45,6 +52,8 @@ export function useSyncPolling(onSync: () => Promise<void>): void {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Sync failed';
       syncFailure(message);
+    } finally {
+      isSyncingRef.current = false;
     }
   }, [rootIpnsName, isOnline, onSync, startSync, syncSuccess, syncFailure]);
 

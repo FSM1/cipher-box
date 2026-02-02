@@ -78,7 +78,8 @@ export class IpnsController {
   })
   @ApiQuery({
     name: 'ipnsName',
-    description: 'IPNS name to resolve (k51... CIDv1 format)',
+    description:
+      'IPNS name to resolve. Supports CIDv1 IPNS names starting with "k51..." (PeerID-style) or "bafzaa..." (IPNS key CID).',
     example: 'k51qzi5uqu5dkkciu33khkzbcmxtyhn2hgdqyp6rv7s5egjlsdj6a2xpz9lxvz',
   })
   @ApiResponse({

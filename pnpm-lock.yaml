@@ -91,6 +91,9 @@ importers:
       form-data:
         specifier: ^4.0.5
         version: 4.0.5
+      ipns:
+        specifier: ^10.1.3
+        version: 10.1.3
       jose:
         specifier: ^6.1.3
         version: 6.1.3
