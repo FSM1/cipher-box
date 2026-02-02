@@ -6,8 +6,8 @@ type BreadcrumbsProps = {
   breadcrumbs: Breadcrumb[];
   /** Callback to navigate to a folder */
   onNavigate: (folderId: string) => void;
-  /** Callback to navigate up to parent folder (kept for compatibility) */
-  onNavigateUp: () => void;
+  /** @deprecated Callback to navigate up - use onNavigate with parent ID instead */
+  onNavigateUp?: () => void;
   /** Callback when an item is dropped onto a breadcrumb segment */
   onDrop?: (
     sourceId: string,

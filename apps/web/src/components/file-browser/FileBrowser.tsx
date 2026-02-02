@@ -267,7 +267,7 @@ export function FileBrowser() {
         <div className="file-browser-actions">
           <button
             type="button"
-            className="toolbar-btn toolbar-btn--primary"
+            className="toolbar-btn toolbar-btn--primary file-browser-new-folder-button"
             onClick={openCreateFolderDialog}
             disabled={isOperating}
             aria-label="New Folder"

@@ -198,7 +198,7 @@
 }
 
 .settings-section {
-  background-color: var(--color-background-dark);
+  background-color: var(--color-background-dark, var(--color-background));
   border: var(--border-thickness) solid var(--color-border);
   padding: var(--spacing-md);
 }

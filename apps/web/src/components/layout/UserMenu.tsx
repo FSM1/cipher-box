@@ -25,17 +25,26 @@ export function UserMenu() {
       onMouseEnter={() => setIsOpen(true)}
       onMouseLeave={() => setIsOpen(false)}
     >
-      <button className="user-menu-trigger" type="button">
+      <button
+        className="user-menu-trigger"
+        type="button"
+        aria-expanded={isOpen}
+        aria-haspopup="true"
+        onClick={() => setIsOpen(!isOpen)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') setIsOpen(false);
+        }}
+      >
         <span className="user-menu-email">{email}</span>
         <span className="user-menu-caret">&#9660;</span>
       </button>
 
       {isOpen && (
-        <div className="user-menu-dropdown">
-          <Link to="/settings" className="user-menu-item">
+        <div className="user-menu-dropdown" role="menu">
+          <Link to="/settings" className="user-menu-item" role="menuitem">
             [settings]
           </Link>
-          <button type="button" className="user-menu-item" onClick={handleLogout}>
+          <button type="button" className="user-menu-item" role="menuitem" onClick={handleLogout}>
             [logout]
           </button>
         </div>
