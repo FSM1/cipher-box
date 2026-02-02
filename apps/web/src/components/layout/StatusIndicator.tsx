@@ -17,7 +17,7 @@ export function StatusIndicator() {
   const isConnected = !isLoading && !isError && data?.status === 'ok';
 
   let dotClass = 'status-indicator-dot';
-  let statusText = '[CHECKING]';
+  let statusText: string;
 
   if (isLoading) {
     dotClass += ' status-indicator-dot--loading';

@@ -28,7 +28,14 @@ export function ParentDirRow({ onClick }: ParentDirRowProps) {
       onClick={onClick}
       role="row"
       tabIndex={0}
-      onKeyDown={(e) => e.key === 'Enter' && onClick()}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          if (e.key === ' ') {
+            e.preventDefault();
+          }
+          onClick();
+        }
+      }}
       data-testid="parent-dir-row"
     >
       {/* Row 1: Icon + Name */}

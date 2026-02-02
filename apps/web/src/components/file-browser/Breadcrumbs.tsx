@@ -1,4 +1,4 @@
-import { Fragment, useState, useCallback, type DragEvent } from 'react';
+import { Fragment, useState, useCallback, type DragEvent, type KeyboardEvent } from 'react';
 import type { Breadcrumb } from '../../hooks/useFolderNavigation';
 
 type BreadcrumbsProps = {
@@ -64,7 +64,7 @@ export function Breadcrumbs({ breadcrumbs, onNavigate, onDrop }: BreadcrumbsProp
    * Handle keyboard navigation.
    */
   const handleKeyDown = useCallback(
-    (event: React.KeyboardEvent, folderId: string) => {
+    (event: KeyboardEvent, folderId: string) => {
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
         onNavigate(folderId);

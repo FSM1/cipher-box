@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, type KeyboardEvent } from 'react';
 import type { FolderChild } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useFolderStore, type FolderNode } from '../../stores/folder.store';
@@ -235,7 +235,7 @@ export function MoveDialog({
   );
 
   const handleKeyDown = useCallback(
-    (event: React.KeyboardEvent, folderId: string) => {
+    (event: KeyboardEvent, folderId: string) => {
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
         handleSelectFolder(folderId);
