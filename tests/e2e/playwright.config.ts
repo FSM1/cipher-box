@@ -55,9 +55,10 @@ export default defineConfig({
   webServer: [
     {
       // Mock IPNS routing service - must start first as API depends on it
+      // Uses MOCK_IPNS_URL env var to allow external server (e.g., Docker)
       command: 'node tools/mock-ipns-routing/dist/index.js',
-      url: 'http://localhost:3001/health',
-      reuseExistingServer: !process.env.CI,
+      url: process.env.MOCK_IPNS_URL || 'http://localhost:3001/health',
+      reuseExistingServer: true, // Always reuse if available
       timeout: 30000,
       cwd: resolve(__dirname, '../..'),
       stdout: 'pipe',

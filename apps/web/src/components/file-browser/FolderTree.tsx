@@ -1,3 +1,8 @@
+/**
+ * @deprecated This component is no longer used as of Phase 6.3.
+ * Folder navigation is now handled via in-place navigation with ParentDirRow.
+ * This file is kept for reference and will be removed in a future cleanup.
+ */
 import { useVaultStore } from '../../stores/vault.store';
 import { useFolderStore } from '../../stores/folder.store';
 import { FolderTreeNode } from './FolderTreeNode';

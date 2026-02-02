@@ -24,6 +24,8 @@ type ContextMenuProps = {
   onDownload?: () => void;
   /** Callback when rename is clicked */
   onRename: () => void;
+  /** Callback when move is clicked */
+  onMove?: () => void;
   /** Callback when delete is clicked */
   onDelete: () => void;
 };
@@ -46,6 +48,7 @@ export function ContextMenu({
   onClose,
   onDownload,
   onRename,
+  onMove,
   onDelete,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -126,6 +129,11 @@ export function ContextMenu({
     onClose();
   };
 
+  const handleMove = () => {
+    onMove?.();
+    onClose();
+  };
+
   const handleDelete = () => {
     onDelete();
     onClose();
@@ -164,6 +172,14 @@ export function ContextMenu({
           <span className="context-menu-item-icon">&#9998;</span>
           Rename
         </button>
+
+        {/* Move to... */}
+        {onMove && (
+          <button type="button" className="context-menu-item" onClick={handleMove} role="menuitem">
+            <span className="context-menu-item-icon">&#8594;</span>
+            Move to...
+          </button>
+        )}
 
         {/* Divider before destructive action */}
         <div className="context-menu-divider" role="separator" />

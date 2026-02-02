@@ -1,16 +1,16 @@
-import { useState, useCallback, useEffect, type DragEvent, type MouseEvent } from 'react';
+import { useState, useCallback, type DragEvent, type MouseEvent } from 'react';
 import type { FolderChild, FileEntry } from '@cipherbox/crypto';
 import { useFolderNavigation } from '../../hooks/useFolderNavigation';
 import { useFolder } from '../../hooks/useFolder';
 import { useFileDownload } from '../../hooks/useFileDownload';
 import { useContextMenu } from '../../hooks/useContextMenu';
-import { FolderTree } from './FolderTree';
 import { FileList } from './FileList';
 import { EmptyState } from './EmptyState';
 import { ContextMenu } from './ContextMenu';
 import { ConfirmDialog } from './ConfirmDialog';
 import { RenameDialog } from './RenameDialog';
 import { CreateFolderDialog } from './CreateFolderDialog';
+import { MoveDialog } from './MoveDialog';
 import { UploadZone } from './UploadZone';
 import { UploadModal } from './UploadModal';
 import { Breadcrumbs } from './Breadcrumbs';
@@ -33,41 +33,31 @@ type DialogState = {
 /**
  * Main file browser container component.
  *
- * Orchestrates the sidebar folder tree and main file list area.
- * Manages selection state, context menu, and file/folder actions.
+ * Manages the file list area with in-place navigation.
+ * Selection state, context menu, and file/folder actions.
  *
- * Layout:
- * - Left sidebar: FolderTree for navigation
- * - Main area: FileList or EmptyState based on folder contents
+ * Navigation:
+ * - Double-click folders to navigate into them
+ * - Click [..] PARENT_DIR row to navigate up
+ * - Browser history integration via URL routing
  *
  * Actions:
  * - Download: Downloads file from IPFS, decrypts, and triggers browser download
  * - Rename: Opens dialog to rename file/folder
  * - Delete: Shows confirmation, then removes from folder metadata
- * - Move: Drag-drop to sidebar folder tree
+ * - Move: Drag-drop to folder rows in list
  *
  * @example
  * ```tsx
- * function Dashboard() {
+ * function FilesPage() {
  *   return (
- *     <main className="dashboard-main">
+ *     <main className="app-main">
  *       <FileBrowser />
  *     </main>
  *   );
  * }
  * ```
  */
-/**
- * Mobile breakpoint (px) - matches CSS media query.
- */
-const MOBILE_BREAKPOINT = 768;
-
-/**
- * Check if viewport is mobile width.
- */
-function isMobileViewport(): boolean {
-  return typeof window !== 'undefined' && window.innerWidth < MOBILE_BREAKPOINT;
-}
 
 export function FileBrowser() {
   // Navigation state from hook
@@ -89,50 +79,16 @@ export function FileBrowser() {
   // Dialog states
   const [confirmDialog, setConfirmDialog] = useState<DialogState>({ open: false, item: null });
   const [renameDialog, setRenameDialog] = useState<DialogState>({ open: false, item: null });
+  const [moveDialog, setMoveDialog] = useState<DialogState>({ open: false, item: null });
   const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false);
-
-  // Mobile sidebar state - closed by default on mobile, open on desktop
-  const [sidebarOpen, setSidebarOpen] = useState(() => !isMobileViewport());
-  const [isMobile, setIsMobile] = useState(() => isMobileViewport());
-
-  // Track viewport changes
-  useEffect(() => {
-    const handleResize = () => {
-      const mobile = isMobileViewport();
-      setIsMobile(mobile);
-      // Auto-open sidebar when transitioning from mobile to desktop
-      if (!mobile) {
-        setSidebarOpen(true);
-      }
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  // Toggle sidebar (mobile)
-  const toggleSidebar = useCallback(() => {
-    setSidebarOpen((prev) => !prev);
-  }, []);
-
-  // Close sidebar (mobile)
-  const closeSidebar = useCallback(() => {
-    if (isMobile) {
-      setSidebarOpen(false);
-    }
-  }, [isMobile]);
 
   // Clear selection when navigating to a new folder
   const handleNavigate = useCallback(
     (folderId: string) => {
       setSelectedItemId(null);
       navigateTo(folderId);
-      // Close sidebar on mobile after navigation
-      if (isMobile) {
-        setSidebarOpen(false);
-      }
     },
-    [navigateTo, isMobile]
+    [navigateTo]
   );
 
   // Handle item selection
@@ -153,26 +109,16 @@ export function FileBrowser() {
     // Drag data is set by FileListItem component
   }, []);
 
-  // Drop handler for folder tree - move item to target folder
-  const handleDrop = useCallback(
-    async (targetFolderId: string, dataTransfer: DataTransfer) => {
+  // Drop on folder handler
+  const handleDropOnFolder = useCallback(
+    async (
+      sourceId: string,
+      sourceType: 'file' | 'folder',
+      sourceParentId: string,
+      destFolderId: string
+    ) => {
       try {
-        const data = dataTransfer.getData('application/json');
-        if (!data) return;
-
-        const { id, type, parentId } = JSON.parse(data) as {
-          id: string;
-          type: 'file' | 'folder';
-          parentId: string;
-        };
-
-        // Don't move to same folder
-        if (parentId === targetFolderId) return;
-
-        // Prevent moving folder into itself (checked in folder.service too)
-        if (type === 'folder' && id === targetFolderId) return;
-
-        await moveItem(id, type, parentId, targetFolderId);
+        await moveItem(sourceId, sourceType, sourceParentId, destFolderId);
       } catch (err) {
         console.error('Move failed:', err);
       }
@@ -212,6 +158,13 @@ export function FileBrowser() {
     }
   }, [contextMenu.item]);
 
+  // Open move dialog
+  const handleMoveClick = useCallback(() => {
+    if (contextMenu.item) {
+      setMoveDialog({ open: true, item: contextMenu.item });
+    }
+  }, [contextMenu.item]);
+
   // Confirm rename
   const handleRenameConfirm = useCallback(
     async (newName: string) => {
@@ -241,6 +194,22 @@ export function FileBrowser() {
     }
   }, [confirmDialog.item, deleteItem, currentFolderId]);
 
+  // Confirm move
+  const handleMoveConfirm = useCallback(
+    async (destinationFolderId: string) => {
+      const item = moveDialog.item;
+      if (!item) return;
+
+      try {
+        await moveItem(item.id, item.type, currentFolderId, destinationFolderId);
+        setMoveDialog({ open: false, item: null });
+      } catch (err) {
+        console.error('Move failed:', err);
+      }
+    },
+    [moveDialog.item, moveItem, currentFolderId]
+  );
+
   // Close dialogs
   const closeConfirmDialog = useCallback(() => {
     setConfirmDialog({ open: false, item: null });
@@ -248,6 +217,10 @@ export function FileBrowser() {
 
   const closeRenameDialog = useCallback(() => {
     setRenameDialog({ open: false, item: null });
+  }, []);
+
+  const closeMoveDialog = useCallback(() => {
+    setMoveDialog({ open: false, item: null });
   }, []);
 
   // Create folder handlers
@@ -281,111 +254,56 @@ export function FileBrowser() {
       ? `Are you sure you want to delete "${confirmDialog.item?.name}"? This will also delete all files and subfolders inside. This cannot be undone.`
       : `Are you sure you want to delete "${confirmDialog.item?.name}"? This cannot be undone.`;
 
-  // Sidebar classes based on state
-  const sidebarClassName = [
-    'file-browser-sidebar',
-    sidebarOpen ? 'file-browser-sidebar--open' : 'file-browser-sidebar--closed',
-  ].join(' ');
-
   return (
-    <div className="file-browser">
-      {/* Mobile backdrop when sidebar is open */}
-      {isMobile && sidebarOpen && (
-        <div className="file-browser-backdrop" onClick={closeSidebar} aria-hidden="true" />
-      )}
-
-      {/* Sidebar with folder tree */}
-      <aside className={sidebarClassName}>
-        {/* Close button for mobile */}
-        {isMobile && (
+    <div className="file-browser-content">
+      {/* Toolbar with breadcrumbs and actions */}
+      <div className="file-browser-toolbar">
+        <Breadcrumbs
+          breadcrumbs={breadcrumbs}
+          onNavigate={handleNavigate}
+          onNavigateUp={navigateUp}
+          onDrop={handleDropOnFolder}
+        />
+        <div className="file-browser-actions">
           <button
             type="button"
-            className="file-browser-sidebar-close"
-            onClick={closeSidebar}
-            aria-label="Close sidebar"
+            className="toolbar-btn toolbar-btn--primary file-browser-new-folder-button"
+            onClick={openCreateFolderDialog}
+            disabled={isOperating}
+            aria-label="New Folder"
           >
-            &#10005;
+            +folder
           </button>
-        )}
-        <FolderTree
-          currentFolderId={currentFolderId}
-          onNavigate={handleNavigate}
-          onDrop={handleDrop}
-        />
-      </aside>
-
-      {/* Main content area */}
-      <main className="file-browser-main">
-        {/* Breadcrumbs + upload zone in toolbar area */}
-        <div className="file-browser-toolbar">
-          {/* Mobile hamburger toggle */}
-          {isMobile && (
-            <button
-              type="button"
-              className="file-browser-toggle"
-              onClick={toggleSidebar}
-              aria-label={sidebarOpen ? 'Close sidebar' : 'Open sidebar'}
-              aria-expanded={sidebarOpen}
-            >
-              &#9776;
-            </button>
-          )}
-          <Breadcrumbs
-            breadcrumbs={breadcrumbs}
-            onNavigate={handleNavigate}
-            onNavigateUp={navigateUp}
-          />
-          <div className="file-browser-actions">
-            <button
-              type="button"
-              className="file-browser-new-folder-button"
-              onClick={openCreateFolderDialog}
-              disabled={isOperating}
-              aria-label="New Folder"
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                <line x1="12" y1="11" x2="12" y2="17" />
-                <line x1="9" y1="14" x2="15" y2="14" />
-              </svg>
-              <span>New Folder</span>
-            </button>
+          <div className="toolbar-upload">
             <UploadZone folderId={currentFolderId} />
           </div>
         </div>
+      </div>
 
-        {/* Loading state */}
-        {isLoading && (
-          <div className="file-browser-loading">
-            <span className="file-browser-loading-spinner">Loading...</span>
-          </div>
-        )}
+      {/* Loading state */}
+      {isLoading && (
+        <div className="file-browser-loading">
+          <span className="file-browser-loading-spinner">Loading...</span>
+        </div>
+      )}
 
-        {/* File list or empty state */}
-        {!isLoading && hasChildren && (
-          <FileList
-            items={children}
-            selectedId={selectedItemId}
-            parentId={currentFolderId}
-            onSelect={handleSelect}
-            onNavigate={handleNavigate}
-            onContextMenu={handleContextMenu}
-            onDragStart={handleDragStart}
-          />
-        )}
+      {/* File list or empty state */}
+      {!isLoading && hasChildren && (
+        <FileList
+          items={children}
+          selectedId={selectedItemId}
+          parentId={currentFolderId}
+          showParentRow={currentFolderId !== 'root'}
+          onNavigateUp={navigateUp}
+          onSelect={handleSelect}
+          onNavigate={handleNavigate}
+          onContextMenu={handleContextMenu}
+          onDragStart={handleDragStart}
+          onDropOnFolder={handleDropOnFolder}
+        />
+      )}
 
-        {!isLoading && !hasChildren && <EmptyState folderId={currentFolderId} />}
-      </main>
+      {!isLoading && !hasChildren && <EmptyState folderId={currentFolderId} />}
 
       {/* Context menu */}
       {contextMenu.visible && contextMenu.item && (
@@ -396,6 +314,7 @@ export function FileBrowser() {
           onClose={contextMenu.hide}
           onDownload={isFileEntry(contextMenu.item) ? handleDownload : undefined}
           onRename={handleRenameClick}
+          onMove={handleMoveClick}
           onDelete={handleDeleteClick}
         />
       )}
@@ -427,6 +346,16 @@ export function FileBrowser() {
         open={createFolderDialogOpen}
         onClose={closeCreateFolderDialog}
         onConfirm={handleCreateFolderConfirm}
+        isLoading={isOperating}
+      />
+
+      {/* Move dialog */}
+      <MoveDialog
+        open={moveDialog.open}
+        onClose={closeMoveDialog}
+        onConfirm={handleMoveConfirm}
+        item={moveDialog.item}
+        currentFolderId={currentFolderId}
         isLoading={isOperating}
       />
 

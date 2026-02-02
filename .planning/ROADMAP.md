@@ -258,11 +258,15 @@ Plans:
 4. File browser structure improved (sidebar, main area, toolbars)
 5. All new designs created in Pencil before implementation
 6. Existing E2E tests pass with structural changes
-   **Plans**: TBD
+   **Plans**: 5 plans
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 6.3 to break down)
+- [ ] 06.3-01-PLAN.md — AppShell layout components (Header, Sidebar, Footer)
+- [ ] 06.3-02-PLAN.md — Routing and URL-based folder navigation
+- [ ] 06.3-03-PLAN.md — File list structure (ParentDirRow, 3-column layout, Breadcrumbs)
+- [ ] 06.3-04-PLAN.md — FileBrowser integration and responsive styles
+- [ ] 06.3-05-PLAN.md — Visual verification and final adjustments
 
 ### Phase 7: Multi-Device Sync
 
@@ -384,7 +388,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 6. File Browser UI      | 4/4            | Complete    | 2026-01-22 |
 | 6.1 Webapp Automation   | 7/7            | Complete    | 2026-01-22 |
 | 6.2 Restyle App         | 6/6            | Complete    | 2026-01-27 |
-| 6.3 UI Structure        | 0/TBD          | Not started | -          |
+| 6.3 UI Structure        | 0/5            | Not started | -          |
 | 7. Multi-Device Sync    | 0/3            | Not started | -          |
 | 8. TEE Integration      | 0/4            | Not started | -          |
 | 9. Desktop Client       | 0/5            | Not started | -          |
@@ -414,4 +418,5 @@ _Phase 6.1 complete: 2026-01-22_
 _Phase 7 planned: 2026-01-22_
 _Phase 6.3 inserted: 2026-01-25_
 _Phase 6.2 complete: 2026-01-27_
-_Total phases: 13 | Total plans: 60 | Depth: Comprehensive_
+_Phase 6.3 planned: 2026-01-30_
+_Total phases: 13 | Total plans: 65 | Depth: Comprehensive_

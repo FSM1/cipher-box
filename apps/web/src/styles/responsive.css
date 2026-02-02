@@ -1,195 +1,85 @@
 /**
  * Responsive Styles - Terminal Aesthetic
  *
- * Mobile-first responsive design for the file browser.
+ * Mobile-first responsive design for the app shell and file browser.
  * Breakpoint: 768px (tablet/desktop boundary)
  *
  * Mobile features:
- * - Sidebar slides in as overlay
- * - Hamburger toggle in toolbar
- * - Backdrop behind sidebar
+ * - AppShell switches to single column layout
+ * - App sidebar slides in as overlay (hidden by default)
  * - Touch-friendly sizing
+ * - 2-column file list (date hidden)
  */
 
 /* ==========================================================================
-   Mobile Hamburger Toggle
+   DEPRECATED: Old file-browser toggle/backdrop styles
+   No longer used - sidebar removed from FileBrowser in Phase 6.3
+   Now using AppShell layout with app-level sidebar
    ========================================================================== */
 
-.file-browser-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 2.5rem;
-  height: 2.5rem;
-  padding: 0;
-  background: transparent;
-  border: var(--border-thickness) solid var(--color-border);
-  border-radius: 0;
-  color: var(--color-text-primary);
-  font-size: 1.25rem;
-  cursor: pointer;
-  transition: background-color 0.15s ease, box-shadow 0.15s ease;
-  flex-shrink: 0;
-}
-
-.file-browser-toggle:hover {
-  background-color: var(--color-green-darker);
-  box-shadow: var(--glow-green);
-}
-
-.file-browser-toggle:focus {
-  outline: 2px solid var(--color-green-primary);
-  outline-offset: 2px;
-}
+/*
+.file-browser-toggle { ... }
+.file-browser-backdrop { ... }
+.file-browser-sidebar-close { ... }
+*/
 
 /* ==========================================================================
-   Mobile Sidebar Overlay
+   AppShell Mobile Overlay
    ========================================================================== */
-
-/* Backdrop when sidebar is open */
-.file-browser-backdrop {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.8);
-  z-index: 99;
-  animation: fadeIn 0.2s ease;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-/* Sidebar close button (mobile) */
-.file-browser-sidebar-close {
-  position: absolute;
-  top: var(--spacing-sm);
-  right: var(--spacing-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 2rem;
-  height: 2rem;
-  padding: 0;
-  background: transparent;
-  border: var(--border-thickness) solid var(--color-border);
-  border-radius: 0;
-  color: var(--color-text-secondary);
-  font-size: 1.25rem;
-  cursor: pointer;
-  transition: color 0.15s ease, background-color 0.15s ease;
-  z-index: 1;
-}
-
-.file-browser-sidebar-close:hover {
-  color: var(--color-text-primary);
-  background-color: var(--color-green-darker);
-}
 
 /* ==========================================================================
    Mobile Layout Overrides
    ========================================================================== */
 
 @media (max-width: 768px) {
-  /* Sidebar: fixed position overlay */
-  .file-browser-sidebar {
-    position: fixed;
-    top: 0;
-    left: 0;
-    bottom: 0;
-    width: 280px;
-    max-width: 85vw;
-    transform: translateX(-100%);
-    transition: transform 0.3s ease;
-    z-index: 100;
-    background-color: var(--color-background);
-    border-right: var(--border-thickness) solid var(--color-border);
-    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.5);
+  /* AppShell: single column layout on mobile */
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'header'
+      'main'
+      'footer';
   }
 
-  .file-browser-sidebar--open {
-    transform: translateX(0);
+  /* App header: tighter padding */
+  .app-header {
+    padding: var(--spacing-xs) var(--spacing-sm);
   }
 
-  .file-browser-sidebar--closed {
-    transform: translateX(-100%);
+  /* App footer: tighter padding */
+  .app-footer {
+    padding: var(--spacing-xs) var(--spacing-sm);
   }
 
-  /* Adjust folder tree header for close button */
-  .folder-tree-header {
-    padding-right: 3rem;
+  /* Footer links hidden on mobile */
+  .footer-center {
+    display: none;
   }
 
-  /* Main content: full width */
-  .file-browser-main {
+  /* File browser content area */
+  .file-browser-content {
     padding: var(--spacing-sm);
   }
 
-  /* Toolbar: add gap for hamburger */
+  /* Toolbar: wrap on narrow screens */
   .file-browser-toolbar {
     gap: var(--spacing-xs);
     flex-wrap: wrap;
   }
 
-  /* File list: hide header on mobile (2-row item layout) */
+  /* File list: 2-column layout on mobile (date hidden) */
   .file-list-header {
-    display: none;
+    grid-template-columns: 1fr 80px;
+    grid-template-areas: "name size";
   }
 
-  /* File list items: 2-row stacked layout per Pencil design */
   .file-list-item {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 10px 12px;
-    min-height: auto;
+    grid-template-columns: 1fr 80px;
+    grid-template-areas: "name size";
   }
 
-  /* Row 1: Icon + Name (left aligned) */
-  .file-list-item-row-top {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    width: 100%;
-  }
-
-  .file-list-item-icon {
-    font-size: 10px;
-    font-weight: 600;
-  }
-
-  .file-list-item-name {
-    font-size: 11px;
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  /* Row 2: Modified (left) | Size (right) - space-between */
-  .file-list-item-row-bottom {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    width: 100%;
-  }
-
-  .file-list-item-date,
-  .file-list-item-size {
-    font-size: 9px;
-    color: var(--color-text-secondary);
-  }
-
-  /* Hide TYPE column on mobile (shown in row layout via icon) */
-  .file-list-item-type {
+  .file-list-header-date,
+  .file-list-item-date {
     display: none;
   }
 
@@ -230,22 +120,10 @@
    ========================================================================== */
 
 @media (min-width: 769px) {
-  /* Sidebar always visible on desktop */
-  .file-browser-sidebar {
+  /* App sidebar always visible on desktop */
+  .app-sidebar {
     position: relative;
     transform: none;
-  }
-
-  .file-browser-sidebar--open,
-  .file-browser-sidebar--closed {
-    transform: none;
-  }
-
-  /* Hide mobile-only elements */
-  .file-browser-toggle,
-  .file-browser-backdrop,
-  .file-browser-sidebar-close {
-    display: none;
   }
 }
 

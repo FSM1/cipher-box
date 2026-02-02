@@ -3,7 +3,9 @@ import { type Page, type Locator } from '@playwright/test';
 /**
  * Page object for Breadcrumbs component interactions.
  *
- * Encapsulates breadcrumb navigation for folder paths.
+ * Interactive breadcrumb navigation with clickable segments
+ * and drag-drop support for quick moves to parent folders.
+ *
  * Uses semantic selectors for maintainability.
  */
 export class BreadcrumbsPage {
@@ -13,42 +15,23 @@ export class BreadcrumbsPage {
    * Get the breadcrumbs container.
    */
   container(): Locator {
-    return this.page.locator('.breadcrumbs');
+    return this.page.locator('.breadcrumb-nav');
+  }
+
+  /**
+   * Get a breadcrumb item by folder name.
+   */
+  getBreadcrumbItem(name: string): Locator {
+    return this.container().locator('.breadcrumb-item', {
+      hasText: new RegExp(`^${name}$`, 'i'),
+    });
   }
 
   /**
    * Get all breadcrumb items.
    */
   breadcrumbItems(): Locator {
-    return this.page.locator('.breadcrumb-item');
-  }
-
-  /**
-   * Get a specific breadcrumb by name.
-   */
-  getBreadcrumb(name: string): Locator {
-    return this.page.locator('.breadcrumb-item', { hasText: name });
-  }
-
-  /**
-   * Get the home breadcrumb (root).
-   */
-  getHomeBreadcrumb(): Locator {
-    return this.page.locator('.breadcrumb-item').first();
-  }
-
-  /**
-   * Click a breadcrumb to navigate to that folder.
-   */
-  async clickBreadcrumb(name: string): Promise<void> {
-    await this.getBreadcrumb(name).click();
-  }
-
-  /**
-   * Click the home breadcrumb to navigate to root.
-   */
-  async clickHome(): Promise<void> {
-    await this.getHomeBreadcrumb().click();
+    return this.container().locator('.breadcrumb-item');
   }
 
   /**
@@ -59,56 +42,94 @@ export class BreadcrumbsPage {
   }
 
   /**
-   * Get the current path as array of breadcrumb names.
-   * Returns folder names from root to current location.
+   * Click a breadcrumb segment to navigate.
    */
-  async getCurrentPath(): Promise<string[]> {
+  async clickBreadcrumb(name: string): Promise<void> {
+    await this.getBreadcrumbItem(name).click();
+  }
+
+  /**
+   * Get all visible breadcrumb names in order.
+   */
+  async getVisibleBreadcrumbs(): Promise<string[]> {
     const items = this.breadcrumbItems();
     const count = await items.count();
-    const path: string[] = [];
+    const names: string[] = [];
 
     for (let i = 0; i < count; i++) {
       const text = await items.nth(i).textContent();
       if (text) {
-        // Clean up text (remove separators, trim)
-        const cleaned = text.replace(/[/›>]/g, '').trim();
-        if (cleaned) {
-          path.push(cleaned);
-        }
+        names.push(text.trim());
       }
     }
 
-    return path;
+    return names;
   }
 
   /**
-   * Get the number of breadcrumb items.
-   * Root folder has 1 breadcrumb, nested folders have more.
+   * Get the current path as a string (e.g., "~/my vault/documents").
+   * Reads the full nav content.
    */
-  async getBreadcrumbCount(): Promise<number> {
-    return await this.breadcrumbItems().count();
-  }
-
-  /**
-   * Get the last (current) breadcrumb text.
-   */
-  async getCurrentBreadcrumb(): Promise<string> {
-    const items = this.breadcrumbItems();
-    const count = await items.count();
-    if (count === 0) {
-      return '';
-    }
-    const text = await items.nth(count - 1).textContent();
+  async getPathString(): Promise<string> {
+    const text = await this.container().textContent();
     return text?.trim() ?? '';
   }
 
   /**
-   * Check if a breadcrumb is clickable (not the current/last item).
-   * The last breadcrumb is typically non-clickable.
+   * Check if the current path contains a specific folder name.
    */
-  async isBreadcrumbClickable(name: string): Promise<boolean> {
-    const breadcrumb = this.getBreadcrumb(name);
-    const isDisabled = await breadcrumb.getAttribute('aria-disabled');
-    return isDisabled !== 'true';
+  async pathContains(folderName: string): Promise<boolean> {
+    const path = await this.getPathString();
+    return path.toLowerCase().includes(folderName.toLowerCase());
+  }
+
+  /**
+   * Check if at root folder.
+   * Root shows only "my vault" segment after ~/
+   */
+  async isAtRoot(): Promise<boolean> {
+    const breadcrumbs = await this.getVisibleBreadcrumbs();
+    return breadcrumbs.length === 1 && breadcrumbs[0].toLowerCase() === 'my vault';
+  }
+
+  /**
+   * Get the current folder name (last breadcrumb segment).
+   */
+  async getCurrentFolderName(): Promise<string> {
+    const breadcrumbs = await this.getVisibleBreadcrumbs();
+    return breadcrumbs[breadcrumbs.length - 1] || 'my vault';
+  }
+
+  /**
+   * Wait for path to contain a specific folder name.
+   * Useful after navigation.
+   */
+  async waitForPathToContain(folderName: string, options?: { timeout?: number }): Promise<void> {
+    await this.container()
+      .locator('.breadcrumb-item', { hasText: new RegExp(folderName, 'i') })
+      .waitFor({ state: 'visible', ...options });
+  }
+
+  /**
+   * Wait for the breadcrumbs to show only root.
+   */
+  async waitForRoot(options?: { timeout?: number }): Promise<void> {
+    // Wait for "my vault" to be the only breadcrumb (root level)
+    await this.page
+      .locator('.breadcrumb-nav')
+      .filter({ hasText: /my vault/i })
+      .waitFor({ state: 'visible', ...options });
+  }
+
+  /**
+   * Drag an item to a breadcrumb segment.
+   * This performs a drag-and-drop from a source locator to a breadcrumb.
+   *
+   * @param sourceLocator - The locator for the item to drag
+   * @param breadcrumbName - The name of the target breadcrumb
+   */
+  async dragItemToBreadcrumb(sourceLocator: Locator, breadcrumbName: string): Promise<void> {
+    const target = this.getBreadcrumbItem(breadcrumbName);
+    await sourceLocator.dragTo(target);
   }
 }

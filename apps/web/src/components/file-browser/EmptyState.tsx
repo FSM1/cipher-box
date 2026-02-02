@@ -6,9 +6,21 @@ type EmptyStateProps = {
 };
 
 /**
+ * Terminal-style ASCII art folder icon for empty state.
+ */
+const asciiArt = `
+   ___________
+  /          /|
+ /          / |
+|__________|  |
+|          |  /
+|__________|/
+`;
+
+/**
  * Empty state component shown when a folder has no contents.
  *
- * Displays a large drop zone with upload prompt using UploadZone.
+ * Displays terminal-style ASCII art with drop zone for uploads.
  * Acts as both visual indicator and functional upload target.
  *
  * @example
@@ -26,11 +38,13 @@ type EmptyStateProps = {
  */
 export function EmptyState({ folderId }: EmptyStateProps) {
   return (
-    <div className="empty-state">
+    <div className="empty-state" data-testid="empty-state">
       <div className="empty-state-content">
-        <span className="empty-state-icon">📤</span>
-        <p className="empty-state-text">This folder is empty</p>
-        <p className="empty-state-hint">Your files are encrypted before leaving your device</p>
+        <pre className="empty-state-ascii" aria-hidden="true">
+          {asciiArt}
+        </pre>
+        <p className="empty-state-text">// EMPTY DIRECTORY</p>
+        <p className="empty-state-hint">drag files here or use upload</p>
         <div className="empty-state-upload">
           <UploadZone folderId={folderId} />
         </div>

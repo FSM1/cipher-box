@@ -5,45 +5,46 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 6.2 - Restyle App with Pencil Design (inserted)
+**Current focus:** Phase 6.3 - UI Structure Refactor (inserted)
 
 ## Current Position
 
-Phase: 6.1 of 11 (Webapp Automation Testing) - COMPLETE
-Plan: 6 of 6 in Phase 6.1 complete
-Status: Complete - All E2E tests and CI integration done
-Last activity: 2026-01-22 - Completed quick task 001: API status indicator on login page
+Phase: 6.3 of 11 (UI Structure Refactor)
+Plan: 5 of 5 in Phase 6.3 complete
+Status: Phase complete - UI restructure verified and approved
+Last activity: 2026-01-30 - Completed 06.3-05-PLAN.md
 
-Progress: [#######...] 72% (34 of 47 plans)
+Progress: [########..] 83% (39 of 47 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 34
-- Average duration: 5.1 min
-- Total execution time: 2.9 hours
+- Total plans completed: 39
+- Average duration: 4.9 min
+- Total execution time: 3.17 hours
 
 **By Phase:**
 
-| Phase                    | Plans | Total  | Avg/Plan |
-| ------------------------ | ----- | ------ | -------- |
-| 01-foundation            | 3/3   | 20 min | 7 min    |
-| 02-authentication        | 4/4   | 18 min | 4.5 min  |
-| 03-core-encryption       | 3/3   | 18 min | 6 min    |
-| 04-file-storage          | 4/4   | 17 min | 4.3 min  |
-| 04.1-api-service-testing | 3/3   | 11 min | 3.7 min  |
-| 04.2-local-ipfs-testing  | 2/2   | 14 min | 7 min    |
-| 05-folder-system         | 4/4   | 18 min | 4.5 min  |
-| 06-file-browser-ui       | 4/4   | 19 min | 4.8 min  |
-| 06.1-webapp-automation   | 6/6   | 25 min | 4.2 min  |
+| Phase                      | Plans | Total  | Avg/Plan |
+| -------------------------- | ----- | ------ | -------- |
+| 01-foundation              | 3/3   | 20 min | 7 min    |
+| 02-authentication          | 4/4   | 18 min | 4.5 min  |
+| 03-core-encryption         | 3/3   | 18 min | 6 min    |
+| 04-file-storage            | 4/4   | 17 min | 4.3 min  |
+| 04.1-api-service-testing   | 3/3   | 11 min | 3.7 min  |
+| 04.2-local-ipfs-testing    | 2/2   | 14 min | 7 min    |
+| 05-folder-system           | 4/4   | 18 min | 4.5 min  |
+| 06-file-browser-ui         | 4/4   | 19 min | 4.8 min  |
+| 06.1-webapp-automation     | 6/6   | 25 min | 4.2 min  |
+| 06.3-ui-structure-refactor | 5/5   | 16 min | 3.2 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 4m, 3m, 4m, 2m
-- Trend: Consistent, improving
+- Last 5 plans: 2m, 3m, 4m, 6m, 3m
+- Trend: Consistent, stable
 
-_Updated after each plan completion_
+Updated after each plan completion.
 
 ## Accumulated Context
 
@@ -151,6 +152,22 @@ Recent decisions affecting current work:
 | ESM for E2E test files                               | 06.1-03 | Consistent with monorepo type:module, avoids require() issues             |
 | Separate E2E workspace package                       | 06.1-03 | Isolated dependencies, independent test execution from unit tests         |
 | Multi-browser testing (Chromium/Firefox/WebKit)      | 06.1-03 | Cross-browser compatibility validation catches browser-specific bugs      |
+| CSS Grid with 180px sidebar                          | 06.3-01 | Fixed layout with header/sidebar/main/footer areas, only main scrolls     |
+| Hover-triggered UserMenu dropdown                    | 06.3-01 | Per CONTEXT.md decision, onMouseEnter/Leave not onClick                   |
+| Terminal ASCII icons [DIR] [CFG]                     | 06.3-01 | Nav items use bracket-wrapped labels for terminal aesthetic               |
+| Mobile breakpoint 768px hides sidebar                | 06.3-01 | Single column layout on mobile, sidebar removed from grid                 |
+| URL-based folder navigation via useParams            | 06.3-02 | Browser back/forward works for folder navigation history                  |
+| /files/:folderId? route pattern                      | 06.3-02 | Root folder at /files, subfolders at /files/:folderId                     |
+| 3-column file list layout (Name/Size/Modified)       | 06.3-03 | TYPE column removed per CONTEXT.md decision                               |
+| Parent navigation via [..] row not breadcrumb        | 06.3-03 | Back button removed from breadcrumbs, [..] row for parent navigation      |
+| Breadcrumbs show full path ~/root/path lowercase     | 06.3-03 | Terminal aesthetic with lowercase folder names                            |
+| ASCII art folder icon for empty state                | 06.3-03 | Terminal-style ASCII art instead of emoji for empty state                 |
+| FileBrowser removes FolderTree entirely              | 06.3-04 | Sidebar removed, in-place navigation via [..] row                         |
+| Deprecated components marked with @deprecated        | 06.3-04 | FolderTree, FolderTreeNode, ApiStatusIndicator for future cleanup         |
+| 2-column mobile file list                            | 06.3-04 | Date column hidden on mobile for space efficiency                         |
+| AppShell overlay sidebar pattern                     | 06.3-04 | Fixed position with translateX for mobile slide-in animation              |
+| Visual verification via Playwright MCP               | 06.3-05 | All must_haves verified programmatically before approval                  |
+| [..] row absent in empty folders accepted            | 06.3-05 | Minor UX issue - users can navigate via breadcrumbs or browser back       |
 
 ### Pending Todos
 
@@ -192,12 +209,12 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-01-22
-Stopped at: Phase 6.1 Complete - Webapp Automation Testing verified
+Last session: 2026-01-30
+Stopped at: Completed 06.3-05-PLAN.md - Phase 6.3 complete (visual verification passed)
 Resume file: None
-Next phase: Phase 6.2 (Restyle App with Pencil Design)
+Next plan: Phase 7 (TEE Integration) or next priority phase
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-01-25 after Phase 6.3 insertion_
+_Last updated: 2026-01-30 after 06.3-05 completion (Phase 6.3 complete)_

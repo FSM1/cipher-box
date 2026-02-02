@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useFolderStore, type FolderNode } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 
@@ -98,8 +99,11 @@ function buildBreadcrumbs(
  * ```
  */
 export function useFolderNavigation(): UseFolderNavigationReturn {
-  // Local state for current folder ID (default to 'root')
-  const [currentFolderId, setCurrentFolderId] = useState<string>('root');
+  // Get folder ID from URL params - defaults to 'root' when not present
+  const { folderId } = useParams<{ folderId?: string }>();
+  const navigate = useNavigate();
+  const currentFolderId = folderId ?? 'root';
+
   const [isLoading, setIsLoading] = useState(false);
 
   // Subscribe to stores
@@ -141,34 +145,36 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
   }, [breadcrumbs, setBreadcrumbs]);
 
   /**
-   * Navigate to a specific folder.
+   * Navigate to a specific folder using react-router.
+   * Browser history is automatically managed.
    */
   const navigateTo = useCallback(
-    (folderId: string) => {
+    (targetFolderId: string) => {
+      // Navigate to URL - root folder goes to /files, others to /files/:folderId
+      if (targetFolderId === 'root') {
+        navigate('/files');
+      } else {
+        navigate(`/files/${targetFolderId}`);
+      }
+
+      // Handle folder loading state
       const targetFolder =
-        folderId === 'root' ? getRootFolder(vaultState, folders) : folders[folderId];
+        targetFolderId === 'root' ? getRootFolder(vaultState, folders) : folders[targetFolderId];
 
-      // If folder exists and is loaded, navigate immediately
-      if (targetFolder) {
-        setCurrentFolderId(folderId);
+      if (targetFolder && !targetFolder.isLoaded && !targetFolder.isLoading) {
+        setIsLoading(true);
+        // Mark folder as loading
+        setFolder({ ...targetFolder, isLoading: true });
 
-        // If folder is not loaded yet, trigger loading
-        // (actual IPNS resolution deferred to Phase 7)
-        if (!targetFolder.isLoaded && !targetFolder.isLoading) {
-          setIsLoading(true);
-          // Mark folder as loading
-          setFolder({ ...targetFolder, isLoading: true });
-
-          // Simulate async load (actual implementation in Phase 7)
-          // For now, mark as loaded after a brief delay
-          setTimeout(() => {
-            setFolder({ ...targetFolder, isLoaded: true, isLoading: false });
-            setIsLoading(false);
-          }, 100);
-        }
+        // Simulate async load (actual implementation in Phase 7)
+        // For now, mark as loaded after a brief delay
+        setTimeout(() => {
+          setFolder({ ...targetFolder, isLoaded: true, isLoading: false });
+          setIsLoading(false);
+        }, 100);
       }
     },
-    [folders, vaultState, setFolder]
+    [navigate, folders, vaultState, setFolder]
   );
 
   /**

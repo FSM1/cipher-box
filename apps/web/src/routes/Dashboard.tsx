@@ -1,3 +1,8 @@
+/**
+ * @deprecated - Use FilesPage instead. Kept for reference during migration.
+ * This component is no longer used in routes - /dashboard redirects to /files.
+ * Can be deleted after Phase 6.3 is verified complete.
+ */
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LogoutButton } from '../components/auth/LogoutButton';
@@ -5,7 +10,7 @@ import { FileBrowser } from '../components/file-browser';
 import { useAuth } from '../hooks/useAuth';
 
 /**
- * Dashboard page showing user's vault.
+ * @deprecated Dashboard page - replaced by FilesPage with AppShell.
  * Protected route - redirects to login if not authenticated.
  */
 export function Dashboard() {
