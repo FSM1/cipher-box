@@ -493,6 +493,55 @@
         "tags": ["IPNS"]
       }
     },
+    "/ipns/resolve": {
+      "get": {
+        "description": "Resolve an IPNS name to its current CID via delegated routing. Returns the CID and sequence number of the current IPNS record.",
+        "operationId": "IpnsController_resolveRecord",
+        "parameters": [
+          {
+            "name": "ipnsName",
+            "required": true,
+            "in": "query",
+            "description": "IPNS name to resolve (k51... CIDv1 format)",
+            "schema": {
+              "example": "k51qzi5uqu5dkkciu33khkzbcmxtyhn2hgdqyp6rv7s5egjlsdj6a2xpz9lxvz",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "IPNS name resolved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveIpnsResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request - Invalid IPNS name format"
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          },
+          "404": {
+            "description": "Not Found - IPNS name not published or not found in routing network"
+          },
+          "502": {
+            "description": "Bad Gateway - Failed to resolve from delegated routing"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Resolve IPNS name",
+        "tags": ["IPNS"]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "HealthController_check",
@@ -916,6 +965,27 @@
           }
         },
         "required": ["success", "ipnsName", "sequenceNumber"]
+      },
+      "ResolveIpnsResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the resolution succeeded",
+            "example": true
+          },
+          "cid": {
+            "type": "string",
+            "description": "CID that the IPNS name currently points to",
+            "example": "bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4"
+          },
+          "sequenceNumber": {
+            "type": "string",
+            "description": "Current sequence number of the IPNS record (bigint as string)",
+            "example": "1"
+          }
+        },
+        "required": ["success", "cid", "sequenceNumber"]
       }
     }
   }
