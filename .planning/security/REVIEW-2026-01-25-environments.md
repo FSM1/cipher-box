@@ -12,11 +12,13 @@
 The environment architecture document proposes a well-considered approach to solving IPNS sequence number conflicts across environments. The core cryptographic design is sound, but there are several security concerns that should be addressed before implementation.
 
 **Key Strengths:**
+
 - Environment salt in IPNS key derivation is cryptographically correct
 - TEE key epoch rotation with grace period is reasonable
 - Separation of encryption keys from IPNS keys is a good architectural decision
 
 **Primary Concerns:**
+
 - Incomplete HKDF implementation details (salt vs info parameter usage)
 - Cross-environment data accessibility creates unintentional attack surface
 - Mock service security implications need explicit documentation
@@ -30,6 +32,7 @@ The environment architecture document proposes a well-considered approach to sol
 **Location:** `.planning/ENVIRONMENTS.md:61-64`
 
 **Code:**
+
 ```typescript
 const salt = ENVIRONMENT_SALTS[environment];
 // HKDF-SHA256 with environment-specific salt
@@ -39,16 +42,18 @@ const info = `${salt}:${folderId}`;
 
 **Issue:**
 The document conflates HKDF terminology. The variable is named `salt` but is used to construct the `info` parameter. In HKDF (RFC 5869):
+
 - **Salt:** Should be random or fixed per application; provides domain separation at the extract phase
 - **Info:** Provides context binding at the expand phase; appropriate for environment/folderId
 
-The current existing implementation at `/home/user/cipher-box/packages/crypto/src/keys/derive.ts` uses a fixed salt (`CipherBox-v1`) and passes context via info, which is correct.
+The current existing implementation at `packages/crypto/src/keys/derive.ts` uses a fixed salt (`CipherBox-v1`) and passes context via info, which is correct.
 
 **Impact:**
 If implemented as written with the environment string as the actual HKDF salt (not info), security is not reduced, but it deviates from the established pattern in the codebase and RFC best practices. The primary risk is maintenance confusion.
 
 **Recommendation:**
 Clarify the implementation to match existing patterns:
+
 ```typescript
 // packages/crypto/src/ipns.ts
 const HKDF_SALT = new TextEncoder().encode('CipherBox-IPNS-v1');
@@ -66,14 +71,12 @@ export async function deriveIpnsKeypair(
   environment: Environment
 ): Promise<Ed25519Keypair> {
   // Info string provides context binding (environment + folder)
-  const info = new TextEncoder().encode(
-    `${ENVIRONMENT_PREFIXES[environment]}:folder:${folderId}`
-  );
+  const info = new TextEncoder().encode(`${ENVIRONMENT_PREFIXES[environment]}:folder:${folderId}`);
 
   const seed = await deriveKey({
     inputKey: userSecp256k1PrivateKey,
-    salt: HKDF_SALT,  // Fixed application salt
-    info: info,       // Variable context
+    salt: HKDF_SALT, // Fixed application salt
+    info: info, // Variable context
     outputLength: 32,
   });
 
@@ -83,6 +86,7 @@ export async function deriveIpnsKeypair(
 ```
 
 **References:**
+
 - RFC 5869 Section 3.1 (HKDF parameter recommendations)
 
 **Status:** Open
@@ -93,16 +97,18 @@ export async function deriveIpnsKeypair(
 
 **Location:** `.planning/ENVIRONMENTS.md:56-65`
 
-**Current Implementation:** `/home/user/cipher-box/packages/crypto/src/ed25519/keygen.ts:30-38`
+**Current Implementation:** `packages/crypto/src/ed25519/keygen.ts:30-38`
+
 ```typescript
 export function generateEd25519Keypair(): Ed25519Keypair {
-  const privateKey = ed.utils.randomPrivateKey();  // Random generation
+  const privateKey = ed.utils.randomPrivateKey(); // Random generation
   const publicKey = ed.getPublicKey(privateKey);
   return { publicKey, privateKey };
 }
 ```
 
 **Proposed Change:**
+
 ```typescript
 // Derive from secp256k1 key + environment + folderId
 const info = `${salt}:${folderId}`;
@@ -118,16 +124,19 @@ The document proposes a significant change from random key generation to determi
 3. **Cross-curve derivation:** Deriving Ed25519 keys from secp256k1 private keys is cryptographically sound when using HKDF, but the security margin depends on the entropy of the source key.
 
 **Impact:**
+
 - If Web3Auth devnet resets user identity (acknowledged in document), IPNS records become permanently inaccessible
 - Existing vaults would need migration or parallel support
 
 **Recommendation:**
+
 1. Document the migration path for existing vaults
 2. Add explicit error handling for Web3Auth identity changes
 3. Consider storing a "key derivation version" flag to support future algorithm changes:
+
 ```typescript
 interface IpnsKeyDerivation {
-  version: 1;  // Increment if algorithm changes
+  version: 1; // Increment if algorithm changes
   environment: Environment;
   folderId: string;
 }
@@ -142,8 +151,10 @@ interface IpnsKeyDerivation {
 **Location:** `.planning/ENVIRONMENTS.md:37-39`
 
 **Design:**
+
 ```markdown
 This means:
+
 - Same user can encrypt/decrypt files across environments (if CIDs are known)
 - Different IPNS namespaces per environment → no sequence conflicts
 ```
@@ -159,14 +170,16 @@ While this is presented as a feature, it creates an unintentional attack surface
 Low - requires multiple preconditions (CID knowledge + same user identity across environments), but worth documenting as a known property.
 
 **Recommendation:**
+
 1. Explicitly document this as a known security property in the architecture
 2. Add guidance to use different test accounts for CI vs production
 3. Consider adding an optional "environment binding" to encryption metadata in future versions:
+
 ```typescript
 // Future consideration: environment-bound encryption
 interface EncryptionMetadata {
   version: number;
-  environment?: string;  // Optional environment binding for additional isolation
+  environment?: string; // Optional environment binding for additional isolation
 }
 ```
 
@@ -179,6 +192,7 @@ interface EncryptionMetadata {
 **Location:** `.planning/ENVIRONMENTS.md:199-210`
 
 **Code:**
+
 ```typescript
 beforeAll(async () => {
   // Reset mock IPNS routing for clean slate
@@ -197,6 +211,7 @@ If mock service code is accidentally deployed or the reset endpoint is exposed, 
 
 **Recommendation:**
 Add explicit safeguards in the mock service:
+
 ```typescript
 // tools/mock-ipns-routing/src/index.ts
 app.post('/reset', (req, res) => {
@@ -204,7 +219,7 @@ app.post('/reset', (req, res) => {
   const env = process.env.CIPHERBOX_ENVIRONMENT;
   if (env !== 'local' && env !== 'ci') {
     return res.status(403).json({
-      error: 'Reset endpoint disabled outside local/CI environments'
+      error: 'Reset endpoint disabled outside local/CI environments',
     });
   }
   // ... reset logic
@@ -220,6 +235,7 @@ app.post('/reset', (req, res) => {
 **Location:** `.planning/ENVIRONMENTS.md:474-476`
 
 **Configuration:**
+
 ```bash
 TEE_REPUBLISH_INTERVAL_HOURS=3
 TEE_KEY_EPOCH_ROTATION_WEEKS=4
@@ -229,16 +245,19 @@ TEE_KEY_EPOCH_ROTATION_WEEKS=4
 The 4-week epoch rotation with grace period is reasonable. Key observations:
 
 **Strengths:**
+
 - 3-hour republish interval is well within 24-hour IPNS TTL (8x safety margin)
 - 4-week rotation balances security with operational complexity
 - Grace period allows for migration without service disruption
 
 **Considerations:**
+
 - Document does not specify grace period duration (should be >= 1 republish cycle, ideally 1 week)
 - Key epoch mismatch handling is not detailed (what happens if client sends old epoch?)
 
 **Recommendation:**
 Add explicit handling for epoch transitions:
+
 ```typescript
 // API should accept:
 // - Current epoch: normal processing
@@ -255,6 +274,7 @@ Add explicit handling for epoch transitions:
 **Location:** `.planning/ENVIRONMENTS.md:303-308`
 
 **Design:**
+
 ```markdown
 1. **cipherbox-dev** (Sapphire Devnet)
    - Used for: Local dev, CI, Staging
@@ -262,11 +282,13 @@ Add explicit handling for epoch transitions:
 
 **Analysis:**
 Sharing Sapphire Devnet across local/CI/staging means:
+
 - Test account actions in CI affect staging state
 - Devnet resets could invalidate staging data
 - IPNS key derivation isolation mitigates sequence conflicts but not identity issues
 
 The document acknowledges this risk but does not provide mitigation:
+
 ```markdown
 1. **Web3Auth Testnet Instability**
    - Sapphire Devnet may reset or have unstable user IDs
@@ -276,7 +298,8 @@ The document acknowledges this risk but does not provide mitigation:
 
 **Recommendation:**
 Consider using separate Web3Auth projects for staging (if budget allows):
-```
+
+```text
 local/CI: cipherbox-dev (Sapphire Devnet) - ephemeral testing
 staging: cipherbox-staging (Sapphire Devnet) - stable testing, separate project
 production: cipherbox-prod (Sapphire Mainnet) - production
@@ -293,6 +316,7 @@ Alternatively, document the risk explicitly and add monitoring for identity stab
 **Location:** `.planning/ENVIRONMENTS.md:153`
 
 **Code:**
+
 ```bash
 JWT_SECRET=local-dev-jwt-secret-change-in-production
 ```
@@ -302,6 +326,7 @@ Using a hardcoded JWT secret for local development is acceptable, but the placeh
 
 **Recommendation:**
 Use a format that is obviously invalid for production:
+
 ```bash
 JWT_SECRET=INSECURE_LOCAL_DEV_ONLY_DO_NOT_USE_IN_PRODUCTION_xxxxxxxxxxxxxxxx
 ```
@@ -389,13 +414,13 @@ describe('Environment Key Derivation Security Tests', () => {
 
 ## Summary
 
-| Severity | Count | Summary |
-|----------|-------|---------|
-| Critical | 0 | None found |
-| High | 0 | None found |
-| Medium | 2 | HKDF parameter naming; Random vs derived key migration |
-| Low | 2 | Cross-environment accessibility; Mock service security |
-| Info | 3 | TEE epoch design; Web3Auth shared identity; JWT placeholder |
+| Severity | Count | Summary                                                     |
+| -------- | ----- | ----------------------------------------------------------- |
+| Critical | 0     | None found                                                  |
+| High     | 0     | None found                                                  |
+| Medium   | 2     | HKDF parameter naming; Random vs derived key migration      |
+| Low      | 2     | Cross-environment accessibility; Mock service security      |
+| Info     | 3     | TEE epoch design; Web3Auth shared identity; JWT placeholder |
 
 ---
 
@@ -420,5 +445,5 @@ describe('Environment Key Derivation Security Tests', () => {
 
 ---
 
-*Review Status: Complete*
-*Next Review: After implementation begins*
+_Review Status: Complete_
+_Next Review: After implementation begins_
