@@ -77,5 +77,10 @@ module.exports = {
       lines: 80,
       branches: 61, // 61.9% actual; Swagger decorators inflate uncovered branches
     },
+    '**/ipns/ipns.controller.ts': {
+      lines: 73, // Phase 7: sync endpoint tested via integration tests
+      branches: 70,
+      functions: 66,
+    },
   },
 };
