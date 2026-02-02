@@ -202,3 +202,78 @@
   border: var(--border-thickness) solid var(--color-border);
   padding: var(--spacing-md);
 }
+
+/* ==========================================================================
+   Sync Indicator
+   ========================================================================== */
+
+.sync-indicator {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+}
+
+.sync-indicator-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--color-text-secondary);
+}
+
+.sync-indicator-icon--spinning {
+  animation: spin 1s linear infinite;
+  color: var(--color-green-primary);
+}
+
+.sync-indicator-icon--success {
+  color: var(--color-green-primary);
+}
+
+.sync-indicator-icon--error {
+  color: var(--color-warning, #f59e0b);
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ==========================================================================
+   Offline Banner
+   ========================================================================== */
+
+.offline-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background-color: var(--color-warning-bg, #3d2e0a);
+  color: var(--color-warning-text, #fcd34d);
+  font-size: 12px;
+  font-family: var(--font-family-mono);
+}
+
+.offline-banner-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   Screen Reader Only (Accessibility)
+   ========================================================================== */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
