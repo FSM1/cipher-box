@@ -503,12 +503,18 @@ describe('IpnsService', () => {
   });
 
   describe('resolveRecord', () => {
+    let setTimeoutSpy: jest.SpyInstance;
+
     beforeEach(() => {
-      jest.spyOn(global, 'setTimeout').mockImplementation((cb: () => void) => {
+      setTimeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation((cb: () => void) => {
         cb();
         return 0 as unknown as NodeJS.Timeout;
       });
       mockUnmarshalIPNSRecord.mockReset();
+    });
+
+    afterEach(() => {
+      setTimeoutSpy.mockRestore();
     });
 
     it('should resolve IPNS name to CID successfully', async () => {
@@ -765,12 +771,18 @@ describe('IpnsService', () => {
   });
 
   describe('error handling in publishToDelegatedRouting', () => {
+    let setTimeoutSpy: jest.SpyInstance;
+
     beforeEach(() => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
-      jest.spyOn(global, 'setTimeout').mockImplementation((cb: () => void) => {
+      setTimeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation((cb: () => void) => {
         cb();
         return 0 as unknown as NodeJS.Timeout;
       });
+    });
+
+    afterEach(() => {
+      setTimeoutSpy.mockRestore();
     });
 
     it('should convert non-Error exceptions to Error objects', async () => {

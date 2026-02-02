@@ -135,7 +135,9 @@ The previous verification identified "Desktop sync daemon runs in background whi
 - **TypeScript compilation:** PASSED (pnpm tsc --noEmit)
 - **No stub patterns:** VERIFIED (grep for TODO/FIXME: 0 matches in FileBrowser.tsx)
 
-## Human Verification Required
+## Human Verification Results
+
+Verified via UAT session 2026-02-02 (see 07-UAT.md for full session log).
 
 ### 1. Sync Indicator Visual States
 
@@ -145,7 +147,10 @@ The previous verification identified "Desktop sync daemon runs in background whi
 - Initially shows idle state (static icon)
 - Every 30s shows "Syncing..." with spinning animation
 - After sync completes, shows checkmark
-  **Why human:** Visual animation verification requires runtime observation
+
+| Result | Tested by   | Date       | Notes                                 |
+| ------ | ----------- | ---------- | ------------------------------------- |
+| PASS   | Claude + QA | 2026-02-02 | All visual states observed during UAT |
 
 ### 2. Offline Banner Behavior
 
@@ -154,7 +159,10 @@ The previous verification identified "Desktop sync daemon runs in background whi
 
 - Offline banner appears at top with "You are offline" message
 - Amber/warning styling per terminal aesthetic
-  **Why human:** Browser offline mode testing requires manual interaction
+
+| Result | Tested by   | Date       | Notes                               |
+| ------ | ----------- | ---------- | ----------------------------------- |
+| PASS   | Claude + QA | 2026-02-02 | Banner appears/disappears correctly |
 
 ### 3. Multi-Device Sync End-to-End
 
@@ -164,7 +172,10 @@ The previous verification identified "Desktop sync daemon runs in background whi
 - Within ~30 seconds, the file appears in the other window
 - No page refresh required
 - Sync indicator shows syncing during poll, success after
-  **Why human:** True multi-device behavior requires manual test
+
+| Result | Tested by   | Date       | Notes                                     |
+| ------ | ----------- | ---------- | ----------------------------------------- |
+| PASS   | Claude + QA | 2026-02-02 | File appeared in second window after sync |
 
 ### 4. Polling Pause on Tab Background
 
@@ -173,7 +184,10 @@ The previous verification identified "Desktop sync daemon runs in background whi
 
 - Polling pauses when tab is backgrounded
 - Immediate sync triggers when tab regains focus
-  **Why human:** Tab visibility state requires manual testing
+
+| Result | Tested by   | Date       | Notes                            |
+| ------ | ----------- | ---------- | -------------------------------- |
+| PASS   | Claude + QA | 2026-02-02 | Polling paused/resumed correctly |
 
 ## Summary
 

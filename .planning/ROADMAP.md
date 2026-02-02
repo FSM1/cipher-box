@@ -277,13 +277,14 @@ Plans:
 
 1. Changes made on one device appear on another within ~30 seconds
 2. User sees loading state during IPNS resolution
-   **Plans**: 3 plans
+   **Plans**: 4 plans
 
 Plans:
 
 - [x] 07-01-PLAN.md — Backend IPNS resolution endpoint and sync state store
 - [x] 07-02-PLAN.md — Polling infrastructure hooks (useInterval, useVisibility, useOnlineStatus, useSyncPolling)
 - [x] 07-03-PLAN.md — Frontend integration with SyncIndicator and OfflineBanner UI
+- [x] 07-04-PLAN.md — Gap closure: full metadata refresh with decryption on sync
 
 ### Phase 8: TEE Integration
 
