@@ -26,14 +26,14 @@ CipherBox requires isolated environments to prevent cross-environment interferen
 
 ## Solution: Environment-Aware Key Derivation
 
-### Recommended Approach: Environment Salt in Ed25519 Key Derivation
+### Recommended Approach: Environment-Specific IPNS Key Derivation
 
-The IPNS keypair is derived from the user's vault key. By adding an environment-specific salt to this derivation, we get different IPNS keys per environment while keeping the same Web3Auth identity.
+The IPNS keypair is derived from the user's vault key. By adding an environment-specific context (via the HKDF `info` parameter) to this derivation, we get different IPNS keys per environment while keeping the same Web3Auth identity.
 
 **Key Insight:** The problematic shared state is the **IPNS keypair**, not the user's encryption keypair. We can:
 
 1. Keep the same secp256k1 keypair from Web3Auth (same encryption keys)
-2. Add environment salt only to Ed25519 IPNS key derivation (different IPNS identities)
+2. Add environment context only to Ed25519 IPNS key derivation (different IPNS identities)
 
 This means:
 
@@ -170,7 +170,7 @@ JWT_SECRET=local-dev-jwt-secret-change-in-production
 - Kubo runs with `--offline` flag (no DHT, no peer connections)
 - Mock IPNS routing with persistent storage (survives restarts)
 - Local Postgres with persistent volume
-- Environment salt: `local`
+- Environment context: `local`
 
 ### 2. CI E2E Testing Environment
 
@@ -212,7 +212,7 @@ env:
 
 - No persistent volumes (fresh state each run)
 - Mock IPNS routing resets via `/reset` endpoint before each test
-- Environment salt: `ci`
+- Environment context: `ci`
 - Same Web3Auth project as local (Sapphire Devnet)
 
 **Test Setup Pattern:**
@@ -283,7 +283,7 @@ JWT_SECRET=${{ secrets.JWT_SECRET_STAGING }}
 - Kubo publishes to real DHT (content discoverable)
 - Uses real delegated-ipfs.dev for IPNS
 - Same Sapphire Devnet Web3Auth (shared identity with local/CI)
-- Environment salt: `staging` (different IPNS keys than local/CI)
+- Environment context: `staging` (different IPNS keys than local/CI)
 - Can be used for user acceptance testing
 
 ### 4. Production Environment
@@ -301,9 +301,8 @@ JWT_SECRET=${{ secrets.JWT_SECRET_STAGING }}
 ```bash
 # Production environment
 VITE_WEB3AUTH_CLIENT_ID=BK...prod  # DIFFERENT - Production client ID
-VITE_WEB3AUTH_NETWORK=sapphire_mainnet  # MAINNET
 VITE_API_URL=https://api.cipherbox.io
-VITE_ENVIRONMENT=production
+VITE_ENVIRONMENT=production  # Network is derived from this (see web3auth/config.ts)
 
 CIPHERBOX_ENVIRONMENT=production
 NODE_ENV=production
@@ -318,7 +317,7 @@ JWT_SECRET=${{ secrets.JWT_SECRET_PRODUCTION }}
 - **Separate Web3Auth Project** (Sapphire Mainnet)
 - Different client ID (complete user isolation from dev/staging)
 - Pinata for production-grade IPFS pinning
-- Environment salt: `production`
+- Environment context: `production`
 
 ## Web3Auth Project Setup
 
@@ -400,12 +399,12 @@ export const web3AuthOptions: Web3AuthOptions = {
 
 ### Web App (Vite)
 
-| Variable                  | Local               | CI                  | Staging                   | Production                |
-| ------------------------- | ------------------- | ------------------- | ------------------------- | ------------------------- |
-| `VITE_WEB3AUTH_CLIENT_ID` | dev                 | dev                 | dev                       | **prod**                  |
-| `VITE_API_URL`            | localhost:3000      | localhost:3000      | staging-api.cipherbox.io  | api.cipherbox.io          |
-| `VITE_PINATA_GATEWAY_URL` | localhost:8080/ipfs | localhost:8080/ipfs | gateway.pinata.cloud/ipfs | gateway.pinata.cloud/ipfs |
-| `VITE_ENVIRONMENT`        | local               | ci                  | staging                   | production                |
+| Variable                  | Local                      | CI                         | Staging                           | Production                        |
+| ------------------------- | -------------------------- | -------------------------- | --------------------------------- | --------------------------------- |
+| `VITE_WEB3AUTH_CLIENT_ID` | dev                        | dev                        | dev                               | **prod**                          |
+| `VITE_API_URL`            | http://localhost:3000      | http://localhost:3000      | https://staging-api.cipherbox.io  | https://api.cipherbox.io          |
+| `VITE_PINATA_GATEWAY_URL` | http://localhost:8080/ipfs | http://localhost:8080/ipfs | https://gateway.pinata.cloud/ipfs | https://gateway.pinata.cloud/ipfs |
+| `VITE_ENVIRONMENT`        | local                      | ci                         | staging                           | production                        |
 
 ### API (NestJS)
 
@@ -706,7 +705,7 @@ TEE_ALERT_STALE_THRESHOLD_HOURS=12
 - Overhead of managing 4 projects
 - Need separate test accounts per environment
 - Can't share test fixtures between local/CI/staging
-- Environment salt achieves same isolation with less complexity
+- Environment context achieves same isolation with less complexity
 
 ### B. Backend User Aggregation (Custom Auth)
 

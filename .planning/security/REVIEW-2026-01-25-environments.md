@@ -89,7 +89,7 @@ export async function deriveIpnsKeypair(
 
 - RFC 5869 Section 3.1 (HKDF parameter recommendations)
 
-**Status:** Open
+**Status:** Addressed in ENVIRONMENTS.md (2026-02-02) - Code example now uses fixed `HKDF_SALT` constant and `ENVIRONMENT_CONTEXT` for info parameter, matching RFC 5869 best practices.
 
 ---
 
@@ -183,7 +183,7 @@ interface EncryptionMetadata {
 }
 ```
 
-**Status:** Open - Document as known property
+**Status:** Addressed in ENVIRONMENTS.md (2026-02-02) - Security note added warning about CID leakage risks and recommending separate test accounts.
 
 ---
 
@@ -226,7 +226,7 @@ app.post('/reset', (req, res) => {
 });
 ```
 
-**Status:** Open
+**Status:** Addressed in ENVIRONMENTS.md (2026-02-02) - Security note added after `/reset` example warning it must be disabled outside local/CI environments.
 
 ---
 
