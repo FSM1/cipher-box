@@ -9,17 +9,17 @@ interface NavItemProps {
 
 /**
  * Navigation item component.
- * Renders a sidebar navigation link with terminal-style icon prefix.
+ * Renders a sidebar navigation link with emoji icon.
  */
 export function NavItem({ to, icon, label, active }: NavItemProps) {
-  // Terminal-style ASCII icons
-  const iconText = icon === 'folder' ? '[DIR]' : '[CFG]';
+  // Emoji icons per design specification
+  const iconEmoji = icon === 'folder' ? '📁' : '⚙';
 
   const className = active ? 'nav-item nav-item--active' : 'nav-item';
 
   return (
     <Link to={to} className={className} data-testid={`nav-item-${label.toLowerCase()}`}>
-      <span className="nav-item-icon">{iconText}</span>
+      <span className="nav-item-icon">{iconEmoji}</span>
       <span className="nav-item-label">{label}</span>
     </Link>
   );

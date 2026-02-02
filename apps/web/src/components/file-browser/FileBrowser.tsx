@@ -267,29 +267,16 @@ export function FileBrowser() {
         <div className="file-browser-actions">
           <button
             type="button"
-            className="file-browser-new-folder-button"
+            className="toolbar-btn toolbar-btn--primary"
             onClick={openCreateFolderDialog}
             disabled={isOperating}
             aria-label="New Folder"
           >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-              <line x1="12" y1="11" x2="12" y2="17" />
-              <line x1="9" y1="14" x2="15" y2="14" />
-            </svg>
-            <span>New Folder</span>
+            +folder
           </button>
-          <UploadZone folderId={currentFolderId} />
+          <div className="toolbar-upload">
+            <UploadZone folderId={currentFolderId} />
+          </div>
         </div>
       </div>
 

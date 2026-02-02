@@ -399,10 +399,26 @@ export function useAuth() {
           const response = await authApi.refresh();
           setAccessToken(response.accessToken);
 
-          // After successful session restore, initialize/load vault
-          // Check if external wallet via auth store flag (persisted from original login)
-          const isExternal = useAuthStore.getState().isExternalWallet;
-          await initializeOrLoadVault(web3Auth?.provider, isExternal);
+          // Determine if this was an external wallet login
+          // Note: isExternalWallet flag is cleared on logout, so we check if we can get
+          // a keypair from Web3Auth (only works for social logins)
+          const socialKeypair = await getKeypairForVault(web3Auth?.provider);
+
+          if (socialKeypair) {
+            // Social login - restore the derived keypair for crypto operations
+            setDerivedKeypair(socialKeypair);
+            setIsExternalWallet(false);
+            await initializeOrLoadVault(web3Auth?.provider, false);
+          } else {
+            // External wallet - keypair derivation requires user signature
+            // User will need to re-authenticate to restore crypto capabilities
+            console.warn(
+              '[useAuth] Session restored but crypto keys unavailable - external wallet requires re-login for full functionality'
+            );
+            setIsExternalWallet(true);
+            // Still try to load vault metadata (will fail gracefully if keys needed)
+            await initializeOrLoadVault(web3Auth?.provider, true);
+          }
         } catch {
           // No valid session, stay on login page
           // Don't clear anything - user may just need to re-authenticate
@@ -415,6 +431,9 @@ export function useAuth() {
     isAuthenticated,
     isLoggingIn,
     setAccessToken,
+    setDerivedKeypair,
+    setIsExternalWallet,
+    getKeypairForVault,
     web3Auth?.provider,
     initializeOrLoadVault,
   ]);

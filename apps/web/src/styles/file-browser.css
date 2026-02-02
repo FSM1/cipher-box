@@ -52,10 +52,10 @@
 .file-browser-toolbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--spacing-md);
-  padding-bottom: var(--spacing-md);
-  border-bottom: var(--border-thickness) solid var(--color-border-dim);
-  margin-bottom: var(--spacing-md);
+  padding: var(--spacing-sm) 20px;
+  background-color: var(--color-toolbar-bg);
 }
 
 /* Toolbar buttons - Terminal flag style */
@@ -117,24 +117,63 @@
   margin-left: auto;
 }
 
+/* Terminal-style toolbar buttons */
+.toolbar-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 6px 12px;
+  background: transparent;
+  border: var(--border-thickness) solid;
+  border-radius: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-normal);
+  cursor: pointer;
+  transition: box-shadow 0.15s ease;
+}
+
+.toolbar-btn--primary {
+  color: var(--color-text-primary);
+  border-color: var(--color-text-primary);
+}
+
+.toolbar-btn--primary:hover:not(:disabled) {
+  box-shadow: var(--glow-green);
+}
+
+.toolbar-btn--secondary {
+  color: var(--color-text-secondary);
+  border-color: var(--color-border-dim);
+}
+
+.toolbar-btn--secondary:hover:not(:disabled) {
+  box-shadow: 0 0 8px rgba(0, 208, 132, 0.2);
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Legacy button class - map to new styles */
 .file-browser-new-folder-button {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
+  padding: 6px 12px;
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 6px;
-  color: rgba(255, 255, 255, 0.8);
-  font-size: 0.875rem;
+  border: var(--border-thickness) solid var(--color-text-primary);
+  border-radius: 0;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: box-shadow 0.15s ease;
 }
 
 .file-browser-new-folder-button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.3);
-  color: rgba(255, 255, 255, 1);
+  box-shadow: var(--glow-green);
 }
 
 .file-browser-new-folder-button:disabled {
@@ -144,6 +183,42 @@
 
 .file-browser-new-folder-button svg {
   flex-shrink: 0;
+}
+
+/* Toolbar upload - compact button style */
+.toolbar-upload {
+  display: flex;
+}
+
+.toolbar-upload .upload-zone-wrapper {
+  width: auto;
+}
+
+.toolbar-upload .upload-zone {
+  min-height: auto;
+  padding: 6px 12px;
+  border-style: solid;
+  border-color: var(--color-border-dim);
+}
+
+.toolbar-upload .upload-zone:hover {
+  border-color: var(--color-border-dim);
+  box-shadow: 0 0 8px rgba(0, 208, 132, 0.2);
+}
+
+.toolbar-upload .upload-zone-content {
+  flex-direction: row;
+  gap: 6px;
+}
+
+.toolbar-upload .upload-zone-icon {
+  font-size: var(--font-size-md);
+  color: var(--color-text-secondary);
+}
+
+.toolbar-upload .upload-zone-text {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
 }
 
 /* ==========================================================================

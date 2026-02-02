@@ -9,6 +9,8 @@
   --color-green-dim: #006644;
   --color-green-darker: #003322;
   --color-green-glow: #00D08466; /* 40% opacity for shadows */
+  --color-toolbar-bg: #001108; /* Dark green toolbar background */
+  --color-nav-active: #001a11; /* Active nav item background */
 
   /* Semantic Colors - Error/Warning */
   --color-error: #EF4444;
