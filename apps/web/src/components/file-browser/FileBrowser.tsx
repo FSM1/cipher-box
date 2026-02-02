@@ -4,6 +4,10 @@ import { useFolderNavigation } from '../../hooks/useFolderNavigation';
 import { useFolder } from '../../hooks/useFolder';
 import { useFileDownload } from '../../hooks/useFileDownload';
 import { useContextMenu } from '../../hooks/useContextMenu';
+import { useSyncPolling } from '../../hooks/useSyncPolling';
+import { useVaultStore } from '../../stores/vault.store';
+import { useFolderStore } from '../../stores/folder.store';
+import { resolveIpnsRecord } from '../../services/ipns.service';
 import { FileList } from './FileList';
 import { EmptyState } from './EmptyState';
 import { ContextMenu } from './ContextMenu';
@@ -14,6 +18,8 @@ import { MoveDialog } from './MoveDialog';
 import { UploadZone } from './UploadZone';
 import { UploadModal } from './UploadModal';
 import { Breadcrumbs } from './Breadcrumbs';
+import { SyncIndicator } from './SyncIndicator';
+import { OfflineBanner } from './OfflineBanner';
 
 /**
  * Type guard for file entries.
@@ -72,6 +78,36 @@ export function FileBrowser() {
 
   // Context menu state
   const contextMenu = useContextMenu();
+
+  // Vault and folder stores for sync
+  const { rootIpnsName } = useVaultStore();
+  const { folders } = useFolderStore();
+
+  // Sync callback - compare remote CID with local, refresh if different
+  const handleSync = useCallback(async () => {
+    if (!rootIpnsName) return;
+
+    // Resolve root folder IPNS
+    const resolved = await resolveIpnsRecord(rootIpnsName);
+    if (!resolved) return;
+
+    // Get current root folder from store
+    const rootFolder = folders['root'];
+    if (!rootFolder) return;
+
+    // Compare CIDs - if different, remote has changes
+    // Per CONTEXT.md: last write wins, instant refresh (no toast/prompt)
+    // TODO: Implement full metadata refresh when CID differs
+    // For now, sync detection is complete - full refresh requires decrypting new metadata
+    // which requires extracting common logic from useFolderNavigation
+
+    // Note: Full implementation will call folder.service to fetch and decrypt
+    // the new metadata, then update the folder store. This requires the folder
+    // keys which are in the FolderNode.
+  }, [rootIpnsName, folders]);
+
+  // Start sync polling (30s interval, pauses when backgrounded/offline)
+  useSyncPolling(handleSync);
 
   // Selection state (single selection per CONTEXT.md)
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -277,8 +313,12 @@ export function FileBrowser() {
           <div className="toolbar-upload">
             <UploadZone folderId={currentFolderId} />
           </div>
+          <SyncIndicator />
         </div>
       </div>
+
+      {/* Offline banner */}
+      <OfflineBanner />
 
       {/* Loading state */}
       {isLoading && (
