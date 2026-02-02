@@ -8,6 +8,7 @@ import { useSyncPolling } from '../../hooks/useSyncPolling';
 import { useVaultStore } from '../../stores/vault.store';
 import { useFolderStore } from '../../stores/folder.store';
 import { resolveIpnsRecord } from '../../services/ipns.service';
+import { fetchAndDecryptMetadata } from '../../services/folder.service';
 import { FileList } from './FileList';
 import { EmptyState } from './EmptyState';
 import { ContextMenu } from './ContextMenu';
@@ -83,11 +84,11 @@ export function FileBrowser() {
   const { rootIpnsName } = useVaultStore();
   const { folders } = useFolderStore();
 
-  // Sync callback - compare remote CID with local, refresh if different
+  // Sync callback - compare remote sequence with local, refresh if different
   const handleSync = useCallback(async () => {
     if (!rootIpnsName) return;
 
-    // Resolve root folder IPNS
+    // Resolve root folder IPNS to get remote CID and sequence number
     const resolved = await resolveIpnsRecord(rootIpnsName);
     if (!resolved) return;
 
@@ -95,15 +96,26 @@ export function FileBrowser() {
     const rootFolder = folders['root'];
     if (!rootFolder) return;
 
-    // Compare CIDs - if different, remote has changes
-    // Per CONTEXT.md: last write wins, instant refresh (no toast/prompt)
-    // TODO: Implement full metadata refresh when CID differs
-    // For now, sync detection is complete - full refresh requires decrypting new metadata
-    // which requires extracting common logic from useFolderNavigation
+    // Compare sequence numbers - if remote > local, we need to refresh
+    // Sequence number comparison is more reliable than CID since we
+    // don't cache the local CID, and sequence always increments
+    if (resolved.sequenceNumber <= rootFolder.sequenceNumber) {
+      // No changes, already up to date
+      return;
+    }
 
-    // Note: Full implementation will call folder.service to fetch and decrypt
-    // the new metadata, then update the folder store. This requires the folder
-    // keys which are in the FolderNode.
+    // Remote has newer version - fetch and decrypt new metadata
+    try {
+      const metadata = await fetchAndDecryptMetadata(resolved.cid, rootFolder.folderKey);
+
+      // Update folder store with new children
+      // Per CONTEXT.md: last write wins, instant refresh (no toast/prompt)
+      useFolderStore.getState().updateFolderChildren('root', metadata.children);
+      useFolderStore.getState().updateFolderSequence('root', resolved.sequenceNumber);
+    } catch (err) {
+      // Log but don't crash - sync will retry on next interval
+      console.error('Sync refresh failed:', err);
+    }
   }, [rootIpnsName, folders]);
 
   // Start sync polling (30s interval, pauses when backgrounded/offline)
