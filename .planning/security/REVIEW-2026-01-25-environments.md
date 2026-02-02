@@ -265,7 +265,12 @@ Add explicit handling for epoch transitions:
 // - Older epochs: reject with error instructing client to fetch new TEE public key
 ```
 
-**Status:** Open - Clarify in implementation
+**Status:** Addressed in ENVIRONMENTS.md (2026-02-02) - Added "TEE Key Encryption Architecture" section with:
+
+- 1-week grace period duration specified
+- Epoch validation logic with `PROCESS_NORMALLY`, `RE_ENCRYPT_AND_UPDATE`, and `REJECT` actions
+- Grace period expiration handling (mark as `republish_failed`, alert, require user re-publish)
+- Full encryption flow diagram and ECIES implementation details
 
 ---
 
@@ -405,6 +410,96 @@ describe('Environment Key Derivation Security Tests', () => {
 
     it('should accept encryptedIpnsPrivateKey with previous epoch during grace period', async () => {
       // Test grace period handling
+    });
+  });
+
+  describe('Private Key Security', () => {
+    it('should never log IPNS private keys', async () => {
+      const logSpy = vi.spyOn(console, 'log');
+      const warnSpy = vi.spyOn(console, 'warn');
+      const errorSpy = vi.spyOn(console, 'error');
+
+      const userKey = await generateTestUserKey();
+      await deriveIpnsKeypair(userKey, 'folder-1', 'local');
+
+      // Verify no log output contains private key patterns
+      const allLogs = [
+        ...logSpy.mock.calls.flat(),
+        ...warnSpy.mock.calls.flat(),
+        ...errorSpy.mock.calls.flat(),
+      ].map(String);
+
+      for (const log of allLogs) {
+        expect(log).not.toMatch(/privateKey/i);
+        expect(log).not.toMatch(/0x04[0-9a-fA-F]{64}/); // secp256k1 pubkey pattern
+        expect(log).not.toMatch(/[0-9a-fA-F]{64}/); // 32-byte hex key
+      }
+    });
+
+    it('should not store IPNS private keys in localStorage or sessionStorage', async () => {
+      const userKey = await generateTestUserKey();
+      await deriveIpnsKeypair(userKey, 'folder-1', 'local');
+
+      // Check localStorage
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i)!;
+        const value = localStorage.getItem(key)!;
+        expect(key.toLowerCase()).not.toContain('privatekey');
+        expect(key.toLowerCase()).not.toContain('ipns');
+        expect(key.toLowerCase()).not.toContain('ed25519');
+        expect(value).not.toMatch(/[0-9a-fA-F]{64}/);
+      }
+
+      // Check sessionStorage
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i)!;
+        const value = sessionStorage.getItem(key)!;
+        expect(key.toLowerCase()).not.toContain('privatekey');
+        expect(key.toLowerCase()).not.toContain('ipns');
+        expect(key.toLowerCase()).not.toContain('ed25519');
+        expect(value).not.toMatch(/[0-9a-fA-F]{64}/);
+      }
+    });
+
+    it('should only send encrypted IPNS private keys to TEE', async () => {
+      const mockTeeEndpoint = vi.fn();
+      // Mock the TEE client
+      vi.spyOn(teeService, 'submitForRepublishing').mockImplementation(mockTeeEndpoint);
+
+      const ipnsKey = await deriveIpnsKeypair(userKey, 'folder-1', 'local');
+      const teePublicKey = await teeService.getCurrentPublicKey();
+
+      await folderService.publishFolder(folderId, ipnsKey, teePublicKey);
+
+      // Verify the call was made with encrypted data
+      expect(mockTeeEndpoint).toHaveBeenCalledTimes(1);
+      const [payload] = mockTeeEndpoint.mock.calls[0];
+
+      // encryptedIpnsPrivateKey should be ECIES ciphertext (longer than raw key)
+      expect(payload.encryptedIpnsPrivateKey.length).toBeGreaterThan(32);
+      // Should NOT contain raw private key bytes
+      expect(payload.encryptedIpnsPrivateKey).not.toEqual(ipnsKey.privateKey);
+      // Should include key epoch
+      expect(payload.keyEpoch).toBeDefined();
+      expect(typeof payload.keyEpoch).toBe('number');
+    });
+
+    it('should verify IPNS signature before accepting record', async () => {
+      const validKeypair = await deriveIpnsKeypair(userKey, 'folder-1', 'local');
+      const attackerKeypair = await generateEd25519Keypair(); // Random key
+
+      // Create a valid IPNS record
+      const validRecord = await createIpnsRecord(validKeypair, 'QmValidCid', 1);
+
+      // Forge a record with attacker's signature but claiming to be from validKeypair
+      const forgedRecord = await createIpnsRecord(attackerKeypair, 'QmMaliciousCid', 2);
+      forgedRecord.pubKey = validKeypair.publicKey; // Claim to be valid key
+
+      // Valid record should be accepted
+      await expect(verifyIpnsRecord(validRecord)).resolves.toBe(true);
+
+      // Forged record should be rejected (signature mismatch)
+      await expect(verifyIpnsRecord(forgedRecord)).resolves.toBe(false);
     });
   });
 });

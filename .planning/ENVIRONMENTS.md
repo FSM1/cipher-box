@@ -664,6 +664,178 @@ TEE_ALERT_STALE_THRESHOLD_HOURS=12
 - > 24h stale: IPNS records expired, users must re-publish from client
 ```
 
+### TEE Key Encryption Architecture
+
+This section documents the security architecture for encrypting IPNS private keys before transmission to the TEE for republishing.
+
+#### Threat Model
+
+**Assets:**
+
+- IPNS private keys (Ed25519) - control over user's folder metadata
+- User's ability to update IPNS records
+
+**Threats:**
+
+1. **Network interception:** Attacker intercepts IPNS private key in transit to TEE
+2. **TEE key compromise:** Attacker obtains TEE private key, can decrypt all `encryptedIpnsPrivateKey` values
+3. **Stale epoch attack:** Attacker replays old encrypted keys after epoch rotation
+
+**Security Goals:**
+
+- IPNS private keys are never transmitted in plaintext
+- Only the current TEE can decrypt keys (forward secrecy via epoch rotation)
+- Key compromise has bounded impact (4-week epoch window)
+
+#### Encryption Flow
+
+```
+User Client                      CipherBox API                    TEE (Phala Cloud)
+    |                                 |                                 |
+    |  1. Fetch TEE public key        |                                 |
+    |-------------------------------->|                                 |
+    |                                 |  2. Get current epoch key       |
+    |                                 |-------------------------------->|
+    |                                 |<--------------------------------|
+    |<--------------------------------|  {publicKey, epoch}             |
+    |                                 |                                 |
+    |  3. ECIES encrypt IPNS key      |                                 |
+    |  with TEE public key            |                                 |
+    |                                 |                                 |
+    |  4. POST /folders/:id/publish   |                                 |
+    |  {encryptedIpnsPrivateKey,      |                                 |
+    |   keyEpoch, ipnsValue, ...}     |                                 |
+    |-------------------------------->|                                 |
+    |                                 |  5. Store for republishing      |
+    |                                 |  (cron every 3 hours)           |
+    |                                 |                                 |
+    |                                 |  6. Send encrypted key to TEE   |
+    |                                 |-------------------------------->|
+    |                                 |                                 |  7. Decrypt in hardware
+    |                                 |                                 |  8. Sign IPNS record
+    |                                 |                                 |  9. Discard key (never stored)
+    |                                 |<--------------------------------|
+    |                                 |  {signedIpnsRecord}             |
+```
+
+#### Encryption Primitive: ECIES over secp256k1
+
+Per project security standards, IPNS private keys MUST be encrypted using ECIES (Elliptic Curve Integrated Encryption Scheme) with secp256k1:
+
+```typescript
+// packages/crypto/src/tee/encrypt.ts
+import { eciesEncrypt } from '../ecies';
+
+export async function encryptIpnsKeyForTee(
+  ipnsPrivateKey: Uint8Array, // 32-byte Ed25519 private key
+  teePublicKey: Uint8Array, // secp256k1 public key (33 or 65 bytes)
+  keyEpoch: number // Current TEE key epoch
+): Promise<EncryptedIpnsKey> {
+  // ECIES encryption: ephemeral ECDH + AES-256-GCM
+  const ciphertext = await eciesEncrypt(ipnsPrivateKey, teePublicKey);
+
+  return {
+    ciphertext,
+    keyEpoch,
+    algorithm: 'ECIES-secp256k1-AES256GCM',
+  };
+}
+```
+
+#### TEE Public Key Distribution
+
+The TEE public key is obtained via the CipherBox API, which caches and validates it from Phala Cloud:
+
+```typescript
+// apps/api/src/tee/tee.service.ts
+export class TeeService {
+  private cachedPublicKey: { key: Uint8Array; epoch: number; expiresAt: Date } | null = null;
+
+  async getCurrentPublicKey(): Promise<{ publicKey: Uint8Array; epoch: number }> {
+    // 1. Check cache (valid for 1 hour)
+    if (this.cachedPublicKey && this.cachedPublicKey.expiresAt > new Date()) {
+      return { publicKey: this.cachedPublicKey.key, epoch: this.cachedPublicKey.epoch };
+    }
+
+    // 2. Fetch from Phala Cloud with attestation verification
+    const response = await this.phalaClient.getPublicKey();
+
+    // 3. Verify attestation quote (proves key is from genuine TEE)
+    await this.verifyAttestation(response.attestation);
+
+    // 4. Cache with expiry
+    this.cachedPublicKey = {
+      key: response.publicKey,
+      epoch: response.epoch,
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000), // 1 hour
+    };
+
+    return { publicKey: response.publicKey, epoch: response.epoch };
+  }
+}
+```
+
+#### Key Epoch Rotation Scheme
+
+TEE keys rotate every 4 weeks (`TEE_KEY_EPOCH_ROTATION_WEEKS=4`) with a 1-week grace period:
+
+| Epoch State      | Window    | API Behavior                                     |
+| ---------------- | --------- | ------------------------------------------------ |
+| Current          | Weeks 0-4 | Normal processing                                |
+| Previous (grace) | Weeks 4-5 | Accept, re-encrypt with new epoch, update record |
+| Expired          | >5 weeks  | Reject with `EPOCH_EXPIRED` error                |
+
+**Epoch Handling Logic:**
+
+```typescript
+// apps/api/src/tee/epoch.service.ts
+export class EpochService {
+  private readonly GRACE_PERIOD_WEEKS = 1;
+
+  async validateEpoch(submittedEpoch: number): Promise<EpochValidation> {
+    const currentEpoch = await this.getCurrentEpoch();
+
+    if (submittedEpoch === currentEpoch) {
+      return { valid: true, action: 'PROCESS_NORMALLY' };
+    }
+
+    if (submittedEpoch === currentEpoch - 1) {
+      const gracePeriodEnd = this.getEpochEndDate(currentEpoch - 1).add(
+        this.GRACE_PERIOD_WEEKS,
+        'weeks'
+      );
+
+      if (new Date() < gracePeriodEnd) {
+        return { valid: true, action: 'RE_ENCRYPT_AND_UPDATE' };
+      }
+    }
+
+    return {
+      valid: false,
+      action: 'REJECT',
+      error: {
+        code: 'EPOCH_EXPIRED',
+        message: 'TEE key epoch expired. Fetch new TEE public key and re-encrypt.',
+        currentEpoch,
+      },
+    };
+  }
+}
+```
+
+**Grace Period Expiration:**
+Records encrypted with an expired epoch that were not re-encrypted during the grace period become invalid. The TEE cannot decrypt them, and the republishing job will:
+
+1. Mark the record as `republish_failed` with reason `EPOCH_EXPIRED`
+2. Send alert to monitoring (PagerDuty/Opsgenie)
+3. User must re-publish from client to restore republishing
+
+#### Forward Secrecy Considerations
+
+- **Epoch rotation provides bounded compromise:** If a TEE private key is compromised, only records encrypted with that epoch's key are exposed
+- **No retroactive decryption:** Old epoch keys are destroyed; past ciphertexts cannot be decrypted
+- **Grace period tradeoff:** 1-week grace period balances usability (client update propagation) vs security (exposure window)
+
 ### TEE Implementation Checklist
 
 #### Phase 1: Core TEE Infrastructure (Production + Staging)
@@ -672,7 +844,7 @@ TEE_ALERT_STALE_THRESHOLD_HOURS=12
 - [ ] Create `TeeService` with Phala Cloud client
 - [ ] Implement `ipns_republish_schedule` table
 - [ ] Create republish cron job (3-hour interval)
-- [ ] Add `encryptedIpnsPrivateKey` to folder publish flow
+- [ ] Add `encryptedIpnsPrivateKey` to folder publish flow (see encryption flow above)
 
 #### Phase 2: Monitoring & Alerting (Production)
 
