@@ -5,15 +5,28 @@
  * Zero-knowledge encrypted cloud storage API
  * OpenAPI spec version: 0.1.0
  */
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import type {
+  DataTag,
+  DefinedInitialDataOptions,
+  DefinedUseQueryResult,
   MutationFunction,
   QueryClient,
+  QueryFunction,
+  QueryKey,
+  UndefinedInitialDataOptions,
   UseMutationOptions,
   UseMutationResult,
+  UseQueryOptions,
+  UseQueryResult,
 } from '@tanstack/react-query';
 
-import type { PublishIpnsDto, PublishIpnsResponseDto } from '../models';
+import type {
+  IpnsControllerResolveRecordParams,
+  PublishIpnsDto,
+  PublishIpnsResponseDto,
+  ResolveIpnsResponseDto,
+} from '../models';
 
 import { customInstance } from '../custom-instance';
 
@@ -98,3 +111,134 @@ export const useIpnsControllerPublishRecord = <TError = void, TContext = unknown
 
   return useMutation(mutationOptions, queryClient);
 };
+/**
+ * Resolve an IPNS name to its current CID via delegated routing. Returns the CID and sequence number of the current IPNS record.
+ * @summary Resolve IPNS name
+ */
+export const ipnsControllerResolveRecord = (
+  params: IpnsControllerResolveRecordParams,
+  signal?: AbortSignal
+) => {
+  return customInstance<ResolveIpnsResponseDto>({
+    url: `/ipns/resolve`,
+    method: 'GET',
+    params,
+    signal,
+  });
+};
+
+export const getIpnsControllerResolveRecordQueryKey = (
+  params?: IpnsControllerResolveRecordParams
+) => {
+  return [`/ipns/resolve`, ...(params ? [params] : [])] as const;
+};
+
+export const getIpnsControllerResolveRecordQueryOptions = <
+  TData = Awaited<ReturnType<typeof ipnsControllerResolveRecord>>,
+  TError = void,
+>(
+  params: IpnsControllerResolveRecordParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof ipnsControllerResolveRecord>>, TError, TData>
+    >;
+  }
+) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getIpnsControllerResolveRecordQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof ipnsControllerResolveRecord>>> = ({
+    signal,
+  }) => ipnsControllerResolveRecord(params, signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof ipnsControllerResolveRecord>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type IpnsControllerResolveRecordQueryResult = NonNullable<
+  Awaited<ReturnType<typeof ipnsControllerResolveRecord>>
+>;
+export type IpnsControllerResolveRecordQueryError = void;
+
+export function useIpnsControllerResolveRecord<
+  TData = Awaited<ReturnType<typeof ipnsControllerResolveRecord>>,
+  TError = void,
+>(
+  params: IpnsControllerResolveRecordParams,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof ipnsControllerResolveRecord>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof ipnsControllerResolveRecord>>,
+          TError,
+          Awaited<ReturnType<typeof ipnsControllerResolveRecord>>
+        >,
+        'initialData'
+      >;
+  },
+  queryClient?: QueryClient
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useIpnsControllerResolveRecord<
+  TData = Awaited<ReturnType<typeof ipnsControllerResolveRecord>>,
+  TError = void,
+>(
+  params: IpnsControllerResolveRecordParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof ipnsControllerResolveRecord>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof ipnsControllerResolveRecord>>,
+          TError,
+          Awaited<ReturnType<typeof ipnsControllerResolveRecord>>
+        >,
+        'initialData'
+      >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useIpnsControllerResolveRecord<
+  TData = Awaited<ReturnType<typeof ipnsControllerResolveRecord>>,
+  TError = void,
+>(
+  params: IpnsControllerResolveRecordParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof ipnsControllerResolveRecord>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary Resolve IPNS name
+ */
+
+export function useIpnsControllerResolveRecord<
+  TData = Awaited<ReturnType<typeof ipnsControllerResolveRecord>>,
+  TError = void,
+>(
+  params: IpnsControllerResolveRecordParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof ipnsControllerResolveRecord>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getIpnsControllerResolveRecordQueryOptions(params, options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  query.queryKey = queryOptions.queryKey;
+
+  return query;
+}

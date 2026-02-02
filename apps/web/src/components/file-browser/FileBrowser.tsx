@@ -4,6 +4,11 @@ import { useFolderNavigation } from '../../hooks/useFolderNavigation';
 import { useFolder } from '../../hooks/useFolder';
 import { useFileDownload } from '../../hooks/useFileDownload';
 import { useContextMenu } from '../../hooks/useContextMenu';
+import { useSyncPolling } from '../../hooks/useSyncPolling';
+import { useVaultStore } from '../../stores/vault.store';
+import { useFolderStore } from '../../stores/folder.store';
+import { resolveIpnsRecord } from '../../services/ipns.service';
+import { fetchAndDecryptMetadata } from '../../services/folder.service';
 import { FileList } from './FileList';
 import { EmptyState } from './EmptyState';
 import { ContextMenu } from './ContextMenu';
@@ -14,6 +19,8 @@ import { MoveDialog } from './MoveDialog';
 import { UploadZone } from './UploadZone';
 import { UploadModal } from './UploadModal';
 import { Breadcrumbs } from './Breadcrumbs';
+import { SyncIndicator } from './SyncIndicator';
+import { OfflineBanner } from './OfflineBanner';
 
 /**
  * Type guard for file entries.
@@ -72,6 +79,47 @@ export function FileBrowser() {
 
   // Context menu state
   const contextMenu = useContextMenu();
+
+  // Vault and folder stores for sync
+  const { rootIpnsName } = useVaultStore();
+  const { folders } = useFolderStore();
+
+  // Sync callback - compare remote sequence with local, refresh if different
+  const handleSync = useCallback(async () => {
+    if (!rootIpnsName) return;
+
+    // Resolve root folder IPNS to get remote CID and sequence number
+    const resolved = await resolveIpnsRecord(rootIpnsName);
+    if (!resolved) return;
+
+    // Get current root folder from store
+    const rootFolder = folders['root'];
+    if (!rootFolder) return;
+
+    // Compare sequence numbers - if remote > local, we need to refresh
+    // Sequence number comparison is more reliable than CID since we
+    // don't cache the local CID, and sequence always increments
+    if (resolved.sequenceNumber <= rootFolder.sequenceNumber) {
+      // No changes, already up to date
+      return;
+    }
+
+    // Remote has newer version - fetch and decrypt new metadata
+    try {
+      const metadata = await fetchAndDecryptMetadata(resolved.cid, rootFolder.folderKey);
+
+      // Update folder store with new children
+      // Per CONTEXT.md: last write wins, instant refresh (no toast/prompt)
+      useFolderStore.getState().updateFolderChildren('root', metadata.children);
+      useFolderStore.getState().updateFolderSequence('root', resolved.sequenceNumber);
+    } catch (err) {
+      // Log but don't crash - sync will retry on next interval
+      console.error('Sync refresh failed:', err);
+    }
+  }, [rootIpnsName, folders]);
+
+  // Start sync polling (30s interval, pauses when backgrounded/offline)
+  useSyncPolling(handleSync);
 
   // Selection state (single selection per CONTEXT.md)
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -277,8 +325,12 @@ export function FileBrowser() {
           <div className="toolbar-upload">
             <UploadZone folderId={currentFolderId} />
           </div>
+          <SyncIndicator />
         </div>
       </div>
+
+      {/* Offline banner */}
+      <OfflineBanner />
 
       {/* Loading state */}
       {isLoading && (

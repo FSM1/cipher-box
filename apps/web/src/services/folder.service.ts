@@ -12,12 +12,14 @@ import {
   wrapKey,
   bytesToHex,
   encryptFolderMetadata,
+  decryptFolderMetadata,
   type FolderMetadata,
+  type EncryptedFolderMetadata,
   type FolderEntry,
   type FileEntry,
   type FolderChild,
 } from '@cipherbox/crypto';
-import { addToIpfs } from '../lib/api/ipfs';
+import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
 import { createAndPublishIpnsRecord } from './ipns.service';
 import type { FolderNode } from '../stores/folder.store';
 
@@ -645,4 +647,32 @@ export async function renameFile(params: {
     ipnsName: params.parentFolderState.ipnsName,
     sequenceNumber: params.parentFolderState.sequenceNumber,
   });
+}
+
+/**
+ * Fetch and decrypt folder metadata from IPFS.
+ *
+ * Used for sync operations when remote IPNS resolves to a different CID.
+ * Fetches the encrypted metadata blob from IPFS and decrypts it with the folder key.
+ *
+ * @param cid - IPFS CID of the encrypted metadata blob
+ * @param folderKey - Decrypted AES-256 folder key
+ * @returns Decrypted folder metadata (version and children array)
+ * @throws Error if fetch or decryption fails
+ */
+export async function fetchAndDecryptMetadata(
+  cid: string,
+  folderKey: Uint8Array
+): Promise<FolderMetadata> {
+  // 1. Fetch encrypted metadata blob from IPFS
+  const encryptedBytes = await fetchFromIpfs(cid);
+
+  // 2. Parse as JSON to get EncryptedFolderMetadata (contains iv and data fields)
+  const encryptedJson = new TextDecoder().decode(encryptedBytes);
+  const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
+
+  // 3. Decrypt using folder key
+  const metadata = await decryptFolderMetadata(encrypted, folderKey);
+
+  return metadata;
 }

@@ -58,9 +58,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Multi-Device Sync
 
-- [ ] **SYNC-01**: Changes sync across devices via IPNS polling (~30s interval)
+- [x] **SYNC-01**: Changes sync across devices via IPNS polling (~30s interval)
 - [ ] **SYNC-02**: Desktop app runs background sync daemon
-- [ ] **SYNC-03**: User sees loading state during IPNS resolution
+- [x] **SYNC-03**: User sees loading state during IPNS resolution
 
 ### TEE Republishing
 
@@ -194,9 +194,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | API-06      | Phase 4  | Complete |
 | API-07      | Phase 4  | Complete |
 | API-08      | Phase 8  | Pending  |
-| SYNC-01     | Phase 7  | Pending  |
-| SYNC-02     | Phase 7  | Pending  |
-| SYNC-03     | Phase 7  | Pending  |
+| SYNC-01     | Phase 7  | Complete |
+| SYNC-02     | Phase 9  | Pending  |
+| SYNC-03     | Phase 7  | Complete |
 | TEE-01      | Phase 8  | Pending  |
 | TEE-02      | Phase 8  | Pending  |
 | TEE-03      | Phase 8  | Pending  |

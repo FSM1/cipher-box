@@ -5,6 +5,8 @@
  * These tests verify the security requirements from the Phase 5 security review.
  */
 
+// Note: ipns module is mocked via moduleNameMapper in jest.config.js
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';

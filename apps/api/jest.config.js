@@ -24,9 +24,10 @@ module.exports = {
   testEnvironment: 'node',
   // Transform ESM modules like jose
   transformIgnorePatterns: ['/node_modules/(?!(jose)/)'],
-  // Mock jose module for tests that don't directly test Web3AuthVerifierService
+  // Mock ESM modules for tests that don't directly test their functionality
   moduleNameMapper: {
     '^jose$': '<rootDir>/../test/__mocks__/jose.ts',
+    '^ipns$': '<rootDir>/../test/__mocks__/ipns.ts',
   },
   // Coverage thresholds per TESTING.md requirements
   // Paths are relative to rootDir (src/)
@@ -76,6 +77,12 @@ module.exports = {
     '**/ipfs/ipfs.controller.ts': {
       lines: 80,
       branches: 61, // 61.9% actual; Swagger decorators inflate uncovered branches
+    },
+    '**/ipns/ipns.controller.ts': {
+      // Coverage from integration/security tests in __tests__/
+      lines: 73,
+      branches: 70,
+      functions: 66,
     },
   },
 };

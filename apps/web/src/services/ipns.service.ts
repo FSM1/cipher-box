@@ -1,12 +1,12 @@
 /**
- * IPNS Service - Record creation and publishing
+ * IPNS Service - Record creation, publishing, and resolution
  *
  * Creates IPNS records locally using @cipherbox/crypto and publishes
  * via the backend API relay to delegated-ipfs.dev.
  */
 
 import { createIpnsRecord, marshalIpnsRecord } from '@cipherbox/crypto';
-import { ipnsControllerPublishRecord } from '../api/ipns/ipns';
+import { ipnsControllerPublishRecord, ipnsControllerResolveRecord } from '../api/ipns/ipns';
 
 /**
  * Create an IPNS record locally and publish via backend.
@@ -62,16 +62,31 @@ export async function createAndPublishIpnsRecord(params: {
 /**
  * Resolve an IPNS name to its current CID and sequence number.
  *
- * For now, this returns null - actual IPNS resolution via Pinata gateway
- * or IPFS network will be implemented in Phase 7 (Multi-Device Sync).
+ * Calls backend API which relays to delegated-ipfs.dev for resolution.
  *
  * @param ipnsName - IPNS name to resolve (k51.../bafzaa... format)
  * @returns Current CID and sequence number, or null if not found
  */
 export async function resolveIpnsRecord(
-  _ipnsName: string
+  ipnsName: string
 ): Promise<{ cid: string; sequenceNumber: bigint } | null> {
-  // Stub implementation - actual resolution deferred to Phase 7
-  // Will use Pinata gateway or direct IPFS gateway for resolution
-  return null;
+  try {
+    const response = await ipnsControllerResolveRecord({ ipnsName });
+
+    if (!response.success) {
+      return null;
+    }
+
+    return {
+      cid: response.cid,
+      sequenceNumber: BigInt(response.sequenceNumber),
+    };
+  } catch (error) {
+    // 404 means IPNS name not found - return null
+    // Other errors should propagate
+    if (error instanceof Error && error.message.includes('404')) {
+      return null;
+    }
+    throw error;
+  }
 }
