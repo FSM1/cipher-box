@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 9 - Desktop Client (next)
+**Current focus:** Phase 9 - Desktop Client (in progress)
 
 ## Current Position
 
-Phase: 8 of 11 (TEE Integration)
-Plan: 4 of 4 in Phase 8 complete
-Status: Phase complete - verified ✓
-Last activity: 2026-02-07 - Phase 8 execution complete (5/5 must-haves verified)
+Phase: 9 of 11 (Desktop Client)
+Plan: 1 of 7 in Phase 9 complete (09-03)
+Status: In progress
+Last activity: 2026-02-08 - Completed 09-03-PLAN.md (desktop auth endpoints)
 
-Progress: [#########-] 93% (50 of 54 plans)
+Progress: [#######---] 74% (51 of 69 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 50
+- Total plans completed: 51
 - Average duration: 4.6 min
-- Total execution time: 4.1 hours
+- Total execution time: 4.2 hours
 
 **By Phase:**
 
@@ -41,10 +41,11 @@ Progress: [#########-] 93% (50 of 54 plans)
 | 07-multi-device-sync       | 4/4   | 17 min | 4.3 min  |
 | 07.1-atomic-file-upload    | 2/2   | 6 min  | 3 min    |
 | 08-tee-integration         | 4/4   | 21 min | 5.3 min  |
+| 09-desktop-client          | 1/7   | 5 min  | 5 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 3m, 2m, 7m, 7m, 5m
+- Last 5 plans: 2m, 7m, 7m, 5m, 5m
 - Trend: Consistent, stable
 
 Updated after each plan completion.
@@ -211,6 +212,8 @@ Recent decisions affecting current work:
 | Per-entry error handling in batch republish           | 08-04   | One failure does not block other entries in the batch                     |
 | Public key cache in TEE worker memory                 | 08-04   | Map<epoch, publicKey> avoids repeated HKDF for same epoch                 |
 | ESM module type for TEE worker                        | 08-04   | type:module with bundler moduleResolution for standalone deployment       |
+| X-Client-Type: desktop header for body-based tokens   | 09-03   | Desktop clients send refreshToken in body instead of cookie               |
+| Controller-only auth changes for desktop support      | 09-03   | AuthService unchanged; controller switches token delivery based on header |
 
 ### Pending Todos
 
@@ -263,12 +266,12 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-07
-Stopped at: Phase 8 execution complete - verified ✓
+Last session: 2026-02-08
+Stopped at: Completed 09-03-PLAN.md (desktop auth endpoints)
 Resume file: None
-Next plan: Phase 9 (Desktop Client) - requires discuss/plan/execute cycle
+Next plan: 09-04-PLAN.md (Desktop auth flow: Web3Auth in webview, IPC, Keychain)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-07 after completing Phase 8 (TEE Integration)_
+_Last updated: 2026-02-08 after completing 09-03-PLAN.md (Desktop Auth Endpoints)_
