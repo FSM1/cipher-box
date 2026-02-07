@@ -74,7 +74,7 @@ export function useFileUpload() {
     totalFiles,
     completedFiles,
     error,
-    isUploading: status === 'encrypting' || status === 'uploading',
+    isUploading: status === 'encrypting' || status === 'uploading' || status === 'registering',
 
     // Quota
     usedBytes,

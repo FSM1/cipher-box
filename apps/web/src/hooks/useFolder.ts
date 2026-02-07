@@ -434,6 +434,67 @@ export function useFolder() {
   );
 
   /**
+   * Add multiple files to a folder after upload (batch).
+   *
+   * Registers all files in a single folder metadata update with one IPNS publish.
+   *
+   * @param parentId - Parent folder ID ('root' or folder UUID)
+   * @param filesData - Array of uploaded file data from upload service
+   * @returns Created file entries
+   */
+  const handleAddFiles = useCallback(
+    async (
+      parentId: string,
+      filesData: Array<{
+        cid: string;
+        wrappedKey: string;
+        iv: string;
+        originalName: string;
+        originalSize: number;
+      }>
+    ): Promise<FileEntry[]> => {
+      setState({ isLoading: true, error: null });
+      try {
+        const folders = useFolderStore.getState().folders;
+        const vault = useVaultStore.getState();
+
+        // Get parent folder state
+        const parentFolder =
+          parentId === 'root' ? getRootFolderState(vault, folders) : folders[parentId];
+
+        if (!parentFolder) {
+          throw new Error('Parent folder not found or vault not initialized');
+        }
+
+        // Batch add files to folder (single IPNS publish)
+        const { fileEntries, newSequenceNumber } = await folderService.addFilesToFolder({
+          parentFolderState: parentFolder,
+          files: filesData.map((f) => ({
+            cid: f.cid,
+            fileKeyEncrypted: f.wrappedKey,
+            fileIv: f.iv,
+            name: f.originalName,
+            size: f.originalSize,
+          })),
+        });
+
+        // Update local state with new children and sequence number
+        const store = useFolderStore.getState();
+        store.updateFolderChildren(parentId, [...parentFolder.children, ...fileEntries]);
+        store.updateFolderSequence(parentId, newSequenceNumber);
+
+        setState({ isLoading: false, error: null });
+        return fileEntries;
+      } catch (err) {
+        const error = err instanceof Error ? err.message : 'Failed to add files';
+        setState({ isLoading: false, error });
+        throw err;
+      }
+    },
+    []
+  );
+
+  /**
    * Clear error state.
    */
   const clearError = useCallback(() => {
@@ -450,6 +511,7 @@ export function useFolder() {
     moveItem: handleMove,
     deleteItem: handleDelete,
     addFile: handleAddFile,
+    addFiles: handleAddFiles,
 
     // Utilities
     clearError,

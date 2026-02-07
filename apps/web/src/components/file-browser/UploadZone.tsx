@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { useDropzone, FileRejection } from 'react-dropzone';
 import { useFileUpload } from '../../hooks/useFileUpload';
 import { useFolder } from '../../hooks/useFolder';
+import { useUploadStore } from '../../stores/upload.store';
 import '../../styles/upload.css';
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per FILE-01
@@ -31,7 +32,7 @@ type UploadZoneProps = {
  */
 export function UploadZone({ folderId, onUploadComplete }: UploadZoneProps) {
   const { upload, canUpload, isUploading } = useFileUpload();
-  const { addFile } = useFolder();
+  const { addFiles } = useFolder();
   const [error, setError] = useState<string | null>(null);
 
   const handleDrop = useCallback(
@@ -66,34 +67,23 @@ export function UploadZone({ folderId, onUploadComplete }: UploadZoneProps) {
       }
 
       try {
-        // Upload files to IPFS
+        // Upload files to IPFS (sequential encrypt + upload per file)
         const uploadedFiles = await upload(acceptedFiles);
 
-        // Register each uploaded file in the folder metadata
-        // Handle partial failures gracefully - continue with remaining files if one fails
-        const failedRegistrations: string[] = [];
-        for (const uploaded of uploadedFiles) {
-          try {
-            await addFile(folderId, {
-              cid: uploaded.cid,
-              wrappedKey: uploaded.wrappedKey,
-              iv: uploaded.iv,
-              originalName: uploaded.originalName,
-              originalSize: uploaded.originalSize,
-            });
-          } catch {
-            // Keep going, but remember which files failed to register
-            failedRegistrations.push(uploaded.originalName ?? 'Unnamed file');
-          }
-        }
+        // Set registering status during batch folder metadata registration
+        useUploadStore.getState().setRegistering();
 
-        if (failedRegistrations.length > 0) {
-          setError(
-            `Some files were uploaded but could not be added to this folder: ${failedRegistrations.join(
-              ', '
-            )}`
-          );
-        }
+        // Batch register all files in folder (single IPNS publish)
+        await addFiles(
+          folderId,
+          uploadedFiles.map((uploaded) => ({
+            cid: uploaded.cid,
+            wrappedKey: uploaded.wrappedKey,
+            iv: uploaded.iv,
+            originalName: uploaded.originalName,
+            originalSize: uploaded.originalSize,
+          }))
+        );
 
         onUploadComplete?.();
       } catch (err) {
@@ -104,7 +94,7 @@ export function UploadZone({ folderId, onUploadComplete }: UploadZoneProps) {
         }
       }
     },
-    [upload, canUpload, addFile, folderId, onUploadComplete]
+    [upload, canUpload, addFiles, folderId, onUploadComplete]
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
