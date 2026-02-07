@@ -2,7 +2,10 @@ import { useCallback, useState } from 'react';
 import { useDropzone, FileRejection } from 'react-dropzone';
 import { useFileUpload } from '../../hooks/useFileUpload';
 import { useFolder } from '../../hooks/useFolder';
+import { unpinFromIpfs } from '../../lib/api/ipfs';
 import { useUploadStore } from '../../stores/upload.store';
+import { useQuotaStore } from '../../stores/quota.store';
+import type { UploadedFile } from '../../services/upload.service';
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per FILE-01
 
@@ -49,9 +52,10 @@ export function EmptyState({ folderId }: EmptyStateProps) {
         return;
       }
 
+      let uploadedFiles: UploadedFile[] | undefined;
       try {
         // Upload files to IPFS (sequential encrypt + upload per file)
-        const uploadedFiles = await upload(acceptedFiles);
+        uploadedFiles = await upload(acceptedFiles);
 
         // Set registering status during batch folder metadata registration
         useUploadStore.getState().setRegistering();
@@ -74,6 +78,12 @@ export function EmptyState({ folderId }: EmptyStateProps) {
         if (message !== 'Upload cancelled by user') {
           useUploadStore.getState().setError(message);
           setError(message);
+
+          // Clean up orphaned IPFS pins if upload succeeded but registration failed
+          if (uploadedFiles?.length) {
+            uploadedFiles.forEach((f) => unpinFromIpfs(f.cid).catch(() => {}));
+            useQuotaStore.getState().fetchQuota();
+          }
         }
       }
     },
