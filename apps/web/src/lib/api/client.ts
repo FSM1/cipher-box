@@ -3,16 +3,11 @@ import { useAuthStore } from '../../stores/auth.store';
 import { useVaultStore } from '../../stores/vault.store';
 import { useFolderStore } from '../../stores/folder.store';
 
-let isRefreshing = false;
-let failedQueue: Array<{ resolve: (token: string) => void; reject: (error: Error) => void }> = [];
-
-const processQueue = (error: Error | null, token: string | null) => {
-  failedQueue.forEach(({ resolve, reject }) => {
-    if (error) reject(error);
-    else if (token) resolve(token);
-  });
-  failedQueue = [];
-};
+// Shared refresh promise eliminates race condition where multiple concurrent
+// 401 responses each trigger their own POST /auth/refresh before the boolean
+// flag could be set. The promise is assigned synchronously before any await,
+// so all concurrent 401 handlers see it immediately and share the same refresh.
+let refreshPromise: Promise<string> | null = null;
 
 export const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3000',
@@ -39,38 +34,40 @@ apiClient.interceptors.response.use(
 
     // Only handle 401 errors, and only retry once (but never retry refresh endpoint)
     if (error.response?.status === 401 && !originalRequest._retry && !isRefreshRequest) {
-      if (isRefreshing) {
-        // Another refresh is in progress, queue this request
-        return new Promise<string>((resolve, reject) => {
-          failedQueue.push({ resolve, reject });
-        }).then((token) => {
-          originalRequest.headers.Authorization = `Bearer ${token}`;
-          return apiClient(originalRequest);
-        });
-      }
-
       originalRequest._retry = true;
-      isRefreshing = true;
 
-      try {
-        // Refresh token is in HTTP-only cookie, sent automatically via withCredentials
-        const response = await apiClient.post<{ accessToken: string }>('/auth/refresh');
-        const { accessToken } = response.data;
-        useAuthStore.getState().setAccessToken(accessToken);
-        processQueue(null, accessToken);
-        originalRequest.headers.Authorization = `Bearer ${accessToken}`;
+      // If a refresh is already in flight, all concurrent 401 handlers
+      // await the same promise instead of firing duplicate refresh requests.
+      if (refreshPromise) {
+        const token = await refreshPromise;
+        originalRequest.headers.Authorization = `Bearer ${token}`;
         return apiClient(originalRequest);
-      } catch (refreshError) {
-        processQueue(refreshError as Error, null);
-        // [SECURITY: HIGH-03] Clear all stores including crypto keys on token refresh failure
-        useFolderStore.getState().clearFolders();
-        useVaultStore.getState().clearVaultKeys();
-        useAuthStore.getState().logout();
-        // Redirect to login will be handled by route guard
-        throw refreshError;
-      } finally {
-        isRefreshing = false;
       }
+
+      // First 401 handler: create the refresh promise synchronously (before any await)
+      // so subsequent 401 handlers in the same microtask see it immediately.
+      refreshPromise = apiClient
+        .post<{ accessToken: string }>('/auth/refresh')
+        .then((response) => {
+          const { accessToken } = response.data;
+          useAuthStore.getState().setAccessToken(accessToken);
+          return accessToken;
+        })
+        .catch((refreshError) => {
+          // [SECURITY: HIGH-03] Clear all stores including crypto keys on token refresh failure
+          useFolderStore.getState().clearFolders();
+          useVaultStore.getState().clearVaultKeys();
+          useAuthStore.getState().logout();
+          // Redirect to login will be handled by route guard
+          throw refreshError;
+        })
+        .finally(() => {
+          refreshPromise = null;
+        });
+
+      const token = await refreshPromise;
+      originalRequest.headers.Authorization = `Bearer ${token}`;
+      return apiClient(originalRequest);
     }
 
     throw error;
