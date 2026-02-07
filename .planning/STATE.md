@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 ## Current Position
 
 Phase: 9 of 11 (Desktop Client)
-Plan: 2 of 7 in Phase 9 complete (09-01, 09-03)
+Plan: 3 of 7 in Phase 9 complete (09-01, 09-02, 09-03)
 Status: In progress
-Last activity: 2026-02-08 - Completed 09-01-PLAN.md (Tauri v2 scaffold)
+Last activity: 2026-02-08 - Completed 09-02-PLAN.md (Rust crypto module)
 
-Progress: [########--] 75% (52 of 69 plans)
+Progress: [########--] 77% (53 of 69 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 52
-- Average duration: 4.6 min
-- Total execution time: 4.3 hours
+- Total plans completed: 53
+- Average duration: 4.7 min
+- Total execution time: 4.5 hours
 
 **By Phase:**
 
@@ -41,12 +41,12 @@ Progress: [########--] 75% (52 of 69 plans)
 | 07-multi-device-sync       | 4/4   | 17 min | 4.3 min  |
 | 07.1-atomic-file-upload    | 2/2   | 6 min  | 3 min    |
 | 08-tee-integration         | 4/4   | 21 min | 5.3 min  |
-| 09-desktop-client          | 2/7   | 11 min | 5.5 min  |
+| 09-desktop-client          | 3/7   | 21 min | 7 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 7m, 7m, 5m, 5m, 6m
-- Trend: Consistent, stable
+- Last 5 plans: 7m, 5m, 5m, 6m, 10m
+- Trend: Consistent, slightly higher for Rust crypto
 
 Updated after each plan completion.
 
@@ -218,6 +218,11 @@ Recent decisions affecting current work:
 | multihash 0.19 without identity feature               | 09-01   | Identity hash code is a constant, not a feature gate in multihash 0.19    |
 | Tauri v2 top-level identifier (not bundle.identifier) | 09-01   | Tauri v2 moved identifier to top-level config                             |
 | Placeholder icons for Tauri compile-time validation   | 09-01   | generate_context!() macro requires icon files to exist at build time      |
+| Manual protobuf encoding for IPNS records             | 09-02   | Direct byte encoding for exact field number control without .proto file   |
+| Manual base36 encoding via big-integer division       | 09-02   | Simple algorithm, avoids multibase crate dependency                       |
+| CBOR field order matches ipns npm package             | 09-02   | TTL,Value,Sequence,Validity,ValidityType ordering for compatibility       |
+| ecies crate v0.2 cross-compatible with eciesjs        | 09-02   | Verified via cross-language test vector (TS wrap, Rust unwrap)            |
+| Pre-computed test vectors from TypeScript             | 09-02   | Generate once with script, hardcode hex constants in Rust tests           |
 
 ### Pending Todos
 
@@ -271,11 +276,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-08
-Stopped at: Completed 09-01-PLAN.md (Tauri v2 scaffold)
+Stopped at: Completed 09-02-PLAN.md (Rust crypto module)
 Resume file: None
-Next plan: 09-02-PLAN.md (Rust crypto module with cross-language test vectors)
+Next plan: 09-04-PLAN.md (Auth and keychain integration)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-08 after completing 09-01-PLAN.md (Tauri v2 Desktop Scaffold)_
+_Last updated: 2026-02-08 after completing 09-02-PLAN.md (Rust Crypto Module)_
