@@ -209,10 +209,38 @@ export class IpnsService {
   }
 
   /**
-   * Resolve an IPNS name to its current CID via delegated routing
+   * Resolve an IPNS name to its current CID via delegated routing,
+   * falling back to the DB-cached CID when delegated routing is unavailable.
    * Returns null if the IPNS name is not found (404)
    */
   async resolveRecord(ipnsName: string): Promise<{ cid: string; sequenceNumber: string } | null> {
+    try {
+      return await this.resolveFromDelegatedRouting(ipnsName);
+    } catch (error) {
+      // Only fall back to DB cache on BAD_GATEWAY (delegated routing failures)
+      if (error instanceof HttpException && error.getStatus() === HttpStatus.BAD_GATEWAY) {
+        this.logger.warn(`Delegated routing failed for ${ipnsName}, falling back to DB cache`);
+        const cached = await this.folderIpnsRepository.findOne({
+          where: { ipnsName },
+        });
+        if (cached?.latestCid) {
+          this.logger.log(`Resolved ${ipnsName} from DB cache: ${cached.latestCid}`);
+          return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
+        }
+        this.logger.warn(`No DB cache available for ${ipnsName}, re-throwing`);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Resolve an IPNS name via the delegated routing API with retries.
+   * Returns null if the IPNS name is not found (404).
+   * Throws HttpException (BAD_GATEWAY) on routing failures.
+   */
+  private async resolveFromDelegatedRouting(
+    ipnsName: string
+  ): Promise<{ cid: string; sequenceNumber: string } | null> {
     const url = `${this.delegatedRoutingUrl}/routing/v1/ipns/${ipnsName}`;
 
     let lastError: Error | null = null;
