@@ -11,6 +11,7 @@ describe('AuthController', () => {
   let controller: AuthController;
   let authService: jest.Mocked<AuthService>;
   let mockResponse: jest.Mocked<Response>;
+  let mockWebRequest: ExpressRequest;
 
   const mockUser = {
     id: 'user-uuid-123',
@@ -34,6 +35,11 @@ describe('AuthController', () => {
       cookie: jest.fn(),
       clearCookie: jest.fn(),
     } as unknown as jest.Mocked<Response>;
+
+    // Create mock web request (no X-Client-Type header)
+    mockWebRequest = {
+      headers: {},
+    } as unknown as ExpressRequest;
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AuthController],
@@ -70,7 +76,7 @@ describe('AuthController', () => {
         isNewUser: false,
       });
 
-      await controller.login(loginDto, mockResponse);
+      await controller.login(loginDto, mockWebRequest, mockResponse);
 
       expect(authService.login).toHaveBeenCalledWith(loginDto);
       expect(authService.login).toHaveBeenCalledTimes(1);
@@ -83,7 +89,7 @@ describe('AuthController', () => {
         isNewUser: false,
       });
 
-      await controller.login(loginDto, mockResponse);
+      await controller.login(loginDto, mockWebRequest, mockResponse);
 
       expect(mockResponse.cookie).toHaveBeenCalledWith(
         'refresh_token',
@@ -102,7 +108,7 @@ describe('AuthController', () => {
         isNewUser: true,
       });
 
-      const result = await controller.login(loginDto, mockResponse);
+      const result = await controller.login(loginDto, mockWebRequest, mockResponse);
 
       expect(result).toEqual({
         accessToken: 'mock-access-token',
@@ -118,7 +124,7 @@ describe('AuthController', () => {
         isNewUser: false,
       });
 
-      const result = await controller.login(loginDto, mockResponse);
+      const result = await controller.login(loginDto, mockWebRequest, mockResponse);
 
       expect(result.isNewUser).toBe(false);
     });
@@ -127,6 +133,7 @@ describe('AuthController', () => {
   describe('refresh', () => {
     it('should extract refresh_token from cookies', async () => {
       const mockRequest = {
+        headers: {},
         cookies: { refresh_token: 'mock-refresh-token' },
       } as unknown as ExpressRequest;
 
@@ -135,36 +142,39 @@ describe('AuthController', () => {
         refreshToken: 'new-refresh-token',
       });
 
-      await controller.refresh(mockRequest, mockResponse);
+      await controller.refresh(mockRequest, {}, mockResponse);
 
       expect(authService.refreshByToken).toHaveBeenCalledWith('mock-refresh-token');
     });
 
     it('should throw UnauthorizedException if no refresh token cookie', async () => {
       const mockRequest = {
+        headers: {},
         cookies: {},
       } as unknown as ExpressRequest;
 
-      await expect(controller.refresh(mockRequest, mockResponse)).rejects.toThrow(
+      await expect(controller.refresh(mockRequest, {}, mockResponse)).rejects.toThrow(
         UnauthorizedException
       );
-      await expect(controller.refresh(mockRequest, mockResponse)).rejects.toThrow(
+      await expect(controller.refresh(mockRequest, {}, mockResponse)).rejects.toThrow(
         'No refresh token'
       );
     });
 
     it('should throw UnauthorizedException if cookies object is undefined', async () => {
       const mockRequest = {
+        headers: {},
         cookies: undefined,
       } as unknown as ExpressRequest;
 
-      await expect(controller.refresh(mockRequest, mockResponse)).rejects.toThrow(
+      await expect(controller.refresh(mockRequest, {}, mockResponse)).rejects.toThrow(
         UnauthorizedException
       );
     });
 
     it('should set new refresh_token cookie on successful refresh', async () => {
       const mockRequest = {
+        headers: {},
         cookies: { refresh_token: 'old-refresh-token' },
       } as unknown as ExpressRequest;
 
@@ -173,7 +183,7 @@ describe('AuthController', () => {
         refreshToken: 'new-refresh-token',
       });
 
-      await controller.refresh(mockRequest, mockResponse);
+      await controller.refresh(mockRequest, {}, mockResponse);
 
       expect(mockResponse.cookie).toHaveBeenCalledWith(
         'refresh_token',
@@ -187,6 +197,7 @@ describe('AuthController', () => {
 
     it('should return only accessToken (refreshToken goes in cookie)', async () => {
       const mockRequest = {
+        headers: {},
         cookies: { refresh_token: 'mock-refresh-token' },
       } as unknown as ExpressRequest;
 
@@ -195,7 +206,7 @@ describe('AuthController', () => {
         refreshToken: 'new-refresh-token',
       });
 
-      const result = await controller.refresh(mockRequest, mockResponse);
+      const result = await controller.refresh(mockRequest, {}, mockResponse);
 
       expect(result).toEqual({
         accessToken: 'new-access-token',
@@ -208,6 +219,7 @@ describe('AuthController', () => {
     it('should clear refresh_token cookie with path /auth', async () => {
       const mockRequest = {
         user: mockUser,
+        headers: {},
       } as unknown as Request & { user: typeof mockUser };
 
       authService.logout.mockResolvedValue({ success: true });
@@ -220,6 +232,7 @@ describe('AuthController', () => {
     it('should call authService.logout with user.id', async () => {
       const mockRequest = {
         user: mockUser,
+        headers: {},
       } as unknown as Request & { user: typeof mockUser };
 
       authService.logout.mockResolvedValue({ success: true });
@@ -232,6 +245,7 @@ describe('AuthController', () => {
     it('should return { success: true }', async () => {
       const mockRequest = {
         user: mockUser,
+        headers: {},
       } as unknown as Request & { user: typeof mockUser };
 
       authService.logout.mockResolvedValue({ success: true });

@@ -1,4 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsOptional, IsString } from 'class-validator';
 
 export class TokenResponseDto {
   @ApiProperty({
@@ -6,6 +7,23 @@ export class TokenResponseDto {
     example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
   })
   accessToken!: string;
+
+  @ApiPropertyOptional({
+    description:
+      'New refresh token (only present for desktop clients using X-Client-Type: desktop header)',
+    example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+  })
+  refreshToken?: string;
+}
+
+export class DesktopRefreshDto {
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional({
+    description: 'Refresh token from previous login/refresh (required for desktop clients)',
+    example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+  })
+  refreshToken?: string;
 }
 
 export class LogoutResponseDto {

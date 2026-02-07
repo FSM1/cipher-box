@@ -9,6 +9,7 @@
 export * from './addResponseDto';
 export * from './authMethodResponseDto';
 export * from './authMethodResponseDtoType';
+export * from './desktopRefreshDto';
 export * from './healthControllerCheck200';
 export * from './healthControllerCheck200Info';
 export * from './healthControllerCheck200InfoDatabase';

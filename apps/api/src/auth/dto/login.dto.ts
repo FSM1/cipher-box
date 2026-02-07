@@ -63,6 +63,13 @@ export class LoginResponseDto {
     example: false,
   })
   isNewUser!: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'Refresh token (only present for desktop clients using X-Client-Type: desktop header)',
+    example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+  })
+  refreshToken?: string;
 }
 
 // Internal type for service layer (includes refreshToken for cookie)

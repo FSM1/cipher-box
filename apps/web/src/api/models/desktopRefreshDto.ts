@@ -6,9 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface TokenResponseDto {
-  /** New JWT access token */
-  accessToken: string;
-  /** New refresh token (only present for desktop clients using X-Client-Type: desktop header) */
+export interface DesktopRefreshDto {
+  /** Refresh token from previous login/refresh (required for desktop clients) */
   refreshToken?: string;
 }
