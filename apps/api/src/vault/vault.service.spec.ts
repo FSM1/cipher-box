@@ -541,5 +541,29 @@ describe('VaultService', () => {
       expect(result?.createdAt).toBe(mockVaultEntity.createdAt);
       expect(result?.initializedAt).toBe(mockVaultEntity.initializedAt);
     });
+
+    it('should include teeKeys when TeeKeyStateService returns non-null', async () => {
+      const mockTeeKeys = {
+        currentEpoch: 1,
+        currentPublicKey: '04' + 'ab'.repeat(64),
+        previousEpoch: null,
+        previousPublicKey: null,
+      };
+      mockTeeKeyStateService.getTeeKeysDto.mockResolvedValue(mockTeeKeys);
+      mockVaultRepo.findOne.mockResolvedValue(mockVaultEntity);
+
+      const result = await service.getVault(testUserId);
+
+      expect(result.teeKeys).toEqual(mockTeeKeys);
+    });
+
+    it('should pass null teeKeys when TeeKeyStateService returns null', async () => {
+      mockTeeKeyStateService.getTeeKeysDto.mockResolvedValue(null);
+      mockVaultRepo.findOne.mockResolvedValue(mockVaultEntity);
+
+      const result = await service.getVault(testUserId);
+
+      expect(result.teeKeys).toBeNull();
+    });
   });
 });

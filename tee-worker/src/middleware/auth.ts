@@ -5,6 +5,7 @@
  * Uses Bearer token authentication in the Authorization header.
  */
 
+import { timingSafeEqual as cryptoTimingSafeEqual } from 'node:crypto';
 import type { Request, Response, NextFunction } from 'express';
 
 /**
@@ -30,23 +31,13 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
   const token = authHeader.slice(7); // Remove 'Bearer ' prefix
 
   // Constant-time comparison to prevent timing attacks
-  if (token.length !== expectedSecret.length || !timingSafeEqual(token, expectedSecret)) {
+  if (
+    token.length !== expectedSecret.length ||
+    !cryptoTimingSafeEqual(Buffer.from(token), Buffer.from(expectedSecret))
+  ) {
     res.status(401).json({ error: 'Invalid authentication token' });
     return;
   }
 
   next();
-}
-
-/**
- * Simple constant-time string comparison.
- * Prevents timing attacks on secret comparison.
- */
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let result = 0;
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  }
-  return result === 0;
 }

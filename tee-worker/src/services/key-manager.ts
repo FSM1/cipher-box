@@ -25,8 +25,11 @@ export async function decryptIpnsKey(
   epoch: number
 ): Promise<Uint8Array> {
   const keypair = await getKeypair(epoch);
-  const ipnsPrivateKey = new Uint8Array(decrypt(keypair.privateKey, encryptedIpnsKey));
-  return ipnsPrivateKey;
+  try {
+    return new Uint8Array(decrypt(keypair.privateKey, encryptedIpnsKey));
+  } finally {
+    keypair.privateKey.fill(0);
+  }
 }
 
 /**

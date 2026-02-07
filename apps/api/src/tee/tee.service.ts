@@ -16,6 +16,10 @@ export interface RepublishEntry {
   latestCid: string;
   /** Current IPNS sequence number (bigint as string) */
   sequenceNumber: string;
+  /** Current active TEE epoch */
+  currentEpoch: number;
+  /** Previous TEE epoch (null if no grace period active) */
+  previousEpoch: number | null;
 }
 
 /**
@@ -87,7 +91,7 @@ export class TeeService {
     }
 
     const data = (await response.json()) as { publicKey: string };
-    const publicKeyBytes = Uint8Array.from(atob(data.publicKey), (c) => c.charCodeAt(0));
+    const publicKeyBytes = new Uint8Array(Buffer.from(data.publicKey, 'hex'));
 
     if (publicKeyBytes.length !== 65 || publicKeyBytes[0] !== 0x04) {
       throw new Error(

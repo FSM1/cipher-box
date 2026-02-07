@@ -27,6 +27,12 @@ export async function getKeypair(
 ): Promise<{ publicKey: Uint8Array; privateKey: Uint8Array }> {
   const mode = process.env.TEE_MODE || 'simulator';
 
+  if (mode === 'simulator' && process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'TEE_MODE=simulator is not allowed in production. Set TEE_MODE=cvm for production deployments.'
+    );
+  }
+
   let privateKey: Uint8Array;
 
   if (mode === 'cvm') {

@@ -77,6 +77,16 @@ export class RepublishService {
 
     this.logger.log(`Processing ${dueEntries.length} due republish entries`);
 
+    // Fetch current TEE epoch state for the batch
+    const teeState = await this.teeKeyStateService.getCurrentState();
+    if (!teeState) {
+      this.logger.error('TEE key state not initialized, cannot process republish batch');
+      return { processed: dueEntries.length, succeeded: 0, failed: dueEntries.length };
+    }
+
+    const currentEpoch = teeState.currentEpoch;
+    const previousEpoch = teeState.previousEpoch;
+
     let totalSucceeded = 0;
     let totalFailed = 0;
 
@@ -91,6 +101,8 @@ export class RepublishService {
         ipnsName: entry.ipnsName,
         latestCid: entry.latestCid,
         sequenceNumber: entry.sequenceNumber,
+        currentEpoch,
+        previousEpoch,
       }));
 
       let teeResults: RepublishResult[];

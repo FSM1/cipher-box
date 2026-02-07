@@ -11,8 +11,9 @@ const router = Router();
 
 router.get('/health', (_req: Request, res: Response) => {
   res.json({
-    status: 'ok',
+    healthy: true,
     mode: process.env.TEE_MODE || 'simulator',
+    epoch: parseInt(process.env.TEE_EPOCH || '1', 10),
     uptime: process.uptime(),
   });
 });
