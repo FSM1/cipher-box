@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 7.1 - Atomic File Upload (in progress)
+**Current focus:** Phase 7.1 - Atomic File Upload (complete)
 
 ## Current Position
 
 Phase: 7.1 of 11 (Atomic File Upload)
-Plan: 1 of 2 in Phase 7.1 complete
-Status: In progress
-Last activity: 2026-02-07 - Completed 07.1-01-PLAN.md
+Plan: 2 of 2 in Phase 7.1 complete
+Status: Phase complete
+Last activity: 2026-02-07 - Completed 07.1-02-PLAN.md
 
-Progress: [#########.] 90% (45 of 50 plans)
+Progress: [##########] 92% (46 of 50 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 45
+- Total plans completed: 46
 - Average duration: 4.7 min
-- Total execution time: 3.69 hours
+- Total execution time: 3.74 hours
 
 **By Phase:**
 
@@ -39,11 +39,11 @@ Progress: [#########.] 90% (45 of 50 plans)
 | 06.1-webapp-automation     | 6/6   | 25 min | 4.2 min  |
 | 06.3-ui-structure-refactor | 5/5   | 16 min | 3.2 min  |
 | 07-multi-device-sync       | 4/4   | 17 min | 4.3 min  |
-| 07.1-atomic-file-upload    | 1/2   | 3 min  | 3 min    |
+| 07.1-atomic-file-upload    | 2/2   | 6 min  | 3 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 3m, 3m, 4m, 7m, 3m
+- Last 5 plans: 3m, 3m, 3m, 4m, 3m
 - Trend: Consistent, stable
 
 Updated after each plan completion.
@@ -184,6 +184,9 @@ Recent decisions affecting current work:
 | Silent sync error handling                           | 07-04   | Log errors but don't crash - 30s interval auto-retries                    |
 | Atomic upload: quota + pin + record in one request   | 7.1-01  | Eliminates gap where file can be pinned but never recorded for quota      |
 | VaultModule imported into IpfsModule                 | 7.1-01  | Cross-module import for VaultService access in IpfsController             |
+| Batch addFiles coexists with single addFile          | 7.1-02  | Both remain exported from useFolder for different code paths              |
+| Server-authoritative quota via fetchQuota            | 7.1-02  | fetchQuota after upload replaces optimistic per-file addUsage             |
+| All-or-nothing batch folder registration             | 7.1-02  | Single IPNS publish for N files, no partial failure handling              |
 
 ### Pending Todos
 
@@ -228,11 +231,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-07
-Stopped at: Completed 07.1-01-PLAN.md (atomic upload endpoint)
+Stopped at: Completed 07.1-02-PLAN.md (client-side upload refactor) - Phase 7.1 complete
 Resume file: None
-Next plan: 07.1-02-PLAN.md (client-side upload refactor)
+Next plan: Phase 8 (TEE Republishing)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-07 after completing 07.1-01-PLAN.md_
+_Last updated: 2026-02-07 after completing 07.1-02-PLAN.md_
