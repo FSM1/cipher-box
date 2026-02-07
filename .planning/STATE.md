@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 ## Current Position
 
 Phase: 9 of 11 (Desktop Client)
-Plan: 1 of 7 in Phase 9 complete (09-03)
+Plan: 2 of 7 in Phase 9 complete (09-01, 09-03)
 Status: In progress
-Last activity: 2026-02-08 - Completed 09-03-PLAN.md (desktop auth endpoints)
+Last activity: 2026-02-08 - Completed 09-01-PLAN.md (Tauri v2 scaffold)
 
-Progress: [#######---] 74% (51 of 69 plans)
+Progress: [########--] 75% (52 of 69 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 51
+- Total plans completed: 52
 - Average duration: 4.6 min
-- Total execution time: 4.2 hours
+- Total execution time: 4.3 hours
 
 **By Phase:**
 
@@ -41,11 +41,11 @@ Progress: [#######---] 74% (51 of 69 plans)
 | 07-multi-device-sync       | 4/4   | 17 min | 4.3 min  |
 | 07.1-atomic-file-upload    | 2/2   | 6 min  | 3 min    |
 | 08-tee-integration         | 4/4   | 21 min | 5.3 min  |
-| 09-desktop-client          | 1/7   | 5 min  | 5 min    |
+| 09-desktop-client          | 2/7   | 11 min | 5.5 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 2m, 7m, 7m, 5m, 5m
+- Last 5 plans: 7m, 7m, 5m, 5m, 6m
 - Trend: Consistent, stable
 
 Updated after each plan completion.
@@ -214,6 +214,10 @@ Recent decisions affecting current work:
 | ESM module type for TEE worker                        | 08-04   | type:module with bundler moduleResolution for standalone deployment       |
 | X-Client-Type: desktop header for body-based tokens   | 09-03   | Desktop clients send refreshToken in body instead of cookie               |
 | Controller-only auth changes for desktop support      | 09-03   | AuthService unchanged; controller switches token delivery based on header |
+| fuser optional via cargo feature flag                 | 09-01   | FUSE-T required on macOS to compile fuser; optional until plan 09-03      |
+| multihash 0.19 without identity feature               | 09-01   | Identity hash code is a constant, not a feature gate in multihash 0.19    |
+| Tauri v2 top-level identifier (not bundle.identifier) | 09-01   | Tauri v2 moved identifier to top-level config                             |
+| Placeholder icons for Tauri compile-time validation   | 09-01   | generate_context!() macro requires icon files to exist at build time      |
 
 ### Pending Todos
 
@@ -267,11 +271,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-08
-Stopped at: Completed 09-03-PLAN.md (desktop auth endpoints)
+Stopped at: Completed 09-01-PLAN.md (Tauri v2 scaffold)
 Resume file: None
-Next plan: 09-04-PLAN.md (Desktop auth flow: Web3Auth in webview, IPC, Keychain)
+Next plan: 09-02-PLAN.md (Rust crypto module with cross-language test vectors)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-08 after completing 09-03-PLAN.md (Desktop Auth Endpoints)_
+_Last updated: 2026-02-08 after completing 09-01-PLAN.md (Tauri v2 Desktop Scaffold)_
