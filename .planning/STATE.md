@@ -5,7 +5,7 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 8 - TEE Integration (next)
+**Current focus:** Phase 7.1 - Atomic File Upload (next)
 
 ## Current Position
 
@@ -184,13 +184,12 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-5 pending todo(s):
+4 pending todo(s):
 
-- `2026-01-22-atomic-file-upload-flow.md` — Atomic file upload flow with client-side CID (area: api)
+- `2026-01-22-atomic-file-upload-flow.md` — Atomic file upload flow with client-side CID (area: api) → **Phase 7.1**
 - `2026-01-23-pre-upload-file-validation.md` — Pre-upload file name validation and duplicate prevention (area: ui)
 - `2026-01-23-simple-text-file-editor-modal.md` — Add simple text file editor modal (area: ui)
 - `2026-02-07-web-worker-large-file-encryption.md` — Offload large file encryption to Web Worker (area: ui)
-- ~~`2026-01-21-local-ipfs-node-for-testing.md` — Add local IPFS node to Docker stack for testing (area: api)~~ - **COMPLETED: Phase 4.2**
 
 ### Blockers/Concerns
 
@@ -221,13 +220,14 @@ Recent decisions affecting current work:
 - Phase 6.1 inserted after Phase 6: Webapp Automation Testing - E2E UI testing with automation framework
 - Phase 6.2 inserted after Phase 6.1: Restyle App with Pencil Design - Complete UI redesign using Pencil design tool
 - Phase 6.3 inserted after Phase 6.2: UI Structure Refactor - Page layouts, component hierarchy, toolbars, and navigation using Pencil MCP for design-first approach
+- Phase 7.1 inserted after Phase 7: Atomic File Upload - Refactor multi-request upload into single atomic backend call with batch IPNS publishing (URGENT)
 
 ## Session Continuity
 
 Last session: 2026-02-07
 Stopped at: Quick task 002 complete + DnD regression fix; 6.3 UAT gap closed (12/12 pass)
 Resume file: None
-Next plan: Phase 8 (TEE Integration)
+Next plan: Phase 7.1 (Atomic File Upload)
 
 ---
 
