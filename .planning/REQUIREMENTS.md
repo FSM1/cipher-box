@@ -54,7 +54,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **API-05**: Backend relays pre-signed IPNS records (POST /ipns/publish)
 - [x] **API-06**: Backend stores encrypted vault keys (rootFolderKey, ipnsPrivateKey)
 - [x] **API-07**: Backend enforces 500 MiB storage quota per user
-- [ ] **API-08**: Backend returns TEE public keys on login
+- [x] **API-08**: Backend returns TEE public keys on login
 
 ### Multi-Device Sync
 
@@ -64,11 +64,11 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### TEE Republishing
 
-- [ ] **TEE-01**: IPNS records are republished every 3 hours via Phala Cloud TEE
-- [ ] **TEE-02**: Client encrypts IPNS private key with TEE public key before sending
-- [ ] **TEE-03**: TEE decrypts key in hardware, signs record, immediately zeros memory
-- [ ] **TEE-04**: Backend schedules and tracks republish jobs
-- [ ] **TEE-05**: Key epochs rotate with 4-week grace period
+- [x] **TEE-01**: IPNS records are republished every 3 hours via Phala Cloud TEE
+- [x] **TEE-02**: Client encrypts IPNS private key with TEE public key before sending
+- [x] **TEE-03**: TEE decrypts key in hardware, signs record, immediately zeros memory
+- [x] **TEE-04**: Backend schedules and tracks republish jobs
+- [x] **TEE-05**: Key epochs rotate with 4-week grace period
 
 ### Web UI
 
@@ -193,15 +193,15 @@ Which phases cover which requirements. Updated during roadmap creation.
 | API-05      | Phase 5  | Complete |
 | API-06      | Phase 4  | Complete |
 | API-07      | Phase 4  | Complete |
-| API-08      | Phase 8  | Pending  |
+| API-08      | Phase 8  | Complete |
 | SYNC-01     | Phase 7  | Complete |
 | SYNC-02     | Phase 9  | Pending  |
 | SYNC-03     | Phase 7  | Complete |
-| TEE-01      | Phase 8  | Pending  |
-| TEE-02      | Phase 8  | Pending  |
-| TEE-03      | Phase 8  | Pending  |
-| TEE-04      | Phase 8  | Pending  |
-| TEE-05      | Phase 8  | Pending  |
+| TEE-01      | Phase 8  | Complete |
+| TEE-02      | Phase 8  | Complete |
+| TEE-03      | Phase 8  | Complete |
+| TEE-04      | Phase 8  | Complete |
+| TEE-05      | Phase 8  | Complete |
 | WEB-01      | Phase 6  | Pending  |
 | WEB-02      | Phase 6  | Pending  |
 | WEB-03      | Phase 6  | Pending  |

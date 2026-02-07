@@ -26,7 +26,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 6.3: UI Structure Refactor** - Page layouts, component hierarchy, and structural redesign using Pencil (INSERTED)
 - [x] **Phase 7: Multi-Device Sync** - IPNS polling and sync state management
 - [x] **Phase 7.1: Atomic File Upload** - Refactor multi-request upload into single atomic backend call with batch IPNS publishing (INSERTED)
-- [ ] **Phase 8: TEE Integration** - Auto-republishing via Phala Cloud
+- [x] **Phase 8: TEE Integration** - Auto-republishing via Phala Cloud
 - [ ] **Phase 9: Desktop Client** - Tauri app with FUSE mount for macOS
 - [ ] **Phase 10: Data Portability** - Vault export and documentation
 - [ ] **Phase 11: Security Enhancements** - Web3Auth MFA (post-v1.0)
@@ -319,10 +319,10 @@ Current upload requires 3 sequential requests (pin to IPFS, record metadata, pub
 
 Plans:
 
-- [ ] 08-01-PLAN.md — TEE key state entities, epoch management service, and TEE worker HTTP client
-- [ ] 08-02-PLAN.md — Redis + BullMQ republish scheduling, processor, and admin health endpoint
-- [ ] 08-03-PLAN.md — Client TEE key encryption on publish and backend auto-enrollment
-- [ ] 08-04-PLAN.md — Standalone TEE worker (Express/Phala Cloud CVM) with ECIES decrypt and IPNS signing
+- [x] 08-01-PLAN.md — TEE key state entities, epoch management service, and TEE worker HTTP client
+- [x] 08-02-PLAN.md — Redis + BullMQ republish scheduling, processor, and admin health endpoint
+- [x] 08-03-PLAN.md — Client TEE key encryption on publish and backend auto-enrollment
+- [x] 08-04-PLAN.md — Standalone TEE worker (Express/Phala Cloud CVM) with ECIES decrypt and IPNS signing
 
 ### Phase 9: Desktop Client
 
@@ -408,7 +408,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 6.3 UI Structure        | 5/5            | Complete    | 2026-01-30 |
 | 7. Multi-Device Sync    | 4/4            | Complete    | 2026-02-02 |
 | 7.1 Atomic File Upload  | 2/2            | Complete    | 2026-02-07 |
-| 8. TEE Integration      | 0/4            | Planned     | -          |
+| 8. TEE Integration      | 4/4            | Complete    | 2026-02-07 |
 | 9. Desktop Client       | 0/5            | Not started | -          |
 | 10. Data Portability    | 0/3            | Not started | -          |
 | 11. Security (MFA)      | 0/4            | Post-v1.0   | -          |
@@ -443,4 +443,5 @@ _Phase 7.1 inserted: 2026-02-07_
 _Phase 7.1 planned: 2026-02-07_
 _Phase 7.1 complete: 2026-02-07_
 _Phase 8 planned: 2026-02-07_
+_Phase 8 complete: 2026-02-07_
 _Total phases: 14 | Total plans: 68+ | Depth: Comprehensive_
