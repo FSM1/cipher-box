@@ -464,6 +464,48 @@ git commit -m "docs(phase-{X}): complete phase execution"
 ```
 </step>
 
+<step name="capture_learnings">
+**Capture learnings from this phase execution.**
+
+Reflect on what was learned and create a learnings entry at `.learnings/YYYY-MM-DD-phase-{X}-brief-description.md`.
+
+Use this template:
+
+```markdown
+# [Phase Name] - Learnings
+
+**Date:** YYYY-MM-DD
+
+## Original Prompt
+
+> [Phase goal from ROADMAP.md]
+
+## What I Learned
+
+- [Non-obvious discoveries about the codebase, libraries, or patterns]
+- [Gotchas and edge cases encountered]
+- [Things that look similar but behave differently]
+
+## What Would Have Helped
+
+- [Missing context that slowed things down]
+- [Files that should have been checked first]
+- [Clarifying questions that should have been asked earlier]
+
+## Key Files
+
+- [Files most relevant to this type of task for future reference]
+```
+
+Commit the learnings file:
+```bash
+git add .learnings/
+git commit -m "docs(learnings): phase {X} - {brief description}"
+```
+
+**Skip this step if the phase was trivial or no meaningful learnings emerged.**
+</step>
+
 <step name="offer_next">
 Present next steps based on milestone status:
 

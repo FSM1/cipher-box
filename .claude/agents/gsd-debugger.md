@@ -843,6 +843,21 @@ ls .planning/debug/*.md 2>/dev/null | grep -v resolved
 - Continue to create_debug_file
 </step>
 
+<step name="scan_learnings">
+Before investigating, scan `.learnings/` for entries relevant to the reported issue:
+
+```bash
+ls .learnings/*.md 2>/dev/null | grep -v README
+```
+
+If entries exist, quickly scan titles and read any that relate to the affected area (e.g., same component, similar error type, related feature). Extract:
+- Known gotchas in the affected area
+- Past bugs with similar symptoms
+- Key files that were involved in previous issues
+
+This takes ~30 seconds and can shortcut investigation. Skip if no `.learnings/` directory exists.
+</step>
+
 <step name="create_debug_file">
 **Create debug file IMMEDIATELY.**
 

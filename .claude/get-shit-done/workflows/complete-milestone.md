@@ -661,6 +661,44 @@ Confirm: "Committed: chore: complete v[X.Y] milestone"
 
 </step>
 
+<step name="capture_milestone_learnings">
+**Capture milestone-level learnings.**
+
+Create a learnings entry at `.learnings/YYYY-MM-DD-milestone-vXY-brief-description.md` reflecting on the entire milestone:
+
+```markdown
+# Milestone v[X.Y] - Learnings
+
+**Date:** YYYY-MM-DD
+
+## Original Prompt
+
+> [Milestone goal/description from PROJECT.md]
+
+## What I Learned
+
+- [Architectural patterns that worked well or poorly across phases]
+- [Cross-phase gotchas and integration issues]
+- [Libraries, tools, or approaches worth reusing or avoiding]
+
+## What Would Have Helped
+
+- [Context that was missing at milestone start]
+- [Planning gaps that caused rework]
+- [Questions that should have been asked during requirements]
+
+## Key Files
+
+- [Files most critical to this milestone for future reference]
+```
+
+Commit the learnings file:
+```bash
+git add .learnings/
+git commit -m "docs(learnings): milestone v[X.Y] - {brief description}"
+```
+</step>
+
 <step name="offer_next">
 
 ```
