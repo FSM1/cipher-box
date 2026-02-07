@@ -120,9 +120,6 @@ export async function uploadFiles(
       uploadStore.fileComplete();
     }
 
-    // Refresh quota from server (authoritative source after atomic upload)
-    await useQuotaStore.getState().fetchQuota();
-
     uploadStore.setSuccess();
     return results;
   } catch (error) {
@@ -132,5 +129,8 @@ export async function uploadFiles(
       console.error('Upload failed:', error);
     }
     throw error;
+  } finally {
+    // Refresh quota from server (authoritative source after atomic upload)
+    await useQuotaStore.getState().fetchQuota();
   }
 }

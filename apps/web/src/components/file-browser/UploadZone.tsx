@@ -85,6 +85,7 @@ export function UploadZone({ folderId, onUploadComplete }: UploadZoneProps) {
           }))
         );
 
+        useUploadStore.getState().setSuccess();
         onUploadComplete?.();
       } catch (err) {
         // Error is already set in upload store

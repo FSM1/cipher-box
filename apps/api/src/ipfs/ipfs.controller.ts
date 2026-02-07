@@ -145,7 +145,12 @@ export class IpfsController {
     const hasQuota = await this.vaultService.checkQuota(req.user.id, file.size);
     if (!hasQuota) throw new PayloadTooLargeException('Storage quota exceeded');
     const result = await this.ipfsProvider.pinFile(file.buffer);
-    await this.vaultService.recordPin(req.user.id, result.cid, result.size);
+    try {
+      await this.vaultService.recordPin(req.user.id, result.cid, result.size);
+    } catch (err) {
+      await this.ipfsProvider.unpinFile(result.cid).catch(() => undefined);
+      throw err;
+    }
     return { cid: result.cid, size: result.size, recorded: true };
   }
 

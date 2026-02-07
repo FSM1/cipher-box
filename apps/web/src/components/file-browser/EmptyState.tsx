@@ -67,6 +67,8 @@ export function EmptyState({ folderId }: EmptyStateProps) {
             originalSize: uploaded.originalSize,
           }))
         );
+
+        useUploadStore.getState().setSuccess();
       } catch (err) {
         if ((err as Error).message !== 'Upload cancelled by user') {
           setError((err as Error).message);

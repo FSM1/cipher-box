@@ -1,9 +1,14 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PayloadTooLargeException } from '@nestjs/common';
+import { Request as ExpressRequest } from 'express';
 import { IpfsController } from './ipfs.controller';
 import { IPFS_PROVIDER, IpfsProvider } from './providers';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { VaultService } from '../vault/vault.service';
+
+interface RequestWithUser extends ExpressRequest {
+  user: { id: string };
+}
 
 describe('IpfsController', () => {
   let controller: IpfsController;
@@ -137,7 +142,7 @@ describe('IpfsController', () => {
   describe('upload', () => {
     const mockCid = 'bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi';
     const mockSize = 1024;
-    const mockReq = { user: { id: 'user-123' } } as any;
+    const mockReq: RequestWithUser = { user: { id: 'user-123' } } as RequestWithUser;
 
     it('should check quota, pin file, record pin, and return result', async () => {
       const mockFile = {
@@ -168,6 +173,21 @@ describe('IpfsController', () => {
       await expect(controller.upload(mockReq, mockFile)).rejects.toThrow(PayloadTooLargeException);
       expect(ipfsProvider.pinFile).not.toHaveBeenCalled();
       expect(vaultService.recordPin).not.toHaveBeenCalled();
+    });
+
+    it('should unpin file if recordPin fails', async () => {
+      const mockFile = {
+        buffer: Buffer.from('encrypted file content'),
+        size: 22,
+      } as Express.Multer.File;
+
+      vaultService.checkQuota.mockResolvedValue(true);
+      ipfsProvider.pinFile.mockResolvedValue({ cid: mockCid, size: mockSize });
+      vaultService.recordPin.mockRejectedValue(new Error('DB error'));
+      ipfsProvider.unpinFile.mockResolvedValue(undefined);
+
+      await expect(controller.upload(mockReq, mockFile)).rejects.toThrow('DB error');
+      expect(ipfsProvider.unpinFile).toHaveBeenCalledWith(mockCid);
     });
 
     it('should not record pin if pinFile fails', async () => {
