@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { Modal } from '../ui/Modal';
 import { UploadItem } from './UploadItem';
 import { useUploadStore } from '../../stores/upload.store';
@@ -39,6 +40,8 @@ function getModalTitle(
       return 'Upload Failed';
     case 'cancelled':
       return 'Upload Cancelled';
+    case 'registering':
+      return 'Registering Files...';
     default:
       return `Uploading Files (${completedFiles}/${totalFiles})`;
   }
@@ -68,16 +71,27 @@ export function UploadModal() {
   const cancel = useUploadStore((state) => state.cancel);
   const reset = useUploadStore((state) => state.reset);
 
-  // Don't show modal when idle or success (auto-close on success)
-  const isVisible = status !== 'idle' && status !== 'success';
+  const isVisible = status !== 'idle';
 
-  // Can close only when not actively uploading
-  const canClose = status === 'error' || status === 'cancelled';
+  // Can close when upload is finished (success, error, cancelled)
+  const canClose = status === 'success' || status === 'error' || status === 'cancelled';
 
   // Can cancel only during active upload
   const canCancel = status === 'encrypting' || status === 'uploading';
 
+  // Auto-dismiss after 1.5s on success
+  const autoCloseTimer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => {
+    if (status === 'success') {
+      autoCloseTimer.current = setTimeout(() => {
+        reset();
+      }, 1500);
+    }
+    return () => clearTimeout(autoCloseTimer.current);
+  }, [status, reset]);
+
   const handleClose = () => {
+    clearTimeout(autoCloseTimer.current);
     reset();
   };
 
@@ -111,6 +125,11 @@ export function UploadModal() {
               error={error}
               onCancel={canCancel ? handleCancel : undefined}
             />
+          )}
+
+          {/* Show status message during registering */}
+          {status === 'registering' && !currentFile && (
+            <div className="upload-item-status">Updating folder metadata...</div>
           )}
 
           {/* Show error message if upload failed */}
