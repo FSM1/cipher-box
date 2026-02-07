@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 8 - TEE Integration (next)
+**Current focus:** Phase 8 - TEE Integration
 
 ## Current Position
 
-Phase: 7.1 of 11 (Atomic File Upload)
-Plan: 2 of 2 in Phase 7.1 complete
-Status: Phase complete - verified ✓
-Last activity: 2026-02-07 - Phase 7.1 execution complete (10/10 must-haves verified)
+Phase: 8 of 11 (TEE Integration)
+Plan: 1 of 4 in Phase 8 complete
+Status: In progress
+Last activity: 2026-02-07 - Completed 08-01-PLAN.md (TEE key state foundation)
 
-Progress: [##########] 92% (46 of 50 plans)
+Progress: [########--] 87% (47 of 54 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 46
-- Average duration: 4.7 min
-- Total execution time: 3.74 hours
+- Total plans completed: 47
+- Average duration: 4.6 min
+- Total execution time: 3.77 hours
 
 **By Phase:**
 
@@ -40,10 +40,11 @@ Progress: [##########] 92% (46 of 50 plans)
 | 06.3-ui-structure-refactor | 5/5   | 16 min | 3.2 min  |
 | 07-multi-device-sync       | 4/4   | 17 min | 4.3 min  |
 | 07.1-atomic-file-upload    | 2/2   | 6 min  | 3 min    |
+| 08-tee-integration         | 1/4   | 2 min  | 2 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 3m, 3m, 3m, 4m, 3m
+- Last 5 plans: 3m, 3m, 4m, 3m, 2m
 - Trend: Consistent, stable
 
 Updated after each plan completion.
@@ -187,6 +188,12 @@ Recent decisions affecting current work:
 | Batch addFiles coexists with single addFile          | 7.1-02  | Both remain exported from useFolder for different code paths              |
 | Server-authoritative quota via fetchQuota            | 7.1-02  | fetchQuota after upload replaces optimistic per-file addUsage             |
 | All-or-nothing batch folder registration             | 7.1-02  | Single IPNS publish for N files, no partial failure handling              |
+| Singleton-row pattern for tee_key_state              | 08-01   | One row tracks current/previous epoch, queried with find({ take: 1 })     |
+| DataSource.transaction for epoch rotation            | 08-01   | Atomic shift current->previous + rotation log insert                      |
+| 4-week grace period for TEE key rotation             | 08-01   | GRACE_PERIOD_MS constant, matches spec for seamless migration             |
+| Base64 encoding for TEE worker public key transport  | 08-01   | TEE worker returns base64, backend decodes and validates 65-byte format   |
+| TEE_WORKER_URL defaults to localhost:3001            | 08-01   | Local dev with simulator, configurable for production                     |
+| Graceful TEE initialization via OnModuleInit         | 08-01   | Try/catch in module init, log warning if TEE unavailable, never crash     |
 
 ### Pending Todos
 
@@ -237,11 +244,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-07
-Stopped at: Completed 07.1-02-PLAN.md (client-side upload refactor) - Phase 7.1 complete
+Stopped at: Completed 08-01-PLAN.md (TEE key state foundation)
 Resume file: None
-Next plan: Phase 8 (TEE Republishing)
+Next plan: 08-02-PLAN.md (republish scheduling with BullMQ)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-07 after completing 07.1-02-PLAN.md_
+_Last updated: 2026-02-07 after completing 08-01-PLAN.md_
