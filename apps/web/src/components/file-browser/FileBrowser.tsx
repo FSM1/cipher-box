@@ -355,7 +355,7 @@ export function FileBrowser() {
         />
       )}
 
-      {!isLoading && !hasChildren && <EmptyState folderId={currentFolderId} />}
+      {!isLoading && !hasChildren && <EmptyState />}
 
       {/* Context menu */}
       {contextMenu.visible && contextMenu.item && (
