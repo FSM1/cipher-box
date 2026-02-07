@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, Matches } from 'class-validator';
+import { TeeKeysDto } from '../../tee/dto/tee-keys.dto';
 
 /**
  * Request DTO for vault initialization
@@ -109,4 +110,12 @@ export class VaultResponseDto {
     nullable: true,
   })
   initializedAt!: Date | null;
+
+  @ApiProperty({
+    description: 'TEE public keys for IPNS key encryption (null if TEE not initialized)',
+    required: false,
+    nullable: true,
+    type: () => TeeKeysDto,
+  })
+  teeKeys!: TeeKeysDto | null;
 }

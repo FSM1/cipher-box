@@ -102,6 +102,11 @@ export function useAuth() {
         // Try to fetch existing vault
         const existingVault = await vaultApi.getVault();
 
+        // Store TEE keys if available (API-08: backend delivers TEE public keys)
+        if (existingVault.teeKeys) {
+          useAuthStore.getState().setTeeKeys(existingVault.teeKeys);
+        }
+
         // Vault exists - decrypt keys and load into store
         const decryptedVault = await decryptVaultKeys(
           {
@@ -136,6 +141,11 @@ export function useAuth() {
             rootIpnsPublicKey: bytesToHex(encryptedVault.rootIpnsPublicKey),
             rootIpnsName,
           });
+
+          // Store TEE keys if available (API-08: backend delivers TEE public keys)
+          if (storedVault.teeKeys) {
+            useAuthStore.getState().setTeeKeys(storedVault.teeKeys);
+          }
 
           // Load decrypted keys into store
           setVaultKeys({

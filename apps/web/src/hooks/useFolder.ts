@@ -124,13 +124,14 @@ export function useFolder() {
         }
         const userPublicKey = auth.derivedKeypair.publicKey;
 
-        // Create the folder (generates keys, wraps with user public key)
-        const { folder, ipnsPrivateKey, folderKey } = await folderService.createFolder({
-          parentFolderId: parentId,
-          name,
-          userPublicKey,
-          folders,
-        });
+        // Create the folder (generates keys, wraps with user public key, TEE-encrypts IPNS key)
+        const { folder, ipnsPrivateKey, folderKey, encryptedIpnsPrivateKey, keyEpoch } =
+          await folderService.createFolder({
+            parentFolderId: parentId,
+            name,
+            userPublicKey,
+            folders,
+          });
 
         // Get parent folder state
         const parentFolder =
@@ -151,6 +152,19 @@ export function useFolder() {
           ipnsPrivateKey: parentFolder.ipnsPrivateKey,
           ipnsName: parentFolder.ipnsName,
           sequenceNumber: parentFolder.sequenceNumber,
+        });
+
+        // First publish for the new folder's own IPNS record with TEE-encrypted key
+        // This sends encryptedIpnsPrivateKey to backend for TEE republish enrollment
+        await folderService.updateFolderMetadata({
+          folderId: folder.id,
+          children: [],
+          folderKey,
+          ipnsPrivateKey,
+          ipnsName: folder.ipnsName,
+          sequenceNumber: 0n,
+          encryptedIpnsPrivateKey,
+          keyEpoch,
         });
 
         // Update local state - add new folder to tree

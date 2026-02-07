@@ -49,6 +49,20 @@ services:
           memory: 2G
           cpus: '1.0'
 
+  redis:
+    image: redis:7-alpine
+    container_name: cipherbox-redis
+    restart: unless-stopped
+    ports:
+      - '${REDIS_PORT:-6380}:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   mock-ipns-routing:
     build:
       context: ../tools/mock-ipns-routing
@@ -70,3 +84,4 @@ services:
 volumes:
   postgres_data:
   ipfs_data:
+  redis_data:

@@ -6,6 +6,7 @@ import { IpnsService } from './ipns.service';
 import { FolderIpns } from './entities/folder-ipns.entity';
 import { PublishIpnsDto } from './dto';
 import { User } from '../auth/entities/user.entity';
+import { RepublishService } from '../republish/republish.service';
 // Import mocked ipns module (via moduleNameMapper in jest.config.js)
 import { unmarshalIPNSRecord } from 'ipns';
 
@@ -81,6 +82,12 @@ describe('IpnsService', () => {
         {
           provide: ConfigService,
           useValue: mockConfigService,
+        },
+        {
+          provide: RepublishService,
+          useValue: {
+            enrollFolder: jest.fn().mockResolvedValue(undefined),
+          },
         },
       ],
     }).compile();

@@ -11,6 +11,7 @@ import {
   generateRandomBytes,
   wrapKey,
   bytesToHex,
+  hexToBytes,
   encryptFolderMetadata,
   decryptFolderMetadata,
   type FolderMetadata,
@@ -21,6 +22,7 @@ import {
 } from '@cipherbox/crypto';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
 import { createAndPublishIpnsRecord } from './ipns.service';
+import { useAuthStore } from '../stores/auth.store';
 import type { FolderNode } from '../stores/folder.store';
 
 /** Maximum folder nesting depth per FOLD-03 */
@@ -112,6 +114,8 @@ export async function createFolder(params: {
   folder: FolderEntry;
   ipnsPrivateKey: Uint8Array;
   folderKey: Uint8Array;
+  encryptedIpnsPrivateKey?: string;
+  keyEpoch?: number;
 }> {
   // 1. Check depth limit (FOLD-03)
   const parentDepth = getDepth(params.parentFolderId, params.folders);
@@ -133,7 +137,19 @@ export async function createFolder(params: {
   );
   const folderKeyEncrypted = bytesToHex(await wrapKey(folderKey, params.userPublicKey));
 
-  // 5. Create folder entry for parent's metadata
+  // 5. TEE-02: Encrypt IPNS private key with TEE public key for republishing
+  let encryptedIpnsPrivateKey: string | undefined;
+  let keyEpoch: number | undefined;
+
+  const teeKeys = useAuthStore.getState().teeKeys;
+  if (teeKeys?.currentPublicKey) {
+    const teePublicKey = hexToBytes(teeKeys.currentPublicKey);
+    const encryptedKey = await wrapKey(ipnsKeypair.privateKey, teePublicKey);
+    encryptedIpnsPrivateKey = bytesToHex(encryptedKey);
+    keyEpoch = teeKeys.currentEpoch;
+  }
+
+  // 6. Create folder entry for parent's metadata
   const now = Date.now();
   const folder: FolderEntry = {
     type: 'folder',
@@ -146,7 +162,13 @@ export async function createFolder(params: {
     modifiedAt: now,
   };
 
-  return { folder, ipnsPrivateKey: ipnsKeypair.privateKey, folderKey };
+  return {
+    folder,
+    ipnsPrivateKey: ipnsKeypair.privateKey,
+    folderKey,
+    encryptedIpnsPrivateKey,
+    keyEpoch,
+  };
 }
 
 /**
