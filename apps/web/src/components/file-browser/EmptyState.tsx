@@ -70,8 +70,10 @@ export function EmptyState({ folderId }: EmptyStateProps) {
 
         useUploadStore.getState().setSuccess();
       } catch (err) {
-        if ((err as Error).message !== 'Upload cancelled by user') {
-          setError((err as Error).message);
+        const message = (err as Error).message;
+        if (message !== 'Upload cancelled by user') {
+          useUploadStore.getState().setError(message);
+          setError(message);
         }
       }
     },

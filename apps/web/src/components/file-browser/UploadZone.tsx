@@ -88,10 +88,10 @@ export function UploadZone({ folderId, onUploadComplete }: UploadZoneProps) {
         useUploadStore.getState().setSuccess();
         onUploadComplete?.();
       } catch (err) {
-        // Error is already set in upload store
-        // Only set local error if not a cancellation
-        if ((err as Error).message !== 'Upload cancelled by user') {
-          setError((err as Error).message);
+        const message = (err as Error).message;
+        if (message !== 'Upload cancelled by user') {
+          useUploadStore.getState().setError(message);
+          setError(message);
         }
       }
     },
