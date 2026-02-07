@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 ## Current Position
 
 Phase: 8 of 11 (TEE Integration)
-Plan: 1 of 4 in Phase 8 complete
+Plan: 2 of 4 in Phase 8 complete
 Status: In progress
-Last activity: 2026-02-07 - Completed 08-01-PLAN.md (TEE key state foundation)
+Last activity: 2026-02-07 - Completed 08-03-PLAN.md (client-backend TEE key flow)
 
-Progress: [########--] 87% (47 of 54 plans)
+Progress: [#########-] 89% (48 of 54 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 47
+- Total plans completed: 48
 - Average duration: 4.6 min
-- Total execution time: 3.77 hours
+- Total execution time: 3.88 hours
 
 **By Phase:**
 
@@ -40,11 +40,11 @@ Progress: [########--] 87% (47 of 54 plans)
 | 06.3-ui-structure-refactor | 5/5   | 16 min | 3.2 min  |
 | 07-multi-device-sync       | 4/4   | 17 min | 4.3 min  |
 | 07.1-atomic-file-upload    | 2/2   | 6 min  | 3 min    |
-| 08-tee-integration         | 1/4   | 2 min  | 2 min    |
+| 08-tee-integration         | 2/4   | 9 min  | 4.5 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 3m, 3m, 4m, 3m, 2m
+- Last 5 plans: 3m, 4m, 3m, 2m, 7m
 - Trend: Consistent, stable
 
 Updated after each plan completion.
@@ -194,6 +194,10 @@ Recent decisions affecting current work:
 | Base64 encoding for TEE worker public key transport  | 08-01   | TEE worker returns base64, backend decodes and validates 65-byte format   |
 | TEE_WORKER_URL defaults to localhost:3001            | 08-01   | Local dev with simulator, configurable for production                     |
 | Graceful TEE initialization via OnModuleInit         | 08-01   | Try/catch in module init, log warning if TEE unavailable, never crash     |
+| TEE keys delivered via vault endpoint                | 08-03   | No separate endpoint; delivered in GET/POST vault response                |
+| wrapKey reused for TEE key encryption                | 08-03   | Same ECIES as user key wrapping; TEE public key is secp256k1              |
+| Initial empty IPNS publish on folder creation        | 08-03   | Immediately enrolls new folder for TEE republishing                       |
+| Root folder TEE enrollment deferred                  | 08-03   | Handled only for subfolders in v1; root deferred to follow-up             |
 
 ### Pending Todos
 
@@ -244,11 +248,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-07
-Stopped at: Completed 08-01-PLAN.md (TEE key state foundation)
+Stopped at: Completed 08-03-PLAN.md (client-backend TEE key flow)
 Resume file: None
-Next plan: 08-02-PLAN.md (republish scheduling with BullMQ)
+Next plan: 08-02-PLAN.md (republish scheduling with BullMQ) or 08-04-PLAN.md
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-07 after completing 08-01-PLAN.md_
+_Last updated: 2026-02-07 after completing 08-03-PLAN.md_
