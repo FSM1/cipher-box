@@ -23,8 +23,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 6: File Browser UI** - Web interface for file management
 - [x] **Phase 6.1: Webapp Automation Testing** - E2E UI testing with automation framework (INSERTED)
 - [x] **Phase 6.2: Restyle App with Pencil Design** - Complete UI redesign using Pencil design tool (INSERTED)
-- [ ] **Phase 6.3: UI Structure Refactor** - Page layouts, component hierarchy, and structural redesign using Pencil (INSERTED)
-- [ ] **Phase 7: Multi-Device Sync** - IPNS polling and sync state management
+- [x] **Phase 6.3: UI Structure Refactor** - Page layouts, component hierarchy, and structural redesign using Pencil (INSERTED)
+- [x] **Phase 7: Multi-Device Sync** - IPNS polling and sync state management
+- [ ] **Phase 7.1: Atomic File Upload** - Refactor multi-request upload into single atomic backend call with batch IPNS publishing (INSERTED)
 - [ ] **Phase 8: TEE Integration** - Auto-republishing via Phala Cloud
 - [ ] **Phase 9: Desktop Client** - Tauri app with FUSE mount for macOS
 - [ ] **Phase 10: Data Portability** - Vault export and documentation
@@ -262,11 +263,11 @@ Plans:
 
 Plans:
 
-- [ ] 06.3-01-PLAN.md — AppShell layout components (Header, Sidebar, Footer)
-- [ ] 06.3-02-PLAN.md — Routing and URL-based folder navigation
-- [ ] 06.3-03-PLAN.md — File list structure (ParentDirRow, 3-column layout, Breadcrumbs)
-- [ ] 06.3-04-PLAN.md — FileBrowser integration and responsive styles
-- [ ] 06.3-05-PLAN.md — Visual verification and final adjustments
+- [x] 06.3-01-PLAN.md — AppShell layout components (Header, Sidebar, Footer)
+- [x] 06.3-02-PLAN.md — Routing and URL-based folder navigation
+- [x] 06.3-03-PLAN.md — File list structure (ParentDirRow, 3-column layout, Breadcrumbs)
+- [x] 06.3-04-PLAN.md — FileBrowser integration and responsive styles
+- [x] 06.3-05-PLAN.md — Visual verification and final adjustments
 
 ### Phase 7: Multi-Device Sync
 
@@ -285,6 +286,22 @@ Plans:
 - [x] 07-02-PLAN.md — Polling infrastructure hooks (useInterval, useVisibility, useOnlineStatus, useSyncPolling)
 - [x] 07-03-PLAN.md — Frontend integration with SyncIndicator and OfflineBanner UI
 - [x] 07-04-PLAN.md — Gap closure: full metadata refresh with decryption on sync
+
+### Phase 7.1: Atomic File Upload (INSERTED)
+
+**Goal:** Refactor multi-request upload flow into single atomic backend call with batch IPNS publishing
+**Depends on:** Phase 7
+**Plans:** 2 plans
+
+Plans:
+
+- [ ] 07.1-01-PLAN.md — Backend atomic upload endpoint (POST /ipfs/upload with quota check + pin recording)
+- [ ] 07.1-02-PLAN.md — Frontend batch upload flow (new endpoint, batch folder registration, server-authoritative quota)
+
+**Details:**
+Based on todo: `.planning/todos/pending/2026-01-22-atomic-file-upload-flow.md`
+
+Current upload requires 3 sequential requests (pin to IPFS, record metadata, publish IPNS) which is non-atomic and wastes latency. This phase consolidates into a single backend call with DB transaction wrapping, batch IPNS publishing for multi-file uploads, and granular error response with retry tokens for partial failures.
 
 ### Phase 8: TEE Integration
 
@@ -390,6 +407,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 6.2 Restyle App         | 6/6            | Complete    | 2026-01-27 |
 | 6.3 UI Structure        | 5/5            | Complete    | 2026-01-30 |
 | 7. Multi-Device Sync    | 4/4            | Complete    | 2026-02-02 |
+| 7.1 Atomic File Upload  | 0/2            | Planned     | -          |
 | 8. TEE Integration      | 0/4            | Not started | -          |
 | 9. Desktop Client       | 0/5            | Not started | -          |
 | 10. Data Portability    | 0/3            | Not started | -          |
@@ -421,4 +439,6 @@ _Phase 6.2 complete: 2026-01-27_
 _Phase 6.3 planned: 2026-01-30_
 _Phase 6.3 complete: 2026-01-30_
 _Phase 7 complete: 2026-02-02_
-_Total phases: 13 | Total plans: 66 | Depth: Comprehensive_
+_Phase 7.1 inserted: 2026-02-07_
+_Phase 7.1 planned: 2026-02-07_
+_Total phases: 14 | Total plans: 68+ | Depth: Comprehensive_
