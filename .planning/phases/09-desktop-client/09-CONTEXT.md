@@ -5,7 +5,7 @@
 
 ## Phase Boundary
 
-Tauri-based macOS desktop app with FUSE mount at ~/CipherVault. Users log in via Web3Auth (system browser redirect), the app mounts the encrypted vault as a native filesystem, and runs as a menu bar utility with background sync. macOS only for v1. Linux/Windows are out of scope (v1.1).
+Tauri-based macOS desktop app with FUSE mount at ~/CipherVault. Users log in via Web3Auth running inside the Tauri webview, the app mounts the encrypted vault as a native filesystem, and runs as a menu bar utility with background sync. macOS only for v1. Linux/Windows are out of scope (v1.1).
 
 ## Implementation Decisions
 
@@ -25,10 +25,10 @@ Tauri-based macOS desktop app with FUSE mount at ~/CipherVault. Users log in via
 
 ### Login and auth window
 
-- System browser redirect for Web3Auth (not embedded webview)
-- Deep link (cipherbox://) returns token to app after browser auth
-- Remember last auth method: try silent refresh from Keychain first, only open browser if refresh fails
-- After login: window closes silently, FUSE mounts, app lives in menu bar only
+- **REVISED DECISION:** Web3Auth runs inside the Tauri webview (NOT system browser redirect). This avoids passing the private key through URL parameters or deep links, which would be a security risk. The webview handles the full Web3Auth SDK flow internally (modal popup within the webview). After authentication, the webview passes the idToken and derived private key to the Rust side via Tauri IPC commands -- a secure in-process communication channel.
+- The original plan was system browser redirect with deep link (cipherbox://) returning token to app, but this was revised because the private key would need to transit through URL parameters, which is insecure.
+- Remember last auth method: try silent refresh from Keychain first, only show Web3Auth modal if refresh fails
+- After login: webview window hides, FUSE mounts, app lives in menu bar only
 - Tray icon shows mount status during mount process (mounting -> synced)
 - Auto-start on macOS login: opt-in checkbox in Preferences (uses macOS Login Items), off by default
 
@@ -49,7 +49,6 @@ Tauri-based macOS desktop app with FUSE mount at ~/CipherVault. Users log in via
 - Tray menu items (balance spec completeness vs v1 simplicity)
 - Tray icon visual states (synced/syncing/error/offline variants)
 - FUSE cache eviction strategy for memory cache
-- Deep link URL scheme details (cipherbox://)
 - Preferences window scope for v1
 - Temp file location and cleanup strategy
 - Offline write queue persistence (memory vs disk)
