@@ -338,15 +338,16 @@ Plans:
 5. App runs in system tray with status icon
 6. Refresh tokens stored securely in macOS Keychain
 7. Background sync runs while app is in system tray
-   **Plans**: TBD
+   **Plans**: 6 plans
 
 Plans:
 
-- [ ] 09-01: Tauri app scaffold with shared crypto module
-- [ ] 09-02: Desktop Web3Auth integration and keychain storage
-- [ ] 09-03: FUSE mount implementation (read operations)
-- [ ] 09-04: FUSE mount implementation (write operations)
-- [ ] 09-05: System tray and background sync daemon
+- [ ] 09-01-PLAN.md — Tauri v2 app scaffold with Rust-native crypto module (AES-256-GCM, ECIES, Ed25519)
+- [ ] 09-02-PLAN.md — Backend auth endpoint modification for desktop body-based refresh tokens
+- [ ] 09-03-PLAN.md — Desktop auth flow: system browser redirect, deep link, Keychain, vault key decryption
+- [ ] 09-04-PLAN.md — FUSE mount read operations (readdir, getattr, open, read with IPFS fetch + decrypt)
+- [ ] 09-05-PLAN.md — FUSE mount write operations (create, write, delete, mkdir, rmdir, rename)
+- [ ] 09-06-PLAN.md — System tray menu bar icon, background sync daemon, offline write queue
 
 ### Phase 10: Data Portability
 
@@ -409,7 +410,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 7. Multi-Device Sync    | 4/4            | Complete    | 2026-02-02 |
 | 7.1 Atomic File Upload  | 2/2            | Complete    | 2026-02-07 |
 | 8. TEE Integration      | 4/4            | Complete    | 2026-02-07 |
-| 9. Desktop Client       | 0/5            | Not started | -          |
+| 9. Desktop Client       | 0/6            | Planned     | -          |
 | 10. Data Portability    | 0/3            | Not started | -          |
 | 11. Security (MFA)      | 0/4            | Post-v1.0   | -          |
 
@@ -444,4 +445,5 @@ _Phase 7.1 planned: 2026-02-07_
 _Phase 7.1 complete: 2026-02-07_
 _Phase 8 planned: 2026-02-07_
 _Phase 8 complete: 2026-02-07_
+_Phase 9 planned: 2026-02-07_
 _Total phases: 14 | Total plans: 68+ | Depth: Comprehensive_
