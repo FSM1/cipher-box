@@ -9,3 +9,8 @@ CHANGELOG.md
 # Finalized specifications - do not modify
 00-Preliminary-R&D/
 00_START_HERE.md
+
+# GSD workflow files - vendor/generated markdown with non-standard syntax
+.claude/agents/gsd-*.md
+.claude/commands/gsd/
+.claude/get-shit-done/
