@@ -22,6 +22,7 @@ describe('VaultController', () => {
     rootIpnsPublicKey: 'd'.repeat(64), // 32-byte Ed25519 public key
     createdAt: new Date('2026-01-20T00:00:00Z'),
     initializedAt: null,
+    teeKeys: null,
   };
 
   beforeEach(async () => {
