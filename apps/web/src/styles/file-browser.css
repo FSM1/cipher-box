@@ -401,7 +401,7 @@
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   line-height: 1.2;
-  color: var(--color-text-secondary);
+  color: var(--color-green-primary);
   margin: 0 0 var(--spacing-md) 0;
   white-space: pre;
 }
@@ -418,19 +418,15 @@
   font-family: var(--font-family-mono);
   font-size: var(--font-size-sm);
   margin: 0 0 var(--spacing-xs) 0;
-  color: var(--color-text-primary);
+  color: var(--color-text-muted);
 }
 
 .empty-state-hint {
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   margin: 0;
-  color: var(--color-text-secondary);
+  color: var(--color-text-dim);
   text-transform: lowercase;
-}
-
-.empty-state-upload {
-  margin-top: var(--spacing-md);
 }
 
 /* Note: Mobile responsive styles are in responsive.css */
