@@ -62,7 +62,7 @@ Optimize to a single atomic backend call that handles the entire upload flow:
 
 IPNS publish is external to the DB transaction — once published, cannot rollback:
 
-```
+```text
 [DB Transaction]                    [External Call]
 ┌─────────────────────┐            ┌─────────────────┐
 │ 1. Pin to IPFS      │            │                 │
@@ -83,26 +83,26 @@ IPNS publish is external to the DB transaction — once published, cannot rollba
 
 ### Options Evaluated
 
-**Option A: Accept Partial State + Client Retry**
+#### Option A: Accept Partial State + Client Retry
 
 - Pin → Record → Commit → Try IPNS
 - On IPNS failure: return `{ cid, ipnsError: true }`, client retries IPNS
 - Pros: Simple, file safely stored, client already has IPNS capability
 - Cons: Client retry logic, brief invisible window
 
-**Option B: Optimistic IPNS (Publish First)**
+#### Option B: Optimistic IPNS (Publish First)
 
 - Pin → Publish IPNS → Record → Commit
 - Pros: File always visible if exists
 - Cons: Worse failure mode (IPNS references non-existent file)
 
-**Option C: Two-Phase with Pending State**
+#### Option C: Two-Phase with Pending State
 
 - Record with `status: pending`, publish IPNS, then `status: confirmed`
 - Pros: Clear visibility, background retry
 - Cons: Complex state model, UI changes needed
 
-**Option D: Idempotent Retry with Deduplication**
+#### Option D: Idempotent Retry with Deduplication
 
 - Accept `{ expectedCid, idempotencyKey }`, skip completed steps on retry
 - Pros: True atomic from client view, safe retries
@@ -140,6 +140,15 @@ IPNS publish is external to the DB transaction — once published, cannot rollba
 - Exact chunking algorithm match with Pinata for large files?
 - Should this be a new phase or quick task?
 
+### CodeRabbit Review Notes (2026-02-07, PR #55)
+
+CodeRabbit independently identified the same per-file IPNS publish bottleneck:
+
+- **Call chain per file:** `addFile()` → `addFileToFolder()` → `updateFolderMetadata()` → `createAndPublishIpnsRecord()` — each triggering a separate IPNS publish (~2s each)
+- **Suggested approach:** Create `addFilesToFolder` / `updateFolderMetadataBatch` function so `createAndPublishIpnsRecord` is invoked once after all files are added
+- **Keep `addFile` for single-file use**, batch path calls `updateFolderMetadata` once at the end
+- **Key files confirmed:** `EmptyState.tsx` (handleDrop loop), `useFileUpload.ts`, `upload.service.ts`, `folder.service.ts` (`addFileToFolder`, `updateFolderMetadata`)
+
 ---
 
-_Decision pending — return to this after Phase 7_
+<!-- Decision pending — return to this after Phase 7 -->

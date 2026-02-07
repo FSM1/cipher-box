@@ -1000,6 +1000,22 @@ Read `.planning/STATE.md` and parse:
 If STATE.md missing but .planning/ exists, offer to reconstruct or continue without.
 </step>
 
+<step name="scan_learnings">
+Scan `.learnings/` for entries relevant to the phase being planned:
+
+```bash
+ls .learnings/*.md 2>/dev/null | grep -v README
+```
+
+If entries exist, quickly scan titles and read any that relate to the current phase's domain (e.g., same technology area, similar components, related features). Extract:
+- Gotchas to build into plan verification steps
+- Patterns that worked — reuse in task actions
+- Patterns that failed — explicitly avoid in task actions
+- Key files to reference in plan context
+
+Integrate relevant learnings into the plan as constraints or guidance. Skip if no `.learnings/` directory exists.
+</step>
+
 <step name="load_codebase_context">
 Check for codebase map:
 

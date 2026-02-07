@@ -41,6 +41,21 @@ Options:
 **If .planning/ doesn't exist:** Error - project not initialized.
 </step>
 
+<step name="scan_learnings">
+Scan `.learnings/` for entries relevant to the current plan's domain:
+
+```bash
+ls .learnings/*.md 2>/dev/null | grep -v README
+```
+
+If entries exist, quickly scan titles and read any that relate to the current phase/task area (e.g., same components, similar libraries, related features). Extract:
+- Gotchas and edge cases to watch for
+- Patterns that worked or failed
+- Key files to be aware of
+
+This takes ~30 seconds and prevents repeating past mistakes. Skip if no `.learnings/` directory exists.
+</step>
+
 <step name="load_plan">
 Read the plan file provided in your prompt context.
 

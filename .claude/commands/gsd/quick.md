@@ -83,6 +83,14 @@ Generate slug from description:
 slug=$(echo "$DESCRIPTION" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | cut -c1-40)
 ```
 
+**Scan learnings** for relevant context:
+
+```bash
+ls .learnings/*.md 2>/dev/null | grep -v README
+```
+
+If entries exist, quickly scan titles and read any that relate to the task description. Extract gotchas, patterns, and key files that may be relevant. This prevents repeating past mistakes. Skip if no `.learnings/` directory exists.
+
 ---
 
 ### Step 2b: Detect UI task and offer design workflow
@@ -514,6 +522,38 @@ Get final commit hash:
 
 ```bash
 commit_hash=$(git rev-parse --short HEAD)
+```
+
+**Capture learnings** (skip if trivial):
+
+If the quick task involved non-obvious discoveries, gotchas, or useful patterns, create a learnings entry at `.learnings/YYYY-MM-DD-brief-description.md`:
+
+```markdown
+# [Brief Title]
+
+**Date:** YYYY-MM-DD
+
+## Original Prompt
+
+> [User's original task description]
+
+## What I Learned
+
+- [Non-obvious discoveries, gotchas, edge cases]
+
+## What Would Have Helped
+
+- [Missing context, files to check first]
+
+## Key Files
+
+- [Relevant files for future reference]
+```
+
+If created, commit it:
+```bash
+git add .learnings/
+git commit -m "docs(learnings): quick-${next_num} - {brief description}"
 ```
 
 Display completion output:

@@ -497,6 +497,19 @@ cat "${PHASE_DIR}"/*-CONTEXT.md 2>/dev/null
 
 Parse CONTEXT.md content before proceeding to research.
 
+**Scan learnings (RECOMMENDED):**
+
+```bash
+ls .learnings/*.md 2>/dev/null | grep -v README
+```
+
+If entries exist, quickly scan titles and read any that relate to the current phase's technology domain. Extract:
+- Past discoveries about libraries or APIs being researched
+- Gotchas that should inform research direction
+- Things that looked right but caused issues
+
+This prevents re-discovering known issues and focuses research on genuinely unknown areas. Skip if no `.learnings/` directory exists.
+
 ## Step 2: Identify Research Domains
 
 Based on phase description, identify what needs investigating:

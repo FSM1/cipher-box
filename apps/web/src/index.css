@@ -24,6 +24,8 @@
   --color-border-dim: var(--color-green-darker);
   --color-text-primary: var(--color-green-primary);
   --color-text-secondary: var(--color-green-dim);
+  --color-text-muted: #8b9a8f; /* Muted gray-green for labels */
+  --color-text-dim: #4a5a4e; /* Dim gray-green for hints */
 
   /* Typography */
   --font-family-mono: "JetBrains Mono", monospace;
