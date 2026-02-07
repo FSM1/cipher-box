@@ -214,18 +214,21 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-7 pending todo(s):
+2 pending todo(s):
 
-- ~~`2026-01-22-atomic-file-upload-flow.md`~~ — Atomic file upload flow (**Resolved by Phase 7.1**)
-- `2026-01-23-pre-upload-file-validation.md` — Pre-upload file name validation and duplicate prevention (area: ui)
 - `2026-01-23-simple-text-file-editor-modal.md` — Add simple text file editor modal (area: ui)
 - `2026-02-07-web-worker-large-file-encryption.md` — Offload large file encryption to Web Worker (area: ui)
+
+### Completed Todos
+
+- ~~`2026-01-22-atomic-file-upload-flow.md`~~ — Atomic file upload flow (**Resolved by Phase 7.1**)
+- ~~`2026-01-23-pre-upload-file-validation.md`~~ — Pre-upload file name validation and duplicate prevention (**In progress**)
 - ~~`2026-02-07-upload-modal-no-dismiss.md`~~ — Upload modal dismiss + button text stuck (**Fixed in PR #57**)
 - ~~`2026-02-07-upload-button-text-stuck.md`~~ — (**Merged with above**)
-- `2026-02-07-auth-refresh-race-condition.md` — Auth token refresh race condition causes parallel 401s (area: api)
-- `2026-02-07-ipns-resolve-502-fallback.md` — IPNS resolve 502 — add DB-cached CID fallback (area: api)
-- `2026-02-07-registering-state-stuck-on-error.md` — Upload store stuck in "registering" if addFiles fails (area: ui)
-- `2026-02-07-orphaned-ipfs-pins-on-failed-registration.md` — Orphaned IPFS pins on failed folder registration leak quota (area: ui)
+- ~~`2026-02-07-auth-refresh-race-condition.md`~~ — Auth token refresh race condition (**Done**)
+- ~~`2026-02-07-ipns-resolve-502-fallback.md`~~ — IPNS resolve 502 fallback (**Done**)
+- ~~`2026-02-07-registering-state-stuck-on-error.md`~~ — Upload store stuck in "registering" (**Done**)
+- ~~`2026-02-07-orphaned-ipfs-pins-on-failed-registration.md`~~ — Orphaned IPFS pins on failed registration (**Done**)
 
 ### Blockers/Concerns
 
