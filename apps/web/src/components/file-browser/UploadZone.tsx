@@ -5,6 +5,7 @@ import { useFolder } from '../../hooks/useFolder';
 import { unpinFromIpfs } from '../../lib/api/ipfs';
 import { useUploadStore } from '../../stores/upload.store';
 import { useQuotaStore } from '../../stores/quota.store';
+import { useFolderStore } from '../../stores/folder.store';
 import type { UploadedFile } from '../../services/upload.service';
 import '../../styles/upload.css';
 
@@ -67,6 +68,29 @@ export function UploadZone({ folderId, onUploadComplete }: UploadZoneProps) {
       if (!canUpload(totalSize)) {
         setError('Not enough storage space for these files');
         return;
+      }
+
+      // Pre-upload: check for duplicate file names in current folder
+      const folder = useFolderStore.getState().folders[folderId];
+      if (folder) {
+        const existingNames = new Set(folder.children.map((c) => c.name));
+        const duplicates = acceptedFiles.filter((f) => existingNames.has(f.name));
+        if (duplicates.length > 0) {
+          setError(
+            `File${duplicates.length > 1 ? 's' : ''} already exist${duplicates.length === 1 ? 's' : ''} in this folder: ${duplicates.map((f) => f.name).join(', ')}`
+          );
+          return;
+        }
+
+        // Check for duplicates within the batch itself
+        const batchNames = new Set<string>();
+        for (const f of acceptedFiles) {
+          if (batchNames.has(f.name)) {
+            setError(`Duplicate file name in selection: ${f.name}`);
+            return;
+          }
+          batchNames.add(f.name);
+        }
       }
 
       let uploadedFiles: UploadedFile[] | undefined;
