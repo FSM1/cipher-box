@@ -1,6 +1,8 @@
 // Prevents additional console window on Windows in release
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod crypto;
+
 fn main() {
     env_logger::init();
     log::info!("CipherBox Desktop starting...");
