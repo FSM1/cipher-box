@@ -1,9 +1,18 @@
-import { Injectable, HttpException, HttpStatus, BadRequestException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  HttpException,
+  HttpStatus,
+  BadRequestException,
+  Logger,
+  Inject,
+  forwardRef,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { FolderIpns } from './entities/folder-ipns.entity';
 import { PublishIpnsDto, PublishIpnsResponseDto } from './dto';
+import { RepublishService } from '../republish/republish.service';
 
 // Dynamic import for ESM-only ipns package (loaded at runtime)
 type UnmarshalIPNSRecord = (bytes: Uint8Array) => { value: string; sequence: bigint };
@@ -19,7 +28,9 @@ export class IpnsService {
   constructor(
     @InjectRepository(FolderIpns)
     private readonly folderIpnsRepository: Repository<FolderIpns>,
-    private readonly configService: ConfigService
+    private readonly configService: ConfigService,
+    @Inject(forwardRef(() => RepublishService))
+    private readonly republishService: RepublishService
   ) {
     this.delegatedRoutingUrl = this.configService.get<string>(
       'DELEGATED_ROUTING_URL',
@@ -172,11 +183,19 @@ export class IpnsService {
       const saved = await this.folderIpnsRepository.save(existing);
 
       // Auto-enroll for TEE republishing when encrypted key is provided
-      // TODO: Wire to RepublishService.enrollFolder when 08-02 creates the republish module
       if (encryptedIpnsPrivateKey && keyEpoch !== undefined) {
-        this.logger.log(
-          `Folder ${ipnsName} has TEE-encrypted key (epoch ${keyEpoch}), ready for republish enrollment`
-        );
+        this.republishService
+          .enrollFolder(
+            userId,
+            ipnsName,
+            Buffer.from(encryptedIpnsPrivateKey, 'hex'),
+            keyEpoch,
+            metadataCid,
+            saved.sequenceNumber
+          )
+          .catch((err) =>
+            this.logger.warn(`Failed to enroll folder ${ipnsName} for republishing: ${err.message}`)
+          );
       }
 
       return saved;
@@ -198,11 +217,19 @@ export class IpnsService {
     const saved = await this.folderIpnsRepository.save(folder);
 
     // Auto-enroll for TEE republishing when encrypted key is provided
-    // TODO: Wire to RepublishService.enrollFolder when 08-02 creates the republish module
     if (encryptedIpnsPrivateKey && keyEpoch !== undefined) {
-      this.logger.log(
-        `New folder ${ipnsName} has TEE-encrypted key (epoch ${keyEpoch}), ready for republish enrollment`
-      );
+      this.republishService
+        .enrollFolder(
+          userId,
+          ipnsName,
+          Buffer.from(encryptedIpnsPrivateKey, 'hex'),
+          keyEpoch,
+          metadataCid,
+          saved.sequenceNumber
+        )
+        .catch((err) =>
+          this.logger.warn(`Failed to enroll folder ${ipnsName} for republishing: ${err.message}`)
+        );
     }
 
     return saved;
