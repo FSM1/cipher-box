@@ -5,6 +5,7 @@ import { VaultService, QUOTA_LIMIT_BYTES } from './vault.service';
 import { Vault } from './entities/vault.entity';
 import { PinnedCid } from './entities/pinned-cid.entity';
 import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
+import { TeeKeyStateService } from '../tee/tee-key-state.service';
 import { InitVaultDto } from './dto/init-vault.dto';
 
 describe('VaultService', () => {
@@ -32,6 +33,9 @@ describe('VaultService', () => {
   let mockFolderIpnsRepo: {
     create: jest.Mock;
     save: jest.Mock;
+  };
+  let mockTeeKeyStateService: {
+    getTeeKeysDto: jest.Mock;
   };
 
   // Test data
@@ -95,6 +99,10 @@ describe('VaultService', () => {
       save: jest.fn().mockResolvedValue({}),
     };
 
+    mockTeeKeyStateService = {
+      getTeeKeysDto: jest.fn().mockResolvedValue(null),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         VaultService,
@@ -109,6 +117,10 @@ describe('VaultService', () => {
         {
           provide: getRepositoryToken(FolderIpns),
           useValue: mockFolderIpnsRepo,
+        },
+        {
+          provide: TeeKeyStateService,
+          useValue: mockTeeKeyStateService,
         },
       ],
     }).compile();
@@ -238,6 +250,7 @@ describe('VaultService', () => {
         rootIpnsPublicKey: testRootIpnsPublicKey,
         createdAt: mockVaultEntity.createdAt,
         initializedAt: null,
+        teeKeys: null,
       });
     });
 

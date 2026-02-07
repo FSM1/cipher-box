@@ -40,6 +40,16 @@ jobs:
           --health-retries 10
           --health-start-period 30s
 
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -92,6 +102,8 @@ jobs:
           echo "IPFS_LOCAL_API_URL=http://localhost:5001" >> apps/api/.env
           echo "IPFS_LOCAL_GATEWAY_URL=http://localhost:8080" >> apps/api/.env
           echo "DELEGATED_ROUTING_URL=http://localhost:3001" >> apps/api/.env
+          echo "REDIS_HOST=localhost" >> apps/api/.env
+          echo "REDIS_PORT=6379" >> apps/api/.env
 
       - name: Run E2E tests
         # Only running full-workflow.spec.ts - archived tests in tests/archive/ used storage-state
@@ -115,6 +127,9 @@ jobs:
           WEB_APP_URL: http://localhost:5173
           # IPNS delegated routing (mock service for E2E tests)
           DELEGATED_ROUTING_URL: http://localhost:3001
+          # Redis for BullMQ job scheduling
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
           # Web app configuration (needed for Web3Auth initialization)
           VITE_WEB3AUTH_CLIENT_ID: ${{ secrets.VITE_WEB3AUTH_CLIENT_ID }}
           VITE_API_URL: http://localhost:3000
