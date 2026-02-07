@@ -25,7 +25,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 6.2: Restyle App with Pencil Design** - Complete UI redesign using Pencil design tool (INSERTED)
 - [x] **Phase 6.3: UI Structure Refactor** - Page layouts, component hierarchy, and structural redesign using Pencil (INSERTED)
 - [x] **Phase 7: Multi-Device Sync** - IPNS polling and sync state management
-- [ ] **Phase 7.1: Atomic File Upload** - Refactor multi-request upload into single atomic backend call with batch IPNS publishing (INSERTED)
+- [x] **Phase 7.1: Atomic File Upload** - Refactor multi-request upload into single atomic backend call with batch IPNS publishing (INSERTED)
 - [ ] **Phase 8: TEE Integration** - Auto-republishing via Phala Cloud
 - [ ] **Phase 9: Desktop Client** - Tauri app with FUSE mount for macOS
 - [ ] **Phase 10: Data Portability** - Vault export and documentation
@@ -295,8 +295,8 @@ Plans:
 
 Plans:
 
-- [ ] 07.1-01-PLAN.md — Backend atomic upload endpoint (POST /ipfs/upload with quota check + pin recording)
-- [ ] 07.1-02-PLAN.md — Frontend batch upload flow (new endpoint, batch folder registration, server-authoritative quota)
+- [x] 07.1-01-PLAN.md — Backend atomic upload endpoint (POST /ipfs/upload with quota check + pin recording)
+- [x] 07.1-02-PLAN.md — Frontend batch upload flow (new endpoint, batch folder registration, server-authoritative quota)
 
 **Details:**
 Based on todo: `.planning/todos/pending/2026-01-22-atomic-file-upload-flow.md`
@@ -407,7 +407,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 6.2 Restyle App         | 6/6            | Complete    | 2026-01-27 |
 | 6.3 UI Structure        | 5/5            | Complete    | 2026-01-30 |
 | 7. Multi-Device Sync    | 4/4            | Complete    | 2026-02-02 |
-| 7.1 Atomic File Upload  | 0/2            | Planned     | -          |
+| 7.1 Atomic File Upload  | 2/2            | Complete    | 2026-02-07 |
 | 8. TEE Integration      | 0/4            | Not started | -          |
 | 9. Desktop Client       | 0/5            | Not started | -          |
 | 10. Data Portability    | 0/3            | Not started | -          |
@@ -441,4 +441,5 @@ _Phase 6.3 complete: 2026-01-30_
 _Phase 7 complete: 2026-02-02_
 _Phase 7.1 inserted: 2026-02-07_
 _Phase 7.1 planned: 2026-02-07_
+_Phase 7.1 complete: 2026-02-07_
 _Total phases: 14 | Total plans: 68+ | Depth: Comprehensive_
