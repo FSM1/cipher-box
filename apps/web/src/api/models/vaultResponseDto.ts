@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { VaultResponseDtoInitializedAt } from './vaultResponseDtoInitializedAt';
+import type { VaultResponseDtoTeeKeys } from './vaultResponseDtoTeeKeys';
 
 export interface VaultResponseDto {
   /** Vault UUID */
@@ -27,4 +28,9 @@ export interface VaultResponseDto {
    * @nullable
    */
   initializedAt: VaultResponseDtoInitializedAt;
+  /**
+   * TEE public keys for IPNS key encryption (null if TEE not initialized)
+   * @nullable
+   */
+  teeKeys?: VaultResponseDtoTeeKeys;
 }

@@ -13,6 +13,12 @@ export type VaultResponse = {
   encryptedRootIpnsPrivateKey: string;
   rootIpnsPublicKey: string;
   rootIpnsName: string;
+  teeKeys: {
+    currentEpoch: number;
+    currentPublicKey: string;
+    previousEpoch: number | null;
+    previousPublicKey: string | null;
+  } | null;
 };
 
 export type InitVaultDto = {

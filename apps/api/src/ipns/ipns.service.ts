@@ -169,11 +169,20 @@ export class IpnsService {
         existing.keyEpoch = keyEpoch;
       }
 
-      return this.folderIpnsRepository.save(existing);
+      const saved = await this.folderIpnsRepository.save(existing);
+
+      // Auto-enroll for TEE republishing when encrypted key is provided
+      // TODO: Wire to RepublishService.enrollFolder when 08-02 creates the republish module
+      if (encryptedIpnsPrivateKey && keyEpoch !== undefined) {
+        this.logger.log(
+          `Folder ${ipnsName} has TEE-encrypted key (epoch ${keyEpoch}), ready for republish enrollment`
+        );
+      }
+
+      return saved;
     }
 
     // Create new entry
-    // TEE fields are optional for Phase 6 - will be null until TEE integration
     const folder = this.folderIpnsRepository.create({
       userId,
       ipnsName,
@@ -186,7 +195,17 @@ export class IpnsService {
       isRoot: false, // Root folder is tracked in Vault entity
     });
 
-    return this.folderIpnsRepository.save(folder);
+    const saved = await this.folderIpnsRepository.save(folder);
+
+    // Auto-enroll for TEE republishing when encrypted key is provided
+    // TODO: Wire to RepublishService.enrollFolder when 08-02 creates the republish module
+    if (encryptedIpnsPrivateKey && keyEpoch !== undefined) {
+      this.logger.log(
+        `New folder ${ipnsName} has TEE-encrypted key (epoch ${keyEpoch}), ready for republish enrollment`
+      );
+    }
+
+    return saved;
   }
 
   /**

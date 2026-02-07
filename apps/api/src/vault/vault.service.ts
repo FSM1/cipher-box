@@ -6,6 +6,8 @@ import { PinnedCid } from './entities/pinned-cid.entity';
 import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
 import { InitVaultDto, VaultResponseDto } from './dto/init-vault.dto';
 import { QuotaResponseDto } from './dto/quota.dto';
+import { TeeKeyStateService } from '../tee/tee-key-state.service';
+import { TeeKeysDto } from '../tee/dto/tee-keys.dto';
 
 /**
  * Storage quota limit: 500 MiB
@@ -20,7 +22,8 @@ export class VaultService {
     @InjectRepository(PinnedCid)
     private readonly pinnedCidRepository: Repository<PinnedCid>,
     @InjectRepository(FolderIpns)
-    private readonly folderIpnsRepository: Repository<FolderIpns>
+    private readonly folderIpnsRepository: Repository<FolderIpns>,
+    private readonly teeKeyStateService: TeeKeyStateService
   ) {}
 
   /**
@@ -65,7 +68,8 @@ export class VaultService {
     });
     await this.folderIpnsRepository.save(rootFolderIpns);
 
-    return this.toVaultResponse(savedVault);
+    const teeKeys = await this.teeKeyStateService.getTeeKeysDto();
+    return this.toVaultResponse(savedVault, teeKeys);
   }
 
   /**
@@ -82,7 +86,8 @@ export class VaultService {
       throw new NotFoundException('Vault not found');
     }
 
-    return this.toVaultResponse(vault);
+    const teeKeys = await this.teeKeyStateService.getTeeKeysDto();
+    return this.toVaultResponse(vault, teeKeys);
   }
 
   /**
@@ -93,7 +98,10 @@ export class VaultService {
       where: { ownerId: userId },
     });
 
-    return vault ? this.toVaultResponse(vault) : null;
+    if (!vault) return null;
+
+    const teeKeys = await this.teeKeyStateService.getTeeKeysDto();
+    return this.toVaultResponse(vault, teeKeys);
   }
 
   /**
@@ -165,7 +173,7 @@ export class VaultService {
   /**
    * Convert Vault entity to response DTO with hex-encoded fields
    */
-  private toVaultResponse(vault: Vault): VaultResponseDto {
+  private toVaultResponse(vault: Vault, teeKeys: TeeKeysDto | null = null): VaultResponseDto {
     return {
       id: vault.id,
       ownerPublicKey: vault.ownerPublicKey.toString('hex'),
@@ -175,6 +183,7 @@ export class VaultService {
       rootIpnsName: vault.rootIpnsName,
       createdAt: vault.createdAt,
       initializedAt: vault.initializedAt,
+      teeKeys,
     };
   }
 }

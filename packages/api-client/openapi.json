@@ -907,6 +907,34 @@
           "rootIpnsName"
         ]
       },
+      "TeeKeysDto": {
+        "type": "object",
+        "properties": {
+          "currentEpoch": {
+            "type": "number",
+            "description": "Current TEE key epoch number",
+            "example": 1
+          },
+          "currentPublicKey": {
+            "type": "string",
+            "description": "Current epoch TEE secp256k1 public key (uncompressed, 65 bytes, hex-encoded)",
+            "example": "04a1b2c3d4e5f6...(130 hex characters)"
+          },
+          "previousEpoch": {
+            "type": "object",
+            "description": "Previous TEE key epoch number (null if no rotation has occurred)",
+            "example": 0,
+            "nullable": true
+          },
+          "previousPublicKey": {
+            "type": "object",
+            "description": "Previous epoch TEE secp256k1 public key (hex-encoded, null if no rotation has occurred)",
+            "example": null,
+            "nullable": true
+          }
+        },
+        "required": ["currentEpoch", "currentPublicKey", "previousEpoch", "previousPublicKey"]
+      },
       "VaultResponseDto": {
         "type": "object",
         "properties": {
@@ -951,6 +979,15 @@
             "description": "When vault was first used (first file uploaded), null if unused",
             "example": "2026-01-20T13:00:00.000Z",
             "nullable": true
+          },
+          "teeKeys": {
+            "description": "TEE public keys for IPNS key encryption (null if TEE not initialized)",
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TeeKeysDto"
+              }
+            ]
           }
         },
         "required": [
