@@ -9,11 +9,14 @@ import { AuthModule } from './auth/auth.module';
 import { IpfsModule } from './ipfs/ipfs.module';
 import { VaultModule } from './vault/vault.module';
 import { IpnsModule } from './ipns/ipns.module';
+import { TeeModule } from './tee/tee.module';
 import { User } from './auth/entities/user.entity';
 import { RefreshToken } from './auth/entities/refresh-token.entity';
 import { AuthMethod } from './auth/entities/auth-method.entity';
 import { Vault, PinnedCid } from './vault/entities';
 import { FolderIpns } from './ipns/entities';
+import { TeeKeyState } from './tee/tee-key-state.entity';
+import { TeeKeyRotationLog } from './tee/tee-key-rotation-log.entity';
 
 @Module({
   imports: [
@@ -42,7 +45,16 @@ import { FolderIpns } from './ipns/entities';
         username: configService.get<string>('DB_USERNAME', 'postgres'),
         password: configService.get<string>('DB_PASSWORD', 'postgres'),
         database: configService.get<string>('DB_DATABASE', 'cipherbox'),
-        entities: [User, RefreshToken, AuthMethod, Vault, PinnedCid, FolderIpns],
+        entities: [
+          User,
+          RefreshToken,
+          AuthMethod,
+          Vault,
+          PinnedCid,
+          FolderIpns,
+          TeeKeyState,
+          TeeKeyRotationLog,
+        ],
         synchronize: configService.get<string>('NODE_ENV') !== 'production',
         logging: configService.get<string>('NODE_ENV') === 'development',
       }),
@@ -53,6 +65,7 @@ import { FolderIpns } from './ipns/entities';
     IpfsModule.forRootAsync(),
     VaultModule,
     IpnsModule,
+    TeeModule,
   ],
   controllers: [AppController],
   providers: [AppService],
