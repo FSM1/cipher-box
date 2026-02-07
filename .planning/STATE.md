@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 8 - TEE Integration
+**Current focus:** Phase 8 complete - TEE Integration
 
 ## Current Position
 
 Phase: 8 of 11 (TEE Integration)
-Plan: 3 of 4 in Phase 8 complete
-Status: In progress
-Last activity: 2026-02-07 - Completed 08-02-PLAN.md (republish scheduling with BullMQ)
+Plan: 4 of 4 in Phase 8 complete
+Status: Phase complete
+Last activity: 2026-02-07 - Completed 08-04-PLAN.md (TEE worker deployment)
 
-Progress: [#########-] 91% (49 of 54 plans)
+Progress: [#########-] 93% (50 of 54 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 49
+- Total plans completed: 50
 - Average duration: 4.6 min
-- Total execution time: 4.0 hours
+- Total execution time: 4.1 hours
 
 **By Phase:**
 
@@ -40,11 +40,11 @@ Progress: [#########-] 91% (49 of 54 plans)
 | 06.3-ui-structure-refactor | 5/5   | 16 min | 3.2 min  |
 | 07-multi-device-sync       | 4/4   | 17 min | 4.3 min  |
 | 07.1-atomic-file-upload    | 2/2   | 6 min  | 3 min    |
-| 08-tee-integration         | 3/4   | 16 min | 5.3 min  |
+| 08-tee-integration         | 4/4   | 21 min | 5.3 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 3m, 2m, 7m, 7m
+- Last 5 plans: 3m, 2m, 7m, 7m, 5m
 - Trend: Consistent, stable
 
 Updated after each plan completion.
@@ -205,6 +205,12 @@ Recent decisions affecting current work:
 | Graceful cron registration on Redis unavailability    | 08-02   | Warn and continue, never crash API if Redis is down                       |
 | Admin health uses JwtAuthGuard only (no admin role)   | 08-02   | Full admin role check deferred for v1 tech demo                           |
 | Redis 7-alpine bound to 127.0.0.1 only                | 08-02   | Security: local dev only, not exposed to network                          |
+| Type declarations for @phala/dstack-sdk in dev        | 08-04   | SDK only available in CVM at runtime, not needed for compilation          |
+| Timing-safe auth comparison in TEE worker             | 08-04   | Prevent timing attacks on shared secret comparison                        |
+| 48-hour IPNS record lifetime for TEE republish        | 08-04   | Comfortable margin with 6-hour republish interval (vs 24h client)         |
+| Per-entry error handling in batch republish           | 08-04   | One failure does not block other entries in the batch                     |
+| Public key cache in TEE worker memory                 | 08-04   | Map<epoch, publicKey> avoids repeated HKDF for same epoch                 |
+| ESM module type for TEE worker                        | 08-04   | type:module with bundler moduleResolution for standalone deployment       |
 
 ### Pending Todos
 
@@ -255,11 +261,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-07
-Stopped at: Completed 08-02-PLAN.md (republish scheduling with BullMQ)
+Stopped at: Completed 08-04-PLAN.md (TEE worker deployment) - Phase 8 complete
 Resume file: None
-Next plan: 08-04-PLAN.md (TEE worker deployment)
+Next plan: Phase 9 (Desktop Client) - requires research and planning
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-07 after completing 08-02-PLAN.md_
+_Last updated: 2026-02-07 after completing 08-04-PLAN.md_
