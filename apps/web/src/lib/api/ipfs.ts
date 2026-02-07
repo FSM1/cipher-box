@@ -3,7 +3,7 @@ import { useAuthStore } from '../../stores/auth.store';
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
-export type AddResponse = { cid: string; size: number };
+export type AddResponse = { cid: string; size: number; recorded: boolean };
 
 export type DownloadProgressCallback = (loaded: number, total: number) => void;
 
@@ -21,7 +21,7 @@ export async function addToIpfs(
   const formData = new FormData();
   formData.append('file', encryptedFile);
 
-  const response = await axios.post<AddResponse>(`${BASE_URL}/ipfs/add`, formData, {
+  const response = await axios.post<AddResponse>(`${BASE_URL}/ipfs/upload`, formData, {
     headers: { Authorization: `Bearer ${accessToken}` },
     onUploadProgress: (event: AxiosProgressEvent) => {
       if (event.total && onProgress) {

@@ -118,7 +118,6 @@ export async function uploadFiles(
 
       results.push(result);
       uploadStore.fileComplete();
-      quotaStore.addUsage(result.size);
     }
 
     uploadStore.setSuccess();
@@ -130,5 +129,8 @@ export async function uploadFiles(
       console.error('Upload failed:', error);
     }
     throw error;
+  } finally {
+    // Refresh quota from server (authoritative source after atomic upload)
+    await useQuotaStore.getState().fetchQuota();
   }
 }

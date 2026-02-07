@@ -264,6 +264,56 @@
         "tags": ["IPFS"]
       }
     },
+    "/ipfs/upload": {
+      "post": {
+        "description": "Pins encrypted file to IPFS, checks storage quota, and records the pin for quota tracking. All in one atomic request.",
+        "operationId": "IpfsController_upload",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Encrypted file blob (max 100MB)"
+                  }
+                },
+                "required": ["file"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "File uploaded, pinned, and recorded successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          },
+          "413": {
+            "description": "Storage quota exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Upload encrypted file to IPFS with quota tracking",
+        "tags": ["IPFS"]
+      }
+    },
     "/ipfs/unpin": {
       "post": {
         "description": "Remove a pinned file from IPFS via Pinata using its CID.",
@@ -776,6 +826,27 @@
           }
         },
         "required": ["cid", "size"]
+      },
+      "UploadResponseDto": {
+        "type": "object",
+        "properties": {
+          "cid": {
+            "type": "string",
+            "description": "The IPFS CID of the pinned file",
+            "example": "bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi"
+          },
+          "size": {
+            "type": "number",
+            "description": "The size of the pinned file in bytes",
+            "example": 1024
+          },
+          "recorded": {
+            "type": "boolean",
+            "description": "Whether the pin was recorded for quota tracking",
+            "example": true
+          }
+        },
+        "required": ["cid", "size", "recorded"]
       },
       "UnpinDto": {
         "type": "object",

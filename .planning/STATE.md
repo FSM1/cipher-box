@@ -9,20 +9,20 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 
 ## Current Position
 
-Phase: 7 of 11 complete (Multi-Device Sync)
-Plan: All 4 plans in Phase 7 complete
+Phase: 7.1 of 11 (Atomic File Upload)
+Plan: 2 of 2 in Phase 7.1 complete
 Status: Phase complete - verified ✓
-Last activity: 2026-02-02 - Phase 7 execution complete
+Last activity: 2026-02-07 - Phase 7.1 execution complete (10/10 must-haves verified)
 
-Progress: [########..] 91% (44 of 48 plans)
+Progress: [##########] 92% (46 of 50 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 44
-- Average duration: 4.8 min
-- Total execution time: 3.64 hours
+- Total plans completed: 46
+- Average duration: 4.7 min
+- Total execution time: 3.74 hours
 
 **By Phase:**
 
@@ -39,10 +39,11 @@ Progress: [########..] 91% (44 of 48 plans)
 | 06.1-webapp-automation     | 6/6   | 25 min | 4.2 min  |
 | 06.3-ui-structure-refactor | 5/5   | 16 min | 3.2 min  |
 | 07-multi-device-sync       | 4/4   | 17 min | 4.3 min  |
+| 07.1-atomic-file-upload    | 2/2   | 6 min  | 3 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 6m, 3m, 3m, 4m, 7m
+- Last 5 plans: 3m, 3m, 3m, 4m, 3m
 - Trend: Consistent, stable
 
 Updated after each plan completion.
@@ -181,16 +182,25 @@ Recent decisions affecting current work:
 | Sequence number comparison for sync                  | 07-04   | Used sequenceNumber instead of CID - local CID not cached, seq always inc |
 | useFolderStore.getState() in async callback          | 07-04   | Avoid stale closure issues when accessing store from async handleSync     |
 | Silent sync error handling                           | 07-04   | Log errors but don't crash - 30s interval auto-retries                    |
+| Atomic upload: quota + pin + record in one request   | 7.1-01  | Eliminates gap where file can be pinned but never recorded for quota      |
+| VaultModule imported into IpfsModule                 | 7.1-01  | Cross-module import for VaultService access in IpfsController             |
+| Batch addFiles coexists with single addFile          | 7.1-02  | Both remain exported from useFolder for different code paths              |
+| Server-authoritative quota via fetchQuota            | 7.1-02  | fetchQuota after upload replaces optimistic per-file addUsage             |
+| All-or-nothing batch folder registration             | 7.1-02  | Single IPNS publish for N files, no partial failure handling              |
 
 ### Pending Todos
 
-5 pending todo(s):
+8 pending todo(s):
 
-- `2026-01-22-atomic-file-upload-flow.md` — Atomic file upload flow with client-side CID (area: api)
+- ~~`2026-01-22-atomic-file-upload-flow.md`~~ — Atomic file upload flow (**Resolved by Phase 7.1**)
 - `2026-01-23-pre-upload-file-validation.md` — Pre-upload file name validation and duplicate prevention (area: ui)
 - `2026-01-23-simple-text-file-editor-modal.md` — Add simple text file editor modal (area: ui)
 - `2026-02-07-web-worker-large-file-encryption.md` — Offload large file encryption to Web Worker (area: ui)
-- ~~`2026-01-21-local-ipfs-node-for-testing.md` — Add local IPFS node to Docker stack for testing (area: api)~~ - **COMPLETED: Phase 4.2**
+- `2026-02-07-upload-modal-no-dismiss.md` — Upload modal has no close button and doesn't auto-dismiss (area: ui)
+- `2026-02-07-upload-button-text-stuck.md` — Upload button text stuck on "uploading..." after completion (area: ui)
+- `2026-02-07-auth-refresh-race-condition.md` — Auth token refresh race condition causes parallel 401s (area: api)
+- `2026-02-07-ipns-resolve-502-fallback.md` — IPNS resolve 502 — add DB-cached CID fallback (area: api)
+- `2026-02-07-registering-state-stuck-on-error.md` — Upload store stuck in "registering" if addFiles fails (area: ui)
 
 ### Blockers/Concerns
 
@@ -221,15 +231,16 @@ Recent decisions affecting current work:
 - Phase 6.1 inserted after Phase 6: Webapp Automation Testing - E2E UI testing with automation framework
 - Phase 6.2 inserted after Phase 6.1: Restyle App with Pencil Design - Complete UI redesign using Pencil design tool
 - Phase 6.3 inserted after Phase 6.2: UI Structure Refactor - Page layouts, component hierarchy, toolbars, and navigation using Pencil MCP for design-first approach
+- Phase 7.1 inserted after Phase 7: Atomic File Upload - Refactor multi-request upload into single atomic backend call with batch IPNS publishing (URGENT)
 
 ## Session Continuity
 
 Last session: 2026-02-07
-Stopped at: Quick task 002 complete + DnD regression fix; 6.3 UAT gap closed (12/12 pass)
+Stopped at: Completed 07.1-02-PLAN.md (client-side upload refactor) - Phase 7.1 complete
 Resume file: None
-Next plan: Phase 8 (TEE Integration)
+Next plan: Phase 8 (TEE Republishing)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-07 after 06.3 UAT gap closure (12/12 pass) + DnD regression fix_
+_Last updated: 2026-02-07 after completing 07.1-02-PLAN.md_

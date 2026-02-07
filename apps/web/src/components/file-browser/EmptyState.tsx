@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { useDropzone, FileRejection } from 'react-dropzone';
 import { useFileUpload } from '../../hooks/useFileUpload';
 import { useFolder } from '../../hooks/useFolder';
+import { useUploadStore } from '../../stores/upload.store';
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per FILE-01
 
@@ -21,7 +22,7 @@ type EmptyStateProps = {
 
 export function EmptyState({ folderId }: EmptyStateProps) {
   const { upload, canUpload, isUploading } = useFileUpload();
-  const { addFile } = useFolder();
+  const { addFiles } = useFolder();
   const [error, setError] = useState<string | null>(null);
 
   const handleDrop = useCallback(
@@ -49,31 +50,32 @@ export function EmptyState({ folderId }: EmptyStateProps) {
       }
 
       try {
+        // Upload files to IPFS (sequential encrypt + upload per file)
         const uploadedFiles = await upload(acceptedFiles);
-        const failedRegistrations: string[] = [];
-        for (const uploaded of uploadedFiles) {
-          try {
-            await addFile(folderId, {
-              cid: uploaded.cid,
-              wrappedKey: uploaded.wrappedKey,
-              iv: uploaded.iv,
-              originalName: uploaded.originalName,
-              originalSize: uploaded.originalSize,
-            });
-          } catch {
-            failedRegistrations.push(uploaded.originalName ?? 'Unnamed file');
-          }
-        }
-        if (failedRegistrations.length > 0) {
-          setError(`Some files uploaded but could not be added: ${failedRegistrations.join(', ')}`);
-        }
+
+        // Set registering status during batch folder metadata registration
+        useUploadStore.getState().setRegistering();
+
+        // Batch register all files in folder (single IPNS publish)
+        await addFiles(
+          folderId,
+          uploadedFiles.map((uploaded) => ({
+            cid: uploaded.cid,
+            wrappedKey: uploaded.wrappedKey,
+            iv: uploaded.iv,
+            originalName: uploaded.originalName,
+            originalSize: uploaded.originalSize,
+          }))
+        );
+
+        useUploadStore.getState().setSuccess();
       } catch (err) {
         if ((err as Error).message !== 'Upload cancelled by user') {
           setError((err as Error).message);
         }
       }
     },
-    [upload, canUpload, addFile, folderId]
+    [upload, canUpload, addFiles, folderId]
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({

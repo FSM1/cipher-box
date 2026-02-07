@@ -2,13 +2,14 @@ import { Module, DynamicModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { IPFS_PROVIDER, IpfsProvider, PinataProvider, LocalProvider } from './providers';
 import { IpfsController } from './ipfs.controller';
+import { VaultModule } from '../vault/vault.module';
 
 @Module({})
 export class IpfsModule {
   static forRootAsync(): DynamicModule {
     return {
       module: IpfsModule,
-      imports: [ConfigModule],
+      imports: [ConfigModule, VaultModule],
       controllers: [IpfsController],
       providers: [
         {

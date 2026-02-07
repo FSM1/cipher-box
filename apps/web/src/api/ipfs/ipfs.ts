@@ -21,7 +21,14 @@ import type {
   UseQueryResult,
 } from '@tanstack/react-query';
 
-import type { AddResponseDto, IpfsControllerAddBody, UnpinDto, UnpinResponseDto } from '../models';
+import type {
+  AddResponseDto,
+  IpfsControllerAddBody,
+  IpfsControllerUploadBody,
+  UnpinDto,
+  UnpinResponseDto,
+  UploadResponseDto,
+} from '../models';
 
 import { customInstance } from '../custom-instance';
 
@@ -103,6 +110,90 @@ export const useIpfsControllerAdd = <TError = void, TContext = unknown>(
   TContext
 > => {
   const mutationOptions = getIpfsControllerAddMutationOptions(options);
+
+  return useMutation(mutationOptions, queryClient);
+};
+/**
+ * Pins encrypted file to IPFS, checks storage quota, and records the pin for quota tracking. All in one atomic request.
+ * @summary Upload encrypted file to IPFS with quota tracking
+ */
+export const ipfsControllerUpload = (
+  ipfsControllerUploadBody: IpfsControllerUploadBody,
+  signal?: AbortSignal
+) => {
+  const formData = new FormData();
+  formData.append(`file`, ipfsControllerUploadBody.file);
+
+  return customInstance<UploadResponseDto>({
+    url: `/ipfs/upload`,
+    method: 'POST',
+    headers: { 'Content-Type': 'multipart/form-data' },
+    data: formData,
+    signal,
+  });
+};
+
+export const getIpfsControllerUploadMutationOptions = <
+  TError = void,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof ipfsControllerUpload>>,
+    TError,
+    { data: IpfsControllerUploadBody },
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof ipfsControllerUpload>>,
+  TError,
+  { data: IpfsControllerUploadBody },
+  TContext
+> => {
+  const mutationKey = ['ipfsControllerUpload'];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof ipfsControllerUpload>>,
+    { data: IpfsControllerUploadBody }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return ipfsControllerUpload(data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type IpfsControllerUploadMutationResult = NonNullable<
+  Awaited<ReturnType<typeof ipfsControllerUpload>>
+>;
+export type IpfsControllerUploadMutationBody = IpfsControllerUploadBody;
+export type IpfsControllerUploadMutationError = void;
+
+/**
+ * @summary Upload encrypted file to IPFS with quota tracking
+ */
+export const useIpfsControllerUpload = <TError = void, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof ipfsControllerUpload>>,
+      TError,
+      { data: IpfsControllerUploadBody },
+      TContext
+    >;
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof ipfsControllerUpload>>,
+  TError,
+  { data: IpfsControllerUploadBody },
+  TContext
+> => {
+  const mutationOptions = getIpfsControllerUploadMutationOptions(options);
 
   return useMutation(mutationOptions, queryClient);
 };
