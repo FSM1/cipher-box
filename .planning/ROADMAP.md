@@ -305,24 +305,24 @@ Current upload requires 3 sequential requests (pin to IPFS, record metadata, pub
 
 ### Phase 8: TEE Integration
 
-**Goal**: IPNS records auto-republish via TEE without user online
+**Goal**: IPNS records auto-republish every 6 hours via Phala Cloud TEE without user online
 **Depends on**: Phase 7
 **Requirements**: TEE-01, TEE-02, TEE-03, TEE-04, TEE-05, API-08
 **Success Criteria** (what must be TRUE):
 
-1. IPNS records republish every 3 hours via Phala Cloud TEE
+1. IPNS records republish every 6 hours via Phala Cloud TEE (4x/day, 48h record TTL)
 2. Client encrypts IPNS private key with TEE public key before sending
 3. TEE decrypts key in hardware, signs, and immediately zeros memory
 4. Backend schedules and tracks republish jobs with monitoring
 5. Key epochs rotate with 4-week grace period (old keys still work)
-   **Plans**: TBD
+   **Plans**: 4 plans
 
 Plans:
 
-- [ ] 08-01: TEE key state tables and epoch management
-- [ ] 08-02: Republish scheduling and cron jobs
-- [ ] 08-03: Client TEE key encryption on publish
-- [ ] 08-04: Phala Cloud integration and monitoring
+- [ ] 08-01-PLAN.md — TEE key state entities, epoch management service, and TEE worker HTTP client
+- [ ] 08-02-PLAN.md — Redis + BullMQ republish scheduling, processor, and admin health endpoint
+- [ ] 08-03-PLAN.md — Client TEE key encryption on publish and backend auto-enrollment
+- [ ] 08-04-PLAN.md — Standalone TEE worker (Express/Phala Cloud CVM) with ECIES decrypt and IPNS signing
 
 ### Phase 9: Desktop Client
 
@@ -408,7 +408,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 6.3 UI Structure        | 5/5            | Complete    | 2026-01-30 |
 | 7. Multi-Device Sync    | 4/4            | Complete    | 2026-02-02 |
 | 7.1 Atomic File Upload  | 2/2            | Complete    | 2026-02-07 |
-| 8. TEE Integration      | 0/4            | Not started | -          |
+| 8. TEE Integration      | 0/4            | Planned     | -          |
 | 9. Desktop Client       | 0/5            | Not started | -          |
 | 10. Data Portability    | 0/3            | Not started | -          |
 | 11. Security (MFA)      | 0/4            | Post-v1.0   | -          |
@@ -442,4 +442,5 @@ _Phase 7 complete: 2026-02-02_
 _Phase 7.1 inserted: 2026-02-07_
 _Phase 7.1 planned: 2026-02-07_
 _Phase 7.1 complete: 2026-02-07_
+_Phase 8 planned: 2026-02-07_
 _Total phases: 14 | Total plans: 68+ | Depth: Comprehensive_
