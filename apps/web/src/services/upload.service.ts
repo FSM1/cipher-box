@@ -118,8 +118,10 @@ export async function uploadFiles(
 
       results.push(result);
       uploadStore.fileComplete();
-      quotaStore.addUsage(result.size);
     }
+
+    // Refresh quota from server (authoritative source after atomic upload)
+    await useQuotaStore.getState().fetchQuota();
 
     uploadStore.setSuccess();
     return results;

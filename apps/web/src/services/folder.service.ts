@@ -420,6 +420,73 @@ export async function addFileToFolder(params: {
 }
 
 /**
+ * Add multiple files to a folder after successful upload (batch).
+ *
+ * Creates FileEntry objects for all files, checks for name collisions
+ * (against existing children AND within the batch), then updates folder
+ * metadata and publishes IPNS exactly once for the entire batch.
+ *
+ * @param params.parentFolderState - Parent folder to add files to
+ * @param params.files - Array of uploaded file data
+ * @returns Created file entries and new sequence number
+ * @throws Error if any name collision exists (within folder or within batch)
+ */
+export async function addFilesToFolder(params: {
+  parentFolderState: FolderNode;
+  files: Array<{
+    cid: string;
+    fileKeyEncrypted: string;
+    fileIv: string;
+    name: string;
+    size: number;
+  }>;
+}): Promise<{ fileEntries: FileEntry[]; newSequenceNumber: bigint }> {
+  // 1. Build a set of existing child names for collision detection
+  const existingNames = new Set(params.parentFolderState.children.map((c) => c.name));
+
+  // 2. Create FileEntry for each file, checking collisions
+  const fileEntries: FileEntry[] = [];
+  const now = Date.now();
+
+  for (const file of params.files) {
+    // Check collision against existing children AND previously added batch files
+    if (existingNames.has(file.name)) {
+      throw new Error(`A file with name "${file.name}" already exists`);
+    }
+    existingNames.add(file.name);
+
+    const fileEntry: FileEntry = {
+      type: 'file',
+      id: crypto.randomUUID(),
+      name: file.name,
+      cid: file.cid,
+      fileKeyEncrypted: file.fileKeyEncrypted,
+      fileIv: file.fileIv,
+      encryptionMode: 'GCM',
+      size: file.size,
+      createdAt: now,
+      modifiedAt: now,
+    };
+    fileEntries.push(fileEntry);
+  }
+
+  // 3. Build updated children array
+  const children = [...params.parentFolderState.children, ...fileEntries];
+
+  // 4. Update folder metadata and publish IPNS (single publish for entire batch)
+  const { newSequenceNumber } = await updateFolderMetadata({
+    folderId: params.parentFolderState.id,
+    children,
+    folderKey: params.parentFolderState.folderKey,
+    ipnsPrivateKey: params.parentFolderState.ipnsPrivateKey,
+    ipnsName: params.parentFolderState.ipnsName,
+    sequenceNumber: params.parentFolderState.sequenceNumber,
+  });
+
+  return { fileEntries, newSequenceNumber };
+}
+
+/**
  * Calculate the maximum depth of a folder's subtree.
  *
  * Used to check if moving a folder would exceed the depth limit.

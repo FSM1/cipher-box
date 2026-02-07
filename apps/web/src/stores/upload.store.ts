@@ -1,7 +1,14 @@
 import { create } from 'zustand';
 import axios from 'axios';
 
-type UploadStatus = 'idle' | 'encrypting' | 'uploading' | 'success' | 'error' | 'cancelled';
+type UploadStatus =
+  | 'idle'
+  | 'encrypting'
+  | 'uploading'
+  | 'registering'
+  | 'success'
+  | 'error'
+  | 'cancelled';
 
 type UploadState = {
   status: UploadStatus;
@@ -16,6 +23,7 @@ type UploadState = {
   setEncrypting: (filename: string) => void;
   setUploading: (filename: string, progress: number) => void;
   fileComplete: () => void;
+  setRegistering: () => void;
   setSuccess: () => void;
   setError: (error: string) => void;
   cancel: () => void;
@@ -60,6 +68,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       progress: Math.round(((state.completedFiles + 1) / state.totalFiles) * 100),
     })),
 
+  setRegistering: () => set({ status: 'registering', currentFile: null }),
   setSuccess: () => set({ status: 'success', progress: 100, currentFile: null }),
   setError: (error) => set({ status: 'error', error, currentFile: null }),
 

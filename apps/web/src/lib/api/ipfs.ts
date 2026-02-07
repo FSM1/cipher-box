@@ -21,7 +21,7 @@ export async function addToIpfs(
   const formData = new FormData();
   formData.append('file', encryptedFile);
 
-  const response = await axios.post<AddResponse>(`${BASE_URL}/ipfs/add`, formData, {
+  const response = await axios.post<AddResponse>(`${BASE_URL}/ipfs/upload`, formData, {
     headers: { Authorization: `Bearer ${accessToken}` },
     onUploadProgress: (event: AxiosProgressEvent) => {
       if (event.total && onProgress) {
