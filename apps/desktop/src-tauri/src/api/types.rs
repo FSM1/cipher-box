@@ -47,6 +47,17 @@ pub struct TeeKeysResponse {
     pub previous_public_key: Option<String>,
 }
 
+/// Request body for POST /vault/init (new user vault initialization).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitVaultRequest {
+    pub owner_public_key: String,
+    pub encrypted_root_folder_key: String,
+    pub encrypted_root_ipns_private_key: String,
+    pub root_ipns_public_key: String,
+    pub root_ipns_name: String,
+}
+
 /// Vault response from GET /vault.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -86,16 +86,24 @@ pub async fn handle_auth_complete(
         .map_err(|e| format!("Keychain store user ID failed: {}", e))?;
 
     // 6. Store keys in AppState
-    *state.private_key.write().await = Some(private_key_bytes);
-    *state.public_key.write().await = Some(public_key_bytes);
+    *state.private_key.write().await = Some(private_key_bytes.clone());
+    *state.public_key.write().await = Some(public_key_bytes.clone());
 
-    // 7. Fetch and decrypt vault keys (including root IPNS keypair)
+    // 7. Initialize vault for new users, or fetch existing vault
+    if login_resp.is_new_user {
+        log::info!("New user detected, initializing vault");
+        initialize_vault(&state, &public_key_bytes).await?;
+    }
     fetch_and_decrypt_vault(&state).await?;
 
     // 8. Mark as authenticated
     *state.is_authenticated.write().await = true;
 
-    // 9. Mount FUSE filesystem
+    // 9. Mount FUSE filesystem (or just mark as synced if FUSE not enabled)
+    #[cfg(not(feature = "fuse"))]
+    {
+        let _ = crate::tray::update_tray_status(&app, &crate::tray::TrayStatus::Synced);
+    }
     #[cfg(feature = "fuse")]
     {
         *state.mount_status.write().await = crate::state::MountStatus::Mounting;
@@ -152,7 +160,7 @@ pub async fn handle_auth_complete(
             Ok(_handle) => {
                 *state.mount_status.write().await = crate::state::MountStatus::Mounted;
                 let _ = crate::tray::update_tray_status(&app, &crate::tray::TrayStatus::Synced);
-                log::info!("FUSE filesystem mounted at ~/CipherVault");
+                log::info!("FUSE filesystem mounted at ~/CipherBox");
             }
             Err(e) => {
                 let err_msg = format!("FUSE mount failed: {}", e);
@@ -350,6 +358,55 @@ pub async fn logout(app: tauri::AppHandle, state: State<'_, AppState>) -> Result
     let _ = crate::tray::update_tray_status(&app, &crate::tray::TrayStatus::NotConnected);
 
     log::info!("Logout complete");
+    Ok(())
+}
+
+/// Initialize a new vault for a first-time user.
+///
+/// Generates a root folder AES-256 key and an Ed25519 IPNS keypair,
+/// ECIES-wraps them with the user's secp256k1 public key, derives the IPNS name,
+/// and POSTs everything to `/vault/init`.
+async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Result<(), String> {
+    // Generate root folder AES-256 key (32 random bytes)
+    let root_folder_key = crypto::utils::generate_random_bytes(32);
+
+    // Generate root IPNS Ed25519 keypair
+    let (ipns_public_key, ipns_private_key) = crypto::ed25519::generate_ed25519_keypair();
+
+    // ECIES-wrap keys with user's uncompressed secp256k1 public key
+    let encrypted_root_folder_key = crypto::ecies::wrap_key(&root_folder_key, public_key)
+        .map_err(|e| format!("Failed to wrap root folder key: {}", e))?;
+    let encrypted_ipns_private_key = crypto::ecies::wrap_key(&ipns_private_key, public_key)
+        .map_err(|e| format!("Failed to wrap IPNS private key: {}", e))?;
+
+    // Derive IPNS name from Ed25519 public key
+    let ipns_pub_array: [u8; 32] = ipns_public_key
+        .try_into()
+        .map_err(|_| "IPNS public key is not 32 bytes")?;
+    let root_ipns_name = crypto::ipns::derive_ipns_name(&ipns_pub_array)
+        .map_err(|e| format!("Failed to derive IPNS name: {}", e))?;
+
+    let init_req = types::InitVaultRequest {
+        owner_public_key: hex::encode(public_key),
+        encrypted_root_folder_key: hex::encode(&encrypted_root_folder_key),
+        encrypted_root_ipns_private_key: hex::encode(&encrypted_ipns_private_key),
+        root_ipns_public_key: hex::encode(&ipns_pub_array),
+        root_ipns_name,
+    };
+
+    let resp = state
+        .api
+        .authenticated_post("/vault/init", &init_req)
+        .await
+        .map_err(|e| format!("Vault init request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Vault init failed ({}): {}", status, body));
+    }
+
+    log::info!("Vault initialized for new user");
     Ok(())
 }
 

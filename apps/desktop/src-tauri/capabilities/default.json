@@ -4,6 +4,10 @@
   "description": "Default capabilities for CipherBox Desktop",
   "windows": ["*"],
   "permissions": [
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-close",
     "deep-link:default",
     "shell:allow-open",
     "notification:default",

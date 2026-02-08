@@ -9,7 +9,7 @@ mod state;
 mod sync;
 mod tray;
 
-use tauri::Manager;
+use tauri::WindowEvent;
 use state::AppState;
 
 fn main() {
@@ -50,6 +50,16 @@ fn main() {
 
             log::info!("CipherBox Desktop setup complete (tray icon active)");
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Hide the login window on close instead of destroying it.
+            // The app is a menu-bar utility — only "Quit" from tray should exit.
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::handle_auth_complete,

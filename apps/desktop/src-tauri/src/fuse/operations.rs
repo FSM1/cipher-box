@@ -1,4 +1,4 @@
-//! FUSE filesystem trait implementation for CipherVaultFS.
+//! FUSE filesystem trait implementation for CipherBoxFS.
 //!
 //! Implements read operations: init, lookup, getattr, readdir, open, read, release, statfs, access.
 //! Write operations: create, write, open-write, release-with-upload, unlink, setattr, flush.
@@ -16,7 +16,7 @@ mod implementation {
     use std::sync::atomic::Ordering;
     use std::time::{Duration, SystemTime};
 
-    use crate::fuse::CipherVaultFS;
+    use crate::fuse::CipherBoxFS;
     use crate::fuse::file_handle::OpenFileHandle;
     use crate::fuse::inode::{InodeData, InodeKind, ROOT_INO, BLOCK_SIZE};
 
@@ -77,7 +77,7 @@ mod implementation {
     /// Resolves the folder's IPNS name to CID, fetches encrypted metadata,
     /// decrypts with the folder key, and populates the inode table.
     fn fetch_and_populate_folder(
-        fs: &mut CipherVaultFS,
+        fs: &mut CipherBoxFS,
         ino: u64,
         ipns_name: &str,
         folder_key: &[u8],
@@ -123,7 +123,7 @@ mod implementation {
     /// Used when opening an existing file for writing -- need to pre-populate
     /// the temp file with the current decrypted content.
     fn fetch_and_decrypt_file_content(
-        fs: &CipherVaultFS,
+        fs: &CipherBoxFS,
         cid: &str,
         encrypted_file_key_hex: &str,
         iv_hex: &str,
@@ -167,14 +167,14 @@ mod implementation {
         })
     }
 
-    impl Filesystem for CipherVaultFS {
+    impl Filesystem for CipherBoxFS {
         /// Initialize the filesystem: populate root folder from IPNS.
         fn init(
             &mut self,
             _req: &Request<'_>,
             _config: &mut fuser::KernelConfig,
         ) -> Result<(), libc::c_int> {
-            log::info!("CipherVaultFS::init - populating root folder");
+            log::info!("CipherBoxFS::init - populating root folder");
 
             let root_ipns_name = self.root_ipns_name.clone();
             let root_folder_key = self.root_folder_key.clone();

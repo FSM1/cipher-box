@@ -1,6 +1,6 @@
 //! FUSE filesystem module for CipherBox Desktop.
 //!
-//! Mounts the encrypted vault at ~/CipherVault as a native macOS filesystem
+//! Mounts the encrypted vault at ~/CipherBox as a native macOS filesystem
 //! using FUSE-T. All crypto operations happen in Rust via the crypto module.
 //!
 //! The cache and inode modules are always available (they don't depend on libfuse).
@@ -34,7 +34,7 @@ use crate::state::AppState;
 /// Implements `fuser::Filesystem` to serve decrypted folder listings
 /// and file content from the CipherBox vault.
 #[cfg(feature = "fuse")]
-pub struct CipherVaultFS {
+pub struct CipherBoxFS {
     /// Inode table mapping inode numbers to metadata.
     pub inodes: inode::InodeTable,
     /// Folder metadata cache with 30s TTL.
@@ -66,7 +66,7 @@ pub struct CipherVaultFS {
 }
 
 #[cfg(feature = "fuse")]
-impl CipherVaultFS {
+impl CipherBoxFS {
     /// Rebuild, encrypt, and publish a folder's metadata after a mutation.
     ///
     /// This is called after any file/folder mutation (create, delete, rename).
@@ -308,18 +308,18 @@ fn uuid_from_ino(ino: u64) -> String {
     )
 }
 
-/// Get the mount point path: ~/CipherVault
+/// Get the mount point path: ~/CipherBox
 #[cfg(feature = "fuse")]
 pub fn mount_point() -> PathBuf {
     dirs::home_dir()
         .expect("Could not determine home directory")
-        .join("CipherVault")
+        .join("CipherBox")
 }
 
 /// Mount the FUSE filesystem after successful authentication.
 ///
-/// Creates the ~/CipherVault directory if it doesn't exist, builds the
-/// CipherVaultFS with keys from AppState, and spawns the FUSE event loop
+/// Creates the ~/CipherBox directory if it doesn't exist, builds the
+/// CipherBoxFS with keys from AppState, and spawns the FUSE event loop
 /// on a dedicated std::thread (not tokio -- fuser runs its own event loop).
 ///
 /// Returns a JoinHandle for the mount thread.
@@ -359,7 +359,7 @@ pub fn mount_filesystem(
         };
     }
 
-    let fs = CipherVaultFS {
+    let fs = CipherBoxFS {
         inodes,
         metadata_cache: cache::MetadataCache::new(),
         content_cache: cache::ContentCache::new(),
@@ -390,7 +390,7 @@ pub fn mount_filesystem(
         .name("fuse-mount".to_string())
         .spawn(move || {
             log::info!(
-                "Mounting CipherVaultFS at {}",
+                "Mounting CipherBoxFS at {}",
                 mount_path_clone.display()
             );
             match fuser::mount2(fs, &mount_path_clone, &options) {
@@ -406,11 +406,11 @@ pub fn mount_filesystem(
 
 /// Unmount the FUSE filesystem.
 ///
-/// Calls the system `umount` command to cleanly unmount ~/CipherVault.
+/// Calls the system `umount` command to cleanly unmount ~/CipherBox.
 #[cfg(feature = "fuse")]
 pub fn unmount_filesystem() -> Result<(), String> {
     let mount_path = mount_point();
-    log::info!("Unmounting CipherVaultFS at {}", mount_path.display());
+    log::info!("Unmounting CipherBoxFS at {}", mount_path.display());
 
     // Clean up temp directory
     let temp_dir = std::env::temp_dir().join("cipherbox");

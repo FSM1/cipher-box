@@ -1,7 +1,7 @@
 //! System tray (menu bar) icon and menu for CipherBox Desktop.
 //!
 //! Creates a macOS menu bar icon with status display and actions:
-//! Open CipherVault, Sync Now, Login/Logout, Quit.
+//! Open CipherBox, Sync Now, Login/Logout, Quit.
 //!
 //! The app runs as a pure background utility (no Dock icon).
 
@@ -24,7 +24,7 @@ const TRAY_ID: &str = "cipherbox-tray";
 ///
 /// Menu items:
 /// - `status`: Disabled informational line showing current status
-/// - `open`: Open ~/CipherVault in Finder (enabled when mounted)
+/// - `open`: Open ~/CipherBox in Finder (enabled when mounted)
 /// - `sync`: Trigger immediate sync (enabled when connected)
 /// - separator
 /// - `login`: Show Web3Auth webview (when not connected)
@@ -69,7 +69,7 @@ fn build_menu(
         .build(app)
         .map_err(|e| format!("Failed to build status item: {}", e))?;
 
-    let open_item = MenuItemBuilder::with_id("open", "Open CipherVault")
+    let open_item = MenuItemBuilder::with_id("open", "Open CipherBox")
         .enabled(is_mounted)
         .build(app)
         .map_err(|e| format!("Failed to build open item: {}", e))?;
@@ -115,15 +115,15 @@ fn build_menu(
 fn handle_menu_event(app: &AppHandle, id: &str) {
     match id {
         "open" => {
-            // Open ~/CipherVault in Finder
+            // Open ~/CipherBox in Finder
             let mount_point = dirs::home_dir()
-                .map(|h| h.join("CipherVault"))
+                .map(|h| h.join("CipherBox"))
                 .unwrap_or_default();
             if let Err(e) = std::process::Command::new("open")
-                .arg(mount_point.to_str().unwrap_or("~/CipherVault"))
+                .arg(mount_point.to_str().unwrap_or("~/CipherBox"))
                 .spawn()
             {
-                log::error!("Failed to open CipherVault in Finder: {}", e);
+                log::error!("Failed to open CipherBox in Finder: {}", e);
             }
         }
         "sync" => {
