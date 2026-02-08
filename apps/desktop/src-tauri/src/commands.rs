@@ -31,9 +31,28 @@ pub async fn handle_auth_complete(
     // Update tray status: Mounting (auth in progress, about to mount)
     let _ = crate::tray::update_tray_status(&app, &crate::tray::TrayStatus::Mounting);
 
-    // 1. Login with backend
+    // 1. Convert private key from hex to bytes and derive public key
+    //    (needed for the login request)
+    let private_key_hex = if private_key.starts_with("0x") {
+        &private_key[2..]
+    } else {
+        &private_key
+    };
+    let private_key_bytes =
+        hex::decode(private_key_hex).map_err(|_| "Invalid private key hex".to_string())?;
+    if private_key_bytes.len() != 32 {
+        return Err("Private key must be 32 bytes".to_string());
+    }
+
+    // Derive uncompressed public key (65 bytes, 0x04 prefix) from private key
+    let public_key_bytes = derive_public_key(&private_key_bytes)?;
+    let public_key_hex = hex::encode(&public_key_bytes);
+
+    // 2. Login with backend (requires publicKey and loginType)
     let login_req = types::LoginRequest {
         id_token: id_token.clone(),
+        public_key: public_key_hex,
+        login_type: "social".to_string(),
     };
 
     let resp = state
@@ -53,34 +72,20 @@ pub async fn handle_auth_complete(
         .await
         .map_err(|e| format!("Failed to parse login response: {}", e))?;
 
-    // 2. Store access token in API client
+    // 3. Store access token in API client
     state.api.set_access_token(login_resp.access_token.clone()).await;
 
-    // 3. Extract user ID from JWT claims (decode payload, read `sub`)
+    // 4. Extract user ID from JWT claims (decode payload, read `sub`)
     let user_id = extract_user_id_from_jwt(&login_resp.access_token)?;
     *state.user_id.write().await = Some(user_id.clone());
 
-    // 4. Store refresh token in Keychain
+    // 5. Store refresh token in Keychain
     auth::store_refresh_token(&user_id, &login_resp.refresh_token)
         .map_err(|e| format!("Keychain store failed: {}", e))?;
     auth::store_user_id(&user_id)
         .map_err(|e| format!("Keychain store user ID failed: {}", e))?;
 
-    // 5. Convert private key from hex to bytes and store in AppState
-    let private_key_hex = if private_key.starts_with("0x") {
-        &private_key[2..]
-    } else {
-        &private_key
-    };
-    let private_key_bytes =
-        hex::decode(private_key_hex).map_err(|_| "Invalid private key hex".to_string())?;
-    if private_key_bytes.len() != 32 {
-        return Err("Private key must be 32 bytes".to_string());
-    }
-
-    // 6. Derive uncompressed public key from private key using ecies crate
-    let public_key_bytes = derive_public_key(&private_key_bytes)?;
-
+    // 6. Store keys in AppState
     *state.private_key.write().await = Some(private_key_bytes);
     *state.public_key.write().await = Some(public_key_bytes);
 

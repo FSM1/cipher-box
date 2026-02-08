@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct LoginRequest {
     pub id_token: String,
+    pub public_key: String,
+    pub login_type: String,
 }
 
 /// Login response from POST /auth/login (desktop client receives refreshToken in body).
