@@ -10,17 +10,18 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
+import {
+  Web3Auth,
+  WEB3AUTH_NETWORK,
+  WALLET_CONNECTORS,
+  type Web3AuthOptions,
+} from '@web3auth/modal';
 
-// Web3Auth SDK types -- dynamically imported to avoid bundling issues
-// when Web3Auth packages are not installed yet.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let Web3Auth: any = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let web3auth: any = null;
 
 // Web3Auth configuration matching the web app (apps/web/src/lib/web3auth/config.ts)
 const WEB3AUTH_CLIENT_ID = import.meta.env.VITE_WEB3AUTH_CLIENT_ID || '';
-const WEB3AUTH_NETWORK = 'sapphire_devnet';
 
 // Custom OAuth connection IDs (configured in Web3Auth dashboard)
 const AUTH_CONNECTION_IDS = {
@@ -39,19 +40,15 @@ export async function initWeb3Auth(): Promise<void> {
   if (web3auth) return; // Already initialized
 
   try {
-    // Dynamic import to handle the case where @web3auth/modal is not yet installed
-    const modal = await import('@web3auth/modal');
-    Web3Auth = modal.Web3Auth;
-
-    web3auth = new Web3Auth({
+    const options: Web3AuthOptions = {
       clientId: WEB3AUTH_CLIENT_ID,
-      web3AuthNetwork: WEB3AUTH_NETWORK,
+      web3AuthNetwork: WEB3AUTH_NETWORK.SAPPHIRE_DEVNET,
       uiConfig: {
         mode: 'dark',
       },
       modalConfig: {
         connectors: {
-          [modal.WALLET_CONNECTORS.AUTH]: {
+          [WALLET_CONNECTORS.AUTH]: {
             label: 'auth',
             loginMethods: {
               google: {
@@ -69,20 +66,20 @@ export async function initWeb3Auth(): Promise<void> {
             },
             showOnModal: true,
           },
-          // External wallet connectors (MetaMask, WalletConnect)
-          [modal.WALLET_CONNECTORS.WALLET_CONNECT_V2]: {
+          [WALLET_CONNECTORS.WALLET_CONNECT_V2]: {
             label: 'WalletConnect',
             showOnModal: true,
           },
-          [modal.WALLET_CONNECTORS.METAMASK]: {
+          [WALLET_CONNECTORS.METAMASK]: {
             label: 'MetaMask',
             showOnModal: true,
           },
         },
       },
-    });
+    };
 
-    await web3auth.initModal();
+    web3auth = new Web3Auth(options);
+    await web3auth.init();
     console.log('Web3Auth initialized');
   } catch (err) {
     console.error('Failed to initialize Web3Auth:', err);
