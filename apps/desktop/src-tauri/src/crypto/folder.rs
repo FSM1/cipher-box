@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use zeroize::Zeroize;
 
 use super::aes::{self, AesError};
 
@@ -93,8 +94,10 @@ pub fn encrypt_folder_metadata(
     metadata: &FolderMetadata,
     folder_key: &[u8; 32],
 ) -> Result<Vec<u8>, FolderError> {
-    let json = serde_json::to_vec(metadata).map_err(|_| FolderError::SerializationFailed)?;
-    aes::seal_aes_gcm(&json, folder_key).map_err(FolderError::EncryptionFailed)
+    let mut json = serde_json::to_vec(metadata).map_err(|_| FolderError::SerializationFailed)?;
+    let result = aes::seal_aes_gcm(&json, folder_key).map_err(FolderError::EncryptionFailed);
+    json.zeroize();
+    result
 }
 
 /// Decrypt folder metadata from AES-256-GCM sealed bytes.
@@ -104,6 +107,8 @@ pub fn decrypt_folder_metadata(
     sealed: &[u8],
     folder_key: &[u8; 32],
 ) -> Result<FolderMetadata, FolderError> {
-    let json = aes::unseal_aes_gcm(sealed, folder_key).map_err(FolderError::EncryptionFailed)?;
-    serde_json::from_slice(&json).map_err(|_| FolderError::DeserializationFailed)
+    let mut json = aes::unseal_aes_gcm(sealed, folder_key).map_err(FolderError::EncryptionFailed)?;
+    let result = serde_json::from_slice(&json).map_err(|_| FolderError::DeserializationFailed);
+    json.zeroize();
+    result
 }

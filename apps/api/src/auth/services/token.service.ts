@@ -33,10 +33,12 @@ export class TokenService {
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + this.REFRESH_TOKEN_EXPIRY_DAYS);
 
-    // Save to database
+    // Save to database with prefix for O(1) lookup
+    const tokenPrefix = refreshToken.substring(0, 16);
     await this.refreshTokenRepo.save({
       userId,
       tokenHash,
+      tokenPrefix,
       expiresAt,
     });
 
@@ -48,10 +50,12 @@ export class TokenService {
     userId: string,
     publicKey: string
   ): Promise<TokenPair> {
-    // Find all non-revoked tokens for user
+    // Find candidate tokens by prefix for O(1) lookup instead of O(N) Argon2 scan
+    const prefix = oldRefreshToken.substring(0, 16);
     const tokens = await this.refreshTokenRepo.find({
       where: {
         userId,
+        tokenPrefix: prefix,
         revokedAt: IsNull(),
       },
     });

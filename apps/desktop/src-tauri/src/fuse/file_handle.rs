@@ -8,6 +8,7 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use zeroize::Zeroize;
 
 /// Open file handle tracking active reads and writes.
 ///
@@ -74,6 +75,13 @@ impl OpenFileHandle {
                 .map_err(|e| format!("Failed to create temp file: {}", e))?;
             0
         };
+
+        // Restrict temp file permissions to owner-only
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o600));
+        }
 
         Ok(Self {
             ino,
@@ -173,9 +181,25 @@ impl OpenFileHandle {
     }
 
     /// Delete the temp file. Called after upload or on error.
+    /// Overwrites file content with zeros before deletion for defense-in-depth.
     pub fn cleanup(&self) {
         if let Some(ref temp_path) = self.temp_path {
             if temp_path.exists() {
+                // Overwrite with zeros before deletion
+                if let Ok(size) = fs::metadata(temp_path).map(|m| m.len()) {
+                    if size > 0 {
+                        if let Ok(mut file) = fs::OpenOptions::new().write(true).open(temp_path) {
+                            let zeros = vec![0u8; std::cmp::min(size as usize, 64 * 1024)];
+                            let mut remaining = size;
+                            while remaining > 0 {
+                                let chunk = std::cmp::min(remaining, zeros.len() as u64);
+                                let _ = std::io::Write::write_all(&mut file, &zeros[..chunk as usize]);
+                                remaining -= chunk;
+                            }
+                            let _ = file.sync_all();
+                        }
+                    }
+                }
                 if let Err(e) = fs::remove_file(temp_path) {
                     log::warn!("Failed to cleanup temp file {:?}: {}", temp_path, e);
                 }
@@ -186,6 +210,10 @@ impl OpenFileHandle {
 
 impl Drop for OpenFileHandle {
     fn drop(&mut self) {
+        // Zeroize any cached plaintext content before freeing
+        if let Some(ref mut content) = self.cached_content {
+            content.zeroize();
+        }
         self.cleanup();
     }
 }

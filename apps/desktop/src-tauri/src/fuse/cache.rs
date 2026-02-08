@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
+use zeroize::Zeroize;
 
 use crate::crypto::folder::FolderMetadata;
 
@@ -63,6 +64,11 @@ impl MetadataCache {
     pub fn invalidate(&mut self, ipns_name: &str) {
         self.entries.remove(ipns_name);
     }
+
+    /// Clear all cached metadata entries. Used during FUSE destroy().
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
 }
 
 // ── Content Cache ─────────────────────────────────────────────────────────────
@@ -72,6 +78,12 @@ struct CachedContent {
     data: Vec<u8>,
     accessed_at: Instant,
     size: usize,
+}
+
+impl Drop for CachedContent {
+    fn drop(&mut self) {
+        self.data.zeroize();
+    }
 }
 
 /// In-memory LRU cache for decrypted file content, keyed by CID.
@@ -149,6 +161,13 @@ impl ContentCache {
     #[allow(dead_code)]
     pub fn current_size(&self) -> usize {
         self.current_size
+    }
+
+    /// Clear all cached content entries, zeroizing each one via Drop.
+    /// Used during FUSE destroy() for defense-in-depth cleanup.
+    pub fn clear(&mut self) {
+        self.entries.clear(); // Each CachedContent::drop() zeroizes data
+        self.current_size = 0;
     }
 }
 

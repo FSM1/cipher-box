@@ -20,6 +20,8 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 #[cfg(feature = "fuse")]
 use std::sync::Arc;
+#[cfg(feature = "fuse")]
+use zeroize::{Zeroize, Zeroizing};
 
 #[cfg(feature = "fuse")]
 use std::time::Duration;
@@ -177,11 +179,14 @@ pub struct CipherBoxFS {
     /// API client for IPFS/IPNS operations.
     pub api: Arc<ApiClient>,
     /// User's secp256k1 private key for ECIES decryption (32 bytes).
-    pub private_key: Vec<u8>,
+    /// Wrapped in `Zeroizing` for automatic zeroization on drop.
+    pub private_key: Zeroizing<Vec<u8>>,
     /// User's uncompressed secp256k1 public key (65 bytes, 0x04 prefix).
-    pub public_key: Vec<u8>,
+    /// Wrapped in `Zeroizing` for automatic zeroization on drop.
+    pub public_key: Zeroizing<Vec<u8>>,
     /// Root folder AES-256 key (32 bytes).
-    pub root_folder_key: Vec<u8>,
+    /// Wrapped in `Zeroizing` for automatic zeroization on drop.
+    pub root_folder_key: Zeroizing<Vec<u8>>,
     /// Root IPNS name (k51... format).
     pub root_ipns_name: String,
     /// Tokio runtime handle for spawning async tasks from FUSE threads.
@@ -251,12 +256,12 @@ impl CipherBoxFS {
                     let key = ipns_private_key
                         .as_ref()
                         .ok_or("Root folder IPNS private key not available")?
-                        .clone();
+                        .to_vec();
                     let name = ipns_name
                         .as_ref()
                         .ok_or("Root folder IPNS name not available")?
                         .clone();
-                    (self.root_folder_key.clone(), key, name, children)
+                    (self.root_folder_key.to_vec(), key, name, children)
                 }
                 inode::InodeKind::Folder {
                     folder_key,
@@ -267,8 +272,8 @@ impl CipherBoxFS {
                     let key = ipns_private_key
                         .as_ref()
                         .ok_or("Subfolder IPNS private key not available")?
-                        .clone();
-                    (folder_key.clone(), key, ipns_name.clone(), children)
+                        .to_vec();
+                    (folder_key.to_vec(), key, ipns_name.clone(), children)
                 }
                 _ => return Err("Cannot update metadata for non-folder inode".to_string()),
             }
@@ -507,10 +512,20 @@ pub async fn mount_filesystem(
 ) -> Result<std::thread::JoinHandle<()>, String> {
     let mount_path = mount_point();
 
+    // Refuse to proceed if mount point is a symlink (TOCTOU defense)
+    if mount_path.is_symlink() {
+        return Err("Mount point is a symlink — refusing to proceed".to_string());
+    }
+
     // Create mount directory if it doesn't exist
     if !mount_path.exists() {
         std::fs::create_dir_all(&mount_path)
             .map_err(|e| format!("Failed to create mount point: {}", e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&mount_path, std::fs::Permissions::from_mode(0o700));
+        }
     } else {
         // Clean stale files left after a crash (e.g. .DS_Store, .metadata_never_index).
         // FUSE mount will fail or behave unexpectedly if the directory isn't empty.
@@ -537,6 +552,11 @@ pub async fn mount_filesystem(
     let temp_dir = std::env::temp_dir().join("cipherbox");
     std::fs::create_dir_all(&temp_dir)
         .map_err(|e| format!("Failed to create temp directory: {}", e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&temp_dir, std::fs::Permissions::from_mode(0o700));
+    }
 
     // Build the filesystem
     let mut inodes = inode::InodeTable::new();
@@ -544,7 +564,7 @@ pub async fn mount_filesystem(
     // Set root inode's IPNS data
     if let Some(root) = inodes.get_mut(inode::ROOT_INO) {
         root.kind = inode::InodeKind::Root {
-            ipns_private_key: root_ipns_private_key,
+            ipns_private_key: root_ipns_private_key.map(Zeroizing::new),
             ipns_name: Some(root_ipns_name.clone()),
         };
     }
@@ -579,7 +599,7 @@ pub async fn mount_filesystem(
                     // returns correct data. NFS clients cache READDIR aggressively
                     // and won't re-fetch even when mtime changes, so returning empty
                     // on first access causes permanently stale Finder listings.
-                    let subfolder_infos: Vec<(u64, String, Vec<u8>)> = inodes
+                    let subfolder_infos: Vec<(u64, String, Zeroizing<Vec<u8>>)> = inodes
                         .inodes
                         .values()
                         .filter_map(|inode| {
@@ -627,9 +647,9 @@ pub async fn mount_filesystem(
         metadata_cache,
         content_cache: cache::ContentCache::new(),
         api: state.api.clone(),
-        private_key,
-        public_key,
-        root_folder_key,
+        private_key: Zeroizing::new(private_key),
+        public_key: Zeroizing::new(public_key),
+        root_folder_key: Zeroizing::new(root_folder_key),
         root_ipns_name,
         rt,
         next_fh: AtomicU64::new(1),

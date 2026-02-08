@@ -115,9 +115,11 @@ export class AuthService {
    * This allows refresh without requiring the (possibly expired) access token.
    */
   async refreshByToken(refreshToken: string): Promise<RefreshServiceResult> {
-    // Find all non-revoked, non-expired tokens
+    // Find candidate tokens by prefix for O(1) lookup instead of O(N) Argon2 scan
+    const prefix = refreshToken.substring(0, 16);
     const tokens = await this.refreshTokenRepository.find({
       where: {
+        tokenPrefix: prefix,
         revokedAt: IsNull(),
       },
       relations: ['user'],

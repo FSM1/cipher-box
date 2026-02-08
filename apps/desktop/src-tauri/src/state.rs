@@ -92,35 +92,32 @@ impl AppState {
     /// Uses `zeroize` to securely wipe sensitive bytes from memory.
     /// Called on logout and before app exit.
     pub async fn clear_keys(&self) {
-        // Zero private key
-        if let Some(ref mut key) = *self.private_key.write().await {
-            key.zeroize();
+        // Each field uses a single lock acquisition to zeroize and clear.
+        {
+            let mut key = self.private_key.write().await;
+            if let Some(ref mut k) = *key { k.zeroize(); }
+            *key = None;
         }
-        *self.private_key.write().await = None;
-
-        // Zero public key
-        if let Some(ref mut key) = *self.public_key.write().await {
-            key.zeroize();
+        {
+            let mut key = self.public_key.write().await;
+            if let Some(ref mut k) = *key { k.zeroize(); }
+            *key = None;
         }
-        *self.public_key.write().await = None;
-
-        // Zero root folder key
-        if let Some(ref mut key) = *self.root_folder_key.write().await {
-            key.zeroize();
+        {
+            let mut key = self.root_folder_key.write().await;
+            if let Some(ref mut k) = *key { k.zeroize(); }
+            *key = None;
         }
-        *self.root_folder_key.write().await = None;
-
-        // Zero root IPNS private key
-        if let Some(ref mut key) = *self.root_ipns_private_key.write().await {
-            key.zeroize();
+        {
+            let mut key = self.root_ipns_private_key.write().await;
+            if let Some(ref mut k) = *key { k.zeroize(); }
+            *key = None;
         }
-        *self.root_ipns_private_key.write().await = None;
-
-        // Zero root IPNS public key
-        if let Some(ref mut key) = *self.root_ipns_public_key.write().await {
-            key.zeroize();
+        {
+            let mut key = self.root_ipns_public_key.write().await;
+            if let Some(ref mut k) = *key { k.zeroize(); }
+            *key = None;
         }
-        *self.root_ipns_public_key.write().await = None;
 
         // Clear non-sensitive fields
         *self.root_ipns_name.write().await = None;

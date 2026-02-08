@@ -14,6 +14,8 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use zeroize::Zeroizing;
+
 use crate::crypto;
 use crate::crypto::folder::{FolderChild, FolderMetadata};
 
@@ -32,7 +34,8 @@ pub enum InodeKind {
     Root {
         /// Decrypted Ed25519 IPNS private key for signing root folder metadata.
         /// Populated from AppState.root_ipns_private_key during init.
-        ipns_private_key: Option<Vec<u8>>,
+        /// Wrapped in `Zeroizing` for automatic zeroization on drop.
+        ipns_private_key: Option<Zeroizing<Vec<u8>>>,
         /// Root folder IPNS name for metadata resolution.
         ipns_name: Option<String>,
     },
@@ -44,10 +47,12 @@ pub enum InodeKind {
         /// Hex-encoded ECIES-wrapped AES key for this folder's metadata.
         encrypted_folder_key: String,
         /// Decrypted 32-byte AES folder key for metadata encryption/decryption.
-        folder_key: Vec<u8>,
+        /// Wrapped in `Zeroizing` for automatic zeroization on drop.
+        folder_key: Zeroizing<Vec<u8>>,
         /// Decrypted Ed25519 IPNS private key for signing this folder's IPNS records.
         /// Critical for write operations (plan 09-06).
-        ipns_private_key: Option<Vec<u8>>,
+        /// Wrapped in `Zeroizing` for automatic zeroization on drop.
+        ipns_private_key: Option<Zeroizing<Vec<u8>>>,
         /// Whether children have been loaded from IPNS metadata.
         children_loaded: bool,
     },
@@ -254,12 +259,13 @@ impl InodeTable {
                                 "Invalid folderKeyEncrypted hex for folder '{}'",
                                 folder.name
                             ))?;
-                    let folder_key =
+                    let folder_key = Zeroizing::new(
                         crypto::ecies::unwrap_key(&encrypted_folder_key_bytes, private_key)
                             .map_err(|e| format!(
                                 "Failed to decrypt folder key for '{}': {}",
                                 folder.name, e
-                            ))?;
+                            ))?
+                    );
 
                     // Decrypt IPNS private key (ECIES unwrap)
                     let encrypted_ipns_key_bytes =
@@ -268,12 +274,13 @@ impl InodeTable {
                                 "Invalid ipnsPrivateKeyEncrypted hex for folder '{}'",
                                 folder.name
                             ))?;
-                    let ipns_private_key =
+                    let ipns_private_key = Zeroizing::new(
                         crypto::ecies::unwrap_key(&encrypted_ipns_key_bytes, private_key)
                             .map_err(|e| format!(
                                 "Failed to decrypt IPNS private key for '{}': {}",
                                 folder.name, e
-                            ))?;
+                            ))?
+                    );
 
                     let created = UNIX_EPOCH
                         + Duration::from_millis(folder.created_at);
@@ -447,8 +454,8 @@ mod tests {
             kind: InodeKind::Folder {
                 ipns_name: "k51test".to_string(),
                 encrypted_folder_key: "deadbeef".to_string(),
-                folder_key: vec![0u8; 32],
-                ipns_private_key: Some(vec![0u8; 32]),
+                folder_key: Zeroizing::new(vec![0u8; 32]),
+                ipns_private_key: Some(Zeroizing::new(vec![0u8; 32])),
                 children_loaded: false,
             },
             attr: FileAttr {
@@ -550,8 +557,8 @@ mod tests {
         let kind = InodeKind::Folder {
             ipns_name: "k51test".to_string(),
             encrypted_folder_key: "deadbeef".to_string(),
-            folder_key: vec![0u8; 32],
-            ipns_private_key: Some(vec![42u8; 32]),
+            folder_key: Zeroizing::new(vec![0u8; 32]),
+            ipns_private_key: Some(Zeroizing::new(vec![42u8; 32])),
             children_loaded: false,
         };
 
@@ -569,7 +576,7 @@ mod tests {
     #[test]
     fn test_inode_kind_root_has_ipns_private_key() {
         let kind = InodeKind::Root {
-            ipns_private_key: Some(vec![42u8; 32]),
+            ipns_private_key: Some(Zeroizing::new(vec![42u8; 32])),
             ipns_name: Some("k51root".to_string()),
         };
 

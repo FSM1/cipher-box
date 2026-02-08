@@ -194,7 +194,7 @@ mod implementation {
                 .map_err(|_| "Invalid file IV hex".to_string())?;
             let iv_arr: [u8; 12] = iv.try_into()
                 .map_err(|_| "Invalid IV length".to_string())?;
-            let file_key_arr: [u8; 32] = file_key.clone().try_into()
+            let file_key_arr: [u8; 32] = file_key.as_slice().try_into()
                 .map_err(|_| "Invalid file key length".to_string())?;
             let plaintext = crate::crypto::aes::decrypt_aes_gcm(
                 &encrypted_bytes, &file_key_arr, &iv_arr,
@@ -220,6 +220,30 @@ mod implementation {
             log::info!("Root IPNS name: {}", self.root_ipns_name);
             log::info!("Inode count: {}", self.inodes.inodes.len());
             Ok(())
+        }
+
+        /// Clean up all caches and zeroize sensitive data on unmount.
+        fn destroy(&mut self) {
+            use zeroize::Zeroize;
+
+            self.content_cache.clear();
+            self.metadata_cache.clear();
+
+            // Zeroize pending_content values
+            for (_, content) in self.pending_content.iter_mut() {
+                content.zeroize();
+            }
+            self.pending_content.clear();
+
+            // Zeroize open file handles' cached content
+            for (_, handle) in self.open_files.iter_mut() {
+                if let Some(ref mut c) = handle.cached_content {
+                    c.zeroize();
+                }
+            }
+            self.open_files.clear();
+
+            log::info!("CipherBoxFS destroyed: all caches zeroized");
         }
 
         /// Look up a child by name within a parent directory.
@@ -434,7 +458,7 @@ mod implementation {
             self.drain_refresh_completions();
 
             // 2. Check if metadata is stale — fire background refresh if so
-            let stale_info: Option<(String, Vec<u8>)> = {
+            let stale_info: Option<(String, zeroize::Zeroizing<Vec<u8>>)> = {
                 let inode = match self.inodes.get(ino) {
                     Some(i) => i,
                     None => {
@@ -745,8 +769,7 @@ mod implementation {
                             let iv_arr: [u8; 12] = iv_bytes
                                 .try_into()
                                 .map_err(|_| "Invalid IV length".to_string())?;
-                            let file_key_arr: [u8; 32] = file_key
-                                .clone()
+                            let file_key_arr: [u8; 32] = file_key.as_slice()
                                 .try_into()
                                 .map_err(|_| "Invalid file key length".to_string())?;
                             let plaintext = crate::crypto::aes::decrypt_aes_gcm(
@@ -981,8 +1004,7 @@ mod implementation {
                         let iv_arr: [u8; 12] = iv_bytes
                             .try_into()
                             .map_err(|_| "Invalid IV length".to_string())?;
-                        let file_key_arr: [u8; 32] = file_key
-                            .clone()
+                        let file_key_arr: [u8; 32] = file_key.as_slice()
                             .try_into()
                             .map_err(|_| "Invalid file key length".to_string())?;
                         let plaintext = crate::crypto::aes::decrypt_aes_gcm(
@@ -1391,8 +1413,8 @@ mod implementation {
                     kind: InodeKind::Folder {
                         ipns_name: ipns_name.clone(),
                         encrypted_folder_key: encrypted_folder_key_hex,
-                        folder_key: folder_key.to_vec(),
-                        ipns_private_key: Some(ipns_private_key.clone()),
+                        folder_key: zeroize::Zeroizing::new(folder_key.to_vec()),
+                        ipns_private_key: Some(zeroize::Zeroizing::new(ipns_private_key.clone())),
                         children_loaded: true, // empty folder, so "loaded"
                     },
                     attr,
@@ -1833,17 +1855,43 @@ mod implementation {
         }
 
         /// Check file access permissions.
+        ///
+        /// Enforces owner-only access based on inode permission bits.
         fn access(
             &mut self,
-            _req: &Request<'_>,
+            req: &Request<'_>,
             ino: u64,
-            _mask: i32,
+            mask: i32,
             reply: ReplyEmpty,
         ) {
-            if self.inodes.get(ino).is_some() {
+            let Some(inode) = self.inodes.get(ino) else {
+                reply.error(libc::ENOENT);
+                return;
+            };
+
+            // F_OK: just check existence
+            if mask == libc::F_OK {
+                reply.ok();
+                return;
+            }
+
+            let attr = &inode.attr;
+            // Owner-only check: only the mounting user should access files
+            if req.uid() != attr.uid {
+                reply.error(libc::EACCES);
+                return;
+            }
+
+            let owner_bits = (attr.perm >> 6) & 0o7;
+            let mut granted = true;
+            if mask & libc::R_OK != 0 && owner_bits & 0o4 == 0 { granted = false; }
+            if mask & libc::W_OK != 0 && owner_bits & 0o2 == 0 { granted = false; }
+            if mask & libc::X_OK != 0 && owner_bits & 0o1 == 0 { granted = false; }
+
+            if granted {
                 reply.ok();
             } else {
-                reply.error(libc::ENOENT);
+                reply.error(libc::EACCES);
             }
         }
 

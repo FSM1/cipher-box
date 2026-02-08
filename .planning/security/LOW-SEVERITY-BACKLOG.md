@@ -259,4 +259,83 @@ Consider addressing these when:
 
 ---
 
-_Generated from security:review command - Phase 5_
+## 13. Auth Controller Missing Explicit ThrottlerGuard
+
+**Location:** `apps/api/src/auth/auth.controller.ts:42`
+**Added:** 2026-02-08 (Phase 9 Desktop Security Review, L-1)
+
+**Issue:** The auth controller does not have `@UseGuards(ThrottlerGuard)`, unlike the IPNS controller. While global ThrottlerModule exists, NestJS requires the guard to be applied per-controller.
+
+**Suggested Fix:** Add `@UseGuards(ThrottlerGuard)` with stricter per-endpoint limits on login (5/min) and refresh (10/min).
+
+---
+
+## 14. IPNS Name in Query Parameter Not URL-Encoded
+
+**Location:** `apps/desktop/src-tauri/src/api/ipns.rs:29`
+**Added:** 2026-02-08 (Phase 9 Desktop Security Review, L-2)
+
+**Issue:** `format!("/ipns/resolve?ipnsName={}", ipns_name)` -- no URL encoding. Currently safe (IPNS names are `[a-z0-9]`) but establishes a fragile pattern.
+
+**Suggested Fix:** Use `urlencoding::encode()`.
+
+---
+
+## 15. Debug eprintln! Statements Leak Filenames to stderr
+
+**Location:** `apps/desktop/src-tauri/src/fuse/operations.rs:1638-1641` and others
+**Added:** 2026-02-08 (Phase 9 Desktop Security Review, L-3)
+
+**Issue:** Multiple `eprintln!(">>>` statements bypass log-level filtering and leak filenames (sensitive in a privacy-focused app). Already noted in project memory as pre-merge cleanup.
+
+**Suggested Fix:** Remove or replace with `log::debug!()` before merge.
+
+---
+
+## 16. Private Key Logged by Length in auth.ts
+
+**Location:** `apps/desktop/src/auth.ts:167`
+**Added:** 2026-02-08 (Phase 9 Desktop Security Review, L-4)
+
+**Issue:** `console.log('Got private key, length:', privateKey.length)` -- logs the length (always 64 hex chars), not the key itself. Not a secret leak, but establishes a risky log-adjacent pattern.
+
+**Suggested Fix:** Remove or reduce to `console.debug`.
+
+---
+
+## 17. Ed25519 Stack Key Copy Not Zeroized
+
+**Location:** `apps/desktop/src-tauri/src/crypto/ed25519.rs:50-56`
+**Added:** 2026-02-08 (Phase 9 Desktop Security Review, L-5)
+
+**Issue:** `key_bytes: [u8; 32]` stack copy of Ed25519 private key is not zeroized (the `SigningKey` itself IS auto-zeroized via the `zeroize` feature).
+
+**Suggested Fix:** Call `key_bytes.zeroize()` after creating `SigningKey`.
+
+---
+
+## 18. IPNS Sequence Number Fallback to 0 on Resolve Failure
+
+**Location:** `apps/desktop/src-tauri/src/fuse/operations.rs:1141-1147`
+**Added:** 2026-02-08 (Phase 9 Desktop Security Review, L-6)
+
+**Issue:** When IPNS resolve fails, sequence falls back to 0. Publishing with seq=1 when current is seq=100 could cause metadata rollback. Concurrent publishes can also race on the same sequence number.
+
+**Impact:** Silent data loss (overwrites), metadata rollback to stale state.
+
+**Suggested Fix:** Cache last-known sequence number locally and never go below it; return error if unable to resolve current sequence.
+
+---
+
+## 19. Sync Daemon Error Messages Exposed Raw in Tray Status
+
+**Location:** `apps/desktop/src-tauri/src/sync/mod.rs:158-161`
+**Added:** 2026-02-08 (Phase 9 Desktop Security Review, L-7)
+
+**Issue:** Raw error strings (potentially containing API URLs, CIDs, internal info) passed to tray status display.
+
+**Suggested Fix:** Map to user-friendly messages; log full errors internally.
+
+---
+
+_Generated from security:review command - Phase 5, Phase 9_
