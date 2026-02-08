@@ -15,7 +15,6 @@ import {
   unsealAesGcm,
   wrapKey,
   unwrapKey,
-  generateEd25519Keypair,
   signEd25519,
   verifyEd25519,
   createIpnsRecord,
@@ -74,7 +73,9 @@ async function main() {
 
   // 3. Ed25519 with fixed private key
   console.log('--- Ed25519 Test Vector ---');
-  const ed25519PrivateKey = hexToBytes('9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60');
+  const ed25519PrivateKey = hexToBytes(
+    '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60'
+  );
   const ed25519PublicKey = ed.getPublicKey(ed25519PrivateKey);
   console.log(`ED25519_PRIVATE_KEY: "${toHex(ed25519PrivateKey)}"`);
   console.log(`ED25519_PUBLIC_KEY: "${toHex(ed25519PublicKey)}"`);
@@ -91,14 +92,18 @@ async function main() {
 
   // 4. ECIES with fixed secp256k1 keypair
   console.log('--- ECIES Test Vector ---');
-  const eciesPrivateKey = hexToBytes('c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721');
+  const eciesPrivateKey = hexToBytes(
+    'c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721'
+  );
   const eciesPublicKey = getPublicKey(eciesPrivateKey, false); // uncompressed
   console.log(`ECIES_PRIVATE_KEY: "${toHex(eciesPrivateKey)}"`);
   console.log(`ECIES_PUBLIC_KEY: "${toHex(eciesPublicKey)}"`);
 
   // ECIES is non-deterministic (ephemeral key), so we wrap and provide the wrapped bytes
   // for Rust to unwrap. We also test Rust -> TS direction via round-trip test.
-  const eciesPlaintext = hexToBytes('0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef');
+  const eciesPlaintext = hexToBytes(
+    '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+  );
   const wrapped = await wrapKey(eciesPlaintext, eciesPublicKey);
   console.log(`ECIES_PLAINTEXT: "${toHex(eciesPlaintext)}"`);
   console.log(`ECIES_WRAPPED: "${toHex(wrapped)}"`);
@@ -112,7 +117,9 @@ async function main() {
 
   // 5. IPNS Record with fixed Ed25519 keypair and fixed timestamp
   console.log('--- IPNS Record Test Vector ---');
-  const ipnsPrivateKey = hexToBytes('9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60');
+  const ipnsPrivateKey = hexToBytes(
+    '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60'
+  );
   const ipnsPublicKey = ed.getPublicKey(ipnsPrivateKey);
   const ipnsValue = '/ipfs/bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4';
   const ipnsSequence = 42n;
@@ -124,7 +131,12 @@ async function main() {
   console.log(`IPNS_SEQUENCE: ${ipnsSequence}`);
   console.log(`IPNS_LIFETIME_MS: ${ipnsLifetimeMs}`);
 
-  const ipnsRecord = await createIpnsRecord(ipnsPrivateKey, ipnsValue, ipnsSequence, ipnsLifetimeMs);
+  const ipnsRecord = await createIpnsRecord(
+    ipnsPrivateKey,
+    ipnsValue,
+    ipnsSequence,
+    ipnsLifetimeMs
+  );
   console.log(`IPNS_VALIDITY: "${ipnsRecord.validity}"`);
   console.log(`IPNS_SIGNATURE_V2: "${toHex(ipnsRecord.signatureV2)}"`);
   console.log(`IPNS_SIGNATURE_V2_LEN: ${ipnsRecord.signatureV2.length}`);

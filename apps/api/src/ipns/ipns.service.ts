@@ -262,6 +262,7 @@ export class IpnsService {
    */
   async resolveRecord(ipnsName: string): Promise<{ cid: string; sequenceNumber: string } | null> {
     let result: { cid: string; sequenceNumber: string } | null = null;
+    let routingError: HttpException | null = null;
 
     try {
       result = await this.resolveFromDelegatedRouting(ipnsName);
@@ -269,6 +270,7 @@ export class IpnsService {
       // Fall back to DB cache on BAD_GATEWAY (delegated routing failures)
       if (error instanceof HttpException && error.getStatus() === HttpStatus.BAD_GATEWAY) {
         this.logger.warn(`Delegated routing failed for ${ipnsName}, falling back to DB cache`);
+        routingError = error;
       } else {
         throw error;
       }
@@ -285,6 +287,12 @@ export class IpnsService {
     if (cached?.latestCid) {
       this.logger.log(`Resolved ${ipnsName} from DB cache: ${cached.latestCid}`);
       return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
+    }
+
+    // If we got here due to a routing error and DB has no cache, re-throw
+    if (routingError) {
+      this.logger.warn(`No DB cache available for ${ipnsName}, re-throwing`);
+      throw routingError;
     }
 
     return null;
@@ -395,12 +403,9 @@ export class IpnsService {
     recordBytes: Uint8Array
   ): Promise<{ cid: string; sequenceNumber: string }> {
     try {
-      // Dynamically load ESM-only ipns package at runtime.
-      // Use Function constructor to prevent TypeScript from compiling
-      // `import()` into `require()` (which breaks ESM-only packages).
+      // Dynamically load ESM-only ipns package at runtime
       if (!unmarshalIPNSRecord) {
-        const dynamicImport = new Function('specifier', 'return import(specifier)');
-        const ipnsModule = await dynamicImport('ipns');
+        const ipnsModule = await import('ipns');
         unmarshalIPNSRecord = ipnsModule.unmarshalIPNSRecord;
       }
 
