@@ -77,8 +77,8 @@ jobs:
           npm install
           npm run build
 
-      - name: Build packages
-        run: pnpm build
+      - name: Build packages (excluding desktop)
+        run: pnpm --filter @cipherbox/crypto --filter @cipherbox/api --filter @cipherbox/web build
         env:
           VITE_WEB3AUTH_CLIENT_ID: ${{ secrets.VITE_WEB3AUTH_CLIENT_ID }}
           VITE_API_URL: http://localhost:3000
