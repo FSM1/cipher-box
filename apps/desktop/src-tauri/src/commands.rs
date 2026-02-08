@@ -85,6 +85,56 @@ pub async fn handle_auth_complete(
     // 8. Mark as authenticated
     *state.is_authenticated.write().await = true;
 
+    // 9. Mount FUSE filesystem
+    #[cfg(feature = "fuse")]
+    {
+        *state.mount_status.write().await = crate::state::MountStatus::Mounting;
+        let private_key = state
+            .private_key
+            .read()
+            .await
+            .as_ref()
+            .ok_or("Private key not available for FUSE mount")?
+            .clone();
+        let root_folder_key = state
+            .root_folder_key
+            .read()
+            .await
+            .as_ref()
+            .ok_or("Root folder key not available for FUSE mount")?
+            .clone();
+        let root_ipns_name = state
+            .root_ipns_name
+            .read()
+            .await
+            .as_ref()
+            .ok_or("Root IPNS name not available for FUSE mount")?
+            .clone();
+        let root_ipns_private_key = state.root_ipns_private_key.read().await.clone();
+
+        let rt = tokio::runtime::Handle::current();
+        match crate::fuse::mount_filesystem(
+            &state,
+            rt,
+            private_key,
+            root_folder_key,
+            root_ipns_name,
+            root_ipns_private_key,
+        ) {
+            Ok(_handle) => {
+                *state.mount_status.write().await = crate::state::MountStatus::Mounted;
+                log::info!("FUSE filesystem mounted at ~/CipherVault");
+            }
+            Err(e) => {
+                let err_msg = format!("FUSE mount failed: {}", e);
+                *state.mount_status.write().await =
+                    crate::state::MountStatus::Error(err_msg.clone());
+                log::error!("{}", err_msg);
+                // Don't fail auth -- user is authenticated but mount failed
+            }
+        }
+    }
+
     log::info!("Authentication complete for user {}", user_id);
     Ok(())
 }
@@ -175,6 +225,15 @@ pub async fn try_silent_refresh(state: State<'_, AppState>) -> Result<bool, Stri
 #[tauri::command]
 pub async fn logout(state: State<'_, AppState>) -> Result<(), String> {
     log::info!("Logging out");
+
+    // Unmount FUSE filesystem before clearing keys
+    #[cfg(feature = "fuse")]
+    {
+        if let Err(e) = crate::fuse::unmount_filesystem() {
+            log::warn!("FUSE unmount failed (will continue logout): {}", e);
+        }
+        *state.mount_status.write().await = crate::state::MountStatus::Unmounted;
+    }
 
     // POST /auth/logout (best-effort, don't fail logout if server unreachable)
     let resp = state.api.authenticated_post("/auth/logout", &()).await;
