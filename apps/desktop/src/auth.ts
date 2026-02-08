@@ -80,7 +80,20 @@ export async function initWeb3Auth(): Promise<void> {
 
     web3auth = new Web3Auth(options);
     await web3auth.init();
-    console.log('Web3Auth initialized');
+    console.log('Web3Auth initialized, status:', web3auth.status, 'connected:', web3auth.connected);
+
+    // If Web3Auth auto-connected from cached session, disconnect first
+    // so the user gets a fresh login flow. The cached Web3Auth session
+    // may not match the Rust-side state (no keys in memory on cold start).
+    if (web3auth.connected) {
+      console.log('Clearing stale Web3Auth cached session');
+      try {
+        await web3auth.logout({ cleanup: true });
+      } catch {
+        // If logout fails, clear cache directly
+        web3auth.clearCache();
+      }
+    }
   } catch (err) {
     console.error('Failed to initialize Web3Auth:', err);
     throw err;
@@ -107,13 +120,16 @@ export async function login(): Promise<void> {
   }
 
   // Open Web3Auth modal -- user picks login method
+  console.log('Opening Web3Auth modal, current status:', web3auth.status);
   const provider = await web3auth.connect();
   if (!provider) {
     throw new Error('Web3Auth connection failed: no provider returned');
   }
+  console.log('Web3Auth connected, extracting credentials...');
 
   // Extract idToken (v10 API: getIdentityToken() returns { idToken })
   const tokenInfo = await web3auth.getIdentityToken();
+  console.log('Got identity token:', tokenInfo?.idToken ? 'yes' : 'no');
   if (!tokenInfo?.idToken) {
     throw new Error('Failed to get idToken from Web3Auth');
   }
@@ -124,11 +140,13 @@ export async function login(): Promise<void> {
   let privateKey: string | null = null;
   try {
     privateKey = await provider.request<unknown, string>({ method: 'private_key' });
-  } catch {
+  } catch (e1) {
+    console.warn('private_key method failed:', e1);
     // Fallback for some provider versions
     try {
       privateKey = await provider.request<unknown, string>({ method: 'eth_private_key' });
-    } catch {
+    } catch (e2) {
+      console.error('eth_private_key method also failed:', e2);
       throw new Error('Failed to extract private key from Web3Auth provider');
     }
   }
@@ -136,12 +154,14 @@ export async function login(): Promise<void> {
   if (!privateKey) {
     throw new Error('No private key returned from Web3Auth provider');
   }
+  console.log('Got private key, length:', privateKey.length);
 
   // Remove 0x prefix if present for consistent hex format
   const privateKeyHex = privateKey.startsWith('0x') ? privateKey.slice(2) : privateKey;
 
   // Pass credentials to Rust backend via Tauri IPC
   // This is a secure in-process channel -- no URL parameters or external communication
+  console.log('Invoking handle_auth_complete on Rust side...');
   await invoke('handle_auth_complete', {
     idToken,
     privateKey: privateKeyHex,
