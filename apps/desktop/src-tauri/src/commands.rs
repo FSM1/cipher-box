@@ -44,14 +44,14 @@ pub async fn handle_auth_complete(
         return Err("Private key must be 32 bytes".to_string());
     }
 
-    // Derive uncompressed public key (65 bytes, 0x04 prefix) from private key
-    let public_key_bytes = derive_public_key(&private_key_bytes)?;
-    let public_key_hex = hex::encode(&public_key_bytes);
+    // Derive public keys from private key
+    let public_key_bytes = derive_public_key(&private_key_bytes)?; // 65 bytes, uncompressed (for ECIES)
+    let compressed_public_key_hex = derive_compressed_public_key_hex(&private_key_bytes)?; // 33 bytes hex (for backend auth)
 
-    // 2. Login with backend (requires publicKey and loginType)
+    // 2. Login with backend (requires compressed publicKey matching Web3Auth JWT)
     let login_req = types::LoginRequest {
         id_token: id_token.clone(),
-        public_key: public_key_hex,
+        public_key: compressed_public_key_hex,
         login_type: "social".to_string(),
     };
 
@@ -453,12 +453,23 @@ fn extract_user_id_from_jwt(token: &str) -> Result<String, String> {
 
 /// Derive an uncompressed secp256k1 public key (65 bytes, 0x04 prefix) from a 32-byte private key.
 ///
-/// Uses the `ecies` crate's re-exported `SecretKey` and `PublicKey` from libsecp256k1.
+/// Used for ECIES encryption/decryption operations.
 fn derive_public_key(private_key: &[u8]) -> Result<Vec<u8>, String> {
     let sk = ecies::SecretKey::parse_slice(private_key)
         .map_err(|e| format!("Invalid secp256k1 private key: {:?}", e))?;
     let pk = ecies::PublicKey::from_secret_key(&sk);
     Ok(pk.serialize().to_vec()) // 65-byte uncompressed format
+}
+
+/// Derive a compressed secp256k1 public key (33 bytes) as hex string from a 32-byte private key.
+///
+/// Used for backend auth — Web3Auth JWT stores the compressed key format,
+/// so the login request must send compressed to pass the public key match check.
+fn derive_compressed_public_key_hex(private_key: &[u8]) -> Result<String, String> {
+    let sk = ecies::SecretKey::parse_slice(private_key)
+        .map_err(|e| format!("Invalid secp256k1 private key: {:?}", e))?;
+    let pk = ecies::PublicKey::from_secret_key(&sk);
+    Ok(hex::encode(pk.serialize_compressed())) // 33-byte compressed format
 }
 
 #[cfg(test)]
