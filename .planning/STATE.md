@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 ## Current Position
 
 Phase: 9 of 11 (Desktop Client)
-Plan: 3 of 7 in Phase 9 complete (09-01, 09-02, 09-03)
+Plan: 4 of 7 in Phase 9 complete (09-01, 09-02, 09-03, 09-04)
 Status: In progress
-Last activity: 2026-02-08 - Completed 09-02-PLAN.md (Rust crypto module)
+Last activity: 2026-02-08 - Completed 09-04-PLAN.md (Auth and keychain integration)
 
-Progress: [########--] 77% (53 of 69 plans)
+Progress: [########--] 78% (54 of 69 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 53
-- Average duration: 4.7 min
+- Total plans completed: 54
+- Average duration: 4.6 min
 - Total execution time: 4.5 hours
 
 **By Phase:**
@@ -41,12 +41,12 @@ Progress: [########--] 77% (53 of 69 plans)
 | 07-multi-device-sync       | 4/4   | 17 min | 4.3 min  |
 | 07.1-atomic-file-upload    | 2/2   | 6 min  | 3 min    |
 | 08-tee-integration         | 4/4   | 21 min | 5.3 min  |
-| 09-desktop-client          | 3/7   | 21 min | 7 min    |
+| 09-desktop-client          | 4/7   | 24 min | 6 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 7m, 5m, 5m, 6m, 10m
-- Trend: Consistent, slightly higher for Rust crypto
+- Last 5 plans: 5m, 5m, 6m, 10m, 3m
+- Trend: Consistent, auth integration was fast due to pre-written commands.rs
 
 Updated after each plan completion.
 
@@ -223,6 +223,11 @@ Recent decisions affecting current work:
 | CBOR field order matches ipns npm package             | 09-02   | TTL,Value,Sequence,Validity,ValidityType ordering for compatibility       |
 | ecies crate v0.2 cross-compatible with eciesjs        | 09-02   | Verified via cross-language test vector (TS wrap, Rust unwrap)            |
 | Pre-computed test vectors from TypeScript             | 09-02   | Generate once with script, hardcode hex constants in Rust tests           |
+| Web3Auth in webview, not system browser               | 09-04   | Private key stays in-process via Tauri IPC, no insecure URL transit       |
+| Silent refresh is API-only on cold start              | 09-04   | Private key not restorable from Keychain; full Web3Auth login needed      |
+| JWT sub extraction without verification               | 09-04   | Server already verified; manual base64url decode avoids JWT library       |
+| Dynamic Web3Auth SDK import in desktop webview        | 09-04   | Graceful handling when SDK not installed via await import()               |
+| secp256k1 pubkey derivation via ecies crate exports   | 09-04   | Reuses ecies SecretKey/PublicKey, avoids additional crypto dependency     |
 
 ### Pending Todos
 
@@ -276,11 +281,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-08
-Stopped at: Completed 09-02-PLAN.md (Rust crypto module)
+Stopped at: Completed 09-04-PLAN.md (Auth and keychain integration)
 Resume file: None
-Next plan: 09-04-PLAN.md (Auth and keychain integration)
+Next plan: 09-05-PLAN.md (FUSE filesystem)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-08 after completing 09-02-PLAN.md (Rust Crypto Module)_
+_Last updated: 2026-02-08 after completing 09-04-PLAN.md (Auth and Keychain Integration)_
