@@ -49,3 +49,44 @@ pub async fn resolve_ipns(
 
     Ok(resolve_resp)
 }
+
+/// IPNS publish request body matching the backend PublishIpnsDto.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IpnsPublishRequest {
+    /// IPNS name (k51... CIDv1 format).
+    pub ipns_name: String,
+    /// Base64-encoded marshaled IPNS record (protobuf bytes).
+    pub record: String,
+    /// CID of the encrypted metadata this record points to.
+    pub metadata_cid: String,
+    /// Hex-encoded ECIES-wrapped Ed25519 private key for TEE republishing
+    /// (only required on first publish for a new folder).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encrypted_ipns_private_key: Option<String>,
+    /// TEE key epoch (required with encrypted_ipns_private_key).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_epoch: Option<u32>,
+}
+
+/// Publish a signed IPNS record via the backend.
+///
+/// POST /ipns/publish with the signed record. The backend relays
+/// to delegated-ipfs.dev and tracks the folder for TEE republishing.
+pub async fn publish_ipns(
+    client: &ApiClient,
+    request: &IpnsPublishRequest,
+) -> Result<(), String> {
+    let resp = client
+        .authenticated_post("/ipns/publish", request)
+        .await
+        .map_err(|e| format!("IPNS publish failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("IPNS publish failed ({}): {}", status, body));
+    }
+
+    Ok(())
+}

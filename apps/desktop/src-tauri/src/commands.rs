@@ -96,6 +96,13 @@ pub async fn handle_auth_complete(
             .as_ref()
             .ok_or("Private key not available for FUSE mount")?
             .clone();
+        let public_key = state
+            .public_key
+            .read()
+            .await
+            .as_ref()
+            .ok_or("Public key not available for FUSE mount")?
+            .clone();
         let root_folder_key = state
             .root_folder_key
             .read()
@@ -112,14 +119,25 @@ pub async fn handle_auth_complete(
             .clone();
         let root_ipns_private_key = state.root_ipns_private_key.read().await.clone();
 
+        // Extract TEE keys for new folder creation
+        let tee_keys = state.tee_keys.read().await;
+        let tee_public_key = tee_keys.as_ref().and_then(|tk| {
+            hex::decode(&tk.current_public_key).ok()
+        });
+        let tee_key_epoch = tee_keys.as_ref().map(|tk| tk.current_epoch);
+        drop(tee_keys);
+
         let rt = tokio::runtime::Handle::current();
         match crate::fuse::mount_filesystem(
             &state,
             rt,
             private_key,
+            public_key,
             root_folder_key,
             root_ipns_name,
             root_ipns_private_key,
+            tee_public_key,
+            tee_key_epoch,
         ) {
             Ok(_handle) => {
                 *state.mount_status.write().await = crate::state::MountStatus::Mounted;

@@ -67,3 +67,28 @@ pub async fn upload_content(client: &ApiClient, data: &[u8]) -> Result<String, S
 
     Ok(upload_resp.cid)
 }
+
+/// Unpin content from IPFS via the backend.
+///
+/// POST /ipfs/unpin with `{ cid }`. Fire-and-forget on delete
+/// (matches web app pattern -- 404 treated as success).
+pub async fn unpin_content(client: &ApiClient, cid: &str) -> Result<(), String> {
+    #[derive(serde::Serialize)]
+    struct UnpinRequest<'a> {
+        cid: &'a str,
+    }
+
+    let resp = client
+        .authenticated_post("/ipfs/unpin", &UnpinRequest { cid })
+        .await
+        .map_err(|e| format!("IPFS unpin failed: {}", e))?;
+
+    // 404 is success (already unpinned -- idempotent behavior)
+    if resp.status().as_u16() == 404 || resp.status().is_success() {
+        Ok(())
+    } else {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        Err(format!("IPFS unpin failed ({}): {}", status, body))
+    }
+}

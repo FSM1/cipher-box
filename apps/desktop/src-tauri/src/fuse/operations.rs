@@ -16,7 +16,8 @@ mod implementation {
     use std::sync::atomic::Ordering;
     use std::time::Duration;
 
-    use crate::fuse::{CipherVaultFS, OpenFileHandle};
+    use crate::fuse::CipherVaultFS;
+    use crate::fuse::file_handle::OpenFileHandle;
     use crate::fuse::inode::{InodeKind, ROOT_INO, BLOCK_SIZE};
 
     /// TTL for FUSE attribute/entry cache replies (1 second).
@@ -348,16 +349,9 @@ mod implementation {
                 return;
             }
 
-            // Allocate file handle
+            // Allocate file handle (read-only)
             let fh = self.next_fh.fetch_add(1, Ordering::SeqCst);
-            self.open_files.insert(
-                fh,
-                OpenFileHandle {
-                    ino,
-                    flags,
-                    cached_content: None,
-                },
-            );
+            self.open_files.insert(fh, OpenFileHandle::new_read(ino, flags));
 
             reply.opened(fh, 0);
         }
