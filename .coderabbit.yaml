@@ -60,6 +60,22 @@ reviews:
         Focus on test coverage, edge cases, and test quality.
         Ensure tests are meaningful and not just for coverage metrics.
 
+    - path: '**/*.md'
+      instructions: |
+        Markdown files are documentation and learnings. Use them for context
+        when reviewing related code, but do NOT flag markdown formatting,
+        linting, or style issues (these are handled by markdownlint).
+
+    - path: '.planning/**'
+      instructions: |
+        Planning documents provide context for the current development phase.
+        Use for understanding intent, but do not review for style or formatting.
+
+    - path: '.learnings/**'
+      instructions: |
+        Agent learning documents capture development insights. Use for context
+        when reviewing related code, but do not review for style or formatting.
+
   # Paths to ignore in reviews
   path_filters:
     - '!**/node_modules/**'
@@ -68,13 +84,10 @@ reviews:
     - '!**/.next/**'
     - '!**/coverage/**'
     - '!**/pnpm-lock.yaml'
-    - '!**/*.lock'
     - '!**/generated/**'
     - '!.claude/agents/**'
     - '!.claude/commands/**'
     - '!.claude/get-shit-done/**'
-    - '!.learnings/**'
-    - '!.planning/**'
 
 chat:
   # Enable chat interactions in PR comments

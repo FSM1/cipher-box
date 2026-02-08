@@ -15,7 +15,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { Response, Request as ExpressRequest } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto, LoginResponseDto } from './dto/login.dto';
-import { TokenResponseDto, LogoutResponseDto } from './dto/token.dto';
+import { TokenResponseDto, DesktopRefreshDto, LogoutResponseDto } from './dto/token.dto';
 import {
   LinkMethodDto,
   AuthMethodResponseDto,
@@ -54,14 +54,24 @@ export class AuthController {
   @ApiResponse({ status: 401, description: 'Invalid Web3Auth token' })
   async login(
     @Body() loginDto: LoginDto,
+    @Req() req: ExpressRequest,
     @Res({ passthrough: true }) res: Response
   ): Promise<LoginResponseDto> {
     const result = await this.authService.login(loginDto);
+    const isDesktop = req.headers['x-client-type'] === 'desktop';
 
-    // Set refresh token in HTTP-only cookie
+    if (isDesktop) {
+      // Desktop clients: return refreshToken in response body (no cookie)
+      return {
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
+        isNewUser: result.isNewUser,
+      };
+    }
+
+    // Web clients: set refresh token in HTTP-only cookie
     res.cookie('refresh_token', result.refreshToken, REFRESH_TOKEN_COOKIE_OPTIONS);
 
-    // Return only accessToken and isNewUser (refreshToken goes in cookie)
     return {
       accessToken: result.accessToken,
       isNewUser: result.isNewUser,
@@ -79,19 +89,38 @@ export class AuthController {
   @ApiResponse({ status: 401, description: 'Invalid or expired refresh token' })
   async refresh(
     @Req() req: ExpressRequest,
+    @Body() body: DesktopRefreshDto,
     @Res({ passthrough: true }) res: Response
   ): Promise<TokenResponseDto> {
-    const refreshToken = req.cookies?.['refresh_token'];
+    const isDesktop = req.headers['x-client-type'] === 'desktop';
+
+    let refreshToken: string | undefined;
+
+    if (isDesktop) {
+      // Desktop clients: read refresh token from request body
+      refreshToken = body?.refreshToken;
+    } else {
+      // Web clients: read refresh token from cookie
+      refreshToken = req.cookies?.['refresh_token'];
+    }
+
     if (!refreshToken) {
       throw new UnauthorizedException('No refresh token');
     }
 
     const result = await this.authService.refreshByToken(refreshToken);
 
-    // Set new refresh token in HTTP-only cookie (rotation)
+    if (isDesktop) {
+      // Desktop clients: return new refreshToken in response body (no cookie)
+      return {
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
+      };
+    }
+
+    // Web clients: set new refresh token in HTTP-only cookie (rotation)
     res.cookie('refresh_token', result.refreshToken, REFRESH_TOKEN_COOKIE_OPTIONS);
 
-    // Return only accessToken (new refreshToken goes in cookie)
     return {
       accessToken: result.accessToken,
     };
@@ -112,8 +141,12 @@ export class AuthController {
     @Request() req: RequestWithUser,
     @Res({ passthrough: true }) res: Response
   ): Promise<LogoutResponseDto> {
-    // Clear the refresh token cookie
-    res.clearCookie('refresh_token', { path: '/auth' });
+    const isDesktop = (req as unknown as ExpressRequest).headers['x-client-type'] === 'desktop';
+
+    if (!isDesktop) {
+      // Web clients: clear the refresh token cookie
+      res.clearCookie('refresh_token', { path: '/auth' });
+    }
 
     return this.authService.logout(req.user.id);
   }

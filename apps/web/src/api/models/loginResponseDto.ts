@@ -11,4 +11,6 @@ export interface LoginResponseDto {
   accessToken: string;
   /** Whether this is a new user registration */
   isNewUser: boolean;
+  /** Refresh token (only present for desktop clients using X-Client-Type: desktop header) */
+  refreshToken?: string;
 }

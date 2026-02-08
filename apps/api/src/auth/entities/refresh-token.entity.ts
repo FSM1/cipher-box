@@ -19,6 +19,9 @@ export class RefreshToken {
   @Column()
   tokenHash!: string;
 
+  @Column('varchar', { length: 16, nullable: true })
+  tokenPrefix!: string | null;
+
   @Column('timestamp')
   expiresAt!: Date;
 

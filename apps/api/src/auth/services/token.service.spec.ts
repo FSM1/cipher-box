@@ -135,6 +135,7 @@ describe('TokenService', () => {
       expect(refreshTokenRepo.find).toHaveBeenCalledWith({
         where: {
           userId: 'user-123',
+          tokenPrefix: refreshToken.substring(0, 16),
           revokedAt: expect.anything(), // IsNull()
         },
       });

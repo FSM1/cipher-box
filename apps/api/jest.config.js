@@ -27,7 +27,6 @@ module.exports = {
   // Mock ESM modules for tests that don't directly test their functionality
   moduleNameMapper: {
     '^jose$': '<rootDir>/../test/__mocks__/jose.ts',
-    '^ipns$': '<rootDir>/../test/__mocks__/ipns.ts',
   },
   // Coverage thresholds per TESTING.md requirements
   // Paths are relative to rootDir (src/)

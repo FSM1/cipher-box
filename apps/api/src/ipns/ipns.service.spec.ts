@@ -7,11 +7,10 @@ import { FolderIpns } from './entities/folder-ipns.entity';
 import { PublishIpnsDto } from './dto';
 import { User } from '../auth/entities/user.entity';
 import { RepublishService } from '../republish/republish.service';
-// Import mocked ipns module (via moduleNameMapper in jest.config.js)
-import { unmarshalIPNSRecord } from 'ipns';
+import { parseIpnsRecord } from './ipns-record-parser';
 
-// Get the mock function reference for test configuration
-const mockUnmarshalIPNSRecord = unmarshalIPNSRecord as jest.Mock;
+jest.mock('./ipns-record-parser');
+const mockParseIpnsRecord = parseIpnsRecord as jest.Mock;
 
 describe('IpnsService', () => {
   let service: IpnsService;
@@ -517,7 +516,7 @@ describe('IpnsService', () => {
         cb();
         return 0 as unknown as NodeJS.Timeout;
       });
-      mockUnmarshalIPNSRecord.mockReset();
+      mockParseIpnsRecord.mockReset();
     });
 
     afterEach(() => {
@@ -532,7 +531,7 @@ describe('IpnsService', () => {
         arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
       });
       // Mock unmarshalIpnsRecord to return parsed record
-      mockUnmarshalIPNSRecord.mockReturnValue({
+      mockParseIpnsRecord.mockReturnValue({
         value: '/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
         sequence: 5n,
       });
@@ -575,7 +574,7 @@ describe('IpnsService', () => {
           ok: true,
           arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
         });
-      mockUnmarshalIPNSRecord.mockReturnValue({
+      mockParseIpnsRecord.mockReturnValue({
         value: '/ipfs/bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi',
         sequence: 10n,
       });
@@ -598,7 +597,7 @@ describe('IpnsService', () => {
           ok: true,
           arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
         });
-      mockUnmarshalIPNSRecord.mockReturnValue({
+      mockParseIpnsRecord.mockReturnValue({
         value: '/ipfs/bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi',
         sequence: 10n,
       });
@@ -609,33 +608,26 @@ describe('IpnsService', () => {
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
-    it('should throw BAD_GATEWAY for non-retryable HTTP errors (500)', async () => {
+    it('should return null for non-retryable HTTP errors (500) with no DB cache', async () => {
       mockFetch.mockResolvedValue({
         ok: false,
         status: 500,
         text: () => Promise.resolve('Internal Server Error'),
       });
 
-      await expect(service.resolveRecord(testIpnsName)).rejects.toThrow(HttpException);
-      await expect(service.resolveRecord(testIpnsName)).rejects.toThrow(
-        'Failed to resolve IPNS name from routing network'
-      );
+      const result = await service.resolveRecord(testIpnsName);
+      expect(result).toBeNull();
     });
 
-    it('should throw BAD_GATEWAY for 400 errors', async () => {
+    it('should return null for 400 errors with no DB cache', async () => {
       mockFetch.mockResolvedValue({
         ok: false,
         status: 400,
         text: () => Promise.resolve('Bad Request'),
       });
 
-      try {
-        await service.resolveRecord(testIpnsName);
-        fail('Expected HttpException to be thrown');
-      } catch (error) {
-        expect(error).toBeInstanceOf(HttpException);
-        expect((error as HttpException).getStatus()).toBe(HttpStatus.BAD_GATEWAY);
-      }
+      const result = await service.resolveRecord(testIpnsName);
+      expect(result).toBeNull();
     });
 
     it('should retry on network errors with exponential backoff', async () => {
@@ -647,7 +639,7 @@ describe('IpnsService', () => {
           ok: true,
           arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
         });
-      mockUnmarshalIPNSRecord.mockReturnValue({
+      mockParseIpnsRecord.mockReturnValue({
         value: '/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
         sequence: 1n,
       });
@@ -658,19 +650,18 @@ describe('IpnsService', () => {
       expect(mockFetch).toHaveBeenCalledTimes(3);
     });
 
-    it('should throw BAD_GATEWAY after max retries on network errors', async () => {
+    it('should return null after max retries on network errors with no DB cache', async () => {
       mockFetch.mockRejectedValue(new Error('Network error'));
 
-      await expect(service.resolveRecord(testIpnsName)).rejects.toThrow(HttpException);
-      await expect(service.resolveRecord(testIpnsName)).rejects.toThrow(
-        'Failed to resolve IPNS name from routing network after multiple attempts'
-      );
+      const result = await service.resolveRecord(testIpnsName);
+      expect(result).toBeNull();
     });
 
-    it('should handle non-Error exceptions during resolve', async () => {
+    it('should return null for non-Error exceptions during resolve with no DB cache', async () => {
       mockFetch.mockRejectedValue('string error');
 
-      await expect(service.resolveRecord(testIpnsName)).rejects.toThrow(HttpException);
+      const result = await service.resolveRecord(testIpnsName);
+      expect(result).toBeNull();
     });
 
     it('should parse CID from record with Qm prefix (CIDv0)', async () => {
@@ -679,7 +670,7 @@ describe('IpnsService', () => {
         ok: true,
         arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
       });
-      mockUnmarshalIPNSRecord.mockReturnValue({
+      mockParseIpnsRecord.mockReturnValue({
         value: '/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
         sequence: 1n,
       });
@@ -696,7 +687,7 @@ describe('IpnsService', () => {
         ok: true,
         arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
       });
-      mockUnmarshalIPNSRecord.mockReturnValue({
+      mockParseIpnsRecord.mockReturnValue({
         value: '/ipfs/bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi',
         sequence: 1n,
       });
@@ -707,23 +698,20 @@ describe('IpnsService', () => {
       expect(result!.cid).toBe('bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi');
     });
 
-    it('should throw BAD_GATEWAY for invalid record without CID', async () => {
+    it('should return null for invalid record without CID and no DB cache', async () => {
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
       mockFetch.mockResolvedValue({
         ok: true,
         arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
       });
-      // Mock unmarshalIpnsRecord to return a record without a valid CID path
-      mockUnmarshalIPNSRecord.mockReturnValue({
+      mockParseIpnsRecord.mockReturnValue({
         value: 'invalid-record-without-cid',
         sequence: 1n,
       });
 
-      // The parsing throws BAD_GATEWAY immediately (no retries needed for parsing errors)
-      await expect(service.resolveRecord(testIpnsName)).rejects.toThrow(HttpException);
-      await expect(service.resolveRecord(testIpnsName)).rejects.toThrow(
-        'Invalid IPNS record format'
-      );
+      // The parsing throws BAD_GATEWAY, which falls through to DB cache → null
+      const result = await service.resolveRecord(testIpnsName);
+      expect(result).toBeNull();
     });
 
     it('should extract sequence number from IPNS record', async () => {
@@ -732,7 +720,7 @@ describe('IpnsService', () => {
         ok: true,
         arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
       });
-      mockUnmarshalIPNSRecord.mockReturnValue({
+      mockParseIpnsRecord.mockReturnValue({
         value: '/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
         sequence: 42n,
       });
@@ -749,7 +737,7 @@ describe('IpnsService', () => {
         ok: true,
         arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
       });
-      mockUnmarshalIPNSRecord.mockReturnValue({
+      mockParseIpnsRecord.mockReturnValue({
         value: '/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
         sequence: undefined, // Missing sequence
       });
@@ -760,20 +748,19 @@ describe('IpnsService', () => {
       expect(result!.sequenceNumber).toBe('0');
     });
 
-    it('should handle unmarshal errors gracefully', async () => {
+    it('should return null on unmarshal errors with no DB cache', async () => {
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
       mockFetch.mockResolvedValue({
         ok: true,
         arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
       });
-      mockUnmarshalIPNSRecord.mockImplementation(() => {
+      mockParseIpnsRecord.mockImplementation(() => {
         throw new Error('Invalid protobuf');
       });
 
-      await expect(service.resolveRecord(testIpnsName)).rejects.toThrow(HttpException);
-      await expect(service.resolveRecord(testIpnsName)).rejects.toThrow(
-        'Invalid IPNS record format'
-      );
+      // Parse error → BAD_GATEWAY → falls through to DB cache → null
+      const result = await service.resolveRecord(testIpnsName);
+      expect(result).toBeNull();
     });
 
     it('should fall back to DB-cached CID when delegated routing returns 502', async () => {
@@ -815,7 +802,7 @@ describe('IpnsService', () => {
       expect(result!.sequenceNumber).toBe('10');
     });
 
-    it('should re-throw BAD_GATEWAY when no DB cache exists', async () => {
+    it('should return null when routing fails and no DB cache exists', async () => {
       mockFetch.mockResolvedValue({
         ok: false,
         status: 500,
@@ -823,13 +810,11 @@ describe('IpnsService', () => {
       });
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
 
-      await expect(service.resolveRecord(testIpnsName)).rejects.toThrow(HttpException);
-      await expect(service.resolveRecord(testIpnsName)).rejects.toThrow(
-        'Failed to resolve IPNS name from routing network'
-      );
+      const result = await service.resolveRecord(testIpnsName);
+      expect(result).toBeNull();
     });
 
-    it('should re-throw BAD_GATEWAY when DB cache has no CID', async () => {
+    it('should return null when routing fails and DB cache has no CID', async () => {
       mockFetch.mockResolvedValue({
         ok: false,
         status: 500,
@@ -840,23 +825,30 @@ describe('IpnsService', () => {
         latestCid: null,
       });
 
-      await expect(service.resolveRecord(testIpnsName)).rejects.toThrow(HttpException);
+      const result = await service.resolveRecord(testIpnsName);
+      expect(result).toBeNull();
     });
 
-    it('should not fall back to DB on non-BAD_GATEWAY errors', async () => {
+    it('should fall back to DB on parse errors (BAD_GATEWAY)', async () => {
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
       mockFetch.mockResolvedValue({
         ok: true,
         arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
       });
-      mockUnmarshalIPNSRecord.mockImplementation(() => {
+      mockParseIpnsRecord.mockImplementation(() => {
         throw new Error('Invalid protobuf');
       });
+      const cachedFolder = {
+        ...mockFolderEntity,
+        latestCid: 'bafyCACHED_PARSE',
+        sequenceNumber: '7',
+      };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(cachedFolder);
 
-      // parseIpnsRecord throws BAD_GATEWAY for invalid format,
-      // but the DB fallback should still work for this case
-      await expect(service.resolveRecord(testIpnsName)).rejects.toThrow(HttpException);
-      // The findOne call happens because parseIpnsRecord also throws BAD_GATEWAY
+      // Parse error → BAD_GATEWAY → falls through to DB cache
+      const result = await service.resolveRecord(testIpnsName);
+      expect(result).not.toBeNull();
+      expect(result!.cid).toBe('bafyCACHED_PARSE');
       expect(mockFolderIpnsRepo.findOne).toHaveBeenCalled();
     });
   });

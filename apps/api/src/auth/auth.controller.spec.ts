@@ -11,6 +11,7 @@ describe('AuthController', () => {
   let controller: AuthController;
   let authService: jest.Mocked<AuthService>;
   let mockResponse: jest.Mocked<Response>;
+  let mockWebRequest: ExpressRequest;
 
   const mockUser = {
     id: 'user-uuid-123',
@@ -34,6 +35,11 @@ describe('AuthController', () => {
       cookie: jest.fn(),
       clearCookie: jest.fn(),
     } as unknown as jest.Mocked<Response>;
+
+    // Create mock web request (no X-Client-Type header)
+    mockWebRequest = {
+      headers: {},
+    } as unknown as ExpressRequest;
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AuthController],
@@ -70,7 +76,7 @@ describe('AuthController', () => {
         isNewUser: false,
       });
 
-      await controller.login(loginDto, mockResponse);
+      await controller.login(loginDto, mockWebRequest, mockResponse);
 
       expect(authService.login).toHaveBeenCalledWith(loginDto);
       expect(authService.login).toHaveBeenCalledTimes(1);
@@ -83,7 +89,7 @@ describe('AuthController', () => {
         isNewUser: false,
       });
 
-      await controller.login(loginDto, mockResponse);
+      await controller.login(loginDto, mockWebRequest, mockResponse);
 
       expect(mockResponse.cookie).toHaveBeenCalledWith(
         'refresh_token',
@@ -102,7 +108,7 @@ describe('AuthController', () => {
         isNewUser: true,
       });
 
-      const result = await controller.login(loginDto, mockResponse);
+      const result = await controller.login(loginDto, mockWebRequest, mockResponse);
 
       expect(result).toEqual({
         accessToken: 'mock-access-token',
@@ -118,15 +124,60 @@ describe('AuthController', () => {
         isNewUser: false,
       });
 
-      const result = await controller.login(loginDto, mockResponse);
+      const result = await controller.login(loginDto, mockWebRequest, mockResponse);
 
       expect(result.isNewUser).toBe(false);
+    });
+  });
+
+  describe('login (desktop client)', () => {
+    const loginDto: LoginDto = {
+      idToken: 'mock-web3auth-token',
+      publicKey: '04abcd1234567890',
+      loginType: 'social',
+    };
+
+    it('should return refreshToken in body when X-Client-Type: desktop header is present', async () => {
+      const desktopRequest = {
+        headers: { 'x-client-type': 'desktop' },
+      } as unknown as ExpressRequest;
+
+      authService.login.mockResolvedValue({
+        accessToken: 'mock-access-token',
+        refreshToken: 'mock-refresh-token',
+        isNewUser: false,
+      });
+
+      const result = await controller.login(loginDto, desktopRequest, mockResponse);
+
+      expect(result).toEqual({
+        accessToken: 'mock-access-token',
+        refreshToken: 'mock-refresh-token',
+        isNewUser: false,
+      });
+    });
+
+    it('should NOT set cookie when X-Client-Type: desktop header is present', async () => {
+      const desktopRequest = {
+        headers: { 'x-client-type': 'desktop' },
+      } as unknown as ExpressRequest;
+
+      authService.login.mockResolvedValue({
+        accessToken: 'mock-access-token',
+        refreshToken: 'mock-refresh-token',
+        isNewUser: false,
+      });
+
+      await controller.login(loginDto, desktopRequest, mockResponse);
+
+      expect(mockResponse.cookie).not.toHaveBeenCalled();
     });
   });
 
   describe('refresh', () => {
     it('should extract refresh_token from cookies', async () => {
       const mockRequest = {
+        headers: {},
         cookies: { refresh_token: 'mock-refresh-token' },
       } as unknown as ExpressRequest;
 
@@ -135,36 +186,39 @@ describe('AuthController', () => {
         refreshToken: 'new-refresh-token',
       });
 
-      await controller.refresh(mockRequest, mockResponse);
+      await controller.refresh(mockRequest, {}, mockResponse);
 
       expect(authService.refreshByToken).toHaveBeenCalledWith('mock-refresh-token');
     });
 
     it('should throw UnauthorizedException if no refresh token cookie', async () => {
       const mockRequest = {
+        headers: {},
         cookies: {},
       } as unknown as ExpressRequest;
 
-      await expect(controller.refresh(mockRequest, mockResponse)).rejects.toThrow(
+      await expect(controller.refresh(mockRequest, {}, mockResponse)).rejects.toThrow(
         UnauthorizedException
       );
-      await expect(controller.refresh(mockRequest, mockResponse)).rejects.toThrow(
+      await expect(controller.refresh(mockRequest, {}, mockResponse)).rejects.toThrow(
         'No refresh token'
       );
     });
 
     it('should throw UnauthorizedException if cookies object is undefined', async () => {
       const mockRequest = {
+        headers: {},
         cookies: undefined,
       } as unknown as ExpressRequest;
 
-      await expect(controller.refresh(mockRequest, mockResponse)).rejects.toThrow(
+      await expect(controller.refresh(mockRequest, {}, mockResponse)).rejects.toThrow(
         UnauthorizedException
       );
     });
 
     it('should set new refresh_token cookie on successful refresh', async () => {
       const mockRequest = {
+        headers: {},
         cookies: { refresh_token: 'old-refresh-token' },
       } as unknown as ExpressRequest;
 
@@ -173,7 +227,7 @@ describe('AuthController', () => {
         refreshToken: 'new-refresh-token',
       });
 
-      await controller.refresh(mockRequest, mockResponse);
+      await controller.refresh(mockRequest, {}, mockResponse);
 
       expect(mockResponse.cookie).toHaveBeenCalledWith(
         'refresh_token',
@@ -187,6 +241,7 @@ describe('AuthController', () => {
 
     it('should return only accessToken (refreshToken goes in cookie)', async () => {
       const mockRequest = {
+        headers: {},
         cookies: { refresh_token: 'mock-refresh-token' },
       } as unknown as ExpressRequest;
 
@@ -195,7 +250,7 @@ describe('AuthController', () => {
         refreshToken: 'new-refresh-token',
       });
 
-      const result = await controller.refresh(mockRequest, mockResponse);
+      const result = await controller.refresh(mockRequest, {}, mockResponse);
 
       expect(result).toEqual({
         accessToken: 'new-access-token',
@@ -204,10 +259,86 @@ describe('AuthController', () => {
     });
   });
 
+  describe('refresh (desktop client)', () => {
+    it('should read refreshToken from request body when X-Client-Type: desktop', async () => {
+      const desktopRequest = {
+        headers: { 'x-client-type': 'desktop' },
+      } as unknown as ExpressRequest;
+
+      authService.refreshByToken.mockResolvedValue({
+        accessToken: 'new-access-token',
+        refreshToken: 'new-refresh-token',
+      });
+
+      await controller.refresh(
+        desktopRequest,
+        { refreshToken: 'desktop-refresh-token' },
+        mockResponse
+      );
+
+      expect(authService.refreshByToken).toHaveBeenCalledWith('desktop-refresh-token');
+    });
+
+    it('should return new refreshToken in body when X-Client-Type: desktop', async () => {
+      const desktopRequest = {
+        headers: { 'x-client-type': 'desktop' },
+      } as unknown as ExpressRequest;
+
+      authService.refreshByToken.mockResolvedValue({
+        accessToken: 'new-access-token',
+        refreshToken: 'new-refresh-token',
+      });
+
+      const result = await controller.refresh(
+        desktopRequest,
+        { refreshToken: 'desktop-refresh-token' },
+        mockResponse
+      );
+
+      expect(result).toEqual({
+        accessToken: 'new-access-token',
+        refreshToken: 'new-refresh-token',
+      });
+    });
+
+    it('should NOT set cookie when X-Client-Type: desktop', async () => {
+      const desktopRequest = {
+        headers: { 'x-client-type': 'desktop' },
+      } as unknown as ExpressRequest;
+
+      authService.refreshByToken.mockResolvedValue({
+        accessToken: 'new-access-token',
+        refreshToken: 'new-refresh-token',
+      });
+
+      await controller.refresh(
+        desktopRequest,
+        { refreshToken: 'desktop-refresh-token' },
+        mockResponse
+      );
+
+      expect(mockResponse.cookie).not.toHaveBeenCalled();
+    });
+
+    it('should throw UnauthorizedException if desktop request has no body refreshToken', async () => {
+      const desktopRequest = {
+        headers: { 'x-client-type': 'desktop' },
+      } as unknown as ExpressRequest;
+
+      await expect(controller.refresh(desktopRequest, {}, mockResponse)).rejects.toThrow(
+        UnauthorizedException
+      );
+      await expect(controller.refresh(desktopRequest, {}, mockResponse)).rejects.toThrow(
+        'No refresh token'
+      );
+    });
+  });
+
   describe('logout', () => {
     it('should clear refresh_token cookie with path /auth', async () => {
       const mockRequest = {
         user: mockUser,
+        headers: {},
       } as unknown as Request & { user: typeof mockUser };
 
       authService.logout.mockResolvedValue({ success: true });
@@ -220,6 +351,7 @@ describe('AuthController', () => {
     it('should call authService.logout with user.id', async () => {
       const mockRequest = {
         user: mockUser,
+        headers: {},
       } as unknown as Request & { user: typeof mockUser };
 
       authService.logout.mockResolvedValue({ success: true });
@@ -232,12 +364,42 @@ describe('AuthController', () => {
     it('should return { success: true }', async () => {
       const mockRequest = {
         user: mockUser,
+        headers: {},
       } as unknown as Request & { user: typeof mockUser };
 
       authService.logout.mockResolvedValue({ success: true });
 
       const result = await controller.logout(mockRequest as any, mockResponse);
 
+      expect(result).toEqual({ success: true });
+    });
+  });
+
+  describe('logout (desktop client)', () => {
+    it('should NOT clear cookie when X-Client-Type: desktop', async () => {
+      const mockRequest = {
+        user: mockUser,
+        headers: { 'x-client-type': 'desktop' },
+      } as unknown as Request & { user: typeof mockUser };
+
+      authService.logout.mockResolvedValue({ success: true });
+
+      await controller.logout(mockRequest as any, mockResponse);
+
+      expect(mockResponse.clearCookie).not.toHaveBeenCalled();
+    });
+
+    it('should still call authService.logout with user.id for desktop', async () => {
+      const mockRequest = {
+        user: mockUser,
+        headers: { 'x-client-type': 'desktop' },
+      } as unknown as Request & { user: typeof mockUser };
+
+      authService.logout.mockResolvedValue({ success: true });
+
+      const result = await controller.logout(mockRequest as any, mockResponse);
+
+      expect(authService.logout).toHaveBeenCalledWith('user-uuid-123');
       expect(result).toEqual({ success: true });
     });
   });

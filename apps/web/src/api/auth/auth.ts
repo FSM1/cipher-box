@@ -23,6 +23,7 @@ import type {
 
 import type {
   AuthMethodResponseDto,
+  DesktopRefreshDto,
   LinkMethodDto,
   LoginDto,
   LoginResponseDto,
@@ -111,8 +112,17 @@ export const useAuthControllerLogin = <TError = void, TContext = unknown>(
 /**
  * @summary Refresh access token using HTTP-only refresh token cookie
  */
-export const authControllerRefresh = (signal?: AbortSignal) => {
-  return customInstance<TokenResponseDto>({ url: `/auth/refresh`, method: 'POST', signal });
+export const authControllerRefresh = (
+  desktopRefreshDto: DesktopRefreshDto,
+  signal?: AbortSignal
+) => {
+  return customInstance<TokenResponseDto>({
+    url: `/auth/refresh`,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    data: desktopRefreshDto,
+    signal,
+  });
 };
 
 export const getAuthControllerRefreshMutationOptions = <
@@ -122,13 +132,13 @@ export const getAuthControllerRefreshMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof authControllerRefresh>>,
     TError,
-    void,
+    { data: DesktopRefreshDto },
     TContext
   >;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof authControllerRefresh>>,
   TError,
-  void,
+  { data: DesktopRefreshDto },
   TContext
 > => {
   const mutationKey = ['authControllerRefresh'];
@@ -140,9 +150,11 @@ export const getAuthControllerRefreshMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof authControllerRefresh>>,
-    void
-  > = () => {
-    return authControllerRefresh();
+    { data: DesktopRefreshDto }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return authControllerRefresh(data);
   };
 
   return { mutationFn, ...mutationOptions };
@@ -151,7 +163,7 @@ export const getAuthControllerRefreshMutationOptions = <
 export type AuthControllerRefreshMutationResult = NonNullable<
   Awaited<ReturnType<typeof authControllerRefresh>>
 >;
-
+export type AuthControllerRefreshMutationBody = DesktopRefreshDto;
 export type AuthControllerRefreshMutationError = void;
 
 /**
@@ -162,12 +174,17 @@ export const useAuthControllerRefresh = <TError = void, TContext = unknown>(
     mutation?: UseMutationOptions<
       Awaited<ReturnType<typeof authControllerRefresh>>,
       TError,
-      void,
+      { data: DesktopRefreshDto },
       TContext
     >;
   },
   queryClient?: QueryClient
-): UseMutationResult<Awaited<ReturnType<typeof authControllerRefresh>>, TError, void, TContext> => {
+): UseMutationResult<
+  Awaited<ReturnType<typeof authControllerRefresh>>,
+  TError,
+  { data: DesktopRefreshDto },
+  TContext
+> => {
   const mutationOptions = getAuthControllerRefreshMutationOptions(options);
 
   return useMutation(mutationOptions, queryClient);

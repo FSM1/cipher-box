@@ -9,4 +9,6 @@
 export interface TokenResponseDto {
   /** New JWT access token */
   accessToken: string;
+  /** New refresh token (only present for desktop clients using X-Client-Type: desktop header) */
+  refreshToken?: string;
 }
