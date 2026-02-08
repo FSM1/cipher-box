@@ -25,8 +25,12 @@ impl From<keyring::Error> for KeychainError {
 }
 
 /// Store a refresh token in the macOS Keychain for the given user ID.
+///
+/// Deletes any existing entry first to avoid "already exists" errors
+/// on macOS Keychain when updating an existing credential.
 pub fn store_refresh_token(user_id: &str, token: &str) -> Result<(), KeychainError> {
     let entry = Entry::new(SERVICE_NAME, user_id)?;
+    let _ = entry.delete_credential(); // ignore NotFound
     entry.set_password(token)?;
     Ok(())
 }
@@ -58,8 +62,10 @@ pub fn delete_refresh_token(user_id: &str) -> Result<(), KeychainError> {
 /// Store the user ID so we can find the Keychain entry on next app launch.
 ///
 /// Uses a fixed key "last_user_id" to store which user was last logged in.
+/// Deletes existing entry first to avoid macOS Keychain "already exists" errors.
 pub fn store_user_id(user_id: &str) -> Result<(), KeychainError> {
     let entry = Entry::new(SERVICE_NAME, LAST_USER_ID_KEY)?;
+    let _ = entry.delete_credential(); // ignore NotFound
     entry.set_password(user_id)?;
     Ok(())
 }

@@ -90,11 +90,20 @@ pub async fn handle_auth_complete(
     *state.public_key.write().await = Some(public_key_bytes.clone());
 
     // 7. Initialize vault for new users, or fetch existing vault
+    //    Also handle the edge case where user exists but vault was deleted.
     if login_resp.is_new_user {
         log::info!("New user detected, initializing vault");
         initialize_vault(&state, &public_key_bytes).await?;
     }
-    fetch_and_decrypt_vault(&state).await?;
+    match fetch_and_decrypt_vault(&state).await {
+        Ok(()) => {}
+        Err(e) if e.contains("404") && !login_resp.is_new_user => {
+            log::warn!("Vault not found for existing user, re-initializing");
+            initialize_vault(&state, &public_key_bytes).await?;
+            fetch_and_decrypt_vault(&state).await?;
+        }
+        Err(e) => return Err(e),
+    }
 
     // 8. Mark as authenticated
     *state.is_authenticated.write().await = true;
@@ -156,7 +165,7 @@ pub async fn handle_auth_complete(
             root_ipns_private_key,
             tee_public_key,
             tee_key_epoch,
-        ) {
+        ).await {
             Ok(_handle) => {
                 *state.mount_status.write().await = crate::state::MountStatus::Mounted;
                 let _ = crate::tray::update_tray_status(&app, &crate::tray::TrayStatus::Synced);
@@ -173,6 +182,15 @@ pub async fn handle_auth_complete(
                 log::error!("{}", err_msg);
                 // Don't fail auth -- user is authenticated but mount failed
             }
+        }
+    }
+
+    // Close OAuth popup windows and hide the login webview
+    for (label, window) in app.webview_windows() {
+        if label.starts_with("oauth-popup-") {
+            let _ = window.destroy();
+        } else if label == "main" {
+            let _ = window.hide();
         }
     }
 
@@ -386,12 +404,13 @@ async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Result<(), Str
     let root_ipns_name = crypto::ipns::derive_ipns_name(&ipns_pub_array)
         .map_err(|e| format!("Failed to derive IPNS name: {}", e))?;
 
+    // 1. Register vault with backend
     let init_req = types::InitVaultRequest {
         owner_public_key: hex::encode(public_key),
         encrypted_root_folder_key: hex::encode(&encrypted_root_folder_key),
         encrypted_root_ipns_private_key: hex::encode(&encrypted_ipns_private_key),
         root_ipns_public_key: hex::encode(&ipns_pub_array),
-        root_ipns_name,
+        root_ipns_name: root_ipns_name.clone(),
     };
 
     let resp = state
@@ -406,7 +425,58 @@ async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Result<(), Str
         return Err(format!("Vault init failed ({}): {}", status, body));
     }
 
-    log::info!("Vault initialized for new user");
+    // 2. Create and publish initial empty folder metadata
+    //    Without this, FUSE init() can't resolve the root IPNS name.
+    log::info!("Publishing initial empty root folder metadata");
+
+    let empty_metadata = crypto::folder::FolderMetadata {
+        version: "v1".to_string(),
+        children: vec![],
+    };
+
+    // Encrypt metadata with root folder key
+    let folder_key_arr: [u8; 32] = root_folder_key
+        .try_into()
+        .map_err(|_| "Invalid root folder key length".to_string())?;
+    let sealed = crypto::folder::encrypt_folder_metadata(&empty_metadata, &folder_key_arr)
+        .map_err(|e| format!("Metadata encryption failed: {}", e))?;
+
+    // Format as JSON { "iv": "<hex>", "data": "<base64>" }
+    let iv_hex = hex::encode(&sealed[..12]);
+    use base64::Engine;
+    let data_base64 = base64::engine::general_purpose::STANDARD.encode(&sealed[12..]);
+    let json_metadata = serde_json::json!({
+        "iv": iv_hex,
+        "data": data_base64,
+    });
+    let json_bytes = serde_json::to_vec(&json_metadata)
+        .map_err(|e| format!("JSON serialization failed: {}", e))?;
+
+    // Upload encrypted metadata to IPFS
+    let initial_cid = crate::api::ipfs::upload_content(&state.api, &json_bytes).await?;
+
+    // Create and sign IPNS record (sequence 0, 24h lifetime)
+    let ipns_key_arr: [u8; 32] = ipns_private_key
+        .try_into()
+        .map_err(|_| "Invalid IPNS private key length".to_string())?;
+    let value = format!("/ipfs/{}", initial_cid);
+    let record = crypto::ipns::create_ipns_record(&ipns_key_arr, &value, 0, 86_400_000)
+        .map_err(|e| format!("IPNS record creation failed: {}", e))?;
+    let marshaled = crypto::ipns::marshal_ipns_record(&record)
+        .map_err(|e| format!("IPNS record marshaling failed: {}", e))?;
+    let record_base64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
+
+    // Publish IPNS record via backend
+    let publish_req = crate::api::ipns::IpnsPublishRequest {
+        ipns_name: root_ipns_name.clone(),
+        record: record_base64,
+        metadata_cid: initial_cid,
+        encrypted_ipns_private_key: None,
+        key_epoch: None,
+    };
+    crate::api::ipns::publish_ipns(&state.api, &publish_req).await?;
+
+    log::info!("Vault initialized and root metadata published for new user");
     Ok(())
 }
 

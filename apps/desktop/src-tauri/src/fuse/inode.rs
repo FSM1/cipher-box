@@ -198,6 +198,10 @@ impl InodeTable {
     ///   using the user's secp256k1 private key (ECIES unwrap).
     /// - **File:** Stores CID, encrypted file key, IV, size, and encryption mode.
     ///
+    /// IMPORTANT: Reuses existing inode numbers for children that match by name.
+    /// NFS clients cache inode numbers; allocating new ones causes "stale file handle"
+    /// errors and NFS disconnects. Only allocate new inos for genuinely new entries.
+    ///
     /// The `private_key` parameter is the user's secp256k1 private key for ECIES decryption.
     #[cfg(feature = "fuse")]
     pub fn populate_folder(
@@ -209,12 +213,39 @@ impl InodeTable {
         let uid = unsafe { libc::getuid() };
         let gid = unsafe { libc::getgid() };
 
+        // Build set of new child names for detecting removals
+        let new_names: std::collections::HashSet<String> = metadata.children.iter().map(|c| {
+            match c {
+                FolderChild::Folder(f) => f.name.clone(),
+                FolderChild::File(f) => f.name.clone(),
+            }
+        }).collect();
+
+        // Get existing children to detect removals
+        let old_child_inos: Vec<u64> = self.inodes.get(&parent_ino)
+            .and_then(|p| p.children.as_ref())
+            .cloned()
+            .unwrap_or_default();
+
+        // Remove children that no longer exist in the new metadata
+        for old_ino in &old_child_inos {
+            if let Some(old_child) = self.inodes.get(old_ino) {
+                if !new_names.contains(&old_child.name) {
+                    let name = old_child.name.clone();
+                    self.inodes.remove(old_ino);
+                    self.name_to_ino.remove(&(parent_ino, name));
+                }
+            }
+        }
+
         let mut child_inos = Vec::new();
 
         for child in &metadata.children {
             match child {
                 FolderChild::Folder(folder) => {
-                    let ino = self.allocate_ino();
+                    // Reuse existing ino if child with same name exists
+                    let existing_ino = self.find_child(parent_ino, &folder.name);
+                    let ino = existing_ino.unwrap_or_else(|| self.allocate_ino());
 
                     // Decrypt folder key (ECIES unwrap)
                     let encrypted_folder_key_bytes =
@@ -244,11 +275,20 @@ impl InodeTable {
                                 folder.name, e
                             ))?;
 
-                    let now = SystemTime::now();
                     let created = UNIX_EPOCH
                         + Duration::from_millis(folder.created_at);
                     let modified = UNIX_EPOCH
                         + Duration::from_millis(folder.modified_at);
+
+                    // Preserve existing children list and loaded state for existing folders
+                    let (existing_children, was_loaded) = if existing_ino.is_some() {
+                        let old = self.inodes.get(&ino);
+                        let ch = old.and_then(|o| o.children.clone());
+                        let loaded = old.map(|o| matches!(&o.kind, InodeKind::Folder { children_loaded: true, .. })).unwrap_or(false);
+                        (ch, loaded)
+                    } else {
+                        (Some(vec![]), false)
+                    };
 
                     let attr = FileAttr {
                         ino,
@@ -277,17 +317,19 @@ impl InodeTable {
                             encrypted_folder_key: folder.folder_key_encrypted.clone(),
                             folder_key,
                             ipns_private_key: Some(ipns_private_key),
-                            children_loaded: false,
+                            children_loaded: was_loaded,
                         },
                         attr,
-                        children: Some(vec![]),
+                        children: existing_children,
                     };
 
                     self.insert(inode);
                     child_inos.push(ino);
                 }
                 FolderChild::File(file) => {
-                    let ino = self.allocate_ino();
+                    // Reuse existing ino if child with same name exists
+                    let existing_ino = self.find_child(parent_ino, &file.name);
+                    let ino = existing_ino.unwrap_or_else(|| self.allocate_ino());
 
                     let created = UNIX_EPOCH
                         + Duration::from_millis(file.created_at);
@@ -335,6 +377,17 @@ impl InodeTable {
 
         // Set parent's children list
         if let Some(parent) = self.inodes.get_mut(&parent_ino) {
+            // Detect if children changed (new entries appeared or were removed).
+            // If so, bump mtime to NOW so NFS client invalidates its readdir cache.
+            let old_children = parent.children.as_ref().cloned().unwrap_or_default();
+            let children_changed = old_children.len() != child_inos.len()
+                || old_children != child_inos;
+            if children_changed {
+                let now = SystemTime::now();
+                parent.attr.mtime = now;
+                parent.attr.ctime = now;
+            }
+
             parent.children = Some(child_inos);
             // Mark folder as loaded
             match &mut parent.kind {

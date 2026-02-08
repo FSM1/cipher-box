@@ -256,27 +256,38 @@ export class IpnsService {
 
   /**
    * Resolve an IPNS name to its current CID via delegated routing,
-   * falling back to the DB-cached CID when delegated routing is unavailable.
-   * Returns null if the IPNS name is not found (404)
+   * falling back to the DB-cached CID when delegated routing is unavailable
+   * or when the record is not found in the DHT.
+   * Returns null if the IPNS name is not found anywhere (404)
    */
   async resolveRecord(ipnsName: string): Promise<{ cid: string; sequenceNumber: string } | null> {
+    let result: { cid: string; sequenceNumber: string } | null = null;
+
     try {
-      return await this.resolveFromDelegatedRouting(ipnsName);
+      result = await this.resolveFromDelegatedRouting(ipnsName);
     } catch (error) {
-      // Only fall back to DB cache on BAD_GATEWAY (delegated routing failures)
+      // Fall back to DB cache on BAD_GATEWAY (delegated routing failures)
       if (error instanceof HttpException && error.getStatus() === HttpStatus.BAD_GATEWAY) {
         this.logger.warn(`Delegated routing failed for ${ipnsName}, falling back to DB cache`);
-        const cached = await this.folderIpnsRepository.findOne({
-          where: { ipnsName },
-        });
-        if (cached?.latestCid) {
-          this.logger.log(`Resolved ${ipnsName} from DB cache: ${cached.latestCid}`);
-          return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
-        }
-        this.logger.warn(`No DB cache available for ${ipnsName}, re-throwing`);
+      } else {
+        throw error;
       }
-      throw error;
     }
+
+    if (result) {
+      return result;
+    }
+
+    // Delegated routing returned null (404) or threw BAD_GATEWAY — try DB cache
+    const cached = await this.folderIpnsRepository.findOne({
+      where: { ipnsName },
+    });
+    if (cached?.latestCid) {
+      this.logger.log(`Resolved ${ipnsName} from DB cache: ${cached.latestCid}`);
+      return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
+    }
+
+    return null;
   }
 
   /**
@@ -384,13 +395,16 @@ export class IpnsService {
     recordBytes: Uint8Array
   ): Promise<{ cid: string; sequenceNumber: string }> {
     try {
-      // Dynamically load ESM-only ipns package at runtime
+      // Dynamically load ESM-only ipns package at runtime.
+      // Use Function constructor to prevent TypeScript from compiling
+      // `import()` into `require()` (which breaks ESM-only packages).
       if (!unmarshalIPNSRecord) {
-        const ipnsModule = await import('ipns');
+        const dynamicImport = new Function('specifier', 'return import(specifier)');
+        const ipnsModule = await dynamicImport('ipns');
         unmarshalIPNSRecord = ipnsModule.unmarshalIPNSRecord;
       }
 
-      const record = unmarshalIPNSRecord(recordBytes);
+      const record = unmarshalIPNSRecord!(recordBytes);
 
       // Extract CID from the Value field (format: /ipfs/<cid>)
       // The ipns package returns value as a string path (e.g., "/ipfs/bafy...")

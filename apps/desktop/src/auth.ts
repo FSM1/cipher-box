@@ -82,17 +82,14 @@ export async function initWeb3Auth(): Promise<void> {
     await web3auth.init();
     console.log('Web3Auth initialized, status:', web3auth.status, 'connected:', web3auth.connected);
 
-    // If Web3Auth auto-connected from cached session, disconnect first
-    // so the user gets a fresh login flow. The cached Web3Auth session
-    // may not match the Rust-side state (no keys in memory on cold start).
+    // If Web3Auth auto-connected from cached session, clear it so the user
+    // gets a fresh login flow. The cached Web3Auth session may not match the
+    // Rust-side state (no keys in memory on cold start).
+    // Use clearCache() instead of logout({ cleanup: true }) to avoid tearing
+    // down connectors — the SDK stays initialized and ready for connect().
     if (web3auth.connected) {
       console.log('Clearing stale Web3Auth cached session');
-      try {
-        await web3auth.logout({ cleanup: true });
-      } catch {
-        // If logout fails, clear cache directly
-        web3auth.clearCache();
-      }
+      web3auth.clearCache();
     }
   } catch (err) {
     console.error('Failed to initialize Web3Auth:', err);
@@ -117,6 +114,19 @@ export async function initWeb3Auth(): Promise<void> {
 export async function login(): Promise<void> {
   if (!web3auth) {
     throw new Error('Web3Auth not initialized. Call initWeb3Auth() first.');
+  }
+
+  // If Web3Auth is still connected from a previous session (e.g. tray logout
+  // cleared Rust state but not the webview SDK), disconnect first so the user
+  // gets a fresh login flow. Use logout() without cleanup flag to keep
+  // connectors initialized.
+  if (web3auth.connected) {
+    console.log('Web3Auth still connected, disconnecting for fresh login');
+    try {
+      await web3auth.logout();
+    } catch {
+      web3auth.clearCache();
+    }
   }
 
   // Open Web3Auth modal -- user picks login method

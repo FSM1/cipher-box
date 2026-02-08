@@ -113,12 +113,26 @@ fn build_menu(
 
 /// Handle a menu item click by ID.
 fn handle_menu_event(app: &AppHandle, id: &str) {
+    use tauri_plugin_notification::NotificationExt;
     match id {
         "open" => {
             // Open ~/CipherBox in Finder
             let mount_point = dirs::home_dir()
                 .map(|h| h.join("CipherBox"))
                 .unwrap_or_default();
+            if !mount_point.exists() {
+                log::warn!("Mount point {} does not exist — FUSE may not be mounted", mount_point.display());
+                // Show notification instead of a confusing Finder error
+                if let Err(e) = app.notification()
+                    .builder()
+                    .title("CipherBox")
+                    .body("Vault is not mounted. Please sign in first.")
+                    .show()
+                {
+                    log::error!("Failed to show notification: {}", e);
+                }
+                return;
+            }
             if let Err(e) = std::process::Command::new("open")
                 .arg(mount_point.to_str().unwrap_or("~/CipherBox"))
                 .spawn()
@@ -137,12 +151,14 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             }
         }
         "login" => {
-            // Show or create the webview window for Web3Auth login
+            // Show existing window or create a new one with on_new_window
+            // handler for OAuth popups.
             if let Some(window) = app.get_webview_window("main") {
+                // Reload page to reset stale DOM & Web3Auth state after logout
+                let _ = window.eval("location.reload()");
                 let _ = window.show();
                 let _ = window.set_focus();
             } else {
-                // No window exists yet (headless start) — create one
                 log::info!("Creating login webview window");
                 match tauri::WebviewWindowBuilder::new(
                     app,

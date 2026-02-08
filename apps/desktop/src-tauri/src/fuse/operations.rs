@@ -10,7 +10,7 @@
 mod implementation {
     use fuser::{
         FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
-        ReplyEntry, ReplyEmpty, ReplyOpen, ReplyStatfs, ReplyWrite, Request,
+        ReplyEntry, ReplyEmpty, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request,
     };
     use std::ffi::OsStr;
     use std::sync::atomic::Ordering;
@@ -20,11 +20,64 @@ mod implementation {
     use crate::fuse::file_handle::OpenFileHandle;
     use crate::fuse::inode::{InodeData, InodeKind, ROOT_INO, BLOCK_SIZE};
 
-    /// TTL for FUSE attribute/entry cache replies (1 second).
-    const FUSE_TTL: Duration = Duration::from_secs(1);
+    /// TTL for FUSE attribute/entry cache replies on files.
+    /// Longer TTL = fewer kernel callbacks = less FUSE-T NFS thread contention.
+    const FILE_TTL: Duration = Duration::from_secs(60);
+
+    /// TTL for directory attribute/entry cache replies.
+    /// Must be short (or zero) so the NFS client re-validates directory attributes
+    /// after mutations (rename, create, unlink, etc.) and sees updated mtime,
+    /// which triggers readdir cache invalidation.
+    const DIR_TTL: Duration = Duration::from_secs(0);
+
+    /// Pick the right TTL based on file type.
+    fn ttl_for(kind: FileType) -> Duration {
+        if kind == FileType::Directory { DIR_TTL } else { FILE_TTL }
+    }
 
     /// Total storage quota in bytes (500 MiB).
     const QUOTA_BYTES: u64 = 500 * 1024 * 1024;
+
+    /// Returns true if this filename is a platform-specific special file
+    /// that should never be created, synced, or shown in directory listings.
+    fn is_platform_special(name: &str) -> bool {
+        name.starts_with("._")
+            || name == ".DS_Store"
+            || name == ".Trashes"
+            || name == ".fseventsd"
+            || name == ".Spotlight-V100"
+            || name == ".hidden"
+            || name == ".localized"
+            || name == ".metadata_never_index"
+            || name == ".metadata_never_index_unless_rootfs"
+            || name == ".metadata_direct_scope_only"
+            || name == ".ql_disablecache"
+            || name == ".ql_disablethumbnails"
+            || name == "DCIM"
+            || name == "Thumbs.db"
+            || name == "desktop.ini"
+            || name == ".directory"
+    }
+
+    /// Maximum time for a network operation before returning EIO.
+    /// FUSE-T runs NFS callbacks on a single thread; blocking too long
+    /// causes ALL subsequent operations (including ls) to hang.
+    /// Keep this SHORT — macOS NFS client times out in ~3-5s.
+    const NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
+
+    /// Run an async operation with a timeout, blocking the current thread.
+    /// Returns Err if the operation fails or times out.
+    fn block_with_timeout<F, T>(rt: &tokio::runtime::Handle, fut: F) -> Result<T, String>
+    where
+        F: std::future::Future<Output = Result<T, String>>,
+    {
+        rt.block_on(async {
+            match tokio::time::timeout(NETWORK_TIMEOUT, fut).await {
+                Ok(result) => result,
+                Err(_) => Err("Operation timed out".to_string()),
+            }
+        })
+    }
 
     /// Encrypted folder metadata format from IPFS (JSON with iv + data).
     #[derive(serde::Deserialize)]
@@ -87,18 +140,12 @@ mod implementation {
         let folder_key_owned = folder_key.to_vec();
         let private_key = fs.private_key.clone();
 
-        // Use the tokio runtime to run the async fetch synchronously
-        // This is called during init (before FUSE event loop) so blocking is acceptable here
         let rt = fs.rt.clone();
-        let result = rt.block_on(async {
-            // Resolve IPNS name to CID
+        let result = block_with_timeout(&rt, async {
             let resolve_resp =
                 crate::api::ipns::resolve_ipns(&api, &ipns_name_owned).await?;
-
-            // Fetch encrypted metadata from IPFS
             let encrypted_bytes =
                 crate::api::ipfs::fetch_content(&api, &resolve_resp.cid).await?;
-
             Ok::<(Vec<u8>, String), String>((encrypted_bytes, resolve_resp.cid))
         })?;
 
@@ -135,62 +182,44 @@ mod implementation {
         let iv_hex_owned = iv_hex.to_string();
         let rt = fs.rt.clone();
 
-        rt.block_on(async {
-            // Fetch encrypted bytes from IPFS
+        block_with_timeout(&rt, async {
             let encrypted_bytes =
                 crate::api::ipfs::fetch_content(&api, &cid_owned).await?;
-
-            // Decode and unwrap file key
             let encrypted_file_key = hex::decode(&key_hex)
                 .map_err(|_| "Invalid file key hex".to_string())?;
             let mut file_key =
                 crate::crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
                     .map_err(|e| format!("File key unwrap failed: {}", e))?;
-
-            // Decode IV and decrypt
             let iv = hex::decode(&iv_hex_owned)
                 .map_err(|_| "Invalid file IV hex".to_string())?;
             let iv_arr: [u8; 12] = iv.try_into()
                 .map_err(|_| "Invalid IV length".to_string())?;
             let file_key_arr: [u8; 32] = file_key.clone().try_into()
                 .map_err(|_| "Invalid file key length".to_string())?;
-
             let plaintext = crate::crypto::aes::decrypt_aes_gcm(
                 &encrypted_bytes, &file_key_arr, &iv_arr,
             )
             .map_err(|e| format!("File decryption failed: {}", e))?;
-
-            // Zero file key from memory
             crate::crypto::utils::clear_bytes(&mut file_key);
-
             Ok(plaintext)
         })
     }
 
     impl Filesystem for CipherBoxFS {
-        /// Initialize the filesystem: populate root folder from IPNS.
+        /// Initialize the filesystem.
+        ///
+        /// Root folder is pre-populated in mount_filesystem() before the FUSE
+        /// event loop starts. No network I/O happens here — FUSE-T's NFS layer
+        /// requires fast init() responses to avoid connection timeouts.
         fn init(
             &mut self,
             _req: &Request<'_>,
             _config: &mut fuser::KernelConfig,
         ) -> Result<(), libc::c_int> {
-            log::info!("CipherBoxFS::init - populating root folder");
-
-            let root_ipns_name = self.root_ipns_name.clone();
-            let root_folder_key = self.root_folder_key.clone();
-
-            match fetch_and_populate_folder(self, ROOT_INO, &root_ipns_name, &root_folder_key)
-            {
-                Ok(()) => {
-                    log::info!("Root folder populated successfully");
-                    Ok(())
-                }
-                Err(e) => {
-                    log::error!("Failed to populate root folder: {}", e);
-                    // Still allow mount -- empty filesystem until sync fixes it
-                    Ok(())
-                }
-            }
+            log::info!("CipherBoxFS::init (root pre-populated, no network I/O)");
+            log::info!("Root IPNS name: {}", self.root_ipns_name);
+            log::info!("Inode count: {}", self.inodes.inodes.len());
+            Ok(())
         }
 
         /// Look up a child by name within a parent directory.
@@ -201,6 +230,9 @@ mod implementation {
             name: &OsStr,
             reply: ReplyEntry,
         ) {
+            self.drain_upload_completions();
+            self.drain_refresh_completions();
+
             let name_str = match name.to_str() {
                 Some(n) => n,
                 None => {
@@ -208,6 +240,31 @@ mod implementation {
                     return;
                 }
             };
+
+            // Handle "." and ".." — NFS clients rely on these working.
+            // Returning ENOENT for ".." causes the NFS client to disconnect.
+            if name_str == "." {
+                if let Some(inode) = self.inodes.get(parent) {
+                    reply.entry(&ttl_for(inode.attr.kind), &inode.attr, 0);
+                    return;
+                }
+            }
+            if name_str == ".." {
+                let parent_ino = self.inodes.get(parent)
+                    .map(|i| i.parent_ino)
+                    .unwrap_or(1); // root's parent is itself
+                if let Some(inode) = self.inodes.get(parent_ino) {
+                    reply.entry(&ttl_for(inode.attr.kind), &inode.attr, 0);
+                    return;
+                }
+            }
+
+            // Quick-reject platform special names — these never exist in the vault
+            // and would otherwise trigger blocking lazy-load of subfolder children.
+            if is_platform_special(name_str) {
+                reply.error(libc::ENOENT);
+                return;
+            }
 
             // Check if parent is a folder with unloaded children (lazy loading)
             let needs_load = {
@@ -233,20 +290,48 @@ mod implementation {
                 }
             };
 
-            // Load children if needed
+            // Non-blocking lazy load: fire background fetch instead of blocking
+            // the FUSE-T NFS thread. Return ENOENT now; the NFS client retries
+            // shortly and the children will be populated by then.
             if let Some((ipns_name, folder_key)) = needs_load {
-                if let Err(e) =
-                    fetch_and_populate_folder(self, parent, &ipns_name, &folder_key)
-                {
-                    log::warn!("Failed to load folder children: {}", e);
-                    // Continue -- the child might not exist
-                }
+                let api = self.api.clone();
+                let rt = self.rt.clone();
+                let tx = self.refresh_tx.clone();
+                let private_key = self.private_key.clone();
+                let refresh_ino = parent;
+                rt.spawn(async move {
+                    match crate::api::ipns::resolve_ipns(&api, &ipns_name).await {
+                        Ok(resolve_resp) => {
+                            match crate::api::ipfs::fetch_content(&api, &resolve_resp.cid).await {
+                                Ok(encrypted_bytes) => {
+                                    match crate::fuse::operations::decrypt_metadata_from_ipfs_public(
+                                        &encrypted_bytes, &folder_key,
+                                    ) {
+                                        Ok(metadata) => {
+                                            let _ = tx.send(crate::fuse::PendingRefresh {
+                                                ino: refresh_ino,
+                                                ipns_name,
+                                                metadata,
+                                                cid: resolve_resp.cid,
+                                            });
+                                        }
+                                        Err(e) => log::warn!("Lookup prefetch decrypt failed: {}", e),
+                                    }
+                                }
+                                Err(e) => log::warn!("Lookup prefetch fetch failed: {}", e),
+                            }
+                        }
+                        Err(e) => log::debug!("Lookup prefetch resolve failed for {}: {}", ipns_name, e),
+                    }
+                });
+                reply.error(libc::ENOENT);
+                return;
             }
 
             // Now look up the child
             if let Some(child_ino) = self.inodes.find_child(parent, name_str) {
                 if let Some(inode) = self.inodes.get(child_ino) {
-                    reply.entry(&FUSE_TTL, &inode.attr, 0);
+                    reply.entry(&ttl_for(inode.attr.kind), &inode.attr, 0);
                     return;
                 }
             }
@@ -262,8 +347,10 @@ mod implementation {
             _fh: Option<u64>,
             reply: ReplyAttr,
         ) {
+            self.drain_upload_completions();
+
             if let Some(inode) = self.inodes.get(ino) {
-                reply.attr(&FUSE_TTL, &inode.attr);
+                reply.attr(&ttl_for(inode.attr.kind), &inode.attr);
             } else {
                 reply.error(libc::ENOENT);
             }
@@ -318,14 +405,14 @@ mod implementation {
                         *s = new_size;
                     }
 
-                    reply.attr(&FUSE_TTL, &inode.attr);
+                    reply.attr(&ttl_for(inode.attr.kind), &inode.attr);
                     return;
                 }
             }
 
             // For other setattr calls, just return current attributes
             if let Some(inode) = self.inodes.get(ino) {
-                reply.attr(&FUSE_TTL, &inode.attr);
+                reply.attr(&ttl_for(inode.attr.kind), &inode.attr);
             } else {
                 reply.error(libc::ENOENT);
             }
@@ -343,7 +430,11 @@ mod implementation {
             offset: i64,
             mut reply: ReplyDirectory,
         ) {
-            let (parent_ino, children, ipns_stale) = {
+            // 1. Drain any pending background refresh results (non-blocking)
+            self.drain_refresh_completions();
+
+            // 2. Check if metadata is stale — fire background refresh if so
+            let stale_info: Option<(String, Vec<u8>)> = {
                 let inode = match self.inodes.get(ino) {
                     Some(i) => i,
                     None => {
@@ -352,40 +443,84 @@ mod implementation {
                     }
                 };
 
-                let parent_ino = inode.parent_ino;
-                let children = inode.children.clone().unwrap_or_default();
-
-                // Check if metadata is stale for background refresh
-                let ipns_stale = match &inode.kind {
+                match &inode.kind {
                     InodeKind::Root { ipns_name, .. } => {
                         ipns_name.as_ref().and_then(|name| {
                             if self.metadata_cache.get(name).is_none() {
-                                Some(name.clone())
+                                Some((name.clone(), self.root_folder_key.clone()))
                             } else {
                                 None
                             }
                         })
                     }
-                    InodeKind::Folder { ipns_name, .. } => {
+                    InodeKind::Folder { ipns_name, folder_key, .. } => {
                         if self.metadata_cache.get(ipns_name).is_none() {
-                            Some(ipns_name.clone())
+                            Some((ipns_name.clone(), folder_key.clone()))
                         } else {
                             None
                         }
                     }
                     _ => None,
-                };
-
-                (parent_ino, children, ipns_stale)
+                }
             };
 
-            // Build complete entry list: ".", "..", then children
+            // Fire background refresh (non-blocking, results applied on next readdir)
+            // Only on offset=0 to avoid duplicate refreshes (NFS calls readdir twice)
+            if let Some((ipns_name, folder_key)) = stale_info.filter(|_| offset == 0) {
+                let api = self.api.clone();
+                let rt = self.rt.clone();
+                let tx = self.refresh_tx.clone();
+                let refresh_ino = ino;
+                rt.spawn(async move {
+                    match crate::api::ipns::resolve_ipns(&api, &ipns_name).await {
+                        Ok(resolve_resp) => {
+                            match crate::api::ipfs::fetch_content(&api, &resolve_resp.cid).await {
+                                Ok(encrypted_bytes) => {
+                                    match crate::fuse::operations::decrypt_metadata_from_ipfs_public(
+                                        &encrypted_bytes, &folder_key,
+                                    ) {
+                                        Ok(metadata) => {
+                                            let _ = tx.send(crate::fuse::PendingRefresh {
+                                                ino: refresh_ino,
+                                                ipns_name,
+                                                metadata,
+                                                cid: resolve_resp.cid,
+                                            });
+                                        }
+                                        Err(e) => log::warn!("Refresh decrypt failed: {}", e),
+                                    }
+                                }
+                                Err(e) => log::warn!("Refresh fetch failed: {}", e),
+                            }
+                        }
+                        Err(e) => log::warn!("Refresh resolve failed for {}: {}", ipns_name, e),
+                    }
+                });
+            }
+
+            // 3. Return current (possibly stale) entries immediately — no blocking
+            let (parent_ino, children) = {
+                let inode = match self.inodes.get(ino) {
+                    Some(i) => i,
+                    None => {
+                        reply.error(libc::ENOENT);
+                        return;
+                    }
+                };
+                (inode.parent_ino, inode.children.clone().unwrap_or_default())
+            };
+
             let mut entries: Vec<(u64, FileType, String)> = Vec::new();
             entries.push((ino, FileType::Directory, ".".to_string()));
             entries.push((parent_ino, FileType::Directory, "..".to_string()));
 
             for &child_ino in &children {
                 if let Some(child) = self.inodes.get(child_ino) {
+                    // Filter out platform special files — readdir must be
+                    // consistent with lookup or Finder/NFS will hang retrying.
+                    if is_platform_special(&child.name) {
+                        continue;
+                    }
                     let file_type = match &child.kind {
                         InodeKind::Root { .. } | InodeKind::Folder { .. } => {
                             FileType::Directory
@@ -396,36 +531,15 @@ mod implementation {
                 }
             }
 
-            // Return entries starting at offset (ALL in one pass per FUSE-T)
             for (i, (ino, file_type, name)) in
                 entries.iter().enumerate().skip(offset as usize)
             {
-                // reply.add returns true if the buffer is full
                 if reply.add(*ino, (i + 1) as i64, *file_type, &name) {
                     break;
                 }
             }
 
             reply.ok();
-
-            // Trigger background metadata refresh if stale (AFTER responding to FUSE)
-            if let Some(stale_ipns) = ipns_stale {
-                let api = self.api.clone();
-                let rt = self.rt.clone();
-                // Fire-and-forget background refresh
-                rt.spawn(async move {
-                    if let Err(e) =
-                        crate::api::ipns::resolve_ipns(&api, &stale_ipns).await
-                    {
-                        log::debug!(
-                            "Background metadata refresh failed for {}: {}",
-                            stale_ipns,
-                            e
-                        );
-                    }
-                    // Note: actual inode update on next readdir/lookup when metadata is re-fetched
-                });
-            }
         }
 
         /// Create a new file in a directory.
@@ -450,6 +564,12 @@ mod implementation {
                     return;
                 }
             };
+
+            // Reject platform-specific files — never sync .DS_Store, ._ etc.
+            if is_platform_special(name_str) {
+                reply.error(libc::EACCES);
+                return;
+            }
 
             // Check parent exists and is a directory
             let parent_exists = self.inodes.get(parent).map(|inode| {
@@ -502,11 +622,13 @@ mod implementation {
 
             self.inodes.insert(inode);
 
-            // Add to parent's children list
+            // Add to parent's children list and bump mtime for NFS cache invalidation
             if let Some(parent_inode) = self.inodes.get_mut(parent) {
                 if let Some(ref mut children) = parent_inode.children {
                     children.push(ino);
                 }
+                parent_inode.attr.mtime = SystemTime::now();
+                parent_inode.attr.ctime = SystemTime::now();
             }
 
             // Create writable file handle with temp file
@@ -525,7 +647,7 @@ mod implementation {
             }
 
             log::debug!("create: {} in parent {} -> ino {} fh {}", name_str, parent, ino, fh);
-            reply.created(&FUSE_TTL, &attr, 0, fh, 0);
+            reply.created(&FILE_TTL, &attr, 0, fh, 0);
         }
 
         /// Open a file for reading or writing.
@@ -592,9 +714,63 @@ mod implementation {
                     }
                 }
             } else {
-                // Read-only open
+                // Read-only open — prefetch content in background if not cached
+                self.drain_content_prefetches();
                 let fh = self.next_fh.fetch_add(1, Ordering::SeqCst);
                 self.open_files.insert(fh, OpenFileHandle::new_read(ino, flags));
+
+                if !cid.is_empty()
+                    && self.content_cache.get(&cid).is_none()
+                    && !self.prefetching.contains(&cid)
+                {
+                    self.prefetching.insert(cid.clone());
+                    let api = self.api.clone();
+                    let private_key = self.private_key.clone();
+                    let rt = self.rt.clone();
+                    let cid_clone = cid.clone();
+                    let efk = encrypted_file_key.clone();
+                    let iv_clone = iv.clone();
+                    let tx = self.content_tx.clone();
+                    rt.spawn(async move {
+                        let result: Result<Vec<u8>, String> = async {
+                            let encrypted_bytes =
+                                crate::api::ipfs::fetch_content(&api, &cid_clone).await?;
+                            let encrypted_file_key = hex::decode(&efk)
+                                .map_err(|_| "Invalid file key hex".to_string())?;
+                            let mut file_key =
+                                crate::crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
+                                    .map_err(|e| format!("File key unwrap failed: {}", e))?;
+                            let iv_bytes = hex::decode(&iv_clone)
+                                .map_err(|_| "Invalid file IV hex".to_string())?;
+                            let iv_arr: [u8; 12] = iv_bytes
+                                .try_into()
+                                .map_err(|_| "Invalid IV length".to_string())?;
+                            let file_key_arr: [u8; 32] = file_key
+                                .clone()
+                                .try_into()
+                                .map_err(|_| "Invalid file key length".to_string())?;
+                            let plaintext = crate::crypto::aes::decrypt_aes_gcm(
+                                &encrypted_bytes,
+                                &file_key_arr,
+                                &iv_arr,
+                            )
+                            .map_err(|e| format!("File decryption failed: {}", e))?;
+                            crate::crypto::utils::clear_bytes(&mut file_key);
+                            Ok(plaintext)
+                        }
+                        .await;
+                        match result {
+                            Ok(data) => {
+                                let _ = tx.send(crate::fuse::PendingContent {
+                                    cid: cid_clone,
+                                    data,
+                                });
+                            }
+                            Err(e) => log::warn!("Content prefetch failed: {}", e),
+                        }
+                    });
+                }
+
                 reply.opened(fh, 0);
             }
         }
@@ -659,6 +835,9 @@ mod implementation {
             _lock: Option<u64>,
             reply: ReplyData,
         ) {
+            // Drain any pending content prefetches into the cache
+            self.drain_content_prefetches();
+
             // Check if the handle has a temp file (writable handle)
             let has_temp = self.open_files.get(&fh)
                 .map(|h| h.temp_path.is_some())
@@ -709,8 +888,18 @@ mod implementation {
                 }
             };
 
-            // Empty CID means newly created file with no content yet
+            // Empty CID means file upload is in flight — serve from pending cache
             if cid.is_empty() {
+                if let Some(content) = self.pending_content.get(&ino) {
+                    let start = offset as usize;
+                    if start >= content.len() {
+                        reply.data(&[]);
+                    } else {
+                        let end = std::cmp::min(start + size as usize, content.len());
+                        reply.data(&content[start..end]);
+                    }
+                    return;
+                }
                 reply.data(&[]);
                 return;
             }
@@ -748,76 +937,79 @@ mod implementation {
                 return;
             }
 
-            // Cache miss: fetch, decrypt, cache, return
-            let api = self.api.clone();
-            let private_key = self.private_key.clone();
-            let rt = self.rt.clone();
+            // Cache miss — drain any pending prefetches first, then recheck
+            self.drain_content_prefetches();
 
-            // Block on the fetch+decrypt (FUSE requires a response)
-            let result: Result<Vec<u8>, String> = rt.block_on(async {
-                // Fetch encrypted bytes from IPFS
-                let encrypted_bytes =
-                    crate::api::ipfs::fetch_content(&api, &cid).await?;
-
-                // Decode encrypted file key
-                let encrypted_file_key = hex::decode(&encrypted_file_key_hex)
-                    .map_err(|_| "Invalid file key hex".to_string())?;
-
-                // Unwrap file key using ECIES
-                let mut file_key =
-                    crate::crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
-                        .map_err(|e| format!("File key unwrap failed: {}", e))?;
-
-                // Decode IV
-                let iv = hex::decode(&iv_hex)
-                    .map_err(|_| "Invalid file IV hex".to_string())?;
-                let iv_arr: [u8; 12] = iv
-                    .try_into()
-                    .map_err(|_| "Invalid IV length".to_string())?;
-
-                // Decrypt file content
-                let file_key_arr: [u8; 32] = file_key
-                    .clone()
-                    .try_into()
-                    .map_err(|_| "Invalid file key length".to_string())?;
-                let plaintext = crate::crypto::aes::decrypt_aes_gcm(
-                    &encrypted_bytes,
-                    &file_key_arr,
-                    &iv_arr,
-                )
-                .map_err(|e| format!("File decryption failed: {}", e))?;
-
-                // Zero the file key from memory
-                crate::crypto::utils::clear_bytes(&mut file_key);
-
-                Ok(plaintext)
-            });
-
-            match result {
-                Ok(plaintext) => {
-                    // Cache the decrypted content
-                    self.content_cache.set(&cid, plaintext.clone());
-
-                    // Store in open file handle
-                    if let Some(handle) = self.open_files.get_mut(&fh) {
-                        handle.cached_content = Some(plaintext.clone());
-                    }
-
-                    // Return requested slice
-                    let start = offset as usize;
-                    if start >= plaintext.len() {
-                        reply.data(&[]);
-                    } else {
-                        let end =
-                            std::cmp::min(start + size as usize, plaintext.len());
-                        reply.data(&plaintext[start..end]);
-                    }
+            // Recheck content cache after drain
+            if let Some(cached) = self.content_cache.get(&cid) {
+                let start = offset as usize;
+                if start >= cached.len() {
+                    reply.data(&[]);
+                    return;
                 }
-                Err(e) => {
-                    log::error!("File read failed for ino {}: {}", ino, e);
-                    reply.error(libc::EIO);
+                let end = std::cmp::min(start + size as usize, cached.len());
+                let data_slice = cached[start..end].to_vec();
+                if let Some(handle) = self.open_files.get_mut(&fh) {
+                    handle.cached_content = Some(cached.to_vec());
                 }
+                reply.data(&data_slice);
+                return;
             }
+
+            // Still not cached — prefetch may still be in flight, or was never started.
+            // Fire a prefetch if not already in flight, and return EIO so NFS retries.
+            if !self.prefetching.contains(&cid) {
+                self.prefetching.insert(cid.clone());
+                let api = self.api.clone();
+                let private_key = self.private_key.clone();
+                let rt = self.rt.clone();
+                let cid_clone = cid.clone();
+                let efk = encrypted_file_key_hex.clone();
+                let iv_clone = iv_hex.clone();
+                let tx = self.content_tx.clone();
+                rt.spawn(async move {
+                    let result: Result<Vec<u8>, String> = async {
+                        let encrypted_bytes =
+                            crate::api::ipfs::fetch_content(&api, &cid_clone).await?;
+                        let encrypted_file_key = hex::decode(&efk)
+                            .map_err(|_| "Invalid file key hex".to_string())?;
+                        let mut file_key =
+                            crate::crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
+                                .map_err(|e| format!("File key unwrap failed: {}", e))?;
+                        let iv_bytes = hex::decode(&iv_clone)
+                            .map_err(|_| "Invalid file IV hex".to_string())?;
+                        let iv_arr: [u8; 12] = iv_bytes
+                            .try_into()
+                            .map_err(|_| "Invalid IV length".to_string())?;
+                        let file_key_arr: [u8; 32] = file_key
+                            .clone()
+                            .try_into()
+                            .map_err(|_| "Invalid file key length".to_string())?;
+                        let plaintext = crate::crypto::aes::decrypt_aes_gcm(
+                            &encrypted_bytes,
+                            &file_key_arr,
+                            &iv_arr,
+                        )
+                        .map_err(|e| format!("File decryption failed: {}", e))?;
+                        crate::crypto::utils::clear_bytes(&mut file_key);
+                        Ok(plaintext)
+                    }
+                    .await;
+                    match result {
+                        Ok(data) => {
+                            let _ = tx.send(crate::fuse::PendingContent {
+                                cid: cid_clone,
+                                data,
+                            });
+                        }
+                        Err(e) => log::warn!("Content prefetch failed: {}", e),
+                    }
+                });
+            } else {
+            }
+
+            // Return EIO — NFS client will retry, and the prefetch will populate the cache
+            reply.error(libc::EIO);
         }
 
         /// Release (close) a file handle.
@@ -835,15 +1027,18 @@ mod implementation {
             _flush: bool,
             reply: ReplyEmpty,
         ) {
+            // Drain any completed uploads from previous operations
+            self.drain_upload_completions();
+
             let handle = self.open_files.remove(&fh);
 
             if let Some(handle) = handle {
                 if handle.dirty && handle.temp_path.is_some() {
-                    // Dirty file: encrypt + upload
-                    log::debug!("release: dirty file ino {}, encrypting and uploading", ino);
+                    // Dirty file: do CPU work synchronously, spawn network I/O
+                    log::debug!("release: dirty file ino {}, preparing background upload", ino);
 
-                    let upload_result = (|| -> Result<(), String> {
-                        // Read complete temp file content
+                    let prepare_result = (|| -> Result<(), String> {
+                        // Read complete temp file content (local I/O, fast)
                         let plaintext = handle.read_all()?;
 
                         // Generate new random file key and IV
@@ -865,8 +1060,8 @@ mod implementation {
                         // Zero file key from memory
                         crate::crypto::utils::clear_bytes(&mut file_key);
 
-                        // Get the old CID for unpinning
-                        let old_cid = self.inodes.get(ino).and_then(|inode| {
+                        // Get the old file CID for unpinning
+                        let old_file_cid = self.inodes.get(ino).and_then(|inode| {
                             match &inode.kind {
                                 InodeKind::File { cid, .. } if !cid.is_empty() => {
                                     Some(cid.clone())
@@ -875,23 +1070,19 @@ mod implementation {
                             }
                         });
 
-                        // Upload encrypted content to IPFS
-                        let api = self.api.clone();
-                        let rt = self.rt.clone();
-                        let new_cid = rt.block_on(async {
-                            crate::api::ipfs::upload_content(&api, &ciphertext).await
-                        })?;
-
-                        // Update inode with new CID, key, IV, and size
+                        // Update local inode (CID="" for now — background thread will fix it)
                         let encrypted_file_key_hex = hex::encode(&wrapped_key);
                         let iv_hex = hex::encode(&iv);
                         let file_size = plaintext.len() as u64;
+                        let file_name = self.inodes.get(ino)
+                            .map(|i| i.name.clone())
+                            .unwrap_or_default();
 
                         if let Some(inode) = self.inodes.get_mut(ino) {
                             inode.kind = InodeKind::File {
-                                cid: new_cid.clone(),
-                                encrypted_file_key: encrypted_file_key_hex,
-                                iv: iv_hex,
+                                cid: String::new(),
+                                encrypted_file_key: encrypted_file_key_hex.clone(),
+                                iv: iv_hex.clone(),
                                 size: file_size,
                                 encryption_mode: "GCM".to_string(),
                             };
@@ -900,33 +1091,119 @@ mod implementation {
                             inode.attr.mtime = SystemTime::now();
                         }
 
-                        // Cache decrypted content for immediate re-reads
-                        self.content_cache.set(&new_cid, plaintext);
+                        // Cache plaintext so reads work before upload completes
+                        self.pending_content.insert(ino, plaintext);
 
-                        // Get parent inode for metadata update
+                        // Get parent inode for metadata
                         let parent_ino = self.inodes.get(ino)
                             .map(|i| i.parent_ino)
                             .unwrap_or(ROOT_INO);
 
-                        // Update parent folder metadata (re-encrypt + IPNS publish)
-                        self.update_folder_metadata(parent_ino)?;
+                        // Build folder metadata snapshot (CPU-only).
+                        // This will have CID="" for the new/modified file.
+                        // The background thread will replace it with the real CID after upload.
+                        let (mut metadata, folder_key, ipns_private_key, ipns_name, old_metadata_cid) =
+                            self.build_folder_metadata(parent_ino)?;
 
-                        // Fire-and-forget unpin of old CID
-                        if let Some(old_cid) = old_cid {
-                            let api = self.api.clone();
-                            self.rt.spawn(async move {
-                                if let Err(e) = crate::api::ipfs::unpin_content(&api, &old_cid).await {
-                                    log::debug!("Background unpin failed for {}: {}", old_cid, e);
+                        // Clone data for background thread
+                        let api = self.api.clone();
+                        let rt = self.rt.clone();
+                        let upload_tx = self.upload_tx.clone();
+
+                        // Spawn background OS thread for ALL network I/O
+                        std::thread::spawn(move || {
+                            let result = rt.block_on(async {
+                                // 1. Upload file content to IPFS
+                                let file_cid = crate::api::ipfs::upload_content(
+                                    &api, &ciphertext,
+                                ).await?;
+
+                                log::info!("File uploaded: ino {} -> CID {}", ino, file_cid);
+
+                                // 2. Fix the CID in the metadata snapshot
+                                for child in &mut metadata.children {
+                                    if let crate::crypto::folder::FolderChild::File(entry) = child {
+                                        if entry.cid.is_empty() && entry.name == file_name {
+                                            entry.cid = file_cid.clone();
+                                            entry.file_key_encrypted = encrypted_file_key_hex.clone();
+                                            entry.file_iv = iv_hex.clone();
+                                            entry.size = file_size;
+                                            break;
+                                        }
+                                    }
                                 }
+
+                                // 3. Encrypt metadata
+                                let json_bytes = crate::fuse::encrypt_metadata_to_json(
+                                    &metadata, &folder_key,
+                                )?;
+
+                                // 4. Resolve current IPNS seq
+                                let seq = match crate::api::ipns::resolve_ipns(
+                                    &api, &ipns_name,
+                                ).await {
+                                    Ok(resp) => resp.sequence_number.parse::<u64>().unwrap_or(0),
+                                    Err(_) => 0,
+                                };
+
+                                // 5. Upload metadata to IPFS
+                                let meta_cid = crate::api::ipfs::upload_content(
+                                    &api, &json_bytes,
+                                ).await?;
+
+                                // 6. Create + sign IPNS record
+                                let ipns_key_arr: [u8; 32] = ipns_private_key.try_into()
+                                    .map_err(|_| "Invalid IPNS key length".to_string())?;
+                                let new_seq = seq + 1;
+                                let value = format!("/ipfs/{}", meta_cid);
+                                let record = crate::crypto::ipns::create_ipns_record(
+                                    &ipns_key_arr, &value, new_seq, 86_400_000,
+                                ).map_err(|e| format!("IPNS record creation failed: {}", e))?;
+                                let marshaled = crate::crypto::ipns::marshal_ipns_record(&record)
+                                    .map_err(|e| format!("IPNS marshal failed: {}", e))?;
+
+                                use base64::Engine;
+                                let record_b64 = base64::engine::general_purpose::STANDARD
+                                    .encode(&marshaled);
+
+                                // 7. Publish IPNS record
+                                let req = crate::api::ipns::IpnsPublishRequest {
+                                    ipns_name: ipns_name.clone(),
+                                    record: record_b64,
+                                    metadata_cid: meta_cid,
+                                    encrypted_ipns_private_key: None,
+                                    key_epoch: None,
+                                };
+                                crate::api::ipns::publish_ipns(&api, &req).await?;
+
+                                // 8. Unpin old CIDs
+                                if let Some(old) = old_file_cid {
+                                    let _ = crate::api::ipfs::unpin_content(&api, &old).await;
+                                }
+                                if let Some(old) = old_metadata_cid {
+                                    let _ = crate::api::ipfs::unpin_content(&api, &old).await;
+                                }
+
+                                // Notify main thread of completed upload
+                                let _ = upload_tx.send(crate::fuse::UploadComplete {
+                                    ino,
+                                    new_cid: file_cid,
+                                });
+
+                                log::info!("Background file+metadata upload complete for ino {}", ino);
+                                Ok::<(), String>(())
                             });
-                        }
+
+                            if let Err(e) = result {
+                                log::error!("Background upload failed for ino {}: {}", ino, e);
+                            }
+                        });
 
                         Ok(())
                     })();
 
-                    if let Err(e) = upload_result {
-                        log::error!("File upload failed for ino {}: {}", ino, e);
-                        // Don't return EIO -- reply.ok() to avoid confusing apps
+                    if let Err(e) = prepare_result {
+                        log::error!("File upload preparation failed for ino {}: {}", ino, e);
                     }
 
                     // Cleanup temp file
@@ -997,10 +1274,10 @@ mod implementation {
             // Remove inode from table (also removes from parent's children)
             self.inodes.remove(child_ino);
 
-            // Invalidate content cache for this CID
-            if let Some(ref cid) = cid_to_unpin {
-                // Content cache entry will be evicted naturally (LRU)
-                // No explicit invalidate method needed
+            // Bump parent mtime so NFS client invalidates its directory cache
+            if let Some(parent_inode) = self.inodes.get_mut(parent) {
+                parent_inode.attr.mtime = SystemTime::now();
+                parent_inode.attr.ctime = SystemTime::now();
             }
 
             // Update parent folder metadata
@@ -1045,6 +1322,12 @@ mod implementation {
                 }
             };
 
+            // Reject platform-specific directories — never sync .Trashes, .fseventsd etc.
+            if is_platform_special(name_str) {
+                reply.error(libc::EACCES);
+                return;
+            }
+
             // Check parent exists and is a directory
             let parent_exists = self.inodes.get(parent).map(|inode| {
                 matches!(inode.kind, InodeKind::Root { .. } | InodeKind::Folder { .. })
@@ -1070,52 +1353,6 @@ mod implementation {
                 let ipns_name = crate::crypto::ipns::derive_ipns_name(&ipns_pub_arr)
                     .map_err(|e| format!("Failed to derive IPNS name: {}", e))?;
 
-                // Create initial empty folder metadata
-                let metadata = crate::crypto::folder::FolderMetadata {
-                    version: "v1".to_string(),
-                    children: vec![],
-                };
-
-                // Encrypt metadata
-                let folder_key_arr: [u8; 32] = folder_key;
-                let sealed = crate::crypto::folder::encrypt_folder_metadata(
-                    &metadata, &folder_key_arr,
-                )
-                .map_err(|e| format!("Metadata encryption failed: {}", e))?;
-
-                // Format as JSON `{ "iv": "<hex>", "data": "<base64>" }`
-                let iv_hex = hex::encode(&sealed[..12]);
-                use base64::Engine;
-                let data_base64 = base64::engine::general_purpose::STANDARD
-                    .encode(&sealed[12..]);
-                let json_metadata = serde_json::json!({
-                    "iv": iv_hex,
-                    "data": data_base64,
-                });
-                let json_bytes = serde_json::to_vec(&json_metadata)
-                    .map_err(|e| format!("JSON serialization failed: {}", e))?;
-
-                // Upload encrypted metadata to IPFS
-                let api = self.api.clone();
-                let rt = self.rt.clone();
-                let initial_cid = rt.block_on(async {
-                    crate::api::ipfs::upload_content(&api, &json_bytes).await
-                })?;
-
-                // Create and sign initial IPNS record
-                let ipns_key_arr: [u8; 32] = ipns_private_key.clone().try_into()
-                    .map_err(|_| "Invalid IPNS private key length".to_string())?;
-                let value = format!("/ipfs/{}", initial_cid);
-                let record = crate::crypto::ipns::create_ipns_record(
-                    &ipns_key_arr, &value, 0, 86_400_000,
-                )
-                .map_err(|e| format!("IPNS record creation failed: {}", e))?;
-
-                let marshaled = crate::crypto::ipns::marshal_ipns_record(&record)
-                    .map_err(|e| format!("IPNS record marshaling failed: {}", e))?;
-                let record_base64 = base64::engine::general_purpose::STANDARD
-                    .encode(&marshaled);
-
                 // Wrap folder key with user's public key (ECIES) for parent metadata
                 let wrapped_folder_key = crate::crypto::ecies::wrap_key(
                     &folder_key, &self.public_key,
@@ -1123,33 +1360,7 @@ mod implementation {
                 .map_err(|e| format!("Folder key wrapping failed: {}", e))?;
                 let encrypted_folder_key_hex = hex::encode(&wrapped_folder_key);
 
-                // Encrypt IPNS private key with TEE public key for republishing enrollment
-                let encrypted_ipns_for_tee = if let Some(ref tee_key) = self.tee_public_key {
-                    let wrapped = crate::crypto::ecies::wrap_key(&ipns_private_key, tee_key)
-                        .map_err(|e| format!("TEE key wrapping failed: {}", e))?;
-                    Some(hex::encode(&wrapped))
-                } else {
-                    None
-                };
-
-                // Publish IPNS record
-                let publish_request = crate::api::ipns::IpnsPublishRequest {
-                    ipns_name: ipns_name.clone(),
-                    record: record_base64,
-                    metadata_cid: initial_cid.clone(),
-                    encrypted_ipns_private_key: encrypted_ipns_for_tee,
-                    key_epoch: self.tee_key_epoch,
-                };
-
-                let api = self.api.clone();
-                rt.block_on(async {
-                    crate::api::ipns::publish_ipns(&api, &publish_request).await
-                })?;
-
-                // Cache metadata for this new folder
-                self.metadata_cache.set(&ipns_name, metadata, initial_cid);
-
-                // Allocate inode and create InodeData
+                // Allocate inode and create InodeData (locally, no network I/O)
                 let ino = self.inodes.allocate_ino();
                 let now = SystemTime::now();
                 let uid = req.uid();
@@ -1181,7 +1392,7 @@ mod implementation {
                         ipns_name: ipns_name.clone(),
                         encrypted_folder_key: encrypted_folder_key_hex,
                         folder_key: folder_key.to_vec(),
-                        ipns_private_key: Some(ipns_private_key),
+                        ipns_private_key: Some(ipns_private_key.clone()),
                         children_loaded: true, // empty folder, so "loaded"
                     },
                     attr,
@@ -1190,22 +1401,136 @@ mod implementation {
 
                 self.inodes.insert(inode);
 
-                // Add to parent's children
+                // Add to parent's children and bump mtime for NFS cache invalidation
                 if let Some(parent_inode) = self.inodes.get_mut(parent) {
                     if let Some(ref mut children) = parent_inode.children {
                         children.push(ino);
                     }
+                    parent_inode.attr.mtime = SystemTime::now();
+                    parent_inode.attr.ctime = SystemTime::now();
                 }
 
-                // Update parent folder metadata
-                self.update_folder_metadata(parent)?;
+                // Create initial empty folder metadata (CPU-only)
+                let metadata = crate::crypto::folder::FolderMetadata {
+                    version: "v1".to_string(),
+                    children: vec![],
+                };
+
+                // Encrypt metadata (CPU-only)
+                let json_bytes = crate::fuse::encrypt_metadata_to_json(
+                    &metadata, &folder_key,
+                )?;
+
+                // Encrypt IPNS private key with TEE public key for republishing
+                let encrypted_ipns_for_tee = if let Some(ref tee_key) = self.tee_public_key {
+                    let wrapped = crate::crypto::ecies::wrap_key(&ipns_private_key, tee_key)
+                        .map_err(|e| format!("TEE key wrapping failed: {}", e))?;
+                    Some(hex::encode(&wrapped))
+                } else {
+                    None
+                };
+                let tee_key_epoch = self.tee_key_epoch;
+
+                // Build parent folder metadata for background publish
+                let (parent_metadata, parent_folder_key, parent_ipns_key, parent_ipns_name, parent_old_cid) =
+                    self.build_folder_metadata(parent)?;
+
+                // Spawn background thread for ALL network I/O:
+                // 1. Upload new folder's initial metadata to IPFS
+                // 2. Create + publish IPNS record for new folder
+                // 3. Encrypt + upload + publish parent folder metadata
+                let api = self.api.clone();
+                let rt = self.rt.clone();
+                let ipns_name_clone = ipns_name.clone();
+
+                std::thread::spawn(move || {
+                    let result = rt.block_on(async {
+                        // Upload new folder's encrypted metadata to IPFS
+                        let initial_cid = crate::api::ipfs::upload_content(
+                            &api, &json_bytes,
+                        ).await?;
+
+                        // Create and sign IPNS record for new folder
+                        let ipns_key_arr: [u8; 32] = ipns_private_key.try_into()
+                            .map_err(|_| "Invalid IPNS key length".to_string())?;
+                        let value = format!("/ipfs/{}", initial_cid);
+                        let record = crate::crypto::ipns::create_ipns_record(
+                            &ipns_key_arr, &value, 0, 86_400_000,
+                        ).map_err(|e| format!("IPNS record creation failed: {}", e))?;
+                        let marshaled = crate::crypto::ipns::marshal_ipns_record(&record)
+                            .map_err(|e| format!("IPNS marshal failed: {}", e))?;
+
+                        use base64::Engine;
+                        let record_b64 = base64::engine::general_purpose::STANDARD
+                            .encode(&marshaled);
+
+                        let req = crate::api::ipns::IpnsPublishRequest {
+                            ipns_name: ipns_name_clone.clone(),
+                            record: record_b64,
+                            metadata_cid: initial_cid,
+                            encrypted_ipns_private_key: encrypted_ipns_for_tee,
+                            key_epoch: tee_key_epoch,
+                        };
+                        crate::api::ipns::publish_ipns(&api, &req).await?;
+
+                        log::info!("New folder IPNS published: {}", ipns_name_clone);
+
+                        // Now publish parent folder metadata
+                        let parent_json = crate::fuse::encrypt_metadata_to_json(
+                            &parent_metadata, &parent_folder_key,
+                        )?;
+
+                        let seq = match crate::api::ipns::resolve_ipns(
+                            &api, &parent_ipns_name,
+                        ).await {
+                            Ok(resp) => resp.sequence_number.parse::<u64>().unwrap_or(0),
+                            Err(_) => 0,
+                        };
+
+                        let parent_meta_cid = crate::api::ipfs::upload_content(
+                            &api, &parent_json,
+                        ).await?;
+
+                        let parent_key_arr: [u8; 32] = parent_ipns_key.try_into()
+                            .map_err(|_| "Invalid parent IPNS key length".to_string())?;
+                        let parent_value = format!("/ipfs/{}", parent_meta_cid);
+                        let parent_record = crate::crypto::ipns::create_ipns_record(
+                            &parent_key_arr, &parent_value, seq + 1, 86_400_000,
+                        ).map_err(|e| format!("Parent IPNS record failed: {}", e))?;
+                        let parent_marshaled = crate::crypto::ipns::marshal_ipns_record(
+                            &parent_record,
+                        ).map_err(|e| format!("Parent IPNS marshal failed: {}", e))?;
+                        let parent_record_b64 = base64::engine::general_purpose::STANDARD
+                            .encode(&parent_marshaled);
+
+                        let parent_req = crate::api::ipns::IpnsPublishRequest {
+                            ipns_name: parent_ipns_name.clone(),
+                            record: parent_record_b64,
+                            metadata_cid: parent_meta_cid,
+                            encrypted_ipns_private_key: None,
+                            key_epoch: None,
+                        };
+                        crate::api::ipns::publish_ipns(&api, &parent_req).await?;
+
+                        if let Some(old) = parent_old_cid {
+                            let _ = crate::api::ipfs::unpin_content(&api, &old).await;
+                        }
+
+                        log::info!("Parent metadata published after mkdir");
+                        Ok::<(), String>(())
+                    });
+
+                    if let Err(e) = result {
+                        log::error!("Background mkdir publish failed: {}", e);
+                    }
+                });
 
                 Ok(attr)
             })();
 
             match result {
                 Ok(attr) => {
-                    reply.entry(&FUSE_TTL, &attr, 0);
+                    reply.entry(&DIR_TTL, &attr, 0);
                 }
                 Err(e) => {
                     log::error!("mkdir failed: {}", e);
@@ -1272,6 +1597,12 @@ mod implementation {
             // Remove inode from table (also removes from parent's children)
             self.inodes.remove(child_ino);
 
+            // Bump parent mtime so NFS client invalidates its directory cache
+            if let Some(parent_inode) = self.inodes.get_mut(parent) {
+                parent_inode.attr.mtime = SystemTime::now();
+                parent_inode.attr.ctime = SystemTime::now();
+            }
+
             // Update parent folder metadata
             if let Err(e) = self.update_folder_metadata(parent) {
                 log::error!("Failed to update folder metadata after rmdir: {}", e);
@@ -1304,6 +1635,10 @@ mod implementation {
             _flags: u32,
             reply: ReplyEmpty,
         ) {
+            eprintln!(
+                ">>> RENAME called: {:?} (parent {}) -> {:?} (parent {})",
+                name, parent, newname, newparent,
+            );
             let name_str = match name.to_str() {
                 Some(n) => n,
                 None => {
@@ -1319,14 +1654,53 @@ mod implementation {
                 }
             };
 
-            // Find source inode
-            let source_ino = match self.inodes.find_child(parent, name_str) {
-                Some(ino) => ino,
+            // Find source inode.
+            // Workaround: FUSE-T (NFS-based) may pass truncated names
+            // to the rename callback (first N bytes stripped). If exact
+            // match fails, fall back to suffix match among children.
+            let (source_ino, actual_name) = match self.inodes.find_child(parent, name_str) {
+                Some(ino) => (ino, name_str.to_string()),
                 None => {
-                    reply.error(libc::ENOENT);
-                    return;
+                    // Suffix-match fallback for FUSE-T truncated names
+                    let parent_inode = match self.inodes.get(parent) {
+                        Some(i) => i,
+                        None => {
+                            reply.error(libc::ENOENT);
+                            return;
+                        }
+                    };
+                    let children = parent_inode.children.clone().unwrap_or_default();
+                    let mut matches: Vec<(u64, String)> = Vec::new();
+                    for &child_ino in &children {
+                        if let Some(child) = self.inodes.get(child_ino) {
+                            // Skip platform special files
+                            if is_platform_special(&child.name) {
+                                continue;
+                            }
+                            if child.name.ends_with(name_str) && child.name.len() > name_str.len() {
+                                matches.push((child_ino, child.name.clone()));
+                            }
+                        }
+                    }
+                    if matches.len() == 1 {
+                        eprintln!(
+                            ">>> RENAME suffix-match: truncated {:?} matched full name {:?}",
+                            name_str, matches[0].1
+                        );
+                        (matches[0].0, matches[0].1.clone())
+                    } else {
+                        eprintln!(
+                            ">>> RENAME failed: {:?} not found (suffix matches: {})",
+                            name_str, matches.len()
+                        );
+                        reply.error(libc::ENOENT);
+                        return;
+                    }
                 }
             };
+
+            // Use actual_name for name_to_ino removal (may differ from truncated name_str)
+            let name_str = &actual_name;
 
             log::debug!(
                 "rename: {} (ino {}) in parent {} -> {} in parent {}",
@@ -1388,12 +1762,16 @@ mod implementation {
                     if let Some(ref mut children) = old_parent.children {
                         children.retain(|&c| c != source_ino);
                     }
+                    old_parent.attr.mtime = SystemTime::now();
+                    old_parent.attr.ctime = SystemTime::now();
                 }
                 // Add to new parent
                 if let Some(new_parent) = self.inodes.get_mut(newparent) {
                     if let Some(ref mut children) = new_parent.children {
                         children.push(source_ino);
                     }
+                    new_parent.attr.mtime = SystemTime::now();
+                    new_parent.attr.ctime = SystemTime::now();
                 }
 
                 // Update both folders' metadata
@@ -1404,7 +1782,11 @@ mod implementation {
                     log::error!("Failed to update new parent metadata after rename: {}", e);
                 }
             } else {
-                // Same-folder rename: just update parent metadata
+                // Same-folder rename: update parent mtime + metadata
+                if let Some(parent_inode) = self.inodes.get_mut(parent) {
+                    parent_inode.attr.mtime = SystemTime::now();
+                    parent_inode.attr.ctime = SystemTime::now();
+                }
                 if let Err(e) = self.update_folder_metadata(parent) {
                     log::error!("Failed to update parent metadata after rename: {}", e);
                 }
@@ -1464,5 +1846,112 @@ mod implementation {
                 reply.error(libc::ENOENT);
             }
         }
+
+        /// Get extended attribute value.
+        ///
+        /// Finder calls this for resource forks, Spotlight metadata, etc.
+        /// Return ENODATA (no such xattr) instead of ENOSYS so Finder
+        /// treats the directory as readable rather than broken.
+        fn getxattr(
+            &mut self,
+            _req: &Request<'_>,
+            _ino: u64,
+            _name: &OsStr,
+            _size: u32,
+            reply: ReplyXattr,
+        ) {
+            // ENODATA = attribute not found (expected for files with no xattrs)
+            #[cfg(target_os = "macos")]
+            { reply.error(libc::ENOATTR); }
+            #[cfg(not(target_os = "macos"))]
+            { reply.error(libc::ENODATA); }
+        }
+
+        /// List extended attribute names.
+        ///
+        /// Return empty list (size 0) so Finder knows there are no xattrs
+        /// rather than getting ENOSYS which it treats as an error.
+        fn listxattr(
+            &mut self,
+            _req: &Request<'_>,
+            _ino: u64,
+            size: u32,
+            reply: ReplyXattr,
+        ) {
+            if size == 0 {
+                // Caller wants to know the buffer size needed — 0 bytes.
+                reply.size(0);
+            } else {
+                // Return empty xattr data.
+                reply.data(&[]);
+            }
+        }
+
+        /// Open a directory handle.
+        ///
+        /// Finder calls opendir before readdir. Return success for any
+        /// known directory inode.
+        fn opendir(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            _flags: i32,
+            reply: ReplyOpen,
+        ) {
+            if self.inodes.get(ino).is_some() {
+                reply.opened(0, 0);
+            } else {
+                reply.error(libc::ENOENT);
+            }
+        }
+
+        /// Release (close) a directory handle.
+        fn releasedir(
+            &mut self,
+            _req: &Request<'_>,
+            _ino: u64,
+            _fh: u64,
+            _flags: i32,
+            reply: ReplyEmpty,
+        ) {
+            reply.ok();
+        }
     }
+}
+
+/// Public wrapper for decrypt_metadata_from_ipfs, used by mod.rs for pre-population.
+#[cfg(feature = "fuse")]
+pub fn decrypt_metadata_from_ipfs_public(
+    encrypted_bytes: &[u8],
+    folder_key: &[u8],
+) -> Result<crate::crypto::folder::FolderMetadata, String> {
+    #[derive(serde::Deserialize)]
+    struct EncryptedFolderMetadata {
+        iv: String,
+        data: String,
+    }
+
+    let encrypted: EncryptedFolderMetadata = serde_json::from_slice(encrypted_bytes)
+        .map_err(|e| format!("Failed to parse encrypted metadata JSON: {}", e))?;
+
+    let iv_bytes = hex::decode(&encrypted.iv)
+        .map_err(|_| "Invalid metadata IV hex".to_string())?;
+    if iv_bytes.len() != 12 {
+        return Err(format!("Invalid IV length: {} (expected 12)", iv_bytes.len()));
+    }
+    let iv: [u8; 12] = iv_bytes.try_into().unwrap();
+
+    use base64::Engine;
+    let ciphertext = base64::engine::general_purpose::STANDARD
+        .decode(&encrypted.data)
+        .map_err(|e| format!("Invalid metadata base64: {}", e))?;
+
+    let folder_key_arr: &[u8; 32] = folder_key
+        .try_into()
+        .map_err(|_| "Invalid folder key length".to_string())?;
+    let plaintext = crate::crypto::aes::decrypt_aes_gcm(&ciphertext, folder_key_arr, &iv)
+        .map_err(|e| format!("Metadata decryption failed: {}", e))?;
+
+    serde_json::from_slice(&plaintext)
+        .map_err(|e| format!("Failed to parse decrypted metadata: {}", e))
 }
