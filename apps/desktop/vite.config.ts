@@ -6,6 +6,9 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin-allow-popups',
+    },
   },
   envPrefix: ['VITE_', 'TAURI_'],
   resolve: {

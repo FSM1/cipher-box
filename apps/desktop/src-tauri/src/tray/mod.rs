@@ -9,9 +9,13 @@ pub mod status;
 
 pub use status::TrayStatus;
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager};
+
+/// Counter for unique popup window labels.
+static POPUP_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 /// ID used to look up the single tray icon instance.
 const TRAY_ID: &str = "cipherbox-tray";
@@ -149,9 +153,31 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                 .inner_size(480.0, 600.0)
                 .center()
                 .resizable(false)
-                .on_new_window(|_url, _features| {
-                    // Allow Web3Auth OAuth popups (Google, etc.)
-                    tauri::webview::NewWindowResponse::Allow
+                .on_new_window({
+                    let app_handle = app.clone();
+                    move |url, features| {
+                        // Create popup with shared WKWebViewConfiguration so
+                        // window.opener is preserved for OAuth postMessage callbacks
+                        let n = POPUP_COUNTER.fetch_add(1, Ordering::Relaxed);
+                        let label = format!("oauth-popup-{}", n);
+                        match tauri::WebviewWindowBuilder::new(
+                            &app_handle,
+                            &label,
+                            tauri::WebviewUrl::External("about:blank".parse().unwrap()),
+                        )
+                        .window_features(features)
+                        .title(url.as_str())
+                        .inner_size(500.0, 700.0)
+                        .center()
+                        .build()
+                        {
+                            Ok(window) => tauri::webview::NewWindowResponse::Create { window },
+                            Err(e) => {
+                                log::error!("Failed to create OAuth popup: {}", e);
+                                tauri::webview::NewWindowResponse::Deny
+                            }
+                        }
+                    }
                 })
                 .build()
                 {
