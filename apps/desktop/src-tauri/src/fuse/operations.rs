@@ -1,24 +1,24 @@
 //! FUSE filesystem trait implementation for CipherVaultFS.
 //!
 //! Implements read operations: init, lookup, getattr, readdir, open, read, release, statfs, access.
-//! Write operations are deferred to plan 09-06.
+//! Write operations: create, write, open-write, release-with-upload, unlink, setattr, flush.
 //!
-//! IMPORTANT: All async operations spawn tasks on the tokio runtime and never block the FUSE thread.
-//! This prevents Finder from hanging during network operations (RESEARCH.md pitfall 3).
+//! IMPORTANT: All async operations use block_on from the tokio runtime.
+//! FUSE requires synchronous replies, so we block on async operations as needed.
 
 #[cfg(feature = "fuse")]
 mod implementation {
     use fuser::{
-        FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry,
-        ReplyOpen, ReplyEmpty, ReplyStatfs, Request,
+        FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
+        ReplyEntry, ReplyEmpty, ReplyOpen, ReplyStatfs, ReplyWrite, Request,
     };
     use std::ffi::OsStr;
     use std::sync::atomic::Ordering;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
 
     use crate::fuse::CipherVaultFS;
     use crate::fuse::file_handle::OpenFileHandle;
-    use crate::fuse::inode::{InodeKind, ROOT_INO, BLOCK_SIZE};
+    use crate::fuse::inode::{InodeData, InodeKind, ROOT_INO, BLOCK_SIZE};
 
     /// TTL for FUSE attribute/entry cache replies (1 second).
     const FUSE_TTL: Duration = Duration::from_secs(1);
@@ -116,6 +116,55 @@ mod implementation {
             .populate_folder(ino, &metadata, &private_key)?;
 
         Ok(())
+    }
+
+    /// Helper: Fetch and decrypt existing file content for editing.
+    ///
+    /// Used when opening an existing file for writing -- need to pre-populate
+    /// the temp file with the current decrypted content.
+    fn fetch_and_decrypt_file_content(
+        fs: &CipherVaultFS,
+        cid: &str,
+        encrypted_file_key_hex: &str,
+        iv_hex: &str,
+    ) -> Result<Vec<u8>, String> {
+        let api = fs.api.clone();
+        let private_key = fs.private_key.clone();
+        let cid_owned = cid.to_string();
+        let key_hex = encrypted_file_key_hex.to_string();
+        let iv_hex_owned = iv_hex.to_string();
+        let rt = fs.rt.clone();
+
+        rt.block_on(async {
+            // Fetch encrypted bytes from IPFS
+            let encrypted_bytes =
+                crate::api::ipfs::fetch_content(&api, &cid_owned).await?;
+
+            // Decode and unwrap file key
+            let encrypted_file_key = hex::decode(&key_hex)
+                .map_err(|_| "Invalid file key hex".to_string())?;
+            let mut file_key =
+                crate::crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
+                    .map_err(|e| format!("File key unwrap failed: {}", e))?;
+
+            // Decode IV and decrypt
+            let iv = hex::decode(&iv_hex_owned)
+                .map_err(|_| "Invalid file IV hex".to_string())?;
+            let iv_arr: [u8; 12] = iv.try_into()
+                .map_err(|_| "Invalid IV length".to_string())?;
+            let file_key_arr: [u8; 32] = file_key.clone().try_into()
+                .map_err(|_| "Invalid file key length".to_string())?;
+
+            let plaintext = crate::crypto::aes::decrypt_aes_gcm(
+                &encrypted_bytes, &file_key_arr, &iv_arr,
+            )
+            .map_err(|e| format!("File decryption failed: {}", e))?;
+
+            // Zero file key from memory
+            crate::crypto::utils::clear_bytes(&mut file_key);
+
+            Ok(plaintext)
+        })
     }
 
     impl Filesystem for CipherVaultFS {
@@ -220,6 +269,68 @@ mod implementation {
             }
         }
 
+        /// Set file attributes (handles truncate via size parameter).
+        ///
+        /// Per RESEARCH.md pitfall 4: don't try to independently set atime/mtime
+        /// on FUSE-T -- only handle the size (truncate) operation.
+        fn setattr(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            _mode: Option<u32>,
+            _uid: Option<u32>,
+            _gid: Option<u32>,
+            size: Option<u64>,
+            _atime: Option<fuser::TimeOrNow>,
+            _mtime: Option<fuser::TimeOrNow>,
+            _ctime: Option<SystemTime>,
+            fh: Option<u64>,
+            _crtime: Option<SystemTime>,
+            _chgtime: Option<SystemTime>,
+            _bkuptime: Option<SystemTime>,
+            _flags: Option<u32>,
+            reply: ReplyAttr,
+        ) {
+            // Handle truncate if size is specified
+            if let Some(new_size) = size {
+                // Truncate temp file if file handle exists
+                if let Some(fh_id) = fh {
+                    if let Some(handle) = self.open_files.get_mut(&fh_id) {
+                        if handle.temp_path.is_some() {
+                            if let Err(e) = handle.truncate(new_size) {
+                                log::error!("Truncate failed for ino {}: {}", ino, e);
+                                reply.error(libc::EIO);
+                                return;
+                            }
+                            handle.dirty = true;
+                        }
+                    }
+                }
+
+                // Update inode size
+                if let Some(inode) = self.inodes.get_mut(ino) {
+                    inode.attr.size = new_size;
+                    inode.attr.blocks = (new_size + 511) / 512;
+                    inode.attr.mtime = SystemTime::now();
+
+                    // Also update InodeKind::File size
+                    if let InodeKind::File { size: ref mut s, .. } = inode.kind {
+                        *s = new_size;
+                    }
+
+                    reply.attr(&FUSE_TTL, &inode.attr);
+                    return;
+                }
+            }
+
+            // For other setattr calls, just return current attributes
+            if let Some(inode) = self.inodes.get(ino) {
+                reply.attr(&FUSE_TTL, &inode.attr);
+            } else {
+                reply.error(libc::ENOENT);
+            }
+        }
+
         /// List directory entries.
         ///
         /// IMPORTANT: Returns ALL entries in a single pass (FUSE-T requirement per pitfall 1).
@@ -317,9 +428,110 @@ mod implementation {
             }
         }
 
-        /// Open a file for reading.
+        /// Create a new file in a directory.
         ///
-        /// READ-ONLY in this plan. Write support (O_WRONLY, O_RDWR) added in plan 09-06.
+        /// Allocates a new inode, creates a temp file for write buffering,
+        /// and adds the file to the parent's children list.
+        /// The file isn't uploaded until release() -- it exists only locally.
+        fn create(
+            &mut self,
+            req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            _mode: u32,
+            _umask: u32,
+            flags: i32,
+            reply: ReplyCreate,
+        ) {
+            let name_str = match name.to_str() {
+                Some(n) => n,
+                None => {
+                    reply.error(libc::EINVAL);
+                    return;
+                }
+            };
+
+            // Check parent exists and is a directory
+            let parent_exists = self.inodes.get(parent).map(|inode| {
+                matches!(inode.kind, InodeKind::Root { .. } | InodeKind::Folder { .. })
+            });
+            if parent_exists != Some(true) {
+                reply.error(libc::ENOENT);
+                return;
+            }
+
+            // Allocate new inode
+            let ino = self.inodes.allocate_ino();
+            let now = SystemTime::now();
+            let uid = req.uid();
+            let gid = req.gid();
+
+            let attr = FileAttr {
+                ino,
+                size: 0,
+                blocks: 0,
+                atime: now,
+                mtime: now,
+                ctime: now,
+                crtime: now,
+                kind: FileType::RegularFile,
+                perm: 0o644,
+                nlink: 1,
+                uid,
+                gid,
+                rdev: 0,
+                blksize: BLOCK_SIZE,
+                flags: 0,
+            };
+
+            // Create inode with empty CID (not yet uploaded)
+            let inode = InodeData {
+                ino,
+                parent_ino: parent,
+                name: name_str.to_string(),
+                kind: InodeKind::File {
+                    cid: String::new(),
+                    encrypted_file_key: String::new(),
+                    iv: String::new(),
+                    size: 0,
+                    encryption_mode: "GCM".to_string(),
+                },
+                attr,
+                children: None,
+            };
+
+            self.inodes.insert(inode);
+
+            // Add to parent's children list
+            if let Some(parent_inode) = self.inodes.get_mut(parent) {
+                if let Some(ref mut children) = parent_inode.children {
+                    children.push(ino);
+                }
+            }
+
+            // Create writable file handle with temp file
+            let fh = self.next_fh.fetch_add(1, Ordering::SeqCst);
+            match OpenFileHandle::new_write(ino, flags, &self.temp_dir, None) {
+                Ok(handle) => {
+                    self.open_files.insert(fh, handle);
+                }
+                Err(e) => {
+                    log::error!("Failed to create temp file for new file: {}", e);
+                    // Remove the inode we just created
+                    self.inodes.remove(ino);
+                    reply.error(libc::EIO);
+                    return;
+                }
+            }
+
+            log::debug!("create: {} in parent {} -> ino {} fh {}", name_str, parent, ino, fh);
+            reply.created(&FUSE_TTL, &attr, 0, fh, 0);
+        }
+
+        /// Open a file for reading or writing.
+        ///
+        /// For read-only: creates a lightweight handle.
+        /// For write: creates a temp file, pre-populated with existing content if editing.
         fn open(
             &mut self,
             _req: &Request<'_>,
@@ -327,10 +539,12 @@ mod implementation {
             flags: i32,
             reply: ReplyOpen,
         ) {
-            // Check if inode exists and is a file
-            match self.inodes.get(ino) {
+            // Get file info
+            let file_info = match self.inodes.get(ino) {
                 Some(inode) => match &inode.kind {
-                    InodeKind::File { .. } => {}
+                    InodeKind::File { cid, encrypted_file_key, iv, .. } => {
+                        Some((cid.clone(), encrypted_file_key.clone(), iv.clone()))
+                    }
                     _ => {
                         reply.error(libc::EISDIR);
                         return;
@@ -340,26 +554,100 @@ mod implementation {
                     reply.error(libc::ENOENT);
                     return;
                 }
-            }
+            };
 
-            // Check for write flags -- read-only in this plan
+            let (cid, encrypted_file_key, iv) = file_info.unwrap();
             let access_mode = flags & libc::O_ACCMODE;
+
             if access_mode == libc::O_WRONLY || access_mode == libc::O_RDWR {
-                reply.error(libc::EACCES);
-                return;
+                // Writable open: create temp file
+                // If existing file (has CID), pre-populate with decrypted content
+                let existing_content = if !cid.is_empty() {
+                    match fetch_and_decrypt_file_content(self, &cid, &encrypted_file_key, &iv) {
+                        Ok(content) => Some(content),
+                        Err(e) => {
+                            log::error!("Failed to fetch content for write-open: {}", e);
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                let fh = self.next_fh.fetch_add(1, Ordering::SeqCst);
+                match OpenFileHandle::new_write(
+                    ino,
+                    flags,
+                    &self.temp_dir,
+                    existing_content.as_deref(),
+                ) {
+                    Ok(handle) => {
+                        self.open_files.insert(fh, handle);
+                        reply.opened(fh, 0);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to create write handle: {}", e);
+                        reply.error(libc::EIO);
+                    }
+                }
+            } else {
+                // Read-only open
+                let fh = self.next_fh.fetch_add(1, Ordering::SeqCst);
+                self.open_files.insert(fh, OpenFileHandle::new_read(ino, flags));
+                reply.opened(fh, 0);
             }
+        }
 
-            // Allocate file handle (read-only)
-            let fh = self.next_fh.fetch_add(1, Ordering::SeqCst);
-            self.open_files.insert(fh, OpenFileHandle::new_read(ino, flags));
+        /// Write data to an open file.
+        ///
+        /// Writes to the temp file at the given offset. The actual
+        /// encrypt + upload happens on release().
+        fn write(
+            &mut self,
+            _req: &Request<'_>,
+            ino: u64,
+            fh: u64,
+            offset: i64,
+            data: &[u8],
+            _write_flags: u32,
+            _flags: i32,
+            _lock_owner: Option<u64>,
+            reply: ReplyWrite,
+        ) {
+            let handle = match self.open_files.get_mut(&fh) {
+                Some(h) => h,
+                None => {
+                    reply.error(libc::EBADF);
+                    return;
+                }
+            };
 
-            reply.opened(fh, 0);
+            match handle.write_at(offset, data) {
+                Ok(written) => {
+                    // Update inode size if write extends the file
+                    let new_end = offset as u64 + data.len() as u64;
+                    if let Some(inode) = self.inodes.get_mut(ino) {
+                        if new_end > inode.attr.size {
+                            inode.attr.size = new_end;
+                            inode.attr.blocks = (new_end + 511) / 512;
+                        }
+                        inode.attr.mtime = SystemTime::now();
+                    }
+
+                    reply.written(written as u32);
+                }
+                Err(e) => {
+                    log::error!("Write failed for ino {} fh {}: {}", ino, fh, e);
+                    reply.error(libc::EIO);
+                }
+            }
         }
 
         /// Read file content.
         ///
-        /// Checks content cache first. On miss, fetches encrypted bytes from IPFS,
-        /// unwraps the file key (ECIES), decrypts (AES-256-GCM), caches, and returns slice.
+        /// For writable handles with a temp file, reads from the temp file.
+        /// For read-only handles, checks content cache first, then fetches from IPFS.
         fn read(
             &mut self,
             _req: &Request<'_>,
@@ -371,7 +659,35 @@ mod implementation {
             _lock: Option<u64>,
             reply: ReplyData,
         ) {
-            // Get file metadata
+            // Check if the handle has a temp file (writable handle)
+            let has_temp = self.open_files.get(&fh)
+                .map(|h| h.temp_path.is_some())
+                .unwrap_or(false);
+
+            if has_temp {
+                // Read from temp file
+                match self.open_files.get(&fh) {
+                    Some(handle) => {
+                        match handle.read_at(offset, size) {
+                            Ok(data) => {
+                                reply.data(&data);
+                                return;
+                            }
+                            Err(e) => {
+                                log::error!("Temp file read failed: {}", e);
+                                reply.error(libc::EIO);
+                                return;
+                            }
+                        }
+                    }
+                    None => {
+                        reply.error(libc::EBADF);
+                        return;
+                    }
+                }
+            }
+
+            // Read-only path: get file metadata
             let (cid, encrypted_file_key_hex, iv_hex) = {
                 match self.inodes.get(ino) {
                     Some(inode) => match &inode.kind {
@@ -392,6 +708,12 @@ mod implementation {
                     }
                 }
             };
+
+            // Empty CID means newly created file with no content yet
+            if cid.is_empty() {
+                reply.data(&[]);
+                return;
+            }
 
             // Check open file handle for cached content
             if let Some(handle) = self.open_files.get(&fh) {
@@ -499,18 +821,204 @@ mod implementation {
         }
 
         /// Release (close) a file handle.
+        ///
+        /// If the handle is dirty (has been written to), encrypts the temp file
+        /// content, uploads to IPFS, updates inode metadata, and publishes
+        /// updated folder metadata via IPNS.
         fn release(
             &mut self,
             _req: &Request<'_>,
-            _ino: u64,
+            ino: u64,
             fh: u64,
             _flags: i32,
             _lock_owner: Option<u64>,
             _flush: bool,
             reply: ReplyEmpty,
         ) {
-            // Remove file handle (write/dirty handling deferred to plan 09-06)
-            self.open_files.remove(&fh);
+            let handle = self.open_files.remove(&fh);
+
+            if let Some(handle) = handle {
+                if handle.dirty && handle.temp_path.is_some() {
+                    // Dirty file: encrypt + upload
+                    log::debug!("release: dirty file ino {}, encrypting and uploading", ino);
+
+                    let upload_result = (|| -> Result<(), String> {
+                        // Read complete temp file content
+                        let plaintext = handle.read_all()?;
+
+                        // Generate new random file key and IV
+                        let mut file_key = crate::crypto::utils::generate_file_key();
+                        let iv = crate::crypto::utils::generate_iv();
+
+                        // Encrypt content with AES-256-GCM
+                        let ciphertext = crate::crypto::aes::encrypt_aes_gcm(
+                            &plaintext, &file_key, &iv,
+                        )
+                        .map_err(|e| format!("File encryption failed: {}", e))?;
+
+                        // Wrap file key with user's public key (ECIES)
+                        let wrapped_key = crate::crypto::ecies::wrap_key(
+                            &file_key, &self.public_key,
+                        )
+                        .map_err(|e| format!("Key wrapping failed: {}", e))?;
+
+                        // Zero file key from memory
+                        crate::crypto::utils::clear_bytes(&mut file_key);
+
+                        // Get the old CID for unpinning
+                        let old_cid = self.inodes.get(ino).and_then(|inode| {
+                            match &inode.kind {
+                                InodeKind::File { cid, .. } if !cid.is_empty() => {
+                                    Some(cid.clone())
+                                }
+                                _ => None,
+                            }
+                        });
+
+                        // Upload encrypted content to IPFS
+                        let api = self.api.clone();
+                        let rt = self.rt.clone();
+                        let new_cid = rt.block_on(async {
+                            crate::api::ipfs::upload_content(&api, &ciphertext).await
+                        })?;
+
+                        // Update inode with new CID, key, IV, and size
+                        let encrypted_file_key_hex = hex::encode(&wrapped_key);
+                        let iv_hex = hex::encode(&iv);
+                        let file_size = plaintext.len() as u64;
+
+                        if let Some(inode) = self.inodes.get_mut(ino) {
+                            inode.kind = InodeKind::File {
+                                cid: new_cid.clone(),
+                                encrypted_file_key: encrypted_file_key_hex,
+                                iv: iv_hex,
+                                size: file_size,
+                                encryption_mode: "GCM".to_string(),
+                            };
+                            inode.attr.size = file_size;
+                            inode.attr.blocks = (file_size + 511) / 512;
+                            inode.attr.mtime = SystemTime::now();
+                        }
+
+                        // Cache decrypted content for immediate re-reads
+                        self.content_cache.set(&new_cid, plaintext);
+
+                        // Get parent inode for metadata update
+                        let parent_ino = self.inodes.get(ino)
+                            .map(|i| i.parent_ino)
+                            .unwrap_or(ROOT_INO);
+
+                        // Update parent folder metadata (re-encrypt + IPNS publish)
+                        self.update_folder_metadata(parent_ino)?;
+
+                        // Fire-and-forget unpin of old CID
+                        if let Some(old_cid) = old_cid {
+                            let api = self.api.clone();
+                            self.rt.spawn(async move {
+                                if let Err(e) = crate::api::ipfs::unpin_content(&api, &old_cid).await {
+                                    log::debug!("Background unpin failed for {}: {}", old_cid, e);
+                                }
+                            });
+                        }
+
+                        Ok(())
+                    })();
+
+                    if let Err(e) = upload_result {
+                        log::error!("File upload failed for ino {}: {}", ino, e);
+                        // Don't return EIO -- reply.ok() to avoid confusing apps
+                    }
+
+                    // Cleanup temp file
+                    handle.cleanup();
+                }
+                // Non-dirty handles: just drop (cleanup happens via Drop impl)
+            }
+
+            reply.ok();
+        }
+
+        /// Flush file data (no-op -- actual upload happens on release).
+        fn flush(
+            &mut self,
+            _req: &Request<'_>,
+            _ino: u64,
+            _fh: u64,
+            _lock_owner: u64,
+            reply: ReplyEmpty,
+        ) {
+            reply.ok();
+        }
+
+        /// Delete a file from a directory.
+        fn unlink(
+            &mut self,
+            _req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            reply: ReplyEmpty,
+        ) {
+            let name_str = match name.to_str() {
+                Some(n) => n,
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
+            };
+
+            // Find child inode
+            let child_ino = match self.inodes.find_child(parent, name_str) {
+                Some(ino) => ino,
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
+            };
+
+            // Verify it's a file (not a directory)
+            let cid_to_unpin = match self.inodes.get(child_ino) {
+                Some(inode) => match &inode.kind {
+                    InodeKind::File { cid, .. } => {
+                        if cid.is_empty() { None } else { Some(cid.clone()) }
+                    }
+                    _ => {
+                        reply.error(libc::EISDIR);
+                        return;
+                    }
+                },
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
+            };
+
+            log::debug!("unlink: {} from parent {}", name_str, parent);
+
+            // Remove inode from table (also removes from parent's children)
+            self.inodes.remove(child_ino);
+
+            // Invalidate content cache for this CID
+            if let Some(ref cid) = cid_to_unpin {
+                // Content cache entry will be evicted naturally (LRU)
+                // No explicit invalidate method needed
+            }
+
+            // Update parent folder metadata
+            if let Err(e) = self.update_folder_metadata(parent) {
+                log::error!("Failed to update folder metadata after unlink: {}", e);
+                // Don't fail -- the local state is already updated
+            }
+
+            // Fire-and-forget unpin of file CID
+            if let Some(cid) = cid_to_unpin {
+                let api = self.api.clone();
+                self.rt.spawn(async move {
+                    if let Err(e) = crate::api::ipfs::unpin_content(&api, &cid).await {
+                        log::debug!("Background unpin failed for {}: {}", cid, e);
+                    }
+                });
+            }
+
             reply.ok();
         }
 
