@@ -149,6 +149,10 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                 .inner_size(480.0, 600.0)
                 .center()
                 .resizable(false)
+                .on_new_window(|_url, _features| {
+                    // Allow Web3Auth OAuth popups (Google, etc.)
+                    tauri::webview::NewWindowResponse::Allow
+                })
                 .build()
                 {
                     Ok(window) => {
