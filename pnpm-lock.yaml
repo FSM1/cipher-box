@@ -194,6 +194,12 @@ importers:
       '@web3auth/modal':
         specifier: ^10.13.1
         version: 10.13.1(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))(bufferutil@4.1.0)(ioredis@5.9.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
+      buffer:
+        specifier: ^6.0.3
+        version: 6.0.3
+      process:
+        specifier: ^0.11.10
+        version: 0.11.10
     devDependencies:
       '@tauri-apps/cli':
         specifier: ^2.0.0

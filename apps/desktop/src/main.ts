@@ -13,6 +13,7 @@
  * the app runs as a menu bar utility with FUSE mount (plan 09-05).
  */
 
+import './polyfills';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { initWeb3Auth, login } from './auth';
