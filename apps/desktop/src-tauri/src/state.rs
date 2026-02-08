@@ -10,6 +10,9 @@ use zeroize::Zeroize;
 use crate::api::client::ApiClient;
 use crate::api::types::TeeKeysResponse;
 
+/// Channel sender type for triggering manual sync from the tray menu.
+pub type SyncTrigger = tokio::sync::mpsc::Sender<()>;
+
 /// FUSE mount status for the system tray indicator.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MountStatus {
@@ -58,6 +61,11 @@ pub struct AppState {
 
     /// Current FUSE mount status.
     pub mount_status: RwLock<MountStatus>,
+
+    /// Channel sender to trigger an immediate sync cycle from the tray "Sync Now" button.
+    /// Set once the SyncDaemon is spawned. Uses std::sync::RwLock because the tray
+    /// menu event handler is synchronous.
+    pub sync_trigger: std::sync::RwLock<Option<SyncTrigger>>,
 }
 
 impl AppState {
@@ -75,6 +83,7 @@ impl AppState {
             tee_keys: RwLock::new(None),
             is_authenticated: RwLock::new(false),
             mount_status: RwLock::new(MountStatus::Unmounted),
+            sync_trigger: std::sync::RwLock::new(None),
         }
     }
 

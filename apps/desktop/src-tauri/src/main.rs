@@ -6,7 +6,10 @@ mod commands;
 mod crypto;
 mod fuse;
 mod state;
+mod sync;
+mod tray;
 
+use tauri::Manager;
 use state::AppState;
 
 fn main() {
@@ -33,13 +36,26 @@ fn main() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            log::info!("CipherBox Desktop setup complete");
+            // Build the system tray menu bar icon
+            let handle = app.handle().clone();
+            tray::build_tray(&handle)
+                .map_err(|e| {
+                    log::error!("Failed to build tray: {}", e);
+                    let boxed: Box<dyn std::error::Error> = e.into();
+                    tauri::Error::Setup(boxed.into())
+                })?;
+
+            // Initial tray status: NotConnected
+            let _ = tray::update_tray_status(&handle, &tray::TrayStatus::NotConnected);
+
+            log::info!("CipherBox Desktop setup complete (tray icon active)");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::handle_auth_complete,
             commands::try_silent_refresh,
             commands::logout,
+            commands::start_sync_daemon,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CipherBox Desktop");
