@@ -133,17 +133,31 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             }
         }
         "login" => {
-            // Show the webview window for Web3Auth login
+            // Show or create the webview window for Web3Auth login
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
             } else {
-                // Try to show any existing window
-                log::info!("Login window requested (webview will handle Web3Auth)");
-                for (_, window) in app.webview_windows() {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                    break;
+                // No window exists yet (headless start) — create one
+                log::info!("Creating login webview window");
+                match tauri::WebviewWindowBuilder::new(
+                    app,
+                    "main",
+                    tauri::WebviewUrl::App("index.html".into()),
+                )
+                .title("CipherBox")
+                .inner_size(480.0, 600.0)
+                .center()
+                .resizable(false)
+                .build()
+                {
+                    Ok(window) => {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                    Err(e) => {
+                        log::error!("Failed to create login window: {}", e);
+                    }
                 }
             }
         }
