@@ -13,10 +13,7 @@ import { ConfigService } from '@nestjs/config';
 import { FolderIpns } from './entities/folder-ipns.entity';
 import { PublishIpnsDto, PublishIpnsResponseDto } from './dto';
 import { RepublishService } from '../republish/republish.service';
-
-// Dynamic import for ESM-only ipns package (loaded at runtime)
-type UnmarshalIPNSRecord = (bytes: Uint8Array) => { value: string; sequence: bigint };
-let unmarshalIPNSRecord: UnmarshalIPNSRecord | null = null;
+import { parseIpnsRecord } from './ipns-record-parser';
 
 @Injectable()
 export class IpnsService {
@@ -262,7 +259,6 @@ export class IpnsService {
    */
   async resolveRecord(ipnsName: string): Promise<{ cid: string; sequenceNumber: string } | null> {
     let result: { cid: string; sequenceNumber: string } | null = null;
-    let routingError: HttpException | null = null;
 
     try {
       result = await this.resolveFromDelegatedRouting(ipnsName);
@@ -270,7 +266,6 @@ export class IpnsService {
       // Fall back to DB cache on BAD_GATEWAY (delegated routing failures)
       if (error instanceof HttpException && error.getStatus() === HttpStatus.BAD_GATEWAY) {
         this.logger.warn(`Delegated routing failed for ${ipnsName}, falling back to DB cache`);
-        routingError = error;
       } else {
         throw error;
       }
@@ -287,12 +282,6 @@ export class IpnsService {
     if (cached?.latestCid) {
       this.logger.log(`Resolved ${ipnsName} from DB cache: ${cached.latestCid}`);
       return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
-    }
-
-    // If we got here due to a routing error and DB has no cache, re-throw
-    if (routingError) {
-      this.logger.warn(`No DB cache available for ${ipnsName}, re-throwing`);
-      throw routingError;
     }
 
     return null;
@@ -329,7 +318,7 @@ export class IpnsService {
           // The delegated routing API returns the raw IPNS record
           // We need to parse it to extract the CID and sequence number
           const recordBytes = new Uint8Array(await response.arrayBuffer());
-          const parsed = await this.parseIpnsRecord(recordBytes);
+          const parsed = this.parseIpnsRecordBytes(recordBytes);
 
           this.logger.debug(`IPNS name resolved successfully: ${ipnsName} -> ${parsed.cid}`);
           return parsed;
@@ -397,22 +386,13 @@ export class IpnsService {
 
   /**
    * Parse an IPNS record to extract CID and sequence number
-   * Uses the ipns package to properly deserialize protobuf-encoded records
+   * Uses inline protobuf decoder — no external dependencies
    */
-  private async parseIpnsRecord(
-    recordBytes: Uint8Array
-  ): Promise<{ cid: string; sequenceNumber: string }> {
+  private parseIpnsRecordBytes(recordBytes: Uint8Array): { cid: string; sequenceNumber: string } {
     try {
-      // Dynamically load ESM-only ipns package at runtime
-      if (!unmarshalIPNSRecord) {
-        const ipnsModule = await import('ipns');
-        unmarshalIPNSRecord = ipnsModule.unmarshalIPNSRecord;
-      }
-
-      const record = unmarshalIPNSRecord!(recordBytes);
+      const record = parseIpnsRecord(recordBytes);
 
       // Extract CID from the Value field (format: /ipfs/<cid>)
-      // The ipns package returns value as a string path (e.g., "/ipfs/bafy...")
       const valuePath = record.value;
       const cidMatch = valuePath.match(/\/ipfs\/([a-zA-Z0-9]+)/);
       if (!cidMatch) {
@@ -421,7 +401,6 @@ export class IpnsService {
       }
 
       const cid = cidMatch[1];
-      // Sequence is a bigint in the record structure
       const sequenceNumber = String(record.sequence ?? 0n);
 
       this.logger.debug(`Parsed IPNS record: cid=${cid}, sequenceNumber=${sequenceNumber}`);
