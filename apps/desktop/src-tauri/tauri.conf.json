@@ -6,8 +6,8 @@
   "build": {
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist",
-    "beforeDevCommand": "",
-    "beforeBuildCommand": ""
+    "beforeDevCommand": "pnpm vite dev",
+    "beforeBuildCommand": "pnpm vite build"
   },
   "app": {
     "windows": [],
