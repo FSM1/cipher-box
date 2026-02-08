@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod api;
+mod commands;
 mod crypto;
 mod state;
 
@@ -34,7 +35,11 @@ fn main() {
             log::info!("CipherBox Desktop setup complete");
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![])
+        .invoke_handler(tauri::generate_handler![
+            commands::handle_auth_complete,
+            commands::try_silent_refresh,
+            commands::logout,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running CipherBox Desktop");
 }
