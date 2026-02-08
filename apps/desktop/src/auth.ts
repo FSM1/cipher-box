@@ -112,22 +112,22 @@ export async function login(): Promise<void> {
     throw new Error('Web3Auth connection failed: no provider returned');
   }
 
-  // Extract idToken
-  const authUser = await web3auth.authenticateUser();
-  if (!authUser?.idToken) {
+  // Extract idToken (v10 API: getIdentityToken() returns { idToken })
+  const tokenInfo = await web3auth.getIdentityToken();
+  if (!tokenInfo?.idToken) {
     throw new Error('Failed to get idToken from Web3Auth');
   }
-  const idToken: string = authUser.idToken;
+  const idToken: string = tokenInfo.idToken;
 
   // Extract private key from provider
   // Web3Auth social logins expose the private key via RPC
   let privateKey: string | null = null;
   try {
-    privateKey = await provider.request<string>({ method: 'private_key' });
+    privateKey = await provider.request<unknown, string>({ method: 'private_key' });
   } catch {
     // Fallback for some provider versions
     try {
-      privateKey = await provider.request<string>({ method: 'eth_private_key' });
+      privateKey = await provider.request<unknown, string>({ method: 'eth_private_key' });
     } catch {
       throw new Error('Failed to extract private key from Web3Auth provider');
     }
