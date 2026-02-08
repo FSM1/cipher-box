@@ -1022,6 +1022,397 @@ mod implementation {
             reply.ok();
         }
 
+        /// Create a new directory.
+        ///
+        /// Generates a new Ed25519 IPNS keypair, derives the IPNS name,
+        /// creates initial empty folder metadata, encrypts and uploads to IPFS,
+        /// creates and publishes IPNS record, enrolls for TEE republishing,
+        /// and updates the parent folder metadata.
+        fn mkdir(
+            &mut self,
+            req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            _mode: u32,
+            _umask: u32,
+            reply: ReplyEntry,
+        ) {
+            let name_str = match name.to_str() {
+                Some(n) => n,
+                None => {
+                    reply.error(libc::EINVAL);
+                    return;
+                }
+            };
+
+            // Check parent exists and is a directory
+            let parent_exists = self.inodes.get(parent).map(|inode| {
+                matches!(inode.kind, InodeKind::Root { .. } | InodeKind::Folder { .. })
+            });
+            if parent_exists != Some(true) {
+                reply.error(libc::ENOENT);
+                return;
+            }
+
+            log::debug!("mkdir: {} in parent {}", name_str, parent);
+
+            let result = (|| -> Result<FileAttr, String> {
+                // Generate new folder key (32 random bytes)
+                let folder_key = crate::crypto::utils::generate_file_key();
+
+                // Generate new Ed25519 keypair for this folder's IPNS
+                let (ipns_public_key, ipns_private_key) =
+                    crate::crypto::ed25519::generate_ed25519_keypair();
+
+                // Derive IPNS name from public key
+                let ipns_pub_arr: [u8; 32] = ipns_public_key.clone().try_into()
+                    .map_err(|_| "Invalid IPNS public key length".to_string())?;
+                let ipns_name = crate::crypto::ipns::derive_ipns_name(&ipns_pub_arr)
+                    .map_err(|e| format!("Failed to derive IPNS name: {}", e))?;
+
+                // Create initial empty folder metadata
+                let metadata = crate::crypto::folder::FolderMetadata {
+                    version: "v1".to_string(),
+                    children: vec![],
+                };
+
+                // Encrypt metadata
+                let folder_key_arr: [u8; 32] = folder_key;
+                let sealed = crate::crypto::folder::encrypt_folder_metadata(
+                    &metadata, &folder_key_arr,
+                )
+                .map_err(|e| format!("Metadata encryption failed: {}", e))?;
+
+                // Format as JSON `{ "iv": "<hex>", "data": "<base64>" }`
+                let iv_hex = hex::encode(&sealed[..12]);
+                use base64::Engine;
+                let data_base64 = base64::engine::general_purpose::STANDARD
+                    .encode(&sealed[12..]);
+                let json_metadata = serde_json::json!({
+                    "iv": iv_hex,
+                    "data": data_base64,
+                });
+                let json_bytes = serde_json::to_vec(&json_metadata)
+                    .map_err(|e| format!("JSON serialization failed: {}", e))?;
+
+                // Upload encrypted metadata to IPFS
+                let api = self.api.clone();
+                let rt = self.rt.clone();
+                let initial_cid = rt.block_on(async {
+                    crate::api::ipfs::upload_content(&api, &json_bytes).await
+                })?;
+
+                // Create and sign initial IPNS record
+                let ipns_key_arr: [u8; 32] = ipns_private_key.clone().try_into()
+                    .map_err(|_| "Invalid IPNS private key length".to_string())?;
+                let value = format!("/ipfs/{}", initial_cid);
+                let record = crate::crypto::ipns::create_ipns_record(
+                    &ipns_key_arr, &value, 0, 86_400_000,
+                )
+                .map_err(|e| format!("IPNS record creation failed: {}", e))?;
+
+                let marshaled = crate::crypto::ipns::marshal_ipns_record(&record)
+                    .map_err(|e| format!("IPNS record marshaling failed: {}", e))?;
+                let record_base64 = base64::engine::general_purpose::STANDARD
+                    .encode(&marshaled);
+
+                // Wrap folder key with user's public key (ECIES) for parent metadata
+                let wrapped_folder_key = crate::crypto::ecies::wrap_key(
+                    &folder_key, &self.public_key,
+                )
+                .map_err(|e| format!("Folder key wrapping failed: {}", e))?;
+                let encrypted_folder_key_hex = hex::encode(&wrapped_folder_key);
+
+                // Encrypt IPNS private key with TEE public key for republishing enrollment
+                let encrypted_ipns_for_tee = if let Some(ref tee_key) = self.tee_public_key {
+                    let wrapped = crate::crypto::ecies::wrap_key(&ipns_private_key, tee_key)
+                        .map_err(|e| format!("TEE key wrapping failed: {}", e))?;
+                    Some(hex::encode(&wrapped))
+                } else {
+                    None
+                };
+
+                // Publish IPNS record
+                let publish_request = crate::api::ipns::IpnsPublishRequest {
+                    ipns_name: ipns_name.clone(),
+                    record: record_base64,
+                    metadata_cid: initial_cid.clone(),
+                    encrypted_ipns_private_key: encrypted_ipns_for_tee,
+                    key_epoch: self.tee_key_epoch,
+                };
+
+                let api = self.api.clone();
+                rt.block_on(async {
+                    crate::api::ipns::publish_ipns(&api, &publish_request).await
+                })?;
+
+                // Cache metadata for this new folder
+                self.metadata_cache.set(&ipns_name, metadata, initial_cid);
+
+                // Allocate inode and create InodeData
+                let ino = self.inodes.allocate_ino();
+                let now = SystemTime::now();
+                let uid = req.uid();
+                let gid = req.gid();
+
+                let attr = FileAttr {
+                    ino,
+                    size: 0,
+                    blocks: 0,
+                    atime: now,
+                    mtime: now,
+                    ctime: now,
+                    crtime: now,
+                    kind: FileType::Directory,
+                    perm: 0o755,
+                    nlink: 2,
+                    uid,
+                    gid,
+                    rdev: 0,
+                    blksize: BLOCK_SIZE,
+                    flags: 0,
+                };
+
+                let inode = InodeData {
+                    ino,
+                    parent_ino: parent,
+                    name: name_str.to_string(),
+                    kind: InodeKind::Folder {
+                        ipns_name: ipns_name.clone(),
+                        encrypted_folder_key: encrypted_folder_key_hex,
+                        folder_key: folder_key.to_vec(),
+                        ipns_private_key: Some(ipns_private_key),
+                        children_loaded: true, // empty folder, so "loaded"
+                    },
+                    attr,
+                    children: Some(vec![]),
+                };
+
+                self.inodes.insert(inode);
+
+                // Add to parent's children
+                if let Some(parent_inode) = self.inodes.get_mut(parent) {
+                    if let Some(ref mut children) = parent_inode.children {
+                        children.push(ino);
+                    }
+                }
+
+                // Update parent folder metadata
+                self.update_folder_metadata(parent)?;
+
+                Ok(attr)
+            })();
+
+            match result {
+                Ok(attr) => {
+                    reply.entry(&FUSE_TTL, &attr, 0);
+                }
+                Err(e) => {
+                    log::error!("mkdir failed: {}", e);
+                    reply.error(libc::EIO);
+                }
+            }
+        }
+
+        /// Remove an empty directory.
+        fn rmdir(
+            &mut self,
+            _req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            reply: ReplyEmpty,
+        ) {
+            let name_str = match name.to_str() {
+                Some(n) => n,
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
+            };
+
+            // Find child inode
+            let child_ino = match self.inodes.find_child(parent, name_str) {
+                Some(ino) => ino,
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
+            };
+
+            // Verify it's a folder and get CID for unpinning
+            let cid_to_unpin = match self.inodes.get(child_ino) {
+                Some(inode) => {
+                    match &inode.kind {
+                        InodeKind::Folder { ipns_name, .. } => {
+                            // Check not empty
+                            if let Some(ref children) = inode.children {
+                                if !children.is_empty() {
+                                    reply.error(libc::ENOTEMPTY);
+                                    return;
+                                }
+                            }
+                            // Get CID from metadata cache for unpinning
+                            self.metadata_cache.get(ipns_name)
+                                .map(|cached| cached.cid.clone())
+                        }
+                        _ => {
+                            reply.error(libc::ENOTDIR);
+                            return;
+                        }
+                    }
+                }
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
+            };
+
+            log::debug!("rmdir: {} from parent {}", name_str, parent);
+
+            // Remove inode from table (also removes from parent's children)
+            self.inodes.remove(child_ino);
+
+            // Update parent folder metadata
+            if let Err(e) = self.update_folder_metadata(parent) {
+                log::error!("Failed to update folder metadata after rmdir: {}", e);
+            }
+
+            // Fire-and-forget unpin of folder's IPNS CID
+            if let Some(cid) = cid_to_unpin {
+                let api = self.api.clone();
+                self.rt.spawn(async move {
+                    if let Err(e) = crate::api::ipfs::unpin_content(&api, &cid).await {
+                        log::debug!("Background unpin failed for {}: {}", cid, e);
+                    }
+                });
+            }
+
+            reply.ok();
+        }
+
+        /// Rename or move a file/folder.
+        ///
+        /// Handles both same-folder renames and cross-folder moves.
+        /// For cross-folder moves, updates both parent folders' metadata.
+        fn rename(
+            &mut self,
+            _req: &Request<'_>,
+            parent: u64,
+            name: &OsStr,
+            newparent: u64,
+            newname: &OsStr,
+            _flags: u32,
+            reply: ReplyEmpty,
+        ) {
+            let name_str = match name.to_str() {
+                Some(n) => n,
+                None => {
+                    reply.error(libc::EINVAL);
+                    return;
+                }
+            };
+            let newname_str = match newname.to_str() {
+                Some(n) => n,
+                None => {
+                    reply.error(libc::EINVAL);
+                    return;
+                }
+            };
+
+            // Find source inode
+            let source_ino = match self.inodes.find_child(parent, name_str) {
+                Some(ino) => ino,
+                None => {
+                    reply.error(libc::ENOENT);
+                    return;
+                }
+            };
+
+            log::debug!(
+                "rename: {} (ino {}) in parent {} -> {} in parent {}",
+                name_str, source_ino, parent, newname_str, newparent,
+            );
+
+            // If destination exists, handle replacement
+            if let Some(dest_ino) = self.inodes.find_child(newparent, newname_str) {
+                // Check if destination is a non-empty directory
+                if let Some(dest_inode) = self.inodes.get(dest_ino) {
+                    match &dest_inode.kind {
+                        InodeKind::Folder { .. } => {
+                            if let Some(ref children) = dest_inode.children {
+                                if !children.is_empty() {
+                                    reply.error(libc::ENOTEMPTY);
+                                    return;
+                                }
+                            }
+                        }
+                        InodeKind::File { cid, .. } => {
+                            // Fire-and-forget unpin of replaced file
+                            if !cid.is_empty() {
+                                let cid_clone = cid.clone();
+                                let api = self.api.clone();
+                                self.rt.spawn(async move {
+                                    let _ = crate::api::ipfs::unpin_content(
+                                        &api, &cid_clone,
+                                    ).await;
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                // Remove destination inode
+                self.inodes.remove(dest_ino);
+            }
+
+            // Remove source from old parent's name index
+            self.inodes.name_to_ino.remove(&(parent, name_str.to_string()));
+
+            // Update the source inode's name and parent
+            if let Some(inode) = self.inodes.get_mut(source_ino) {
+                inode.name = newname_str.to_string();
+                inode.parent_ino = newparent;
+                inode.attr.ctime = SystemTime::now();
+            }
+
+            // Update the name lookup index for the new location
+            self.inodes.name_to_ino.insert(
+                (newparent, newname_str.to_string()),
+                source_ino,
+            );
+
+            if parent != newparent {
+                // Cross-folder move: update both parent children lists
+                // Remove from old parent
+                if let Some(old_parent) = self.inodes.get_mut(parent) {
+                    if let Some(ref mut children) = old_parent.children {
+                        children.retain(|&c| c != source_ino);
+                    }
+                }
+                // Add to new parent
+                if let Some(new_parent) = self.inodes.get_mut(newparent) {
+                    if let Some(ref mut children) = new_parent.children {
+                        children.push(source_ino);
+                    }
+                }
+
+                // Update both folders' metadata
+                if let Err(e) = self.update_folder_metadata(parent) {
+                    log::error!("Failed to update old parent metadata after rename: {}", e);
+                }
+                if let Err(e) = self.update_folder_metadata(newparent) {
+                    log::error!("Failed to update new parent metadata after rename: {}", e);
+                }
+            } else {
+                // Same-folder rename: just update parent metadata
+                if let Err(e) = self.update_folder_metadata(parent) {
+                    log::error!("Failed to update parent metadata after rename: {}", e);
+                }
+            }
+
+            reply.ok();
+        }
+
         /// Return filesystem statistics.
         fn statfs(
             &mut self,

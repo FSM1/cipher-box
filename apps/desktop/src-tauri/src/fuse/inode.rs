@@ -97,7 +97,7 @@ pub struct InodeTable {
     /// Map from inode number to inode data.
     pub inodes: HashMap<u64, InodeData>,
     /// Lookup index: (parent_ino, name) -> child_ino.
-    name_to_ino: HashMap<(u64, String), u64>,
+    pub name_to_ino: HashMap<(u64, String), u64>,
     /// Atomic counter for allocating new inode numbers.
     next_ino: AtomicU64,
 }
