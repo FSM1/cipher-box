@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 ## Current Position
 
 Phase: 9 of 11 (Desktop Client)
-Plan: 5 of 7 in Phase 9 complete (09-01, 09-02, 09-03, 09-04, 09-05)
+Plan: 6 of 7 in Phase 9 complete (09-01, 09-02, 09-03, 09-04, 09-05, 09-06)
 Status: In progress
-Last activity: 2026-02-08 - Completed 09-05-PLAN.md (FUSE filesystem read operations)
+Last activity: 2026-02-08 - Completed 09-06-PLAN.md (FUSE write operations)
 
-Progress: [########--] 80% (55 of 69 plans)
+Progress: [########--] 81% (56 of 69 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 55
+- Total plans completed: 56
 - Average duration: 4.6 min
-- Total execution time: 4.6 hours
+- Total execution time: 4.8 hours
 
 **By Phase:**
 
@@ -41,12 +41,12 @@ Progress: [########--] 80% (55 of 69 plans)
 | 07-multi-device-sync       | 4/4   | 17 min | 4.3 min  |
 | 07.1-atomic-file-upload    | 2/2   | 6 min  | 3 min    |
 | 08-tee-integration         | 4/4   | 21 min | 5.3 min  |
-| 09-desktop-client          | 5/7   | 32 min | 6.4 min  |
+| 09-desktop-client          | 6/7   | 44 min | 7.3 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 5m, 6m, 10m, 3m, 8m
-- Trend: Consistent, FUSE filesystem had moderate complexity (inode table + caching + operations)
+- Last 5 plans: 6m, 10m, 3m, 8m, 12m
+- Trend: FUSE write operations most complex yet (temp-file commit + IPNS publish + metadata rebuild)
 
 Updated after each plan completion.
 
@@ -233,6 +233,11 @@ Recent decisions affecting current work:
 | EncryptedFolderMetadata JSON with hex IV + base64 data | 09-05   | Rust decodes hex IV, base64 ciphertext, then AES-256-GCM decrypts         |
 | open() is read-only; EACCES for write flags            | 09-05   | Write support deferred to plan 09-06                                      |
 | block_on for FUSE-thread operations                    | 09-05   | Init and read use rt.block_on(); background refresh uses rt.spawn()       |
+| IpnsPublishRequest matches backend PublishIpnsDto      | 09-06   | Backend expects ipnsName, record (base64), metadataCid, not plan fields   |
+| Encrypted metadata JSON: { iv: hex, data: base64 }     | 09-06   | seal_aes_gcm split: iv=hex(sealed[..12]), data=base64(sealed[12..])       |
+| name_to_ino made public for rename manipulation        | 09-06   | Rename operations need direct HashMap access for index updates            |
+| Temp-file commit model for FUSE writes                 | 09-06   | Writes buffer to local temp file, encrypt+upload only on release()        |
+| Per-folder IPNS signing from inode data                | 09-06   | Each folder's Ed25519 key stored in InodeKind, not global state           |
 
 ### Pending Todos
 
@@ -286,11 +291,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-08
-Stopped at: Completed 09-05-PLAN.md (FUSE filesystem read operations)
+Stopped at: Completed 09-06-PLAN.md (FUSE write operations)
 Resume file: None
-Next plan: 09-06-PLAN.md (FUSE write operations)
+Next plan: 09-07-PLAN.md (Desktop testing/integration)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-08 after completing 09-05-PLAN.md (FUSE Filesystem Read Operations)_
+_Last updated: 2026-02-08 after completing 09-06-PLAN.md (FUSE Write Operations)_
