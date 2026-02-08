@@ -4,6 +4,7 @@
 mod api;
 mod commands;
 mod crypto;
+mod fuse;
 mod state;
 
 use state::AppState;

@@ -101,4 +101,26 @@ impl ApiClient {
         let bytes = resp.bytes().await?;
         Ok(bytes.to_vec())
     }
+
+    /// Send an authenticated multipart POST request (used for IPFS file uploads).
+    pub async fn authenticated_multipart_post(
+        &self,
+        path: &str,
+        form: reqwest::multipart::Form,
+    ) -> Result<Response, reqwest::Error> {
+        let url = format!("{}{}", self.base_url, path);
+        let token = self.access_token.read().await;
+
+        let mut builder = self
+            .client
+            .post(&url)
+            .header("X-Client-Type", "desktop")
+            .multipart(form);
+
+        if let Some(ref t) = *token {
+            builder = builder.bearer_auth(t);
+        }
+
+        builder.send().await
+    }
 }
