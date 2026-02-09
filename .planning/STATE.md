@@ -20,9 +20,9 @@ Progress: [#########-] 96% (66 of 69 plans)
 
 **Velocity:**
 
-- Total plans completed: 65
+- Total plans completed: 66
 - Average duration: 4.6 min
-- Total execution time: 5.3 hours
+- Total execution time: 5.4 hours
 
 **By Phase:**
 
@@ -42,12 +42,12 @@ Progress: [#########-] 96% (66 of 69 plans)
 | 07.1-atomic-file-upload    | 2/2   | 6 min  | 3 min    |
 | 08-tee-integration         | 4/4   | 21 min | 5.3 min  |
 | 09-desktop-client          | 7/7   | 49 min | 7.0 min  |
-| 09.1-env-devops-staging    | 2/6   | 3 min  | 1.5 min  |
+| 09.1-env-devops-staging    | 3/6   | 6 min  | 2.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 3m, 8m, 12m, 1m, 2m
-- Trend: Docker infrastructure files are config-only, no compilation needed
+- Last 5 plans: 8m, 12m, 1m, 2m, 3m
+- Trend: Environment config changes are straightforward source file edits
 
 Updated after each plan completion.
 
@@ -245,6 +245,11 @@ Recent decisions affecting current work:
 | GHCR image references with OWNER variable              | 09.1-02 | Deploy workflow substitutes actual GitHub repository owner at runtime     |
 | All non-public ports bound to 127.0.0.1                | 09.1-02 | Security: only 80, 443, 4001 (IPFS swarm) exposed to internet             |
 | Caddy with Cloudflare Origin CA (auto_https off)       | 09.1-02 | Cloudflare handles browser TLS; Caddy serves origin cert for CF-to-VPS    |
+| NestJS Logger instead of nestjs-pino                   | 09.1-01 | Simpler, no new dependency; Grafana Alloy can ingest plain text logs      |
+| TypeORM logging as array not boolean                   | 09.1-01 | Targeted: errors+warnings+migrations in dev, errors+migrations in prod    |
+| CIPHERBOX_ENVIRONMENT for TEE simulator guard          | 09.1-01 | Decouples deployment tier from NODE_ENV for staging compatibility         |
+| HashRouter for IPFS-hosted web app                     | 09.1-01 | IPFS gateways serve files by path; hash routing keeps routes in fragment  |
+| VITE_ENVIRONMENT for frontend env detection            | 09.1-01 | NETWORK_CONFIG map selects devnet/mainnet based on deployment tier        |
 
 ### Pending Todos
 
@@ -300,11 +305,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-09
-Stopped at: Completed 09.1-02-PLAN.md (Docker infrastructure)
+Stopped at: Completed 09.1-01-PLAN.md (environment-aware config)
 Resume file: None
 Next plan: 09.1-04 through 09.1-06 remaining in Phase 9.1
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-09 after completing 09.1-02 (Docker Infrastructure)_
+_Last updated: 2026-02-09 after completing 09.1-01 (Environment-Aware Config)_
