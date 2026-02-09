@@ -101,10 +101,11 @@ jobs:
           UPLOAD_DIR="apps/web/dist"
           CURL_ARGS=()
 
-          # Build -F args for each file (curl handles multipart encoding)
+          # Build -F args for each file with shared directory prefix
+          # Pinata requires a common folder prefix for directory uploads
           while IFS= read -r -d '' filepath; do
             relpath="${filepath#$UPLOAD_DIR/}"
-            CURL_ARGS+=(-F "file=@${filepath};filename=${relpath}")
+            CURL_ARGS+=(-F "file=@${filepath};filename=site/${relpath}")
           done < <(find "$UPLOAD_DIR" -type f -print0)
 
           RESPONSE=$(curl -s -X POST "https://api.pinata.cloud/pinning/pinFileToIPFS" \
