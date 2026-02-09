@@ -10,17 +10,17 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 ## Current Position
 
 Phase: 9.1 of 11 (Environment Changes, DevOps & Staging Deployment)
-Plan: 1 of 6 in Phase 9.1 complete (09.1-03)
+Plan: 3 of 6 in Phase 9.1 complete (09.1-01, 09.1-02, 09.1-03)
 Status: In progress
-Last activity: 2026-02-09 - Completed 09.1-03-PLAN.md (full schema migration)
+Last activity: 2026-02-09 - Completed 09.1-01-PLAN.md (environment-aware config)
 
-Progress: [#########-] 93% (64 of 69 plans)
+Progress: [#########-] 96% (66 of 69 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 64
+- Total plans completed: 65
 - Average duration: 4.6 min
 - Total execution time: 5.3 hours
 
@@ -42,12 +42,12 @@ Progress: [#########-] 93% (64 of 69 plans)
 | 07.1-atomic-file-upload    | 2/2   | 6 min  | 3 min    |
 | 08-tee-integration         | 4/4   | 21 min | 5.3 min  |
 | 09-desktop-client          | 7/7   | 49 min | 7.0 min  |
-| 09.1-env-devops-staging    | 1/6   | 1 min  | 1 min    |
+| 09.1-env-devops-staging    | 2/6   | 3 min  | 1.5 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 10m, 3m, 8m, 12m, 1m
-- Trend: Schema migration was straightforward - single file creation from entity definitions
+- Last 5 plans: 3m, 8m, 12m, 1m, 2m
+- Trend: Docker infrastructure files are config-only, no compilation needed
 
 Updated after each plan completion.
 
@@ -241,6 +241,10 @@ Recent decisions affecting current work:
 | Per-folder IPNS signing from inode data                | 09-06   | Each folder's Ed25519 key stored in InodeKind, not global state           |
 | Baseline migration timestamp 1700000000000             | 09.1-03 | Precedes incremental migrations; fresh DB gets full schema first          |
 | Full schema includes final column states               | 09.1-03 | tokenPrefix and nullable TEE fields already present; incrementals no-op   |
+| Multi-stage Dockerfile (deps/build/production)         | 09.1-02 | Minimal image size, non-root user, monorepo root as build context         |
+| GHCR image references with OWNER variable              | 09.1-02 | Deploy workflow substitutes actual GitHub repository owner at runtime     |
+| All non-public ports bound to 127.0.0.1                | 09.1-02 | Security: only 80, 443, 4001 (IPFS swarm) exposed to internet             |
+| Caddy with Cloudflare Origin CA (auto_https off)       | 09.1-02 | Cloudflare handles browser TLS; Caddy serves origin cert for CF-to-VPS    |
 
 ### Pending Todos
 
@@ -296,11 +300,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-09
-Stopped at: Completed 09.1-03-PLAN.md (full schema migration)
+Stopped at: Completed 09.1-02-PLAN.md (Docker infrastructure)
 Resume file: None
 Next plan: 09.1-04 through 09.1-06 remaining in Phase 9.1
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-09 after completing 09.1-03 (Full Schema Migration)_
+_Last updated: 2026-02-09 after completing 09.1-02 (Docker Infrastructure)_
