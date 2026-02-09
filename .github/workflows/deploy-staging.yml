@@ -174,6 +174,10 @@ jobs:
           GRAFANA_LOKI_USERNAME=${{ vars.GRAFANA_LOKI_USERNAME }}
           GRAFANA_LOKI_API_KEY=${{ secrets.GRAFANA_LOKI_API_KEY }}
           ENVEOF
+          # Append image tag and lowercase owner (can't use shell vars in quoted heredoc)
+          OWNER="${{ github.repository_owner }}"
+          echo "GITHUB_REPOSITORY_OWNER=${OWNER,,}" >> .env.staging
+          echo "TAG=${{ github.ref_name }}" >> .env.staging
 
       - name: Copy files to VPS
         uses: appleboy/scp-action@v0.1.7
@@ -196,8 +200,11 @@ jobs:
             mv /opt/cipherbox/.env.staging /opt/cipherbox/docker/.env.staging 2>/dev/null || true
             cd /opt/cipherbox/docker
 
-            # Rename .env for docker compose
-            cp .env.staging .env.staging.bak
+            # Docker Compose reads .env automatically for variable substitution
+            cp .env.staging .env
+
+            # Ensure certs symlink exists for Caddy
+            ln -sf /opt/cipherbox/certs /opt/cipherbox/docker/certs 2>/dev/null || true
 
       - name: Deploy services
         uses: appleboy/ssh-action@v1
