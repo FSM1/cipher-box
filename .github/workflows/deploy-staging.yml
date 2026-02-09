@@ -63,8 +63,8 @@ jobs:
             ${{ env.TEE_IMAGE }}:${{ github.ref_name }}
             ${{ env.TEE_IMAGE }}:latest
 
-  deploy-web:
-    name: Build & Deploy Web App to IPFS
+  build-web:
+    name: Build Web App
     runs-on: ubuntu-latest
     environment: staging
     steps:
@@ -93,61 +93,26 @@ jobs:
           VITE_PINATA_GATEWAY_URL: ${{ vars.STAGING_PINATA_GATEWAY_URL }}
           VITE_ENVIRONMENT: staging
 
-      - name: Upload web app to Pinata
-        id: pinata
-        env:
-          PINATA_JWT: ${{ secrets.PINATA_JWT }}
-        run: |
-          UPLOAD_DIR="apps/web/dist"
-          CURL_ARGS=()
-
-          # Build -F args for each file with shared directory prefix
-          # Pinata requires a common folder prefix for directory uploads
-          while IFS= read -r -d '' filepath; do
-            relpath="${filepath#$UPLOAD_DIR/}"
-            CURL_ARGS+=(-F "file=@${filepath};filename=site/${relpath}")
-          done < <(find "$UPLOAD_DIR" -type f -print0)
-
-          RESPONSE=$(curl -s -X POST "https://api.pinata.cloud/pinning/pinFileToIPFS" \
-            -H "Authorization: Bearer ${PINATA_JWT}" \
-            "${CURL_ARGS[@]}" \
-            -F "pinataMetadata={\"name\":\"cipherbox-web-${{ github.ref_name }}\"}")
-
-          CID=$(echo "$RESPONSE" | jq -r '.IpfsHash')
-          if [ -z "$CID" ] || [ "$CID" = "null" ]; then
-            echo "Failed to upload to Pinata. Response: $RESPONSE"
-            exit 1
-          fi
-
-          echo "Uploaded web app to IPFS: $CID"
-          echo "cid=$CID" >> "$GITHUB_OUTPUT"
-
-      - name: Update Cloudflare DNSLink
-        run: |
-          CID="${{ steps.pinata.outputs.cid }}"
-          echo "Updating DNSLink to /ipfs/${CID}"
-
-          RESPONSE=$(curl -s -X PUT \
-            "https://api.cloudflare.com/client/v4/zones/${{ vars.CLOUDFLARE_ZONE_ID }}/dns_records/${{ vars.CLOUDFLARE_DNSLINK_RECORD_ID }}" \
-            -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            --data '{"type":"TXT","name":"_dnslink.app-staging","content":"dnslink=/ipfs/'"${CID}"'","ttl":1}')
-
-          SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
-          if [ "$SUCCESS" != "true" ]; then
-            echo "Failed to update DNSLink. Response: $RESPONSE"
-            exit 1
-          fi
-
-          echo "DNSLink updated successfully"
+      - name: Upload web dist as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist/
+          retention-days: 1
 
   deploy-vps:
     name: Deploy to Staging VPS
-    needs: [build-api, build-tee]
+    needs: [build-api, build-tee, build-web]
     runs-on: ubuntu-latest
     environment: staging
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download web dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web-dist/
 
       - name: Generate .env.staging
         run: |
@@ -185,7 +150,7 @@ jobs:
           host: ${{ vars.STAGING_HOST }}
           username: ${{ vars.STAGING_USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
-          source: '.env.staging,docker/docker-compose.staging.yml,docker/Caddyfile'
+          source: '.env.staging,docker/docker-compose.staging.yml,docker/Caddyfile,docker/alloy-config.river'
           target: /opt/cipherbox
           strip_components: 0
 
@@ -205,6 +170,17 @@ jobs:
 
             # Ensure certs symlink exists for Caddy
             ln -sf /opt/cipherbox/certs /opt/cipherbox/docker/certs 2>/dev/null || true
+
+      - name: Deploy web app files to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ vars.STAGING_HOST }}
+          username: ${{ vars.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          source: 'web-dist/*'
+          target: /opt/cipherbox/web
+          strip_components: 1
+          rm: true
 
       - name: Deploy services
         uses: appleboy/ssh-action@v1

@@ -99,6 +99,7 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - ./certs:/etc/caddy/certs
+      - /opt/cipherbox/web:/srv/web:ro
       - caddy_data:/data
       - caddy_config:/config
     logging: *default-logging
