@@ -268,7 +268,7 @@ volumes:
 ```bash
 # Staging environment
 VITE_WEB3AUTH_CLIENT_ID=BK...dev  # Same Devnet client ID
-VITE_API_URL=https://staging-api.cipherbox.io
+VITE_API_URL=https://api.staging.cipherbox.cc
 VITE_ENVIRONMENT=staging
 
 CIPHERBOX_ENVIRONMENT=staging
@@ -301,7 +301,7 @@ JWT_SECRET=${{ secrets.JWT_SECRET_STAGING }}
 ```bash
 # Production environment
 VITE_WEB3AUTH_CLIENT_ID=BK...prod  # DIFFERENT - Production client ID
-VITE_API_URL=https://api.cipherbox.io
+VITE_API_URL=https://api.cipherbox.cc
 VITE_ENVIRONMENT=production  # Network is derived from this (see web3auth/config.ts)
 
 CIPHERBOX_ENVIRONMENT=production
@@ -341,6 +341,7 @@ For Local/CI/Staging (Devnet project):
 1. Create test email in Web3Auth dashboard
 2. Enable "Test User" mode (static OTP: 000000)
 3. Store in GitHub Secrets:
+
    ```bash
    WEB3AUTH_TEST_EMAIL=test@cipherbox.dev
    WEB3AUTH_TEST_OTP=000000
@@ -399,12 +400,12 @@ export const web3AuthOptions: Web3AuthOptions = {
 
 ### Web App (Vite)
 
-| Variable                  | Local                      | CI                         | Staging                           | Production                        |
-| ------------------------- | -------------------------- | -------------------------- | --------------------------------- | --------------------------------- |
-| `VITE_WEB3AUTH_CLIENT_ID` | dev                        | dev                        | dev                               | **prod**                          |
-| `VITE_API_URL`            | http://localhost:3000      | http://localhost:3000      | https://staging-api.cipherbox.io  | https://api.cipherbox.io          |
-| `VITE_PINATA_GATEWAY_URL` | http://localhost:8080/ipfs | http://localhost:8080/ipfs | https://gateway.pinata.cloud/ipfs | https://gateway.pinata.cloud/ipfs |
-| `VITE_ENVIRONMENT`        | local                      | ci                         | staging                           | production                        |
+| Variable                  | Local                        | CI                           | Staging                             | Production                          |
+| ------------------------- | ---------------------------- | ---------------------------- | ----------------------------------- | ----------------------------------- |
+| `VITE_WEB3AUTH_CLIENT_ID` | dev                          | dev                          | dev                                 | **prod**                            |
+| `VITE_API_URL`            | <http://localhost:3000>      | <http://localhost:3000>      | <https://api.staging.cipherbox.cc>  | <https://api.cipherbox.cc>          |
+| `VITE_PINATA_GATEWAY_URL` | <http://localhost:8080/ipfs> | <http://localhost:8080/ipfs> | <https://gateway.pinata.cloud/ipfs> | <https://gateway.pinata.cloud/ipfs> |
+| `VITE_ENVIRONMENT`        | local                        | ci                           | staging                             | production                          |
 
 ### API (NestJS)
 
@@ -689,7 +690,7 @@ This section documents the security architecture for encrypting IPNS private key
 
 #### Encryption Flow
 
-```
+```text
 User Client                      CipherBox API                    TEE (Phala Cloud)
     |                                 |                                 |
     |  1. Fetch TEE public key        |                                 |
