@@ -90,7 +90,7 @@ export const useFolderStore = create<FolderState>((set, get) => ({
       return {
         folders: {
           ...state.folders,
-          [folderId]: { ...folder, children },
+          [folderId]: { ...folder, children, isLoaded: true, isLoading: false },
         },
       };
     }),

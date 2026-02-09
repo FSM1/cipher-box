@@ -236,20 +236,34 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
           derivedKeypair.privateKey
         );
 
-        // Load folder metadata from IPNS
-        const folderNode = await loadFolder(
-          targetFolderId,
-          folderKey,
-          ipnsPrivateKey,
-          folderEntry.ipnsName,
-          parentId,
-          folderEntry.name
-        );
+        // Load folder metadata from IPNS (retry if IPNS hasn't propagated yet)
+        const MAX_RETRIES = 3;
+        const RETRY_DELAY_MS = 2000;
+        let folderNode: Awaited<ReturnType<typeof loadFolder>> | null = null;
+
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+          if (latestNavTarget.current !== targetFolderId) return;
+
+          folderNode = await loadFolder(
+            targetFolderId,
+            folderKey,
+            ipnsPrivateKey,
+            folderEntry.ipnsName,
+            parentId,
+            folderEntry.name
+          );
+
+          // If loaded successfully or this is the last attempt, stop retrying
+          if (folderNode.isLoaded || attempt === MAX_RETRIES) break;
+
+          // IPNS not propagated yet — wait and retry
+          await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+        }
 
         // Only apply result if this is still the latest navigation
         if (latestNavTarget.current !== targetFolderId) return;
 
-        useFolderStore.getState().setFolder(folderNode);
+        useFolderStore.getState().setFolder(folderNode!);
       } catch (err) {
         console.error('Failed to load subfolder:', err);
         // Only clean up if this is still the latest navigation
