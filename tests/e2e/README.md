@@ -17,6 +17,7 @@ End-to-end tests for CipherBox using Playwright.
    ```
 
 3. Configure environment (optional):
+
    ```bash
    cp .env.example .env
    # Edit .env with your test configuration
@@ -62,7 +63,7 @@ pnpm test:ui
 
 ## Test Structure
 
-```
+```text
 tests/e2e/
 ├── fixtures/          # Test fixtures
 │   └── auth.fixture.ts    # Authenticated session fixture
