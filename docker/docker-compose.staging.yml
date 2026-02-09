@@ -1,4 +1,11 @@
 name: cipherbox-staging
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
 services:
   api:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-OWNER}/cipherbox-api:${TAG:-latest}
@@ -6,6 +13,7 @@ services:
     env_file: .env.staging
     ports:
       - '127.0.0.1:3000:3000'
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -23,6 +31,7 @@ services:
       - '127.0.0.1:5432:5432'
     volumes:
       - postgres_staging:/var/lib/postgresql/data
+    logging: *default-logging
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U ${DB_USERNAME:-cipherbox}']
       interval: 5s
@@ -36,6 +45,7 @@ services:
       - '127.0.0.1:6379:6379'
     volumes:
       - redis_staging:/data
+    logging: *default-logging
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
@@ -54,6 +64,7 @@ services:
       - '127.0.0.1:8080:8080'
     volumes:
       - ipfs_staging:/data/ipfs
+    logging: *default-logging
     healthcheck:
       test: ['CMD-SHELL', 'ipfs id || exit 1']
       interval: 10s
@@ -77,6 +88,7 @@ services:
       TEE_WORKER_SECRET: ${TEE_WORKER_SECRET}
     ports:
       - '127.0.0.1:3001:3001'
+    logging: *default-logging
 
   caddy:
     image: caddy:2-alpine
@@ -89,6 +101,24 @@ services:
       - ./certs:/etc/caddy/certs
       - caddy_data:/data
       - caddy_config:/config
+    logging: *default-logging
+
+  alloy:
+    image: grafana/alloy:latest
+    restart: unless-stopped
+    volumes:
+      - ./alloy-config.river:/etc/alloy/config.river
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      GRAFANA_LOKI_URL: ${GRAFANA_LOKI_URL}
+      GRAFANA_LOKI_USERNAME: ${GRAFANA_LOKI_USERNAME}
+      GRAFANA_LOKI_API_KEY: ${GRAFANA_LOKI_API_KEY}
+    command:
+      - run
+      - /etc/alloy/config.river
+    logging: *default-logging
+    depends_on:
+      - api
 
 volumes:
   postgres_staging:
