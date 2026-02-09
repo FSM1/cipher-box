@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { ApiStatusIndicator } from '../components/ApiStatusIndicator';
 import { AuthButton } from '../components/auth/AuthButton';
 import { MatrixBackground } from '../components/MatrixBackground';
+import { StagingBanner } from '../components/StagingBanner';
 import { useAuth } from '../hooks/useAuth';
 
 /**
@@ -23,23 +24,29 @@ export function Login() {
   // Show loading state while checking authentication
   if (isLoading) {
     return (
-      <div className="login-container">
-        <MatrixBackground />
-        <div className="loading">initializing...</div>
-      </div>
+      <>
+        <StagingBanner variant="login" />
+        <div className="login-container">
+          <MatrixBackground />
+          <div className="loading">initializing...</div>
+        </div>
+      </>
     );
   }
 
   return (
-    <div className="login-container">
-      <MatrixBackground />
-      <h1>CIPHERBOX</h1>
-      <p className="tagline">zero-knowledge encrypted storage</p>
-      <p className="login-description">
-        your files, encrypted on your device. we never see your data.
-      </p>
-      <AuthButton />
-      <ApiStatusIndicator />
-    </div>
+    <>
+      <StagingBanner variant="login" />
+      <div className="login-container">
+        <MatrixBackground />
+        <h1>CIPHERBOX</h1>
+        <p className="tagline">zero-knowledge encrypted storage</p>
+        <p className="login-description">
+          your files, encrypted on your device. we never see your data.
+        </p>
+        <AuthButton />
+        <ApiStatusIndicator />
+      </div>
+    </>
   );
 }
