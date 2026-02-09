@@ -12,9 +12,9 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          # Conventional Commits pattern: type(optional-scope): description
+          # Conventional Commits pattern: type(optional-scope)(optional-!) : description
           # Types must match commitlint config used by husky
-          pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?: .+'
+          pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?(!)?: .+'
 
           if [[ ! "$PR_TITLE" =~ $pattern ]]; then
             echo "::error::PR title does not follow Conventional Commits format."
