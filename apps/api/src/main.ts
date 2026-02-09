@@ -1,11 +1,18 @@
 import { NestFactory } from '@nestjs/core';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, Logger } from '@nestjs/common';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const isDev = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
+
+  // In staging/production, omit debug and verbose log levels for concise output
+  const app = await NestFactory.create(AppModule, {
+    logger: isDev ? ['log', 'error', 'warn', 'debug', 'verbose'] : ['log', 'error', 'warn'],
+  });
+
+  const logger = new Logger('Bootstrap');
 
   // [SECURITY: CRITICAL-01] Enable global validation pipe
   // Without this, all DTO validation decorators (@IsString, @Matches, etc.) are ignored
@@ -36,8 +43,9 @@ async function bootstrap() {
     jsonDocumentUrl: 'api-docs/json',
   });
 
-  await app.listen(3000);
-  console.log('CipherBox API running on http://localhost:3000');
-  console.log('Swagger UI: http://localhost:3000/api-docs');
+  const port = process.env.PORT || 3000;
+  await app.listen(port);
+  logger.log(`CipherBox API running on http://localhost:${port}`);
+  logger.log(`Swagger UI: http://localhost:${port}/api-docs`);
 }
 bootstrap();

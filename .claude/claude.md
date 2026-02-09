@@ -134,7 +134,7 @@ await mcp__playwright__screenshot({ fullPage: true, name: 'verification' });
 
 // 4. Verify element existence
 const exists = await mcp__playwright__evaluate({
-  script: `!!document.querySelector('.expected-element')`
+  script: `!!document.querySelector('.expected-element')`,
 });
 
 // 5. Verify computed styles (for UI work)
@@ -143,7 +143,7 @@ const styles = await mcp__playwright__evaluate({
     const el = document.querySelector('.target');
     const s = getComputedStyle(el);
     return { backgroundColor: s.backgroundColor, color: s.color };
-  `
+  `,
 });
 
 // 6. Test interactions
@@ -188,3 +188,24 @@ await mcp__playwright__wait({ selector: '.result-element' });
 - `docs/` - Documentation updates
 - `refactor/` - Code refactoring
 - `chore/` - Maintenance tasks
+
+**Commit Messages:**
+
+Commits must follow the [Conventional Commits](https://www.conventionalcommits.org/) format. This is enforced by commitlint via a husky `commit-msg` hook.
+
+```text
+type(optional-scope): description
+
+[optional body]
+```
+
+Valid types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. Any scope string is allowed (e.g., `feat(api): add health endpoint`).
+
+**Releases & Versioning:**
+
+- All packages share a single unified version (currently tracked in `.release-please-manifest.json`)
+- [Release Please](https://github.com/googleapis/release-please) automates changelog generation, version bumping, and GitHub Releases
+- On push to `main`, the `release-please.yml` workflow creates/updates a release PR with accumulated changes
+- When that PR is merged, Release Please creates a GitHub Release and `vX.Y.Z` tag
+- Version bumps propagate to all `package.json` files, `Cargo.toml`, and `tauri.conf.json` via `release-please-config.json`
+- Staging deploys use `v*-staging*` tags and are unaffected by release tags

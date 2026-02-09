@@ -27,7 +27,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 7: Multi-Device Sync** - IPNS polling and sync state management
 - [x] **Phase 7.1: Atomic File Upload** - Refactor multi-request upload into single atomic backend call with batch IPNS publishing (INSERTED)
 - [x] **Phase 8: TEE Integration** - Auto-republishing via Phala Cloud
-- [ ] **Phase 9: Desktop Client** - Tauri app with FUSE mount for macOS
+- [x] **Phase 9: Desktop Client** - Tauri app with FUSE mount for macOS
+- [x] **Phase 9.1: Environment Changes, DevOps & Staging Deployment** - CI/CD, environment config, staging deploy (INSERTED)
 - [ ] **Phase 10: Data Portability** - Vault export and documentation
 - [ ] **Phase 11: Security Enhancements** - Web3Auth MFA (post-v1.0)
 
@@ -342,18 +343,43 @@ Plans:
 
 Plans:
 
-- [ ] 09-01-PLAN.md — Tauri v2 app scaffold in pnpm workspace
-- [ ] 09-02-PLAN.md — Rust-native crypto module (AES, ECIES, Ed25519, IPNS) with cross-language test vectors
-- [ ] 09-03-PLAN.md — Backend auth endpoint modification for desktop body-based refresh tokens
-- [ ] 09-04-PLAN.md — Desktop auth flow: Web3Auth in webview, IPC, Keychain, vault key decryption
-- [ ] 09-05-PLAN.md — FUSE mount read operations (readdir, getattr, open, read with IPFS fetch + decrypt)
-- [ ] 09-06-PLAN.md — FUSE mount write operations (create, write, delete, mkdir, rmdir, rename)
-- [ ] 09-07-PLAN.md — System tray menu bar icon, background sync daemon, offline write queue
+- [x] 09-01-PLAN.md — Tauri v2 app scaffold in pnpm workspace
+- [x] 09-02-PLAN.md — Rust-native crypto module (AES, ECIES, Ed25519, IPNS) with cross-language test vectors
+- [x] 09-03-PLAN.md — Backend auth endpoint modification for desktop body-based refresh tokens
+- [x] 09-04-PLAN.md — Desktop auth flow: Web3Auth in webview, IPC, Keychain, vault key decryption
+- [x] 09-05-PLAN.md — FUSE mount read operations (readdir, getattr, open, read with IPFS fetch + decrypt)
+- [x] 09-06-PLAN.md — FUSE mount write operations (create, write, delete, mkdir, rmdir, rename)
+- [x] 09-07-PLAN.md — System tray menu bar icon, background sync daemon, offline write queue
+
+### Phase 9.1: Environment Changes, DevOps & Staging Deployment (INSERTED)
+
+**Goal**: Production-ready environment configuration, CI/CD pipeline updates, and deployment to staging
+**Depends on**: Phase 9
+**Requirements**: Infrastructure and deployment readiness - See [ENVIRONMENTS.md](.planning/ENVIRONMENTS.md) for preliminary planning.
+**Success Criteria** (what must be TRUE):
+
+1. Environment configuration supports staging and production targets
+2. CI/CD pipeline builds and deploys to staging
+3. Infrastructure provisioned for staging environment
+4. Application deployable and functional in staging
+   **Plans**: 6 plans
+
+Plans:
+
+- [x] 09.1-01-PLAN.md — Environment config fixes (configurable port, TEE guard, hash routing, Web3Auth network, logging cleanup)
+- [x] 09.1-02-PLAN.md — API Dockerfile, staging Docker Compose, Caddyfile, .dockerignore
+- [x] 09.1-03-PLAN.md — Full schema database migration for fresh staging database
+- [x] 09.1-04-PLAN.md — Tag-triggered deployment workflow (build, push, deploy to VPS + Pinata)
+- [x] 09.1-05-PLAN.md — Infrastructure provisioning and first deployment verification
+- [x] 09.1-06-PLAN.md — Monitoring: Grafana Cloud log aggregation + Better Stack uptime monitoring
+
+**Details:**
+Urgent insertion to prepare environment, DevOps pipeline, and staging deployment before continuing to data portability. Ensures the application is deployable and testable in a real environment.
 
 ### Phase 10: Data Portability
 
 **Goal**: Users can export vault for independent recovery
-**Depends on**: Phase 9
+**Depends on**: Phase 9.1
 **Requirements**: PORT-01, PORT-02, PORT-03
 **Success Criteria** (what must be TRUE):
 
@@ -411,7 +437,8 @@ Decimal phases (if any) execute between their surrounding integers.
 | 7. Multi-Device Sync    | 4/4            | Complete    | 2026-02-02 |
 | 7.1 Atomic File Upload  | 2/2            | Complete    | 2026-02-07 |
 | 8. TEE Integration      | 4/4            | Complete    | 2026-02-07 |
-| 9. Desktop Client       | 0/7            | Planned     | -          |
+| 9. Desktop Client       | 7/7            | Complete    | 2026-02-08 |
+| 9.1 Env/DevOps/Staging  | 6/6            | Complete    | 2026-02-09 |
 | 10. Data Portability    | 0/3            | Not started | -          |
 | 11. Security (MFA)      | 0/4            | Post-v1.0   | -          |
 
@@ -448,4 +475,7 @@ _Phase 8 planned: 2026-02-07_
 _Phase 8 complete: 2026-02-07_
 _Phase 9 planned: 2026-02-07_
 _Phase 9 revised: 2026-02-07_
-_Total phases: 14 | Total plans: 69+ | Depth: Comprehensive_
+_Phase 9 complete: 2026-02-08_
+_Phase 9.1 planned: 2026-02-09_
+_Phase 9.1 complete: 2026-02-09_
+_Total phases: 14 | Total plans: 74 | Depth: Comprehensive_

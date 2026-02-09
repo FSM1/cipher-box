@@ -33,6 +33,7 @@ import { IpnsRepublishSchedule } from './republish/republish-schedule.entity';
         connection: {
           host: config.get('REDIS_HOST', 'localhost'),
           port: config.get<number>('REDIS_PORT', 6379),
+          password: config.get('REDIS_PASSWORD', undefined),
         },
       }),
       inject: [ConfigService],
@@ -70,8 +71,13 @@ import { IpnsRepublishSchedule } from './republish/republish-schedule.entity';
           TeeKeyRotationLog,
           IpnsRepublishSchedule,
         ],
-        synchronize: configService.get<string>('NODE_ENV') !== 'production',
-        logging: configService.get<string>('NODE_ENV') === 'development',
+        synchronize: ['development', 'test'].includes(
+          configService.get<string>('NODE_ENV', 'development')
+        ),
+        logging:
+          configService.get<string>('NODE_ENV') === 'development'
+            ? ['error', 'warn', 'migration'] // Dev: errors, warnings, migrations only (no SQL query spam)
+            : ['error', 'migration'], // Staging/production: errors and migrations only
       }),
       inject: [ConfigService],
     }),

@@ -5,48 +5,49 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 9 - Desktop Client (in progress)
+**Current focus:** Phase 10 - Data Portability (next)
 
 ## Current Position
 
-Phase: 9 of 11 (Desktop Client)
-Plan: 6 of 7 in Phase 9 complete (09-01, 09-02, 09-03, 09-04, 09-05, 09-06)
-Status: In progress
-Last activity: 2026-02-08 - Completed 09-06-PLAN.md (FUSE write operations)
+Phase: 9.1 of 11 (Environment Changes, DevOps & Staging Deployment)
+Plan: 6 of 6 in Phase 9.1 complete
+Status: Complete
+Last activity: 2026-02-09 - Phase 9.1 complete, staging environment live
 
-Progress: [########--] 81% (56 of 69 plans)
+Progress: [##########] 100% (69 of 69 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 56
-- Average duration: 4.6 min
-- Total execution time: 4.8 hours
+- Total plans completed: 69
+- Average duration: 4.7 min
+- Total execution time: 5.5 hours
 
 **By Phase:**
 
-| Phase                      | Plans | Total  | Avg/Plan |
-| -------------------------- | ----- | ------ | -------- |
-| 01-foundation              | 3/3   | 20 min | 7 min    |
-| 02-authentication          | 4/4   | 18 min | 4.5 min  |
-| 03-core-encryption         | 3/3   | 18 min | 6 min    |
-| 04-file-storage            | 4/4   | 17 min | 4.3 min  |
-| 04.1-api-service-testing   | 3/3   | 11 min | 3.7 min  |
-| 04.2-local-ipfs-testing    | 2/2   | 14 min | 7 min    |
-| 05-folder-system           | 4/4   | 18 min | 4.5 min  |
-| 06-file-browser-ui         | 4/4   | 19 min | 4.8 min  |
-| 06.1-webapp-automation     | 6/6   | 25 min | 4.2 min  |
-| 06.3-ui-structure-refactor | 5/5   | 16 min | 3.2 min  |
-| 07-multi-device-sync       | 4/4   | 17 min | 4.3 min  |
-| 07.1-atomic-file-upload    | 2/2   | 6 min  | 3 min    |
-| 08-tee-integration         | 4/4   | 21 min | 5.3 min  |
-| 09-desktop-client          | 6/7   | 44 min | 7.3 min  |
+| Phase                      | Plans | Total   | Avg/Plan |
+| -------------------------- | ----- | ------- | -------- |
+| 01-foundation              | 3/3   | 20 min  | 7 min    |
+| 02-authentication          | 4/4   | 18 min  | 4.5 min  |
+| 03-core-encryption         | 3/3   | 18 min  | 6 min    |
+| 04-file-storage            | 4/4   | 17 min  | 4.3 min  |
+| 04.1-api-service-testing   | 3/3   | 11 min  | 3.7 min  |
+| 04.2-local-ipfs-testing    | 2/2   | 14 min  | 7 min    |
+| 05-folder-system           | 4/4   | 18 min  | 4.5 min  |
+| 06-file-browser-ui         | 4/4   | 19 min  | 4.8 min  |
+| 06.1-webapp-automation     | 6/6   | 25 min  | 4.2 min  |
+| 06.3-ui-structure-refactor | 5/5   | 16 min  | 3.2 min  |
+| 07-multi-device-sync       | 4/4   | 17 min  | 4.3 min  |
+| 07.1-atomic-file-upload    | 2/2   | 6 min   | 3 min    |
+| 08-tee-integration         | 4/4   | 21 min  | 5.3 min  |
+| 09-desktop-client          | 7/7   | 49 min  | 7.0 min  |
+| 09.1-env-devops-staging    | 6/6   | 101 min | 16.8 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 6m, 10m, 3m, 8m, 12m
-- Trend: FUSE write operations most complex yet (temp-file commit + IPNS publish + metadata rebuild)
+- Last 5 plans: 2m, 3m, 2m, 3m, 90m
+- Trend: Plan 09.1-05 was interactive infrastructure provisioning with iterative deployment fixes
 
 Updated after each plan completion.
 
@@ -238,13 +239,32 @@ Recent decisions affecting current work:
 | name_to_ino made public for rename manipulation        | 09-06   | Rename operations need direct HashMap access for index updates            |
 | Temp-file commit model for FUSE writes                 | 09-06   | Writes buffer to local temp file, encrypt+upload only on release()        |
 | Per-folder IPNS signing from inode data                | 09-06   | Each folder's Ed25519 key stored in InodeKind, not global state           |
+| Baseline migration timestamp 1700000000000             | 09.1-03 | Precedes incremental migrations; fresh DB gets full schema first          |
+| Full schema includes final column states               | 09.1-03 | tokenPrefix and nullable TEE fields already present; incrementals no-op   |
+| Multi-stage Dockerfile (deps/build/production)         | 09.1-02 | Minimal image size, non-root user, monorepo root as build context         |
+| GHCR image references with OWNER variable              | 09.1-02 | Deploy workflow substitutes actual GitHub repository owner at runtime     |
+| All non-public ports bound to 127.0.0.1                | 09.1-02 | Security: only 80, 443, 4001 (IPFS swarm) exposed to internet             |
+| Caddy with Cloudflare Origin CA (auto_https off)       | 09.1-02 | Cloudflare handles browser TLS; Caddy serves origin cert for CF-to-VPS    |
+| NestJS Logger instead of nestjs-pino                   | 09.1-01 | Simpler, no new dependency; Grafana Alloy can ingest plain text logs      |
+| TypeORM logging as array not boolean                   | 09.1-01 | Targeted: errors+warnings+migrations in dev, errors+migrations in prod    |
+| CIPHERBOX_ENVIRONMENT for TEE simulator guard          | 09.1-01 | Decouples deployment tier from NODE_ENV for staging compatibility         |
+| HashRouter for IPFS-hosted web app                     | 09.1-01 | IPFS gateways serve files by path; hash routing keeps routes in fragment  |
+| VITE_ENVIRONMENT for frontend env detection            | 09.1-01 | NETWORK_CONFIG map selects devnet/mainnet based on deployment tier        |
+| Grafana Alloy via Docker socket for log collection     | 09.1-06 | Read-only socket mount discovers containers and ships logs to Loki        |
+| x-logging YAML anchor for DRY log rotation             | 09.1-06 | json-file driver, 10m max-size, 3 files applied to all 7 services         |
+| Alloy credentials via environment variables            | 09.1-06 | GRAFANA_LOKI_URL/USERNAME/API_KEY from .env.staging, GitHub Secrets       |
+| Programmatic migration runner for Docker containers    | 09.1-04 | run-migrations.ts with JS glob paths; production image lacks ts-node/npx  |
+| Multi-stage TEE worker Dockerfile builds from source   | 09.1-04 | CI builds without separate pre-build step; node user for security         |
+| curl-based Pinata directory upload in deploy workflow  | 09.1-04 | Portable, no CLI dependency; multipart form with CID capture              |
+| SCP then SSH pattern for VPS deployment                | 09.1-04 | Separates file transfer from service orchestration for clarity            |
 
 ### Pending Todos
 
-2 pending todo(s):
+3 pending todo(s):
 
 - `2026-01-23-simple-text-file-editor-modal.md` — Add simple text file editor modal (area: ui)
 - `2026-02-07-web-worker-large-file-encryption.md` — Offload large file encryption to Web Worker (area: ui)
+- `2026-02-08-vault-sync-loading-state-ux.md` — Vault sync loading state UX (area: ui)
 
 ### Completed Todos
 
@@ -287,15 +307,16 @@ Recent decisions affecting current work:
 - Phase 6.2 inserted after Phase 6.1: Restyle App with Pencil Design - Complete UI redesign using Pencil design tool
 - Phase 6.3 inserted after Phase 6.2: UI Structure Refactor - Page layouts, component hierarchy, toolbars, and navigation using Pencil MCP for design-first approach
 - Phase 7.1 inserted after Phase 7: Atomic File Upload - Refactor multi-request upload into single atomic backend call with batch IPNS publishing (URGENT)
+- Phase 9.1 inserted after Phase 9: Environment Changes, DevOps & Staging Deployment - CI/CD pipeline, environment config, staging deploy
 
 ## Session Continuity
 
-Last session: 2026-02-08
-Stopped at: Completed 09-06-PLAN.md (FUSE write operations)
+Last session: 2026-02-09
+Stopped at: Phase 9.1 complete — staging environment live
 Resume file: None
-Next plan: 09-07-PLAN.md (Desktop testing/integration)
+Next phase: Phase 10 - Data Portability
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-08 after completing 09-06-PLAN.md (FUSE Write Operations)_
+_Last updated: 2026-02-09 after completing Phase 9.1 (Environment Changes, DevOps & Staging Deployment)_
