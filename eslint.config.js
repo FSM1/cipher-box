@@ -12,6 +12,8 @@ export default [
       '**/.claude/**',
       '**/00-Preliminary-R&D/**',
       '**/Preliminary/**',
+      '**/.learnings/**',
+      '**/src-tauri/target/**',
     ],
   },
   { files: ['**/*.{js,mjs,cjs,ts,tsx}'] },

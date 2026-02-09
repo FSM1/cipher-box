@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 Phase: 9.1 of 11 (Environment Changes, DevOps & Staging Deployment)
 Plan: 6 of 6 in Phase 9.1 complete
 Status: Complete
-Last activity: 2026-02-09 - Phase 9.1 complete, staging environment live
+Last activity: 2026-02-09 - Completed quick task 003: Fix subfolder navigation and upload
 
 Progress: [##########] 100% (69 of 69 plans)
 
@@ -260,10 +260,11 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-2 pending todo(s):
+3 pending todo(s):
 
 - `2026-01-23-simple-text-file-editor-modal.md` — Add simple text file editor modal (area: ui)
 - `2026-02-07-web-worker-large-file-encryption.md` — Offload large file encryption to Web Worker (area: ui)
+- `2026-02-09-client-side-ipns-signature-validation.md` — Add client-side IPNS signature validation (area: crypto) — GitHub #71
 
 ### Completed Todos
 
@@ -287,10 +288,11 @@ Recent decisions affecting current work:
 
 ### Quick Tasks Completed
 
-| #   | Description                            | Date       | Commit  | Directory                                                                           |
-| --- | -------------------------------------- | ---------- | ------- | ----------------------------------------------------------------------------------- |
-| 001 | Add API status indicator on login page | 2026-01-22 | 929143e | [001-login-page-api-status-indicator](./quick/001-login-page-api-status-indicator/) |
-| 002 | Fix empty state ASCII art              | 2026-02-07 | ff97f12 | [002-fix-empty-state-ascii-art](./quick/002-fix-empty-state-ascii-art/)             |
+| #   | Description                            | Date       | Commit  | Directory                                                                                   |
+| --- | -------------------------------------- | ---------- | ------- | ------------------------------------------------------------------------------------------- |
+| 001 | Add API status indicator on login page | 2026-01-22 | 929143e | [001-login-page-api-status-indicator](./quick/001-login-page-api-status-indicator/)         |
+| 002 | Fix empty state ASCII art              | 2026-02-07 | ff97f12 | [002-fix-empty-state-ascii-art](./quick/002-fix-empty-state-ascii-art/)                     |
+| 003 | Fix subfolder navigation and upload    | 2026-02-09 | 95666db | [003-fix-subfolder-navigation-and-upload](./quick/003-fix-subfolder-navigation-and-upload/) |
 
 ### Research Flags (from research phase)
 
@@ -311,11 +313,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-09
-Stopped at: Phase 9.1 complete — staging environment live
+Stopped at: Quick Task 003 complete — subfolder navigation fixed
 Resume file: None
 Next phase: Phase 10 - Data Portability
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-09 after completing Phase 9.1 (Environment Changes, DevOps & Staging Deployment)_
+_Last updated: 2026-02-09 after completing Quick Task 003 (Fix subfolder navigation and upload)_

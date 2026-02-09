@@ -18,6 +18,8 @@ import { MoveDialogPage } from '../page-objects/dialogs/move-dialog.page';
  * 1. Logs in once via Web3Auth
  * 2. Creates a realistic folder hierarchy
  * 3. Uploads multiple files at various folder levels (12+ files)
+ * 3.5. Reloads page and verifies subfolder navigation from cold state
+ *      (IPNS resolve + key unwrapping via navigateTo)
  * 4. Moves files between folders
  * 5. Edits a file (delete + re-upload with new content)
  * 6. Cleans up and logs out
@@ -89,6 +91,12 @@ test.describe.serial('Full Workflow', () => {
     { name: `completed-${timestamp}.txt`, content: 'Completed project info' },
     { name: `retrospective-${timestamp}.txt`, content: 'Project retrospective' },
   ];
+
+  // File uploaded after page reload (tests cold-load upload path)
+  const postReloadFile = {
+    name: `post-reload-${timestamp}.txt`,
+    content: 'File uploaded after page reload',
+  };
 
   // File to be edited (re-uploaded with new content)
   const editableFileName = `editable-${timestamp}.txt`;
@@ -358,6 +366,102 @@ test.describe.serial('Full Workflow', () => {
       await uploadFile(file.name, file.content);
       expect(await fileList.isItemVisible(file.name)).toBe(true);
     }
+  });
+
+  // ============================================
+  // Phase 3.5: Post-Reload Subfolder Navigation
+  // ============================================
+  // After page.reload(), Zustand store is empty. The app must
+  // re-authenticate, re-sync root metadata from IPNS, and then
+  // cold-load subfolder contents via navigateTo (IPNS resolve +
+  // key unwrapping). This path is NOT exercised by in-session tests.
+
+  test('3.7 Page reload preserves session and reloads root folder', async () => {
+    // Navigate to root before reload so we start from a clean state
+    await navigateToRoot();
+
+    // Reload the page — Zustand store is wiped
+    await page.reload({ waitUntil: 'domcontentloaded' });
+
+    // Reset navigation stack since we're starting fresh
+    navigationStack.length = 0;
+    navigationStack.push('root');
+
+    // Wait for auth to restore (user menu becomes visible)
+    await page.locator('[data-testid="user-menu"]').waitFor({
+      state: 'visible',
+      timeout: 30000,
+    });
+
+    // Wait for initial sync to complete — workspace folder must appear
+    // This proves IPNS root metadata was re-fetched and decrypted
+    await fileList.waitForItemToAppear(workspaceFolder, { timeout: 60000 });
+
+    // Verify other root-level items are also visible
+    // rootFiles[0] was moved to workspace in 4.1 — but Phase 4 hasn't run yet at this point
+    for (const file of rootFiles) {
+      expect(await fileList.isItemVisible(file.name)).toBe(true);
+    }
+    expect(await fileList.isItemVisible(editableFileName)).toBe(true);
+  });
+
+  test('3.8 Navigate into subfolder after reload and verify contents', async () => {
+    // Double-click workspace folder → exercises navigateTo cold-load
+    await navigateIntoFolder(workspaceFolder);
+
+    // Verify workspace children are visible (documents, images, projects)
+    expect(await fileList.isItemVisible(documentsFolder)).toBe(true);
+    expect(await fileList.isItemVisible(imagesFolder)).toBe(true);
+    expect(await fileList.isItemVisible(projectsFolder)).toBe(true);
+
+    // Navigate deeper into documents — exercises nested IPNS resolve + key unwrap
+    await navigateIntoFolder(documentsFolder);
+
+    // Verify uploaded document files are visible
+    for (const file of documentFiles) {
+      expect(await fileList.isItemVisible(file.name)).toBe(true);
+    }
+  });
+
+  test('3.9 Breadcrumb navigation works after reload', async () => {
+    // We're in documents folder from previous test
+    // Click workspace breadcrumb to navigate back
+    await breadcrumbs.clickBreadcrumb(workspaceFolder);
+    await breadcrumbs.waitForPathToContain(workspaceFolder, { timeout: 10000 });
+
+    // Update navigation stack manually since we used breadcrumb
+    navigationStack.length = 0;
+    navigationStack.push('root', workspaceFolder);
+
+    // Verify workspace children are all visible
+    expect(await fileList.isItemVisible(documentsFolder)).toBe(true);
+    expect(await fileList.isItemVisible(imagesFolder)).toBe(true);
+    expect(await fileList.isItemVisible(projectsFolder)).toBe(true);
+  });
+
+  test('3.10 Upload file to subfolder after reload', async () => {
+    // Navigate into images folder
+    await navigateIntoFolder(imagesFolder);
+
+    // Verify existing image files are present (from Phase 3.4)
+    for (const file of imageFiles) {
+      expect(await fileList.isItemVisible(file.name)).toBe(true);
+    }
+
+    // Upload a new file — exercises the upload path after cold-load
+    await uploadFile(postReloadFile.name, postReloadFile.content);
+    expect(await fileList.isItemVisible(postReloadFile.name)).toBe(true);
+
+    // Navigate away and back to verify persistence
+    await navigateBack(); // Back to workspace
+    await navigateIntoFolder(imagesFolder);
+
+    // File should still be there
+    await fileList.waitForItemToAppear(postReloadFile.name, { timeout: 30000 });
+    expect(await fileList.isItemVisible(postReloadFile.name)).toBe(true);
+
+    // Navigate back to root for Phase 4
+    await navigateToRoot();
   });
 
   // ============================================
