@@ -419,6 +419,12 @@
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .vault-syncing-bar-fill {
+    animation: none;
+  }
+}
+
 .vault-syncing-text {
   font-family: var(--font-family-mono);
   font-size: var(--font-size-sm);

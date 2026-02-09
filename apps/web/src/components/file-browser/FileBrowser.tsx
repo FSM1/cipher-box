@@ -124,8 +124,12 @@ export function FileBrowser() {
       useFolderStore.getState().updateFolderChildren('root', metadata.children);
       useFolderStore.getState().updateFolderSequence('root', resolved.sequenceNumber);
     } catch (err) {
-      // Log but don't crash - sync will retry on next interval
       console.error('Sync refresh failed:', err);
+      // During initial sync, propagate so useSyncPolling keeps the
+      // loading UI visible and retries instead of showing empty state
+      if (!useSyncStore.getState().initialSyncComplete) {
+        throw err;
+      }
     }
   }, [rootIpnsName]);
 
@@ -352,7 +356,7 @@ export function FileBrowser() {
 
       {/* Initial vault sync state — shown before first IPNS resolve completes (root only) */}
       {!isLoading && !initialSyncComplete && currentFolderId === 'root' && !hasChildren && (
-        <div className="vault-syncing" data-testid="vault-syncing">
+        <div className="vault-syncing" data-testid="vault-syncing" role="status" aria-live="polite">
           <pre className="vault-syncing-ascii" aria-hidden="true">
             {`> vault sync in progress...
 > resolving ipns records`}

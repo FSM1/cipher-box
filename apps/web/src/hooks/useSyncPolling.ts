@@ -73,12 +73,13 @@ export function useSyncPolling(onSync: () => Promise<void>): void {
   }, [rootIpnsName, isOnline, onSync, startSync, syncSuccess, syncFailure, completeInitialSync]);
 
   // Immediate sync on first mount — don't wait for the 30s interval
+  // Skip for new vaults: there's no IPNS record to resolve yet
   useEffect(() => {
-    if (rootIpnsName && isOnline && !initialSyncFired.current) {
+    if (rootIpnsName && isOnline && !isNewVault && !initialSyncFired.current) {
       initialSyncFired.current = true;
       doSync();
     }
-  }, [rootIpnsName, isOnline, doSync]);
+  }, [rootIpnsName, isOnline, isNewVault, doSync]);
 
   // Determine polling delay: null pauses, number runs
   // Per CONTEXT.md: pause when backgrounded (Claude's discretion chose pause)
