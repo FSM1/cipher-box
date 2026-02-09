@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { unwrapKey, hexToBytes, type FolderEntry } from '@cipherbox/crypto';
 import { useFolderStore, type FolderNode } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
+import { useAuthStore } from '../stores/auth.store';
+import { loadFolder } from '../services/folder.service';
 
 /**
  * Breadcrumb entry for navigation.
@@ -19,7 +22,7 @@ type UseFolderNavigationReturn = {
   currentFolder: FolderNode | null;
   breadcrumbs: Breadcrumb[];
   isLoading: boolean;
-  navigateTo: (folderId: string) => void;
+  navigateTo: (folderId: string) => Promise<void>;
   navigateUp: () => void;
 };
 
@@ -147,9 +150,10 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
   /**
    * Navigate to a specific folder using react-router.
    * Browser history is automatically managed.
+   * Loads subfolder metadata (IPNS resolve + decrypt) if not yet loaded.
    */
   const navigateTo = useCallback(
-    (targetFolderId: string) => {
+    async (targetFolderId: string) => {
       // Navigate to URL - root folder goes to /files, others to /files/:folderId
       if (targetFolderId === 'root') {
         navigate('/files');
@@ -157,24 +161,94 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         navigate(`/files/${targetFolderId}`);
       }
 
-      // Handle folder loading state
+      // Use getState() to avoid stale Zustand closures in async callback
+      const currentFolders = useFolderStore.getState().folders;
       const targetFolder =
-        targetFolderId === 'root' ? getRootFolder(vaultState, folders) : folders[targetFolderId];
+        targetFolderId === 'root'
+          ? getRootFolder(useVaultStore.getState(), currentFolders)
+          : currentFolders[targetFolderId];
 
-      if (targetFolder && !targetFolder.isLoaded && !targetFolder.isLoading) {
-        setIsLoading(true);
-        // Mark folder as loading
-        setFolder({ ...targetFolder, isLoading: true });
+      // If already loaded, nothing to do
+      if (targetFolder?.isLoaded) return;
 
-        // Simulate async load (actual implementation in Phase 7)
-        // For now, mark as loaded after a brief delay
-        setTimeout(() => {
-          setFolder({ ...targetFolder, isLoaded: true, isLoading: false });
-          setIsLoading(false);
-        }, 100);
+      // Find the FolderEntry for this subfolder in any loaded parent's children
+      let folderEntry: FolderEntry | undefined;
+      let parentId: string | null = null;
+
+      for (const [fId, fNode] of Object.entries(currentFolders)) {
+        if (!fNode.isLoaded) continue;
+        const match = fNode.children.find(
+          (c): c is FolderEntry => c.type === 'folder' && c.id === targetFolderId
+        );
+        if (match) {
+          folderEntry = match;
+          parentId = fId;
+          break;
+        }
+      }
+
+      if (!folderEntry) {
+        console.error(
+          `Cannot load folder ${targetFolderId}: no parent with its FolderEntry is loaded`
+        );
+        return;
+      }
+
+      // Get user's ECIES private key for unwrapping
+      const derivedKeypair = useAuthStore.getState().derivedKeypair;
+      if (!derivedKeypair) {
+        console.error('Cannot load folder: no derived keypair available');
+        return;
+      }
+
+      // Set loading state with placeholder
+      setIsLoading(true);
+      const loadingPlaceholder: FolderNode = {
+        id: targetFolderId,
+        name: folderEntry.name,
+        ipnsName: folderEntry.ipnsName,
+        parentId,
+        children: [],
+        isLoaded: false,
+        isLoading: true,
+        sequenceNumber: 0n,
+        folderKey: new Uint8Array(0),
+        ipnsPrivateKey: new Uint8Array(0),
+      };
+      useFolderStore.getState().setFolder(loadingPlaceholder);
+
+      try {
+        // Unwrap keys using user's ECIES private key
+        const folderKey = await unwrapKey(
+          hexToBytes(folderEntry.folderKeyEncrypted),
+          derivedKeypair.privateKey
+        );
+        const ipnsPrivateKey = await unwrapKey(
+          hexToBytes(folderEntry.ipnsPrivateKeyEncrypted),
+          derivedKeypair.privateKey
+        );
+
+        // Load folder metadata from IPNS
+        const folderNode = await loadFolder(
+          targetFolderId,
+          folderKey,
+          ipnsPrivateKey,
+          folderEntry.ipnsName,
+          parentId,
+          folderEntry.name
+        );
+
+        // Use getState() to avoid stale closure
+        useFolderStore.getState().setFolder(folderNode);
+      } catch (err) {
+        console.error('Failed to load subfolder:', err);
+        // Remove the loading placeholder so the user can retry
+        useFolderStore.getState().removeFolder(targetFolderId);
+      } finally {
+        setIsLoading(false);
       }
     },
-    [navigate, folders, vaultState, setFolder]
+    [navigate]
   );
 
   /**
