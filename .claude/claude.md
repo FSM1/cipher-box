@@ -208,4 +208,4 @@ Valid types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`
 - On push to `main`, the `release-please.yml` workflow creates/updates a release PR with accumulated changes
 - When that PR is merged, Release Please creates a GitHub Release and `vX.Y.Z` tag
 - Version bumps propagate to all `package.json` files, `Cargo.toml`, and `tauri.conf.json` via `release-please-config.json`
-- Staging deploys use `v*-staging*` tags and are unaffected by release tags
+- Staging deploys are triggered by pushing a tag matching `v*-staging*`. Legacy tags (e.g., `v0.1.0-staging.1`) also match but the **recommended convention** for new tags is `v<version>-staging-rc-<N>` (e.g., `v0.1.2-staging-rc-1`, `v0.1.2-staging-rc-2`). The `rc-N` suffix is a sequential counter allowing multiple staging deploys per version.
