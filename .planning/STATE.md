@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 Phase: 9.1 of 11 (Environment Changes, DevOps & Staging Deployment)
 Plan: 6 of 6 in Phase 9.1 complete
 Status: Complete
-Last activity: 2026-02-09 - Completed quick task 003: Fix subfolder navigation and upload
+Last activity: 2026-02-09 - Completed quick task 004: Add staging environment banner
 
 Progress: [##########] 100% (69 of 69 plans)
 
@@ -293,6 +293,7 @@ Recent decisions affecting current work:
 | 001 | Add API status indicator on login page | 2026-01-22 | 929143e | [001-login-page-api-status-indicator](./quick/001-login-page-api-status-indicator/)         |
 | 002 | Fix empty state ASCII art              | 2026-02-07 | ff97f12 | [002-fix-empty-state-ascii-art](./quick/002-fix-empty-state-ascii-art/)                     |
 | 003 | Fix subfolder navigation and upload    | 2026-02-09 | 95666db | [003-fix-subfolder-navigation-and-upload](./quick/003-fix-subfolder-navigation-and-upload/) |
+| 004 | Add staging environment banner         | 2026-02-09 | 839179e | [004-add-staging-environment-banner](./quick/004-add-staging-environment-banner/)           |
 
 ### Research Flags (from research phase)
 
