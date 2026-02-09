@@ -1,0 +1,240 @@
+name: Deploy Staging
+
+on:
+  push:
+    tags:
+      - 'v*-staging*'
+
+env:
+  REGISTRY: ghcr.io
+  API_IMAGE: ghcr.io/${{ github.repository_owner }}/cipherbox-api
+  TEE_IMAGE: ghcr.io/${{ github.repository_owner }}/cipherbox-tee-worker
+
+jobs:
+  build-api:
+    name: Build & Push API Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: |
+            ${{ env.API_IMAGE }}:${{ github.ref_name }}
+            ${{ env.API_IMAGE }}:latest
+
+  build-tee:
+    name: Build & Push TEE Worker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: ./tee-worker
+          file: tee-worker/Dockerfile
+          push: true
+          tags: |
+            ${{ env.TEE_IMAGE }}:${{ github.ref_name }}
+            ${{ env.TEE_IMAGE }}:latest
+
+  deploy-web:
+    name: Build & Deploy Web App to IPFS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build crypto package
+        run: pnpm --filter @cipherbox/crypto build
+
+      - name: Build web app with staging env vars
+        run: pnpm --filter @cipherbox/web build
+        env:
+          VITE_WEB3AUTH_CLIENT_ID: ${{ secrets.VITE_WEB3AUTH_CLIENT_ID }}
+          VITE_API_URL: https://api.staging.cipherbox.cc
+          VITE_PINATA_GATEWAY_URL: https://gateway.pinata.cloud/ipfs
+          VITE_ENVIRONMENT: staging
+
+      - name: Upload web app to Pinata
+        id: pinata
+        run: |
+          # Upload directory to Pinata using their API
+          # Build a multipart form with all files from dist/
+          UPLOAD_DIR="apps/web/dist"
+          BOUNDARY="----CipherBoxUpload$(date +%s)"
+
+          # Create a temporary file for the multipart body
+          BODY_FILE=$(mktemp)
+
+          # Add each file as a form part
+          find "$UPLOAD_DIR" -type f | while read -r filepath; do
+            # Get relative path from dist/
+            relpath="${filepath#$UPLOAD_DIR/}"
+            echo "--${BOUNDARY}" >> "$BODY_FILE"
+            echo "Content-Disposition: form-data; name=\"file\"; filename=\"${relpath}\"" >> "$BODY_FILE"
+            echo "Content-Type: application/octet-stream" >> "$BODY_FILE"
+            echo "" >> "$BODY_FILE"
+            cat "$filepath" >> "$BODY_FILE"
+            echo "" >> "$BODY_FILE"
+          done
+
+          # Add pinataMetadata
+          echo "--${BOUNDARY}" >> "$BODY_FILE"
+          echo 'Content-Disposition: form-data; name="pinataMetadata"' >> "$BODY_FILE"
+          echo "" >> "$BODY_FILE"
+          echo '{"name":"cipherbox-web-'"${{ github.ref_name }}"'"}' >> "$BODY_FILE"
+          echo "" >> "$BODY_FILE"
+          echo "--${BOUNDARY}--" >> "$BODY_FILE"
+
+          # Upload to Pinata
+          RESPONSE=$(curl -s -X POST "https://api.pinata.cloud/pinning/pinFileToIPFS" \
+            -H "Authorization: Bearer ${{ secrets.PINATA_JWT }}" \
+            -H "Content-Type: multipart/form-data; boundary=${BOUNDARY}" \
+            --data-binary "@${BODY_FILE}")
+
+          rm -f "$BODY_FILE"
+
+          CID=$(echo "$RESPONSE" | jq -r '.IpfsHash')
+          if [ -z "$CID" ] || [ "$CID" = "null" ]; then
+            echo "Failed to upload to Pinata. Response: $RESPONSE"
+            exit 1
+          fi
+
+          echo "Uploaded web app to IPFS: $CID"
+          echo "cid=$CID" >> "$GITHUB_OUTPUT"
+
+      - name: Update Cloudflare DNSLink
+        run: |
+          CID="${{ steps.pinata.outputs.cid }}"
+          echo "Updating DNSLink to /ipfs/${CID}"
+
+          RESPONSE=$(curl -s -X PUT \
+            "https://api.cloudflare.com/client/v4/zones/${{ secrets.CLOUDFLARE_ZONE_ID }}/dns_records/${{ secrets.CLOUDFLARE_DNSLINK_RECORD_ID }}" \
+            -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            --data '{"type":"TXT","name":"_dnslink.app.staging","content":"dnslink=/ipfs/'"${CID}"'","ttl":1}')
+
+          SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
+          if [ "$SUCCESS" != "true" ]; then
+            echo "Failed to update DNSLink. Response: $RESPONSE"
+            exit 1
+          fi
+
+          echo "DNSLink updated successfully"
+
+  deploy-vps:
+    name: Deploy to Staging VPS
+    needs: [build-api, build-tee]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate .env.staging
+        run: |
+          cat > .env.staging << 'ENVEOF'
+          NODE_ENV=production
+          CIPHERBOX_ENVIRONMENT=staging
+          PORT=3000
+          DB_HOST=postgres
+          DB_PORT=5432
+          DB_USERNAME=${{ secrets.STAGING_DB_USERNAME }}
+          DB_PASSWORD=${{ secrets.STAGING_DB_PASSWORD }}
+          DB_DATABASE=cipherbox_staging
+          JWT_SECRET=${{ secrets.STAGING_JWT_SECRET }}
+          WEB_APP_URL=https://app.staging.cipherbox.cc
+          IPFS_PROVIDER=local
+          IPFS_LOCAL_API_URL=http://ipfs:5001
+          IPFS_LOCAL_GATEWAY_URL=http://ipfs:8080
+          DELEGATED_ROUTING_URL=https://delegated-ipfs.dev
+          REDIS_HOST=redis
+          REDIS_PORT=6379
+          TEE_WORKER_URL=http://tee-worker:3001
+          TEE_WORKER_SECRET=${{ secrets.STAGING_TEE_WORKER_SECRET }}
+          ENVEOF
+
+      - name: Copy files to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          source: '.env.staging,docker/docker-compose.staging.yml,docker/Caddyfile'
+          target: /opt/cipherbox
+          strip_components: 0
+
+      - name: Arrange files on VPS
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            # Move files to correct locations
+            mv /opt/cipherbox/.env.staging /opt/cipherbox/docker/.env.staging 2>/dev/null || true
+            cd /opt/cipherbox/docker
+
+            # Rename .env for docker compose
+            cp .env.staging .env.staging.bak
+
+      - name: Deploy services
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.STAGING_HOST }}
+          username: ${{ secrets.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            cd /opt/cipherbox/docker
+
+            # Login to GHCR
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            # Set image tag from git tag
+            export TAG="${{ github.ref_name }}"
+            export GITHUB_REPOSITORY_OWNER="${{ github.repository_owner }}"
+
+            # Pull new images
+            docker compose -f docker-compose.staging.yml pull
+
+            # Run database migrations before starting services
+            docker compose -f docker-compose.staging.yml run --rm \
+              --env-file .env.staging \
+              api node dist/run-migrations.js
+
+            # Start/restart services
+            docker compose -f docker-compose.staging.yml up -d
+
+            # Cleanup old images
+            docker image prune -f
