@@ -14,7 +14,7 @@ COPY tsconfig.base.json ./
 RUN pnpm --filter @cipherbox/api build
 
 # Create standalone deployment (flat node_modules, no symlinks)
-RUN pnpm --filter @cipherbox/api deploy /deploy --prod
+RUN pnpm --filter @cipherbox/api deploy /deploy --prod --legacy
 
 # Stage 2: Production runtime
 FROM node:22-alpine AS production
