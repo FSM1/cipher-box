@@ -131,7 +131,7 @@ jobs:
             "https://api.cloudflare.com/client/v4/zones/${{ vars.CLOUDFLARE_ZONE_ID }}/dns_records/${{ vars.CLOUDFLARE_DNSLINK_RECORD_ID }}" \
             -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
             -H "Content-Type: application/json" \
-            --data '{"type":"TXT","name":"_dnslink.app.staging","content":"dnslink=/ipfs/'"${CID}"'","ttl":1}')
+            --data '{"type":"TXT","name":"_dnslink.app-staging","content":"dnslink=/ipfs/'"${CID}"'","ttl":1}')
 
           SUCCESS=$(echo "$RESPONSE" | jq -r '.success')
           if [ "$SUCCESS" != "true" ]; then
