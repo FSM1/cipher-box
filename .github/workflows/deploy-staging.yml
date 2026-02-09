@@ -7,8 +7,6 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  API_IMAGE: ghcr.io/${{ github.repository_owner }}/cipherbox-api
-  TEE_IMAGE: ghcr.io/${{ github.repository_owner }}/cipherbox-tee-worker
 
 jobs:
   build-api:
@@ -19,6 +17,9 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set lowercase image name
+        run: echo "API_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cipherbox-api" >> "$GITHUB_ENV"
 
       - uses: docker/login-action@v3
         with:
@@ -43,6 +44,9 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set lowercase image name
+        run: echo "TEE_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cipherbox-tee-worker" >> "$GITHUB_ENV"
 
       - uses: docker/login-action@v3
         with:
@@ -91,42 +95,22 @@ jobs:
 
       - name: Upload web app to Pinata
         id: pinata
+        env:
+          PINATA_JWT: ${{ secrets.PINATA_JWT }}
         run: |
-          # Upload directory to Pinata using their API
-          # Build a multipart form with all files from dist/
           UPLOAD_DIR="apps/web/dist"
-          BOUNDARY="----CipherBoxUpload$(date +%s)"
+          CURL_ARGS=()
 
-          # Create a temporary file for the multipart body
-          BODY_FILE=$(mktemp)
-
-          # Add each file as a form part
-          find "$UPLOAD_DIR" -type f | while read -r filepath; do
-            # Get relative path from dist/
+          # Build -F args for each file (curl handles multipart encoding)
+          while IFS= read -r -d '' filepath; do
             relpath="${filepath#$UPLOAD_DIR/}"
-            echo "--${BOUNDARY}" >> "$BODY_FILE"
-            echo "Content-Disposition: form-data; name=\"file\"; filename=\"${relpath}\"" >> "$BODY_FILE"
-            echo "Content-Type: application/octet-stream" >> "$BODY_FILE"
-            echo "" >> "$BODY_FILE"
-            cat "$filepath" >> "$BODY_FILE"
-            echo "" >> "$BODY_FILE"
-          done
+            CURL_ARGS+=(-F "file=@${filepath};filename=${relpath}")
+          done < <(find "$UPLOAD_DIR" -type f -print0)
 
-          # Add pinataMetadata
-          echo "--${BOUNDARY}" >> "$BODY_FILE"
-          echo 'Content-Disposition: form-data; name="pinataMetadata"' >> "$BODY_FILE"
-          echo "" >> "$BODY_FILE"
-          echo '{"name":"cipherbox-web-'"${{ github.ref_name }}"'"}' >> "$BODY_FILE"
-          echo "" >> "$BODY_FILE"
-          echo "--${BOUNDARY}--" >> "$BODY_FILE"
-
-          # Upload to Pinata
           RESPONSE=$(curl -s -X POST "https://api.pinata.cloud/pinning/pinFileToIPFS" \
-            -H "Authorization: Bearer ${{ secrets.PINATA_JWT }}" \
-            -H "Content-Type: multipart/form-data; boundary=${BOUNDARY}" \
-            --data-binary "@${BODY_FILE}")
-
-          rm -f "$BODY_FILE"
+            -H "Authorization: Bearer ${PINATA_JWT}" \
+            "${CURL_ARGS[@]}" \
+            -F "pinataMetadata={\"name\":\"cipherbox-web-${{ github.ref_name }}\"}")
 
           CID=$(echo "$RESPONSE" | jq -r '.IpfsHash')
           if [ -z "$CID" ] || [ "$CID" = "null" ]; then
@@ -226,9 +210,10 @@ jobs:
             # Login to GHCR
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-            # Set image tag from git tag
+            # Set image tag from git tag (GHCR requires lowercase owner)
             export TAG="${{ github.ref_name }}"
-            export GITHUB_REPOSITORY_OWNER="${{ github.repository_owner }}"
+            OWNER="${{ github.repository_owner }}"
+            export GITHUB_REPOSITORY_OWNER="${OWNER,,}"
 
             # Pull new images
             docker compose -f docker-compose.staging.yml pull
