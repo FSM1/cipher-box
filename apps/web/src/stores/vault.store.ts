@@ -18,6 +18,7 @@ type VaultState = {
   // Vault metadata from server
   vaultId: string | null;
   isInitialized: boolean;
+  isNewVault: boolean;
 
   // Actions
   setVaultKeys: (keys: {
@@ -25,6 +26,7 @@ type VaultState = {
     rootIpnsKeypair: IpnsKeypair;
     rootIpnsName: string;
     vaultId: string;
+    isNewVault?: boolean;
   }) => void;
   clearVaultKeys: () => void;
 };
@@ -49,6 +51,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   rootIpnsName: null,
   vaultId: null,
   isInitialized: false,
+  isNewVault: false,
 
   // Actions
   setVaultKeys: (keys) =>
@@ -58,6 +61,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       rootIpnsName: keys.rootIpnsName,
       vaultId: keys.vaultId,
       isInitialized: true,
+      isNewVault: keys.isNewVault ?? false,
     }),
 
   // [SECURITY: MEDIUM-02] Zero-fill sensitive key material before clearing
@@ -84,6 +88,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       rootIpnsName: null,
       vaultId: null,
       isInitialized: false,
+      isNewVault: false,
     });
   },
 }));

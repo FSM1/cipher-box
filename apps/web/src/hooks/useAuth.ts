@@ -6,6 +6,7 @@ import { vaultApi } from '../lib/api/vault';
 import { useAuthStore } from '../stores/auth.store';
 import { useVaultStore } from '../stores/vault.store';
 import { useFolderStore } from '../stores/folder.store';
+import { useSyncStore } from '../stores/sync.store';
 import { getDerivationVersion } from '../lib/crypto/signatureKeyDerivation';
 import {
   initializeVault,
@@ -153,6 +154,7 @@ export function useAuth() {
             rootIpnsKeypair: newVault.rootIpnsKeypair,
             rootIpnsName,
             vaultId: storedVault.id,
+            isNewVault: true,
           });
         } else {
           // Other error - log but don't block login
@@ -310,6 +312,7 @@ export function useAuth() {
       // This ensures all cryptographic keys are zeroed from memory on logout
       useFolderStore.getState().clearFolders();
       useVaultStore.getState().clearVaultKeys();
+      useSyncStore.getState().reset();
       clearAuthState();
       // Clear E2E test mode flags to prevent session restoration loop after logout
       sessionStorage.removeItem('__e2e_test_mode__');
@@ -323,6 +326,7 @@ export function useAuth() {
       // [SECURITY: HIGH-02] Clear all stores including crypto keys
       useFolderStore.getState().clearFolders();
       useVaultStore.getState().clearVaultKeys();
+      useSyncStore.getState().reset();
       clearAuthState();
       // Clear E2E test mode flags to prevent session restoration loop after logout
       sessionStorage.removeItem('__e2e_test_mode__');

@@ -2,6 +2,7 @@ import axios from 'axios';
 import { useAuthStore } from '../../stores/auth.store';
 import { useVaultStore } from '../../stores/vault.store';
 import { useFolderStore } from '../../stores/folder.store';
+import { useSyncStore } from '../../stores/sync.store';
 
 // Shared refresh promise eliminates race condition where multiple concurrent
 // 401 responses each trigger their own POST /auth/refresh before the boolean
@@ -57,6 +58,7 @@ apiClient.interceptors.response.use(
           // [SECURITY: HIGH-03] Clear all stores including crypto keys on token refresh failure
           useFolderStore.getState().clearFolders();
           useVaultStore.getState().clearVaultKeys();
+          useSyncStore.getState().reset();
           useAuthStore.getState().logout();
           // Redirect to login will be handled by route guard
           throw refreshError;
