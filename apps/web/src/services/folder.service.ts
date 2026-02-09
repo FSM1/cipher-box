@@ -21,7 +21,7 @@ import {
   type FolderChild,
 } from '@cipherbox/crypto';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
-import { createAndPublishIpnsRecord } from './ipns.service';
+import { createAndPublishIpnsRecord, resolveIpnsRecord } from './ipns.service';
 import { useAuthStore } from '../stores/auth.store';
 import type { FolderNode } from '../stores/folder.store';
 
@@ -57,36 +57,60 @@ export function getDepth(folderId: string | null, folders: Record<string, Folder
 /**
  * Load a folder's metadata from IPNS.
  *
- * For now, returns an empty folder structure. Actual metadata fetch
- * from IPFS and decryption will be implemented in Phase 05-04.
+ * Resolves the folder's IPNS name to get the current metadata CID,
+ * fetches and decrypts the metadata, and returns a complete FolderNode.
  *
  * @param folderId - Folder ID (null for root, or UUID)
  * @param folderKey - Decrypted AES-256 key for this folder
  * @param ipnsPrivateKey - Decrypted Ed25519 private key for IPNS
  * @param ipnsName - IPNS name for this folder
+ * @param parentId - Parent folder ID (null for root)
+ * @param name - Display name for this folder
  */
 export async function loadFolder(
   folderId: string | null,
   folderKey: Uint8Array,
   ipnsPrivateKey: Uint8Array,
-  ipnsName: string
+  ipnsName: string,
+  parentId: string | null,
+  name: string
 ): Promise<FolderNode> {
-  // TODO: Implement in 05-04
-  // 1. Resolve IPNS to get current metadata CID (or use cached)
-  // 2. Fetch encrypted metadata from IPFS gateway
-  // 3. Decrypt with folderKey
-  // 4. Return FolderNode with decrypted children
+  // 1. Resolve IPNS to get current metadata CID
+  const resolved = await resolveIpnsRecord(ipnsName);
 
-  // For now, return empty folder placeholder
+  // 2. If IPNS resolution returns null, return empty folder
+  //    This handles newly-created subfolders whose IPNS hasn't propagated yet
+  if (!resolved) {
+    console.warn(
+      `IPNS resolution returned null for folder "${name}" (${ipnsName}). Returning empty folder.`
+    );
+    return {
+      id: folderId ?? 'root',
+      name,
+      ipnsName,
+      parentId,
+      children: [],
+      isLoaded: true,
+      isLoading: false,
+      sequenceNumber: 0n,
+      folderKey,
+      ipnsPrivateKey,
+    };
+  }
+
+  // 3. Fetch encrypted metadata from IPFS and decrypt with folderKey
+  const metadata = await fetchAndDecryptMetadata(resolved.cid, folderKey);
+
+  // 4. Return complete FolderNode with decrypted children
   return {
     id: folderId ?? 'root',
-    name: folderId ? 'Folder' : 'My Vault',
+    name,
     ipnsName,
-    parentId: null,
-    children: [],
+    parentId,
+    children: metadata.children,
     isLoaded: true,
     isLoading: false,
-    sequenceNumber: 0n,
+    sequenceNumber: resolved.sequenceNumber,
     folderKey,
     ipnsPrivateKey,
   };
