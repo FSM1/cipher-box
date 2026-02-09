@@ -1,15 +1,11 @@
 <p align="center">
-<img src="./cipherbox logo.png" alt="CipherBox Logo" width="450"/>
+  <img src="./cipherbox logo.png" alt="CipherBox Logo" width="450"/>
 </p>
 
 # CipherBox - README.md
 
 **Privacy-first cloud storage with decentralized persistence**
 
-<p align="center">
-  <a href="https://codecov.io/gh/FSM1/cipher-box"><img src="https://codecov.io/gh/FSM1/cipher-box/graph/badge.svg?flag=api" alt="API Coverage"></a>
-  <a href="https://codecov.io/gh/FSM1/cipher-box"><img src="https://codecov.io/gh/FSM1/cipher-box/graph/badge.svg?flag=crypto" alt="Crypto Coverage"></a>
-</p>
 
 ---
 
@@ -30,6 +26,12 @@
 - **React web UI** + **FUSE desktop mount** (macOS v1)
 - **Automatic multi-device sync** via IPNS polling
 - **TEE-based IPNS republishing** via Phala Cloud / AWS Nitro (zero-knowledge)
+
+---
+
+## Acknowledgements
+
+This project is inspired by discussions and planning while working on [ChainSafe Files](https://github.com/chainsafe/ui-monorepo). A massive shout-out to all the colleagues I got to work with on the original ChainSafe Files project, who unknowingly contributed to this phoenix rising out of the ashes.
 
 ---
 
