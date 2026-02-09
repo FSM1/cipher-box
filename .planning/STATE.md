@@ -10,17 +10,17 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 ## Current Position
 
 Phase: 9.1 of 11 (Environment Changes, DevOps & Staging Deployment)
-Plan: 3 of 6 in Phase 9.1 complete (09.1-01, 09.1-02, 09.1-03)
+Plan: 4 of 6 in Phase 9.1 complete (09.1-01, 09.1-02, 09.1-03, 09.1-06)
 Status: In progress
-Last activity: 2026-02-09 - Completed 09.1-01-PLAN.md (environment-aware config)
+Last activity: 2026-02-09 - Completed 09.1-06-PLAN.md (log aggregation)
 
-Progress: [#########-] 96% (66 of 69 plans)
+Progress: [#########-] 97% (67 of 69 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 66
+- Total plans completed: 67
 - Average duration: 4.6 min
 - Total execution time: 5.4 hours
 
@@ -42,11 +42,11 @@ Progress: [#########-] 96% (66 of 69 plans)
 | 07.1-atomic-file-upload    | 2/2   | 6 min  | 3 min    |
 | 08-tee-integration         | 4/4   | 21 min | 5.3 min  |
 | 09-desktop-client          | 7/7   | 49 min | 7.0 min  |
-| 09.1-env-devops-staging    | 3/6   | 6 min  | 2.0 min  |
+| 09.1-env-devops-staging    | 4/6   | 8 min  | 2.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 8m, 12m, 1m, 2m, 3m
+- Last 5 plans: 12m, 1m, 2m, 3m, 2m
 - Trend: Environment config changes are straightforward source file edits
 
 Updated after each plan completion.
@@ -250,6 +250,9 @@ Recent decisions affecting current work:
 | CIPHERBOX_ENVIRONMENT for TEE simulator guard          | 09.1-01 | Decouples deployment tier from NODE_ENV for staging compatibility         |
 | HashRouter for IPFS-hosted web app                     | 09.1-01 | IPFS gateways serve files by path; hash routing keeps routes in fragment  |
 | VITE_ENVIRONMENT for frontend env detection            | 09.1-01 | NETWORK_CONFIG map selects devnet/mainnet based on deployment tier        |
+| Grafana Alloy via Docker socket for log collection     | 09.1-06 | Read-only socket mount discovers containers and ships logs to Loki        |
+| x-logging YAML anchor for DRY log rotation             | 09.1-06 | json-file driver, 10m max-size, 3 files applied to all 7 services         |
+| Alloy credentials via environment variables            | 09.1-06 | GRAFANA_LOKI_URL/USERNAME/API_KEY from .env.staging, GitHub Secrets       |
 
 ### Pending Todos
 
@@ -305,11 +308,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-09
-Stopped at: Completed 09.1-01-PLAN.md (environment-aware config)
+Stopped at: Completed 09.1-06-PLAN.md (log aggregation)
 Resume file: None
-Next plan: 09.1-04 through 09.1-06 remaining in Phase 9.1
+Next plan: 09.1-04, 09.1-05 remaining in Phase 9.1
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-09 after completing 09.1-01 (Environment-Aware Config)_
+_Last updated: 2026-02-09 after completing 09.1-06 (Log Aggregation)_
