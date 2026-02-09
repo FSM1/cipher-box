@@ -1,0 +1,33 @@
+name: PR Title Lint
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+
+jobs:
+  lint-pr-title:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check PR title follows Conventional Commits
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          # Conventional Commits pattern: type(optional-scope): description
+          # Types must match commitlint config used by husky
+          pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?: .+'
+
+          if [[ ! "$PR_TITLE" =~ $pattern ]]; then
+            echo "::error::PR title does not follow Conventional Commits format."
+            echo ""
+            echo "Expected: <type>(<optional scope>): <description>"
+            echo "Got:      $PR_TITLE"
+            echo ""
+            echo "Valid types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+            echo "Examples:"
+            echo "  feat: add file sharing"
+            echo "  fix(api): handle null vault ID"
+            echo "  chore: update dependencies"
+            exit 1
+          fi
+
+          echo "PR title is valid: $PR_TITLE"
