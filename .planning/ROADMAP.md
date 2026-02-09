@@ -362,11 +362,15 @@ Plans:
 2. CI/CD pipeline builds and deploys to staging
 3. Infrastructure provisioned for staging environment
 4. Application deployable and functional in staging
-   **Plans**: TBD
+   **Plans**: 5 plans
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 9.1 to break down)
+- [ ] 09.1-01-PLAN.md — Environment config fixes (configurable port, TEE guard, hash routing, Web3Auth network)
+- [ ] 09.1-02-PLAN.md — API Dockerfile, staging Docker Compose, Caddyfile, .dockerignore
+- [ ] 09.1-03-PLAN.md — Full schema database migration for fresh staging database
+- [ ] 09.1-04-PLAN.md — Tag-triggered deployment workflow (build, push, deploy to VPS + Pinata)
+- [ ] 09.1-05-PLAN.md — Infrastructure provisioning and first deployment verification
 
 **Details:**
 Urgent insertion to prepare environment, DevOps pipeline, and staging deployment before continuing to data portability. Ensures the application is deployable and testable in a real environment.
@@ -433,7 +437,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 7.1 Atomic File Upload  | 2/2            | Complete    | 2026-02-07 |
 | 8. TEE Integration      | 4/4            | Complete    | 2026-02-07 |
 | 9. Desktop Client       | 7/7            | Complete    | 2026-02-08 |
-| 9.1 Env/DevOps/Staging  | 0/TBD          | Not started | -          |
+| 9.1 Env/DevOps/Staging  | 0/5            | Not started | -          |
 | 10. Data Portability    | 0/3            | Not started | -          |
 | 11. Security (MFA)      | 0/4            | Post-v1.0   | -          |
 
@@ -471,4 +475,5 @@ _Phase 8 complete: 2026-02-07_
 _Phase 9 planned: 2026-02-07_
 _Phase 9 revised: 2026-02-07_
 _Phase 9 complete: 2026-02-08_
-_Total phases: 14 | Total plans: 69+ | Depth: Comprehensive_
+_Phase 9.1 planned: 2026-02-09_
+_Total phases: 14 | Total plans: 74 | Depth: Comprehensive_
