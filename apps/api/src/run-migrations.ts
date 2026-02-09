@@ -40,8 +40,12 @@ async function run() {
     await dataSource.destroy();
     console.log('Migrations complete.');
     process.exit(0);
-  } catch (error) {
-    console.error('Migration failed:', error);
+  } catch (error: any) {
+    console.error(
+      'Migration failed:',
+      error?.name || 'UnknownError',
+      error?.message?.replace(/(?:host|password|user(?:name)?)=[^\s;,]+/gi, '$&=***') || ''
+    );
     process.exit(1);
   }
 }

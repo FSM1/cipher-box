@@ -49,7 +49,7 @@ Better Stack (formerly Better Uptime) free tier provides 10 monitors with 3-minu
 ### 2. Create a monitor
 
 1. Create a new monitor:
-   - **URL:** `https://api.staging.cipherbox.cc/health`
+   - **URL:** `https://api-staging.cipherbox.cc/health`
    - **Check interval:** 3 minutes
    - **Alert method:** Email
 2. Optionally create a public status page at `status.staging.cipherbox.cc`
@@ -94,7 +94,7 @@ Use these in the **Explore** panel in Grafana Cloud.
 API errors only:
 
 ```logql
-{service="api"} |= "error" or {service="api"} |= "ERROR"
+{service="api"} |~ "(?i)error"
 ```
 
 All errors across all services:
@@ -163,7 +163,7 @@ Create a "CipherBox Staging" dashboard in Grafana Cloud with these panels:
       |
       | HTTPS health check every 3 min
       v
-  https://api.staging.cipherbox.cc/health
+  https://api-staging.cipherbox.cc/health
 ```
 
 ## Troubleshooting

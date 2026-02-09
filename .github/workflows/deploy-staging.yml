@@ -105,6 +105,9 @@ jobs:
     needs: [build-api, build-tee, build-web]
     runs-on: ubuntu-latest
     environment: staging
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
 
@@ -135,6 +138,7 @@ jobs:
           REDIS_PORT=6379
           TEE_WORKER_URL=http://tee-worker:3001
           TEE_WORKER_SECRET=${{ secrets.STAGING_TEE_WORKER_SECRET }}
+          REDIS_PASSWORD=${{ secrets.STAGING_REDIS_PASSWORD }}
           GRAFANA_LOKI_URL=${{ vars.GRAFANA_LOKI_URL }}
           GRAFANA_LOKI_USERNAME=${{ vars.GRAFANA_LOKI_USERNAME }}
           GRAFANA_LOKI_API_KEY=${{ secrets.GRAFANA_LOKI_API_KEY }}
@@ -155,7 +159,7 @@ jobs:
           strip_components: 0
 
       - name: Arrange files on VPS
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ vars.STAGING_HOST }}
           username: ${{ vars.STAGING_USER }}
@@ -167,6 +171,9 @@ jobs:
 
             # Docker Compose reads .env automatically for variable substitution
             cp .env.staging .env
+
+            # Restrict env file permissions (contains secrets)
+            chmod 600 .env .env.staging
 
             # Ensure certs symlink exists for Caddy
             ln -sf /opt/cipherbox/certs /opt/cipherbox/docker/certs 2>/dev/null || true
@@ -183,7 +190,7 @@ jobs:
           rm: true
 
       - name: Deploy services
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ vars.STAGING_HOST }}
           username: ${{ vars.STAGING_USER }}
