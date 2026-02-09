@@ -1,0 +1,16 @@
+# CipherBox Staging - Caddy Reverse Proxy
+# Cloudflare Origin CA certificates for Full (Strict) SSL mode
+# Cloudflare handles browser-facing TLS; Caddy handles CF-to-origin TLS
+
+{
+	auto_https off
+}
+
+:443 {
+	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin-key.pem
+	reverse_proxy api:3000
+}
+
+:80 {
+	redir https://{host}{uri} permanent
+}

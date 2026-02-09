@@ -1,0 +1,98 @@
+name: cipherbox-staging
+services:
+  api:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-OWNER}/cipherbox-api:${TAG:-latest}
+    restart: unless-stopped
+    env_file: .env.staging
+    ports:
+      - '127.0.0.1:3000:3000'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-cipherbox}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_DATABASE:-cipherbox_staging}
+    ports:
+      - '127.0.0.1:5432:5432'
+    volumes:
+      - postgres_staging:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USERNAME:-cipherbox}']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:6379:6379'
+    volumes:
+      - redis_staging:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ipfs:
+    image: ipfs/kubo:v0.34.0
+    restart: unless-stopped
+    environment:
+      IPFS_PROFILE: server
+    ports:
+      - '4001:4001/tcp'
+      - '4001:4001/udp'
+      - '127.0.0.1:5001:5001'
+      - '127.0.0.1:8080:8080'
+    volumes:
+      - ipfs_staging:/data/ipfs
+    healthcheck:
+      test: ['CMD-SHELL', 'ipfs id || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+
+  tee-worker:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-OWNER}/cipherbox-tee-worker:${TAG:-latest}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      TEE_MODE: simulator
+      CIPHERBOX_ENVIRONMENT: staging
+      TEE_WORKER_SECRET: ${TEE_WORKER_SECRET}
+    ports:
+      - '127.0.0.1:3001:3001'
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./certs:/etc/caddy/certs
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  postgres_staging:
+  redis_staging:
+  ipfs_staging:
+  caddy_data:
+  caddy_config:
