@@ -31,10 +31,6 @@
 - **Automatic multi-device sync** via IPNS polling
 - **TEE-based IPNS republishing** via Phala Cloud / AWS Nitro (zero-knowledge)
 
-**PoC Focus:** A single-user, console-based harness validates IPFS/IPNS flows end-to-end without Web3Auth or backend dependencies. Each run performs a full file/folder flow, verifies correctness via IPNS resolution, measures propagation delay, and unpins all created CIDs during teardown. The PoC was purely meant to validate the core assumption that the file system operations would work as intended and all encryption and decryption flows on IPFS/IPNS were sound. It is not production-ready code, and lacks lots of the actual flows defined in the V1 scope.
-
-**Target:** Developers and technical users interested in cryptography, IPFS, and privacy-preserving architectures.
-
 ---
 
 ## 🎯 Vision
@@ -167,20 +163,6 @@ Providers: Phala Cloud (primary) / AWS Nitro (fallback)
 4. Phone polls IPNS → Sees file → Downloads & decrypts
 5. Export vault → JSON with CIDs + encrypted root key
 6. CipherBox gone? → Use export + private key → Full recovery
-```
-
----
-
-## 📈 Timeline
-
-```
-Week 1-2:  Planning, Web3Auth/IPFS setup
-Week 3-4:  Auth endpoints + key derivation
-Week 5-7:  Encryption + IPFS integration
-Week 8-10: React UI + macOS FUSE mount
-Week 11-12: Testing + security audit + launch
-
-Team: 3 people | Total: 12 weeks
 ```
 
 ---
