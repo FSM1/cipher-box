@@ -203,8 +203,8 @@ jobs:
             docker compose -f docker-compose.staging.yml pull
 
             # Run database migrations before starting services
+            # (api service inherits env vars from env_file in compose)
             docker compose -f docker-compose.staging.yml run --rm \
-              --env-file .env.staging \
               api node dist/run-migrations.js
 
             # Start/restart services

@@ -1,23 +1,18 @@
-import { MigrationInterface, QueryRunner, TableColumn } from 'typeorm';
+import { MigrationInterface, QueryRunner } from 'typeorm';
 
 export class AddTokenPrefix1738972800000 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.addColumn(
-      'refresh_tokens',
-      new TableColumn({
-        name: 'tokenPrefix',
-        type: 'varchar',
-        length: '16',
-        isNullable: true,
-      })
+    // Idempotent: column may already exist if FullSchema baseline ran first
+    await queryRunner.query(
+      `ALTER TABLE "refresh_tokens" ADD COLUMN IF NOT EXISTS "tokenPrefix" varchar(16)`
     );
     await queryRunner.query(
-      `CREATE INDEX "IDX_refresh_token_prefix" ON "refresh_tokens" ("tokenPrefix")`
+      `CREATE INDEX IF NOT EXISTS "IDX_refresh_token_prefix" ON "refresh_tokens" ("tokenPrefix")`
     );
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.dropIndex('refresh_tokens', 'IDX_refresh_token_prefix');
-    await queryRunner.dropColumn('refresh_tokens', 'tokenPrefix');
+    await queryRunner.query(`DROP INDEX IF EXISTS "IDX_refresh_token_prefix"`);
+    await queryRunner.query(`ALTER TABLE "refresh_tokens" DROP COLUMN IF EXISTS "tokenPrefix"`);
   }
 }

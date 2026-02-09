@@ -18,13 +18,13 @@ export class MakeFolderIpnsTeeFieldsNullable1737520000000 implements MigrationIn
   name = 'MakeFolderIpnsTeeFieldsNullable1737520000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    // Make encrypted_ipns_private_key nullable
+    // Idempotent: columns may already be nullable if FullSchema baseline ran first.
+    // DROP NOT NULL on an already-nullable column is a no-op in PostgreSQL.
     await queryRunner.query(`
       ALTER TABLE "folder_ipns"
       ALTER COLUMN "encrypted_ipns_private_key" DROP NOT NULL
     `);
 
-    // Make key_epoch nullable
     await queryRunner.query(`
       ALTER TABLE "folder_ipns"
       ALTER COLUMN "key_epoch" DROP NOT NULL
