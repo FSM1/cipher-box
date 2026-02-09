@@ -10,18 +10,18 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 ## Current Position
 
 Phase: 9.1 of 11 (Environment Changes, DevOps & Staging Deployment)
-Plan: 4 of 6 in Phase 9.1 complete (09.1-01, 09.1-02, 09.1-03, 09.1-06)
+Plan: 5 of 6 in Phase 9.1 complete (09.1-01, 09.1-02, 09.1-03, 09.1-04, 09.1-06)
 Status: In progress
-Last activity: 2026-02-09 - Completed 09.1-06-PLAN.md (log aggregation)
+Last activity: 2026-02-09 - Completed 09.1-04-PLAN.md (deployment workflow)
 
-Progress: [#########-] 97% (67 of 69 plans)
+Progress: [#########-] 99% (68 of 69 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 67
-- Average duration: 4.6 min
+- Total plans completed: 68
+- Average duration: 4.5 min
 - Total execution time: 5.4 hours
 
 **By Phase:**
@@ -42,12 +42,12 @@ Progress: [#########-] 97% (67 of 69 plans)
 | 07.1-atomic-file-upload    | 2/2   | 6 min  | 3 min    |
 | 08-tee-integration         | 4/4   | 21 min | 5.3 min  |
 | 09-desktop-client          | 7/7   | 49 min | 7.0 min  |
-| 09.1-env-devops-staging    | 4/6   | 8 min  | 2.0 min  |
+| 09.1-env-devops-staging    | 5/6   | 11 min | 2.2 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 12m, 1m, 2m, 3m, 2m
-- Trend: Environment config changes are straightforward source file edits
+- Last 5 plans: 1m, 2m, 3m, 2m, 3m
+- Trend: Environment config and CI/CD plans are fast source file edits
 
 Updated after each plan completion.
 
@@ -253,6 +253,10 @@ Recent decisions affecting current work:
 | Grafana Alloy via Docker socket for log collection     | 09.1-06 | Read-only socket mount discovers containers and ships logs to Loki        |
 | x-logging YAML anchor for DRY log rotation             | 09.1-06 | json-file driver, 10m max-size, 3 files applied to all 7 services         |
 | Alloy credentials via environment variables            | 09.1-06 | GRAFANA_LOKI_URL/USERNAME/API_KEY from .env.staging, GitHub Secrets       |
+| Programmatic migration runner for Docker containers    | 09.1-04 | run-migrations.ts with JS glob paths; production image lacks ts-node/npx  |
+| Multi-stage TEE worker Dockerfile builds from source   | 09.1-04 | CI builds without separate pre-build step; node user for security         |
+| curl-based Pinata directory upload in deploy workflow  | 09.1-04 | Portable, no CLI dependency; multipart form with CID capture              |
+| SCP then SSH pattern for VPS deployment                | 09.1-04 | Separates file transfer from service orchestration for clarity            |
 
 ### Pending Todos
 
@@ -308,11 +312,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-09
-Stopped at: Completed 09.1-06-PLAN.md (log aggregation)
+Stopped at: Completed 09.1-04-PLAN.md (deployment workflow)
 Resume file: None
-Next plan: 09.1-04, 09.1-05 remaining in Phase 9.1
+Next plan: 09.1-05 remaining in Phase 9.1
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-09 after completing 09.1-06 (Log Aggregation)_
+_Last updated: 2026-02-09 after completing 09.1-04 (Deployment Workflow)_
