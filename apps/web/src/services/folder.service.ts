@@ -78,11 +78,11 @@ export async function loadFolder(
   // 1. Resolve IPNS to get current metadata CID
   const resolved = await resolveIpnsRecord(ipnsName);
 
-  // 2. If IPNS resolution returns null, return empty folder
+  // 2. If IPNS resolution returns null, return unloaded folder so it can be retried
   //    This handles newly-created subfolders whose IPNS hasn't propagated yet
   if (!resolved) {
     console.warn(
-      `IPNS resolution returned null for folder "${name}" (${ipnsName}). Returning empty folder.`
+      `IPNS resolution returned null for folder "${name}" (${ipnsName}). Marking as not loaded for retry.`
     );
     return {
       id: folderId ?? 'root',
@@ -90,7 +90,7 @@ export async function loadFolder(
       ipnsName,
       parentId,
       children: [],
-      isLoaded: true,
+      isLoaded: false,
       isLoading: false,
       sequenceNumber: 0n,
       folderKey,
