@@ -218,5 +218,9 @@ jobs:
             # Start/restart services
             docker compose -f docker-compose.staging.yml up -d
 
+            # Restart Caddy to pick up refreshed web files bind mount
+            # (scp rm:true recreates the host dir, breaking the old mount inode)
+            docker compose -f docker-compose.staging.yml restart caddy
+
             # Cleanup old images
             docker image prune -f
