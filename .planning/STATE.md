@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 9.1 - Environment Changes, DevOps & Staging Deployment (next)
+**Current focus:** Phase 9.1 - Environment Changes, DevOps & Staging Deployment (in progress)
 
 ## Current Position
 
-Phase: 9 of 11 (Desktop Client) — COMPLETE
-Plan: 7 of 7 in Phase 9 complete (09-01 through 09-07)
-Status: Complete — UAT passed (14/15, 1 open issue), security review done
-Last activity: 2026-02-09 - Phase 9 complete, merged to main
+Phase: 9.1 of 11 (Environment Changes, DevOps & Staging Deployment)
+Plan: 1 of 6 in Phase 9.1 complete (09.1-03)
+Status: In progress
+Last activity: 2026-02-09 - Completed 09.1-03-PLAN.md (full schema migration)
 
-Progress: [#########-] 91% (63 of 69 plans)
+Progress: [#########-] 93% (64 of 69 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 63
-- Average duration: 4.7 min
+- Total plans completed: 64
+- Average duration: 4.6 min
 - Total execution time: 5.3 hours
 
 **By Phase:**
@@ -42,11 +42,12 @@ Progress: [#########-] 91% (63 of 69 plans)
 | 07.1-atomic-file-upload    | 2/2   | 6 min  | 3 min    |
 | 08-tee-integration         | 4/4   | 21 min | 5.3 min  |
 | 09-desktop-client          | 7/7   | 49 min | 7.0 min  |
+| 09.1-env-devops-staging    | 1/6   | 1 min  | 1 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 6m, 10m, 3m, 8m, 12m
-- Trend: FUSE write operations most complex yet (temp-file commit + IPNS publish + metadata rebuild)
+- Last 5 plans: 10m, 3m, 8m, 12m, 1m
+- Trend: Schema migration was straightforward - single file creation from entity definitions
 
 Updated after each plan completion.
 
@@ -238,6 +239,8 @@ Recent decisions affecting current work:
 | name_to_ino made public for rename manipulation        | 09-06   | Rename operations need direct HashMap access for index updates            |
 | Temp-file commit model for FUSE writes                 | 09-06   | Writes buffer to local temp file, encrypt+upload only on release()        |
 | Per-folder IPNS signing from inode data                | 09-06   | Each folder's Ed25519 key stored in InodeKind, not global state           |
+| Baseline migration timestamp 1700000000000             | 09.1-03 | Precedes incremental migrations; fresh DB gets full schema first          |
+| Full schema includes final column states               | 09.1-03 | tokenPrefix and nullable TEE fields already present; incrementals no-op   |
 
 ### Pending Todos
 
@@ -293,11 +296,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-09
-Stopped at: Phase 9 complete, merged to main
+Stopped at: Completed 09.1-03-PLAN.md (full schema migration)
 Resume file: None
-Next phase: Phase 9.1 (Environment Changes, DevOps & Staging Deployment)
+Next plan: 09.1-04 through 09.1-06 remaining in Phase 9.1
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-09 after completing Phase 9 (Desktop Client)_
+_Last updated: 2026-02-09 after completing 09.1-03 (Full Schema Migration)_
