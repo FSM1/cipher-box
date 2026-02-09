@@ -627,7 +627,7 @@ test.describe.serial('Full Workflow', () => {
     await expect(logoutButton).toBeVisible();
     await logoutButton.click();
 
-    await expect(page).toHaveURL(/localhost:\d+\/?$/);
+    await expect(page).toHaveURL(/localhost:\d+\/?(?:#\/?)?$/);
     await expect(page.getByRole('button', { name: /\[CONNECT\]|sign in|login/i })).toBeVisible({
       timeout: 10000,
     });

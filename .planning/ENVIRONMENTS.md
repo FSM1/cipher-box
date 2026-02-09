@@ -149,7 +149,6 @@ volumes:
 # apps/web/.env.local
 VITE_WEB3AUTH_CLIENT_ID=BK...dev  # Devnet client ID
 VITE_API_URL=http://localhost:3000
-VITE_PINATA_GATEWAY_URL=http://localhost:8080/ipfs
 VITE_ENVIRONMENT=local
 
 # apps/api/.env.local
@@ -400,12 +399,11 @@ export const web3AuthOptions: Web3AuthOptions = {
 
 ### Web App (Vite)
 
-| Variable                  | Local                        | CI                           | Staging                             | Production                          |
-| ------------------------- | ---------------------------- | ---------------------------- | ----------------------------------- | ----------------------------------- |
-| `VITE_WEB3AUTH_CLIENT_ID` | dev                          | dev                          | dev                                 | **prod**                            |
-| `VITE_API_URL`            | <http://localhost:3000>      | <http://localhost:3000>      | <https://api-staging.cipherbox.cc>  | <https://api.cipherbox.cc>          |
-| `VITE_PINATA_GATEWAY_URL` | <http://localhost:8080/ipfs> | <http://localhost:8080/ipfs> | <https://gateway.pinata.cloud/ipfs> | <https://gateway.pinata.cloud/ipfs> |
-| `VITE_ENVIRONMENT`        | local                        | ci                           | staging                             | production                          |
+| Variable                  | Local                   | CI                      | Staging                            | Production                 |
+| ------------------------- | ----------------------- | ----------------------- | ---------------------------------- | -------------------------- |
+| `VITE_WEB3AUTH_CLIENT_ID` | dev                     | dev                     | dev                                | **prod**                   |
+| `VITE_API_URL`            | <http://localhost:3000> | <http://localhost:3000> | <https://api-staging.cipherbox.cc> | <https://api.cipherbox.cc> |
+| `VITE_ENVIRONMENT`        | local                   | ci                      | staging                            | production                 |
 
 ### API (NestJS)
 

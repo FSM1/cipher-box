@@ -7,9 +7,10 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * This migration captures the complete schema state as of Phase 9.1.
  *
  * Timestamp 1700000000000 ensures this runs BEFORE any incremental migrations.
- * For fresh databases: this creates everything; incremental migrations become no-ops.
- * For existing databases: this migration was never run, so TypeORM skips it
- *   (existing DBs already have tables from synchronize:true + incremental migrations).
+ * For fresh databases: this creates everything; incremental migrations are idempotent (IF NOT EXISTS).
+ * For existing databases created via synchronize:true: this migration will NOT be skipped
+ *   automatically — you must manually insert a row into the `migrations` table to mark it
+ *   as applied, or only run migrations against fresh databases.
  *
  * Tables created (9):
  *   users, refresh_tokens, auth_methods, vaults, pinned_cids,
