@@ -22,8 +22,8 @@ const SYNC_INTERVAL_MS = 30000; // 30 seconds per CONTEXT.md
 export function useSyncPolling(onSync: () => Promise<void>): void {
   const isVisible = useVisibility();
   const isOnline = useOnlineStatus();
-  const { startSync, syncSuccess, syncFailure, setOnline } = useSyncStore();
-  const { rootIpnsName } = useVaultStore();
+  const { startSync, syncSuccess, syncFailure, completeInitialSync, setOnline } = useSyncStore();
+  const { rootIpnsName, isNewVault } = useVaultStore();
 
   // Track previous states for edge detection
   const prevOnline = useRef(isOnline);
@@ -31,6 +31,16 @@ export function useSyncPolling(onSync: () => Promise<void>): void {
 
   // Guard against concurrent sync runs - multiple triggers can occur (interval + visibility + reconnect)
   const isSyncingRef = useRef(false);
+
+  // Track whether initial sync has been attempted
+  const initialSyncFired = useRef(false);
+
+  // For new vaults, skip the syncing state — there's nothing to sync
+  useEffect(() => {
+    if (isNewVault && !useSyncStore.getState().initialSyncComplete) {
+      completeInitialSync();
+    }
+  }, [isNewVault, completeInitialSync]);
 
   // Keep sync store's isOnline in sync
   useEffect(() => {
@@ -49,13 +59,27 @@ export function useSyncPolling(onSync: () => Promise<void>): void {
     try {
       await onSync();
       syncSuccess();
+      // Mark initial sync complete only on success (IPNS resolved)
+      if (!useSyncStore.getState().initialSyncComplete) {
+        completeInitialSync();
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Sync failed';
       syncFailure(message);
+      // Don't mark initial sync complete on failure — will retry
     } finally {
       isSyncingRef.current = false;
     }
-  }, [rootIpnsName, isOnline, onSync, startSync, syncSuccess, syncFailure]);
+  }, [rootIpnsName, isOnline, onSync, startSync, syncSuccess, syncFailure, completeInitialSync]);
+
+  // Immediate sync on first mount — don't wait for the 30s interval
+  // Skip for new vaults: there's no IPNS record to resolve yet
+  useEffect(() => {
+    if (rootIpnsName && isOnline && !isNewVault && !initialSyncFired.current) {
+      initialSyncFired.current = true;
+      doSync();
+    }
+  }, [rootIpnsName, isOnline, isNewVault, doSync]);
 
   // Determine polling delay: null pauses, number runs
   // Per CONTEXT.md: pause when backgrounded (Claude's discretion chose pause)

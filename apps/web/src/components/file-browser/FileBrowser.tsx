@@ -7,6 +7,7 @@ import { useContextMenu } from '../../hooks/useContextMenu';
 import { useSyncPolling } from '../../hooks/useSyncPolling';
 import { useVaultStore } from '../../stores/vault.store';
 import { useFolderStore } from '../../stores/folder.store';
+import { useSyncStore } from '../../stores/sync.store';
 import { resolveIpnsRecord } from '../../services/ipns.service';
 import { fetchAndDecryptMetadata } from '../../services/folder.service';
 import { FileList } from './FileList';
@@ -82,7 +83,8 @@ export function FileBrowser() {
 
   // Vault and folder stores for sync
   const { rootIpnsName } = useVaultStore();
-  const { folders } = useFolderStore();
+  const initialSyncComplete = useSyncStore((state) => state.initialSyncComplete);
+  const syncStatus = useSyncStore((state) => state.status);
 
   // Sync callback - compare remote sequence with local, refresh if different
   const handleSync = useCallback(async () => {
@@ -90,10 +92,19 @@ export function FileBrowser() {
 
     // Resolve root folder IPNS to get remote CID and sequence number
     const resolved = await resolveIpnsRecord(rootIpnsName);
-    if (!resolved) return;
+    if (!resolved) {
+      // If initial sync hasn't completed yet, signal that IPNS isn't available
+      // so useSyncPolling keeps the syncing state visible and retries
+      if (!useSyncStore.getState().initialSyncComplete) {
+        throw new Error('IPNS not resolved yet');
+      }
+      return;
+    }
 
-    // Get current root folder from store
-    const rootFolder = folders['root'];
+    // Read fresh state from store — avoid stale closure from render cycle.
+    // On initial load, the root folder may not be in the closure's `folders`
+    // yet because useFolderNavigation's useEffect sets it in the same commit.
+    const rootFolder = useFolderStore.getState().folders['root'];
     if (!rootFolder) return;
 
     // Compare sequence numbers - if remote > local, we need to refresh
@@ -113,10 +124,14 @@ export function FileBrowser() {
       useFolderStore.getState().updateFolderChildren('root', metadata.children);
       useFolderStore.getState().updateFolderSequence('root', resolved.sequenceNumber);
     } catch (err) {
-      // Log but don't crash - sync will retry on next interval
       console.error('Sync refresh failed:', err);
+      // During initial sync, propagate so useSyncPolling keeps the
+      // loading UI visible and retries instead of showing empty state
+      if (!useSyncStore.getState().initialSyncComplete) {
+        throw err;
+      }
     }
-  }, [rootIpnsName, folders]);
+  }, [rootIpnsName]);
 
   // Start sync polling (30s interval, pauses when backgrounded/offline)
   useSyncPolling(handleSync);
@@ -339,6 +354,23 @@ export function FileBrowser() {
         </div>
       )}
 
+      {/* Initial vault sync state — shown before first IPNS resolve completes (root only) */}
+      {!isLoading && !initialSyncComplete && currentFolderId === 'root' && !hasChildren && (
+        <div className="vault-syncing" data-testid="vault-syncing" role="status" aria-live="polite">
+          <pre className="vault-syncing-ascii" aria-hidden="true">
+            {`> vault sync in progress...
+> resolving ipns records`}
+          </pre>
+          <div className="vault-syncing-bar">
+            <div className="vault-syncing-bar-fill" />
+          </div>
+          <p className="vault-syncing-text">
+            {syncStatus === 'error' ? '// SYNC FAILED — retrying...' : '// SYNCING VAULT...'}
+          </p>
+          <p className="vault-syncing-hint">fetching encrypted metadata from the network</p>
+        </div>
+      )}
+
       {/* File list or empty state */}
       {!isLoading && hasChildren && (
         <FileList
@@ -355,7 +387,9 @@ export function FileBrowser() {
         />
       )}
 
-      {!isLoading && !hasChildren && <EmptyState folderId={currentFolderId} />}
+      {!isLoading && (initialSyncComplete || currentFolderId !== 'root') && !hasChildren && (
+        <EmptyState folderId={currentFolderId} />
+      )}
 
       {/* Context menu */}
       {contextMenu.visible && contextMenu.item && (

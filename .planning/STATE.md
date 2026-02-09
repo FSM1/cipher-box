@@ -260,11 +260,10 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-3 pending todo(s):
+2 pending todo(s):
 
 - `2026-01-23-simple-text-file-editor-modal.md` — Add simple text file editor modal (area: ui)
 - `2026-02-07-web-worker-large-file-encryption.md` — Offload large file encryption to Web Worker (area: ui)
-- `2026-02-08-vault-sync-loading-state-ux.md` — Vault sync loading state UX (area: ui)
 
 ### Completed Todos
 

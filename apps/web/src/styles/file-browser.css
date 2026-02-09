@@ -371,6 +371,76 @@
 }
 
 /* ==========================================================================
+   Vault Syncing State
+   ========================================================================== */
+
+.vault-syncing {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  margin: var(--spacing-lg);
+  text-align: center;
+  padding: var(--spacing-lg);
+}
+
+.vault-syncing-ascii {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.6;
+  color: var(--color-green-primary);
+  margin: 0 0 var(--spacing-md) 0;
+  white-space: pre;
+  opacity: 0.8;
+}
+
+.vault-syncing-bar {
+  width: 200px;
+  height: 4px;
+  background: var(--color-border);
+  margin-bottom: var(--spacing-md);
+  overflow: hidden;
+}
+
+.vault-syncing-bar-fill {
+  width: 40%;
+  height: 100%;
+  background: var(--color-green-primary);
+  animation: vault-syncing-slide 1.5s ease-in-out infinite;
+}
+
+@keyframes vault-syncing-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vault-syncing-bar-fill {
+    animation: none;
+  }
+}
+
+.vault-syncing-text {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  margin: 0 0 var(--spacing-xs) 0;
+  color: var(--color-text-muted);
+}
+
+.vault-syncing-hint {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  margin: 0;
+  color: var(--color-text-dim);
+  text-transform: lowercase;
+}
+
+/* ==========================================================================
    Empty State
    ========================================================================== */
 

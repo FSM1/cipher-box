@@ -8,6 +8,9 @@ type SyncState = {
   lastSyncTime: Date | null;
   syncError: string | null;
 
+  // Initial sync tracking
+  initialSyncComplete: boolean;
+
   // Network status
   isOnline: boolean;
 
@@ -15,6 +18,7 @@ type SyncState = {
   startSync: () => void;
   syncSuccess: () => void;
   syncFailure: (error: string) => void;
+  completeInitialSync: () => void;
   setOnline: (online: boolean) => void;
   reset: () => void;
 };
@@ -35,6 +39,7 @@ export const useSyncStore = create<SyncState>((set) => ({
   status: 'idle',
   lastSyncTime: null,
   syncError: null,
+  initialSyncComplete: false,
   isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
 
   // Actions
@@ -57,6 +62,8 @@ export const useSyncStore = create<SyncState>((set) => ({
       syncError: error,
     }),
 
+  completeInitialSync: () => set({ initialSyncComplete: true }),
+
   setOnline: (online) => set({ isOnline: online }),
 
   reset: () =>
@@ -64,5 +71,6 @@ export const useSyncStore = create<SyncState>((set) => ({
       status: 'idle',
       lastSyncTime: null,
       syncError: null,
+      initialSyncComplete: false,
     }),
 }));
