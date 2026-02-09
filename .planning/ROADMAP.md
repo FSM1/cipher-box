@@ -28,7 +28,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 7.1: Atomic File Upload** - Refactor multi-request upload into single atomic backend call with batch IPNS publishing (INSERTED)
 - [x] **Phase 8: TEE Integration** - Auto-republishing via Phala Cloud
 - [x] **Phase 9: Desktop Client** - Tauri app with FUSE mount for macOS
-- [ ] **Phase 9.1: Environment Changes, DevOps & Staging Deployment** - CI/CD, environment config, staging deploy (INSERTED)
+- [x] **Phase 9.1: Environment Changes, DevOps & Staging Deployment** - CI/CD, environment config, staging deploy (INSERTED)
 - [ ] **Phase 10: Data Portability** - Vault export and documentation
 - [ ] **Phase 11: Security Enhancements** - Web3Auth MFA (post-v1.0)
 
@@ -366,12 +366,12 @@ Plans:
 
 Plans:
 
-- [ ] 09.1-01-PLAN.md — Environment config fixes (configurable port, TEE guard, hash routing, Web3Auth network, logging cleanup)
-- [ ] 09.1-02-PLAN.md — API Dockerfile, staging Docker Compose, Caddyfile, .dockerignore
-- [ ] 09.1-03-PLAN.md — Full schema database migration for fresh staging database
-- [ ] 09.1-04-PLAN.md — Tag-triggered deployment workflow (build, push, deploy to VPS + Pinata)
-- [ ] 09.1-05-PLAN.md — Infrastructure provisioning and first deployment verification
-- [ ] 09.1-06-PLAN.md — Monitoring: Grafana Cloud log aggregation + Better Stack uptime monitoring
+- [x] 09.1-01-PLAN.md — Environment config fixes (configurable port, TEE guard, hash routing, Web3Auth network, logging cleanup)
+- [x] 09.1-02-PLAN.md — API Dockerfile, staging Docker Compose, Caddyfile, .dockerignore
+- [x] 09.1-03-PLAN.md — Full schema database migration for fresh staging database
+- [x] 09.1-04-PLAN.md — Tag-triggered deployment workflow (build, push, deploy to VPS + Pinata)
+- [x] 09.1-05-PLAN.md — Infrastructure provisioning and first deployment verification
+- [x] 09.1-06-PLAN.md — Monitoring: Grafana Cloud log aggregation + Better Stack uptime monitoring
 
 **Details:**
 Urgent insertion to prepare environment, DevOps pipeline, and staging deployment before continuing to data portability. Ensures the application is deployable and testable in a real environment.
@@ -438,7 +438,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 7.1 Atomic File Upload  | 2/2            | Complete    | 2026-02-07 |
 | 8. TEE Integration      | 4/4            | Complete    | 2026-02-07 |
 | 9. Desktop Client       | 7/7            | Complete    | 2026-02-08 |
-| 9.1 Env/DevOps/Staging  | 0/6            | Not started | -          |
+| 9.1 Env/DevOps/Staging  | 6/6            | Complete    | 2026-02-09 |
 | 10. Data Portability    | 0/3            | Not started | -          |
 | 11. Security (MFA)      | 0/4            | Post-v1.0   | -          |
 
@@ -477,4 +477,5 @@ _Phase 9 planned: 2026-02-07_
 _Phase 9 revised: 2026-02-07_
 _Phase 9 complete: 2026-02-08_
 _Phase 9.1 planned: 2026-02-09_
+_Phase 9.1 complete: 2026-02-09_
 _Total phases: 14 | Total plans: 74 | Depth: Comprehensive_
