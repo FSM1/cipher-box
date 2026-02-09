@@ -15,6 +15,7 @@ export function StagingBanner({ variant }: StagingBannerProps) {
   if (variant === 'login') {
     return (
       <div
+        role="banner"
         data-testid="staging-banner"
         style={{
           position: 'fixed',
@@ -49,12 +50,13 @@ export function StagingBanner({ variant }: StagingBannerProps) {
             fontFamily: 'var(--font-family-mono)',
             fontSize: '11px',
             fontWeight: 400,
-            color: '#FF6B0088',
+            color: '#994400',
             textAlign: 'center',
           }}
         >
-          // This is a staging instance for testing purposes only. No guarantees are made regarding
-          data safety or security.
+          {
+            '// This is a staging instance for testing purposes only. No guarantees are made regarding data safety or security.'
+          }
         </span>
       </div>
     );
@@ -63,6 +65,7 @@ export function StagingBanner({ variant }: StagingBannerProps) {
   // compact variant
   return (
     <div
+      role="banner"
       data-testid="staging-banner"
       style={{
         width: '100%',

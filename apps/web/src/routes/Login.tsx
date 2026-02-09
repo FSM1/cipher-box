@@ -24,10 +24,13 @@ export function Login() {
   // Show loading state while checking authentication
   if (isLoading) {
     return (
-      <div className="login-container">
-        <MatrixBackground />
-        <div className="loading">initializing...</div>
-      </div>
+      <>
+        <StagingBanner variant="login" />
+        <div className="login-container">
+          <MatrixBackground />
+          <div className="loading">initializing...</div>
+        </div>
+      </>
     );
   }
 
