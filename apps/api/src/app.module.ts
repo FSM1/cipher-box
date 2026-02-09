@@ -71,7 +71,10 @@ import { IpnsRepublishSchedule } from './republish/republish-schedule.entity';
           IpnsRepublishSchedule,
         ],
         synchronize: configService.get<string>('NODE_ENV') !== 'production',
-        logging: configService.get<string>('NODE_ENV') === 'development',
+        logging:
+          configService.get<string>('NODE_ENV') === 'development'
+            ? ['error', 'warn', 'migration'] // Dev: errors, warnings, migrations only (no SQL query spam)
+            : ['error', 'migration'], // Staging/production: errors and migrations only
       }),
       inject: [ConfigService],
     }),

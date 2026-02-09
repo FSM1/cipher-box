@@ -88,7 +88,6 @@ jobs:
           # Web app .env (for Vite dev server)
           echo "VITE_WEB3AUTH_CLIENT_ID=${{ secrets.VITE_WEB3AUTH_CLIENT_ID }}" > apps/web/.env
           echo "VITE_API_URL=http://localhost:3000" >> apps/web/.env
-          echo "VITE_PINATA_GATEWAY_URL=http://localhost:8080/ipfs" >> apps/web/.env
           # API .env (for NestJS)
           echo "NODE_ENV=test" > apps/api/.env
           echo "DB_HOST=localhost" >> apps/api/.env
