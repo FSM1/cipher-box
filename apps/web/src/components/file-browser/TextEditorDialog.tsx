@@ -109,7 +109,10 @@ export function TextEditorDialog({ open, onClose, item, parentFolderId }: TextEd
       const encrypted = await encryptFile(file, auth.derivedKeypair.publicKey);
 
       // 3. Upload to IPFS
-      const blob = new Blob([encrypted.ciphertext.buffer as ArrayBuffer]);
+      // Use .slice() to get a clean copy with its own ArrayBuffer,
+      // avoiding sub-view issues if ciphertext is an offset view.
+      const ciphertextBytes = encrypted.ciphertext.slice();
+      const blob = new Blob([ciphertextBytes.buffer as ArrayBuffer]);
       const { cid } = await addToIpfs(blob);
 
       // 4. Update folder metadata
@@ -172,7 +175,9 @@ export function TextEditorDialog({ open, onClose, item, parentFolderId }: TextEd
           />
           <div className={`text-editor-status${isDirty ? ' text-editor-status--modified' : ''}`}>
             <span>
-              // {lineCount} {lineCount === 1 ? 'line' : 'lines'} | utf-8
+              {'// '}
+              {lineCount} {lineCount === 1 ? 'line' : 'lines'}
+              {' | utf-8'}
               {isDirty ? ' | modified' : ''}
             </span>
           </div>

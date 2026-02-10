@@ -514,7 +514,7 @@ export function useFolder() {
    *
    * @param parentId - Parent folder ID ('root' or folder UUID)
    * @param fileData - New file data after re-encryption
-   * @returns Old CID that was replaced
+   * @returns Resolves when the update is complete
    */
   const handleUpdateFile = useCallback(
     async (

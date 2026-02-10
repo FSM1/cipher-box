@@ -69,10 +69,18 @@ const TEXT_EXTENSIONS = new Set([
   '.hpp',
   '.sql',
   '.graphql',
-  '.dockerfile',
-  '.makefile',
   '.gitignore',
   '.editorconfig',
+]);
+
+/** Well-known extensionless text filenames. */
+const TEXT_FILENAMES = new Set([
+  'dockerfile',
+  'makefile',
+  'rakefile',
+  'gemfile',
+  'procfile',
+  'vagrantfile',
 ]);
 
 /**
@@ -82,6 +90,8 @@ function isTextFile(name: string): boolean {
   const lower = name.toLowerCase();
   // Handle dotfiles like .gitignore, .editorconfig
   if (TEXT_EXTENSIONS.has(lower)) return true;
+  // Handle well-known extensionless filenames like Dockerfile, Makefile
+  if (TEXT_FILENAMES.has(lower)) return true;
   const lastDot = lower.lastIndexOf('.');
   if (lastDot === -1) return false;
   return TEXT_EXTENSIONS.has(lower.slice(lastDot));
