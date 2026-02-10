@@ -22,5 +22,5 @@
 
 ## Key Files
 
-- `designs/cipher-box-design.pen` — the design file (binary/encrypted, only accessible via Pencil MCP tools)
+- `designs/cipher-box-design.pen` — Pencil design file in plain-text JSON (can be opened/read directly; MCP tools work on an in-memory copy until you save from the Pencil UI)
 - `apps/web/src/index.css` — CSS design tokens (colors, fonts, spacing) that the design must match
