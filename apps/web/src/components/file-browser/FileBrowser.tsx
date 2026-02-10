@@ -17,6 +17,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { RenameDialog } from './RenameDialog';
 import { CreateFolderDialog } from './CreateFolderDialog';
 import { MoveDialog } from './MoveDialog';
+import { DetailsDialog } from './DetailsDialog';
 import { UploadZone } from './UploadZone';
 import { UploadModal } from './UploadModal';
 import { Breadcrumbs } from './Breadcrumbs';
@@ -143,6 +144,7 @@ export function FileBrowser() {
   const [confirmDialog, setConfirmDialog] = useState<DialogState>({ open: false, item: null });
   const [renameDialog, setRenameDialog] = useState<DialogState>({ open: false, item: null });
   const [moveDialog, setMoveDialog] = useState<DialogState>({ open: false, item: null });
+  const [detailsDialog, setDetailsDialog] = useState<DialogState>({ open: false, item: null });
   const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false);
 
   // Clear selection when navigating to a new folder
@@ -228,6 +230,13 @@ export function FileBrowser() {
     }
   }, [contextMenu.item]);
 
+  // Open details dialog
+  const handleDetailsClick = useCallback(() => {
+    if (contextMenu.item) {
+      setDetailsDialog({ open: true, item: contextMenu.item });
+    }
+  }, [contextMenu.item]);
+
   // Confirm rename
   const handleRenameConfirm = useCallback(
     async (newName: string) => {
@@ -284,6 +293,10 @@ export function FileBrowser() {
 
   const closeMoveDialog = useCallback(() => {
     setMoveDialog({ open: false, item: null });
+  }, []);
+
+  const closeDetailsDialog = useCallback(() => {
+    setDetailsDialog({ open: false, item: null });
   }, []);
 
   // Create folder handlers
@@ -402,6 +415,7 @@ export function FileBrowser() {
           onRename={handleRenameClick}
           onMove={handleMoveClick}
           onDelete={handleDeleteClick}
+          onDetails={handleDetailsClick}
         />
       )}
 
@@ -443,6 +457,14 @@ export function FileBrowser() {
         item={moveDialog.item}
         currentFolderId={currentFolderId}
         isLoading={isOperating}
+      />
+
+      {/* Details dialog */}
+      <DetailsDialog
+        open={detailsDialog.open}
+        onClose={closeDetailsDialog}
+        item={detailsDialog.item}
+        parentFolderId={currentFolderId}
       />
 
       {/* Upload modal (self-manages visibility) */}
