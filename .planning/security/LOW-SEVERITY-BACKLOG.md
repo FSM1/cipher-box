@@ -314,10 +314,11 @@ Consider addressing these when:
 
 ---
 
-## 18. IPNS Sequence Number Fallback to 0 on Resolve Failure
+## ~~18. IPNS Sequence Number Fallback to 0 on Resolve Failure~~ — RESOLVED
 
 **Location:** `apps/desktop/src-tauri/src/fuse/operations.rs:1141-1147`
 **Added:** 2026-02-08 (Phase 9 Desktop Security Review, L-6)
+**Resolved:** 2026-02-10 — Added `PublishCoordinator` with monotonic sequence cache and per-folder publish locks. All 3 publish paths updated.
 
 **Issue:** When IPNS resolve fails, sequence falls back to 0. Publishing with seq=1 when current is seq=100 could cause metadata rollback. Concurrent publishes can also race on the same sequence number.
 
