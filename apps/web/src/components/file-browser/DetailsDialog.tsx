@@ -59,13 +59,7 @@ function CopyableValue({ value }: { value: string }) {
 /**
  * A single detail row with label and value.
  */
-function DetailRow({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
+function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="details-row">
       <span className="details-label">{label}</span>
@@ -205,13 +199,15 @@ function FolderDetails({
 
       <DetailRow label="Folder Key">
         <span className="details-value--redacted">
-          {item.folderKeyEncrypted.slice(0, 16)}...{item.folderKeyEncrypted.slice(-8)} (ECIES-wrapped)
+          {item.folderKeyEncrypted.slice(0, 16)}...{item.folderKeyEncrypted.slice(-8)}{' '}
+          (ECIES-wrapped)
         </span>
       </DetailRow>
 
       <DetailRow label="IPNS Private Key">
         <span className="details-value--redacted">
-          {item.ipnsPrivateKeyEncrypted.slice(0, 16)}...{item.ipnsPrivateKeyEncrypted.slice(-8)} (ECIES-wrapped)
+          {item.ipnsPrivateKeyEncrypted.slice(0, 16)}...{item.ipnsPrivateKeyEncrypted.slice(-8)}{' '}
+          (ECIES-wrapped)
         </span>
       </DetailRow>
 
@@ -258,8 +254,7 @@ export function DetailsDialog({ open, onClose, item, parentFolderId }: DetailsDi
       return;
     }
 
-    const ipnsName =
-      item.type === 'folder' ? item.ipnsName : parentFolder?.ipnsName;
+    const ipnsName = item.type === 'folder' ? item.ipnsName : parentFolder?.ipnsName;
 
     if (!ipnsName) return;
 
@@ -295,11 +290,7 @@ export function DetailsDialog({ open, onClose, item, parentFolderId }: DetailsDi
   return (
     <Modal open={open} onClose={onClose} title={title}>
       {item.type === 'file' ? (
-        <FileDetails
-          item={item}
-          metadataCid={metadataCid}
-          metadataLoading={metadataLoading}
-        />
+        <FileDetails item={item} metadataCid={metadataCid} metadataLoading={metadataLoading} />
       ) : (
         <FolderDetails
           item={item}
