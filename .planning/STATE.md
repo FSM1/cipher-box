@@ -260,11 +260,10 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-4 pending todo(s):
+3 pending todo(s):
 
 - `2026-01-23-simple-text-file-editor-modal.md` — Add simple text file editor modal (area: ui)
 - `2026-02-07-web-worker-large-file-encryption.md` — Offload large file encryption to Web Worker (area: ui)
-- `2026-02-09-client-side-ipns-signature-validation.md` — Add client-side IPNS signature validation (area: crypto) — GitHub #71
 - `2026-02-10-remove-debug-eprintln-statements.md` — Remove debug eprintln! statements from FUSE code (area: desktop)
 
 ### Completed Todos
