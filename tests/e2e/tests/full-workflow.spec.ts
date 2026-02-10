@@ -11,6 +11,7 @@ import { ConfirmDialogPage } from '../page-objects/dialogs/confirm-dialog.page';
 import { CreateFolderDialogPage } from '../page-objects/dialogs/create-folder-dialog.page';
 import { MoveDialogPage } from '../page-objects/dialogs/move-dialog.page';
 import { DetailsDialogPage } from '../page-objects/dialogs/details-dialog.page';
+import { TextEditorDialogPage } from '../page-objects/dialogs/text-editor-dialog.page';
 
 /**
  * Full Workflow E2E Test Suite
@@ -46,6 +47,7 @@ test.describe.serial('Full Workflow', () => {
   let createFolderDialog: CreateFolderDialogPage;
   let moveDialog: MoveDialogPage;
   let detailsDialog: DetailsDialogPage;
+  let textEditorDialog: TextEditorDialogPage;
 
   // Test data - unique names for this test run
   const timestamp = Date.now();
@@ -105,6 +107,12 @@ test.describe.serial('Full Workflow', () => {
   const editableFileOriginalContent = 'Original content before edit';
   const editableFileUpdatedContent = 'Updated content after edit - version 2';
 
+  // Content for in-place text editor test (Phase 5.5)
+  const textEditorEditedContent = 'Edited in-browser via text editor modal - version 3';
+
+  // Track CID before/after text editor save to verify re-encryption
+  let cidBeforeEdit = '';
+
   test.beforeAll(async ({ browser: testBrowser }) => {
     browser = testBrowser;
     context = await browser.newContext();
@@ -121,6 +129,7 @@ test.describe.serial('Full Workflow', () => {
     createFolderDialog = new CreateFolderDialogPage(page);
     moveDialog = new MoveDialogPage(page);
     detailsDialog = new DetailsDialogPage(page);
+    textEditorDialog = new TextEditorDialogPage(page);
   });
 
   test.afterAll(async () => {
@@ -781,6 +790,140 @@ test.describe.serial('Full Workflow', () => {
     const download2 = await downloadPromise2;
     expect(download2.suggestedFilename()).toBe(editableFileName);
     await download2.cancel();
+  });
+
+  // ============================================
+  // Phase 5.5: In-Browser Text Editor
+  // ============================================
+  // Exercises the full crypto round-trip: download → decrypt → edit → encrypt
+  // → re-upload → update folder metadata → unpin old CID.
+
+  test('5.5.1 Edit option appears for text files only', async () => {
+    // We're at root from 5.1
+
+    // Right-click the text file — "Edit" should be in context menu
+    expect(await fileList.isItemVisible(editableFileName)).toBe(true);
+    await fileList.rightClickItem(editableFileName);
+    await contextMenu.waitForOpen();
+
+    const options = await contextMenu.getVisibleOptions();
+    expect(options).toContain('Edit');
+    await contextMenu.closeWithEscape();
+
+    // Right-click a folder — "Edit" should NOT be in context menu
+    expect(await fileList.isItemVisible(workspaceFolder)).toBe(true);
+    await fileList.rightClickItem(workspaceFolder);
+    await contextMenu.waitForOpen();
+
+    const folderOptions = await contextMenu.getVisibleOptions();
+    expect(folderOptions).not.toContain('Edit');
+    await contextMenu.closeWithEscape();
+  });
+
+  test('5.5.2 Open text editor, verify content loaded', async () => {
+    // Right-click the editable file and click Edit
+    await fileList.rightClickItem(editableFileName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickEdit();
+
+    // Dialog should open with loading state
+    await textEditorDialog.waitForOpen({ timeout: 10000 });
+
+    // Title should show the filename
+    const title = await textEditorDialog.getTitle();
+    expect(title).toContain(editableFileName);
+
+    // Wait for content to decrypt and load
+    await textEditorDialog.waitForContentLoaded({ timeout: 30000 });
+
+    // Textarea should contain the file content (uploaded in 5.1 with updated content)
+    const content = await textEditorDialog.getContent();
+    expect(content).toBe(editableFileUpdatedContent);
+
+    // Status line should show line count and utf-8
+    const status = await textEditorDialog.getStatusText();
+    expect(status).toContain('utf-8');
+    expect(status).toMatch(/\d+ line/);
+
+    // Should NOT show modified yet
+    expect(await textEditorDialog.isModified()).toBe(false);
+
+    // Save button should be disabled (no changes)
+    expect(await textEditorDialog.isSaveDisabled()).toBe(true);
+
+    // Close without saving
+    await textEditorDialog.clickCancel();
+    await textEditorDialog.waitForClose();
+  });
+
+  test('5.5.3 Edit content and save (full crypto round-trip)', async () => {
+    // Record the original CID via Details dialog before editing
+    await fileList.rightClickItem(editableFileName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickDetails();
+    await detailsDialog.waitForOpen();
+    cidBeforeEdit = await detailsDialog.getValueText('Content CID');
+    expect(cidBeforeEdit).toBeTruthy();
+    await detailsDialog.close();
+
+    // Open the text editor
+    await fileList.rightClickItem(editableFileName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickEdit();
+    await textEditorDialog.waitForOpen({ timeout: 10000 });
+    await textEditorDialog.waitForContentLoaded({ timeout: 30000 });
+
+    // Modify the content
+    await textEditorDialog.setContent(textEditorEditedContent);
+
+    // Status should now show "modified"
+    expect(await textEditorDialog.isModified()).toBe(true);
+
+    // Save button should be enabled
+    expect(await textEditorDialog.isSaveDisabled()).toBe(false);
+
+    // Click save — triggers encrypt → upload → metadata update
+    await textEditorDialog.clickSave();
+
+    // Dialog should close after successful save
+    await textEditorDialog.waitForClose({ timeout: 30000 });
+
+    // File should still be visible in the list
+    expect(await fileList.isItemVisible(editableFileName)).toBe(true);
+  });
+
+  test('5.5.4 Verify CID changed after edit (re-encryption confirmed)', async () => {
+    // Open Details dialog to verify the CID changed
+    await fileList.rightClickItem(editableFileName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickDetails();
+    await detailsDialog.waitForOpen();
+
+    const newCid = await detailsDialog.getValueText('Content CID');
+    expect(newCid).toBeTruthy();
+
+    // CID must be different from before editing (content was re-encrypted with new key)
+    expect(cidBeforeEdit).toBeTruthy();
+    expect(newCid).not.toBe(cidBeforeEdit);
+
+    await detailsDialog.close();
+  });
+
+  test('5.5.5 Re-open editor to verify saved content persists', async () => {
+    // Re-open the editor to verify the new content was actually saved
+    await fileList.rightClickItem(editableFileName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickEdit();
+    await textEditorDialog.waitForOpen({ timeout: 10000 });
+    await textEditorDialog.waitForContentLoaded({ timeout: 30000 });
+
+    // Content should be the edited version
+    const content = await textEditorDialog.getContent();
+    expect(content).toBe(textEditorEditedContent);
+
+    // Close without changes
+    await textEditorDialog.clickCancel();
+    await textEditorDialog.waitForClose();
   });
 
   // ============================================

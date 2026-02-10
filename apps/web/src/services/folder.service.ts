@@ -763,6 +763,63 @@ export async function renameFile(params: {
 }
 
 /**
+ * Replace an existing file entry in a folder with updated content.
+ *
+ * Updates the file's CID, wrapped key, IV, and size in-place within the
+ * parent folder's children array, then publishes updated metadata to IPNS.
+ * Returns the old CID so the caller can unpin it.
+ *
+ * @param params.fileId - ID of file to replace
+ * @param params.newCid - New IPFS CID of re-encrypted content
+ * @param params.newFileKeyEncrypted - Hex-encoded ECIES-wrapped new file key
+ * @param params.newFileIv - Hex-encoded new IV
+ * @param params.newSize - New file size in bytes
+ * @param params.parentFolderState - Parent folder containing this file
+ * @returns New sequence number and old CID for unpinning
+ * @throws Error if file not found
+ */
+export async function replaceFileInFolder(params: {
+  fileId: string;
+  newCid: string;
+  newFileKeyEncrypted: string;
+  newFileIv: string;
+  newSize: number;
+  parentFolderState: FolderNode;
+}): Promise<{ newSequenceNumber: bigint; oldCid: string }> {
+  // 1. Find file in parent's children
+  const children = [...params.parentFolderState.children];
+  const fileIndex = children.findIndex((c) => c.type === 'file' && c.id === params.fileId);
+
+  if (fileIndex === -1) throw new Error('File not found');
+
+  // 2. Save old CID for unpinning
+  const file = children[fileIndex] as FileEntry;
+  const oldCid = file.cid;
+
+  // 3. Update file entry with new encrypted content
+  children[fileIndex] = {
+    ...file,
+    cid: params.newCid,
+    fileKeyEncrypted: params.newFileKeyEncrypted,
+    fileIv: params.newFileIv,
+    size: params.newSize,
+    modifiedAt: Date.now(),
+  };
+
+  // 4. Update parent folder metadata and publish IPNS
+  const { newSequenceNumber } = await updateFolderMetadata({
+    folderId: params.parentFolderState.id,
+    children,
+    folderKey: params.parentFolderState.folderKey,
+    ipnsPrivateKey: params.parentFolderState.ipnsPrivateKey,
+    ipnsName: params.parentFolderState.ipnsName,
+    sequenceNumber: params.parentFolderState.sequenceNumber,
+  });
+
+  return { newSequenceNumber, oldCid };
+}
+
+/**
  * Fetch and decrypt folder metadata from IPFS.
  *
  * Used for sync operations when remote IPNS resolves to a different CID.

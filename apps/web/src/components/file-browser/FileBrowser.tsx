@@ -20,6 +20,7 @@ import { CreateFolderDialog } from './CreateFolderDialog';
 import { MoveDialog } from './MoveDialog';
 import { DetailsDialog } from './DetailsDialog';
 import { UploadZone } from './UploadZone';
+import { TextEditorDialog } from './TextEditorDialog';
 import { UploadModal } from './UploadModal';
 import { Breadcrumbs } from './Breadcrumbs';
 import { SyncIndicator } from './SyncIndicator';
@@ -30,6 +31,60 @@ import { OfflineBanner } from './OfflineBanner';
  */
 function isFileEntry(item: FolderChild): item is FileEntry {
   return item.type === 'file';
+}
+
+/** Extensions recognized as editable text files. */
+const TEXT_EXTENSIONS = new Set([
+  '.txt',
+  '.md',
+  '.json',
+  '.yaml',
+  '.yml',
+  '.xml',
+  '.csv',
+  '.log',
+  '.env',
+  '.toml',
+  '.ini',
+  '.cfg',
+  '.conf',
+  '.sh',
+  '.bash',
+  '.zsh',
+  '.fish',
+  '.html',
+  '.css',
+  '.js',
+  '.ts',
+  '.jsx',
+  '.tsx',
+  '.py',
+  '.rb',
+  '.rs',
+  '.go',
+  '.java',
+  '.c',
+  '.cpp',
+  '.h',
+  '.hpp',
+  '.sql',
+  '.graphql',
+  '.dockerfile',
+  '.makefile',
+  '.gitignore',
+  '.editorconfig',
+]);
+
+/**
+ * Check if a filename has a text-editable extension.
+ */
+function isTextFile(name: string): boolean {
+  const lower = name.toLowerCase();
+  // Handle dotfiles like .gitignore, .editorconfig
+  if (TEXT_EXTENSIONS.has(lower)) return true;
+  const lastDot = lower.lastIndexOf('.');
+  if (lastDot === -1) return false;
+  return TEXT_EXTENSIONS.has(lower.slice(lastDot));
 }
 
 /**
@@ -244,6 +299,7 @@ export function FileBrowser() {
   const [renameDialog, setRenameDialog] = useState<DialogState>({ open: false, item: null });
   const [moveDialog, setMoveDialog] = useState<DialogState>({ open: false, item: null });
   const [detailsDialog, setDetailsDialog] = useState<DialogState>({ open: false, item: null });
+  const [editorDialog, setEditorDialog] = useState<DialogState>({ open: false, item: null });
   const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false);
 
   // Clear selection when navigating to a new folder
@@ -336,6 +392,13 @@ export function FileBrowser() {
     }
   }, [contextMenu.item]);
 
+  // Open text editor dialog
+  const handleEditClick = useCallback(() => {
+    if (contextMenu.item) {
+      setEditorDialog({ open: true, item: contextMenu.item });
+    }
+  }, [contextMenu.item]);
+
   // Confirm rename
   const handleRenameConfirm = useCallback(
     async (newName: string) => {
@@ -396,6 +459,10 @@ export function FileBrowser() {
 
   const closeDetailsDialog = useCallback(() => {
     setDetailsDialog({ open: false, item: null });
+  }, []);
+
+  const closeEditorDialog = useCallback(() => {
+    setEditorDialog({ open: false, item: null });
   }, []);
 
   // Create folder handlers
@@ -526,6 +593,11 @@ export function FileBrowser() {
           item={contextMenu.item}
           onClose={contextMenu.hide}
           onDownload={isFileEntry(contextMenu.item) ? handleDownload : undefined}
+          onEdit={
+            isFileEntry(contextMenu.item) && isTextFile(contextMenu.item.name)
+              ? handleEditClick
+              : undefined
+          }
           onRename={handleRenameClick}
           onMove={handleMoveClick}
           onDelete={handleDeleteClick}
@@ -578,6 +650,14 @@ export function FileBrowser() {
         open={detailsDialog.open}
         onClose={closeDetailsDialog}
         item={detailsDialog.item}
+        parentFolderId={currentFolderId}
+      />
+
+      {/* Text editor dialog */}
+      <TextEditorDialog
+        open={editorDialog.open}
+        onClose={closeEditorDialog}
+        item={editorDialog.item && isFileEntry(editorDialog.item) ? editorDialog.item : null}
         parentFolderId={currentFolderId}
       />
 

@@ -45,6 +45,13 @@ export class ContextMenuPage {
   }
 
   /**
+   * Get the Edit menu option (text files only).
+   */
+  editOption(): Locator {
+    return this.menu().locator('button[role="menuitem"]', { hasText: 'Edit' });
+  }
+
+  /**
    * Get the Details menu option.
    */
   detailsOption(): Locator {
@@ -98,6 +105,13 @@ export class ContextMenuPage {
    */
   async clickMove(): Promise<void> {
     await this.moveOption().click();
+  }
+
+  /**
+   * Click the Edit option (text files only).
+   */
+  async clickEdit(): Promise<void> {
+    await this.editOption().click();
   }
 
   /**

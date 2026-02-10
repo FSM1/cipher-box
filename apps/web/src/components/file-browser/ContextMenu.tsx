@@ -22,6 +22,8 @@ type ContextMenuProps = {
   onClose: () => void;
   /** Callback when download is clicked (files only) */
   onDownload?: () => void;
+  /** Callback when edit is clicked (text files only) */
+  onEdit?: () => void;
   /** Callback when rename is clicked */
   onRename: () => void;
   /** Callback when move is clicked */
@@ -50,6 +52,7 @@ export function ContextMenu({
   item,
   onClose,
   onDownload,
+  onEdit,
   onRename,
   onMove,
   onDelete,
@@ -128,6 +131,11 @@ export function ContextMenu({
     onClose();
   };
 
+  const handleEdit = () => {
+    onEdit?.();
+    onClose();
+  };
+
   const handleRename = () => {
     onRename();
     onClose();
@@ -173,6 +181,14 @@ export function ContextMenu({
           >
             <span className="context-menu-item-icon">&#8595;</span>
             Download
+          </button>
+        )}
+
+        {/* Edit - text files only */}
+        {isFile && onEdit && (
+          <button type="button" className="context-menu-item" onClick={handleEdit} role="menuitem">
+            <span className="context-menu-item-icon">&#9998;</span>
+            Edit
           </button>
         )}
 

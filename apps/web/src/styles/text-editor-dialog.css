@@ -1,0 +1,123 @@
+/**
+ * Text Editor Dialog Styles - Terminal Aesthetic
+ *
+ * Wider modal variant for editing text files in-browser.
+ * Monospace textarea with dark background, status line.
+ */
+
+/* ==========================================================================
+   Wider Modal Override
+   ========================================================================== */
+
+.text-editor-modal .modal-container {
+  max-width: 800px;
+}
+
+.text-editor-modal .modal-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  max-height: calc(90vh - 60px);
+}
+
+/* ==========================================================================
+   Editor Body
+   ========================================================================== */
+
+.text-editor-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ==========================================================================
+   Textarea
+   ========================================================================== */
+
+.text-editor-textarea {
+  flex: 1;
+  width: 100%;
+  min-height: 400px;
+  padding: var(--spacing-md);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  color: var(--color-text-primary);
+  background-color: var(--color-background);
+  border: none;
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
+  outline: none;
+  resize: none;
+  tab-size: 2;
+}
+
+.text-editor-textarea:focus {
+  box-shadow: inset 0 0 20px rgba(0, 208, 132, 0.05);
+}
+
+.text-editor-textarea:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.text-editor-textarea::placeholder {
+  color: var(--color-text-secondary);
+}
+
+/* ==========================================================================
+   Status Line
+   ========================================================================== */
+
+.text-editor-status {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  padding: var(--spacing-xs) var(--spacing-md);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
+  flex-shrink: 0;
+}
+
+.text-editor-status--modified {
+  color: var(--color-warning);
+}
+
+/* ==========================================================================
+   Footer (actions)
+   ========================================================================== */
+
+.text-editor-footer {
+  display: flex;
+  gap: var(--spacing-sm);
+  justify-content: flex-end;
+  padding: var(--spacing-sm) var(--spacing-md);
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   Loading State
+   ========================================================================== */
+
+.text-editor-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* ==========================================================================
+   Error Message
+   ========================================================================== */
+
+.text-editor-error {
+  padding: var(--spacing-xs) var(--spacing-md);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-error);
+}
