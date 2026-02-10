@@ -34,7 +34,9 @@ export const customInstance = async <T>(config: {
   });
 
   if (!response.ok) {
-    throw new Error(`HTTP error! status: ${response.status}`);
+    const err = new Error(`HTTP error! status: ${response.status}`);
+    (err as Error & { status: number }).status = response.status;
+    throw err;
   }
 
   // Return appropriate response type
