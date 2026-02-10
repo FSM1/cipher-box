@@ -521,6 +521,9 @@ test.describe.serial('Full Workflow', () => {
   // key unwrapping). This path is NOT exercised by in-session tests.
 
   test('3.7 Page reload preserves session and reloads root folder', async () => {
+    // Reload + re-auth + IPNS sync chain can take >30s in CI
+    test.setTimeout(90000);
+
     // Navigate to root before reload so we start from a clean state
     await navigateToRoot();
 
