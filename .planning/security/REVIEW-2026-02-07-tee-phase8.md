@@ -483,7 +483,7 @@ Based on project security rules (CLAUDE.md):
 | -------- | ------------------------------------------------------------------- | ------ | ------- |
 | ~~P0~~   | ~~Add currentEpoch/previousEpoch to republish entries~~             | LOW    | C1 RESOLVED |
 | ~~P0~~   | ~~Fix hex/base64 encoding mismatch in public key retrieval~~        | LOW    | C2 RESOLVED |
-| ~~P0~~   | ~~Fix health endpoint response shape to include `healthy` and `epoch`~~ | LOW | H1 RESOLVED |
+| ~~P0~~   | ~~Fix health endpoint response shape to include `healthy` and `epoch`~~ | LOW    | H1 RESOLVED |
 | P1       | Zero TEE epoch private keys after ECIES decrypt                     | MEDIUM | H2      |
 | P1       | Enforce CVM mode in production (reject simulator)                   | LOW    | H3      |
 | P1       | Document libp2p key object limitation                               | LOW    | H4      |
