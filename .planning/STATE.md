@@ -260,11 +260,14 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-3 pending todo(s):
+6 pending todo(s):
 
 - `2026-01-23-simple-text-file-editor-modal.md` — Add simple text file editor modal (area: ui)
 - `2026-02-07-web-worker-large-file-encryption.md` — Offload large file encryption to Web Worker (area: ui)
 - `2026-02-09-client-side-ipns-signature-validation.md` — Add client-side IPNS signature validation (area: crypto) — GitHub #71
+- `2026-02-10-fix-tee-critical-integration-bugs.md` — Fix TEE critical integration bugs C1/C2/H1 (area: api) — CRITICAL
+- `2026-02-10-ipns-sequence-fallback-to-zero.md` — Fix IPNS sequence number fallback to 0 (area: desktop) — HIGH data integrity
+- `2026-02-10-remove-debug-eprintln-statements.md` — Remove debug eprintln! statements from FUSE code (area: desktop)
 
 ### Completed Todos
 
