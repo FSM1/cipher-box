@@ -368,6 +368,17 @@ test.describe.serial('Full Workflow', () => {
     }
   });
 
+  test('3.6.1 Storage quota reflects uploaded files', async () => {
+    // After uploading 13+ files, the quota display should show non-zero usage.
+    // The StorageQuota component fetches from GET /vault/quota which computes
+    // usage from pinned CIDs in the database.
+    const quotaText = page.locator('[data-testid="storage-quota"] .storage-quota-text');
+    await expect(quotaText).toBeVisible({ timeout: 10000 });
+
+    // Quota should NOT be "0 B" — files were uploaded so usage must be > 0
+    await expect(quotaText).not.toHaveText(/^0 B\s*\//, { timeout: 15000 });
+  });
+
   // ============================================
   // Phase 3.5: Post-Reload Subfolder Navigation
   // ============================================
@@ -403,6 +414,18 @@ test.describe.serial('Full Workflow', () => {
       expect(await fileList.isItemVisible(file.name)).toBe(true);
     }
     expect(await fileList.isItemVisible(editableFileName)).toBe(true);
+  });
+
+  test('3.7.1 Storage quota persists after page reload', async () => {
+    // After reload, the Zustand store is wiped so quota resets to 0.
+    // The StorageQuota component should fetch fresh quota from the backend
+    // once auth is restored, showing the same non-zero value as before reload.
+    // This is a regression test for the quota-stuck-at-zero bug.
+    const quotaText = page.locator('[data-testid="storage-quota"] .storage-quota-text');
+    await expect(quotaText).toBeVisible({ timeout: 10000 });
+
+    // Quota should NOT be "0 B" — the backend still has the pinned CIDs
+    await expect(quotaText).not.toHaveText(/^0 B\s*\//, { timeout: 15000 });
   });
 
   test('3.8 Navigate into subfolder after reload and verify contents', async () => {

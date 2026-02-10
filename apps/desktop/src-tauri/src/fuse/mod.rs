@@ -76,6 +76,90 @@ pub struct UploadComplete {
     pub new_cid: String,
 }
 
+/// Coordinates IPNS publish operations to prevent sequence number races
+/// and maintain a monotonic sequence number cache per IPNS name.
+///
+/// Shared via `Arc` between `CipherBoxFS` and background publish threads.
+#[cfg(feature = "fuse")]
+pub struct PublishCoordinator {
+    /// Per-IPNS-name sequence number cache (monotonically increasing).
+    seq_cache: std::sync::Mutex<HashMap<String, u64>>,
+    /// Per-IPNS-name publish locks to serialize concurrent publishes.
+    publish_locks: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+}
+
+#[cfg(feature = "fuse")]
+impl PublishCoordinator {
+    pub fn new() -> Self {
+        Self {
+            seq_cache: std::sync::Mutex::new(HashMap::new()),
+            publish_locks: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Get or create a per-folder publish lock.
+    pub fn get_lock(&self, ipns_name: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.publish_locks.lock().unwrap();
+        locks
+            .entry(ipns_name.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
+
+    /// Resolve current sequence number with monotonic cache fallback.
+    ///
+    /// - On successful resolve: returns max(resolved, cached)
+    /// - On failed resolve with cached value: returns cached value with warning
+    /// - On failed resolve with no cache: returns error (prevents seq rollback)
+    pub async fn resolve_sequence(
+        &self,
+        api: &crate::api::client::ApiClient,
+        ipns_name: &str,
+    ) -> Result<u64, String> {
+        match crate::api::ipns::resolve_ipns(api, ipns_name).await {
+            Ok(resp) => {
+                let resolved = resp.sequence_number.parse::<u64>().unwrap_or(0);
+                let cached = self.get_cached(ipns_name).unwrap_or(0);
+                let seq = std::cmp::max(resolved, cached);
+                self.update_cache(ipns_name, seq);
+                Ok(seq)
+            }
+            Err(e) => match self.get_cached(ipns_name) {
+                Some(cached) => {
+                    log::warn!(
+                        "IPNS resolve failed for {}, using cached seq {}: {}",
+                        ipns_name,
+                        cached,
+                        e
+                    );
+                    Ok(cached)
+                }
+                None => Err(format!(
+                    "IPNS resolve failed and no cached sequence for {}: {}",
+                    ipns_name, e
+                )),
+            },
+        }
+    }
+
+    /// Record a successful publish — cache is monotonic (only increases).
+    pub fn record_publish(&self, ipns_name: &str, published_seq: u64) {
+        self.update_cache(ipns_name, published_seq);
+    }
+
+    fn get_cached(&self, ipns_name: &str) -> Option<u64> {
+        self.seq_cache.lock().unwrap().get(ipns_name).copied()
+    }
+
+    fn update_cache(&self, ipns_name: &str, seq: u64) {
+        let mut cache = self.seq_cache.lock().unwrap();
+        let entry = cache.entry(ipns_name.to_string()).or_insert(0);
+        if seq > *entry {
+            *entry = seq;
+        }
+    }
+}
+
 /// Encrypt a FolderMetadata struct and package as JSON bytes ready for IPFS upload.
 /// CPU-only, no network I/O.
 #[cfg(feature = "fuse")]
@@ -106,17 +190,19 @@ fn spawn_metadata_publish(
     ipns_private_key: Vec<u8>,
     ipns_name: String,
     old_metadata_cid: Option<String>,
+    coordinator: Arc<PublishCoordinator>,
 ) {
     std::thread::spawn(move || {
         let result = rt.block_on(async {
+            // Acquire per-folder publish lock to serialize concurrent publishes
+            let lock = coordinator.get_lock(&ipns_name);
+            let _guard = lock.lock().await;
+
             // Encrypt metadata (CPU)
             let json_bytes = encrypt_metadata_to_json(&metadata, &folder_key)?;
 
-            // Resolve current IPNS sequence number
-            let seq = match crate::api::ipns::resolve_ipns(&api, &ipns_name).await {
-                Ok(resp) => resp.sequence_number.parse::<u64>().unwrap_or(0),
-                Err(_) => 0,
-            };
+            // Resolve current IPNS sequence number (monotonic cache fallback)
+            let seq = coordinator.resolve_sequence(&api, &ipns_name).await?;
 
             // Upload encrypted metadata to IPFS
             let new_cid = crate::api::ipfs::upload_content(&api, &json_bytes).await?;
@@ -148,6 +234,9 @@ fn spawn_metadata_publish(
                 key_epoch: None,
             };
             crate::api::ipns::publish_ipns(&api, &req).await?;
+
+            // Record successful publish in coordinator cache
+            coordinator.record_publish(&ipns_name, new_seq);
 
             // Unpin old metadata CID
             if let Some(old) = old_metadata_cid {
@@ -221,6 +310,8 @@ pub struct CipherBoxFS {
     pub upload_rx: std::sync::mpsc::Receiver<UploadComplete>,
     /// Sender for background upload threads to notify completion.
     pub upload_tx: std::sync::mpsc::Sender<UploadComplete>,
+    /// Shared coordinator for IPNS publish sequencing and per-folder locking.
+    pub publish_coordinator: Arc<PublishCoordinator>,
 }
 
 #[cfg(feature = "fuse")]
@@ -401,6 +492,7 @@ impl CipherBoxFS {
             ipns_private_key,
             ipns_name,
             old_cid,
+            self.publish_coordinator.clone(),
         );
 
         Ok(())
@@ -666,6 +758,7 @@ pub async fn mount_filesystem(
         upload_rx,
         upload_tx,
         mutated_folders: HashMap::new(),
+        publish_coordinator: Arc::new(PublishCoordinator::new()),
     };
 
     let mount_path_clone = mount_path.clone();
