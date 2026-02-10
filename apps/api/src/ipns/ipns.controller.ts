@@ -114,6 +114,9 @@ export class IpnsController {
       success: true,
       cid: result.cid,
       sequenceNumber: result.sequenceNumber,
+      ...(result.signatureV2 && { signatureV2: result.signatureV2 }),
+      ...(result.data && { data: result.data }),
+      ...(result.pubKey && { pubKey: result.pubKey }),
     };
   }
 }
