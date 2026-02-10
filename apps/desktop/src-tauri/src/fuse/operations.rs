@@ -1131,6 +1131,7 @@ mod implementation {
                         let api = self.api.clone();
                         let rt = self.rt.clone();
                         let upload_tx = self.upload_tx.clone();
+                        let coordinator = self.publish_coordinator.clone();
 
                         // Spawn background OS thread for ALL network I/O
                         std::thread::spawn(move || {
@@ -1141,6 +1142,10 @@ mod implementation {
                                 ).await?;
 
                                 log::info!("File uploaded: ino {} -> CID {}", ino, file_cid);
+
+                                // Acquire per-folder publish lock
+                                let lock = coordinator.get_lock(&ipns_name);
+                                let _guard = lock.lock().await;
 
                                 // 2. Fix the CID in the metadata snapshot
                                 for child in &mut metadata.children {
@@ -1160,13 +1165,8 @@ mod implementation {
                                     &metadata, &folder_key,
                                 )?;
 
-                                // 4. Resolve current IPNS seq
-                                let seq = match crate::api::ipns::resolve_ipns(
-                                    &api, &ipns_name,
-                                ).await {
-                                    Ok(resp) => resp.sequence_number.parse::<u64>().unwrap_or(0),
-                                    Err(_) => 0,
-                                };
+                                // 4. Resolve current IPNS seq (monotonic cache fallback)
+                                let seq = coordinator.resolve_sequence(&api, &ipns_name).await?;
 
                                 // 5. Upload metadata to IPFS
                                 let meta_cid = crate::api::ipfs::upload_content(
@@ -1197,6 +1197,9 @@ mod implementation {
                                     key_epoch: None,
                                 };
                                 crate::api::ipns::publish_ipns(&api, &req).await?;
+
+                                // Record successful publish in coordinator cache
+                                coordinator.record_publish(&ipns_name, new_seq);
 
                                 // 8. Unpin old CIDs
                                 if let Some(old) = old_file_cid {
@@ -1464,6 +1467,7 @@ mod implementation {
                 let api = self.api.clone();
                 let rt = self.rt.clone();
                 let ipns_name_clone = ipns_name.clone();
+                let coordinator = self.publish_coordinator.clone();
 
                 std::thread::spawn(move || {
                     let result = rt.block_on(async {
@@ -1472,7 +1476,7 @@ mod implementation {
                             &api, &json_bytes,
                         ).await?;
 
-                        // Create and sign IPNS record for new folder
+                        // Create and sign IPNS record for new folder (seq 0 is correct for brand new folder)
                         let ipns_key_arr: [u8; 32] = ipns_private_key.try_into()
                             .map_err(|_| "Invalid IPNS key length".to_string())?;
                         let value = format!("/ipfs/{}", initial_cid);
@@ -1495,19 +1499,21 @@ mod implementation {
                         };
                         crate::api::ipns::publish_ipns(&api, &req).await?;
 
+                        // Record new folder's initial publish
+                        coordinator.record_publish(&ipns_name_clone, 0);
                         log::info!("New folder IPNS published: {}", ipns_name_clone);
 
                         // Now publish parent folder metadata
+                        // Acquire per-folder publish lock for parent
+                        let lock = coordinator.get_lock(&parent_ipns_name);
+                        let _guard = lock.lock().await;
+
                         let parent_json = crate::fuse::encrypt_metadata_to_json(
                             &parent_metadata, &parent_folder_key,
                         )?;
 
-                        let seq = match crate::api::ipns::resolve_ipns(
-                            &api, &parent_ipns_name,
-                        ).await {
-                            Ok(resp) => resp.sequence_number.parse::<u64>().unwrap_or(0),
-                            Err(_) => 0,
-                        };
+                        // Resolve parent seq (monotonic cache fallback)
+                        let seq = coordinator.resolve_sequence(&api, &parent_ipns_name).await?;
 
                         let parent_meta_cid = crate::api::ipfs::upload_content(
                             &api, &parent_json,
@@ -1515,9 +1521,10 @@ mod implementation {
 
                         let parent_key_arr: [u8; 32] = parent_ipns_key.try_into()
                             .map_err(|_| "Invalid parent IPNS key length".to_string())?;
+                        let new_seq = seq + 1;
                         let parent_value = format!("/ipfs/{}", parent_meta_cid);
                         let parent_record = crate::crypto::ipns::create_ipns_record(
-                            &parent_key_arr, &parent_value, seq + 1, 86_400_000,
+                            &parent_key_arr, &parent_value, new_seq, 86_400_000,
                         ).map_err(|e| format!("Parent IPNS record failed: {}", e))?;
                         let parent_marshaled = crate::crypto::ipns::marshal_ipns_record(
                             &parent_record,
@@ -1533,6 +1540,9 @@ mod implementation {
                             key_epoch: None,
                         };
                         crate::api::ipns::publish_ipns(&api, &parent_req).await?;
+
+                        // Record successful parent publish
+                        coordinator.record_publish(&parent_ipns_name, new_seq);
 
                         if let Some(old) = parent_old_cid {
                             let _ = crate::api::ipfs::unpin_content(&api, &old).await;

@@ -32,9 +32,10 @@ The TEE implementation demonstrates strong security design principles: immediate
 
 ### Critical Issues
 
-#### C1. Missing `currentEpoch`/`previousEpoch` in republish batch request
+#### C1. Missing `currentEpoch`/`previousEpoch` in republish batch request — RESOLVED
 
 - **Severity:** CRITICAL
+- **Status:** RESOLVED — Both fields present in `RepublishEntry` interface (tee.service.ts:20-22) and populated from `TeeKeyStateService.getCurrentState()` in `processRepublishBatch()` (republish.service.ts:87-88,104-105)
 - **Location:** `apps/api/src/republish/republish.service.ts:88-94` and `apps/api/src/tee/tee.service.ts:8-19`
 - **Description:** The API's `RepublishEntry` interface omits `currentEpoch` and `previousEpoch` fields. The TEE worker's `RepublishEntry` interface expects them (at `tee-worker/src/routes/republish.ts:29-30`). When `processRepublishBatch()` builds entries, it only includes `encryptedIpnsKey`, `keyEpoch`, `ipnsName`, `latestCid`, `sequenceNumber`. The TEE worker then calls `decryptWithFallback(encryptedIpnsKey, entry.currentEpoch, entry.previousEpoch)` with both epoch params being `undefined`.
 - **Impact:** Every republish operation will fail because `getKeypair(undefined)` derives a key for `"epoch-undefined"` which will never match the actual encryption epoch. All IPNS records will stop being republished, causing IPNS resolution failures after records expire (48h).
@@ -43,10 +44,11 @@ The TEE implementation demonstrates strong security design principles: immediate
   - **(B - preferred)** Have the TEE worker resolve its own epoch state internally rather than trusting the API. This is more secure because the TEE should be the authority on its own epochs. The TEE worker would call `getKeypair(entry.keyEpoch)` directly, then fallback to the "other" known epoch.
 - **Reference:** Zero-trust principle: TEE should determine its own epoch state
 
-#### C2. Public key encoding mismatch (hex vs base64)
+#### C2. Public key encoding mismatch (hex vs base64) — RESOLVED
 
 - **Severity:** CRITICAL
-- **Location:** `tee-worker/src/routes/public-key.ts:27` sends **hex**; `apps/api/src/tee/tee.service.ts:90` decodes as **base64** (`atob`)
+- **Status:** RESOLVED — API now decodes with `Buffer.from(data.publicKey, 'hex')` at tee.service.ts:94, matching TEE worker's hex encoding
+- **Location:** `tee-worker/src/routes/public-key.ts:27` sends **hex**; `apps/api/src/tee/tee.service.ts:90` decodes as **hex**
 - **Description:** The TEE worker returns `publicKey: Buffer.from(publicKey).toString('hex')` (hex string). The API decodes it with `Uint8Array.from(atob(data.publicKey), (c) => c.charCodeAt(0))` which treats it as base64. `atob('04a1b2c3...')` will produce completely wrong bytes.
 - **Impact:** TEE epoch initialization from `initializeFromTee()` will store garbled bytes as the public key in `tee_key_state`. All subsequent ECIES operations using this public key will fail. Clients would receive an invalid TEE public key, making IPNS key encryption broken.
 - **Recommendation:** Align on one encoding. Use hex consistently since the DTO already specifies hex:
@@ -58,10 +60,11 @@ The TEE implementation demonstrates strong security design principles: immediate
 
 ### High Priority
 
-#### H1. Health endpoint response shape mismatch
+#### H1. Health endpoint response shape mismatch — RESOLVED
 
 - **Severity:** HIGH
-- **Location:** `tee-worker/src/routes/health.ts:13-17` returns `{ status, mode, uptime }` but `apps/api/src/tee/tee.service.ts:71` expects `{ healthy: boolean, epoch: number }`
+- **Status:** RESOLVED — Health endpoint now returns `{ healthy: true, mode, epoch, uptime }` at health.ts:13-18, matching API expectation of `{ healthy: boolean, epoch: number }`
+- **Location:** `tee-worker/src/routes/health.ts:13-17` returns `{ healthy, mode, epoch, uptime }` matching `apps/api/src/tee/tee.service.ts:71` expectation
 - **Description:** The health endpoint doesn't return `healthy` or `epoch` fields. `data.healthy` will be `undefined` (falsy) and `data.epoch` will be `undefined`. When used in `initializeFromTee()`, `getPublicKey(undefined)` would be called.
 - **Impact:** TEE initialization will either fail or store keys for an undefined epoch. `getHealthStats()` would always report `teeHealthy` as falsy even when the TEE is up.
 - **Recommendation:** Update health endpoint to return expected shape, including the epoch:
@@ -478,9 +481,9 @@ Based on project security rules (CLAUDE.md):
 
 | Priority | Recommendation                                                      | Effort | Finding |
 | -------- | ------------------------------------------------------------------- | ------ | ------- |
-| P0       | Add currentEpoch/previousEpoch to republish entries                 | LOW    | C1      |
-| P0       | Fix hex/base64 encoding mismatch in public key retrieval            | LOW    | C2      |
-| P0       | Fix health endpoint response shape to include `healthy` and `epoch` | LOW    | H1      |
+| ~~P0~~   | ~~Add currentEpoch/previousEpoch to republish entries~~             | LOW    | C1 RESOLVED |
+| ~~P0~~   | ~~Fix hex/base64 encoding mismatch in public key retrieval~~        | LOW    | C2 RESOLVED |
+| ~~P0~~   | ~~Fix health endpoint response shape to include `healthy` and `epoch`~~ | LOW    | H1 RESOLVED |
 | P1       | Zero TEE epoch private keys after ECIES decrypt                     | MEDIUM | H2      |
 | P1       | Enforce CVM mode in production (reject simulator)                   | LOW    | H3      |
 | P1       | Document libp2p key object limitation                               | LOW    | H4      |
@@ -492,7 +495,7 @@ Based on project security rules (CLAUDE.md):
 
 ## Next Steps
 
-1. **Immediate (P0):** Fix C1, C2, H1 -- these are integration bugs that prevent the TEE republishing system from working at all
+1. **~~Immediate (P0):~~ RESOLVED:** C1, C2, H1 all verified fixed in codebase (2026-02-10)
 2. **Before deployment (P1):** Address H2, H3, H4 -- these are security hardening items
 3. **Backlog (P2/P3):** Address M1-M4, L1-L3 -- these are defense-in-depth improvements
 

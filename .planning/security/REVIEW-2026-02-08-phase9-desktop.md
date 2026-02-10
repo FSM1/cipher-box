@@ -189,9 +189,10 @@ None found.
 **Description:** `key_bytes: [u8; 32]` stack copy of Ed25519 private key is not zeroized (the `SigningKey` itself IS auto-zeroized via the `zeroize` feature).
 **Recommendation:** Call `key_bytes.zeroize()` after creating `SigningKey`.
 
-### L-6: IPNS Sequence Number Fallback to 0 on Resolve Failure
+### L-6: IPNS Sequence Number Fallback to 0 on Resolve Failure — RESOLVED
 
 **Severity:** LOW (but HIGH data integrity impact)
+**Status:** RESOLVED — Added `PublishCoordinator` with monotonic sequence cache and per-folder tokio::sync::Mutex. All 3 publish paths updated: `spawn_metadata_publish`, file upload release, and mkdir. Resolve failures now use cached seq or return error (never fallback to 0).
 **Location:** `apps/desktop/src-tauri/src/fuse/operations.rs:1141-1147`
 **Description:** When IPNS resolve fails, sequence falls back to 0. Publishing with seq=1 when current is seq=100 could cause metadata rollback. Concurrent publishes can also race on the same sequence number.
 **Impact:** Silent data loss (overwrites), metadata rollback to stale state.
@@ -285,7 +286,7 @@ No known CVEs in any dependency versions.
 | P1       | Add token prefix column for O(1) refresh token lookup                            | MEDIUM | M-1                | DONE       |
 | P2       | Implement permission checking in `access()` callback                             | MEDIUM | H-4                | DONE       |
 | P2       | Add `@UseGuards(ThrottlerGuard)` to AuthController                               | LOW    | L-1                | Backlogged |
-| P2       | Serialize IPNS sequence operations per folder; never fall back to seq=0          | MEDIUM | L-6                | Backlogged |
+| ~~P2~~   | ~~Serialize IPNS sequence operations per folder; never fall back to seq=0~~      | MEDIUM | L-6                | DONE       |
 | P3       | Remove `eprintln!(">>>` debug lines before merge                                 | LOW    | L-3                | Backlogged |
 | P3       | URL-encode query parameters in Rust API client                                   | LOW    | L-2                | Backlogged |
 | P3       | Consolidate `clear_keys()` to single lock acquisition per field                  | LOW    | M-4                | DONE       |
