@@ -60,16 +60,16 @@ export function useDropUpload() {
             );
           return false;
         }
+      }
 
-        // Check for duplicates within batch
-        const batchNames = new Set<string>();
-        for (const f of files) {
-          if (batchNames.has(f.name)) {
-            useUploadStore.getState().setError(`Duplicate file name in selection: ${f.name}`);
-            return false;
-          }
-          batchNames.add(f.name);
+      // Check for duplicates within batch (independent of folder cache)
+      const batchNames = new Set<string>();
+      for (const f of files) {
+        if (batchNames.has(f.name)) {
+          useUploadStore.getState().setError(`Duplicate file name in selection: ${f.name}`);
+          return false;
         }
+        batchNames.add(f.name);
       }
 
       let uploadedFiles: UploadedFile[] | undefined;
@@ -98,7 +98,9 @@ export function useDropUpload() {
 
           // Clean up orphaned IPFS pins if upload succeeded but registration failed
           if (uploadedFiles?.length) {
-            uploadedFiles.forEach((f) => unpinFromIpfs(f.cid).catch(() => {}));
+            for (const f of uploadedFiles) {
+              void unpinFromIpfs(f.cid).catch(() => {});
+            }
             useQuotaStore.getState().fetchQuota();
           }
         }
