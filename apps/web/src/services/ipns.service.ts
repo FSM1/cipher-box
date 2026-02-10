@@ -128,7 +128,7 @@ export async function resolveIpnsRecord(
   } catch (error) {
     // 404 means IPNS name not found - return null
     // Other errors should propagate (including signature verification failures)
-    if (error instanceof Error && error.message.includes('404')) {
+    if (error instanceof Error && (error as Error & { status?: number }).status === 404) {
       return null;
     }
     throw error;

@@ -202,23 +202,33 @@ describe('parseIpnsRecord', () => {
       return new Uint8Array([0x08, 0x01, 0x12, 0x20, ...rawKey]);
     }
 
-    it('should parse signatureV2 (field 8)', () => {
+    it('should parse signatureV2 (field 8) when all sig fields present', () => {
+      const rawKey = new Uint8Array(32).fill(0x42);
+      const wrappedKey = buildLibp2pEd25519PubKey(rawKey);
       const sig = new Uint8Array(64).fill(0xab);
+      const data = new Uint8Array(32).fill(0xcd);
       const buf = new Uint8Array([
         ...encodeLengthDelimited(1, new TextEncoder().encode('/ipfs/QmSig')),
         ...encodeVarintField(5, 1n),
+        ...encodeLengthDelimited(7, wrappedKey),
         ...encodeLengthDelimited(8, sig),
+        ...encodeLengthDelimited(9, data),
       ]);
       const result = parseIpnsRecord(buf);
 
       expect(result.signatureV2).toEqual(sig);
     });
 
-    it('should parse data (field 9)', () => {
+    it('should parse data (field 9) when all sig fields present', () => {
+      const rawKey = new Uint8Array(32).fill(0x42);
+      const wrappedKey = buildLibp2pEd25519PubKey(rawKey);
+      const sig = new Uint8Array(64).fill(0xab);
       const data = new Uint8Array([0xc0, 0xc1, 0xc2, 0xc3]);
       const buf = new Uint8Array([
         ...encodeLengthDelimited(1, new TextEncoder().encode('/ipfs/QmData')),
         ...encodeVarintField(5, 2n),
+        ...encodeLengthDelimited(7, wrappedKey),
+        ...encodeLengthDelimited(8, sig),
         ...encodeLengthDelimited(9, data),
       ]);
       const result = parseIpnsRecord(buf);
@@ -229,40 +239,57 @@ describe('parseIpnsRecord', () => {
     it('should extract raw Ed25519 pubKey from libp2p-wrapped field 7', () => {
       const rawKey = new Uint8Array(32).fill(0x42);
       const wrappedKey = buildLibp2pEd25519PubKey(rawKey);
+      const sig = new Uint8Array(64).fill(0xab);
+      const data = new Uint8Array(32).fill(0xcd);
       const buf = new Uint8Array([
         ...encodeLengthDelimited(1, new TextEncoder().encode('/ipfs/QmKey')),
         ...encodeVarintField(5, 3n),
         ...encodeLengthDelimited(7, wrappedKey),
+        ...encodeLengthDelimited(8, sig),
+        ...encodeLengthDelimited(9, data),
       ]);
       const result = parseIpnsRecord(buf);
 
       expect(result.pubKey).toEqual(rawKey);
     });
 
-    it('should return undefined pubKey for non-Ed25519 wrapped key', () => {
+    it('should drop all sig fields when pubKey extraction fails (non-Ed25519 key)', () => {
       // Wrong prefix — not a standard libp2p Ed25519 key
       const badKey = new Uint8Array(36).fill(0xff);
+      const sig = new Uint8Array(64).fill(0xaa);
+      const data = new Uint8Array(32).fill(0xbb);
       const buf = new Uint8Array([
         ...encodeLengthDelimited(1, new TextEncoder().encode('/ipfs/QmBadKey')),
         ...encodeVarintField(5, 1n),
         ...encodeLengthDelimited(7, badKey),
+        ...encodeLengthDelimited(8, sig),
+        ...encodeLengthDelimited(9, data),
       ]);
       const result = parseIpnsRecord(buf);
 
+      // All-or-nothing: pubKey failed so all sig fields dropped
       expect(result.pubKey).toBeUndefined();
+      expect(result.signatureV2).toBeUndefined();
+      expect(result.data).toBeUndefined();
     });
 
-    it('should return undefined pubKey for wrong-length wrapped key', () => {
+    it('should drop all sig fields when wrapped key has wrong length', () => {
       // Too short (20 bytes instead of 36)
       const shortKey = new Uint8Array([0x08, 0x01, 0x12, 0x20, ...new Uint8Array(16)]);
+      const sig = new Uint8Array(64).fill(0xcc);
+      const data = new Uint8Array(32).fill(0xdd);
       const buf = new Uint8Array([
         ...encodeLengthDelimited(1, new TextEncoder().encode('/ipfs/QmShort')),
         ...encodeVarintField(5, 1n),
         ...encodeLengthDelimited(7, shortKey),
+        ...encodeLengthDelimited(8, sig),
+        ...encodeLengthDelimited(9, data),
       ]);
       const result = parseIpnsRecord(buf);
 
       expect(result.pubKey).toBeUndefined();
+      expect(result.signatureV2).toBeUndefined();
+      expect(result.data).toBeUndefined();
     });
 
     it('should parse all signature fields together', () => {

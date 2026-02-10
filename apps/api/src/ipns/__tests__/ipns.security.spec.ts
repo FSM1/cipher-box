@@ -451,8 +451,8 @@ describe('IPNS API Security Tests', () => {
       expect(response.status).toBe(404);
     });
 
-    it('should conditionally spread only present signature fields', async () => {
-      // Only signatureV2 present, data and pubKey absent
+    it('should drop partial signature fields (all-or-nothing bundle)', async () => {
+      // Only signatureV2 present, data and pubKey absent — should be dropped
       ipnsService.resolveRecord.mockResolvedValueOnce({
         cid: validCid,
         sequenceNumber: '3',
@@ -464,7 +464,7 @@ describe('IPNS API Security Tests', () => {
         .set('Authorization', 'Bearer valid-token');
 
       expect(response.status).toBe(200);
-      expect(response.body.signatureV2).toBe('c2lnbmF0dXJl');
+      expect(response.body.signatureV2).toBeUndefined();
       expect(response.body.data).toBeUndefined();
       expect(response.body.pubKey).toBeUndefined();
     });
