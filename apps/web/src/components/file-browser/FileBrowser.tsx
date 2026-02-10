@@ -1,10 +1,11 @@
-import { useState, useCallback, type DragEvent, type MouseEvent } from 'react';
+import { useState, useCallback, useRef, type DragEvent, type MouseEvent } from 'react';
 import type { FolderChild, FileEntry } from '@cipherbox/crypto';
 import { useFolderNavigation } from '../../hooks/useFolderNavigation';
 import { useFolder } from '../../hooks/useFolder';
 import { useFileDownload } from '../../hooks/useFileDownload';
 import { useContextMenu } from '../../hooks/useContextMenu';
 import { useSyncPolling } from '../../hooks/useSyncPolling';
+import { useDropUpload } from '../../hooks/useDropUpload';
 import { useVaultStore } from '../../stores/vault.store';
 import { useFolderStore } from '../../stores/folder.store';
 import { useSyncStore } from '../../stores/sync.store';
@@ -79,6 +80,9 @@ export function FileBrowser() {
   // File download
   const { download, isDownloading } = useFileDownload();
 
+  // External file drop upload
+  const { handleFileDrop } = useDropUpload();
+
   // Context menu state
   const contextMenu = useContextMenu();
 
@@ -136,6 +140,85 @@ export function FileBrowser() {
 
   // Start sync polling (30s interval, pauses when backgrounded/offline)
   useSyncPolling(handleSync);
+
+  // External drag state — tracks when files from OS are being dragged over
+  const [isDraggingExternal, setIsDraggingExternal] = useState(false);
+  const dragCounterRef = useRef(0);
+
+  /**
+   * Detect external file drag entering the content area.
+   * Uses a counter to handle nested dragenter/dragleave events correctly.
+   */
+  const handleContentDragEnter = useCallback((e: DragEvent) => {
+    // Only respond to external file drags (not internal app drags)
+    if (
+      e.dataTransfer.types.includes('Files') &&
+      !e.dataTransfer.types.includes('application/json')
+    ) {
+      dragCounterRef.current += 1;
+      if (dragCounterRef.current === 1) {
+        setIsDraggingExternal(true);
+      }
+    }
+  }, []);
+
+  const handleContentDragOver = useCallback((e: DragEvent) => {
+    if (
+      e.dataTransfer.types.includes('Files') &&
+      !e.dataTransfer.types.includes('application/json')
+    ) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  }, []);
+
+  const handleContentDragLeave = useCallback((e: DragEvent) => {
+    if (
+      e.dataTransfer.types.includes('Files') &&
+      !e.dataTransfer.types.includes('application/json')
+    ) {
+      dragCounterRef.current -= 1;
+      if (dragCounterRef.current <= 0) {
+        dragCounterRef.current = 0;
+        setIsDraggingExternal(false);
+      }
+    }
+  }, []);
+
+  /**
+   * Catch-all drop handler for the content area.
+   * If files from OS are dropped on general area (not intercepted by a child),
+   * upload them to the current folder.
+   */
+  const handleContentDrop = useCallback(
+    (e: DragEvent) => {
+      dragCounterRef.current = 0;
+      setIsDraggingExternal(false);
+
+      // Only handle external file drops
+      if (!e.dataTransfer.files || e.dataTransfer.files.length === 0) return;
+      // Skip if this is an internal drag (has JSON data)
+      if (e.dataTransfer.types.includes('application/json')) return;
+
+      e.preventDefault();
+      const files = Array.from(e.dataTransfer.files);
+      handleFileDrop(files, currentFolderId);
+    },
+    [handleFileDrop, currentFolderId]
+  );
+
+  /**
+   * Handle external file drops targeting a specific folder.
+   * Called by FileListItem (folder rows) and Breadcrumbs.
+   */
+  const handleExternalFileDrop = useCallback(
+    (files: File[], targetFolderId: string) => {
+      dragCounterRef.current = 0;
+      setIsDraggingExternal(false);
+      handleFileDrop(files, targetFolderId);
+    },
+    [handleFileDrop]
+  );
 
   // Selection state (single selection per CONTEXT.md)
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -330,8 +413,21 @@ export function FileBrowser() {
       ? `Are you sure you want to delete "${confirmDialog.item?.name}"? This will also delete all files and subfolders inside. This cannot be undone.`
       : `Are you sure you want to delete "${confirmDialog.item?.name}"? This cannot be undone.`;
 
+  const contentClassName = [
+    'file-browser-content',
+    isDraggingExternal ? 'file-browser-content--drag-active' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
   return (
-    <div className="file-browser-content">
+    <div
+      className={contentClassName}
+      onDragEnter={handleContentDragEnter}
+      onDragOver={handleContentDragOver}
+      onDragLeave={handleContentDragLeave}
+      onDrop={handleContentDrop}
+    >
       {/* Toolbar with breadcrumbs and actions */}
       <div className="file-browser-toolbar">
         <Breadcrumbs
@@ -339,6 +435,7 @@ export function FileBrowser() {
           onNavigate={handleNavigate}
           onNavigateUp={navigateUp}
           onDrop={handleDropOnFolder}
+          onExternalFileDrop={handleExternalFileDrop}
         />
         <div className="file-browser-actions">
           <button
@@ -397,6 +494,7 @@ export function FileBrowser() {
           onContextMenu={handleContextMenu}
           onDragStart={handleDragStart}
           onDropOnFolder={handleDropOnFolder}
+          onExternalFileDrop={handleExternalFileDrop}
         />
       )}
 

@@ -15,6 +15,8 @@ type BreadcrumbsProps = {
     sourceParentId: string,
     destFolderId: string
   ) => void;
+  /** Callback when external files are dropped onto a breadcrumb segment */
+  onExternalFileDrop?: (files: File[], destFolderId: string) => void;
 };
 
 /**
@@ -46,7 +48,12 @@ type BreadcrumbsProps = {
  * }
  * ```
  */
-export function Breadcrumbs({ breadcrumbs, onNavigate, onDrop }: BreadcrumbsProps) {
+export function Breadcrumbs({
+  breadcrumbs,
+  onNavigate,
+  onDrop,
+  onExternalFileDrop,
+}: BreadcrumbsProps) {
   // Track which breadcrumb is being dragged over
   const [dragOverId, setDragOverId] = useState<string | null>(null);
 
@@ -75,16 +82,25 @@ export function Breadcrumbs({ breadcrumbs, onNavigate, onDrop }: BreadcrumbsProp
 
   /**
    * Handle drag over breadcrumb segment.
+   * Accepts both internal drags (move) and external file drags (upload).
    */
   const handleDragOver = useCallback(
     (e: DragEvent, folderId: string) => {
-      if (!onDrop) return;
+      if (!onDrop && !onExternalFileDrop) return;
       e.preventDefault();
       e.stopPropagation();
-      e.dataTransfer.dropEffect = 'move';
+
+      if (
+        e.dataTransfer.types.includes('Files') &&
+        !e.dataTransfer.types.includes('application/json')
+      ) {
+        e.dataTransfer.dropEffect = 'copy';
+      } else {
+        e.dataTransfer.dropEffect = 'move';
+      }
       setDragOverId(folderId);
     },
-    [onDrop]
+    [onDrop, onExternalFileDrop]
   );
 
   /**
@@ -98,6 +114,7 @@ export function Breadcrumbs({ breadcrumbs, onNavigate, onDrop }: BreadcrumbsProp
 
   /**
    * Handle drop on breadcrumb segment.
+   * Routes external files to upload, internal items to move.
    */
   const handleDrop = useCallback(
     (e: DragEvent, destFolderId: string) => {
@@ -105,6 +122,17 @@ export function Breadcrumbs({ breadcrumbs, onNavigate, onDrop }: BreadcrumbsProp
       e.stopPropagation();
       setDragOverId(null);
 
+      // Check for external file drop first
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        const jsonData = e.dataTransfer.getData('application/json');
+        if (!jsonData && onExternalFileDrop) {
+          const files = Array.from(e.dataTransfer.files);
+          onExternalFileDrop(files, destFolderId);
+          return;
+        }
+      }
+
+      // Internal move operation
       if (!onDrop) return;
 
       try {
@@ -128,7 +156,7 @@ export function Breadcrumbs({ breadcrumbs, onNavigate, onDrop }: BreadcrumbsProp
         // Invalid drag data, ignore
       }
     },
-    [onDrop]
+    [onDrop, onExternalFileDrop]
   );
 
   // Handle empty breadcrumbs
@@ -157,9 +185,11 @@ export function Breadcrumbs({ breadcrumbs, onNavigate, onDrop }: BreadcrumbsProp
               className={`breadcrumb-item ${isDragOver ? 'breadcrumb-item--drag-over' : ''} ${isLast ? 'breadcrumb-item--current' : ''}`}
               onClick={() => handleClick(crumb.id)}
               onKeyDown={(e) => handleKeyDown(e, crumb.id)}
-              onDragOver={onDrop ? (e) => handleDragOver(e, crumb.id) : undefined}
-              onDragLeave={onDrop ? handleDragLeave : undefined}
-              onDrop={onDrop ? (e) => handleDrop(e, crumb.id) : undefined}
+              onDragOver={
+                onDrop || onExternalFileDrop ? (e) => handleDragOver(e, crumb.id) : undefined
+              }
+              onDragLeave={onDrop || onExternalFileDrop ? handleDragLeave : undefined}
+              onDrop={onDrop || onExternalFileDrop ? (e) => handleDrop(e, crumb.id) : undefined}
               aria-current={isLast ? 'page' : undefined}
               data-folder-id={crumb.id}
             >

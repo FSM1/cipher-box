@@ -47,6 +47,14 @@
   flex-direction: column;
   height: 100%;
   background-color: var(--color-background);
+  position: relative;
+}
+
+/* External drag active state — shown when files from OS are dragged over */
+.file-browser-content--drag-active {
+  outline: 2px dashed var(--color-green-primary);
+  outline-offset: -2px;
+  background-color: rgba(0, 208, 132, 0.03);
 }
 
 .file-browser-toolbar {
