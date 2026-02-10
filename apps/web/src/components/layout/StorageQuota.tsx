@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { useAuthStore } from '../../stores/auth.store';
 import { useQuotaStore } from '../../stores/quota.store';
 
 /**
@@ -23,12 +24,18 @@ function formatBytes(bytes: number): string {
  */
 export function StorageQuota() {
   const { usedBytes, limitBytes, fetchQuota } = useQuotaStore();
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
-  // Fetch quota from backend on mount so the display reflects
+  // Fetch quota from backend once authenticated so the display reflects
   // actual usage (e.g. files uploaded in previous sessions).
+  // Guarded by isAuthenticated to avoid firing before session restoration
+  // completes — an unauthenticated request would race with the refresh
+  // token flow and could trigger an accidental logout.
   useEffect(() => {
-    fetchQuota();
-  }, [fetchQuota]);
+    if (isAuthenticated) {
+      fetchQuota();
+    }
+  }, [fetchQuota, isAuthenticated]);
 
   // Calculate percentage (avoid division by zero)
   const percentage = limitBytes > 0 ? (usedBytes / limitBytes) * 100 : 0;
