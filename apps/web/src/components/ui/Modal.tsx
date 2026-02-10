@@ -7,6 +7,8 @@ type ModalProps = {
   onClose?: () => void;
   children: ReactNode;
   title?: string;
+  /** Optional class applied to the backdrop for variant styling */
+  className?: string;
 };
 
 /**
@@ -19,7 +21,7 @@ type ModalProps = {
  * - Focus trap: prevents tab from leaving modal
  * - Accessible: aria-modal, role="dialog"
  */
-export function Modal({ open, onClose, children, title }: ModalProps) {
+export function Modal({ open, onClose, children, title, className }: ModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
   const previousActiveElement = useRef<Element | null>(null);
 
@@ -103,7 +105,10 @@ export function Modal({ open, onClose, children, title }: ModalProps) {
 
   return (
     <Portal>
-      <div className="modal-backdrop" onClick={handleBackdropClick}>
+      <div
+        className={`modal-backdrop${className ? ` ${className}` : ''}`}
+        onClick={handleBackdropClick}
+      >
         <div
           ref={modalRef}
           className="modal-container"

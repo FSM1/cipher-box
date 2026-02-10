@@ -3,6 +3,7 @@ import { useFolderStore } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import { useAuthStore } from '../stores/auth.store';
 import { unpinFromIpfs } from '../lib/api/ipfs';
+import { useQuotaStore } from '../stores/quota.store';
 import * as folderService from '../services/folder.service';
 import type { FolderNode } from '../stores/folder.store';
 import type { FolderEntry, FileEntry } from '@cipherbox/crypto';
@@ -509,6 +510,82 @@ export function useFolder() {
   );
 
   /**
+   * Update a file's content in-place (re-encrypt and replace CID).
+   *
+   * @param parentId - Parent folder ID ('root' or folder UUID)
+   * @param fileData - New file data after re-encryption
+   * @returns Resolves when the update is complete
+   */
+  const handleUpdateFile = useCallback(
+    async (
+      parentId: string,
+      fileData: {
+        fileId: string;
+        newCid: string;
+        newFileKeyEncrypted: string;
+        newFileIv: string;
+        newSize: number;
+      }
+    ): Promise<void> => {
+      setState({ isLoading: true, error: null });
+      try {
+        const folders = useFolderStore.getState().folders;
+        const vault = useVaultStore.getState();
+
+        // Get parent folder state
+        const parentFolder =
+          parentId === 'root' ? getRootFolderState(vault, folders) : folders[parentId];
+
+        if (!parentFolder) {
+          throw new Error('Parent folder not found or vault not initialized');
+        }
+
+        // Replace file in folder metadata
+        const { newSequenceNumber, oldCid } = await folderService.replaceFileInFolder({
+          fileId: fileData.fileId,
+          newCid: fileData.newCid,
+          newFileKeyEncrypted: fileData.newFileKeyEncrypted,
+          newFileIv: fileData.newFileIv,
+          newSize: fileData.newSize,
+          parentFolderState: parentFolder,
+        });
+
+        // Update local state with modified children
+        const updatedChildren = parentFolder.children.map((child) => {
+          if (child.type === 'file' && child.id === fileData.fileId) {
+            return {
+              ...child,
+              cid: fileData.newCid,
+              fileKeyEncrypted: fileData.newFileKeyEncrypted,
+              fileIv: fileData.newFileIv,
+              size: fileData.newSize,
+              modifiedAt: Date.now(),
+            };
+          }
+          return child;
+        });
+
+        const store = useFolderStore.getState();
+        store.updateFolderChildren(parentId, updatedChildren);
+        store.updateFolderSequence(parentId, newSequenceNumber);
+
+        // Unpin old CID fire-and-forget
+        unpinFromIpfs(oldCid).catch(() => {});
+
+        // Refresh quota
+        useQuotaStore.getState().fetchQuota();
+
+        setState({ isLoading: false, error: null });
+      } catch (err) {
+        const error = err instanceof Error ? err.message : 'Failed to update file';
+        setState({ isLoading: false, error });
+        throw err;
+      }
+    },
+    []
+  );
+
+  /**
    * Clear error state.
    */
   const clearError = useCallback(() => {
@@ -526,6 +603,7 @@ export function useFolder() {
     deleteItem: handleDelete,
     addFile: handleAddFile,
     addFiles: handleAddFiles,
+    updateFile: handleUpdateFile,
 
     // Utilities
     clearError,
