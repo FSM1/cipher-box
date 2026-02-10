@@ -102,7 +102,7 @@ Check if the task description involves UI work:
 # Note: This heuristic may produce false positives for tasks that mention UI terms
 # in non-UI contexts (e.g., "update button text in config"). The user can always
 # select "Skip design - just implement" if the detection is incorrect.
-if echo "$DESCRIPTION" | grep -iqE "ui|style|design|layout|component|page|view|button|form|modal|dialog|sidebar|header|footer|nav|menu|card|list|table|icon|color|font|spacing|responsive|mobile|css|visual|appearance"; then
+if echo "$DESCRIPTION" | grep -iqE "ui|ux|style|restyle|design|layout|component|page|view|screen|display|button|form|modal|dialog|popover|tooltip|toast|dropdown|sidebar|header|footer|nav|menu|card|list|table|grid|icon|badge|avatar|breadcrumb|tab|color|font|typography|spacing|padding|margin|responsive|mobile|css|visual|appearance|interface|frontend|dashboard|browser|drag|drop|dnd|hover|focus|animation|transition|overlay|scroll|carousel|interaction|gesture|click|swipe|resize|collapse|expand|accordion|input|checkbox|radio|select|slider|toggle|switch|picker|upload|panel|drawer|toolbar|statusbar|banner|alert|notification|snackbar|thumbnail|preview|placeholder|skeleton|spinner|progress|loading"; then
   IS_UI_TASK=true
 else
   IS_UI_TASK=false
@@ -551,6 +551,7 @@ If the quick task involved non-obvious discoveries, gotchas, or useful patterns,
 ```
 
 If created, commit it:
+
 ```bash
 git add .learnings/
 git commit -m "docs(learnings): quick-${next_num} - {brief description}"

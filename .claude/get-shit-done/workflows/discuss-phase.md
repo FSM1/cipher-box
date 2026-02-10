@@ -502,7 +502,7 @@ After analyzing the phase, determine if it involves UI work.
 # 2. Checking for existing design files before assuming UI work is needed
 # 3. Allowing "Skip mockups" option in the design generation step
 PHASE_TEXT=$(grep -i "Phase ${PHASE}:" .planning/ROADMAP.md)
-if echo "$PHASE_TEXT" | grep -iqE "ui|restyle|design|layout|component|page|view|browser|dashboard|visual|interface|frontend|display|screen"; then
+if echo "$PHASE_TEXT" | grep -iqE "ui|ux|style|restyle|design|layout|component|page|view|screen|display|button|form|modal|dialog|popover|tooltip|toast|dropdown|sidebar|header|footer|nav|menu|card|list|table|grid|icon|badge|avatar|breadcrumb|tab|color|font|typography|spacing|padding|margin|responsive|mobile|css|visual|appearance|interface|frontend|dashboard|browser|drag|drop|dnd|hover|focus|animation|transition|overlay|scroll|carousel|interaction|gesture|click|swipe|resize|collapse|expand|accordion|input|checkbox|radio|select|slider|toggle|switch|picker|upload|panel|drawer|toolbar|statusbar|banner|alert|notification|snackbar|thumbnail|preview|placeholder|skeleton|spinner|progress|loading"; then
   IS_UI_PHASE=true
 else
   IS_UI_PHASE=false
