@@ -7,7 +7,15 @@ import { useQuotaStore } from '../stores/quota.store';
 import { useFolderStore } from '../stores/folder.store';
 import type { UploadedFile } from '../services/upload.service';
 
-const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per FILE-01
+export const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per FILE-01
+
+/**
+ * Check whether a drag event carries external files from the OS (Finder/Explorer)
+ * rather than an internal app drag (which sets application/json).
+ */
+export function isExternalFileDrag(dataTransfer: DataTransfer): boolean {
+  return dataTransfer.types.includes('Files') && !dataTransfer.types.includes('application/json');
+}
 
 /**
  * Hook for handling external file drops (from Finder/Explorer) anywhere in the app.

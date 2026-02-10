@@ -5,7 +5,7 @@ import { useFolder } from '../../hooks/useFolder';
 import { useFileDownload } from '../../hooks/useFileDownload';
 import { useContextMenu } from '../../hooks/useContextMenu';
 import { useSyncPolling } from '../../hooks/useSyncPolling';
-import { useDropUpload } from '../../hooks/useDropUpload';
+import { useDropUpload, isExternalFileDrag } from '../../hooks/useDropUpload';
 import { useVaultStore } from '../../stores/vault.store';
 import { useFolderStore } from '../../stores/folder.store';
 import { useSyncStore } from '../../stores/sync.store';
@@ -150,11 +150,7 @@ export function FileBrowser() {
    * Uses a counter to handle nested dragenter/dragleave events correctly.
    */
   const handleContentDragEnter = useCallback((e: DragEvent) => {
-    // Only respond to external file drags (not internal app drags)
-    if (
-      e.dataTransfer.types.includes('Files') &&
-      !e.dataTransfer.types.includes('application/json')
-    ) {
+    if (isExternalFileDrag(e.dataTransfer)) {
       dragCounterRef.current += 1;
       if (dragCounterRef.current === 1) {
         setIsDraggingExternal(true);
@@ -163,20 +159,14 @@ export function FileBrowser() {
   }, []);
 
   const handleContentDragOver = useCallback((e: DragEvent) => {
-    if (
-      e.dataTransfer.types.includes('Files') &&
-      !e.dataTransfer.types.includes('application/json')
-    ) {
+    if (isExternalFileDrag(e.dataTransfer)) {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
     }
   }, []);
 
   const handleContentDragLeave = useCallback((e: DragEvent) => {
-    if (
-      e.dataTransfer.types.includes('Files') &&
-      !e.dataTransfer.types.includes('application/json')
-    ) {
+    if (isExternalFileDrag(e.dataTransfer)) {
       dragCounterRef.current -= 1;
       if (dragCounterRef.current <= 0) {
         dragCounterRef.current = 0;
@@ -197,8 +187,7 @@ export function FileBrowser() {
 
       // Only handle external file drops
       if (!e.dataTransfer.files || e.dataTransfer.files.length === 0) return;
-      // Skip if this is an internal drag (has JSON data)
-      if (e.dataTransfer.types.includes('application/json')) return;
+      if (!isExternalFileDrag(e.dataTransfer)) return;
 
       e.preventDefault();
       const files = Array.from(e.dataTransfer.files);
