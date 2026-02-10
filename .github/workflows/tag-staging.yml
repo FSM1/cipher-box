@@ -1,0 +1,50 @@
+name: Tag Staging Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to deploy (e.g. v0.3.0)'
+        required: true
+        type: string
+
+jobs:
+  tag-staging:
+    name: Create Staging Tag
+    runs-on: ubuntu-latest
+    environment: staging-approval
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release tag exists
+        run: |
+          if ! git rev-parse "refs/tags/${{ inputs.release_tag }}" >/dev/null 2>&1; then
+            echo "::error::Tag '${{ inputs.release_tag }}' does not exist"
+            exit 1
+          fi
+
+      - name: Calculate next RC number
+        id: rc
+        run: |
+          TAG="${{ inputs.release_tag }}"
+          # Find existing staging RCs for this version
+          LAST_RC=$(git tag -l "${TAG}-staging-rc-*" | sed "s/${TAG}-staging-rc-//" | sort -n | tail -1)
+          if [ -z "$LAST_RC" ]; then
+            NEXT_RC=1
+          else
+            NEXT_RC=$((LAST_RC + 1))
+          fi
+          STAGING_TAG="${TAG}-staging-rc-${NEXT_RC}"
+          echo "staging_tag=${STAGING_TAG}" >> "$GITHUB_OUTPUT"
+          echo "## Staging Tag" >> "$GITHUB_STEP_SUMMARY"
+          echo "Creating **${STAGING_TAG}** from ${TAG}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create and push staging tag
+        run: |
+          git tag "${{ steps.rc.outputs.staging_tag }}" "${{ inputs.release_tag }}"
+          git push origin "${{ steps.rc.outputs.staging_tag }}"
+          echo "::notice::Created tag ${{ steps.rc.outputs.staging_tag }} — deploy-staging workflow will trigger automatically"
