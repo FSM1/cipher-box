@@ -1,7 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useDropzone, FileRejection } from 'react-dropzone';
 import { useDropUpload, MAX_FILE_SIZE } from '../../hooks/useDropUpload';
-import { useFileUpload } from '../../hooks/useFileUpload';
 
 /**
  * Terminal-style ASCII art for empty state using box-drawing characters.
@@ -18,8 +17,7 @@ type EmptyStateProps = {
 };
 
 export function EmptyState({ folderId }: EmptyStateProps) {
-  const { handleFileDrop } = useDropUpload();
-  const { isUploading } = useFileUpload();
+  const { handleFileDrop, isUploading } = useDropUpload();
   const [error, setError] = useState<string | null>(null);
 
   const handleDrop = useCallback(
@@ -40,11 +38,7 @@ export function EmptyState({ folderId }: EmptyStateProps) {
 
       if (acceptedFiles.length === 0) return;
 
-      try {
-        await handleFileDrop(acceptedFiles, folderId);
-      } catch (err) {
-        setError((err as Error).message);
-      }
+      await handleFileDrop(acceptedFiles, folderId);
     },
     [handleFileDrop, folderId]
   );

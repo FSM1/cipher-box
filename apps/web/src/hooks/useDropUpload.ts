@@ -28,23 +28,23 @@ export function useDropUpload() {
   const { addFiles } = useFolder();
 
   const handleFileDrop = useCallback(
-    async (files: File[], folderId: string) => {
+    async (files: File[], folderId: string): Promise<boolean> => {
       // Filter out oversized files
       const oversized = files.filter((f) => f.size > MAX_FILE_SIZE);
       if (oversized.length > 0) {
         useUploadStore
           .getState()
           .setError(`Files exceed 100MB limit: ${oversized.map((f) => f.name).join(', ')}`);
-        return;
+        return false;
       }
 
-      if (files.length === 0) return;
+      if (files.length === 0) return false;
 
       // Check quota
       const totalSize = files.reduce((sum, f) => sum + f.size, 0);
       if (!canUpload(totalSize)) {
         useUploadStore.getState().setError('Not enough storage space for these files');
-        return;
+        return false;
       }
 
       // Check for duplicate names in target folder
@@ -58,7 +58,7 @@ export function useDropUpload() {
             .setError(
               `File${duplicates.length > 1 ? 's' : ''} already exist${duplicates.length === 1 ? 's' : ''} in this folder: ${duplicates.map((f) => f.name).join(', ')}`
             );
-          return;
+          return false;
         }
 
         // Check for duplicates within batch
@@ -66,7 +66,7 @@ export function useDropUpload() {
         for (const f of files) {
           if (batchNames.has(f.name)) {
             useUploadStore.getState().setError(`Duplicate file name in selection: ${f.name}`);
-            return;
+            return false;
           }
           batchNames.add(f.name);
         }
@@ -90,6 +90,7 @@ export function useDropUpload() {
         );
 
         useUploadStore.getState().setSuccess();
+        return true;
       } catch (err) {
         const message = (err as Error).message;
         if (message !== 'Upload cancelled by user') {
@@ -101,6 +102,7 @@ export function useDropUpload() {
             useQuotaStore.getState().fetchQuota();
           }
         }
+        return false;
       }
     },
     [upload, canUpload, addFiles]

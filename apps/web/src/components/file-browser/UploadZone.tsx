@@ -1,7 +1,6 @@
 import { useCallback, useState } from 'react';
 import { useDropzone, FileRejection } from 'react-dropzone';
 import { useDropUpload, MAX_FILE_SIZE } from '../../hooks/useDropUpload';
-import { useFileUpload } from '../../hooks/useFileUpload';
 import '../../styles/upload.css';
 
 type UploadZoneProps = {
@@ -28,8 +27,7 @@ type UploadZoneProps = {
  * ```
  */
 export function UploadZone({ folderId, onUploadComplete }: UploadZoneProps) {
-  const { handleFileDrop } = useDropUpload();
-  const { isUploading } = useFileUpload();
+  const { handleFileDrop, isUploading } = useDropUpload();
   const [error, setError] = useState<string | null>(null);
 
   const handleDrop = useCallback(
@@ -51,11 +49,9 @@ export function UploadZone({ folderId, onUploadComplete }: UploadZoneProps) {
 
       if (acceptedFiles.length === 0) return;
 
-      try {
-        await handleFileDrop(acceptedFiles, folderId);
+      const success = await handleFileDrop(acceptedFiles, folderId);
+      if (success) {
         onUploadComplete?.();
-      } catch (err) {
-        setError((err as Error).message);
       }
     },
     [handleFileDrop, folderId, onUploadComplete]
