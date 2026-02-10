@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { FolderChild, FileEntry, FolderEntry } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useFolderStore } from '../../stores/folder.store';
@@ -20,12 +20,18 @@ type DetailsDialogProps = {
  */
 function CopyableValue({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    };
+  }, []);
 
   const handleCopy = useCallback(async () => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
     try {
       await navigator.clipboard.writeText(value);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
     } catch {
       // Fallback for older browsers
       const textarea = document.createElement('textarea');
@@ -36,9 +42,9 @@ function CopyableValue({ value }: { value: string }) {
       textarea.select();
       document.execCommand('copy');
       document.body.removeChild(textarea);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
     }
+    setCopied(true);
+    timeoutRef.current = setTimeout(() => setCopied(false), 2000);
   }, [value]);
 
   return (
@@ -48,7 +54,8 @@ function CopyableValue({ value }: { value: string }) {
         type="button"
         className={`details-copy-btn ${copied ? 'details-copy-btn--copied' : ''}`}
         onClick={handleCopy}
-        title="Copy to clipboard"
+        aria-label={copied ? 'Copied to clipboard' : 'Copy to clipboard'}
+        aria-pressed={copied}
       >
         {copied ? 'ok' : 'cp'}
       </button>
@@ -95,7 +102,7 @@ function FileDetails({
       </DetailRow>
 
       {/* Crypto section */}
-      <div className="details-section-header">// encryption</div>
+      <div className="details-section-header">{'// encryption'}</div>
 
       <DetailRow label="Content CID">
         <CopyableValue value={item.cid} />
@@ -107,7 +114,7 @@ function FileDetails({
         ) : metadataCid ? (
           <CopyableValue value={metadataCid} />
         ) : (
-          <span className="details-value--dim">unavailable</span>
+          <span className="details-value details-value--dim">unavailable</span>
         )}
       </DetailRow>
 
@@ -120,13 +127,13 @@ function FileDetails({
       </DetailRow>
 
       <DetailRow label="Wrapped File Key">
-        <span className="details-value--redacted">
+        <span className="details-value details-value--redacted">
           {item.fileKeyEncrypted.slice(0, 16)}...{item.fileKeyEncrypted.slice(-8)} (ECIES-wrapped)
         </span>
       </DetailRow>
 
       {/* Timestamps */}
-      <div className="details-section-header">// timestamps</div>
+      <div className="details-section-header">{'// timestamps'}</div>
 
       <DetailRow label="Created">
         <span className="details-value">{formatDate(item.createdAt)}</span>
@@ -153,7 +160,7 @@ function FolderDetails({
   metadataCid: string | null;
   metadataLoading: boolean;
   sequenceNumber: bigint | null;
-  childCount: number;
+  childCount: number | null;
 }) {
   return (
     <div className="details-rows">
@@ -166,13 +173,17 @@ function FolderDetails({
       </DetailRow>
 
       <DetailRow label="Contents">
-        <span className="details-value">
-          {childCount} {childCount === 1 ? 'item' : 'items'}
-        </span>
+        {childCount !== null ? (
+          <span className="details-value">
+            {childCount} {childCount === 1 ? 'item' : 'items'}
+          </span>
+        ) : (
+          <span className="details-value details-value--dim">unknown</span>
+        )}
       </DetailRow>
 
       {/* IPNS section */}
-      <div className="details-section-header">// ipns</div>
+      <div className="details-section-header">{'// ipns'}</div>
 
       <DetailRow label="IPNS Name">
         <CopyableValue value={item.ipnsName} />
@@ -184,7 +195,7 @@ function FolderDetails({
         ) : metadataCid ? (
           <CopyableValue value={metadataCid} />
         ) : (
-          <span className="details-value--dim">unavailable</span>
+          <span className="details-value details-value--dim">unavailable</span>
         )}
       </DetailRow>
 
@@ -195,24 +206,24 @@ function FolderDetails({
       </DetailRow>
 
       {/* Crypto section */}
-      <div className="details-section-header">// encryption</div>
+      <div className="details-section-header">{'// encryption'}</div>
 
       <DetailRow label="Folder Key">
-        <span className="details-value--redacted">
+        <span className="details-value details-value--redacted">
           {item.folderKeyEncrypted.slice(0, 16)}...{item.folderKeyEncrypted.slice(-8)}{' '}
           (ECIES-wrapped)
         </span>
       </DetailRow>
 
       <DetailRow label="IPNS Private Key">
-        <span className="details-value--redacted">
+        <span className="details-value details-value--redacted">
           {item.ipnsPrivateKeyEncrypted.slice(0, 16)}...{item.ipnsPrivateKeyEncrypted.slice(-8)}{' '}
           (ECIES-wrapped)
         </span>
       </DetailRow>
 
       {/* Timestamps */}
-      <div className="details-section-header">// timestamps</div>
+      <div className="details-section-header">{'// timestamps'}</div>
 
       <DetailRow label="Created">
         <span className="details-value">{formatDate(item.createdAt)}</span>
@@ -256,7 +267,10 @@ export function DetailsDialog({ open, onClose, item, parentFolderId }: DetailsDi
 
     const ipnsName = item.type === 'folder' ? item.ipnsName : parentFolder?.ipnsName;
 
-    if (!ipnsName) return;
+    if (!ipnsName) {
+      setMetadataLoading(false);
+      return;
+    }
 
     let cancelled = false;
     setMetadataLoading(true);
@@ -297,7 +311,7 @@ export function DetailsDialog({ open, onClose, item, parentFolderId }: DetailsDi
           metadataCid={metadataCid}
           metadataLoading={metadataLoading}
           sequenceNumber={folderNode?.sequenceNumber ?? null}
-          childCount={folderNode?.children.length ?? 0}
+          childCount={folderNode ? folderNode.children.length : null}
         />
       )}
     </Modal>

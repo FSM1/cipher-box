@@ -107,6 +107,11 @@
   border-color: var(--color-border);
 }
 
+.details-copy-btn:focus-visible {
+  outline: 2px solid var(--color-green-primary);
+  outline-offset: 2px;
+}
+
 .details-copy-btn--copied {
   color: var(--color-green-primary);
   border-color: var(--color-green-primary);
