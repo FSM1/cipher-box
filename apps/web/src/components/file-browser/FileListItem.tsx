@@ -8,6 +8,7 @@ import {
 } from 'react';
 import type { FolderChild, FileEntry, FolderEntry } from '@cipherbox/crypto';
 import { formatBytes, formatDate } from '../../utils/format';
+import { isExternalFileDrag } from '../../hooks/useDropUpload';
 
 /**
  * Long press duration in milliseconds for touch context menu.
@@ -209,14 +210,7 @@ export function FileListItem({
       e.stopPropagation();
 
       // External files get 'copy' effect, internal moves get 'move'
-      if (
-        e.dataTransfer.types.includes('Files') &&
-        !e.dataTransfer.types.includes('application/json')
-      ) {
-        e.dataTransfer.dropEffect = 'copy';
-      } else {
-        e.dataTransfer.dropEffect = 'move';
-      }
+      e.dataTransfer.dropEffect = isExternalFileDrag(e.dataTransfer) ? 'copy' : 'move';
       setIsDragOver(true);
     },
     [item]

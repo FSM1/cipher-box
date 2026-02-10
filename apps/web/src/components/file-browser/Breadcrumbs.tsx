@@ -1,5 +1,6 @@
 import { Fragment, useState, useCallback, type DragEvent, type KeyboardEvent } from 'react';
 import type { Breadcrumb } from '../../hooks/useFolderNavigation';
+import { isExternalFileDrag } from '../../hooks/useDropUpload';
 
 type BreadcrumbsProps = {
   /** Breadcrumb trail from root to current folder */
@@ -90,14 +91,7 @@ export function Breadcrumbs({
       e.preventDefault();
       e.stopPropagation();
 
-      if (
-        e.dataTransfer.types.includes('Files') &&
-        !e.dataTransfer.types.includes('application/json')
-      ) {
-        e.dataTransfer.dropEffect = 'copy';
-      } else {
-        e.dataTransfer.dropEffect = 'move';
-      }
+      e.dataTransfer.dropEffect = isExternalFileDrag(e.dataTransfer) ? 'copy' : 'move';
       setDragOverId(folderId);
     },
     [onDrop, onExternalFileDrop]

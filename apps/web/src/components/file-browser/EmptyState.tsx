@@ -1,13 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useDropzone, FileRejection } from 'react-dropzone';
+import { useDropUpload, MAX_FILE_SIZE } from '../../hooks/useDropUpload';
 import { useFileUpload } from '../../hooks/useFileUpload';
-import { useFolder } from '../../hooks/useFolder';
-import { unpinFromIpfs } from '../../lib/api/ipfs';
-import { useUploadStore } from '../../stores/upload.store';
-import { useQuotaStore } from '../../stores/quota.store';
-import type { UploadedFile } from '../../services/upload.service';
-
-const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per FILE-01
 
 /**
  * Terminal-style ASCII art for empty state using box-drawing characters.
@@ -24,8 +18,8 @@ type EmptyStateProps = {
 };
 
 export function EmptyState({ folderId }: EmptyStateProps) {
-  const { upload, canUpload, isUploading } = useFileUpload();
-  const { addFiles } = useFolder();
+  const { handleFileDrop } = useDropUpload();
+  const { isUploading } = useFileUpload();
   const [error, setError] = useState<string | null>(null);
 
   const handleDrop = useCallback(
@@ -46,48 +40,13 @@ export function EmptyState({ folderId }: EmptyStateProps) {
 
       if (acceptedFiles.length === 0) return;
 
-      const totalSize = acceptedFiles.reduce((sum, f) => sum + f.size, 0);
-      if (!canUpload(totalSize)) {
-        setError('Not enough storage space for these files');
-        return;
-      }
-
-      let uploadedFiles: UploadedFile[] | undefined;
       try {
-        // Upload files to IPFS (sequential encrypt + upload per file)
-        uploadedFiles = await upload(acceptedFiles);
-
-        // Set registering status during batch folder metadata registration
-        useUploadStore.getState().setRegistering();
-
-        // Batch register all files in folder (single IPNS publish)
-        await addFiles(
-          folderId,
-          uploadedFiles.map((uploaded) => ({
-            cid: uploaded.cid,
-            wrappedKey: uploaded.wrappedKey,
-            iv: uploaded.iv,
-            originalName: uploaded.originalName,
-            originalSize: uploaded.originalSize,
-          }))
-        );
-
-        useUploadStore.getState().setSuccess();
+        await handleFileDrop(acceptedFiles, folderId);
       } catch (err) {
-        const message = (err as Error).message;
-        if (message !== 'Upload cancelled by user') {
-          useUploadStore.getState().setError(message);
-          setError(message);
-
-          // Clean up orphaned IPFS pins if upload succeeded but registration failed
-          if (uploadedFiles?.length) {
-            uploadedFiles.forEach((f) => unpinFromIpfs(f.cid).catch(() => {}));
-            useQuotaStore.getState().fetchQuota();
-          }
-        }
+        setError((err as Error).message);
       }
     },
-    [upload, canUpload, addFiles, folderId]
+    [handleFileDrop, folderId]
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
