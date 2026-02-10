@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-01-20)
 Phase: 9.1 of 11 (Environment Changes, DevOps & Staging Deployment)
 Plan: 6 of 6 in Phase 9.1 complete
 Status: Complete
-Last activity: 2026-02-10 - Completed quick task 006: Add file/folder details modal
+Last activity: 2026-02-10 - Completed quick task 007: Client-side IPNS signature validation
 
 Progress: [##########] 100% (69 of 69 plans)
 
@@ -257,14 +257,15 @@ Recent decisions affecting current work:
 | Multi-stage TEE worker Dockerfile builds from source   | 09.1-04 | CI builds without separate pre-build step; node user for security         |
 | curl-based Pinata directory upload in deploy workflow  | 09.1-04 | Portable, no CLI dependency; multipart form with CID capture              |
 | SCP then SSH pattern for VPS deployment                | 09.1-04 | Separates file transfer from service orchestration for clarity            |
+| Signature fields optional in resolve response DTO      | Q-007   | DB-cached fallback has no signature data; graceful degradation            |
+| Client verifies IPNS Ed25519 signature before CID use  | Q-007   | Closes metadata tampering attack vector (GitHub #71)                      |
 
 ### Pending Todos
 
-4 pending todo(s):
+3 pending todo(s):
 
 - `2026-01-23-simple-text-file-editor-modal.md` — Add simple text file editor modal (area: ui)
 - `2026-02-07-web-worker-large-file-encryption.md` — Offload large file encryption to Web Worker (area: ui)
-- `2026-02-09-client-side-ipns-signature-validation.md` — Add client-side IPNS signature validation (area: crypto) — GitHub #71
 - `2026-02-10-remove-debug-eprintln-statements.md` — Remove debug eprintln! statements from FUSE code (area: desktop)
 
 ### Completed Todos
@@ -291,14 +292,15 @@ Recent decisions affecting current work:
 
 ### Quick Tasks Completed
 
-| #   | Description                            | Date       | Commit  | Directory                                                                                   |
-| --- | -------------------------------------- | ---------- | ------- | ------------------------------------------------------------------------------------------- |
-| 001 | Add API status indicator on login page | 2026-01-22 | 929143e | [001-login-page-api-status-indicator](./quick/001-login-page-api-status-indicator/)         |
-| 002 | Fix empty state ASCII art              | 2026-02-07 | ff97f12 | [002-fix-empty-state-ascii-art](./quick/002-fix-empty-state-ascii-art/)                     |
-| 003 | Fix subfolder navigation and upload    | 2026-02-09 | 95666db | [003-fix-subfolder-navigation-and-upload](./quick/003-fix-subfolder-navigation-and-upload/) |
-| 004 | Add staging environment banner         | 2026-02-09 | 839179e | [004-add-staging-environment-banner](./quick/004-add-staging-environment-banner/)           |
-| 005 | Align Pencil design with staging app   | 2026-02-09 | 3d0574b | [005-align-pencil-design-with-app](./quick/005-align-pencil-design-with-app/)               |
-| 006 | Add file/folder details modal          | 2026-02-10 | 612c9f6 | [006-file-folder-details-modal](./quick/006-file-folder-details-modal/)                     |
+| #   | Description                            | Date       | Commit  | Directory                                                                                       |
+| --- | -------------------------------------- | ---------- | ------- | ----------------------------------------------------------------------------------------------- |
+| 001 | Add API status indicator on login page | 2026-01-22 | 929143e | [001-login-page-api-status-indicator](./quick/001-login-page-api-status-indicator/)             |
+| 002 | Fix empty state ASCII art              | 2026-02-07 | ff97f12 | [002-fix-empty-state-ascii-art](./quick/002-fix-empty-state-ascii-art/)                         |
+| 003 | Fix subfolder navigation and upload    | 2026-02-09 | 95666db | [003-fix-subfolder-navigation-and-upload](./quick/003-fix-subfolder-navigation-and-upload/)     |
+| 004 | Add staging environment banner         | 2026-02-09 | 839179e | [004-add-staging-environment-banner](./quick/004-add-staging-environment-banner/)               |
+| 005 | Align Pencil design with staging app   | 2026-02-09 | 3d0574b | [005-align-pencil-design-with-app](./quick/005-align-pencil-design-with-app/)                   |
+| 006 | Add file/folder details modal          | 2026-02-10 | 612c9f6 | [006-file-folder-details-modal](./quick/006-file-folder-details-modal/)                         |
+| 007 | Client-side IPNS signature validation  | 2026-02-10 | 7411d8f | [007-client-side-ipns-signature-validation](./quick/007-client-side-ipns-signature-validation/) |
 
 ### Research Flags (from research phase)
 
@@ -319,11 +321,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-10
-Stopped at: Quick Task 006 complete — File/folder details modal added
+Stopped at: Quick Task 007 complete — Client-side IPNS signature validation
 Resume file: None
 Next phase: Phase 10 - Data Portability
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-10 after completing Quick Task 006 (Add file/folder details modal)_
+_Last updated: 2026-02-10 after completing Quick Task 007 (Client-side IPNS signature validation)_

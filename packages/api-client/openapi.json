@@ -1121,6 +1121,18 @@
             "type": "string",
             "description": "Current sequence number of the IPNS record (bigint as string)",
             "example": "1"
+          },
+          "signatureV2": {
+            "type": "string",
+            "description": "Base64-encoded Ed25519 signature (64 bytes) from the IPNS record. Only present when resolved from delegated routing (not DB cache)."
+          },
+          "data": {
+            "type": "string",
+            "description": "Base64-encoded CBOR data that was signed. Only present when resolved from delegated routing (not DB cache)."
+          },
+          "pubKey": {
+            "type": "string",
+            "description": "Base64-encoded raw Ed25519 public key (32 bytes). Only present when resolved from delegated routing (not DB cache)."
           }
         },
         "required": ["success", "cid", "sequenceNumber"]

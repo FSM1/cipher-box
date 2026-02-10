@@ -31,6 +31,10 @@ describe('IPNS API Security Tests', () => {
         ipnsName: validIpnsName,
         sequenceNumber: '1',
       }),
+      resolveRecord: jest.fn().mockResolvedValue({
+        cid: validCid,
+        sequenceNumber: '5',
+      }),
       getFolderIpns: jest.fn(),
       getAllFolderIpns: jest.fn(),
     };
@@ -388,6 +392,81 @@ describe('IPNS API Security Tests', () => {
       expect(response.body.message).toBe('Failed to publish IPNS record to routing network');
       // Should NOT expose internal routing service URLs or details
       expect(JSON.stringify(response.body)).not.toContain('delegated-ipfs.dev');
+    });
+  });
+
+  describe('Resolve endpoint', () => {
+    it('should return resolve result without signature fields when absent', async () => {
+      ipnsService.resolveRecord.mockResolvedValueOnce({
+        cid: validCid,
+        sequenceNumber: '5',
+      });
+
+      const response = await request(app.getHttpServer())
+        .get(`/ipns/resolve?ipnsName=${validIpnsName}`)
+        .set('Authorization', 'Bearer valid-token');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        success: true,
+        cid: validCid,
+        sequenceNumber: '5',
+      });
+      expect(response.body.signatureV2).toBeUndefined();
+      expect(response.body.data).toBeUndefined();
+      expect(response.body.pubKey).toBeUndefined();
+    });
+
+    it('should include signature fields in response when present', async () => {
+      ipnsService.resolveRecord.mockResolvedValueOnce({
+        cid: validCid,
+        sequenceNumber: '5',
+        signatureV2: 'c2lnbmF0dXJlLWRhdGE=',
+        data: 'Y2Jvci1kYXRh',
+        pubKey: 'cHVibGljLWtleQ==',
+      });
+
+      const response = await request(app.getHttpServer())
+        .get(`/ipns/resolve?ipnsName=${validIpnsName}`)
+        .set('Authorization', 'Bearer valid-token');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        success: true,
+        cid: validCid,
+        sequenceNumber: '5',
+        signatureV2: 'c2lnbmF0dXJlLWRhdGE=',
+        data: 'Y2Jvci1kYXRh',
+        pubKey: 'cHVibGljLWtleQ==',
+      });
+    });
+
+    it('should return 404 when IPNS name not found', async () => {
+      ipnsService.resolveRecord.mockResolvedValueOnce(null);
+
+      const response = await request(app.getHttpServer())
+        .get(`/ipns/resolve?ipnsName=${validIpnsName}`)
+        .set('Authorization', 'Bearer valid-token');
+
+      expect(response.status).toBe(404);
+    });
+
+    it('should drop partial signature fields (all-or-nothing bundle)', async () => {
+      // Only signatureV2 present, data and pubKey absent — should be dropped
+      ipnsService.resolveRecord.mockResolvedValueOnce({
+        cid: validCid,
+        sequenceNumber: '3',
+        signatureV2: 'c2lnbmF0dXJl',
+      });
+
+      const response = await request(app.getHttpServer())
+        .get(`/ipns/resolve?ipnsName=${validIpnsName}`)
+        .set('Authorization', 'Bearer valid-token');
+
+      expect(response.status).toBe(200);
+      expect(response.body.signatureV2).toBeUndefined();
+      expect(response.body.data).toBeUndefined();
+      expect(response.body.pubKey).toBeUndefined();
     });
   });
 
