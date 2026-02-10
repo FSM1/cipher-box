@@ -15,6 +15,8 @@ jobs:
     environment: staging-approval
     permissions:
       contents: write
+    outputs:
+      staging_tag: ${{ steps.rc.outputs.staging_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,4 +55,14 @@ jobs:
         run: |
           git tag "${STAGING_TAG}" "${RELEASE_TAG}"
           git push origin "${STAGING_TAG}"
-          echo "::notice::Created tag ${STAGING_TAG} — deploy-staging workflow will trigger automatically"
+
+  deploy:
+    name: Deploy Staging
+    needs: tag-staging
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/deploy-staging.yml
+    with:
+      staging_tag: ${{ needs.tag-staging.outputs.staging_tag }}
+    secrets: inherit

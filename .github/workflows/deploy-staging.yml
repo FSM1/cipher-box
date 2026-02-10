@@ -4,9 +4,16 @@ on:
   push:
     tags:
       - 'v*-staging*'
+  workflow_call:
+    inputs:
+      staging_tag:
+        required: true
+        type: string
 
 env:
   REGISTRY: ghcr.io
+  # Resolve tag: workflow_call passes it as input, push trigger uses ref_name
+  DEPLOY_TAG: ${{ inputs.staging_tag || github.ref_name }}
 
 jobs:
   build-api:
@@ -17,6 +24,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.staging_tag || github.ref_name }}
 
       - name: Set lowercase image name
         run: echo "API_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cipherbox-api" >> "$GITHUB_ENV"
@@ -33,7 +42,7 @@ jobs:
           file: apps/api/Dockerfile
           push: true
           tags: |
-            ${{ env.API_IMAGE }}:${{ github.ref_name }}
+            ${{ env.API_IMAGE }}:${{ env.DEPLOY_TAG }}
             ${{ env.API_IMAGE }}:latest
 
   build-tee:
@@ -44,6 +53,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.staging_tag || github.ref_name }}
 
       - name: Set lowercase image name
         run: echo "TEE_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cipherbox-tee-worker" >> "$GITHUB_ENV"
@@ -60,7 +71,7 @@ jobs:
           file: tee-worker/Dockerfile
           push: true
           tags: |
-            ${{ env.TEE_IMAGE }}:${{ github.ref_name }}
+            ${{ env.TEE_IMAGE }}:${{ env.DEPLOY_TAG }}
             ${{ env.TEE_IMAGE }}:latest
 
   build-web:
@@ -69,6 +80,8 @@ jobs:
     environment: staging
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.staging_tag || github.ref_name }}
 
       - uses: pnpm/action-setup@v4
         with:
@@ -109,6 +122,8 @@ jobs:
       packages: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.staging_tag || github.ref_name }}
 
       - name: Download web dist artifact
         uses: actions/download-artifact@v4
@@ -145,7 +160,7 @@ jobs:
           # Append image tag and lowercase owner (can't use shell vars in quoted heredoc)
           OWNER="${{ github.repository_owner }}"
           echo "GITHUB_REPOSITORY_OWNER=${OWNER,,}" >> .env.staging
-          echo "TAG=${{ github.ref_name }}" >> .env.staging
+          echo "TAG=${{ env.DEPLOY_TAG }}" >> .env.staging
 
       - name: Copy files to VPS
         uses: appleboy/scp-action@v0.1.7
@@ -203,7 +218,7 @@ jobs:
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
             # Set image tag from git tag (GHCR requires lowercase owner)
-            export TAG="${{ github.ref_name }}"
+            export TAG="${{ env.DEPLOY_TAG }}"
             OWNER="${{ github.repository_owner }}"
             export GITHUB_REPOSITORY_OWNER="${OWNER,,}"
 
