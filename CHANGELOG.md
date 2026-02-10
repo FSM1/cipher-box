@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0](https://github.com/FSM1/cipher-box/compare/v0.1.2...v0.2.0) (2026-02-10)
+
+
+### Features
+
+* add staging environment warning banner ([#73](https://github.com/FSM1/cipher-box/issues/73)) ([e8b6079](https://github.com/FSM1/cipher-box/commit/e8b6079c731718f16a37f0896d29bcdf70ac9e5e))
+
+
+### Bug Fixes
+
+* fetch storage quota from backend on mount ([#76](https://github.com/FSM1/cipher-box/issues/76)) ([713292e](https://github.com/FSM1/cipher-box/commit/713292ef694ea89b481207da986b1e85dec8e62f))
+
 ## [0.1.2](https://github.com/FSM1/cipher-box/compare/v0.1.1...v0.1.2) (2026-02-09)
 
 
