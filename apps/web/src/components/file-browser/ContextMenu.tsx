@@ -28,6 +28,8 @@ type ContextMenuProps = {
   onMove?: () => void;
   /** Callback when delete is clicked */
   onDelete: () => void;
+  /** Callback when details is clicked */
+  onDetails: () => void;
 };
 
 /**
@@ -39,6 +41,7 @@ type ContextMenuProps = {
  * Actions:
  * - Download (files only)
  * - Rename
+ * - Details
  * - Delete
  */
 export function ContextMenu({
@@ -50,6 +53,7 @@ export function ContextMenu({
   onRename,
   onMove,
   onDelete,
+  onDetails,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement | null>(null);
   const isFile = item.type === 'file';
@@ -139,6 +143,11 @@ export function ContextMenu({
     onClose();
   };
 
+  const handleDetails = () => {
+    onDetails();
+    onClose();
+  };
+
   // Combine refs for menu
   const setMenuRef = (node: HTMLDivElement | null) => {
     menuRef.current = node;
@@ -180,6 +189,12 @@ export function ContextMenu({
             Move to...
           </button>
         )}
+
+        {/* Details */}
+        <button type="button" className="context-menu-item" onClick={handleDetails} role="menuitem">
+          <span className="context-menu-item-icon">&#9432;</span>
+          Details
+        </button>
 
         {/* Divider before destructive action */}
         <div className="context-menu-divider" role="separator" />

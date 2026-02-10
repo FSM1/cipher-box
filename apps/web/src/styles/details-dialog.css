@@ -1,0 +1,163 @@
+/**
+ * Details Dialog Styles - Terminal Aesthetic
+ *
+ * Styles for file/folder details modal showing CIDs,
+ * encryption metadata, and IPNS information.
+ */
+
+/* ==========================================================================
+   Details Row List
+   ========================================================================== */
+
+.details-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* ==========================================================================
+   Detail Row
+   ========================================================================== */
+
+.details-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--spacing-xs) 0;
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.details-row:last-child {
+  border-bottom: none;
+}
+
+/* ==========================================================================
+   Detail Label
+   ========================================================================== */
+
+.details-label {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   Detail Value
+   ========================================================================== */
+
+.details-value {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.details-value--dim {
+  color: var(--color-text-muted);
+}
+
+.details-value--redacted {
+  color: var(--color-text-dim);
+  font-style: italic;
+}
+
+/* ==========================================================================
+   Copyable Value (CID, IPNS name, etc.)
+   ========================================================================== */
+
+.details-copyable {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-xs);
+}
+
+.details-copyable-text {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.details-copy-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 6px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: var(--border-thickness) solid var(--color-border-dim);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.details-copy-btn:hover {
+  color: var(--color-text-primary);
+  background-color: var(--color-green-darker);
+  border-color: var(--color-border);
+}
+
+.details-copy-btn--copied {
+  color: var(--color-green-primary);
+  border-color: var(--color-green-primary);
+}
+
+/* ==========================================================================
+   Section Separator
+   ========================================================================== */
+
+.details-section-header {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-green-dim);
+  padding: var(--spacing-sm) 0 var(--spacing-xs) 0;
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
+  margin-top: var(--spacing-xs);
+}
+
+/* ==========================================================================
+   Loading State
+   ========================================================================== */
+
+.details-loading {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+
+/* ==========================================================================
+   Type Badge
+   ========================================================================== */
+
+.details-type-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.details-type-badge--file {
+  color: var(--color-text-primary);
+}
+
+.details-type-badge--folder {
+  color: var(--color-green-primary);
+}
