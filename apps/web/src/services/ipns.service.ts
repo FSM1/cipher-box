@@ -5,7 +5,13 @@
  * via the backend API relay to delegated-ipfs.dev.
  */
 
-import { createIpnsRecord, marshalIpnsRecord } from '@cipherbox/crypto';
+import {
+  createIpnsRecord,
+  marshalIpnsRecord,
+  verifyEd25519,
+  IPNS_SIGNATURE_PREFIX,
+  concatBytes,
+} from '@cipherbox/crypto';
 import { ipnsControllerPublishRecord, ipnsControllerResolveRecord } from '../api/ipns/ipns';
 
 /**
@@ -60,16 +66,41 @@ export async function createAndPublishIpnsRecord(params: {
 }
 
 /**
+ * Verify the Ed25519 signature on an IPNS record.
+ * Per IPFS spec, the signature is over "ipns-signature:" + cborData.
+ *
+ * @param signatureV2 - base64 Ed25519 signature (64 bytes)
+ * @param data - base64 CBOR data that was signed
+ * @param pubKey - base64 raw Ed25519 public key (32 bytes)
+ * @returns true if valid
+ */
+export async function verifyIpnsSignature(
+  signatureV2: string,
+  data: string,
+  pubKey: string
+): Promise<boolean> {
+  const sigBytes = Uint8Array.from(atob(signatureV2), (c) => c.charCodeAt(0));
+  const dataBytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+  const pubKeyBytes = Uint8Array.from(atob(pubKey), (c) => c.charCodeAt(0));
+
+  // Per IPFS IPNS spec, signature is over "ipns-signature:" + cborData
+  const signedData = concatBytes(IPNS_SIGNATURE_PREFIX, dataBytes);
+  return verifyEd25519(sigBytes, signedData, pubKeyBytes);
+}
+
+/**
  * Resolve an IPNS name to its current CID and sequence number.
  *
  * Calls backend API which relays to delegated-ipfs.dev for resolution.
+ * When the response includes IPNS signature data (from delegated routing),
+ * verifies the Ed25519 signature before trusting the CID.
  *
  * @param ipnsName - IPNS name to resolve (k51.../bafzaa... format)
- * @returns Current CID and sequence number, or null if not found
+ * @returns Current CID, sequence number, and signature verification status, or null if not found
  */
 export async function resolveIpnsRecord(
   ipnsName: string
-): Promise<{ cid: string; sequenceNumber: bigint } | null> {
+): Promise<{ cid: string; sequenceNumber: bigint; signatureVerified: boolean } | null> {
   try {
     const response = await ipnsControllerResolveRecord({ ipnsName });
 
@@ -77,13 +108,26 @@ export async function resolveIpnsRecord(
       return null;
     }
 
+    // Verify IPNS signature if all signature fields are present
+    let signatureVerified = false;
+    if (response.signatureV2 && response.data && response.pubKey) {
+      const valid = await verifyIpnsSignature(response.signatureV2, response.data, response.pubKey);
+      if (!valid) {
+        throw new Error('IPNS signature verification failed - record may be tampered');
+      }
+      signatureVerified = true;
+    } else {
+      console.warn('IPNS resolve returned without signature data, skipping verification');
+    }
+
     return {
       cid: response.cid,
       sequenceNumber: BigInt(response.sequenceNumber),
+      signatureVerified,
     };
   } catch (error) {
     // 404 means IPNS name not found - return null
-    // Other errors should propagate
+    // Other errors should propagate (including signature verification failures)
     if (error instanceof Error && error.message.includes('404')) {
       return null;
     }
