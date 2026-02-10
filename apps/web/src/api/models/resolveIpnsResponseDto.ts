@@ -13,4 +13,10 @@ export interface ResolveIpnsResponseDto {
   cid: string;
   /** Current sequence number of the IPNS record (bigint as string) */
   sequenceNumber: string;
+  /** Base64-encoded Ed25519 signature (64 bytes) from the IPNS record. Only present when resolved from delegated routing (not DB cache). */
+  signatureV2?: string;
+  /** Base64-encoded CBOR data that was signed. Only present when resolved from delegated routing (not DB cache). */
+  data?: string;
+  /** Base64-encoded raw Ed25519 public key (32 bytes). Only present when resolved from delegated routing (not DB cache). */
+  pubKey?: string;
 }

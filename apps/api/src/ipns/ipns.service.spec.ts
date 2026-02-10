@@ -550,6 +550,50 @@ describe('IpnsService', () => {
       );
     });
 
+    it('should include base64-encoded signature fields when parser returns them', async () => {
+      const mockRecordBytes = new Uint8Array([1, 2, 3]);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
+      });
+      const sigBytes = new Uint8Array(64).fill(0xab);
+      const dataBytes = new Uint8Array(48).fill(0xcd);
+      const pubKeyBytes = new Uint8Array(32).fill(0xef);
+      mockParseIpnsRecord.mockReturnValue({
+        value: '/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
+        sequence: 10n,
+        signatureV2: sigBytes,
+        data: dataBytes,
+        pubKey: pubKeyBytes,
+      });
+
+      const result = await service.resolveRecord(testIpnsName);
+
+      expect(result).not.toBeNull();
+      expect(result!.signatureV2).toBe(Buffer.from(sigBytes).toString('base64'));
+      expect(result!.data).toBe(Buffer.from(dataBytes).toString('base64'));
+      expect(result!.pubKey).toBe(Buffer.from(pubKeyBytes).toString('base64'));
+    });
+
+    it('should omit signature fields when parser does not return them', async () => {
+      const mockRecordBytes = new Uint8Array([1, 2, 3]);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
+      });
+      mockParseIpnsRecord.mockReturnValue({
+        value: '/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
+        sequence: 1n,
+      });
+
+      const result = await service.resolveRecord(testIpnsName);
+
+      expect(result).not.toBeNull();
+      expect(result!.signatureV2).toBeUndefined();
+      expect(result!.data).toBeUndefined();
+      expect(result!.pubKey).toBeUndefined();
+    });
+
     it('should return null for 404 (IPNS name not found)', async () => {
       mockFetch.mockResolvedValue({
         ok: false,

@@ -1,5 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, Matches, MaxLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsString, IsNotEmpty, IsOptional, Matches, MaxLength } from 'class-validator';
 
 export class ResolveIpnsQueryDto {
   @ApiProperty({
@@ -36,4 +36,31 @@ export class ResolveIpnsResponseDto {
     example: '1',
   })
   sequenceNumber!: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Base64-encoded Ed25519 signature (64 bytes) from the IPNS record. ' +
+      'Only present when resolved from delegated routing (not DB cache).',
+  })
+  @IsOptional()
+  @IsString()
+  signatureV2?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Base64-encoded CBOR data that was signed. ' +
+      'Only present when resolved from delegated routing (not DB cache).',
+  })
+  @IsOptional()
+  @IsString()
+  data?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Base64-encoded raw Ed25519 public key (32 bytes). ' +
+      'Only present when resolved from delegated routing (not DB cache).',
+  })
+  @IsOptional()
+  @IsString()
+  pubKey?: string;
 }

@@ -257,8 +257,20 @@ export class IpnsService {
    * or when the record is not found in the DHT.
    * Returns null if the IPNS name is not found anywhere (404)
    */
-  async resolveRecord(ipnsName: string): Promise<{ cid: string; sequenceNumber: string } | null> {
-    let result: { cid: string; sequenceNumber: string } | null = null;
+  async resolveRecord(ipnsName: string): Promise<{
+    cid: string;
+    sequenceNumber: string;
+    signatureV2?: string;
+    data?: string;
+    pubKey?: string;
+  } | null> {
+    let result: {
+      cid: string;
+      sequenceNumber: string;
+      signatureV2?: string;
+      data?: string;
+      pubKey?: string;
+    } | null = null;
 
     try {
       result = await this.resolveFromDelegatedRouting(ipnsName);
@@ -292,9 +304,13 @@ export class IpnsService {
    * Returns null if the IPNS name is not found (404).
    * Throws HttpException (BAD_GATEWAY) on routing failures.
    */
-  private async resolveFromDelegatedRouting(
-    ipnsName: string
-  ): Promise<{ cid: string; sequenceNumber: string } | null> {
+  private async resolveFromDelegatedRouting(ipnsName: string): Promise<{
+    cid: string;
+    sequenceNumber: string;
+    signatureV2?: string;
+    data?: string;
+    pubKey?: string;
+  } | null> {
     const url = `${this.delegatedRoutingUrl}/routing/v1/ipns/${ipnsName}`;
 
     let lastError: Error | null = null;
@@ -388,7 +404,13 @@ export class IpnsService {
    * Parse an IPNS record to extract CID and sequence number
    * Uses inline protobuf decoder — no external dependencies
    */
-  private parseIpnsRecordBytes(recordBytes: Uint8Array): { cid: string; sequenceNumber: string } {
+  private parseIpnsRecordBytes(recordBytes: Uint8Array): {
+    cid: string;
+    sequenceNumber: string;
+    signatureV2?: string;
+    data?: string;
+    pubKey?: string;
+  } {
     try {
       const record = parseIpnsRecord(recordBytes);
 
@@ -403,8 +425,15 @@ export class IpnsService {
       const cid = cidMatch[1];
       const sequenceNumber = String(record.sequence ?? 0n);
 
+      // Base64-encode signature fields if present
+      const signatureV2 = record.signatureV2
+        ? Buffer.from(record.signatureV2).toString('base64')
+        : undefined;
+      const data = record.data ? Buffer.from(record.data).toString('base64') : undefined;
+      const pubKey = record.pubKey ? Buffer.from(record.pubKey).toString('base64') : undefined;
+
       this.logger.debug(`Parsed IPNS record: cid=${cid}, sequenceNumber=${sequenceNumber}`);
-      return { cid, sequenceNumber };
+      return { cid, sequenceNumber, signatureV2, data, pubKey };
     } catch (error) {
       if (error instanceof HttpException) {
         throw error;

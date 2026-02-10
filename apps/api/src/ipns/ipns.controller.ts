@@ -110,10 +110,17 @@ export class IpnsController {
       throw new NotFoundException('IPNS name not found in routing network');
     }
 
+    // Include signature fields as all-or-nothing bundle for client verification
+    const hasSigData = result.signatureV2 && result.data && result.pubKey;
     return {
       success: true,
       cid: result.cid,
       sequenceNumber: result.sequenceNumber,
+      ...(hasSigData && {
+        signatureV2: result.signatureV2,
+        data: result.data,
+        pubKey: result.pubKey,
+      }),
     };
   }
 }
