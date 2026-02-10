@@ -45,6 +45,13 @@ export class ContextMenuPage {
   }
 
   /**
+   * Get the Details menu option.
+   */
+  detailsOption(): Locator {
+    return this.menu().locator('button[role="menuitem"]', { hasText: 'Details' });
+  }
+
+  /**
    * Check if the context menu is visible.
    */
   async isVisible(): Promise<boolean> {
@@ -91,6 +98,13 @@ export class ContextMenuPage {
    */
   async clickMove(): Promise<void> {
     await this.moveOption().click();
+  }
+
+  /**
+   * Click the Details option.
+   */
+  async clickDetails(): Promise<void> {
+    await this.detailsOption().click();
   }
 
   /**

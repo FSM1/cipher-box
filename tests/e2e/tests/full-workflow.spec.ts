@@ -10,6 +10,7 @@ import { RenameDialogPage } from '../page-objects/dialogs/rename-dialog.page';
 import { ConfirmDialogPage } from '../page-objects/dialogs/confirm-dialog.page';
 import { CreateFolderDialogPage } from '../page-objects/dialogs/create-folder-dialog.page';
 import { MoveDialogPage } from '../page-objects/dialogs/move-dialog.page';
+import { DetailsDialogPage } from '../page-objects/dialogs/details-dialog.page';
 
 /**
  * Full Workflow E2E Test Suite
@@ -44,6 +45,7 @@ test.describe.serial('Full Workflow', () => {
   let confirmDialog: ConfirmDialogPage;
   let createFolderDialog: CreateFolderDialogPage;
   let moveDialog: MoveDialogPage;
+  let detailsDialog: DetailsDialogPage;
 
   // Test data - unique names for this test run
   const timestamp = Date.now();
@@ -118,6 +120,7 @@ test.describe.serial('Full Workflow', () => {
     confirmDialog = new ConfirmDialogPage(page);
     createFolderDialog = new CreateFolderDialogPage(page);
     moveDialog = new MoveDialogPage(page);
+    detailsDialog = new DetailsDialogPage(page);
   });
 
   test.afterAll(async () => {
@@ -366,6 +369,127 @@ test.describe.serial('Full Workflow', () => {
       await uploadFile(file.name, file.content);
       expect(await fileList.isItemVisible(file.name)).toBe(true);
     }
+  });
+
+  // ============================================
+  // Phase 3.5: Details Dialog (File & Folder)
+  // ============================================
+  // Verify the Details modal shows correct metadata for files and folders.
+  // Tests open via context menu, verify labels/sections/badges, and close.
+
+  test('3.65 View file details via context menu', async () => {
+    // Navigate to root where root files are visible
+    await navigateToRoot();
+    const fileName = rootFiles[1].name;
+    expect(await fileList.isItemVisible(fileName)).toBe(true);
+
+    // Open context menu and click Details
+    await fileList.rightClickItem(fileName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickDetails();
+    await detailsDialog.waitForOpen();
+
+    // Verify title
+    const title = await detailsDialog.getTitle();
+    expect(title).toBe('File Details');
+
+    // Verify type badge shows [FILE]
+    expect(await detailsDialog.isFileBadge()).toBe(true);
+    const badgeText = await detailsDialog.getTypeBadgeText();
+    expect(badgeText).toBe('[FILE]');
+
+    // Verify expected labels are present
+    const labels = await detailsDialog.getVisibleLabels();
+    expect(labels).toContain('Name');
+    expect(labels).toContain('Type');
+    expect(labels).toContain('Size');
+    expect(labels).toContain('Content CID');
+    expect(labels).toContain('Encryption Mode');
+    expect(labels).toContain('File IV');
+    expect(labels).toContain('Wrapped File Key');
+    expect(labels).toContain('Created');
+    expect(labels).toContain('Modified');
+
+    // Verify section headers
+    const headers = await detailsDialog.getVisibleSectionHeaders();
+    expect(headers).toContain('// encryption');
+    expect(headers).toContain('// timestamps');
+
+    // Verify name value matches the file
+    const nameValue = await detailsDialog.getValueText('Name');
+    expect(nameValue).toBe(fileName);
+
+    // Verify encryption mode shows AES-256-GCM
+    const encMode = await detailsDialog.getValueText('Encryption Mode');
+    expect(encMode).toContain('AES-256-GCM');
+
+    // Verify copyable fields have copy buttons
+    expect(await detailsDialog.hasCopyButton('Content CID')).toBe(true);
+    expect(await detailsDialog.hasCopyButton('File IV')).toBe(true);
+
+    // Verify wrapped key is redacted
+    expect(await detailsDialog.isValueRedacted('Wrapped File Key')).toBe(true);
+
+    // Close the dialog
+    await detailsDialog.close();
+    expect(await detailsDialog.isVisible()).toBe(false);
+  });
+
+  test('3.66 View folder details via context menu', async () => {
+    // We're at root, right-click on workspace folder
+    expect(await fileList.isItemVisible(workspaceFolder)).toBe(true);
+
+    await fileList.rightClickItem(workspaceFolder);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickDetails();
+    await detailsDialog.waitForOpen();
+
+    // Verify title
+    const title = await detailsDialog.getTitle();
+    expect(title).toBe('Folder Details');
+
+    // Verify type badge shows [DIR]
+    expect(await detailsDialog.isFolderBadge()).toBe(true);
+    const badgeText = await detailsDialog.getTypeBadgeText();
+    expect(badgeText).toBe('[DIR]');
+
+    // Verify expected labels are present
+    const labels = await detailsDialog.getVisibleLabels();
+    expect(labels).toContain('Name');
+    expect(labels).toContain('Type');
+    expect(labels).toContain('Contents');
+    expect(labels).toContain('IPNS Name');
+    expect(labels).toContain('Metadata CID');
+    expect(labels).toContain('Sequence Number');
+    expect(labels).toContain('Folder Key');
+    expect(labels).toContain('IPNS Private Key');
+    expect(labels).toContain('Created');
+    expect(labels).toContain('Modified');
+
+    // Verify section headers
+    const headers = await detailsDialog.getVisibleSectionHeaders();
+    expect(headers).toContain('// ipns');
+    expect(headers).toContain('// encryption');
+    expect(headers).toContain('// timestamps');
+
+    // Verify name value matches the folder
+    const nameValue = await detailsDialog.getValueText('Name');
+    expect(nameValue).toBe(workspaceFolder);
+
+    // Verify contents count (should have 3 subfolders: documents, images, projects)
+    const contentsValue = await detailsDialog.getValueText('Contents');
+    expect(contentsValue).toMatch(/\d+ items?/);
+
+    // Verify copyable fields
+    expect(await detailsDialog.hasCopyButton('IPNS Name')).toBe(true);
+
+    // Verify encrypted keys are redacted
+    expect(await detailsDialog.isValueRedacted('Folder Key')).toBe(true);
+    expect(await detailsDialog.isValueRedacted('IPNS Private Key')).toBe(true);
+
+    // Close the dialog
+    await detailsDialog.close();
+    expect(await detailsDialog.isVisible()).toBe(false);
   });
 
   // ============================================
