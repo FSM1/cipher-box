@@ -192,4 +192,108 @@ describe('parseIpnsRecord', () => {
 
     expect(result.value).toBe('/ipfs/QmSecond');
   });
+
+  describe('signature fields (7, 8, 9)', () => {
+    /**
+     * Build a libp2p-wrapped Ed25519 public key (36 bytes).
+     * Format: [0x08, 0x01, 0x12, 0x20, ...32 bytes of Ed25519 pubkey]
+     */
+    function buildLibp2pEd25519PubKey(rawKey: Uint8Array): Uint8Array {
+      return new Uint8Array([0x08, 0x01, 0x12, 0x20, ...rawKey]);
+    }
+
+    it('should parse signatureV2 (field 8)', () => {
+      const sig = new Uint8Array(64).fill(0xab);
+      const buf = new Uint8Array([
+        ...encodeLengthDelimited(1, new TextEncoder().encode('/ipfs/QmSig')),
+        ...encodeVarintField(5, 1n),
+        ...encodeLengthDelimited(8, sig),
+      ]);
+      const result = parseIpnsRecord(buf);
+
+      expect(result.signatureV2).toEqual(sig);
+    });
+
+    it('should parse data (field 9)', () => {
+      const data = new Uint8Array([0xc0, 0xc1, 0xc2, 0xc3]);
+      const buf = new Uint8Array([
+        ...encodeLengthDelimited(1, new TextEncoder().encode('/ipfs/QmData')),
+        ...encodeVarintField(5, 2n),
+        ...encodeLengthDelimited(9, data),
+      ]);
+      const result = parseIpnsRecord(buf);
+
+      expect(result.data).toEqual(data);
+    });
+
+    it('should extract raw Ed25519 pubKey from libp2p-wrapped field 7', () => {
+      const rawKey = new Uint8Array(32).fill(0x42);
+      const wrappedKey = buildLibp2pEd25519PubKey(rawKey);
+      const buf = new Uint8Array([
+        ...encodeLengthDelimited(1, new TextEncoder().encode('/ipfs/QmKey')),
+        ...encodeVarintField(5, 3n),
+        ...encodeLengthDelimited(7, wrappedKey),
+      ]);
+      const result = parseIpnsRecord(buf);
+
+      expect(result.pubKey).toEqual(rawKey);
+    });
+
+    it('should return undefined pubKey for non-Ed25519 wrapped key', () => {
+      // Wrong prefix — not a standard libp2p Ed25519 key
+      const badKey = new Uint8Array(36).fill(0xff);
+      const buf = new Uint8Array([
+        ...encodeLengthDelimited(1, new TextEncoder().encode('/ipfs/QmBadKey')),
+        ...encodeVarintField(5, 1n),
+        ...encodeLengthDelimited(7, badKey),
+      ]);
+      const result = parseIpnsRecord(buf);
+
+      expect(result.pubKey).toBeUndefined();
+    });
+
+    it('should return undefined pubKey for wrong-length wrapped key', () => {
+      // Too short (20 bytes instead of 36)
+      const shortKey = new Uint8Array([0x08, 0x01, 0x12, 0x20, ...new Uint8Array(16)]);
+      const buf = new Uint8Array([
+        ...encodeLengthDelimited(1, new TextEncoder().encode('/ipfs/QmShort')),
+        ...encodeVarintField(5, 1n),
+        ...encodeLengthDelimited(7, shortKey),
+      ]);
+      const result = parseIpnsRecord(buf);
+
+      expect(result.pubKey).toBeUndefined();
+    });
+
+    it('should parse all signature fields together', () => {
+      const rawKey = new Uint8Array(32).fill(0x11);
+      const wrappedKey = buildLibp2pEd25519PubKey(rawKey);
+      const sig = new Uint8Array(64).fill(0x22);
+      const data = new Uint8Array(48).fill(0x33);
+
+      const buf = new Uint8Array([
+        ...encodeLengthDelimited(1, new TextEncoder().encode('/ipfs/QmAll')),
+        ...encodeVarintField(5, 99n),
+        ...encodeLengthDelimited(7, wrappedKey),
+        ...encodeLengthDelimited(8, sig),
+        ...encodeLengthDelimited(9, data),
+      ]);
+      const result = parseIpnsRecord(buf);
+
+      expect(result.value).toBe('/ipfs/QmAll');
+      expect(result.sequence).toBe(99n);
+      expect(result.pubKey).toEqual(rawKey);
+      expect(result.signatureV2).toEqual(sig);
+      expect(result.data).toEqual(data);
+    });
+
+    it('should return undefined for missing signature fields', () => {
+      const buf = buildIpnsRecord('/ipfs/QmNoSig', 1n);
+      const result = parseIpnsRecord(buf);
+
+      expect(result.signatureV2).toBeUndefined();
+      expect(result.data).toBeUndefined();
+      expect(result.pubKey).toBeUndefined();
+    });
+  });
 });
