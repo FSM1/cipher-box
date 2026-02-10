@@ -1,5 +1,6 @@
 import { Fragment, useState, useCallback, type DragEvent, type KeyboardEvent } from 'react';
 import type { Breadcrumb } from '../../hooks/useFolderNavigation';
+import { isExternalFileDrag } from '../../hooks/useDropUpload';
 
 type BreadcrumbsProps = {
   /** Breadcrumb trail from root to current folder */
@@ -15,6 +16,8 @@ type BreadcrumbsProps = {
     sourceParentId: string,
     destFolderId: string
   ) => void;
+  /** Callback when external files are dropped onto a breadcrumb segment */
+  onExternalFileDrop?: (files: File[], destFolderId: string) => void;
 };
 
 /**
@@ -46,7 +49,12 @@ type BreadcrumbsProps = {
  * }
  * ```
  */
-export function Breadcrumbs({ breadcrumbs, onNavigate, onDrop }: BreadcrumbsProps) {
+export function Breadcrumbs({
+  breadcrumbs,
+  onNavigate,
+  onDrop,
+  onExternalFileDrop,
+}: BreadcrumbsProps) {
   // Track which breadcrumb is being dragged over
   const [dragOverId, setDragOverId] = useState<string | null>(null);
 
@@ -75,16 +83,18 @@ export function Breadcrumbs({ breadcrumbs, onNavigate, onDrop }: BreadcrumbsProp
 
   /**
    * Handle drag over breadcrumb segment.
+   * Accepts both internal drags (move) and external file drags (upload).
    */
   const handleDragOver = useCallback(
     (e: DragEvent, folderId: string) => {
-      if (!onDrop) return;
+      if (!onDrop && !onExternalFileDrop) return;
       e.preventDefault();
       e.stopPropagation();
-      e.dataTransfer.dropEffect = 'move';
+
+      e.dataTransfer.dropEffect = isExternalFileDrag(e.dataTransfer) ? 'copy' : 'move';
       setDragOverId(folderId);
     },
-    [onDrop]
+    [onDrop, onExternalFileDrop]
   );
 
   /**
@@ -98,6 +108,7 @@ export function Breadcrumbs({ breadcrumbs, onNavigate, onDrop }: BreadcrumbsProp
 
   /**
    * Handle drop on breadcrumb segment.
+   * Routes external files to upload, internal items to move.
    */
   const handleDrop = useCallback(
     (e: DragEvent, destFolderId: string) => {
@@ -105,13 +116,23 @@ export function Breadcrumbs({ breadcrumbs, onNavigate, onDrop }: BreadcrumbsProp
       e.stopPropagation();
       setDragOverId(null);
 
+      // Read JSON once — empty string means external file drag from OS
+      const jsonData = e.dataTransfer.getData('application/json');
+
+      if (!jsonData) {
+        // External file drop
+        if (e.dataTransfer.files.length > 0 && onExternalFileDrop) {
+          const files = Array.from(e.dataTransfer.files);
+          onExternalFileDrop(files, destFolderId);
+        }
+        return;
+      }
+
+      // Internal move operation
       if (!onDrop) return;
 
       try {
-        const data = e.dataTransfer.getData('application/json');
-        if (!data) return;
-
-        const parsed = JSON.parse(data) as {
+        const parsed = JSON.parse(jsonData) as {
           id: string;
           type: 'file' | 'folder';
           parentId: string;
@@ -128,7 +149,7 @@ export function Breadcrumbs({ breadcrumbs, onNavigate, onDrop }: BreadcrumbsProp
         // Invalid drag data, ignore
       }
     },
-    [onDrop]
+    [onDrop, onExternalFileDrop]
   );
 
   // Handle empty breadcrumbs
@@ -157,9 +178,11 @@ export function Breadcrumbs({ breadcrumbs, onNavigate, onDrop }: BreadcrumbsProp
               className={`breadcrumb-item ${isDragOver ? 'breadcrumb-item--drag-over' : ''} ${isLast ? 'breadcrumb-item--current' : ''}`}
               onClick={() => handleClick(crumb.id)}
               onKeyDown={(e) => handleKeyDown(e, crumb.id)}
-              onDragOver={onDrop ? (e) => handleDragOver(e, crumb.id) : undefined}
-              onDragLeave={onDrop ? handleDragLeave : undefined}
-              onDrop={onDrop ? (e) => handleDrop(e, crumb.id) : undefined}
+              onDragOver={
+                onDrop || onExternalFileDrop ? (e) => handleDragOver(e, crumb.id) : undefined
+              }
+              onDragLeave={onDrop || onExternalFileDrop ? handleDragLeave : undefined}
+              onDrop={onDrop || onExternalFileDrop ? (e) => handleDrop(e, crumb.id) : undefined}
               aria-current={isLast ? 'page' : undefined}
               data-folder-id={crumb.id}
             >

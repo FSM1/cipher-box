@@ -86,15 +86,15 @@ If found, extract and use:
 ```yaml
 must_haves:
   truths:
-    - "User can see existing messages"
-    - "User can send a message"
+    - 'User can see existing messages'
+    - 'User can send a message'
   artifacts:
-    - path: "src/components/Chat.tsx"
-      provides: "Message list rendering"
+    - path: 'src/components/Chat.tsx'
+      provides: 'Message list rendering'
   key_links:
-    - from: "Chat.tsx"
-      to: "api/chat"
-      via: "fetch in useEffect"
+    - from: 'Chat.tsx'
+      to: 'api/chat'
+      via: 'fetch in useEffect'
 ```
 
 **Option B: Derive from phase goal**
@@ -104,17 +104,14 @@ If no must_haves in frontmatter, derive using goal-backward process:
 1. **State the goal:** Take phase goal from ROADMAP.md
 
 2. **Derive truths:** Ask "What must be TRUE for this goal to be achieved?"
-
    - List 3-7 observable behaviors from user perspective
    - Each truth should be testable by a human using the app
 
 3. **Derive artifacts:** For each truth, ask "What must EXIST?"
-
    - Map truths to concrete files (components, routes, schemas)
    - Be specific: `src/components/Chat.tsx`, not "chat component"
 
 4. **Derive key links:** For each artifact, ask "What must be CONNECTED?"
-
    - Identify critical wiring (component calls API, API queries DB)
    - These are where stubs hide
 
@@ -497,25 +494,25 @@ verified: YYYY-MM-DDTHH:MM:SSZ
 status: gaps_found
 score: N/M must-haves verified
 gaps:
-  - truth: "User can see existing messages"
+  - truth: 'User can see existing messages'
     status: failed
     reason: "Chat.tsx exists but doesn't fetch from API"
     artifacts:
-      - path: "src/components/Chat.tsx"
-        issue: "No useEffect with fetch call"
+      - path: 'src/components/Chat.tsx'
+        issue: 'No useEffect with fetch call'
     missing:
-      - "API call in useEffect to /api/chat"
-      - "State for storing fetched messages"
-      - "Render messages array in JSX"
-  - truth: "User can send a message"
+      - 'API call in useEffect to /api/chat'
+      - 'State for storing fetched messages'
+      - 'Render messages array in JSX'
+  - truth: 'User can send a message'
     status: failed
-    reason: "Form exists but onSubmit is stub"
+    reason: 'Form exists but onSubmit is stub'
     artifacts:
-      - path: "src/components/Chat.tsx"
-        issue: "onSubmit only calls preventDefault()"
+      - path: 'src/components/Chat.tsx'
+        issue: 'onSubmit only calls preventDefault()'
     missing:
-      - "POST request to /api/chat"
-      - "Add new message to state after success"
+      - 'POST request to /api/chat'
+      - 'Add new message to state after success'
 ---
 ```
 
@@ -549,22 +546,22 @@ re_verification: # Only include if previous VERIFICATION.md existed
   previous_status: gaps_found
   previous_score: 2/5
   gaps_closed:
-    - "Truth that was fixed"
+    - 'Truth that was fixed'
   gaps_remaining: []
-  regressions: []  # Items that passed before but now fail
+  regressions: [] # Items that passed before but now fail
 gaps: # Only include if status: gaps_found
-  - truth: "Observable truth that failed"
+  - truth: 'Observable truth that failed'
     status: failed
-    reason: "Why it failed"
+    reason: 'Why it failed'
     artifacts:
-      - path: "src/path/to/file.tsx"
+      - path: 'src/path/to/file.tsx'
         issue: "What's wrong with this file"
     missing:
-      - "Specific thing to add/fix"
-      - "Another specific thing"
+      - 'Specific thing to add/fix'
+      - 'Another specific thing'
 human_verification: # Only include if status: human_needed
-  - test: "What to do"
-    expected: "What should happen"
+  - test: 'What to do'
+    expected: 'What should happen'
     why_human: "Why can't verify programmatically"
 ---
 
@@ -696,7 +693,7 @@ Check if phase involves UI:
 
 ```bash
 # Check phase name/description for UI keywords
-grep -i "ui\|style\|design\|layout\|component\|visual" .planning/ROADMAP.md | grep "Phase ${PHASE_NUM}"
+grep -iE "ui|ux|style|restyle|design|layout|component|page|view|screen|display|button|form|modal|dialog|popover|tooltip|toast|dropdown|sidebar|header|footer|nav|menu|card|list|table|grid|icon|badge|avatar|breadcrumb|tab|color|font|typography|spacing|padding|margin|responsive|mobile|css|visual|appearance|interface|frontend|dashboard|browser|drag|drop|dnd|hover|focus|animation|transition|overlay|scroll|carousel|interaction|gesture|click|swipe|resize|collapse|expand|accordion|input|checkbox|radio|select|slider|toggle|switch|picker|upload|panel|drawer|toolbar|statusbar|banner|alert|notification|snackbar|thumbnail|preview|placeholder|skeleton|spinner|progress|loading" .planning/ROADMAP.md | grep "Phase ${PHASE_NUM}"
 
 # Check for design file references in RESEARCH.md
 grep -i "pencil\|\.pen\|design.*file" "${PHASE_DIR}"/*-RESEARCH.md
@@ -721,11 +718,11 @@ For UI phases, derive truths from design specifications:
 ```markdown
 ### Observable Truths (Design-Derived)
 
-| # | Truth | Design Spec | Status |
-|---|-------|-------------|--------|
-| 1 | Header background is black | fill: #000000 (frame n386r) | ✓ |
-| 2 | Primary accent is correct green | fill: #00D084 | ✓ |
-| 3 | Typography uses JetBrains Mono | fontFamily: "JetBrains Mono" | ✗ |
+| #   | Truth                           | Design Spec                  | Status |
+| --- | ------------------------------- | ---------------------------- | ------ |
+| 1   | Header background is black      | fill: #000000 (frame n386r)  | ✓      |
+| 2   | Primary accent is correct green | fill: #00D084                | ✓      |
+| 3   | Typography uses JetBrains Mono  | fontFamily: "JetBrains Mono" | ✗      |
 ```
 
 ### CSS Value Verification
@@ -775,7 +772,7 @@ const styles = await mcp__playwright__evaluate({
       borderColor: s.borderBottomColor,
       fontFamily: s.fontFamily
     };
-  `
+  `,
 });
 
 // Compare to design specs
@@ -809,7 +806,7 @@ await mcp__playwright__screenshot({ fullPage: true, name: 'desktop-verification'
 await mcp__playwright__visual_diff({
   baseline: 'baselines/desktop.png',
   current: 'screenshots/desktop-verification.png',
-  threshold: 0.02
+  threshold: 0.02,
 });
 ```
 
@@ -845,30 +842,30 @@ Add to VERIFICATION.md for UI phases:
 
 ### Color Compliance
 
-| Token | Design | Implemented | Status |
-|-------|--------|-------------|--------|
-| --color-primary | #00D084 | #00D084 | ✓ |
-| --color-background | #000000 | #000000 | ✓ |
+| Token              | Design  | Implemented | Status |
+| ------------------ | ------- | ----------- | ------ |
+| --color-primary    | #00D084 | #00D084     | ✓      |
+| --color-background | #000000 | #000000     | ✓      |
 
 ### Typography Compliance
 
-| Property | Design | Implemented | Status |
-|----------|--------|-------------|--------|
-| font-family | JetBrains Mono | JetBrains Mono | ✓ |
-| font-size (body) | 11px | 11px | ✓ |
+| Property         | Design         | Implemented    | Status |
+| ---------------- | -------------- | -------------- | ------ |
+| font-family      | JetBrains Mono | JetBrains Mono | ✓      |
+| font-size (body) | 11px           | 11px           | ✓      |
 
 ### Spacing Compliance
 
-| Component | Design | Implemented | Status |
-|-----------|--------|-------------|--------|
-| Header padding | 12px 24px | 12px 24px | ✓ |
+| Component      | Design    | Implemented | Status |
+| -------------- | --------- | ----------- | ------ |
+| Header padding | 12px 24px | 12px 24px   | ✓      |
 
 ### Responsive Compliance
 
-| Breakpoint | Design Frame | Verified | Status |
-|------------|--------------|----------|--------|
-| Desktop (1440px) | bi8Au | Yes | ✓ |
-| Mobile (390px) | ZVAUX | Yes | ✓ |
+| Breakpoint       | Design Frame | Verified | Status |
+| ---------------- | ------------ | -------- | ------ |
+| Desktop (1440px) | bi8Au        | Yes      | ✓      |
+| Mobile (390px)   | ZVAUX        | Yes      | ✓      |
 
 ### Visual Regression
 
@@ -907,7 +904,7 @@ await mcp__playwright__screenshot({ fullPage: true, name: 'verification-baseline
 
 // 5. Verify specific elements
 const elementExists = await mcp__playwright__evaluate({
-  script: `!!document.querySelector('.expected-element')`
+  script: `!!document.querySelector('.expected-element')`,
 });
 
 // 6. Verify functionality
@@ -921,31 +918,35 @@ await mcp__playwright__screenshot({ name: 'after-action' });
 ### Verification Patterns
 
 **Element existence:**
+
 ```typescript
 const exists = await mcp__playwright__evaluate({
-  script: `!!document.querySelector('${selector}')`
+  script: `!!document.querySelector('${selector}')`,
 });
 ```
 
 **Text content:**
+
 ```typescript
 const text = await mcp__playwright__evaluate({
-  script: `document.querySelector('${selector}')?.textContent`
+  script: `document.querySelector('${selector}')?.textContent`,
 });
 ```
 
 **Computed styles:**
+
 ```typescript
 const styles = await mcp__playwright__evaluate({
   script: `
     const el = document.querySelector('${selector}');
     const s = getComputedStyle(el);
     return { backgroundColor: s.backgroundColor, color: s.color };
-  `
+  `,
 });
 ```
 
 **Interactive verification:**
+
 ```typescript
 // Click and verify result
 await mcp__playwright__click({ selector: 'button.submit' });
@@ -1018,7 +1019,7 @@ onSubmit={(e) => e.preventDefault()}  // Only prevents default
 ```typescript
 // RED FLAGS:
 export async function POST() {
-  return Response.json({ message: "Not implemented" });
+  return Response.json({ message: 'Not implemented' });
 }
 
 export async function GET() {
@@ -1068,4 +1069,4 @@ return <div>No messages</div>  // Always shows "no messages"
 - [ ] Re-verification metadata included (if previous existed)
 - [ ] VERIFICATION.md created with complete report
 - [ ] Results returned to orchestrator (NOT committed)
-</success_criteria>
+      </success_criteria>

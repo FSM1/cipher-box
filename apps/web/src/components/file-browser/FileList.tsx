@@ -29,6 +29,8 @@ type FileListProps = {
     sourceParentId: string,
     destFolderId: string
   ) => void;
+  /** Callback when external files are dropped onto a folder */
+  onExternalFileDrop?: (files: File[], destFolderId: string) => void;
 };
 
 /**
@@ -82,6 +84,7 @@ export function FileList({
   onContextMenu,
   onDragStart,
   onDropOnFolder,
+  onExternalFileDrop,
 }: FileListProps) {
   const sortedItems = sortItems(items);
 
@@ -119,6 +122,7 @@ export function FileList({
                     onDropOnFolder(sourceId, sourceType, sourceParentId, item.id)
                 : undefined
             }
+            onExternalFileDrop={item.type === 'folder' ? onExternalFileDrop : undefined}
           />
         ))}
       </div>

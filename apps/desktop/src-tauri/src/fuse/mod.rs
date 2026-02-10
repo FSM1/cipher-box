@@ -118,7 +118,16 @@ impl PublishCoordinator {
     ) -> Result<u64, String> {
         match crate::api::ipns::resolve_ipns(api, ipns_name).await {
             Ok(resp) => {
-                let resolved = resp.sequence_number.parse::<u64>().unwrap_or(0);
+                let resolved = match resp.sequence_number.parse::<u64>() {
+                    Ok(v) => v,
+                    Err(e) => {
+                        log::warn!(
+                            "Failed to parse IPNS sequence '{}' for {}: {}",
+                            resp.sequence_number, ipns_name, e
+                        );
+                        0
+                    }
+                };
                 let cached = self.get_cached(ipns_name).unwrap_or(0);
                 let seq = std::cmp::max(resolved, cached);
                 self.update_cache(ipns_name, seq);

@@ -1,15 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useDropzone, FileRejection } from 'react-dropzone';
-import { useFileUpload } from '../../hooks/useFileUpload';
-import { useFolder } from '../../hooks/useFolder';
-import { unpinFromIpfs } from '../../lib/api/ipfs';
-import { useUploadStore } from '../../stores/upload.store';
-import { useQuotaStore } from '../../stores/quota.store';
-import { useFolderStore } from '../../stores/folder.store';
-import type { UploadedFile } from '../../services/upload.service';
+import { useDropUpload, MAX_FILE_SIZE } from '../../hooks/useDropUpload';
 import '../../styles/upload.css';
-
-const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per FILE-01
 
 type UploadZoneProps = {
   folderId: string;
@@ -35,8 +27,7 @@ type UploadZoneProps = {
  * ```
  */
 export function UploadZone({ folderId, onUploadComplete }: UploadZoneProps) {
-  const { upload, canUpload, isUploading } = useFileUpload();
-  const { addFiles } = useFolder();
+  const { handleFileDrop, isUploading } = useDropUpload();
   const [error, setError] = useState<string | null>(null);
 
   const handleDrop = useCallback(
@@ -52,84 +43,18 @@ export function UploadZone({ folderId, onUploadComplete }: UploadZoneProps) {
           setError(`Files exceed 100MB limit: ${oversized.map((r) => r.file.name).join(', ')}`);
           return;
         }
-        // Other errors
         setError(`Some files were rejected`);
         return;
       }
 
-      if (acceptedFiles.length === 0) {
-        return;
-      }
+      if (acceptedFiles.length === 0) return;
 
-      // Calculate total size
-      const totalSize = acceptedFiles.reduce((sum, f) => sum + f.size, 0);
-
-      // Check quota
-      if (!canUpload(totalSize)) {
-        setError('Not enough storage space for these files');
-        return;
-      }
-
-      // Pre-upload: check for duplicate file names in current folder
-      const folder = useFolderStore.getState().folders[folderId];
-      if (folder) {
-        const existingNames = new Set(folder.children.map((c) => c.name));
-        const duplicates = acceptedFiles.filter((f) => existingNames.has(f.name));
-        if (duplicates.length > 0) {
-          setError(
-            `File${duplicates.length > 1 ? 's' : ''} already exist${duplicates.length === 1 ? 's' : ''} in this folder: ${duplicates.map((f) => f.name).join(', ')}`
-          );
-          return;
-        }
-
-        // Check for duplicates within the batch itself
-        const batchNames = new Set<string>();
-        for (const f of acceptedFiles) {
-          if (batchNames.has(f.name)) {
-            setError(`Duplicate file name in selection: ${f.name}`);
-            return;
-          }
-          batchNames.add(f.name);
-        }
-      }
-
-      let uploadedFiles: UploadedFile[] | undefined;
-      try {
-        // Upload files to IPFS (sequential encrypt + upload per file)
-        uploadedFiles = await upload(acceptedFiles);
-
-        // Set registering status during batch folder metadata registration
-        useUploadStore.getState().setRegistering();
-
-        // Batch register all files in folder (single IPNS publish)
-        await addFiles(
-          folderId,
-          uploadedFiles.map((uploaded) => ({
-            cid: uploaded.cid,
-            wrappedKey: uploaded.wrappedKey,
-            iv: uploaded.iv,
-            originalName: uploaded.originalName,
-            originalSize: uploaded.originalSize,
-          }))
-        );
-
-        useUploadStore.getState().setSuccess();
+      const success = await handleFileDrop(acceptedFiles, folderId);
+      if (success) {
         onUploadComplete?.();
-      } catch (err) {
-        const message = (err as Error).message;
-        if (message !== 'Upload cancelled by user') {
-          useUploadStore.getState().setError(message);
-          setError(message);
-
-          // Clean up orphaned IPFS pins if upload succeeded but registration failed
-          if (uploadedFiles?.length) {
-            uploadedFiles.forEach((f) => unpinFromIpfs(f.cid).catch(() => {}));
-            useQuotaStore.getState().fetchQuota();
-          }
-        }
       }
     },
-    [upload, canUpload, addFiles, folderId, onUploadComplete]
+    [handleFileDrop, folderId, onUploadComplete]
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
