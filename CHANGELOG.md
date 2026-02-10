@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/FSM1/cipher-box/compare/v0.2.0...v0.3.0) (2026-02-10)
+
+
+### Features
+
+* add external file drag-and-drop from Finder/Explorer ([#78](https://github.com/FSM1/cipher-box/issues/78)) ([a776885](https://github.com/FSM1/cipher-box/commit/a77688557edc3e555d2c9402cd16133d63a8711a))
+* add file/folder details modal with CID and encryption metadata ([#82](https://github.com/FSM1/cipher-box/issues/82)) ([96dca2d](https://github.com/FSM1/cipher-box/commit/96dca2d59c394df603aba33cbdbd00859d6790ed))
+
 ## [0.2.0](https://github.com/FSM1/cipher-box/compare/v0.1.2...v0.2.0) (2026-02-10)
 
 
