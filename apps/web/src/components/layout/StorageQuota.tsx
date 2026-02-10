@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useQuotaStore } from '../../stores/quota.store';
 
 /**
@@ -18,9 +19,16 @@ function formatBytes(bytes: number): string {
 /**
  * Storage quota indicator component.
  * Shows storage usage with a progress bar and text.
+ * Fetches current quota from the backend on mount.
  */
 export function StorageQuota() {
-  const { usedBytes, limitBytes } = useQuotaStore();
+  const { usedBytes, limitBytes, fetchQuota } = useQuotaStore();
+
+  // Fetch quota from backend on mount so the display reflects
+  // actual usage (e.g. files uploaded in previous sessions).
+  useEffect(() => {
+    fetchQuota();
+  }, [fetchQuota]);
 
   // Calculate percentage (avoid division by zero)
   const percentage = limitBytes > 0 ? (usedBytes / limitBytes) * 100 : 0;
