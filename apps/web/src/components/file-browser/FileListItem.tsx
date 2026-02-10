@@ -31,6 +31,8 @@ type FileListItemProps = {
   onDragStart: (event: DragEvent, item: FolderChild) => void;
   /** Callback when an item is dropped onto this folder (folders only) */
   onDrop?: (sourceId: string, sourceType: 'file' | 'folder', sourceParentId: string) => void;
+  /** Callback when external files are dropped onto this folder */
+  onExternalFileDrop?: (files: File[], destFolderId: string) => void;
 };
 
 /**
@@ -74,6 +76,7 @@ export function FileListItem({
   onContextMenu,
   onDragStart,
   onDrop,
+  onExternalFileDrop,
 }: FileListItemProps) {
   // Ref for long press timer
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -195,6 +198,7 @@ export function FileListItem({
 
   /**
    * Handle drag over - allow drop on folders.
+   * Accepts both internal drags (move) and external file drags (upload).
    */
   const handleDragOver = useCallback(
     (e: DragEvent) => {
@@ -203,7 +207,16 @@ export function FileListItem({
 
       e.preventDefault();
       e.stopPropagation();
-      e.dataTransfer.dropEffect = 'move';
+
+      // External files get 'copy' effect, internal moves get 'move'
+      if (
+        e.dataTransfer.types.includes('Files') &&
+        !e.dataTransfer.types.includes('application/json')
+      ) {
+        e.dataTransfer.dropEffect = 'copy';
+      } else {
+        e.dataTransfer.dropEffect = 'move';
+      }
       setIsDragOver(true);
     },
     [item]
@@ -219,7 +232,7 @@ export function FileListItem({
   }, []);
 
   /**
-   * Handle drop - move item to this folder.
+   * Handle drop - move item to this folder, or upload external files.
    */
   const handleDrop = useCallback(
     (e: DragEvent) => {
@@ -228,7 +241,21 @@ export function FileListItem({
       setIsDragOver(false);
 
       // Only handle drop on folders
-      if (!isFolder(item) || !onDrop) return;
+      if (!isFolder(item)) return;
+
+      // Check for external file drop first
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        const jsonData = e.dataTransfer.getData('application/json');
+        // No JSON data means this is an external file drag from OS
+        if (!jsonData && onExternalFileDrop) {
+          const files = Array.from(e.dataTransfer.files);
+          onExternalFileDrop(files, item.id);
+          return;
+        }
+      }
+
+      // Internal move operation
+      if (!onDrop) return;
 
       try {
         const data = e.dataTransfer.getData('application/json');
@@ -251,7 +278,7 @@ export function FileListItem({
         // Invalid drag data, ignore
       }
     },
-    [item, onDrop]
+    [item, onDrop, onExternalFileDrop]
   );
 
   // Display size only for files (folders show "-")
@@ -278,9 +305,9 @@ export function FileListItem({
       onContextMenu={handleContextMenu}
       draggable
       onDragStart={handleDragStart}
-      onDragOver={isFolder(item) && onDrop ? handleDragOver : undefined}
-      onDragLeave={isFolder(item) && onDrop ? handleDragLeave : undefined}
-      onDrop={isFolder(item) && onDrop ? handleDrop : undefined}
+      onDragOver={isFolder(item) && (onDrop || onExternalFileDrop) ? handleDragOver : undefined}
+      onDragLeave={isFolder(item) && (onDrop || onExternalFileDrop) ? handleDragLeave : undefined}
+      onDrop={isFolder(item) && (onDrop || onExternalFileDrop) ? handleDrop : undefined}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
