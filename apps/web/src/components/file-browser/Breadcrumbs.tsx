@@ -116,24 +116,23 @@ export function Breadcrumbs({
       e.stopPropagation();
       setDragOverId(null);
 
-      // Check for external file drop first
-      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-        const jsonData = e.dataTransfer.getData('application/json');
-        if (!jsonData && onExternalFileDrop) {
+      // Read JSON once — empty string means external file drag from OS
+      const jsonData = e.dataTransfer.getData('application/json');
+
+      if (!jsonData) {
+        // External file drop
+        if (e.dataTransfer.files.length > 0 && onExternalFileDrop) {
           const files = Array.from(e.dataTransfer.files);
           onExternalFileDrop(files, destFolderId);
-          return;
         }
+        return;
       }
 
       // Internal move operation
       if (!onDrop) return;
 
       try {
-        const data = e.dataTransfer.getData('application/json');
-        if (!data) return;
-
-        const parsed = JSON.parse(data) as {
+        const parsed = JSON.parse(jsonData) as {
           id: string;
           type: 'file' | 'folder';
           parentId: string;

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, type DragEvent, type MouseEvent } from 'react';
+import { useState, useCallback, useEffect, useRef, type DragEvent, type MouseEvent } from 'react';
 import type { FolderChild, FileEntry } from '@cipherbox/crypto';
 import { useFolderNavigation } from '../../hooks/useFolderNavigation';
 import { useFolder } from '../../hooks/useFolder';
@@ -173,6 +173,33 @@ export function FileBrowser() {
         setIsDraggingExternal(false);
       }
     }
+  }, []);
+
+  // Reset drag state if user abandons drag outside the window (e.g. drops on desktop
+  // or presses Escape). Without this the counter/overlay can get stuck.
+  useEffect(() => {
+    const resetDragState = () => {
+      dragCounterRef.current = 0;
+      setIsDraggingExternal(false);
+    };
+    const handleWindowDrop = (e: Event) => {
+      e.preventDefault();
+      resetDragState();
+    };
+    const handleWindowDragLeave = (e: globalThis.DragEvent) => {
+      // relatedTarget is null when the drag leaves the browser window entirely
+      if (!e.relatedTarget) {
+        resetDragState();
+      }
+    };
+    window.addEventListener('dragend', resetDragState);
+    window.addEventListener('drop', handleWindowDrop);
+    window.addEventListener('dragleave', handleWindowDragLeave as EventListener);
+    return () => {
+      window.removeEventListener('dragend', resetDragState);
+      window.removeEventListener('drop', handleWindowDrop);
+      window.removeEventListener('dragleave', handleWindowDragLeave as EventListener);
+    };
   }, []);
 
   /**
