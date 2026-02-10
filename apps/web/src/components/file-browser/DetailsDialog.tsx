@@ -269,6 +269,7 @@ export function DetailsDialog({ open, onClose, item, parentFolderId }: DetailsDi
 
     if (!ipnsName) {
       setMetadataLoading(false);
+      setMetadataCid(null);
       return;
     }
 
