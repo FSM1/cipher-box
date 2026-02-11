@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/FSM1/cipher-box/compare/v0.5.0...v0.6.0) (2026-02-11)
+
+
+### Features
+
+* phase 10 data portability ([#95](https://github.com/FSM1/cipher-box/issues/95)) ([787d881](https://github.com/FSM1/cipher-box/commit/787d88166f0d5158577cea2b7e52c35cdacae97d))
+
 ## [0.5.0](https://github.com/FSM1/cipher-box/compare/v0.4.0...v0.5.0) (2026-02-11)
 
 ### Features
