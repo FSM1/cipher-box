@@ -327,9 +327,9 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-11
-Stopped at: Completed 10.1-01-PLAN.md (Phase 10.1 complete)
+Stopped at: Phase 10.1 verified (5/5 must-haves passed)
 Resume file: None
-Next: Phase 10.1 complete. All plans executed. Ready for Phase 11 or v1.0 release.
+Next: v1.0 milestone complete — ready for `/gsd:audit-milestone` or `/gsd:complete-milestone`
 
 ---
 
