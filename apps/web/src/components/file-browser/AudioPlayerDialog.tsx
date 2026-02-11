@@ -329,7 +329,7 @@ export function AudioPlayerDialog({ open, onClose, item }: AudioPlayerDialogProp
             {vizEnabled ? (
               <canvas ref={canvasRef} />
             ) : (
-              <span className="audio-viz-placeholder">// visualization disabled</span>
+              <span className="audio-viz-placeholder">{'// visualization disabled'}</span>
             )}
           </div>
 

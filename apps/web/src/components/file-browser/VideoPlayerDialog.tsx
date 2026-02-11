@@ -80,6 +80,10 @@ export function VideoPlayerDialog({ open, onClose, item }: VideoPlayerDialogProp
         clearTimeout(hideTimerRef.current);
         hideTimerRef.current = null;
       }
+      if (clickTimerRef.current) {
+        clearTimeout(clickTimerRef.current);
+        clickTimerRef.current = null;
+      }
     }
   }, [open]);
 
@@ -341,6 +345,18 @@ export function VideoPlayerDialog({ open, onClose, item }: VideoPlayerDialogProp
               className="video-progress-track"
               ref={progressRef}
               onClick={handleProgressClick}
+              onKeyDown={(e) => {
+                const video = videoRef.current;
+                if (!video || !duration) return;
+                const step = e.shiftKey ? 10 : 5;
+                if (e.key === 'ArrowRight') {
+                  e.preventDefault();
+                  video.currentTime = Math.min(duration, video.currentTime + step);
+                } else if (e.key === 'ArrowLeft') {
+                  e.preventDefault();
+                  video.currentTime = Math.max(0, video.currentTime - step);
+                }
+              }}
               role="slider"
               aria-label="Video progress"
               aria-valuemin={0}
