@@ -95,22 +95,72 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **PORT-02**: Export includes encrypted keys and folder structure
 - [x] **PORT-03**: Export format is publicly documented
 
-## v2 Requirements
+## Milestone 2 Requirements (Production v1.0)
 
-Deferred to future release. Tracked but not in current roadmap.
+Requirements for production release. Each maps to roadmap phases 12+.
 
 ### File Sharing
 
-- **SHARE-01**: User can generate shareable link for file
-- **SHARE-02**: User can set password on shared link
-- **SHARE-03**: User can set expiration on shared link
-- **SHARE-04**: Recipient can download without account
+- [ ] **SHARE-01**: User can share a folder (read-only) with another CipherBox user via ECIES key re-wrapping
+- [ ] **SHARE-02**: User can invite a recipient by email or public key
+- [ ] **SHARE-03**: Recipient can accept or decline a share invitation
+- [ ] **SHARE-04**: User can revoke a share (triggers folder key rotation for remaining recipients)
+- [ ] **SHARE-05**: User can view "Shared with me" folders in file browser
+- [ ] **SHARE-06**: User can generate a shareable link for a file (decryption key in URL fragment only)
+- [ ] **SHARE-07**: Recipient can download shared file via link without a CipherBox account
+
+### Search
+
+- [ ] **SRCH-01**: User can search file names across all folders (client-side)
+- [ ] **SRCH-02**: Search index is encrypted and persisted in IndexedDB
+- [ ] **SRCH-03**: Search index updates incrementally when IPNS polling detects changes
+
+### Multi-Factor Authentication
+
+- [ ] **MFA-01**: User can enable MFA via Web3Auth settings
+- [ ] **MFA-02**: User can configure device share as an MFA factor
+- [ ] **MFA-03**: User can generate and store a backup recovery phrase
+- [ ] **MFA-04**: MFA enrollment does not change the derived keypair (vault remains accessible)
 
 ### File Versioning
 
-- **VER-01**: System keeps previous versions of files
-- **VER-02**: User can view version history
-- **VER-03**: User can restore previous version
+- [ ] **VER-01**: System automatically retains previous file versions on update (old CIDs kept pinned)
+- [ ] **VER-02**: User can view version history for a file
+- [ ] **VER-03**: User can restore a previous version of a file
+- [ ] **VER-04**: Version retention policy enforced (max versions per file, configurable)
+- [ ] **VER-05**: Version storage counted against user quota
+
+### Advanced Sync
+
+- [ ] **SYNC-04**: Client detects conflicts via IPNS sequence number mismatch before publishing
+- [ ] **SYNC-05**: Offline write operations are queued locally and replayed on reconnect
+- [ ] **SYNC-06**: Queued operations use idempotency keys to prevent duplicate application
+
+### TEE Enhancements
+
+- [ ] **TEE-06**: AWS Nitro enclave as fallback TEE provider for IPNS republishing
+
+## Future Requirements (Milestone 3+)
+
+Deferred to future milestones. Tracked but not in current roadmap.
+
+### Sharing Enhancements
+
+- **SHARE-08**: User can set password on shared link (PBKDF2 key derivation)
+- **SHARE-09**: User can set expiration on shared link
+- **SHARE-10**: Per-subfolder granular sharing (share subfolder without exposing parent)
+- **SHARE-11**: Read-write shared folders (multi-writer IPNS)
+
+### Additional MFA
+
+- **MFA-05**: CipherBox-layer WebAuthn/Passkey for sensitive operations
+- **MFA-06**: TOTP authenticator support
+- **MFA-07**: Custom recovery phrase (beyond Web3Auth built-in)
+
+### Advanced Sync Enhancements
+
+- **SYNC-07**: Selective sync for desktop (choose folders to sync locally)
+- **SYNC-08**: Conflict resolution UI with merge options
 
 ### Mobile Apps
 
@@ -118,41 +168,35 @@ Deferred to future release. Tracked but not in current roadmap.
 - **MOB-02**: Android app with full functionality
 - **MOB-03**: Photo backup feature
 
-### Search
-
-- **SEARCH-01**: User can search file names
-- **SEARCH-02**: Search index is encrypted client-side
-
-### Advanced Sync
-
-- **SYNC-04**: Conflict detection with user resolution
-- **SYNC-05**: Offline write queue with retry on reconnect
-- **SYNC-06**: Selective sync (choose folders to sync locally)
-
-### TEE Enhancements
-
-- **TEE-06**: AWS Nitro as fallback TEE provider
-- **TEE-07**: Multi-epoch support for seamless migration
-
 ### Additional Platforms
 
 - **PLAT-01**: Linux desktop app
 - **PLAT-02**: Windows desktop app
 
+### Productivity Suite (Milestone 3)
+
+- **DOCS-01**: Built-in document editor
+- **DOCS-02**: Spreadsheet editor
+- **DOCS-03**: Presentation editor
+- **DOCS-04**: Secure document signing
+- **TEAM-01**: Team accounts with org structure
+- **TEAM-02**: Admin/member/viewer roles
+- **BILL-01**: Billing integration (Stripe or crypto)
+
 ## Out of Scope
 
 Explicitly excluded. Documented to prevent scope creep.
 
-| Feature                     | Reason                                   |
-| --------------------------- | ---------------------------------------- |
-| Billing/payments            | Tech demo focus, defer to v1.1+          |
-| AES-256-CTR streaming       | Implementation complexity, defer to v1.1 |
-| File preview (images, PDFs) | UX enhancement, not core                 |
-| Soft delete / recycle bin   | Complexity, defer to v2                  |
-| Independent recovery        | Requires offline tooling                 |
-| Collaborative editing       | Real-time sync complexity, v3.0          |
-| Team accounts               | Permission management complexity, v3.0   |
-| Storage indicator in UI     | Nice-to-have, not critical               |
+| Feature                    | Reason                                                         |
+| -------------------------- | -------------------------------------------------------------- |
+| Read-write shared folders  | Multi-writer IPNS unsolved; no competitor has solved it either |
+| Full-text content search   | Encrypted index leaks access patterns; defer to research spike |
+| CRDTs / automatic merging  | Overkill for metadata-blob sync; simple conflict detection     |
+| Billing/payments           | Deferred to Milestone 3                                        |
+| Docs/sheets/slides editors | Deferred to Milestone 3                                        |
+| Team accounts              | Deferred to Milestone 3                                        |
+| Collaborative editing      | Real-time sync complexity, v3.0+                               |
+| Mobile apps                | Platform expansion, Milestone 3+                               |
 
 ## Traceability
 
@@ -219,13 +263,19 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PORT-02     | Phase 10 | Complete |
 | PORT-03     | Phase 10 | Complete |
 
-**Coverage:**
+**Milestone 1 Coverage:**
 
-- v1 requirements: 52 total
+- M1 requirements: 52 total
 - Mapped to phases: 52
 - Unmapped: 0
 
+**Milestone 2 Coverage:**
+
+- M2 requirements: 24 total
+- Mapped to phases: TBD (roadmap creation)
+- Unmapped: 24
+
 ---
 
-_Requirements defined: 2026-01-20_
-_Last updated: 2026-01-20 after Phase 4 completion_
+Requirements defined: 2026-01-20
+Last updated: 2026-02-11 after Milestone 2 requirements definition
