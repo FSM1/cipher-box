@@ -27,7 +27,7 @@ import {
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { IPFS_PROVIDER, IpfsProvider } from './providers';
-import { AddResponseDto, UploadResponseDto, UnpinDto, UnpinResponseDto } from './dto';
+import { UploadResponseDto, UnpinDto, UnpinResponseDto } from './dto';
 import { VaultService } from '../vault/vault.service';
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
@@ -45,55 +45,6 @@ export class IpfsController {
     @Inject(IPFS_PROVIDER) private readonly ipfsProvider: IpfsProvider,
     private readonly vaultService: VaultService
   ) {}
-
-  @Post('add')
-  @ApiOperation({
-    summary: 'Pin encrypted file to IPFS',
-    description: 'Upload an encrypted file blob to IPFS via Pinata. Returns the CID and size.',
-  })
-  @ApiConsumes('multipart/form-data')
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        file: {
-          type: 'string',
-          format: 'binary',
-          description: 'Encrypted file blob (max 100MB)',
-        },
-      },
-      required: ['file'],
-    },
-  })
-  @ApiResponse({
-    status: 201,
-    description: 'File pinned successfully',
-    type: AddResponseDto,
-  })
-  @ApiResponse({
-    status: 401,
-    description: 'Unauthorized - JWT token required',
-  })
-  @ApiResponse({
-    status: 413,
-    description: 'Payload too large - file exceeds 100MB limit',
-  })
-  @UseInterceptors(
-    FileInterceptor('file', {
-      limits: { fileSize: MAX_FILE_SIZE },
-    })
-  )
-  async add(
-    @UploadedFile(
-      new ParseFilePipe({
-        validators: [new MaxFileSizeValidator({ maxSize: MAX_FILE_SIZE })],
-      })
-    )
-    file: Express.Multer.File
-  ): Promise<AddResponseDto> {
-    const result = await this.ipfsProvider.pinFile(file.buffer);
-    return result;
-  }
 
   @Post('upload')
   @ApiOperation({
