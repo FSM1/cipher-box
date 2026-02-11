@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "20c4c2b3f159",
+  "strategy": "auto-commit",
+  "branch": "fix/release-please-ci-trigger",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/release-please.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/20/c4c2b3f159/0/metadata.json",
+      "transcript": "/20/c4c2b3f159/0/full.jsonl",
+      "context": "",
+      "content_hash": "/20/c4c2b3f159/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 1476,
+    "cache_read_tokens": 176239,
+    "output_tokens": 381,
+    "api_call_count": 4
+  }
+}
