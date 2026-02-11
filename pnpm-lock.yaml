@@ -16,6 +16,9 @@ importers:
       '@eslint/js':
         specifier: ^9.18.0
         version: 9.39.2
+      '@noble/secp256k1':
+        specifier: ^3.0.0
+        version: 3.0.0
       concurrently:
         specifier: ^9.2.1
         version: 9.2.1
@@ -43,6 +46,9 @@ importers:
       prettier:
         specifier: ^3.4.2
         version: 3.8.0
+      tsx:
+        specifier: ^4.21.0
+        version: 4.21.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -17920,7 +17926,6 @@ snapshots:
   get-tsconfig@4.13.0:
     dependencies:
       resolve-pkg-maps: 1.0.0
-    optional: true
 
   git-raw-commits@4.0.0:
     dependencies:
@@ -20136,8 +20141,7 @@ snapshots:
 
   resolve-from@5.0.0: {}
 
-  resolve-pkg-maps@1.0.0:
-    optional: true
+  resolve-pkg-maps@1.0.0: {}
 
   resolve.exports@2.0.3: {}
 
@@ -20936,7 +20940,6 @@ snapshots:
       get-tsconfig: 4.13.0
     optionalDependencies:
       fsevents: 2.3.3
-    optional: true
 
   tty-browserify@0.0.1: {}
 
