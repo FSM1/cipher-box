@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/FSM1/cipher-box/compare/v0.7.0...v0.7.1) (2026-02-11)
+
+
+### Bug Fixes
+
+* **web:** correct GitHub URL in app footer ([#102](https://github.com/FSM1/cipher-box/issues/102)) ([6531077](https://github.com/FSM1/cipher-box/commit/653107707f69d1f28e372662ce98bbef8a36c888))
+
 ## [0.7.0](https://github.com/FSM1/cipher-box/compare/v0.6.0...v0.7.0) (2026-02-11)
 
 
