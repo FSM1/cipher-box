@@ -144,6 +144,7 @@ jobs:
           DB_DATABASE=cipherbox_staging
           JWT_SECRET=${{ secrets.STAGING_JWT_SECRET }}
           WEB_APP_URL=${{ vars.STAGING_WEB_APP_URL }}
+          CORS_ALLOWED_ORIGINS=${{ vars.CORS_ALLOWED_ORIGINS }}
           IPFS_PROVIDER=local
           IPFS_LOCAL_API_URL=http://ipfs:5001
           IPFS_LOCAL_GATEWAY_URL=http://ipfs:8080
