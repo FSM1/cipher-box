@@ -1,0 +1,23 @@
+Phase 12.1 inserted after Phase 12:
+
+- **Description:** AES-256-CTR streaming encryption for media files
+- **Directory:** `.planning/phases/12.1-aes-ctr-streaming-encryption/`
+- **Status:** Not planned yet
+- **Marker:** (INSERTED)
+- **Research flag:** Needs `/gsd:research-phase` before planning
+
+**Roadmap updated** — execution order is now: 12 → **12.1** → 13 → 14 → 15 → 16 → 17
+
+---
+
+**Next up** after MFA completes:
+
+`/gsd:plan-phase 12.1`
+
+`/clear` first for fresh context
+
+---
+
+**Also available:**
+- Phase 13 (File Versioning) still depends on Phase 12, not 12.1 — later phases are unaffected by this insertion
+- Phase 11 (Cross-Platform Desktop) remains parallel-capable
