@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.2](https://github.com/FSM1/cipher-box/compare/v0.7.1...v0.7.2) (2026-02-11)
+
+
+### Bug Fixes
+
+* **web:** matrix rain effect visibility improvements ([#104](https://github.com/FSM1/cipher-box/issues/104)) ([e4ba8fb](https://github.com/FSM1/cipher-box/commit/e4ba8fb729fbed7ae72fac38b3d3c8fc80aa5f95))
+
 ## [0.7.1](https://github.com/FSM1/cipher-box/compare/v0.7.0...v0.7.1) (2026-02-11)
 
 
