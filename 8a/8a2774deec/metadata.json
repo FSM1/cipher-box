@@ -1,0 +1,17 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "8a8a2774deec",
+  "strategy": "auto-commit",
+  "branch": "fix/login-footer-status-indicator",
+  "checkpoints_count": 0,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/8a/8a2774deec/0/metadata.json",
+      "transcript": "/8a/8a2774deec/0/full.jsonl",
+      "context": "",
+      "content_hash": "/8a/8a2774deec/0/content_hash.txt",
+      "prompt": ""
+    }
+  ]
+}
