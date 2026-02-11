@@ -144,7 +144,9 @@ export function VideoPlayerDialog({ open, onClose, item }: VideoPlayerDialogProp
     setDuration(video.duration);
     setVideoWidth(video.videoWidth);
     setVideoHeight(video.videoHeight);
-  }, []);
+    video.volume = volume;
+    video.playbackRate = SPEED_OPTIONS[speedIndex];
+  }, [volume, speedIndex]);
 
   const handleEnded = useCallback(() => {
     setIsPlaying(false);
