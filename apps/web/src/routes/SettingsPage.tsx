@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AppShell } from '../components/layout';
 import { LinkedMethods } from '../components/auth/LinkedMethods';
+import { VaultExport } from '../components/vault/VaultExport';
 import { useAuth } from '../hooks/useAuth';
 
 /**
@@ -39,6 +40,9 @@ export function SettingsPage() {
         <h2 className="settings-title">[SETTINGS]</h2>
         <section className="settings-section">
           <LinkedMethods />
+        </section>
+        <section className="settings-section" style={{ marginTop: 'var(--spacing-md)' }}>
+          <VaultExport />
         </section>
       </div>
     </AppShell>
