@@ -46,6 +46,8 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
   background-color: var(--color-background);
   position: relative;
 }
@@ -254,6 +256,8 @@
 .file-list {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
   border: var(--border-thickness) solid var(--color-border);
 }
 
@@ -273,7 +277,9 @@
 }
 
 .file-list-body {
-  /* Container for file items */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* File List Item - Desktop uses grid, Mobile uses 2-row stacked layout */
