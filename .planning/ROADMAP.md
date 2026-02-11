@@ -378,7 +378,7 @@ Urgent insertion to prepare environment, DevOps pipeline, and staging deployment
 
 ### Phase 10: Data Portability
 
-**Goal**: Users can export vault for independent recovery
+**Goal**: Users can export vault as JSON for independent recovery via standalone tool
 **Depends on**: Phase 9.1
 **Requirements**: PORT-01, PORT-02, PORT-03
 **Success Criteria** (what must be TRUE):
@@ -386,13 +386,13 @@ Urgent insertion to prepare environment, DevOps pipeline, and staging deployment
 1. User can export vault as JSON file from settings
 2. Export includes all encrypted keys and complete folder structure
 3. Export format is publicly documented for independent recovery
-   **Plans**: TBD
+   **Plans**: 3 plans
 
 Plans:
 
-- [ ] 10-01: Vault export functionality in web and desktop
-- [ ] 10-02: Export format documentation
-- [ ] 10-03: Final polish and edge case handling
+- [ ] 10-01-PLAN.md — API vault export endpoint + web app settings export button
+- [ ] 10-02-PLAN.md — Standalone recovery HTML page (single-file, infrastructure-independent)
+- [ ] 10-03-PLAN.md — Export format technical documentation with test vectors
 
 ### Phase 11: Security Enhancements (Post-v1.0)
 
@@ -478,4 +478,5 @@ _Phase 9 revised: 2026-02-07_
 _Phase 9 complete: 2026-02-08_
 _Phase 9.1 planned: 2026-02-09_
 _Phase 9.1 complete: 2026-02-09_
+_Phase 10 planned: 2026-02-11_
 _Total phases: 14 | Total plans: 74 | Depth: Comprehensive_
