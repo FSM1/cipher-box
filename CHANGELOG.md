@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.4](https://github.com/FSM1/cipher-box/compare/v0.7.3...v0.7.4) (2026-02-11)
+
+
+### Bug Fixes
+
+* **web:** improve modal-close focus styling per PR review ([b1f5141](https://github.com/FSM1/cipher-box/commit/b1f5141190495550b6ea91121b3f49786537cd23))
+* **web:** replace double-outline focus style with thicker border ([#111](https://github.com/FSM1/cipher-box/issues/111)) ([b1f5141](https://github.com/FSM1/cipher-box/commit/b1f5141190495550b6ea91121b3f49786537cd23))
+
 ## [0.7.3](https://github.com/FSM1/cipher-box/compare/v0.7.2...v0.7.3) (2026-02-11)
 
 
