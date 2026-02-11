@@ -60,6 +60,10 @@ Recent decisions affecting current work:
 - `2026-02-07-web-worker-large-file-encryption.md` -- Offload large file encryption to Web Worker (area: ui)
 - `2026-02-10-remove-debug-eprintln-statements.md` -- Remove debug eprintln! statements from FUSE code (area: desktop)
 
+### Roadmap Evolution
+
+- Phase 12.1 inserted after Phase 12: AES-256-CTR streaming encryption for media files (INSERTED) — previously deferred as "future enhancement," promoted to M2 for early delivery after MFA stabilizes key derivation
+
 ### Blockers/Concerns
 
 - Web3Auth MFA pricing: mfaSettings requires SCALE plan for production (free on devnet). Verify pricing before committing.
@@ -79,6 +83,7 @@ Recent decisions affecting current work:
 - Phase 14 (Sharing): NEEDS `/gsd:research-phase` -- revocation key rotation protocol
 - Phase 15 (Link Sharing): NEEDS `/gsd:research-phase` -- unauthenticated web viewer security
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
+- Phase 12.1 (AES-CTR Streaming): NEEDS `/gsd:research-phase` -- MediaSource/Service Worker decryption, byte-range IPFS, CTR nonce management
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity

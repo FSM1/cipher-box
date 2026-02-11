@@ -48,6 +48,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 
 - [ ] **Phase 11: Cross-Platform Desktop** - Linux and Windows desktop apps (Tauri, platform-specific FUSE/virtual drive) -- can run in parallel
 - [ ] **Phase 12: Multi-Factor Authentication** - Web3Auth MFA factor configuration and backup recovery
+- [ ] **Phase 12.1: AES-CTR Streaming Encryption** - AES-256-CTR for media files with byte-range decryption and in-browser playback (INSERTED)
 - [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
 - [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
@@ -93,6 +94,21 @@ See `.planning/milestones/m3/ROADMAP.md` for full M3 phase details.
 2. User can configure a device share as an additional MFA factor for login
 3. User can generate a backup recovery phrase and use it to regain vault access
 4. User's derived keypair (publicKey) remains identical after MFA enrollment -- vault data stays accessible without re-encryption
+   **Plans**: TBD
+
+### Phase 12.1: AES-CTR Streaming Encryption (INSERTED)
+
+**Goal**: Media files (video/audio) are encrypted with AES-256-CTR instead of GCM, enabling byte-range decryption for in-browser playback and efficient FUSE reads
+**Depends on**: Phase 12 (MFA must stabilize auth and key derivation first)
+**Requirements**: Spec'd in TECHNICAL_ARCHITECTURE.md (v1.1 roadmap item), DATA_FLOWS.md (CTR upload/download sequences)
+**Research flag**: NEEDS `/gsd:research-phase` -- MediaSource API + Service Worker decryption pipeline, byte-range IPFS fetching, CTR nonce/counter management for random-access reads
+**Success Criteria** (what must be TRUE):
+
+1. Media files (detected by MIME type) are encrypted with AES-256-CTR; all other files continue using AES-256-GCM
+2. User can play encrypted video/audio in-browser without downloading the entire file first (streaming decryption via MediaSource or Service Worker)
+3. Desktop FUSE client can decrypt CTR-encrypted files with random-access byte-range reads (no full-file download)
+4. Existing GCM-encrypted files remain fully readable -- encryptionMode field in metadata drives mode selection
+5. Upload pipeline streams file data through CTR encryption instead of loading entirely into memory
    **Plans**: TBD
 
 ### Phase 13: File Versioning
@@ -169,7 +185,7 @@ See `.planning/milestones/m3/ROADMAP.md` for full M3 phase details.
 
 **Execution Order:**
 
-Sequential order: 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
+Sequential order: 12 -> 12.1 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
 
 Parallel phases:
 
@@ -196,6 +212,7 @@ Parallel phases:
 | 9.1 Env/DevOps/Staging     | M1        | 6/6            | Complete    | 2026-02-09 |
 | 10. Data Portability       | M1        | 3/3            | Complete    | 2026-02-11 |
 | 12. MFA                    | M2        | 0/TBD          | Not started | -          |
+| 12.1 AES-CTR Streaming    | M2        | 0/TBD          | Not started | -          |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
@@ -214,5 +231,5 @@ Milestone 1 shipped: 2026-02-11
 Milestone 2 roadmap created: 2026-02-11
 Milestone 3 roadmap created: 2026-02-11
 Total M1 phases: 17 | Total M1 plans: 72 | Depth: Comprehensive
-Total M2 phases: 7 | Total M2 plans: TBD | Depth: Comprehensive
+Total M2 phases: 8 | Total M2 plans: TBD | Depth: Comprehensive
 Total M3 phases: 4 | Total M3 plans: TBD | Depth: Comprehensive
