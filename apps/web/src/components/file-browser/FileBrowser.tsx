@@ -22,6 +22,9 @@ import { DetailsDialog } from './DetailsDialog';
 import { UploadZone } from './UploadZone';
 import { TextEditorDialog } from './TextEditorDialog';
 import { ImagePreviewDialog } from './ImagePreviewDialog';
+import { PdfPreviewDialog } from './PdfPreviewDialog';
+import { AudioPlayerDialog } from './AudioPlayerDialog';
+import { VideoPlayerDialog } from './VideoPlayerDialog';
 import { UploadModal } from './UploadModal';
 import { Breadcrumbs } from './Breadcrumbs';
 import { SyncIndicator } from './SyncIndicator';
@@ -119,6 +122,52 @@ function isImageFile(name: string): boolean {
   const lastDot = lower.lastIndexOf('.');
   if (lastDot === -1) return false;
   return IMAGE_EXTENSIONS.has(lower.slice(lastDot));
+}
+
+/** Extensions recognized as PDF files. */
+const PDF_EXTENSIONS = new Set(['.pdf']);
+
+/** Extensions recognized as playable audio files. */
+const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac']);
+
+/** Extensions recognized as playable video files. */
+const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.mkv']);
+
+/**
+ * Check if a filename has a PDF extension.
+ */
+function isPdfFile(name: string): boolean {
+  const lower = name.toLowerCase();
+  const lastDot = lower.lastIndexOf('.');
+  if (lastDot === -1) return false;
+  return PDF_EXTENSIONS.has(lower.slice(lastDot));
+}
+
+/**
+ * Check if a filename has a playable audio extension.
+ */
+function isAudioFile(name: string): boolean {
+  const lower = name.toLowerCase();
+  const lastDot = lower.lastIndexOf('.');
+  if (lastDot === -1) return false;
+  return AUDIO_EXTENSIONS.has(lower.slice(lastDot));
+}
+
+/**
+ * Check if a filename has a playable video extension.
+ */
+function isVideoFile(name: string): boolean {
+  const lower = name.toLowerCase();
+  const lastDot = lower.lastIndexOf('.');
+  if (lastDot === -1) return false;
+  return VIDEO_EXTENSIONS.has(lower.slice(lastDot));
+}
+
+/**
+ * Check if a filename is any previewable type (image, PDF, audio, video).
+ */
+function isPreviewableFile(name: string): boolean {
+  return isImageFile(name) || isPdfFile(name) || isAudioFile(name) || isVideoFile(name);
 }
 
 /**
@@ -338,6 +387,18 @@ export function FileBrowser() {
     open: false,
     item: null,
   });
+  const [pdfPreviewDialog, setPdfPreviewDialog] = useState<DialogState>({
+    open: false,
+    item: null,
+  });
+  const [audioPlayerDialog, setAudioPlayerDialog] = useState<DialogState>({
+    open: false,
+    item: null,
+  });
+  const [videoPlayerDialog, setVideoPlayerDialog] = useState<DialogState>({
+    open: false,
+    item: null,
+  });
   const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false);
 
   // Clear selection when navigating to a new folder
@@ -437,10 +498,19 @@ export function FileBrowser() {
     }
   }, [contextMenu.item]);
 
-  // Open image preview dialog
+  // Open preview dialog (routes to correct dialog based on file type)
   const handlePreviewClick = useCallback(() => {
-    if (contextMenu.item) {
-      setImagePreviewDialog({ open: true, item: contextMenu.item });
+    const item = contextMenu.item;
+    if (!item || !isFileEntry(item)) return;
+    const name = item.name;
+    if (isImageFile(name)) {
+      setImagePreviewDialog({ open: true, item });
+    } else if (isPdfFile(name)) {
+      setPdfPreviewDialog({ open: true, item });
+    } else if (isAudioFile(name)) {
+      setAudioPlayerDialog({ open: true, item });
+    } else if (isVideoFile(name)) {
+      setVideoPlayerDialog({ open: true, item });
     }
   }, [contextMenu.item]);
 
@@ -512,6 +582,18 @@ export function FileBrowser() {
 
   const closeImagePreviewDialog = useCallback(() => {
     setImagePreviewDialog({ open: false, item: null });
+  }, []);
+
+  const closePdfPreviewDialog = useCallback(() => {
+    setPdfPreviewDialog({ open: false, item: null });
+  }, []);
+
+  const closeAudioPlayerDialog = useCallback(() => {
+    setAudioPlayerDialog({ open: false, item: null });
+  }, []);
+
+  const closeVideoPlayerDialog = useCallback(() => {
+    setVideoPlayerDialog({ open: false, item: null });
   }, []);
 
   // Create folder handlers
@@ -648,7 +730,7 @@ export function FileBrowser() {
               : undefined
           }
           onPreview={
-            isFileEntry(contextMenu.item) && isImageFile(contextMenu.item.name)
+            isFileEntry(contextMenu.item) && isPreviewableFile(contextMenu.item.name)
               ? handlePreviewClick
               : undefined
           }
@@ -722,6 +804,37 @@ export function FileBrowser() {
         item={
           imagePreviewDialog.item && isFileEntry(imagePreviewDialog.item)
             ? imagePreviewDialog.item
+            : null
+        }
+      />
+
+      {/* PDF preview dialog */}
+      <PdfPreviewDialog
+        open={pdfPreviewDialog.open}
+        onClose={closePdfPreviewDialog}
+        item={
+          pdfPreviewDialog.item && isFileEntry(pdfPreviewDialog.item) ? pdfPreviewDialog.item : null
+        }
+      />
+
+      {/* Audio player dialog */}
+      <AudioPlayerDialog
+        open={audioPlayerDialog.open}
+        onClose={closeAudioPlayerDialog}
+        item={
+          audioPlayerDialog.item && isFileEntry(audioPlayerDialog.item)
+            ? audioPlayerDialog.item
+            : null
+        }
+      />
+
+      {/* Video player dialog */}
+      <VideoPlayerDialog
+        open={videoPlayerDialog.open}
+        onClose={closeVideoPlayerDialog}
+        item={
+          videoPlayerDialog.item && isFileEntry(videoPlayerDialog.item)
+            ? videoPlayerDialog.item
             : null
         }
       />

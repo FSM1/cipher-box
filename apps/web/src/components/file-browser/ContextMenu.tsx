@@ -24,7 +24,7 @@ type ContextMenuProps = {
   onDownload?: () => void;
   /** Callback when edit is clicked (text files only) */
   onEdit?: () => void;
-  /** Callback when preview is clicked (image files only) */
+  /** Callback when preview is clicked (image, PDF, audio, video files) */
   onPreview?: () => void;
   /** Callback when rename is clicked */
   onRename: () => void;
