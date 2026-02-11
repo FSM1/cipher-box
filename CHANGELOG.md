@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/FSM1/cipher-box/compare/v0.4.0...v0.5.0) (2026-02-11)
+
+
+### Features
+
+* add image file preview to web UI file browser ([#94](https://github.com/FSM1/cipher-box/issues/94)) ([405142b](https://github.com/FSM1/cipher-box/commit/405142baa2508a703abd7cd6261ad7be1e6b8156))
+
+
+### Bug Fixes
+
+* em dash rendering in StagingBanner component ([#92](https://github.com/FSM1/cipher-box/issues/92)) ([6bd93ee](https://github.com/FSM1/cipher-box/commit/6bd93ee32966de452f35bd821c053b091dd2bf83))
+
 ## [0.4.0](https://github.com/FSM1/cipher-box/compare/v0.3.0...v0.4.0) (2026-02-11)
 
 
