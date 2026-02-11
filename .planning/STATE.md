@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 Phase: 12 (first of 7 M2 phases: 11-17)
 Plan: Not yet planned
 Status: Ready to plan
-Last activity: 2026-02-11 -- Milestone 2 roadmap created
+Last activity: 2026-02-11 -- Completed quick task 009: Fix footer GitHub link
 
 Progress: [##########..........] 50% (M1 complete, M2 0/7 phases)
 
@@ -64,6 +64,12 @@ Recent decisions affecting current work:
 
 - Web3Auth MFA pricing: mfaSettings requires SCALE plan for production (free on devnet). Verify pricing before committing.
 - Versioning + Sharing interaction: When shared folder has version history, should recipient see all versions? Decide during Phase 14 planning.
+
+### Quick Tasks Completed
+
+| #   | Description            | Date       | Commit  | Directory                                                         |
+| --- | ---------------------- | ---------- | ------- | ----------------------------------------------------------------- |
+| 009 | Fix footer GitHub link | 2026-02-11 | c13036d | [009-fix-footer-github-link](./quick/009-fix-footer-github-link/) |
 
 ### Research Flags
 
