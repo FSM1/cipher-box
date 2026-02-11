@@ -82,7 +82,7 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Desktop App (macOS)
 
 - [x] **DESK-01**: User can log in via Web3Auth in desktop app
-- [x] **DESK-02**: FUSE mount appears at ~/CipherVault after login
+- [x] **DESK-02**: FUSE mount appears at ~/CipherBox after login
 - [x] **DESK-03**: User can open files directly in native apps (Preview, etc.)
 - [x] **DESK-04**: User can save files through FUSE mount
 - [x] **DESK-05**: App runs in system tray with status icon
