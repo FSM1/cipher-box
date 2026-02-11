@@ -27,7 +27,7 @@ export function AppShell({ children }: AppShellProps) {
       >
         <StagingBanner variant="compact" />
         <div className="app-shell" data-testid="app-shell" style={{ height: 'auto', flex: 1 }}>
-          <MatrixBackground paused={anyModalOpen} />
+          <MatrixBackground paused={anyModalOpen} frameInterval={50} />
           <AppHeader />
           <AppSidebar />
           <main className="app-main">{children}</main>
@@ -39,7 +39,7 @@ export function AppShell({ children }: AppShellProps) {
 
   return (
     <div className="app-shell" data-testid="app-shell">
-      <MatrixBackground paused={anyModalOpen} />
+      <MatrixBackground paused={anyModalOpen} frameInterval={50} />
       <AppHeader />
       <AppSidebar />
       <main className="app-main">{children}</main>

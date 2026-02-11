@@ -118,7 +118,7 @@ export function Modal({ open, onClose, children, title, className }: ModalProps)
         className={`modal-backdrop${className ? ` ${className}` : ''}`}
         onClick={handleBackdropClick}
       >
-        <MatrixBackground opacity={0.35} className="matrix-canvas--modal" />
+        <MatrixBackground opacity={0.35} className="matrix-canvas--modal" frameInterval={50} />
         <div
           ref={modalRef}
           className="modal-container"
