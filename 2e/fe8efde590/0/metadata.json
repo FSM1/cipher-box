@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "2efe8efde590",
+  "session_id": "6af70815-f797-419c-b957-abbc09f18bb3",
+  "strategy": "auto-commit",
+  "created_at": "2026-02-11T17:14:22.659566Z",
+  "branch": "feat/matrix-effect-visibility",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/release-please.yml"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "48ad1382-5f9a-42af-b9e7-7594105f27b3",
+  "checkpoint_transcript_start": 30,
+  "transcript_lines_at_start": 30,
+  "token_usage": {
+    "input_tokens": 5,
+    "cache_creation_tokens": 606,
+    "cache_read_tokens": 128905,
+    "output_tokens": 430,
+    "api_call_count": 3
+  }
+}
