@@ -143,50 +143,14 @@ editing becomes a priority, evaluate building a Yjs adapter in a future mileston
 
 ---
 
-## 3. Presentation Editor (Slides)
+## 3. Presentation Editor (Slides) -- Deferred to M4+
 
-### Recommended: Custom TipTap-based Slide Editor
+Presentation editing is deferred to M4 or later. No mature, open-source, React-native
+slide editor exists, and building a custom one is a multi-month effort that is out of
+scope for M3. See ARCHITECTURE.md for the deferral rationale.
 
-There is no mature, open-source, React-native slide editor comparable to Google Slides.
-The best approach for CipherBox is to build a slide editor using TipTap as the per-slide
-content editor, with a custom slide deck wrapper.
-
-**Approach:**
-
-| Component         | Technology                      | Purpose                             |
-| ----------------- | ------------------------------- | ----------------------------------- |
-| Per-slide content | TipTap 3.x (same as doc editor) | Rich text, images, shapes per slide |
-| Slide deck model  | Custom React + Zustand          | Slide ordering, transitions, themes |
-| Slide thumbnails  | `html2canvas` or DOM snapshots  | Preview panel                       |
-| Export to PPTX    | `pptxgenjs` ^3.x                | PowerPoint export                   |
-
-| Package       | Version | Purpose                            |
-| ------------- | ------- | ---------------------------------- |
-| `pptxgenjs`   | ^3.12.0 | PPTX file generation for export    |
-| `html2canvas` | ^1.4.1  | DOM-to-canvas for slide thumbnails |
-
-**Confidence:** MEDIUM -- This is a custom build, not an off-the-shelf solution. Gamma.app
-(a YC-backed startup) built their presentation editor on ProseMirror/TipTap, proving the
-approach works. But there is no open-source version to drop in.
-
-**Why NOT use existing presentation libraries:**
-
-| Library   | Why Not                                                               |
-| --------- | --------------------------------------------------------------------- |
-| reveal.js | Presentation _viewer/player_, not an _editor_. No WYSIWYG editing UI. |
-| Spectacle | Code-based slide authoring (JSX). Not a visual editor.                |
-| Slidev    | Markdown-based, developer-focused. Not a visual editor.               |
-| PptxGenJS | File _generation_ only. No editing UI.                                |
-
-**Zero-knowledge architecture fit:**
-
-- Each slide deck is a JSON structure: `{ slides: [{ content: TipTapJSON, layout, theme }] }`.
-- Encrypted and stored as a single IPFS blob (same as documents).
-- Collaboration uses same Yjs approach as documents (one Y.Doc per slide deck).
-
-**Scope recommendation for demo:** Focus on basic slide editing (text, images, backgrounds,
-simple layouts). Do NOT attempt animations, transitions, or complex shape editing. That
-is a multi-year effort for dedicated teams.
+When revisited, the recommended approach is a custom TipTap-based slide editor with
+`pptxgenjs` for export and `html2canvas` for thumbnails.
 
 ---
 
@@ -352,7 +316,7 @@ are encrypted. The signing flow:
 2. User draws signature on `react-signature-canvas` or types/uploads signature image.
 3. Client generates a signing keypair (or uses their Web3Auth-derived key).
 4. Client creates a cryptographic signature over the document hash using Web Crypto API
-   (`crypto.subtle.sign` with ECDSA P-256 or the existing secp256k1 key).
+   (`crypto.subtle.sign` with the existing secp256k1 key via Web3Auth).
 5. The signature + signer's public key + timestamp are embedded in a signature metadata
    record stored alongside the document.
 6. For PDF export: LibPDF embeds the digital signature into a rendered PDF.

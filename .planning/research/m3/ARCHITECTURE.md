@@ -80,7 +80,7 @@ This is architecturally identical to the existing "update file" flow (DATA_FLOWS
 
 #### Rich Text / Documents: Tiptap (built on ProseMirror)
 
-Recommended editor: Tiptap v2+
+Recommended editor: TipTap 3.x
 
 | Criterion             | Tiptap                        | CKEditor 5               | Quill               |
 | --------------------- | ----------------------------- | ------------------------ | ------------------- |
