@@ -7,6 +7,8 @@ interface MatrixBackgroundProps {
   className?: string;
   /** Pause the animation loop */
   paused?: boolean;
+  /** Frame interval in ms. Default 16 (~60fps). Use 50 for slower effect. */
+  frameInterval?: number;
 }
 
 /**
@@ -19,6 +21,7 @@ export function MatrixBackground({
   opacity = 0.5,
   className,
   paused = false,
+  frameInterval = 16,
 }: MatrixBackgroundProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>(0);
@@ -41,7 +44,7 @@ export function MatrixBackground({
     // Configuration
     const FONT_SIZE = 14;
     const COLUMN_WIDTH = 20;
-    const FRAME_INTERVAL = 16; // ~60fps
+    const FRAME_INTERVAL = frameInterval;
     const CHARACTERS = '01';
     const PRIMARY_COLOR = '#00D084';
     const DIM_COLOR = '#006644';

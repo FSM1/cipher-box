@@ -27,7 +27,7 @@ export function Login() {
       <>
         <StagingBanner variant="login" />
         <div className="login-container">
-          <MatrixBackground />
+          <MatrixBackground opacity={0.3} frameInterval={50} />
           <div className="loading">initializing...</div>
         </div>
       </>
@@ -38,14 +38,16 @@ export function Login() {
     <>
       <StagingBanner variant="login" />
       <div className="login-container">
-        <MatrixBackground />
-        <h1>CIPHERBOX</h1>
-        <p className="tagline">zero-knowledge encrypted storage</p>
-        <p className="login-description">
-          your files, encrypted on your device. we never see your data.
-        </p>
-        <AuthButton />
-        <StatusIndicator />
+        <MatrixBackground opacity={0.3} frameInterval={50} />
+        <div className="login-panel">
+          <h1>CIPHERBOX</h1>
+          <p className="tagline">zero-knowledge encrypted storage</p>
+          <p className="login-description">
+            your files, encrypted on your device. we never see your data.
+          </p>
+          <AuthButton />
+          <StatusIndicator />
+        </div>
       </div>
     </>
   );
