@@ -267,14 +267,14 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-3 pending todo(s):
+2 pending todo(s):
 
-- `2026-01-23-simple-text-file-editor-modal.md` — Add simple text file editor modal (area: ui)
 - `2026-02-07-web-worker-large-file-encryption.md` — Offload large file encryption to Web Worker (area: ui)
-- `2026-02-10-remove-debug-eprintln-statements.md` — Remove debug eprintln! statements from FUSE code (area: desktop)
+- `2026-02-10-fix-flaky-post-reload-e2e-tests.md` — Fix flaky post-reload e2e tests 3.8, 3.10 (area: testing)
 
 ### Completed Todos
 
+- ~~`2026-02-10-remove-debug-eprintln-statements.md`~~ — Remove debug eprintln! statements from FUSE code (**Replaced with log::debug!**)
 - ~~`2026-02-10-ipns-sequence-fallback-to-zero.md`~~ — Fix IPNS sequence number fallback to 0 (**Fixed: PublishCoordinator with monotonic cache + per-folder locks**)
 - ~~`2026-02-10-fix-tee-critical-integration-bugs.md`~~ — Fix TEE critical integration bugs C1/C2/H1 (**Already fixed in codebase, verified 2026-02-10**)
 - ~~`2026-01-22-atomic-file-upload-flow.md`~~ — Atomic file upload flow (**Resolved by Phase 7.1**)

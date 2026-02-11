@@ -542,8 +542,8 @@ impl CipherBoxFS {
         while let Ok(refresh) = self.refresh_rx.try_recv() {
             // Skip stale refreshes for recently-mutated folders
             if self.mutated_folders.contains_key(&refresh.ino) {
-                eprintln!(
-                    ">>> REFRESH skipped for ino {} (locally mutated, waiting for IPNS propagation)",
+                log::debug!(
+                    "refresh skipped for ino {} (locally mutated, waiting for IPNS propagation)",
                     refresh.ino
                 );
                 // Still update cache so readdir doesn't re-fire refreshes
