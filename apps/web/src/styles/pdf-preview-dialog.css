@@ -1,0 +1,178 @@
+/**
+ * PDF Preview Dialog Styles - Terminal Aesthetic
+ *
+ * Wider modal variant for previewing PDF files in-browser.
+ * Scrollable canvas area with zoom controls and page navigation.
+ */
+
+/* ==========================================================================
+   Wider Modal Override
+   ========================================================================== */
+
+.pdf-preview-modal .modal-container {
+  max-width: 900px;
+  width: 95vw;
+}
+
+.pdf-preview-modal .modal-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  max-height: calc(90vh - 60px);
+}
+
+/* ==========================================================================
+   Toolbar
+   ========================================================================== */
+
+.pdf-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-xs) var(--spacing-md);
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
+  flex-shrink: 0;
+}
+
+.pdf-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+
+.pdf-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   File Type Tag
+   ========================================================================== */
+
+.pdf-tag {
+  background-color: var(--color-green-primary);
+  color: var(--color-black);
+  padding: 2px 6px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.pdf-filename {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* ==========================================================================
+   Zoom / Nav Buttons
+   ========================================================================== */
+
+.pdf-btn {
+  background: transparent;
+  border: var(--border-thickness) solid var(--color-border);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  white-space: nowrap;
+}
+
+.pdf-btn:hover:not(:disabled) {
+  background-color: var(--color-green-darker);
+}
+
+.pdf-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pdf-zoom-display {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  min-width: 32px;
+  text-align: center;
+}
+
+/* ==========================================================================
+   Canvas Area
+   ========================================================================== */
+
+.pdf-canvas-area {
+  flex: 1;
+  overflow-y: auto;
+  background-color: #0a0f0d;
+  padding: var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.pdf-canvas-area canvas {
+  display: block;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+/* ==========================================================================
+   Footer
+   ========================================================================== */
+
+.pdf-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-md);
+  border-top: var(--border-thickness) solid var(--color-border-dim);
+  flex-shrink: 0;
+}
+
+.pdf-page-info {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  min-width: 80px;
+  text-align: center;
+}
+
+/* ==========================================================================
+   Loading State
+   ========================================================================== */
+
+.pdf-preview-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* ==========================================================================
+   Error Message
+   ========================================================================== */
+
+.pdf-preview-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  padding: var(--spacing-md);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-error);
+}
