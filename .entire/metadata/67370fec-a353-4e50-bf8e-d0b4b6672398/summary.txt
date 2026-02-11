@@ -1,0 +1,1 @@
+Ah got it — yeah, the hooks are all wired up correctly. If you just set it up recently, it might just need a few sessions to accumulate data. Nothing looks misconfigured on the hooks side.
