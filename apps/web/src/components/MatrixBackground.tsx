@@ -1,13 +1,36 @@
 import { useEffect, useRef } from 'react';
 
+interface MatrixBackgroundProps {
+  /** Canvas opacity. Default 0.5 */
+  opacity?: number;
+  /** Additional CSS class name */
+  className?: string;
+  /** Pause the animation loop */
+  paused?: boolean;
+  /** Frame interval in ms. Default 16 (~60fps). Use 50 for slower effect. */
+  frameInterval?: number;
+}
+
 /**
- * Matrix rain background effect for login page.
+ * Matrix rain background effect.
  * Canvas-based animation with falling binary/hex characters.
- * Performance-optimized: 30fps, low opacity, resize handling.
+ * Performance-optimized: 60fps, configurable opacity, resize handling.
+ * Supports pause/resume for coordination with modal overlays.
  */
-export function MatrixBackground() {
+export function MatrixBackground({
+  opacity = 0.5,
+  className,
+  paused = false,
+  frameInterval = 16,
+}: MatrixBackgroundProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>(0);
+  const pausedRef = useRef(paused);
+
+  // Keep pausedRef in sync without restarting the effect
+  useEffect(() => {
+    pausedRef.current = paused;
+  }, [paused]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -21,7 +44,7 @@ export function MatrixBackground() {
     // Configuration
     const FONT_SIZE = 14;
     const COLUMN_WIDTH = 20;
-    const FRAME_INTERVAL = 33; // ~30fps
+    const FRAME_INTERVAL = frameInterval;
     const CHARACTERS = '01';
     const PRIMARY_COLOR = '#00D084';
     const DIM_COLOR = '#006644';
@@ -46,7 +69,13 @@ export function MatrixBackground() {
 
     // Draw frame
     function draw(timestamp: number) {
-      // Throttle to ~30fps
+      if (pausedRef.current) {
+        // Keep requesting frames so we resume instantly when unpaused
+        animationRef.current = requestAnimationFrame(draw);
+        return;
+      }
+
+      // Throttle to ~60fps
       if (timestamp - lastFrameTime < FRAME_INTERVAL) {
         animationRef.current = requestAnimationFrame(draw);
         return;
@@ -103,16 +132,10 @@ export function MatrixBackground() {
   return (
     <canvas
       ref={canvasRef}
-      className="matrix-background"
+      className={`matrix-canvas${className ? ` ${className}` : ''}`}
       aria-hidden="true"
       style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        width: '100%',
-        height: '100%',
-        zIndex: -1,
-        opacity: 0.25, // Subtle, not overwhelming
+        opacity,
         pointerEvents: 'none',
       }}
     />

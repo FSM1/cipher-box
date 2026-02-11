@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 Phase: 12 (first of 7 M2 phases: 11-17)
 Plan: Not yet planned
 Status: Ready to plan
-Last activity: 2026-02-11 -- Completed quick task 009: Fix footer GitHub link
+Last activity: 2026-02-11 -- Completed quick task 010: Matrix effect visibility
 
 Progress: [##########..........] 50% (M1 complete, M2 0/7 phases)
 
@@ -67,9 +67,10 @@ Recent decisions affecting current work:
 
 ### Quick Tasks Completed
 
-| #   | Description            | Date       | Commit  | Directory                                                         |
-| --- | ---------------------- | ---------- | ------- | ----------------------------------------------------------------- |
-| 009 | Fix footer GitHub link | 2026-02-11 | c13036d | [009-fix-footer-github-link](./quick/009-fix-footer-github-link/) |
+| #   | Description              | Date       | Commit  | Directory                                                             |
+| --- | ------------------------ | ---------- | ------- | --------------------------------------------------------------------- |
+| 009 | Fix footer GitHub link   | 2026-02-11 | c13036d | [009-fix-footer-github-link](./quick/009-fix-footer-github-link/)     |
+| 010 | Matrix effect visibility | 2026-02-11 | 74d27b5 | [010-matrix-effect-visibility](./quick/010-matrix-effect-visibility/) |
 
 ### Research Flags
 
