@@ -9,12 +9,12 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 
 ## Current Position
 
-Phase: 12 (first of 6 M2 phases: 12-17)
+Phase: 12 (first of 7 M2 phases: 11-17)
 Plan: Not yet planned
 Status: Ready to plan
 Last activity: 2026-02-11 -- Milestone 2 roadmap created
 
-Progress: [##########..........] 50% (M1 complete, M2 0/6 phases)
+Progress: [##########..........] 50% (M1 complete, M2 0/7 phases)
 
 ## Performance Metrics
 
@@ -67,6 +67,7 @@ Recent decisions affecting current work:
 
 ### Research Flags
 
+- Phase 11 (Desktop): NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse), Windows virtual drive (WinFsp/Dokany), Tauri cross-compilation
 - Phase 14 (Sharing): NEEDS `/gsd:research-phase` -- revocation key rotation protocol
 - Phase 15 (Link Sharing): NEEDS `/gsd:research-phase` -- unauthenticated web viewer security
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases

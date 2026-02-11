@@ -44,15 +44,15 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 
 ### Milestone 2: Production v1.0 (In Progress)
 
-**Milestone Goal:** Elevate the staging MVP into a production-ready encrypted storage platform with sharing, search, MFA, and file versioning.
+**Milestone Goal:** Elevate the staging MVP into a production-ready encrypted storage platform with sharing, search, MFA, file versioning, cross-platform desktop, and TEE failover.
 
+- [ ] **Phase 11: Cross-Platform Desktop** - Linux and Windows desktop apps (Tauri, platform-specific FUSE/virtual drive) -- can run in parallel
 - [ ] **Phase 12: Multi-Factor Authentication** - Web3Auth MFA factor configuration and backup recovery
 - [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
 - [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
 - [ ] **Phase 16: Advanced Sync** - Conflict detection, offline queue, and idempotent replay
 - [ ] **Phase 17: AWS Nitro TEE** - Nitro enclave as fallback TEE provider for IPNS republishing
-- [ ] **Phase 11: Cross-Platform Desktop** - Linux and Windows desktop apps (Tauri, platform-specific FUSE/virtual drive)
 
 ### Milestone 3: Encrypted Productivity Suite (Planned)
 
@@ -66,6 +66,20 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 See `.planning/milestones/m3/ROADMAP.md` for full M3 phase details.
 
 ## Phase Details
+
+### Phase 11: Cross-Platform Desktop
+
+**Goal**: CipherBox desktop app runs on Linux and Windows with native filesystem integration
+**Depends on**: Phase 9 (macOS desktop complete in M1). Can run in parallel with any M2 phase.
+**Requirements**: PLAT-01, PLAT-02
+**Research flag**: NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse) and Windows virtual drive (WinFsp or Dokany) have platform-specific build and packaging requirements. Tauri cross-compilation and CI matrix need investigation.
+**Success Criteria** (what must be TRUE):
+
+1. Linux user can install CipherBox via AppImage or .deb, log in, and access a FUSE mount at ~/CipherBox
+2. Windows user can install CipherBox via MSI or NSIS installer, log in, and access a virtual drive (e.g., C:\CipherBox or mapped drive letter)
+3. Background sync, system tray, and keychain storage work on both platforms (parity with macOS)
+4. CI builds and packages desktop apps for all three platforms (macOS, Linux, Windows)
+   **Plans**: TBD
 
 ### Phase 12: Multi-Factor Authentication
 
@@ -151,28 +165,16 @@ See `.planning/milestones/m3/ROADMAP.md` for full M3 phase details.
 2. Backend routes republish jobs to Nitro when Phala Cloud is unavailable, with automatic failover and failback
    **Plans**: TBD
 
-### Phase 11: Cross-Platform Desktop
-
-**Goal**: CipherBox desktop app runs on Linux and Windows with native filesystem integration
-**Depends on**: Phase 9 (macOS desktop complete in M1). Can run in parallel with any M2 phase.
-**Requirements**: PLAT-01, PLAT-02
-**Research flag**: NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse) and Windows virtual drive (WinFsp or Dokany) have platform-specific build and packaging requirements. Tauri cross-compilation and CI matrix need investigation.
-**Success Criteria** (what must be TRUE):
-
-1. Linux user can install CipherBox via AppImage or .deb, log in, and access a FUSE mount at ~/CipherBox
-2. Windows user can install CipherBox via MSI or NSIS installer, log in, and access a virtual drive (e.g., C:\CipherBox or mapped drive letter)
-3. Background sync, system tray, and keychain storage work on both platforms (parity with macOS)
-4. CI builds and packages desktop apps for all three platforms (macOS, Linux, Windows)
-   **Plans**: TBD
-
 ## Progress
 
 **Execution Order:**
 
-Phases execute in numeric order: 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
+Sequential order: 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
 
-Phase 11 (Cross-Platform Desktop) can run in parallel with any M2 phase.
-Phase 17 (AWS Nitro TEE) can optionally execute in parallel with Phases 14-16.
+Parallel phases:
+
+- Phase 11 (Cross-Platform Desktop) can run in parallel with any M2 phase (depends only on Phase 9/M1).
+- Phase 17 (AWS Nitro TEE) can optionally execute in parallel with Phases 14-16 (depends on Phase 12).
 
 | Phase                      | Milestone | Plans Complete | Status      | Completed  |
 | -------------------------- | --------- | -------------- | ----------- | ---------- |

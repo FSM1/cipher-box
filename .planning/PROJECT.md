@@ -10,7 +10,7 @@ CipherBox is an ambitious demonstration of privacy-first encrypted cloud storage
 
 ## Current Milestone: v1.0 Production-Grade Storage
 
-**Goal:** Elevate the staging MVP into a production-ready encrypted storage platform with sharing, search, MFA, and file versioning.
+**Goal:** Elevate the staging MVP into a production-ready encrypted storage platform with sharing, search, MFA, file versioning, and cross-platform desktop support.
 
 **Target features:**
 
@@ -19,7 +19,8 @@ CipherBox is an ambitious demonstration of privacy-first encrypted cloud storage
 - Multi-factor authentication (passkey, TOTP, recovery phrase)
 - File version history with restore
 - Advanced sync (conflict resolution, offline queue, selective sync)
-- Production deployment and hardening
+- Cross-platform desktop apps (Linux and Windows, extending macOS from M1)
+- AWS Nitro TEE as fallback republishing provider
 
 ## Requirements
 
@@ -81,7 +82,7 @@ CipherBox is an ambitious demonstration of privacy-first encrypted cloud storage
 - Team accounts / org structure — deferred to Milestone 3
 - Secure document signing — deferred to Milestone 3
 - Mobile apps (iOS/Android) — deferred to Milestone 3+
-- Linux/Windows desktop — deferred to Milestone 3+
+- Linux/Windows desktop — moved to Milestone 2 (Phase 11)
 - Collaborative editing — deferred to Milestone 3+
 - AES-256-CTR streaming encryption — complexity, future enhancement
 

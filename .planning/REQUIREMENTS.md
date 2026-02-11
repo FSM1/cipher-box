@@ -392,8 +392,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 **Milestone 1 Coverage:**
 
-- M1 requirements: 52 total
-- Mapped to phases: 52
+- M1 requirements: 58 total
+- Mapped to phases: 58
 - Unmapped: 0
 
 **Milestone 2 Coverage:**
