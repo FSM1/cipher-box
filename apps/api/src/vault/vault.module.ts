@@ -5,10 +5,15 @@ import { VaultController } from './vault.controller';
 import { VaultService } from './vault.service';
 import { Vault, PinnedCid } from './entities';
 import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
+import { User } from '../auth/entities/user.entity';
 import { TeeModule } from '../tee/tee.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Vault, PinnedCid, FolderIpns]), ConfigModule, TeeModule],
+  imports: [
+    TypeOrmModule.forFeature([Vault, PinnedCid, FolderIpns, User]),
+    ConfigModule,
+    TeeModule,
+  ],
   controllers: [VaultController],
   providers: [VaultService],
   exports: [VaultService],

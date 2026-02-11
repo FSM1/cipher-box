@@ -21,7 +21,7 @@ import type {
   UseQueryResult,
 } from '@tanstack/react-query';
 
-import type { InitVaultDto, QuotaResponseDto, VaultResponseDto } from '../models';
+import type { InitVaultDto, QuotaResponseDto, VaultExportDto, VaultResponseDto } from '../models';
 
 import { customInstance } from '../custom-instance';
 
@@ -106,6 +106,121 @@ export const useVaultControllerInitializeVault = <TError = void, TContext = unkn
 
   return useMutation(mutationOptions, queryClient);
 };
+/**
+ * Returns the minimal vault data needed for independent recovery: root IPNS name, encrypted root keys, and derivation hints.
+ * @summary Export vault for independent recovery
+ */
+export const vaultControllerExportVault = (signal?: AbortSignal) => {
+  return customInstance<VaultExportDto>({ url: `/vault/export`, method: 'GET', signal });
+};
+
+export const getVaultControllerExportVaultQueryKey = () => {
+  return [`/vault/export`] as const;
+};
+
+export const getVaultControllerExportVaultQueryOptions = <
+  TData = Awaited<ReturnType<typeof vaultControllerExportVault>>,
+  TError = void,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<Awaited<ReturnType<typeof vaultControllerExportVault>>, TError, TData>
+  >;
+}) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getVaultControllerExportVaultQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof vaultControllerExportVault>>> = ({
+    signal,
+  }) => vaultControllerExportVault(signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof vaultControllerExportVault>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type VaultControllerExportVaultQueryResult = NonNullable<
+  Awaited<ReturnType<typeof vaultControllerExportVault>>
+>;
+export type VaultControllerExportVaultQueryError = void;
+
+export function useVaultControllerExportVault<
+  TData = Awaited<ReturnType<typeof vaultControllerExportVault>>,
+  TError = void,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof vaultControllerExportVault>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof vaultControllerExportVault>>,
+          TError,
+          Awaited<ReturnType<typeof vaultControllerExportVault>>
+        >,
+        'initialData'
+      >;
+  },
+  queryClient?: QueryClient
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useVaultControllerExportVault<
+  TData = Awaited<ReturnType<typeof vaultControllerExportVault>>,
+  TError = void,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof vaultControllerExportVault>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof vaultControllerExportVault>>,
+          TError,
+          Awaited<ReturnType<typeof vaultControllerExportVault>>
+        >,
+        'initialData'
+      >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useVaultControllerExportVault<
+  TData = Awaited<ReturnType<typeof vaultControllerExportVault>>,
+  TError = void,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof vaultControllerExportVault>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary Export vault for independent recovery
+ */
+
+export function useVaultControllerExportVault<
+  TData = Awaited<ReturnType<typeof vaultControllerExportVault>>,
+  TError = void,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof vaultControllerExportVault>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getVaultControllerExportVaultQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  query.queryKey = queryOptions.queryKey;
+
+  return query;
+}
+
 /**
  * Retrieve the vault for the authenticated user.
  * @summary Get user vault
