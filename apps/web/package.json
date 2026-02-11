@@ -20,6 +20,7 @@
     "@web3auth/modal": "^10.13.1",
     "axios": "^1.13.2",
     "buffer": "^6.0.3",
+    "pdfjs-dist": "^5.4.624",
     "process": "^0.11.10",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

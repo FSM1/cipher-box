@@ -306,6 +306,7 @@ Recent decisions affecting current work:
 | 005 | Align Pencil design with staging app   | 2026-02-09 | 3d0574b | [005-align-pencil-design-with-app](./quick/005-align-pencil-design-with-app/)                   |
 | 006 | Add file/folder details modal          | 2026-02-10 | 612c9f6 | [006-file-folder-details-modal](./quick/006-file-folder-details-modal/)                         |
 | 007 | Client-side IPNS signature validation  | 2026-02-10 | 7411d8f | [007-client-side-ipns-signature-validation](./quick/007-client-side-ipns-signature-validation/) |
+| 008 | PDF, audio, and video file preview     | 2026-02-11 | 61e9442 | [008-file-preview](./quick/008-file-preview/)                                                   |
 
 ### Research Flags (from research phase)
 
@@ -327,9 +328,9 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-11
-Stopped at: Phase 10.1 verified (5/5 must-haves passed)
+Stopped at: Quick task 008 complete (awaiting human verification checkpoint)
 Resume file: None
-Next: v1.0 milestone complete — ready for `/gsd:audit-milestone` or `/gsd:complete-milestone`
+Next: Quick task 008 checkpoint - user verifies PDF/audio/video preview dialogs
 
 ---
 
