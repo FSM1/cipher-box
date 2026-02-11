@@ -138,7 +138,7 @@ All 52 MVP requirements are satisfied across 18 phases (77 plans). No critical g
 | Requirement                           | Status    | Phase |
 | ------------------------------------- | --------- | ----- |
 | DESK-01: Web3Auth login in desktop    | SATISFIED | 9     |
-| DESK-02: FUSE mount at ~/CipherBox    | SATISFIED | 9     |
+| DESK-02: FUSE mount at ~/CipherVault  | SATISFIED | 9     |
 | DESK-03: Open files in native apps    | SATISFIED | 9     |
 | DESK-04: Save files through FUSE      | SATISFIED | 9     |
 | DESK-05: System tray with status icon | SATISFIED | 9     |
