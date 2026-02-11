@@ -3,6 +3,7 @@ import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagg
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { VaultService } from './vault.service';
 import { InitVaultDto, VaultResponseDto } from './dto/init-vault.dto';
+import { VaultExportDto } from './dto/vault-export.dto';
 import { QuotaResponseDto } from './dto/quota.dto';
 
 interface RequestWithUser extends Request {
@@ -42,6 +43,29 @@ export class VaultController {
     @Body() dto: InitVaultDto
   ): Promise<VaultResponseDto> {
     return this.vaultService.initializeVault(req.user.id, dto);
+  }
+
+  @Get('export')
+  @ApiOperation({
+    summary: 'Export vault for independent recovery',
+    description:
+      'Returns the minimal vault data needed for independent recovery: root IPNS name, encrypted root keys, and derivation hints.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Vault export data',
+    type: VaultExportDto,
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized - JWT token required',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Not Found - Vault does not exist',
+  })
+  async exportVault(@Request() req: RequestWithUser): Promise<VaultExportDto> {
+    return this.vaultService.getExportData(req.user.id);
   }
 
   @Get()

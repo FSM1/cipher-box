@@ -1,6 +1,6 @@
 {
   "name": "cipher-box",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -21,6 +21,7 @@
     "@commitlint/cli": "^20.4.1",
     "@commitlint/config-conventional": "^20.4.1",
     "@eslint/js": "^9.18.0",
+    "@noble/secp256k1": "^3.0.0",
     "concurrently": "^9.2.1",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
@@ -30,6 +31,7 @@
     "lint-staged": "^15.4.3",
     "markdownlint-cli": "^0.47.0",
     "prettier": "^3.4.2",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.21.0"
   },

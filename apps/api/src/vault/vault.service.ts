@@ -4,7 +4,9 @@ import { Repository } from 'typeorm';
 import { Vault } from './entities/vault.entity';
 import { PinnedCid } from './entities/pinned-cid.entity';
 import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
+import { User } from '../auth/entities/user.entity';
 import { InitVaultDto, VaultResponseDto } from './dto/init-vault.dto';
+import { VaultExportDto } from './dto/vault-export.dto';
 import { QuotaResponseDto } from './dto/quota.dto';
 import { TeeKeyStateService } from '../tee/tee-key-state.service';
 import { TeeKeysDto } from '../tee/dto/tee-keys.dto';
@@ -23,6 +25,8 @@ export class VaultService {
     private readonly pinnedCidRepository: Repository<PinnedCid>,
     @InjectRepository(FolderIpns)
     private readonly folderIpnsRepository: Repository<FolderIpns>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
     private readonly teeKeyStateService: TeeKeyStateService
   ) {}
 
@@ -168,6 +172,44 @@ export class VaultService {
    */
   async markInitialized(userId: string): Promise<void> {
     await this.vaultRepository.update({ ownerId: userId }, { initializedAt: new Date() });
+  }
+
+  /**
+   * Get export data for independent recovery.
+   * Returns the minimal set of fields needed to reconstruct the vault:
+   * root IPNS name + encrypted root keys + derivation hints.
+   */
+  async getExportData(userId: string): Promise<VaultExportDto> {
+    const vault = await this.vaultRepository.findOne({
+      where: { ownerId: userId },
+    });
+
+    if (!vault) {
+      throw new NotFoundException('Vault not found');
+    }
+
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+    });
+
+    // Determine derivation info from user's derivationVersion
+    let derivationInfo: VaultExportDto['derivationInfo'] = null;
+    if (user) {
+      derivationInfo = {
+        method: user.derivationVersion === null ? 'web3auth' : 'external-wallet',
+        derivationVersion: user.derivationVersion,
+      };
+    }
+
+    return {
+      format: 'cipherbox-vault-export',
+      version: '1.0',
+      exportedAt: new Date().toISOString(),
+      rootIpnsName: vault.rootIpnsName,
+      encryptedRootFolderKey: vault.encryptedRootFolderKey.toString('hex'),
+      encryptedRootIpnsPrivateKey: vault.encryptedRootIpnsPrivateKey.toString('hex'),
+      derivationInfo,
+    };
   }
 
   /**
