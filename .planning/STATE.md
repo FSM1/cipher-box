@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 10.1 - v1.0 Tech Debt Cleanup (in progress)
+**Current focus:** Phase 10.1 - v1.0 Tech Debt Cleanup (complete)
 
 ## Current Position
 
 Phase: 10.1 of 11 (v1.0 Tech Debt Cleanup)
-Plan: 2 of 3 in Phase 10.1
-Status: In progress
-Last activity: 2026-02-11 - Completed 10.1-02-PLAN.md
+Plan: 3 of 3 in Phase 10.1
+Status: Phase complete
+Last activity: 2026-02-11 - Completed 10.1-01-PLAN.md
 
-Progress: [#########-] 99% (76 of 77 plans)
+Progress: [##########] 100% (77 of 77 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 71
+- Total plans completed: 72
 - Average duration: 4.6 min
-- Total execution time: 5.5 hours
+- Total execution time: 5.6 hours
 
 **By Phase:**
 
@@ -43,12 +43,12 @@ Progress: [#########-] 99% (76 of 77 plans)
 | 08-tee-integration         | 4/4   | 21 min  | 5.3 min  |
 | 09-desktop-client          | 7/7   | 49 min  | 7.0 min  |
 | 09.1-env-devops-staging    | 6/6   | 101 min | 16.8 min |
-| 10.1-v1-cleanup            | 2/3   | 4 min   | 2 min    |
+| 10.1-v1-cleanup            | 3/3   | 11 min  | 3.7 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 2m, 3m, 90m, 1m, 3m
-- Trend: Plan 10.1-02 was documentation-only (REQUIREMENTS.md + VERIFICATION.md files)
+- Last 5 plans: 3m, 90m, 1m, 3m, 7m
+- Trend: Plan 10.1-01 removed deprecated components, dead endpoint, and regenerated API client
 
 Updated after each plan completion.
 
@@ -262,6 +262,8 @@ Recent decisions affecting current work:
 | Client verifies IPNS Ed25519 signature before CID use  | Q-007   | Closes metadata tampering attack vector (GitHub #71)                        |
 | E2E test 4.2 renamed to match actual behavior          | 10.1-03 | Was "drag-drop to folder row" but uses context menu + MoveDialog            |
 | Retroactive VERIFICATION.md files marked retroactive   | 10.1-02 | Distinguish from real-time verifications with retroactive: true frontmatter |
+| Orval needs manual cleanup of stale model files        | 10.1-01 | Orval regeneration does not delete model files for removed endpoints        |
+| Keep /dashboard redirect for backward compatibility    | 10.1-01 | Route stays as redirect to /files; all navigate() calls updated to /files   |
 
 ### Pending Todos
 
@@ -325,11 +327,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-11
-Stopped at: Completed 10.1-02-PLAN.md
+Stopped at: Completed 10.1-01-PLAN.md (Phase 10.1 complete)
 Resume file: None
-Next: Execute 10.1-01-PLAN.md (code cleanup - deprecated components, unused methods, dead endpoints)
+Next: Phase 10.1 complete. All plans executed. Ready for Phase 11 or v1.0 release.
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-11 after completing 10.1-02 (documentation cleanup)_
+_Last updated: 2026-02-11 after completing 10.1-01 (dead code and deprecated component removal)_
