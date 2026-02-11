@@ -1,0 +1,17 @@
+---
+
+**GSD > QUICK TASK COMPLETE**
+
+**Quick Task 010:** Matrix effect visibility
+
+**What changed:**
+- Matrix rain now visible through header, sidebar, and footer (backgrounds reduced to 50% opacity)
+- Main content area stays opaque (90%) for readability
+- Modal overlays show a dedicated matrix animation (35% opacity canvas)
+- App-level canvas pauses when modal opens (only one canvas at a time = no performance hit)
+- Frame rate bumped from 30fps to 60fps
+- All CSS converted to modern `rgb()` notation
+
+**Summary:** `.REDACTED.md`
+**Commits:** `ba3ffd0` (app shell), `74d27b5` (modal + pause), `3c56541` (docs)
+**Branch:** `feat/matrix-effect-visibility`

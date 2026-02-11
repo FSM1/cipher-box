@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "9f7fb5852875",
+  "session_id": "99e32e72-a055-4cce-9c29-b71fafd9d6fd",
+  "strategy": "auto-commit",
+  "created_at": "2026-02-11T14:25:13.760207Z",
+  "branch": "feat/matrix-effect-visibility",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/quick/010-matrix-effect-visibility/010-PLAN.md",
+    ".planning/quick/010-matrix-effect-visibility/010-SUMMARY.md",
+    "apps/web/src/components/MatrixBackground.tsx",
+    "apps/web/src/components/layout/AppShell.tsx",
+    "apps/web/src/components/ui/Modal.tsx",
+    "apps/web/src/hooks/useModalOpen.ts",
+    "apps/web/src/styles/layout.css",
+    "apps/web/src/styles/modal.css",
+    "matrix-appshell-v2.png",
+    "matrix-appshell-v3.png",
+    "matrix-appshell.png",
+    "matrix-login.png",
+    "matrix-modal-v2.png",
+    "matrix-modal-v3.png",
+    "matrix-modal.png"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "166c4c65-9d1f-4ddb-90ca-867f6a221563",
+  "checkpoint_transcript_start": 5,
+  "transcript_lines_at_start": 5,
+  "token_usage": {
+    "input_tokens": 145,
+    "cache_creation_tokens": 122899,
+    "cache_read_tokens": 13316178,
+    "output_tokens": 13240,
+    "api_call_count": 127,
+    "subagent_tokens": {
+      "input_tokens": 9,
+      "cache_creation_tokens": 42135,
+      "cache_read_tokens": 236950,
+      "output_tokens": 81,
+      "api_call_count": 8
+    }
+  }
+}

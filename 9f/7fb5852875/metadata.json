@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "9f7fb5852875",
+  "strategy": "auto-commit",
+  "branch": "feat/matrix-effect-visibility",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/quick/010-matrix-effect-visibility/010-PLAN.md",
+    ".planning/quick/010-matrix-effect-visibility/010-SUMMARY.md",
+    "apps/web/src/components/MatrixBackground.tsx",
+    "apps/web/src/components/layout/AppShell.tsx",
+    "apps/web/src/components/ui/Modal.tsx",
+    "apps/web/src/hooks/useModalOpen.ts",
+    "apps/web/src/styles/layout.css",
+    "apps/web/src/styles/modal.css",
+    "matrix-appshell-v2.png",
+    "matrix-appshell-v3.png",
+    "matrix-appshell.png",
+    "matrix-login.png",
+    "matrix-modal-v2.png",
+    "matrix-modal-v3.png",
+    "matrix-modal.png"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9f/7fb5852875/0/metadata.json",
+      "transcript": "/9f/7fb5852875/0/full.jsonl",
+      "context": "",
+      "content_hash": "/9f/7fb5852875/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 145,
+    "cache_creation_tokens": 122899,
+    "cache_read_tokens": 13316178,
+    "output_tokens": 13240,
+    "api_call_count": 127
+  }
+}
