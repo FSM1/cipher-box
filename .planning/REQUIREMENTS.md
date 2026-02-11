@@ -91,9 +91,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Data Portability
 
-- [ ] **PORT-01**: User can export vault as JSON file
-- [ ] **PORT-02**: Export includes encrypted keys and folder structure
-- [ ] **PORT-03**: Export format is publicly documented
+- [x] **PORT-01**: User can export vault as JSON file
+- [x] **PORT-02**: Export includes encrypted keys and folder structure
+- [x] **PORT-03**: Export format is publicly documented
 
 ## v2 Requirements
 
@@ -215,9 +215,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DESK-05     | Phase 9  | Pending  |
 | DESK-06     | Phase 9  | Pending  |
 | DESK-07     | Phase 9  | Pending  |
-| PORT-01     | Phase 10 | Pending  |
-| PORT-02     | Phase 10 | Pending  |
-| PORT-03     | Phase 10 | Pending  |
+| PORT-01     | Phase 10 | Complete |
+| PORT-02     | Phase 10 | Complete |
+| PORT-03     | Phase 10 | Complete |
 
 **Coverage:**
 

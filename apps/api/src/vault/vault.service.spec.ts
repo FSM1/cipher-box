@@ -5,6 +5,7 @@ import { VaultService, QUOTA_LIMIT_BYTES } from './vault.service';
 import { Vault } from './entities/vault.entity';
 import { PinnedCid } from './entities/pinned-cid.entity';
 import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
+import { User } from '../auth/entities/user.entity';
 import { TeeKeyStateService } from '../tee/tee-key-state.service';
 import { InitVaultDto } from './dto/init-vault.dto';
 
@@ -33,6 +34,9 @@ describe('VaultService', () => {
   let mockFolderIpnsRepo: {
     create: jest.Mock;
     save: jest.Mock;
+  };
+  let mockUserRepo: {
+    findOne: jest.Mock;
   };
   let mockTeeKeyStateService: {
     getTeeKeysDto: jest.Mock;
@@ -99,6 +103,10 @@ describe('VaultService', () => {
       save: jest.fn().mockResolvedValue({}),
     };
 
+    mockUserRepo = {
+      findOne: jest.fn(),
+    };
+
     mockTeeKeyStateService = {
       getTeeKeysDto: jest.fn().mockResolvedValue(null),
     };
@@ -117,6 +125,10 @@ describe('VaultService', () => {
         {
           provide: getRepositoryToken(FolderIpns),
           useValue: mockFolderIpnsRepo,
+        },
+        {
+          provide: getRepositoryToken(User),
+          useValue: mockUserRepo,
         },
         {
           provide: TeeKeyStateService,
@@ -564,6 +576,72 @@ describe('VaultService', () => {
       const result = await service.getVault(testUserId);
 
       expect(result.teeKeys).toBeNull();
+    });
+  });
+
+  describe('getExportData', () => {
+    it('should return export DTO with hex-encoded keys and derivation info for social login user', async () => {
+      mockVaultRepo.findOne.mockResolvedValue(mockVaultEntity);
+      mockUserRepo.findOne.mockResolvedValue({
+        id: testUserId,
+        derivationVersion: null,
+      });
+
+      const result = await service.getExportData(testUserId);
+
+      expect(result.format).toBe('cipherbox-vault-export');
+      expect(result.version).toBe('1.0');
+      expect(result.rootIpnsName).toBe(testRootIpnsName);
+      expect(result.encryptedRootFolderKey).toBe(testEncryptedRootFolderKey);
+      expect(result.encryptedRootIpnsPrivateKey).toBe(testEncryptedRootIpnsPrivateKey);
+      expect(result.exportedAt).toBeDefined();
+      expect(result.derivationInfo).toEqual({
+        method: 'web3auth',
+        derivationVersion: null,
+      });
+    });
+
+    it('should return external-wallet derivation info for wallet user', async () => {
+      mockVaultRepo.findOne.mockResolvedValue(mockVaultEntity);
+      mockUserRepo.findOne.mockResolvedValue({
+        id: testUserId,
+        derivationVersion: 1,
+      });
+
+      const result = await service.getExportData(testUserId);
+
+      expect(result.derivationInfo).toEqual({
+        method: 'external-wallet',
+        derivationVersion: 1,
+      });
+    });
+
+    it('should return null derivationInfo when user not found', async () => {
+      mockVaultRepo.findOne.mockResolvedValue(mockVaultEntity);
+      mockUserRepo.findOne.mockResolvedValue(null);
+
+      const result = await service.getExportData(testUserId);
+
+      expect(result.derivationInfo).toBeNull();
+    });
+
+    it('should throw NotFoundException if vault does not exist', async () => {
+      mockVaultRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.getExportData(testUserId)).rejects.toThrow(NotFoundException);
+      await expect(service.getExportData(testUserId)).rejects.toThrow('Vault not found');
+    });
+
+    it('should include ISO 8601 exportedAt timestamp', async () => {
+      mockVaultRepo.findOne.mockResolvedValue(mockVaultEntity);
+      mockUserRepo.findOne.mockResolvedValue({ id: testUserId, derivationVersion: null });
+
+      const before = new Date().toISOString();
+      const result = await service.getExportData(testUserId);
+      const after = new Date().toISOString();
+
+      expect(result.exportedAt >= before).toBe(true);
+      expect(result.exportedAt <= after).toBe(true);
     });
   });
 });

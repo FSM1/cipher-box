@@ -29,7 +29,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 8: TEE Integration** - Auto-republishing via Phala Cloud
 - [x] **Phase 9: Desktop Client** - Tauri app with FUSE mount for macOS
 - [x] **Phase 9.1: Environment Changes, DevOps & Staging Deployment** - CI/CD, environment config, staging deploy (INSERTED)
-- [ ] **Phase 10: Data Portability** - Vault export and documentation
+- [x] **Phase 10: Data Portability** - Vault export and documentation
 - [ ] **Phase 11: Security Enhancements** - Web3Auth MFA (post-v1.0)
 
 ## Phase Details
@@ -378,7 +378,7 @@ Urgent insertion to prepare environment, DevOps pipeline, and staging deployment
 
 ### Phase 10: Data Portability
 
-**Goal**: Users can export vault for independent recovery
+**Goal**: Users can export vault as JSON for independent recovery via standalone tool
 **Depends on**: Phase 9.1
 **Requirements**: PORT-01, PORT-02, PORT-03
 **Success Criteria** (what must be TRUE):
@@ -386,13 +386,13 @@ Urgent insertion to prepare environment, DevOps pipeline, and staging deployment
 1. User can export vault as JSON file from settings
 2. Export includes all encrypted keys and complete folder structure
 3. Export format is publicly documented for independent recovery
-   **Plans**: TBD
+   **Plans**: 3 plans
 
 Plans:
 
-- [ ] 10-01: Vault export functionality in web and desktop
-- [ ] 10-02: Export format documentation
-- [ ] 10-03: Final polish and edge case handling
+- [x] 10-01-PLAN.md — API vault export endpoint + web app settings export button
+- [x] 10-02-PLAN.md — Standalone recovery HTML page (single-file, infrastructure-independent)
+- [x] 10-03-PLAN.md — Export format technical documentation with test vectors
 
 ### Phase 11: Security Enhancements (Post-v1.0)
 
@@ -421,26 +421,26 @@ Plans:
 Phases execute in numeric order: 1 -> 2 -> 3 -> ... -> 10 (v1.0), then 11 (post-v1.0)
 Decimal phases (if any) execute between their surrounding integers.
 
-| Phase                   | Plans Complete | Status      | Completed  |
-| ----------------------- | -------------- | ----------- | ---------- |
-| 1. Foundation           | 3/3            | Complete    | 2026-01-20 |
-| 2. Authentication       | 4/4            | Complete    | 2026-01-20 |
-| 3. Core Encryption      | 3/3            | Complete    | 2026-01-20 |
-| 4. File Storage         | 4/4            | Complete    | 2026-01-20 |
-| 4.1 API Service Testing | 3/3            | Complete    | 2026-01-21 |
-| 4.2 Local IPFS Testing  | 2/2            | Complete    | 2026-01-21 |
-| 5. Folder System        | 4/4            | Complete    | 2026-01-21 |
-| 6. File Browser UI      | 4/4            | Complete    | 2026-01-22 |
-| 6.1 Webapp Automation   | 7/7            | Complete    | 2026-01-22 |
-| 6.2 Restyle App         | 6/6            | Complete    | 2026-01-27 |
-| 6.3 UI Structure        | 5/5            | Complete    | 2026-01-30 |
-| 7. Multi-Device Sync    | 4/4            | Complete    | 2026-02-02 |
-| 7.1 Atomic File Upload  | 2/2            | Complete    | 2026-02-07 |
-| 8. TEE Integration      | 4/4            | Complete    | 2026-02-07 |
-| 9. Desktop Client       | 7/7            | Complete    | 2026-02-08 |
-| 9.1 Env/DevOps/Staging  | 6/6            | Complete    | 2026-02-09 |
-| 10. Data Portability    | 0/3            | Not started | -          |
-| 11. Security (MFA)      | 0/4            | Post-v1.0   | -          |
+| Phase                   | Plans Complete | Status    | Completed  |
+| ----------------------- | -------------- | --------- | ---------- |
+| 1. Foundation           | 3/3            | Complete  | 2026-01-20 |
+| 2. Authentication       | 4/4            | Complete  | 2026-01-20 |
+| 3. Core Encryption      | 3/3            | Complete  | 2026-01-20 |
+| 4. File Storage         | 4/4            | Complete  | 2026-01-20 |
+| 4.1 API Service Testing | 3/3            | Complete  | 2026-01-21 |
+| 4.2 Local IPFS Testing  | 2/2            | Complete  | 2026-01-21 |
+| 5. Folder System        | 4/4            | Complete  | 2026-01-21 |
+| 6. File Browser UI      | 4/4            | Complete  | 2026-01-22 |
+| 6.1 Webapp Automation   | 7/7            | Complete  | 2026-01-22 |
+| 6.2 Restyle App         | 6/6            | Complete  | 2026-01-27 |
+| 6.3 UI Structure        | 5/5            | Complete  | 2026-01-30 |
+| 7. Multi-Device Sync    | 4/4            | Complete  | 2026-02-02 |
+| 7.1 Atomic File Upload  | 2/2            | Complete  | 2026-02-07 |
+| 8. TEE Integration      | 4/4            | Complete  | 2026-02-07 |
+| 9. Desktop Client       | 7/7            | Complete  | 2026-02-08 |
+| 9.1 Env/DevOps/Staging  | 6/6            | Complete  | 2026-02-09 |
+| 10. Data Portability    | 3/3            | Complete  | 2026-02-11 |
+| 11. Security (MFA)      | 0/4            | Post-v1.0 | -          |
 
 ---
 
@@ -478,4 +478,6 @@ _Phase 9 revised: 2026-02-07_
 _Phase 9 complete: 2026-02-08_
 _Phase 9.1 planned: 2026-02-09_
 _Phase 9.1 complete: 2026-02-09_
+_Phase 10 planned: 2026-02-11_
+_Phase 10 complete: 2026-02-11_
 _Total phases: 14 | Total plans: 74 | Depth: Comprehensive_
