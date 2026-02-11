@@ -94,8 +94,9 @@
 }
 
 .modal-close:focus {
-  outline: 2px solid var(--color-green-primary);
-  outline-offset: 2px;
+  border-color: var(--color-green-primary);
+  border-width: 2px;
+  outline: none;
 }
 
 /* ==========================================================================
