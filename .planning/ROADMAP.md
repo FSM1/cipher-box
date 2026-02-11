@@ -94,7 +94,13 @@ See `.planning/milestones/m3/ROADMAP.md` for full M3 phase details.
 2. User can configure a device share as an additional MFA factor for login
 3. User can generate a backup recovery phrase and use it to regain vault access
 4. User's derived keypair (publicKey) remains identical after MFA enrollment -- vault data stays accessible without re-encryption
-   **Plans**: TBD
+
+**Plans:** 2 plans
+
+Plans:
+
+- [ ] 12-01-PLAN.md -- Configure Web3Auth MFA settings and add MFA status component to settings page
+- [ ] 12-02-PLAN.md -- Human verification of end-to-end MFA enrollment, recovery, and key identity
 
 ### Phase 12.1: AES-CTR Streaming Encryption (INSERTED)
 
@@ -211,8 +217,8 @@ Parallel phases:
 | 9. Desktop Client          | M1        | 7/7            | Complete    | 2026-02-08 |
 | 9.1 Env/DevOps/Staging     | M1        | 6/6            | Complete    | 2026-02-09 |
 | 10. Data Portability       | M1        | 3/3            | Complete    | 2026-02-11 |
-| 12. MFA                    | M2        | 0/TBD          | Not started | -          |
-| 12.1 AES-CTR Streaming    | M2        | 0/TBD          | Not started | -          |
+| 12. MFA                    | M2        | 0/2            | Not started | -          |
+| 12.1 AES-CTR Streaming     | M2        | 0/TBD          | Not started | -          |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
