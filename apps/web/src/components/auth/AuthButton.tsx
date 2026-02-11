@@ -1,10 +1,14 @@
 import { useAuth } from '../../hooks/useAuth';
 
+interface AuthButtonProps {
+  apiDown?: boolean;
+}
+
 /**
  * Sign In button that opens Web3Auth modal.
- * Shows "Continue with [method]" for returning users.
+ * Disables with [API OFFLINE] text when API health check fails.
  */
-export function AuthButton() {
+export function AuthButton({ apiDown }: AuthButtonProps) {
   const { login, isLoading } = useAuth();
 
   const handleClick = async () => {
@@ -17,8 +21,14 @@ export function AuthButton() {
   };
 
   return (
-    <button onClick={handleClick} disabled={isLoading} className="login-button">
-      {isLoading ? 'connecting...' : '[CONNECT]'}
+    <button
+      onClick={handleClick}
+      disabled={isLoading || apiDown}
+      className={['login-button', apiDown ? 'login-button--api-down' : '']
+        .filter(Boolean)
+        .join(' ')}
+    >
+      {isLoading ? 'connecting...' : apiDown ? '[API OFFLINE]' : '[CONNECT]'}
     </button>
   );
 }

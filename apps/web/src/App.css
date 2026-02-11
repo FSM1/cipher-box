@@ -92,6 +92,39 @@
   cursor: not-allowed;
 }
 
+.login-button--api-down {
+  background-color: transparent;
+  border: 1px solid var(--color-error);
+  color: var(--color-error);
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.login-button--api-down:hover {
+  box-shadow: none;
+  transform: none;
+}
+
+/* Login page footer */
+.login-footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 24px;
+  background-color: rgb(0 0 0 / 50%);
+  border-top: 1px solid var(--color-border-dim);
+  z-index: 1;
+}
+
+.login-footer .footer-link:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
 .login-note {
   margin-top: var(--spacing-lg);
   font-size: var(--font-size-xs);
