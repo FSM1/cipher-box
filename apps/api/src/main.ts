@@ -25,10 +25,28 @@ async function bootstrap() {
   );
 
   app.use(cookieParser());
+
+  // CORS_ALLOWED_ORIGINS supports wildcards (e.g. https://cipher-box-pr-*.onrender.com)
+  // Falls back to WEB_APP_URL for backwards compatibility
+  const rawOrigins = process.env.CORS_ALLOWED_ORIGINS || process.env.WEB_APP_URL;
+  const originEntries = rawOrigins
+    ? rawOrigins.split(',').map((s) => s.trim())
+    : ['http://localhost:5173', 'http://localhost:4173'];
+  const exactOrigins = originEntries.filter((o) => !o.includes('*'));
+  const wildcardPatterns = originEntries
+    .filter((o) => o.includes('*'))
+    .map((o) => new RegExp(`^${o.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`));
+
   app.enableCors({
-    origin: process.env.WEB_APP_URL
-      ? process.env.WEB_APP_URL.split(',')
-      : ['http://localhost:5173', 'http://localhost:4173'],
+    origin: (
+      origin: string | undefined,
+      callback: (err: Error | null, allow?: boolean) => void
+    ) => {
+      if (!origin) return callback(null, true);
+      if (exactOrigins.includes(origin)) return callback(null, true);
+      if (wildcardPatterns.some((re) => re.test(origin))) return callback(null, true);
+      callback(new Error(`Origin ${origin} not allowed by CORS`));
+    },
     credentials: true,
   });
 
