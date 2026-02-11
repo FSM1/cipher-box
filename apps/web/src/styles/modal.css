@@ -16,8 +16,13 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: rgb(0 0 0 / 50%);
-  backdrop-filter: blur(1px);
+  background-color: rgb(0 0 0 / 40%);
+  overflow: hidden;
+}
+
+.matrix-canvas--modal {
+  position: absolute;
+  z-index: 0;
 }
 
 /* ==========================================================================

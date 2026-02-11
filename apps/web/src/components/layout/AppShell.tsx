@@ -1,6 +1,7 @@
 import { ReactNode } from 'react';
 import { StagingBanner } from '../StagingBanner';
 import { MatrixBackground } from '../MatrixBackground';
+import { useAnyModalOpen } from '../../hooks/useModalOpen';
 import { AppHeader } from './AppHeader';
 import { AppSidebar } from './AppSidebar';
 import { AppFooter } from './AppFooter';
@@ -17,6 +18,7 @@ interface AppShellProps {
  */
 export function AppShell({ children }: AppShellProps) {
   const isStaging = import.meta.env.VITE_ENVIRONMENT === 'staging';
+  const anyModalOpen = useAnyModalOpen();
 
   if (isStaging) {
     return (
@@ -25,7 +27,7 @@ export function AppShell({ children }: AppShellProps) {
       >
         <StagingBanner variant="compact" />
         <div className="app-shell" data-testid="app-shell" style={{ height: 'auto', flex: 1 }}>
-          <MatrixBackground />
+          <MatrixBackground paused={anyModalOpen} />
           <AppHeader />
           <AppSidebar />
           <main className="app-main">{children}</main>
@@ -37,7 +39,7 @@ export function AppShell({ children }: AppShellProps) {
 
   return (
     <div className="app-shell" data-testid="app-shell">
-      <MatrixBackground />
+      <MatrixBackground paused={anyModalOpen} />
       <AppHeader />
       <AppSidebar />
       <main className="app-main">{children}</main>

@@ -1,5 +1,7 @@
 import { ReactNode, useEffect, useRef, useCallback } from 'react';
 import { Portal } from './Portal';
+import { MatrixBackground } from '../MatrixBackground';
+import { incrementModalCount, decrementModalCount } from '../../hooks/useModalOpen';
 import '../../styles/modal.css';
 
 type ModalProps = {
@@ -63,6 +65,13 @@ export function Modal({ open, onClose, children, title, className }: ModalProps)
     }
   }, []);
 
+  // Track modal open state for app-level matrix pause
+  useEffect(() => {
+    if (!open) return;
+    incrementModalCount();
+    return () => decrementModalCount();
+  }, [open]);
+
   useEffect(() => {
     if (!open) return;
 
@@ -109,6 +118,7 @@ export function Modal({ open, onClose, children, title, className }: ModalProps)
         className={`modal-backdrop${className ? ` ${className}` : ''}`}
         onClick={handleBackdropClick}
       >
+        <MatrixBackground opacity={0.35} className="matrix-canvas--modal" />
         <div
           ref={modalRef}
           className="modal-container"

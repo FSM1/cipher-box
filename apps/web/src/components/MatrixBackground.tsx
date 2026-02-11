@@ -5,16 +5,29 @@ interface MatrixBackgroundProps {
   opacity?: number;
   /** Additional CSS class name */
   className?: string;
+  /** Pause the animation loop */
+  paused?: boolean;
 }
 
 /**
  * Matrix rain background effect.
  * Canvas-based animation with falling binary/hex characters.
  * Performance-optimized: 60fps, configurable opacity, resize handling.
+ * Supports pause/resume for coordination with modal overlays.
  */
-export function MatrixBackground({ opacity = 0.5, className }: MatrixBackgroundProps) {
+export function MatrixBackground({
+  opacity = 0.5,
+  className,
+  paused = false,
+}: MatrixBackgroundProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number>(0);
+  const pausedRef = useRef(paused);
+
+  // Keep pausedRef in sync without restarting the effect
+  useEffect(() => {
+    pausedRef.current = paused;
+  }, [paused]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -53,6 +66,12 @@ export function MatrixBackground({ opacity = 0.5, className }: MatrixBackgroundP
 
     // Draw frame
     function draw(timestamp: number) {
+      if (pausedRef.current) {
+        // Keep requesting frames so we resume instantly when unpaused
+        animationRef.current = requestAnimationFrame(draw);
+        return;
+      }
+
       // Throttle to ~60fps
       if (timestamp - lastFrameTime < FRAME_INTERVAL) {
         animationRef.current = requestAnimationFrame(draw);
