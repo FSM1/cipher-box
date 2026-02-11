@@ -19,12 +19,16 @@ function getSnapshot() {
 
 export function incrementModalCount() {
   openCount++;
-  listeners.forEach((l) => l());
+  listeners.forEach((l) => {
+    l();
+  });
 }
 
 export function decrementModalCount() {
   openCount = Math.max(0, openCount - 1);
-  listeners.forEach((l) => l());
+  listeners.forEach((l) => {
+    l();
+  });
 }
 
 /** Returns true when any modal is open */
