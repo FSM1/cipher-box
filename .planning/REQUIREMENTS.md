@@ -140,6 +140,11 @@ Requirements for production release. Each maps to roadmap phases 12+.
 
 - [ ] **TEE-06**: AWS Nitro enclave as fallback TEE provider for IPNS republishing
 
+### Cross-Platform Desktop
+
+- [ ] **PLAT-01**: Linux desktop app (Tauri + AppImage/deb, FUSE mount via libfuse)
+- [ ] **PLAT-02**: Windows desktop app (Tauri + MSI/NSIS, virtual drive via WinFsp/Dokany)
+
 ## Milestone 3 Requirements (Encrypted Productivity Suite)
 
 Requirements for productivity suite. Each maps to roadmap phases 18+.
@@ -216,11 +221,6 @@ Deferred to future milestones. Tracked but not in current roadmap.
 - **MOB-01**: iOS app with full functionality
 - **MOB-02**: Android app with full functionality
 - **MOB-03**: Photo backup feature
-
-### Additional Platforms
-
-- **PLAT-01**: Linux desktop app
-- **PLAT-02**: Windows desktop app
 
 ### Real-Time Collaboration (Milestone 4)
 
@@ -355,6 +355,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SYNC-05     | Phase 16 | Pending  |
 | SYNC-06     | Phase 16 | Pending  |
 | TEE-06      | Phase 17 | Pending  |
+| PLAT-01     | Phase 11 | Pending  |
+| PLAT-02     | Phase 11 | Pending  |
 | BILL-01     | Phase 18 | Pending  |
 | BILL-02     | Phase 18 | Pending  |
 | BILL-03     | Phase 18 | Pending  |
@@ -396,8 +398,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 **Milestone 2 Coverage:**
 
-- M2 requirements: 23 total
-- Mapped to phases: 23
+- M2 requirements: 25 total
+- Mapped to phases: 25
 - Unmapped: 0
 
 **Milestone 3 Coverage:**
