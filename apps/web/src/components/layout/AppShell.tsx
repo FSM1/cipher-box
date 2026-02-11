@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 import { StagingBanner } from '../StagingBanner';
+import { MatrixBackground } from '../MatrixBackground';
 import { AppHeader } from './AppHeader';
 import { AppSidebar } from './AppSidebar';
 import { AppFooter } from './AppFooter';
@@ -24,6 +25,7 @@ export function AppShell({ children }: AppShellProps) {
       >
         <StagingBanner variant="compact" />
         <div className="app-shell" data-testid="app-shell" style={{ height: 'auto', flex: 1 }}>
+          <MatrixBackground />
           <AppHeader />
           <AppSidebar />
           <main className="app-main">{children}</main>
@@ -35,6 +37,7 @@ export function AppShell({ children }: AppShellProps) {
 
   return (
     <div className="app-shell" data-testid="app-shell">
+      <MatrixBackground />
       <AppHeader />
       <AppSidebar />
       <main className="app-main">{children}</main>
