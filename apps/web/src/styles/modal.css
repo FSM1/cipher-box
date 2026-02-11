@@ -85,7 +85,8 @@
   background: transparent;
   border: var(--border-thickness) solid var(--color-border);
   border-radius: 0;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease,
+    border-color 0.15s ease, border-width 0.15s ease;
 }
 
 .modal-close:hover {
@@ -93,9 +94,10 @@
   color: var(--color-text-primary);
 }
 
-.modal-close:focus {
+.modal-close:focus-visible {
   border-color: var(--color-green-primary);
   border-width: 2px;
+  box-shadow: var(--glow-green);
   outline: none;
 }
 
