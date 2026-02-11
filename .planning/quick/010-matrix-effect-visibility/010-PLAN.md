@@ -13,9 +13,9 @@ autonomous: true
 
 must_haves:
   truths:
-    - 'Matrix rain effect is visibly bleeding through header, sidebar, footer, and main area backgrounds'
+    - 'Matrix rain effect is visibly bleeding through header, sidebar, and footer backgrounds (NOT main content area)'
     - 'Modal backdrop shows matrix rain effect behind the modal container'
-    - 'Text in header, sidebar, footer, and main area remains readable against the semi-transparent backgrounds'
+    - 'Text in header, sidebar, and footer remains readable against the semi-transparent backgrounds'
     - 'Modal content remains readable with matrix backdrop'
   artifacts:
     - path: 'apps/web/src/components/MatrixBackground.tsx'
@@ -38,11 +38,11 @@ must_haves:
 ---
 
 <objective>
-Make the matrix rain canvas effect visually bleed through all app shell chrome elements (header, sidebar, main content area, footer) and add it as a backdrop effect on modal overlays.
+Make the matrix rain canvas effect visually bleed through app shell chrome elements (header, sidebar, footer — NOT the main content area) and add it as a backdrop effect on modal overlays.
 
-Purpose: The matrix rain is currently barely visible because app shell backgrounds are too opaque (0.85) and the canvas opacity is too low (0.25). This change creates a more immersive terminal/cyberpunk aesthetic.
+Purpose: The matrix rain is currently barely visible because app shell backgrounds are too opaque (0.85) and the canvas opacity is too low (0.25). This change creates a more immersive terminal/cyberpunk aesthetic while keeping the main content area fully readable.
 
-Output: Updated MatrixBackground component with props, reduced layout opacities, and matrix-enhanced modal backdrop.
+Output: Updated MatrixBackground component with props, reduced layout opacities (except main), and matrix-enhanced modal backdrop.
 </objective>
 
 <execution_context>
@@ -118,7 +118,7 @@ Output: Updated MatrixBackground component with props, reduced layout opacities,
 
 - `.app-header` line 33: `background-color: rgba(0, 0, 0, 0.85)` --> `background-color: rgb(0 0 0 / 70%)`
 - `.app-sidebar` line 72: `background-color: rgba(0, 0, 0, 0.85)` --> `background-color: rgb(0 0 0 / 70%)`
-- `.app-main` line 153: `background-color: rgba(0, 0, 0, 0.75)` --> `background-color: rgb(0 0 0 / 60%)`
+- `.app-main` line 153: **DO NOT CHANGE** -- keep at current opacity so main content area remains fully opaque with no matrix bleed-through
 - `.app-footer` line 168: `background-color: rgba(0, 0, 0, 0.85)` --> `background-color: rgb(0 0 0 / 70%)`
 
 Also fix the one remaining legacy rgba in layout.css while we are here -- the `.modal-container` box-shadow line is in modal.css, not here, so just the four above.
