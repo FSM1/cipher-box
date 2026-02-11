@@ -262,6 +262,29 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PORT-01     | Phase 10 | Complete |
 | PORT-02     | Phase 10 | Complete |
 | PORT-03     | Phase 10 | Complete |
+| MFA-01      | Phase 12 | Pending  |
+| MFA-02      | Phase 12 | Pending  |
+| MFA-03      | Phase 12 | Pending  |
+| MFA-04      | Phase 12 | Pending  |
+| VER-01      | Phase 13 | Pending  |
+| VER-02      | Phase 13 | Pending  |
+| VER-03      | Phase 13 | Pending  |
+| VER-04      | Phase 13 | Pending  |
+| VER-05      | Phase 13 | Pending  |
+| SHARE-01    | Phase 14 | Pending  |
+| SHARE-02    | Phase 14 | Pending  |
+| SHARE-03    | Phase 14 | Pending  |
+| SHARE-04    | Phase 14 | Pending  |
+| SHARE-05    | Phase 14 | Pending  |
+| SHARE-06    | Phase 15 | Pending  |
+| SHARE-07    | Phase 15 | Pending  |
+| SRCH-01     | Phase 15 | Pending  |
+| SRCH-02     | Phase 15 | Pending  |
+| SRCH-03     | Phase 15 | Pending  |
+| SYNC-04     | Phase 16 | Pending  |
+| SYNC-05     | Phase 16 | Pending  |
+| SYNC-06     | Phase 16 | Pending  |
+| TEE-06      | Phase 17 | Pending  |
 
 **Milestone 1 Coverage:**
 
@@ -271,11 +294,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 **Milestone 2 Coverage:**
 
-- M2 requirements: 24 total
-- Mapped to phases: TBD (roadmap creation)
-- Unmapped: 24
+- M2 requirements: 23 total
+- Mapped to phases: 23
+- Unmapped: 0
 
 ---
 
 Requirements defined: 2026-01-20
-Last updated: 2026-02-11 after Milestone 2 requirements definition
+Last updated: 2026-02-11 after Milestone 2 roadmap creation (phase mappings added)
