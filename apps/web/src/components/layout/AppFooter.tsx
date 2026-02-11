@@ -21,7 +21,7 @@ export function AppFooter() {
           [terms]
         </a>
         <a
-          href="https://github.com/cipherbox"
+          href="https://github.com/fsm1/cipher-box"
           className="footer-link"
           target="_blank"
           rel="noopener noreferrer"
