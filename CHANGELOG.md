@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/FSM1/cipher-box/compare/v0.3.0...v0.4.0) (2026-02-11)
+
+
+### Features
+
+* add client-side IPNS signature validation ([#88](https://github.com/FSM1/cipher-box/issues/88)) ([8d18b65](https://github.com/FSM1/cipher-box/commit/8d18b6586068f5206d15c472c160656e4f41459e))
+* add in-browser text file editor modal ([#87](https://github.com/FSM1/cipher-box/issues/87)) ([04bfc8c](https://github.com/FSM1/cipher-box/commit/04bfc8c1705e43b99ffa0389511ad597fe435571))
+* add matrix background effect to logged-in app shell ([#91](https://github.com/FSM1/cipher-box/issues/91)) ([175f26e](https://github.com/FSM1/cipher-box/commit/175f26e6325c2d4655f2346b79e7182e63bb72bf))
+* replace upload modal with collapsible bottom-right popup widget ([#90](https://github.com/FSM1/cipher-box/issues/90)) ([e43af30](https://github.com/FSM1/cipher-box/commit/e43af303a1cd6d1107060a04e3a7f42a762f81a6))
+
+
+### Bug Fixes
+
+* **ci:** chain tag-staging to deploy-staging via workflow_call ([#85](https://github.com/FSM1/cipher-box/issues/85)) ([1c41f6d](https://github.com/FSM1/cipher-box/commit/1c41f6ddf82f22992e6f03c7a2b70a04278980bc))
+* file browser scrolling and layout overflow issues ([#89](https://github.com/FSM1/cipher-box/issues/89)) ([8d3f190](https://github.com/FSM1/cipher-box/commit/8d3f190853b03d094b633b79d3bf544895adcf4d))
+
 ## [0.3.0](https://github.com/FSM1/cipher-box/compare/v0.2.0...v0.3.0) (2026-02-10)
 
 
