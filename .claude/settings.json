@@ -6,10 +6,6 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node .claude/hooks/gsd-check-update.js"
-          },
-          {
-            "type": "command",
             "command": "entire hooks claude-code session-start"
           }
         ]
