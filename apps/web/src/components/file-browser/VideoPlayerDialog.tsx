@@ -160,18 +160,38 @@ export function VideoPlayerDialog({ open, onClose, item }: VideoPlayerDialogProp
     if (!video) return;
 
     if (video.paused) {
-      await video.play();
+      try {
+        await video.play();
+      } catch {
+        // Browser blocked playback (autoplay policy / interruption)
+      }
     } else {
       video.pause();
     }
   }, []);
 
+  const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const handleVideoClick = useCallback(() => {
-    togglePlayPause();
-    resetHideTimer();
+    // Delay single-click to distinguish from double-click
+    if (clickTimerRef.current) {
+      clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = null;
+      return; // Second click of a double-click; handled by handleVideoDoubleClick
+    }
+    clickTimerRef.current = setTimeout(() => {
+      clickTimerRef.current = null;
+      togglePlayPause();
+      resetHideTimer();
+    }, 250);
   }, [togglePlayPause, resetHideTimer]);
 
   const handleVideoDoubleClick = useCallback(() => {
+    if (clickTimerRef.current) {
+      clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = null;
+    }
+
     const container = containerRef.current;
     if (!container) return;
 
@@ -290,6 +310,12 @@ export function VideoPlayerDialog({ open, onClose, item }: VideoPlayerDialogProp
               <div
                 className="video-play-overlay"
                 onClick={handleVideoClick}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    togglePlayPause();
+                  }
+                }}
                 role="button"
                 aria-label="Play video"
                 tabIndex={0}

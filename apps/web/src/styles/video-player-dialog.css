@@ -124,12 +124,12 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  background: rgba(0, 0, 0, 0.3);
+  background: rgb(0 0 0 / 30%);
   transition: background-color 0.15s ease;
 }
 
 .video-play-overlay:hover {
-  background: rgba(0, 0, 0, 0.5);
+  background: rgb(0 0 0 / 50%);
 }
 
 .video-play-icon {
@@ -150,7 +150,7 @@
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   color: var(--color-text-secondary);
-  background: rgba(0, 0, 0, 0.6);
+  background: rgb(0 0 0 / 60%);
   padding: 2px 6px;
   pointer-events: none;
 }
@@ -161,7 +161,7 @@
 
 .video-controls-bar {
   padding: var(--spacing-xs) var(--spacing-md);
-  background: rgba(0, 0, 0, 0.8);
+  background: rgb(0 0 0 / 80%);
   transition: opacity 0.3s ease;
 }
 
@@ -195,7 +195,7 @@
   top: 0;
   left: 0;
   height: 100%;
-  background: rgba(0, 208, 132, 0.2);
+  background: rgb(0 208 132 / 20%);
   pointer-events: none;
 }
 

@@ -45,6 +45,7 @@ export function PdfPreviewDialog({ open, onClose, item }: PdfPreviewDialogProps)
   const canvasAreaRef = useRef<HTMLDivElement | null>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
   const renderingRef = useRef(false);
+  const pendingRenderRef = useRef(false);
 
   // Load the PDF document when objectUrl is available
   useEffect(() => {
@@ -90,7 +91,12 @@ export function PdfPreviewDialog({ open, onClose, item }: PdfPreviewDialogProps)
   // Render all pages when numPages or zoom changes
   useEffect(() => {
     const doc = pdfDocRef.current;
-    if (!doc || numPages === 0 || renderingRef.current) return;
+    if (!doc || numPages === 0) return;
+
+    if (renderingRef.current) {
+      pendingRenderRef.current = true;
+      return;
+    }
 
     renderingRef.current = true;
 
@@ -111,6 +117,11 @@ export function PdfPreviewDialog({ open, onClose, item }: PdfPreviewDialogProps)
         console.error('Failed to render PDF pages:', err);
       } finally {
         renderingRef.current = false;
+        if (pendingRenderRef.current) {
+          pendingRenderRef.current = false;
+          // Trigger re-render on next tick for queued zoom change
+          setZoom((z) => z);
+        }
       }
     })();
   }, [numPages, zoom]);
@@ -166,11 +177,15 @@ export function PdfPreviewDialog({ open, onClose, item }: PdfPreviewDialogProps)
   const handleFit = useCallback(() => {
     if (!canvasAreaRef.current || !pdfDocRef.current) return;
 
+    const doc = pdfDocRef.current;
+    const area = canvasAreaRef.current;
+    if (!doc || !area) return;
+
     (async () => {
       try {
-        const page = await pdfDocRef.current!.getPage(1);
+        const page = await doc.getPage(1);
         const viewport = page.getViewport({ scale: 1.0 });
-        const containerWidth = canvasAreaRef.current!.clientWidth - 32; // subtract padding
+        const containerWidth = area.clientWidth - 32; // subtract padding
         const fitScale = containerWidth / viewport.width;
         setZoom(Math.max(MIN_ZOOM, Math.min(fitScale, MAX_ZOOM)));
       } catch {

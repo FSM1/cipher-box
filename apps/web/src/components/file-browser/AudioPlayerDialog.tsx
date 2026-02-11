@@ -237,8 +237,12 @@ export function AudioPlayerDialog({ open, onClose, item }: AudioPlayerDialogProp
       audio.pause();
       setIsPlaying(false);
     } else {
-      await audio.play();
-      setIsPlaying(true);
+      try {
+        await audio.play();
+        setIsPlaying(true);
+      } catch {
+        // Browser blocked playback (autoplay policy / interruption)
+      }
     }
   }, [isPlaying]);
 
@@ -335,6 +339,14 @@ export function AudioPlayerDialog({ open, onClose, item }: AudioPlayerDialogProp
               className="audio-progress-track"
               ref={progressRef}
               onClick={handleProgressClick}
+              onKeyDown={(e) => {
+                const audio = audioRef.current;
+                if (!audio || !duration) return;
+                if (e.key === 'ArrowRight')
+                  audio.currentTime = Math.min(duration, audio.currentTime + 5);
+                else if (e.key === 'ArrowLeft')
+                  audio.currentTime = Math.max(0, audio.currentTime - 5);
+              }}
               role="slider"
               aria-label="Audio progress"
               aria-valuemin={0}
