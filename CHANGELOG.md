@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.3](https://github.com/FSM1/cipher-box/compare/v0.7.2...v0.7.3) (2026-02-11)
+
+
+### Bug Fixes
+
+* **web:** restore login footer with API status indicator ([#107](https://github.com/FSM1/cipher-box/issues/107)) ([3eaeb89](https://github.com/FSM1/cipher-box/commit/3eaeb8912f34de3d256837ec334d10780dd312c1))
+
 ## [0.7.2](https://github.com/FSM1/cipher-box/compare/v0.7.1...v0.7.2) (2026-02-11)
 
 
