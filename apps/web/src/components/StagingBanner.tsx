@@ -89,7 +89,7 @@ export function StagingBanner({ variant }: StagingBannerProps) {
           letterSpacing: '1px',
         }}
       >
-        {'\u26A0'} STAGING | Testing only \u2014 data may be wiped without notice {'\u26A0'}
+        {'\u26A0'} STAGING | Testing only {'\u2014'} data may be wiped without notice {'\u26A0'}
       </span>
     </div>
   );
