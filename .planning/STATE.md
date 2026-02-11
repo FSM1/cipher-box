@@ -260,6 +260,10 @@ Recent decisions affecting current work:
 | SCP then SSH pattern for VPS deployment                 | 09.1-04 | Separates file transfer from service orchestration for clarity             |
 | Signature fields optional in resolve response DTO       | Q-007   | DB-cached fallback has no signature data; graceful degradation             |
 | Client verifies IPNS Ed25519 signature before CID use   | Q-007   | Closes metadata tampering attack vector (GitHub #71)                       |
+| Include derivationInfo in vault export                  | 10-01   | Recovery hints: web3auth vs external-wallet + version                      |
+| Reuse ConfirmDialog for export warning                  | 10-01   | Existing component supports non-destructive confirmation                   |
+| Export route before GET /vault                          | 10-01   | NestJS top-to-bottom; /export before parameterless @Get()                  |
+| User entity added to VaultModule                        | 10-01   | @InjectRepository(User) for derivationVersion lookup                       |
 | Web Crypto API for ECIES inner AES-GCM (16-byte nonce)  | 10-02   | Web Crypto supports non-standard nonce lengths, avoiding noble-ciphers CDN |
 | Compressed ephemeral PK input to getSharedSecret        | 10-02   | Matches eciesjs internal behavior (pk.toBytes(true) for ECDH input)        |
 | Protobuf parsing for IPNS record from delegated routing | 10-02   | Binary IPNS records need protobuf Value field extraction                   |
