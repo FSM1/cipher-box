@@ -70,7 +70,10 @@
 
 .dialog-input:focus {
   border-color: var(--color-green-primary);
+  border-width: 2px;
+  padding: calc(var(--spacing-xs) - 1px) calc(var(--spacing-sm) - 1px);
   box-shadow: var(--glow-green);
+  outline: none;
 }
 
 .dialog-input--error {
@@ -125,10 +128,11 @@
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-normal);
   line-height: 1.5;
-  border: none;
+  border: var(--border-thickness) solid transparent;
   border-radius: 0;
   cursor: pointer;
-  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease,
+    border-color 0.15s ease, border-width 0.15s ease;
 }
 
 .dialog-button:disabled {
@@ -137,8 +141,10 @@
 }
 
 .dialog-button:focus-visible {
-  outline: 2px solid var(--color-green-primary);
-  outline-offset: 2px;
+  border-color: var(--color-green-primary);
+  border-width: 2px;
+  padding: calc(var(--spacing-xs) - 1px) calc(var(--spacing-md) - 1px);
+  outline: none;
 }
 
 /* ==========================================================================
