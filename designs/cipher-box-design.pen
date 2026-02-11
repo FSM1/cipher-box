@@ -5719,7 +5719,7 @@
                           "fill": "#000000",
                           "stroke": {
                             "align": "inside",
-                            "thickness": 1,
+                            "thickness": 2,
                             "fill": "#00D084"
                           },
                           "effect": {
@@ -14876,7 +14876,7 @@
                       "fill": "#000000",
                       "stroke": {
                         "align": "inside",
-                        "thickness": 1,
+                        "thickness": 2,
                         "fill": "#00D084"
                       },
                       "effect": {
