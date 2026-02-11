@@ -4,6 +4,7 @@
 
 - Milestone 1: Staging MVP (Phases 1-10) -- shipped 2026-02-11
 - Milestone 2: Production v1.0 (Phases 12-17) -- in progress
+- Milestone 3: Encrypted Productivity Suite (Phases 18-21) -- planned
 
 ## Phases
 
@@ -51,6 +52,17 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
 - [ ] **Phase 16: Advanced Sync** - Conflict detection, offline queue, and idempotent replay
 - [ ] **Phase 17: AWS Nitro TEE** - Nitro enclave as fallback TEE provider for IPNS republishing
+
+### Milestone 3: Encrypted Productivity Suite (Planned)
+
+**Milestone Goal:** Transform CipherBox into an encrypted productivity platform with billing, team accounts, document editors, and document signing.
+
+- [ ] **Phase 18: Billing Infrastructure** - Stripe subscriptions, NOWPayments crypto billing, tier enforcement
+- [ ] **Phase 19: Team Accounts** - Team CRUD, ECIES-wrapped Per-Team Key hierarchy, CASL permissions
+- [ ] **Phase 20: Document Editors** - TipTap rich text and Univer spreadsheet editors with decrypt-edit-encrypt pipeline
+- [ ] **Phase 21: Document Signing** - ECDSA signing/verification, visual signature capture, multi-party workflows
+
+See `.planning/milestones/m3/ROADMAP.md` for full M3 phase details.
 
 ## Phase Details
 
@@ -142,40 +154,46 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 
 **Execution Order:**
 
-Phases execute in numeric order: 12 -> 13 -> 14 -> 15 -> 16 -> 17
+Phases execute in numeric order: 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
 
 Phase 17 (AWS Nitro TEE) can optionally execute in parallel with Phases 14-16.
 
-| Phase                     | Milestone | Plans Complete | Status      | Completed  |
-| ------------------------- | --------- | -------------- | ----------- | ---------- |
-| 1. Foundation             | M1        | 3/3            | Complete    | 2026-01-20 |
-| 2. Authentication         | M1        | 4/4            | Complete    | 2026-01-20 |
-| 3. Core Encryption        | M1        | 3/3            | Complete    | 2026-01-20 |
-| 4. File Storage           | M1        | 4/4            | Complete    | 2026-01-20 |
-| 4.1 API Service Testing   | M1        | 3/3            | Complete    | 2026-01-21 |
-| 4.2 Local IPFS Testing    | M1        | 2/2            | Complete    | 2026-01-21 |
-| 5. Folder System          | M1        | 4/4            | Complete    | 2026-01-21 |
-| 6. File Browser UI        | M1        | 4/4            | Complete    | 2026-01-22 |
-| 6.1 Webapp Automation     | M1        | 7/7            | Complete    | 2026-01-22 |
-| 6.2 Restyle App           | M1        | 6/6            | Complete    | 2026-01-27 |
-| 6.3 UI Structure          | M1        | 5/5            | Complete    | 2026-01-30 |
-| 7. Multi-Device Sync      | M1        | 4/4            | Complete    | 2026-02-02 |
-| 7.1 Atomic File Upload    | M1        | 2/2            | Complete    | 2026-02-07 |
-| 8. TEE Integration        | M1        | 4/4            | Complete    | 2026-02-07 |
-| 9. Desktop Client         | M1        | 7/7            | Complete    | 2026-02-08 |
-| 9.1 Env/DevOps/Staging    | M1        | 6/6            | Complete    | 2026-02-09 |
-| 10. Data Portability      | M1        | 3/3            | Complete    | 2026-02-11 |
-| 12. MFA                   | M2        | 0/TBD          | Not started | -          |
-| 13. File Versioning       | M2        | 0/TBD          | Not started | -          |
-| 14. User-to-User Sharing  | M2        | 0/TBD          | Not started | -          |
-| 15. Link Sharing + Search | M2        | 0/TBD          | Not started | -          |
-| 16. Advanced Sync         | M2        | 0/TBD          | Not started | -          |
-| 17. AWS Nitro TEE         | M2        | 0/TBD          | Not started | -          |
+| Phase                      | Milestone | Plans Complete | Status      | Completed  |
+| -------------------------- | --------- | -------------- | ----------- | ---------- |
+| 1. Foundation              | M1        | 3/3            | Complete    | 2026-01-20 |
+| 2. Authentication          | M1        | 4/4            | Complete    | 2026-01-20 |
+| 3. Core Encryption         | M1        | 3/3            | Complete    | 2026-01-20 |
+| 4. File Storage            | M1        | 4/4            | Complete    | 2026-01-20 |
+| 4.1 API Service Testing    | M1        | 3/3            | Complete    | 2026-01-21 |
+| 4.2 Local IPFS Testing     | M1        | 2/2            | Complete    | 2026-01-21 |
+| 5. Folder System           | M1        | 4/4            | Complete    | 2026-01-21 |
+| 6. File Browser UI         | M1        | 4/4            | Complete    | 2026-01-22 |
+| 6.1 Webapp Automation      | M1        | 7/7            | Complete    | 2026-01-22 |
+| 6.2 Restyle App            | M1        | 6/6            | Complete    | 2026-01-27 |
+| 6.3 UI Structure           | M1        | 5/5            | Complete    | 2026-01-30 |
+| 7. Multi-Device Sync       | M1        | 4/4            | Complete    | 2026-02-02 |
+| 7.1 Atomic File Upload     | M1        | 2/2            | Complete    | 2026-02-07 |
+| 8. TEE Integration         | M1        | 4/4            | Complete    | 2026-02-07 |
+| 9. Desktop Client          | M1        | 7/7            | Complete    | 2026-02-08 |
+| 9.1 Env/DevOps/Staging     | M1        | 6/6            | Complete    | 2026-02-09 |
+| 10. Data Portability       | M1        | 3/3            | Complete    | 2026-02-11 |
+| 12. MFA                    | M2        | 0/TBD          | Not started | -          |
+| 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
+| 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
+| 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
+| 16. Advanced Sync          | M2        | 0/TBD          | Not started | -          |
+| 17. AWS Nitro TEE          | M2        | 0/TBD          | Not started | -          |
+| 18. Billing Infrastructure | M3        | 0/TBD          | Not started | -          |
+| 19. Team Accounts          | M3        | 0/TBD          | Not started | -          |
+| 20. Document Editors       | M3        | 0/TBD          | Not started | -          |
+| 21. Document Signing       | M3        | 0/TBD          | Not started | -          |
 
 ---
 
-_Roadmap created: 2026-01-20_
-_Milestone 1 shipped: 2026-02-11_
-_Milestone 2 roadmap created: 2026-02-11_
-_Total M1 phases: 17 | Total M1 plans: 72 | Depth: Comprehensive_
-_Total M2 phases: 6 | Total M2 plans: TBD | Depth: Comprehensive_
+Roadmap created: 2026-01-20
+Milestone 1 shipped: 2026-02-11
+Milestone 2 roadmap created: 2026-02-11
+Milestone 3 roadmap created: 2026-02-11
+Total M1 phases: 17 | Total M1 plans: 72 | Depth: Comprehensive
+Total M2 phases: 6 | Total M2 plans: TBD | Depth: Comprehensive
+Total M3 phases: 4 | Total M3 plans: TBD | Depth: Comprehensive
