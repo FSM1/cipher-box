@@ -29,9 +29,7 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": [
-          "cipherbox"
-        ]
+        "schemes": ["cipherbox"]
       }
     }
   }

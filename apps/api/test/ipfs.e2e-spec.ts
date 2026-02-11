@@ -93,73 +93,6 @@ describe('IPFS E2E (local node)', () => {
     }
   });
 
-  describe('POST /ipfs/add', () => {
-    it('should skip if IPFS not available', async () => {
-      if (!isLocalProvider || !ipfsAvailable) {
-        console.log('Test skipped - IPFS not available');
-        return;
-      }
-
-      const testContent = Buffer.from(`test content for E2E - ${Date.now()}`);
-
-      const response = await request(app.getHttpServer())
-        .post('/ipfs/add')
-        .attach('file', testContent, 'test.bin')
-        .expect(201);
-
-      expect(response.body).toHaveProperty('cid');
-      expect(response.body).toHaveProperty('size');
-      expect(response.body.cid).toMatch(/^bafy/); // CIDv1 prefix
-      expect(response.body.size).toBeGreaterThan(0);
-
-      // Track for cleanup
-      pinnedCids.push(response.body.cid);
-
-      // Verify file is actually pinned in local node
-      const pinCheck = await fetch(`${ipfsApiUrl}/api/v0/pin/ls?arg=${response.body.cid}`, {
-        method: 'POST',
-      });
-      expect(pinCheck.ok).toBe(true);
-    });
-
-    it('should pin file and return CID with correct size', async () => {
-      if (!isLocalProvider || !ipfsAvailable) {
-        console.log('Test skipped - IPFS not available');
-        return;
-      }
-
-      const testContent = Buffer.from('Hello, IPFS E2E Test!');
-
-      const response = await request(app.getHttpServer())
-        .post('/ipfs/add')
-        .attach('file', testContent, 'hello.txt')
-        .expect(201);
-
-      expect(response.body.cid).toBeDefined();
-      expect(response.body.size).toBeGreaterThanOrEqual(testContent.length);
-
-      // Track for cleanup
-      pinnedCids.push(response.body.cid);
-    });
-
-    it('should reject empty file', async () => {
-      if (!isLocalProvider || !ipfsAvailable) {
-        console.log('Test skipped - IPFS not available');
-        return;
-      }
-
-      const emptyContent = Buffer.from('');
-
-      // The validation happens before IPFS - should fail with validation error
-      const response = await request(app.getHttpServer())
-        .post('/ipfs/add')
-        .attach('file', emptyContent, 'empty.txt');
-
-      // Either 400 (validation) or 422 (file processing)
-      expect([400, 422]).toContain(response.status);
-    });
-  });
-
   describe('POST /ipfs/unpin', () => {
     it('should unpin previously pinned file', async () => {
       if (!isLocalProvider || !ipfsAvailable) {
@@ -170,7 +103,7 @@ describe('IPFS E2E (local node)', () => {
       // First pin a file
       const testContent = Buffer.from(`content to unpin - ${Date.now()}`);
       const addResponse = await request(app.getHttpServer())
-        .post('/ipfs/add')
+        .post('/ipfs/upload')
         .attach('file', testContent, 'to-unpin.bin')
         .expect(201);
 
@@ -195,7 +128,7 @@ describe('IPFS E2E (local node)', () => {
       // First pin a file
       const testContent = Buffer.from(`content to double-unpin - ${Date.now()}`);
       const addResponse = await request(app.getHttpServer())
-        .post('/ipfs/add')
+        .post('/ipfs/upload')
         .attach('file', testContent, 'to-double-unpin.bin')
         .expect(201);
 

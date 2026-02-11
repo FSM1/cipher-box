@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ApiStatusIndicator } from '../components/ApiStatusIndicator';
+import { StatusIndicator } from '../components/layout';
 import { AuthButton } from '../components/auth/AuthButton';
 import { MatrixBackground } from '../components/MatrixBackground';
 import { StagingBanner } from '../components/StagingBanner';
@@ -17,7 +17,7 @@ export function Login() {
   // Redirect if already authenticated
   useEffect(() => {
     if (isAuthenticated) {
-      navigate('/dashboard');
+      navigate('/files');
     }
   }, [isAuthenticated, navigate]);
 
@@ -45,7 +45,7 @@ export function Login() {
           your files, encrypted on your device. we never see your data.
         </p>
         <AuthButton />
-        <ApiStatusIndicator />
+        <StatusIndicator />
       </div>
     </>
   );

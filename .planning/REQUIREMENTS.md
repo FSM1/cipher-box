@@ -59,7 +59,7 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Multi-Device Sync
 
 - [x] **SYNC-01**: Changes sync across devices via IPNS polling (~30s interval)
-- [ ] **SYNC-02**: Desktop app runs background sync daemon
+- [x] **SYNC-02**: Desktop app runs background sync daemon
 - [x] **SYNC-03**: User sees loading state during IPNS resolution
 
 ### TEE Republishing
@@ -72,22 +72,22 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Web UI
 
-- [ ] **WEB-01**: User sees login page with Web3Auth modal
-- [ ] **WEB-02**: User sees file browser with folder tree sidebar
-- [ ] **WEB-03**: User can drag-drop files to upload
-- [ ] **WEB-04**: User can right-click for context menu (rename, delete, move)
-- [ ] **WEB-05**: UI is responsive for mobile web access
-- [ ] **WEB-06**: User can navigate folder hierarchy with breadcrumbs
+- [x] **WEB-01**: User sees login page with Web3Auth modal
+- [x] **WEB-02**: User sees file browser with folder tree sidebar
+- [x] **WEB-03**: User can drag-drop files to upload
+- [x] **WEB-04**: User can right-click for context menu (rename, delete, move)
+- [x] **WEB-05**: UI is responsive for mobile web access
+- [x] **WEB-06**: User can navigate folder hierarchy with breadcrumbs
 
 ### Desktop App (macOS)
 
-- [ ] **DESK-01**: User can log in via Web3Auth in desktop app
-- [ ] **DESK-02**: FUSE mount appears at ~/CipherVault after login
-- [ ] **DESK-03**: User can open files directly in native apps (Preview, etc.)
-- [ ] **DESK-04**: User can save files through FUSE mount
-- [ ] **DESK-05**: App runs in system tray with status icon
-- [ ] **DESK-06**: Refresh tokens stored securely in OS keychain
-- [ ] **DESK-07**: Background sync runs while app is in tray
+- [x] **DESK-01**: User can log in via Web3Auth in desktop app
+- [x] **DESK-02**: FUSE mount appears at ~/CipherBox after login
+- [x] **DESK-03**: User can open files directly in native apps (Preview, etc.)
+- [x] **DESK-04**: User can save files through FUSE mount
+- [x] **DESK-05**: App runs in system tray with status icon
+- [x] **DESK-06**: Refresh tokens stored securely in OS keychain
+- [x] **DESK-07**: Background sync runs while app is in tray
 
 ### Data Portability
 
@@ -309,26 +309,26 @@ Which phases cover which requirements. Updated during roadmap creation.
 | API-07      | Phase 4  | Complete |
 | API-08      | Phase 8  | Complete |
 | SYNC-01     | Phase 7  | Complete |
-| SYNC-02     | Phase 9  | Pending  |
+| SYNC-02     | Phase 9  | Complete |
 | SYNC-03     | Phase 7  | Complete |
 | TEE-01      | Phase 8  | Complete |
 | TEE-02      | Phase 8  | Complete |
 | TEE-03      | Phase 8  | Complete |
 | TEE-04      | Phase 8  | Complete |
 | TEE-05      | Phase 8  | Complete |
-| WEB-01      | Phase 6  | Pending  |
-| WEB-02      | Phase 6  | Pending  |
-| WEB-03      | Phase 6  | Pending  |
-| WEB-04      | Phase 6  | Pending  |
-| WEB-05      | Phase 6  | Pending  |
-| WEB-06      | Phase 6  | Pending  |
-| DESK-01     | Phase 9  | Pending  |
-| DESK-02     | Phase 9  | Pending  |
-| DESK-03     | Phase 9  | Pending  |
-| DESK-04     | Phase 9  | Pending  |
-| DESK-05     | Phase 9  | Pending  |
-| DESK-06     | Phase 9  | Pending  |
-| DESK-07     | Phase 9  | Pending  |
+| WEB-01      | Phase 6  | Complete |
+| WEB-02      | Phase 6  | Complete |
+| WEB-03      | Phase 6  | Complete |
+| WEB-04      | Phase 6  | Complete |
+| WEB-05      | Phase 6  | Complete |
+| WEB-06      | Phase 6  | Complete |
+| DESK-01     | Phase 9  | Complete |
+| DESK-02     | Phase 9  | Complete |
+| DESK-03     | Phase 9  | Complete |
+| DESK-04     | Phase 9  | Complete |
+| DESK-05     | Phase 9  | Complete |
+| DESK-06     | Phase 9  | Complete |
+| DESK-07     | Phase 9  | Complete |
 | PORT-01     | Phase 10 | Complete |
 | PORT-02     | Phase 10 | Complete |
 | PORT-03     | Phase 10 | Complete |

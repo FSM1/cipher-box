@@ -6,7 +6,6 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export * from './addResponseDto';
 export * from './authMethodResponseDto';
 export * from './authMethodResponseDtoType';
 export * from './derivationInfoDto';
@@ -17,7 +16,6 @@ export * from './healthControllerCheck200';
 export * from './healthControllerCheck200Info';
 export * from './healthControllerCheck200InfoDatabase';
 export * from './initVaultDto';
-export * from './ipfsControllerAddBody';
 export * from './ipfsControllerUploadBody';
 export * from './ipnsControllerResolveRecordParams';
 export * from './linkMethodDto';

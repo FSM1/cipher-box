@@ -89,8 +89,8 @@ export async function loginViaEmail(page: Page, email: string, otp?: string): Pr
   // Wait for OTP input screen to appear and enter code
   await enterOtpCode(page, otpCode);
 
-  // Wait for redirect to dashboard after successful login
-  await page.waitForURL('**/dashboard', { timeout: 60000 });
+  // Wait for redirect to file browser after successful login
+  await page.waitForURL('**/files', { timeout: 60000 });
 }
 
 /**
