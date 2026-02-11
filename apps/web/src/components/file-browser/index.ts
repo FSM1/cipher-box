@@ -16,7 +16,3 @@ export { RenameDialog } from './RenameDialog';
 export { CreateFolderDialog } from './CreateFolderDialog';
 export { MoveDialog } from './MoveDialog';
 export { Breadcrumbs } from './Breadcrumbs';
-
-// @deprecated - kept for backwards compatibility, will be removed in future cleanup
-export { FolderTree } from './FolderTree';
-export { FolderTreeNode } from './FolderTreeNode';

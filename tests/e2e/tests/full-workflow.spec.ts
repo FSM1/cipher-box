@@ -65,7 +65,6 @@ test.describe.serial('Full Workflow', () => {
   const folderIds: Record<string, string> = {};
 
   // Track navigation for internal state management
-  // NOTE: getCurrentFolderName() was removed since move tests (Phase 4) are skipped
   const navigationStack: string[] = ['root'];
 
   // Files to upload at various levels (12+ files total)
@@ -256,10 +255,6 @@ test.describe.serial('Full Workflow', () => {
     await confirmDialog.waitForClose({ timeout: 15000 });
     await fileList.waitForItemToDisappear(name, { timeout: 15000 });
   }
-
-  // NOTE: getTrackedFolderId() was removed since move tests (Phase 4) are
-  // skipped. Re-add when move functionality is implemented via context menu
-  // or drag-drop to folder rows.
 
   // ============================================
   // Phase 1: Login
@@ -663,7 +658,7 @@ test.describe.serial('Full Workflow', () => {
     expect(await fileList.isItemVisible(fileToMove)).toBe(true);
   });
 
-  test('4.2 Move file via drag-drop to folder row', async () => {
+  test('4.2 Move file between sibling folders via context menu', async () => {
     // We're in workspace folder from previous test
     // Move one of the document files from documents to images folder
 

@@ -30,6 +30,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 9: Desktop Client** - Tauri app with FUSE mount for macOS
 - [x] **Phase 9.1: Environment Changes, DevOps & Staging Deployment** - CI/CD, environment config, staging deploy (INSERTED)
 - [x] **Phase 10: Data Portability** - Vault export and documentation
+- [x] **Phase 10.1: v1.0 Tech Debt Cleanup** - Dead code removal, documentation updates, E2E test restoration (INSERTED)
 - [ ] **Phase 11: Security Enhancements** - Web3Auth MFA (post-v1.0)
 
 ## Phase Details
@@ -394,6 +395,30 @@ Plans:
 - [x] 10-02-PLAN.md — Standalone recovery HTML page (single-file, infrastructure-independent)
 - [x] 10-03-PLAN.md — Export format technical documentation with test vectors
 
+### Phase 10.1: v1.0 Tech Debt Cleanup (INSERTED)
+
+**Goal**: Clean up accumulated tech debt before closing v1.0 milestone
+**Depends on**: Phase 10
+**Requirements**: None (cleanup phase — no new functionality)
+**Gap Closure**: Closes 13 tech debt items from v1.0 milestone audit
+**Success Criteria** (what must be TRUE):
+
+1. Deprecated components removed (FolderTree, FolderTreeNode, ApiStatusIndicator)
+2. Unused code removed (addUsage method, /ipfs/add endpoint)
+3. REQUIREMENTS.md checkboxes updated to reflect actual completion status
+4. Missing VERIFICATION.md files created for 5 phases (02, 04.2, 06.2, 09, 09.1)
+5. Skipped E2E move tests investigated and restored or formally removed
+   **Plans**: 3 plans
+
+Plans:
+
+- [x] 10.1-01-PLAN.md — Code cleanup (deprecated components, unused methods, dead endpoints)
+- [x] 10.1-02-PLAN.md — Documentation cleanup (REQUIREMENTS.md checkboxes, 5 missing VERIFICATION.md)
+- [x] 10.1-03-PLAN.md — E2E test restoration (skipped move operation tests)
+
+**Details:**
+Post-audit cleanup insertion. Addresses 13 tech debt items identified by `/gsd:audit-milestone`. All items are non-blocking but worth closing before archiving the v1.0 milestone.
+
 ### Phase 11: Security Enhancements (Post-v1.0)
 
 **Goal**: Optional MFA for users requiring stronger authentication guarantees
@@ -418,7 +443,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> ... -> 10 (v1.0), then 11 (post-v1.0)
+Phases execute in numeric order: 1 -> 2 -> 3 -> ... -> 10 -> 10.1 (v1.0), then 11 (post-v1.0)
 Decimal phases (if any) execute between their surrounding integers.
 
 | Phase                   | Plans Complete | Status    | Completed  |
@@ -440,6 +465,7 @@ Decimal phases (if any) execute between their surrounding integers.
 | 9. Desktop Client       | 7/7            | Complete  | 2026-02-08 |
 | 9.1 Env/DevOps/Staging  | 6/6            | Complete  | 2026-02-09 |
 | 10. Data Portability    | 3/3            | Complete  | 2026-02-11 |
+| 10.1 v1.0 Cleanup       | 3/3            | Complete  | 2026-02-11 |
 | 11. Security (MFA)      | 0/4            | Post-v1.0 | -          |
 
 ---
@@ -478,6 +504,7 @@ _Phase 9 revised: 2026-02-07_
 _Phase 9 complete: 2026-02-08_
 _Phase 9.1 planned: 2026-02-09_
 _Phase 9.1 complete: 2026-02-09_
-_Phase 10 planned: 2026-02-11_
 _Phase 10 complete: 2026-02-11_
-_Total phases: 14 | Total plans: 74 | Depth: Comprehensive_
+_Phase 10.1 inserted: 2026-02-11_
+_Phase 10.1 complete: 2026-02-11_
+_Total phases: 18 | Total plans: 77 | Depth: Comprehensive_

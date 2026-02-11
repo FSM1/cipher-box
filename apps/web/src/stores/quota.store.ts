@@ -9,7 +9,6 @@ type QuotaState = {
   error: string | null;
 
   fetchQuota: () => Promise<void>;
-  addUsage: (bytes: number) => void;
   removeUsage: (bytes: number) => void;
   canUpload: (bytes: number) => boolean;
 };
@@ -35,12 +34,6 @@ export const useQuotaStore = create<QuotaState>((set, get) => ({
       set({ error: 'Failed to fetch quota', loading: false });
     }
   },
-
-  addUsage: (bytes) =>
-    set((state) => ({
-      usedBytes: state.usedBytes + bytes,
-      remainingBytes: state.remainingBytes - bytes,
-    })),
 
   removeUsage: (bytes) =>
     set((state) => ({

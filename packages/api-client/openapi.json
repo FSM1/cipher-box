@@ -224,56 +224,6 @@
         "tags": ["Auth"]
       }
     },
-    "/ipfs/add": {
-      "post": {
-        "description": "Upload an encrypted file blob to IPFS via Pinata. Returns the CID and size.",
-        "operationId": "IpfsController_add",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "file": {
-                    "type": "string",
-                    "format": "binary",
-                    "description": "Encrypted file blob (max 100MB)"
-                  }
-                },
-                "required": ["file"]
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "File pinned successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AddResponseDto"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized - JWT token required"
-          },
-          "413": {
-            "description": "Payload too large - file exceeds 100MB limit"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Pin encrypted file to IPFS",
-        "tags": ["IPFS"]
-      }
-    },
     "/ipfs/upload": {
       "post": {
         "description": "Pins encrypted file to IPFS, checks storage quota, and records the pin for quota tracking. All in one atomic request.",
@@ -872,22 +822,6 @@
           }
         },
         "required": ["success"]
-      },
-      "AddResponseDto": {
-        "type": "object",
-        "properties": {
-          "cid": {
-            "type": "string",
-            "description": "The IPFS CID of the pinned file",
-            "example": "bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi"
-          },
-          "size": {
-            "type": "number",
-            "description": "The size of the pinned file in bytes",
-            "example": 1024
-          }
-        },
-        "required": ["cid", "size"]
       },
       "UploadResponseDto": {
         "type": "object",

@@ -22,8 +22,6 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
-  AddResponseDto,
-  IpfsControllerAddBody,
   IpfsControllerUploadBody,
   UnpinDto,
   UnpinResponseDto,
@@ -32,87 +30,6 @@ import type {
 
 import { customInstance } from '../custom-instance';
 
-/**
- * Upload an encrypted file blob to IPFS via Pinata. Returns the CID and size.
- * @summary Pin encrypted file to IPFS
- */
-export const ipfsControllerAdd = (
-  ipfsControllerAddBody: IpfsControllerAddBody,
-  signal?: AbortSignal
-) => {
-  const formData = new FormData();
-  formData.append(`file`, ipfsControllerAddBody.file);
-
-  return customInstance<AddResponseDto>({
-    url: `/ipfs/add`,
-    method: 'POST',
-    headers: { 'Content-Type': 'multipart/form-data' },
-    data: formData,
-    signal,
-  });
-};
-
-export const getIpfsControllerAddMutationOptions = <TError = void, TContext = unknown>(options?: {
-  mutation?: UseMutationOptions<
-    Awaited<ReturnType<typeof ipfsControllerAdd>>,
-    TError,
-    { data: IpfsControllerAddBody },
-    TContext
-  >;
-}): UseMutationOptions<
-  Awaited<ReturnType<typeof ipfsControllerAdd>>,
-  TError,
-  { data: IpfsControllerAddBody },
-  TContext
-> => {
-  const mutationKey = ['ipfsControllerAdd'];
-  const { mutation: mutationOptions } = options
-    ? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
-      ? options
-      : { ...options, mutation: { ...options.mutation, mutationKey } }
-    : { mutation: { mutationKey } };
-
-  const mutationFn: MutationFunction<
-    Awaited<ReturnType<typeof ipfsControllerAdd>>,
-    { data: IpfsControllerAddBody }
-  > = (props) => {
-    const { data } = props ?? {};
-
-    return ipfsControllerAdd(data);
-  };
-
-  return { mutationFn, ...mutationOptions };
-};
-
-export type IpfsControllerAddMutationResult = NonNullable<
-  Awaited<ReturnType<typeof ipfsControllerAdd>>
->;
-export type IpfsControllerAddMutationBody = IpfsControllerAddBody;
-export type IpfsControllerAddMutationError = void;
-
-/**
- * @summary Pin encrypted file to IPFS
- */
-export const useIpfsControllerAdd = <TError = void, TContext = unknown>(
-  options?: {
-    mutation?: UseMutationOptions<
-      Awaited<ReturnType<typeof ipfsControllerAdd>>,
-      TError,
-      { data: IpfsControllerAddBody },
-      TContext
-    >;
-  },
-  queryClient?: QueryClient
-): UseMutationResult<
-  Awaited<ReturnType<typeof ipfsControllerAdd>>,
-  TError,
-  { data: IpfsControllerAddBody },
-  TContext
-> => {
-  const mutationOptions = getIpfsControllerAddMutationOptions(options);
-
-  return useMutation(mutationOptions, queryClient);
-};
 /**
  * Pins encrypted file to IPFS, checks storage quota, and records the pin for quota tracking. All in one atomic request.
  * @summary Upload encrypted file to IPFS with quota tracking

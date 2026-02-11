@@ -1667,8 +1667,8 @@ mod implementation {
             _flags: u32,
             reply: ReplyEmpty,
         ) {
-            eprintln!(
-                ">>> RENAME called: {:?} (parent {}) -> {:?} (parent {})",
+            log::debug!(
+                "rename: {:?} (parent {}) -> {:?} (parent {})",
                 name, parent, newname, newparent,
             );
             let name_str = match name.to_str() {
@@ -1715,14 +1715,14 @@ mod implementation {
                         }
                     }
                     if matches.len() == 1 {
-                        eprintln!(
-                            ">>> RENAME suffix-match: truncated {:?} matched full name {:?}",
+                        log::debug!(
+                            "rename suffix-match: truncated {:?} matched full name {:?}",
                             name_str, matches[0].1
                         );
                         (matches[0].0, matches[0].1.clone())
                     } else {
-                        eprintln!(
-                            ">>> RENAME failed: {:?} not found (suffix matches: {})",
+                        log::debug!(
+                            "rename failed: {:?} not found (suffix matches: {})",
                             name_str, matches.len()
                         );
                         reply.error(libc::ENOENT);

@@ -94,7 +94,6 @@ function buildBreadcrumbs(
  *   return (
  *     <div>
  *       <Breadcrumbs items={breadcrumbs} onNavigate={navigateTo} />
- *       <FolderTree currentFolderId={currentFolder?.id} onNavigate={navigateTo} />
  *       <FileList items={currentFolder?.children ?? []} />
  *     </div>
  *   );
