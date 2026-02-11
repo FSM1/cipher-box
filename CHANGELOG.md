@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0](https://github.com/FSM1/cipher-box/compare/v0.6.0...v0.7.0) (2026-02-11)
+
+
+### Features
+
+* add PDF, audio, and video file preview ([#100](https://github.com/FSM1/cipher-box/issues/100)) ([91da9b2](https://github.com/FSM1/cipher-box/commit/91da9b211ab7cd17d5bb6b397579e60414c520bc))
+* add vault export, recovery tool, and export format documentation (Phase 10) ([#98](https://github.com/FSM1/cipher-box/issues/98)) ([9e7fe8e](https://github.com/FSM1/cipher-box/commit/9e7fe8e05b5c6a20eba443917ec65259c943b9b3))
+
 ## [0.6.0](https://github.com/FSM1/cipher-box/compare/v0.5.0...v0.6.0) (2026-02-11)
 
 ### Features
