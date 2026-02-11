@@ -21,6 +21,7 @@ import { MoveDialog } from './MoveDialog';
 import { DetailsDialog } from './DetailsDialog';
 import { UploadZone } from './UploadZone';
 import { TextEditorDialog } from './TextEditorDialog';
+import { ImagePreviewDialog } from './ImagePreviewDialog';
 import { UploadModal } from './UploadModal';
 import { Breadcrumbs } from './Breadcrumbs';
 import { SyncIndicator } from './SyncIndicator';
@@ -95,6 +96,29 @@ function isTextFile(name: string): boolean {
   const lastDot = lower.lastIndexOf('.');
   if (lastDot === -1) return false;
   return TEXT_EXTENSIONS.has(lower.slice(lastDot));
+}
+
+/** Extensions recognized as previewable image files. */
+const IMAGE_EXTENSIONS = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.svg',
+  '.bmp',
+  '.ico',
+  '.avif',
+]);
+
+/**
+ * Check if a filename has a previewable image extension.
+ */
+function isImageFile(name: string): boolean {
+  const lower = name.toLowerCase();
+  const lastDot = lower.lastIndexOf('.');
+  if (lastDot === -1) return false;
+  return IMAGE_EXTENSIONS.has(lower.slice(lastDot));
 }
 
 /**
@@ -310,6 +334,10 @@ export function FileBrowser() {
   const [moveDialog, setMoveDialog] = useState<DialogState>({ open: false, item: null });
   const [detailsDialog, setDetailsDialog] = useState<DialogState>({ open: false, item: null });
   const [editorDialog, setEditorDialog] = useState<DialogState>({ open: false, item: null });
+  const [imagePreviewDialog, setImagePreviewDialog] = useState<DialogState>({
+    open: false,
+    item: null,
+  });
   const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false);
 
   // Clear selection when navigating to a new folder
@@ -409,6 +437,13 @@ export function FileBrowser() {
     }
   }, [contextMenu.item]);
 
+  // Open image preview dialog
+  const handlePreviewClick = useCallback(() => {
+    if (contextMenu.item) {
+      setImagePreviewDialog({ open: true, item: contextMenu.item });
+    }
+  }, [contextMenu.item]);
+
   // Confirm rename
   const handleRenameConfirm = useCallback(
     async (newName: string) => {
@@ -473,6 +508,10 @@ export function FileBrowser() {
 
   const closeEditorDialog = useCallback(() => {
     setEditorDialog({ open: false, item: null });
+  }, []);
+
+  const closeImagePreviewDialog = useCallback(() => {
+    setImagePreviewDialog({ open: false, item: null });
   }, []);
 
   // Create folder handlers
@@ -608,6 +647,11 @@ export function FileBrowser() {
               ? handleEditClick
               : undefined
           }
+          onPreview={
+            isFileEntry(contextMenu.item) && isImageFile(contextMenu.item.name)
+              ? handlePreviewClick
+              : undefined
+          }
           onRename={handleRenameClick}
           onMove={handleMoveClick}
           onDelete={handleDeleteClick}
@@ -669,6 +713,17 @@ export function FileBrowser() {
         onClose={closeEditorDialog}
         item={editorDialog.item && isFileEntry(editorDialog.item) ? editorDialog.item : null}
         parentFolderId={currentFolderId}
+      />
+
+      {/* Image preview dialog */}
+      <ImagePreviewDialog
+        open={imagePreviewDialog.open}
+        onClose={closeImagePreviewDialog}
+        item={
+          imagePreviewDialog.item && isFileEntry(imagePreviewDialog.item)
+            ? imagePreviewDialog.item
+            : null
+        }
       />
 
       {/* Upload modal (self-manages visibility) */}
