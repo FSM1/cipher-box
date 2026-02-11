@@ -5,23 +5,23 @@
 See: .planning/PROJECT.md (updated 2026-01-20)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 10.1 - v1.0 Tech Debt Cleanup (next)
+**Current focus:** Phase 10.1 - v1.0 Tech Debt Cleanup (in progress)
 
 ## Current Position
 
 Phase: 10.1 of 11 (v1.0 Tech Debt Cleanup)
-Plan: 0 of 3 in Phase 10.1
-Status: Not started
-Last activity: 2026-02-11 - Phase 10.1 inserted for tech debt cleanup
+Plan: 1 of 3 in Phase 10.1
+Status: In progress
+Last activity: 2026-02-11 - Completed 10.1-03-PLAN.md
 
-Progress: [#########-] 96% (74 of 77 plans)
+Progress: [#########-] 97% (75 of 77 plans)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 69
-- Average duration: 4.7 min
+- Total plans completed: 70
+- Average duration: 4.6 min
 - Total execution time: 5.5 hours
 
 **By Phase:**
@@ -43,11 +43,12 @@ Progress: [#########-] 96% (74 of 77 plans)
 | 08-tee-integration         | 4/4   | 21 min  | 5.3 min  |
 | 09-desktop-client          | 7/7   | 49 min  | 7.0 min  |
 | 09.1-env-devops-staging    | 6/6   | 101 min | 16.8 min |
+| 10.1-v1-cleanup            | 1/3   | 1 min   | 1 min    |
 
 **Recent Trend:**
 
-- Last 5 plans: 2m, 3m, 2m, 3m, 90m
-- Trend: Plan 09.1-05 was interactive infrastructure provisioning with iterative deployment fixes
+- Last 5 plans: 3m, 2m, 3m, 90m, 1m
+- Trend: Plan 10.1-03 was a lightweight comment cleanup task
 
 Updated after each plan completion.
 
@@ -259,6 +260,7 @@ Recent decisions affecting current work:
 | SCP then SSH pattern for VPS deployment                | 09.1-04 | Separates file transfer from service orchestration for clarity            |
 | Signature fields optional in resolve response DTO      | Q-007   | DB-cached fallback has no signature data; graceful degradation            |
 | Client verifies IPNS Ed25519 signature before CID use  | Q-007   | Closes metadata tampering attack vector (GitHub #71)                      |
+| E2E test 4.2 renamed to match actual behavior          | 10.1-03 | Was "drag-drop to folder row" but uses context menu + MoveDialog          |
 
 ### Pending Todos
 
@@ -322,11 +324,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-11
-Stopped at: Phase 10.1 created from milestone audit tech debt
+Stopped at: Completed 10.1-03-PLAN.md
 Resume file: None
-Next: Plan Phase 10.1 (`/gsd:plan-phase 10.1`)
+Next: Execute 10.1-01-PLAN.md and 10.1-02-PLAN.md
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-11 after inserting Phase 10.1 (v1.0 Tech Debt Cleanup)_
+_Last updated: 2026-02-11 after completing 10.1-03 (E2E move test cleanup)_

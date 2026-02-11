@@ -262,8 +262,8 @@ export function useAuth() {
         // Ignore if method doesn't exist
       }
 
-      // 8. Navigate to dashboard
-      navigate('/dashboard');
+      // 8. Navigate to files
+      navigate('/files');
     } catch (error) {
       console.error('Login failed:', error);
       throw error;

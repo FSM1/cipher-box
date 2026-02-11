@@ -36,8 +36,8 @@ export function Settings() {
     <div className="settings-container">
       <header className="settings-header">
         <h1>Settings</h1>
-        <button onClick={() => navigate('/dashboard')} className="back-button">
-          Back to Dashboard
+        <button onClick={() => navigate('/files')} className="back-button">
+          Back to Files
         </button>
       </header>
       <main className="settings-main">
