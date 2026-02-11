@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import { Modal } from '../ui/Modal';
+import { useEffect, useRef, useState } from 'react';
+import { Portal } from '../ui/Portal';
 import { UploadItem } from './UploadItem';
 import { useUploadStore } from '../../stores/upload.store';
 import '../../styles/upload.css';
@@ -26,9 +26,9 @@ function mapStatus(
 }
 
 /**
- * Get modal title based on upload status.
+ * Get header title based on upload status.
  */
-function getModalTitle(
+function getTitle(
   status: ReturnType<typeof useUploadStore.getState>['status'],
   completedFiles: number,
   totalFiles: number
@@ -43,23 +43,17 @@ function getModalTitle(
     case 'registering':
       return 'Registering Files...';
     default:
-      return `Uploading Files (${completedFiles}/${totalFiles})`;
+      return `Uploading (${completedFiles}/${totalFiles})`;
   }
 }
 
 /**
- * Upload progress modal showing upload queue.
+ * Collapsible upload popup widget – bottom-right corner.
  *
- * Features:
- * - Shows current file being uploaded with progress bar
- * - Shows overall progress (X of Y files)
- * - Cancel button to stop all uploads
- * - Close button after completion/error
- * - Error state with descriptive message
- *
- * Per CONTEXT.md v1 simplification:
- * - Shows current file progress + overall batch progress
- * - Individual file tracking can be enhanced in future
+ * Always rendered in the DOM (via Portal) but visually hidden when idle.
+ * Expands automatically when an upload starts, collapses on success after a
+ * short delay.  The user can manually toggle expanded/collapsed at any time
+ * via the header chevron.
  */
 export function UploadModal() {
   const status = useUploadStore((state) => state.status);
@@ -71,97 +65,178 @@ export function UploadModal() {
   const cancel = useUploadStore((state) => state.cancel);
   const reset = useUploadStore((state) => state.reset);
 
-  const isVisible = status !== 'idle';
+  const [expanded, setExpanded] = useState(false);
+  const [visible, setVisible] = useState(false);
 
-  // Can close when upload is finished (success, error, cancelled)
+  const prevStatusRef = useRef(status);
+  const autoCollapseTimer = useRef<ReturnType<typeof setTimeout>>();
+  const autoHideTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  const isActive = status !== 'idle';
+  const canCancel = status === 'encrypting' || status === 'uploading';
   const canClose = status === 'success' || status === 'error' || status === 'cancelled';
 
-  // Can cancel only during active upload
-  const canCancel = status === 'encrypting' || status === 'uploading';
-
-  // Auto-dismiss after 1.5s on success
-  const autoCloseTimer = useRef<ReturnType<typeof setTimeout>>();
+  // --- visibility & expand/collapse automation ---
   useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = status;
+
+    // Clear pending timers on every status change
+    clearTimeout(autoCollapseTimer.current);
+    clearTimeout(autoHideTimer.current);
+
+    if (status !== 'idle' && prev === 'idle') {
+      // Upload just started → show & expand
+      setVisible(true);
+      setExpanded(true);
+    }
+
     if (status === 'success') {
-      autoCloseTimer.current = setTimeout(() => {
-        reset();
+      // Auto-collapse after 1.5s, then hide after the collapse animation (300ms)
+      autoCollapseTimer.current = setTimeout(() => {
+        setExpanded(false);
+        autoHideTimer.current = setTimeout(() => {
+          reset();
+          setVisible(false);
+        }, 400);
       }, 1500);
     }
-    return () => clearTimeout(autoCloseTimer.current);
+
+    return () => {
+      clearTimeout(autoCollapseTimer.current);
+      clearTimeout(autoHideTimer.current);
+    };
   }, [status, reset]);
 
+  // Keep visible flag in sync when store resets externally
+  useEffect(() => {
+    if (!isActive && !expanded) {
+      // Small delay so the collapse animation can finish before we unmount
+      const t = setTimeout(() => setVisible(false), 400);
+      return () => clearTimeout(t);
+    }
+    if (isActive) {
+      setVisible(true);
+    }
+    return undefined;
+  }, [isActive, expanded]);
+
+  const handleToggle = () => setExpanded((e) => !e);
+
   const handleClose = () => {
-    clearTimeout(autoCloseTimer.current);
-    reset();
+    clearTimeout(autoCollapseTimer.current);
+    clearTimeout(autoHideTimer.current);
+    setExpanded(false);
+    setTimeout(() => {
+      reset();
+      setVisible(false);
+    }, 400);
   };
 
-  const handleCancel = () => {
-    cancel();
-  };
+  const handleCancel = () => cancel();
 
-  const title = getModalTitle(status, completedFiles, totalFiles);
+  const title = getTitle(status, completedFiles, totalFiles);
   const itemStatus = mapStatus(status);
 
+  if (!visible) return null;
+
   return (
-    <Modal open={isVisible} title={title} onClose={canClose ? handleClose : undefined}>
-      <div className="upload-modal-content">
-        {/* Overall progress */}
-        <div className="upload-modal-progress">
-          <div className="upload-modal-overall">
+    <Portal>
+      <div
+        className={`upload-popup ${expanded ? 'upload-popup--expanded' : 'upload-popup--collapsed'}`}
+        role="region"
+        aria-label="Upload progress"
+      >
+        {/* Header – always visible, acts as toggle */}
+        <button
+          type="button"
+          className="upload-popup-header"
+          onClick={handleToggle}
+          aria-expanded={expanded}
+        >
+          <span className="upload-popup-header-left">
+            <span className="upload-popup-icon" aria-hidden="true">
+              {status === 'success' ? '\u2713' : status === 'error' ? '!' : '\u2191'}
+            </span>
+            <span className="upload-popup-title">{isActive ? title : 'Uploads'}</span>
+          </span>
+
+          {/* Mini progress indicator visible when collapsed & active */}
+          {!expanded && isActive && status !== 'success' && status !== 'error' && (
+            <span className="upload-popup-mini-progress">{progress}%</span>
+          )}
+
+          <span
+            className={`upload-popup-chevron ${expanded ? 'upload-popup-chevron--down' : ''}`}
+            aria-hidden="true"
+          >
+            {'\u25B2'}
+          </span>
+        </button>
+
+        {/* Body – shown when expanded */}
+        <div className="upload-popup-body">
+          <div className="upload-popup-progress-bar">
+            <div
+              className="upload-popup-progress-fill"
+              style={{ width: `${progress}%` }}
+              data-status={itemStatus}
+            />
+          </div>
+
+          <div className="upload-popup-overall">
             <span>
-              {completedFiles} of {totalFiles} files uploaded
+              {completedFiles} of {totalFiles} files
             </span>
             <span>{progress}%</span>
           </div>
-        </div>
 
-        {/* Current file being processed */}
-        <div className="upload-item-list">
-          {currentFile && (
-            <UploadItem
-              filename={currentFile}
-              status={itemStatus}
-              progress={itemStatus === 'complete' ? 100 : progress}
-              error={error}
-              onCancel={canCancel ? handleCancel : undefined}
-            />
-          )}
+          {/* Current file being processed */}
+          <div className="upload-popup-items">
+            {currentFile && (
+              <UploadItem
+                filename={currentFile}
+                status={itemStatus}
+                progress={itemStatus === 'complete' ? 100 : progress}
+                error={error}
+                onCancel={canCancel ? handleCancel : undefined}
+              />
+            )}
 
-          {/* Show status message during registering */}
-          {status === 'registering' && !currentFile && (
-            <div className="upload-item-status">Updating folder metadata...</div>
-          )}
+            {status === 'registering' && !currentFile && (
+              <div className="upload-item-status">Updating folder metadata...</div>
+            )}
 
-          {/* Show error message if upload failed */}
-          {status === 'error' && error && !currentFile && (
-            <div className="upload-zone-error" role="alert">
-              {error}
-            </div>
-          )}
-        </div>
+            {status === 'error' && error && !currentFile && (
+              <div className="upload-zone-error" role="alert">
+                {error}
+              </div>
+            )}
+          </div>
 
-        {/* Action buttons */}
-        <div className="upload-modal-actions">
-          {canCancel && (
-            <button
-              type="button"
-              className="upload-modal-btn upload-modal-btn-cancel"
-              onClick={handleCancel}
-            >
-              Cancel All
-            </button>
-          )}
-          {canClose && (
-            <button
-              type="button"
-              className="upload-modal-btn upload-modal-btn-close"
-              onClick={handleClose}
-            >
-              Close
-            </button>
-          )}
+          {/* Action buttons */}
+          <div className="upload-popup-actions">
+            {canCancel && (
+              <button
+                type="button"
+                className="upload-modal-btn upload-modal-btn-cancel"
+                onClick={handleCancel}
+              >
+                Cancel
+              </button>
+            )}
+            {canClose && (
+              <button
+                type="button"
+                className="upload-modal-btn upload-modal-btn-close"
+                onClick={handleClose}
+              >
+                Close
+              </button>
+            )}
+          </div>
         </div>
       </div>
-    </Modal>
+    </Portal>
   );
 }
