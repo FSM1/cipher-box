@@ -10,31 +10,31 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 12 (first of 11 M2 phases: 11-17 + decimal insertions)
-Plan: 02 of Phase 12
-Status: In progress (Plan 02 complete, Plan 03+ pending)
-Last activity: 2026-02-12 -- Completed 12-PLAN-02 (Core Kit SDK Setup + React Provider)
+Plan: 02 of Phase 12 (Plans 01 and 02 complete, Plan 03+ pending)
+Status: In progress
+Last activity: 2026-02-12 -- Completed 12-PLAN-01 (Identity Provider Backend)
 
-Progress: [##########..........] 50% (M1 complete, M2 Phase 12 Plan 02 done)
+Progress: [##########..........] 50% (M1 complete, M2 Phase 12 Plans 01-02 done)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 74
+- Total plans completed: 75
 - Average duration: 4.6 min
-- Total execution time: 5.7 hours
+- Total execution time: 5.9 hours
 
 **By Phase (M1 summary):**
 
 | Phase          | Plans | Total   | Avg/Plan |
 | -------------- | ----- | ------- | -------- |
 | M1 (17 phases) | 72/72 | 5.6 hrs | 4.7 min  |
-| M2 Phase 12    | 2/??  | 8 min   | 4.0 min  |
+| M2 Phase 12    | 3/??  | 18 min  | 6.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 3m, 90m, 4m, 4m, 4m
-- Trend: Stable (Phase 12 plans executing quickly)
+- Last 5 plans: 90m, 4m, 4m, 4m, 10m
+- Trend: Stable
 
 Updated after each plan completion.
 
@@ -50,8 +50,10 @@ Recent decisions affecting current work:
 | Replace PnP Modal SDK with MPC Core Kit                   | Phase 12 | Full MFA control, custom UX, programmatic factor mgmt     |
 | CipherBox as identity provider (sub=userId)               | Phase 12 | Enables multi-auth linking, less data to Web3Auth         |
 | Identity trilemma: chose (wallet-only + unified) w/ SPOF  | Phase 12 | No mandatory email; SPOF mitigated by key export+IPFS     |
-| Phase 12 split into 12, 12.2, 12.3, 12.4                  | Phase 12 | Foundation→device registry→SIWE→MFA dependency chain      |
+| Phase 12 split into 12, 12.2, 12.3, 12.4                  | Phase 12 | Foundation->device registry->SIWE->MFA dependency chain   |
 | Core Kit WEB3AUTH_NETWORK uses DEVNET/MAINNET keys        | 12-02    | Different from PnP SDK's SAPPHIRE_DEVNET/SAPPHIRE_MAINNET |
+| jose library for identity JWTs (not @nestjs/jwt)          | 12-01    | Separate signing keys (RS256) and audience from internal  |
+| Cross-auth-method email linking                           | 12-01    | Same email across Google/email auth -> same user account  |
 | ECIES re-wrapping for sharing (not proxy re-encryption)   | Research | Same wrapKey() function, server sees only ciphertexts     |
 | Versioning = stop unpinning old CIDs + metadata extension | Research | Nearly free on IPFS, no new crypto needed                 |
 | Read-only sharing only (no multi-writer IPNS)             | Research | Unsolved problem, deferred to v3                          |
@@ -93,7 +95,7 @@ Recent decisions affecting current work:
 - Phase 14 (Sharing): NEEDS `/gsd:research-phase` -- revocation key rotation protocol
 - Phase 15 (Link Sharing): NEEDS `/gsd:research-phase` -- unauthenticated web viewer security
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
-- Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP→Core Kit key migration, email passwordless
+- Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
 - Phase 12.1 (AES-CTR Streaming): NEEDS `/gsd:research-phase` -- MediaSource/Service Worker decryption, byte-range IPFS, CTR nonce management
 - Phase 12.2 (Device Registry): NEEDS `/gsd:research-phase` -- device registry schema, encryption with user key, IPFS pinning strategy
 - Phase 12.3 (SIWE + Identity): NEEDS `/gsd:research-phase` -- SIWE message format, wallet address hashing, multi-auth linking, ADR-001 migration
@@ -103,11 +105,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-12
-Stopped at: Completed 12-PLAN-02 (Core Kit SDK Setup + React Provider)
+Stopped at: Completed 12-PLAN-01 (Identity Provider Backend)
 Resume file: None
 Next: Execute 12-PLAN-03 (Core Kit auth flow wiring)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-12 after completing 12-02 (Core Kit SDK + React Provider)_
+_Last updated: 2026-02-12 after completing 12-01 (Identity Provider Backend)_
