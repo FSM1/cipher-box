@@ -1,1 +1,0 @@
-On `fix/release-please-ci-trigger`, branched from latest `main`, edit re-applied. Ready to commit whenever you say the word.
