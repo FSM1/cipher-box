@@ -10,30 +10,31 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 12 (first of 11 M2 phases: 11-17 + decimal insertions)
-Plan: Not yet planned (outdated PnP-based plans deleted, needs replanning)
-Status: Context finalized, ready for research and planning
-Last activity: 2026-02-12 -- Phase 12 architectural discussion and scope refinement
+Plan: 02 of Phase 12
+Status: In progress (Plan 02 complete, Plan 03+ pending)
+Last activity: 2026-02-12 -- Completed 12-PLAN-02 (Core Kit SDK Setup + React Provider)
 
-Progress: [##########..........] 50% (M1 complete, M2 0/11 phases)
+Progress: [##########..........] 50% (M1 complete, M2 Phase 12 Plan 02 done)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 72
-- Average duration: 4.7 min
-- Total execution time: 5.6 hours
+- Total plans completed: 74
+- Average duration: 4.6 min
+- Total execution time: 5.7 hours
 
 **By Phase (M1 summary):**
 
 | Phase          | Plans | Total   | Avg/Plan |
 | -------------- | ----- | ------- | -------- |
 | M1 (17 phases) | 72/72 | 5.6 hrs | 4.7 min  |
+| M2 Phase 12    | 2/??  | 8 min   | 4.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 3m, 2m, 3m, 90m, 4m
-- Trend: Stable (Phase 10 plans executing quickly)
+- Last 5 plans: 3m, 90m, 4m, 4m, 4m
+- Trend: Stable (Phase 12 plans executing quickly)
 
 Updated after each plan completion.
 
@@ -44,16 +45,17 @@ Updated after each plan completion.
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-| Decision                                                  | Phase    | Rationale                                              |
-| --------------------------------------------------------- | -------- | ------------------------------------------------------ |
-| Replace PnP Modal SDK with MPC Core Kit                   | Phase 12 | Full MFA control, custom UX, programmatic factor mgmt  |
-| CipherBox as identity provider (sub=userId)               | Phase 12 | Enables multi-auth linking, less data to Web3Auth      |
-| Identity trilemma: chose (wallet-only + unified) w/ SPOF  | Phase 12 | No mandatory email; SPOF mitigated by key export+IPFS  |
-| Phase 12 split into 12, 12.2, 12.3, 12.4                  | Phase 12 | Foundation→device registry→SIWE→MFA dependency chain   |
-| ECIES re-wrapping for sharing (not proxy re-encryption)   | Research | Same wrapKey() function, server sees only ciphertexts  |
-| Versioning = stop unpinning old CIDs + metadata extension | Research | Nearly free on IPFS, no new crypto needed              |
-| Read-only sharing only (no multi-writer IPNS)             | Research | Unsolved problem, deferred to v3                       |
-| minisearch + idb for client-side search                   | Research | ~8KB total, TypeScript-native, zero server interaction |
+| Decision                                                  | Phase    | Rationale                                                 |
+| --------------------------------------------------------- | -------- | --------------------------------------------------------- |
+| Replace PnP Modal SDK with MPC Core Kit                   | Phase 12 | Full MFA control, custom UX, programmatic factor mgmt     |
+| CipherBox as identity provider (sub=userId)               | Phase 12 | Enables multi-auth linking, less data to Web3Auth         |
+| Identity trilemma: chose (wallet-only + unified) w/ SPOF  | Phase 12 | No mandatory email; SPOF mitigated by key export+IPFS     |
+| Phase 12 split into 12, 12.2, 12.3, 12.4                  | Phase 12 | Foundation→device registry→SIWE→MFA dependency chain      |
+| Core Kit WEB3AUTH_NETWORK uses DEVNET/MAINNET keys        | 12-02    | Different from PnP SDK's SAPPHIRE_DEVNET/SAPPHIRE_MAINNET |
+| ECIES re-wrapping for sharing (not proxy re-encryption)   | Research | Same wrapKey() function, server sees only ciphertexts     |
+| Versioning = stop unpinning old CIDs + metadata extension | Research | Nearly free on IPFS, no new crypto needed                 |
+| Read-only sharing only (no multi-writer IPNS)             | Research | Unsolved problem, deferred to v3                          |
+| minisearch + idb for client-side search                   | Research | ~8KB total, TypeScript-native, zero server interaction    |
 
 ### Pending Todos
 
@@ -101,11 +103,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-12
-Stopped at: Phase 12 architectural discussion complete, context and roadmap updated
+Stopped at: Completed 12-PLAN-02 (Core Kit SDK Setup + React Provider)
 Resume file: None
-Next: `/gsd:plan-phase 12` (Core Kit Identity Provider Foundation)
+Next: Execute 12-PLAN-03 (Core Kit auth flow wiring)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-12 after Phase 12 scope refinement_
+_Last updated: 2026-02-12 after completing 12-02 (Core Kit SDK + React Provider)_
