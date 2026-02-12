@@ -212,7 +212,7 @@ export class FileListPage {
    * Ctrl+click (Meta on macOS) an item to toggle its selection.
    */
   async ctrlClickItem(name: string): Promise<void> {
-    await this.getItem(name).click({ modifiers: ['Meta'] });
+    await this.getItem(name).click({ modifiers: ['ControlOrMeta'] });
   }
 
   /**

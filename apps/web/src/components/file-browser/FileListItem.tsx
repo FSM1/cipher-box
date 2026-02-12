@@ -352,6 +352,13 @@ export function FileListItem({
           aria-checked={isSelected}
           aria-label={`Select ${item.name}`}
           tabIndex={-1}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              e.stopPropagation();
+              onSelect(item.id, { ctrlKey: true, shiftKey: false, metaKey: false });
+            }
+          }}
         >
           {isSelected ? '[x]' : '[ ]'}
         </span>
