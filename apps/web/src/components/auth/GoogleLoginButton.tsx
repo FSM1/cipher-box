@@ -120,6 +120,7 @@ export function GoogleLoginButton({ onLogin, disabled }: GoogleLoginButtonProps)
     <div className="google-login-wrapper">
       <button
         type="button"
+        data-testid="google-login-button"
         className={[
           'google-login-btn',
           loading ? 'google-login-btn--loading' : '',

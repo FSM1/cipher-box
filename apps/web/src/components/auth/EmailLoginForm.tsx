@@ -160,6 +160,7 @@ export function EmailLoginForm({ onLogin, disabled }: EmailLoginFormProps) {
           </label>
           <input
             id="login-email"
+            data-testid="email-input"
             type="email"
             className="email-login-input"
             placeholder="enter email address"
@@ -172,6 +173,7 @@ export function EmailLoginForm({ onLogin, disabled }: EmailLoginFormProps) {
           />
           <button
             type="submit"
+            data-testid="send-otp-button"
             className={['email-login-submit', loading ? 'email-login-submit--loading' : '']
               .filter(Boolean)
               .join(' ')}
@@ -200,6 +202,7 @@ export function EmailLoginForm({ onLogin, disabled }: EmailLoginFormProps) {
           </label>
           <input
             id="login-otp"
+            data-testid="otp-input"
             ref={otpInputRef}
             type="text"
             inputMode="numeric"
@@ -216,6 +219,7 @@ export function EmailLoginForm({ onLogin, disabled }: EmailLoginFormProps) {
           />
           <button
             type="submit"
+            data-testid="verify-button"
             className={['email-login-submit', loading ? 'email-login-submit--loading' : '']
               .filter(Boolean)
               .join(' ')}

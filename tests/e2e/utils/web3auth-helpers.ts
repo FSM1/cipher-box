@@ -1,8 +1,14 @@
-import { Page, FrameLocator } from '@playwright/test';
+import { Page } from '@playwright/test';
 
 /**
  * Test credentials from environment variables.
  * These are loaded from .env locally or GitHub Secrets in CI.
+ *
+ * With Core Kit, the E2E flow uses CipherBox's own login UI:
+ * 1. Enter email in CipherBox email input
+ * 2. Backend sends OTP (static OTP in test mode)
+ * 3. Enter OTP code
+ * 4. CipherBox JWT -> Core Kit loginWithJWT -> backend auth -> vault init
  */
 export const TEST_CREDENTIALS = {
   email: process.env.WEB3AUTH_TEST_EMAIL || '',
@@ -10,46 +16,17 @@ export const TEST_CREDENTIALS = {
 };
 
 /**
- * Waits for the Web3Auth/MetaMask modal to appear.
- * The modal can be either an iframe (older Web3Auth) or a direct DOM element (newer MetaMask SDK).
+ * Performs email login through CipherBox's custom login UI.
+ * With Core Kit (Phase 12), login is handled entirely through CipherBox's
+ * own email + OTP form -- no more Web3Auth modal popup/iframe.
  *
- * @returns Object with isIframe flag and either frameLocator or page for interacting with modal
- */
-export async function waitForWeb3AuthModal(
-  page: Page
-): Promise<{ isIframe: boolean; locator: FrameLocator | Page }> {
-  // Try to detect which type of modal we have
-  // Newer MetaMask SDK renders directly in the DOM, older Web3Auth uses iframe
-
-  // Wait for either iframe or direct modal to appear
-  await Promise.race([
-    page.waitForSelector('iframe[id*="w3a"]', { timeout: 15000 }).catch(() => null),
-    page
-      .waitForSelector('[class*="w3a-modal"], [data-testid="w3a-modal"]', { timeout: 15000 })
-      .catch(() => null),
-    page
-      .waitForSelector('button:has-text("Continue with Email")', { timeout: 15000 })
-      .catch(() => null),
-  ]);
-
-  // Check if iframe exists
-  const iframe = await page.$('iframe[id*="w3a"]');
-  if (iframe) {
-    const frame = page.frameLocator('iframe[id*="w3a"]');
-    await frame.locator('[data-testid="w3a-modal"], .w3a-modal, #w3a-modal').waitFor({
-      state: 'visible',
-      timeout: 10000,
-    });
-    return { isIframe: true, locator: frame };
-  }
-
-  // Modal is rendered directly in the page (MetaMask SDK style)
-  return { isIframe: false, locator: page };
-}
-
-/**
- * Performs email login through Web3Auth modal with automated OTP entry.
- * Uses test account credentials from environment variables.
+ * Flow:
+ * 1. Navigate to login page
+ * 2. Enter email in CipherBox's email input
+ * 3. Click [SEND OTP]
+ * 4. Wait for OTP form, enter test OTP code
+ * 5. Click [VERIFY]
+ * 6. Wait for redirect to /files (login + vault init complete)
  *
  * @param page - Playwright page instance
  * @param email - Email address for login
@@ -58,83 +35,109 @@ export async function waitForWeb3AuthModal(
 export async function loginViaEmail(page: Page, email: string, otp?: string): Promise<void> {
   const otpCode = otp || TEST_CREDENTIALS.otp;
 
-  // Click the [CONNECT] button on the login page
-  await page.click('button.login-button');
+  // If SKIP_CORE_KIT is set, use direct API auth (fallback for environments
+  // where Core Kit loginWithJWT doesn't work, e.g., Web3Auth devnet rate limits)
+  if (process.env.SKIP_CORE_KIT) {
+    console.warn('[E2E] SKIP_CORE_KIT set -- using direct API auth (no Core Kit loginWithJWT)');
+    await loginViaDirectApi(page, email, otpCode);
+    return;
+  }
 
-  // Wait for Web3Auth modal to appear
-  await waitForWeb3AuthModal(page);
+  // Navigate to login page
+  await page.goto('/');
 
-  // Click the "Continue with Email/Phone" button to reveal the email input
-  const emailPhoneButton = page.locator(
-    'button:has-text("Continue with Email"), :text("Continue with Email/Phone")'
-  );
-  await emailPhoneButton.first().waitFor({ state: 'visible', timeout: 10000 });
-  await emailPhoneButton.first().click();
+  // Step 1: Enter email in CipherBox's own email input
+  const emailInput = page.locator('[data-testid="email-input"]');
+  await emailInput.waitFor({ state: 'visible', timeout: 15000 });
+  await emailInput.fill(email);
 
-  // Wait for email input to appear after clicking the button
-  const emailInput = page.locator(
-    'input[placeholder*="@example.com"], input[placeholder*="email" i], input[type="email"], input[type="text"]'
-  );
-  await emailInput.first().waitFor({ state: 'visible', timeout: 10000 });
+  // Step 2: Click [SEND OTP] button
+  const sendOtpButton = page.locator('[data-testid="send-otp-button"]');
+  await sendOtpButton.click();
 
-  // Fill the email input
-  await emailInput.first().fill(email);
+  // Step 3: Wait for OTP input to appear (backend sends OTP, form transitions)
+  const otpInput = page.locator('[data-testid="otp-input"]');
+  await otpInput.waitFor({ state: 'visible', timeout: 15000 });
 
-  // Press Enter or click submit button to proceed
-  await page.keyboard.press('Enter');
+  // Step 4: Enter the test OTP code
+  await otpInput.fill(otpCode);
 
-  // Wait a moment for the form to process
-  await page.waitForTimeout(2000);
+  // Step 5: Click [VERIFY] button
+  const verifyButton = page.locator('[data-testid="verify-button"]');
+  await verifyButton.click();
 
-  // Wait for OTP input screen to appear and enter code
-  await enterOtpCode(page, otpCode);
-
-  // Wait for redirect to file browser after successful login
+  // Step 6: Wait for login to complete and redirect to files page
+  // Core Kit loginWithJWT + backend auth + vault init can take time
   await page.waitForURL('**/files', { timeout: 60000 });
 }
 
 /**
- * Enters the OTP code in the Web3Auth modal.
- * Handles both single input and multiple input (one per digit) OTP fields.
+ * Direct API auth fallback for E2E when Core Kit is unavailable.
+ * Skips Core Kit loginWithJWT entirely -- authenticates directly with
+ * the CipherBox backend using the identity endpoint + auth/login.
  *
- * @param page - Playwright page instance
- * @param otp - The OTP code to enter
+ * This is useful when:
+ * - Web3Auth devnet has rate limits or downtime
+ * - JWKS validation issues prevent Core Kit from working in CI
+ * - Running quick smoke tests that don't need full Core Kit flow
+ *
+ * Note: This does NOT exercise the Core Kit MPC key derivation path.
+ * The user's vault keypair will be different from Core Kit-derived keys.
  */
-export async function enterOtpCode(page: Page, otp: string): Promise<void> {
-  // Wait for OTP input to appear (Web3Auth shows OTP screen after email submission)
-  // Try multiple selectors as Web3Auth UI may vary
-  const otpContainer = page.locator(
-    '[data-testid="otp-input"], .otp-input, input[type="tel"], input[inputmode="numeric"], input[autocomplete="one-time-code"], input[maxlength="1"]'
-  );
+async function loginViaDirectApi(page: Page, email: string, otp: string): Promise<void> {
+  // Navigate to the app -- we'll inject auth state programmatically
+  await page.goto('/');
 
-  await otpContainer.first().waitFor({ state: 'visible', timeout: 15000 });
+  // Use the API base URL from env or default
+  const apiBase = process.env.API_BASE_URL || 'http://localhost:3000';
 
-  // Check if it's a single input or multiple inputs (one per digit)
-  const multipleInputs = page.locator('input[maxlength="1"]');
-  const multipleCount = await multipleInputs.count();
+  // Call identity endpoint to get CipherBox JWT
+  const verifyResponse = await page.request.post(`${apiBase}/auth/identity/email/verify`, {
+    data: { email, otp },
+  });
 
-  if (multipleCount >= 4) {
-    // Multiple input fields (one per digit) - common OTP UI pattern
-    for (let i = 0; i < otp.length && i < multipleCount; i++) {
-      await multipleInputs.nth(i).fill(otp[i]);
-    }
-  } else {
-    // Single input field - enter full OTP
-    const singleInput = page.locator(
-      'input[type="tel"], input[inputmode="numeric"], input[autocomplete="one-time-code"]'
-    );
-    await singleInput.first().fill(otp);
+  if (!verifyResponse.ok()) {
+    throw new Error(`Identity email verify failed: ${verifyResponse.status()}`);
   }
 
-  // Look for verify/submit button and click it if present
-  const verifyButton = page.locator(
-    'button:has-text("Verify"), button:has-text("Submit"), button:has-text("Confirm"), button[type="submit"]'
-  );
+  const { idToken } = await verifyResponse.json();
 
-  const verifyButtonCount = await verifyButton.count();
-  if (verifyButtonCount > 0) {
-    await verifyButton.first().click();
+  // Call auth/login with the CipherBox JWT (corekit login type)
+  // Note: Without Core Kit, we don't have a real secp256k1 publicKey.
+  // The backend will use the placeholder publicKey for this user.
+  const loginResponse = await page.request.post(`${apiBase}/auth/login`, {
+    data: {
+      idToken,
+      publicKey: 'e2e-direct-api-placeholder',
+      loginType: 'corekit',
+    },
+  });
+
+  if (!loginResponse.ok()) {
+    throw new Error(`Auth login failed: ${loginResponse.status()}`);
   }
+
+  const { accessToken } = await loginResponse.json();
+
+  // Inject the access token into the app's auth store via localStorage/evaluate
+  await page.evaluate((token: string) => {
+    // Set the access token in the Zustand auth store persistence
+    const authState = {
+      state: {
+        accessToken: token,
+        isAuthenticated: true,
+        lastAuthMethod: 'email_passwordless',
+      },
+      version: 0,
+    };
+    localStorage.setItem('auth-storage', JSON.stringify(authState));
+  }, accessToken);
+
+  // Reload to pick up the injected auth state
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  // Wait for redirect to files page
+  await page.waitForURL('**/files', { timeout: 30000 });
 }
 
 /**
@@ -150,6 +153,7 @@ export async function getStorageState(page: Page): Promise<object> {
  * This is useful after manual login or when loading storage state.
  */
 export async function waitForAuthentication(page: Page): Promise<void> {
-  // Wait for logout button to appear (indicator of authenticated state)
-  await page.waitForSelector('button.logout-link', { timeout: 10000 });
+  // Wait for user menu to appear (indicator of authenticated state)
+  // Phase 6.3: Logout moved to UserMenu dropdown
+  await page.waitForSelector('[data-testid="user-menu"]', { timeout: 15000 });
 }

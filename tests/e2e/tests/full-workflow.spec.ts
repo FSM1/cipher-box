@@ -1020,7 +1020,8 @@ test.describe.serial('Full Workflow', () => {
     await logoutButton.click();
 
     await expect(page).toHaveURL(/localhost:\d+\/?(?:#\/?)?$/);
-    await expect(page.getByRole('button', { name: /\[CONNECT\]|sign in|login/i })).toBeVisible({
+    // Core Kit login page shows CipherBox's own email form instead of [CONNECT] button
+    await expect(page.locator('[data-testid="email-input"]')).toBeVisible({
       timeout: 10000,
     });
   });
