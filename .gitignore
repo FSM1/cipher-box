@@ -36,3 +36,5 @@ coverage/
 # Temporary files
 temp/*
 tests/e2e/test-results/*
+
+apps/desktop/src-tauri/target/
