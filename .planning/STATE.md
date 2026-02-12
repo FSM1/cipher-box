@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 12: Core Kit Identity Provider Foundation
+**Current focus:** Milestone 2 -- Phase 12 complete, next: Phase 12.1 (AES-CTR Streaming)
 
 ## Current Position
 
-Phase: 12 (first of 11 M2 phases: 11-17 + decimal insertions)
-Plan: 05 of Phase 12 (Plans 01-05 complete, Task 4 checkpoint pending)
-Status: In progress -- awaiting checkpoint verification
-Last activity: 2026-02-12 -- Completed 12-PLAN-05 Tasks 1-3 (PnP Migration + Cleanup + E2E)
+Phase: 12 COMPLETE (first of 11 M2 phases: 11-17 + decimal insertions)
+Plan: All 5 plans executed and verified
+Status: Complete -- all checkpoints passed, E2E verified
+Last activity: 2026-02-12 -- Phase 12 verified end-to-end (login, session persistence, logout)
 
-Progress: [##########..........] 50% (M1 complete, M2 Phase 12 Plans 01-05 done)
+Progress: [##########..........] 55% (M1 complete, M2 Phase 12 complete)
 
 ## Performance Metrics
 
@@ -29,7 +29,7 @@ Progress: [##########..........] 50% (M1 complete, M2 Phase 12 Plans 01-05 done)
 | Phase          | Plans | Total   | Avg/Plan |
 | -------------- | ----- | ------- | -------- |
 | M1 (17 phases) | 72/72 | 5.6 hrs | 4.7 min  |
-| M2 Phase 12    | 6/??  | 40 min  | 6.7 min  |
+| M2 Phase 12    | 5/5   | 45 min  | 9.0 min  |
 
 **Recent Trend:**
 
@@ -45,22 +45,22 @@ Updated after each plan completion.
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-| Decision                                                  | Phase    | Rationale                                                 |
-| --------------------------------------------------------- | -------- | --------------------------------------------------------- |
-| Replace PnP Modal SDK with MPC Core Kit                   | Phase 12 | Full MFA control, custom UX, programmatic factor mgmt     |
-| CipherBox as identity provider (sub=userId)               | Phase 12 | Enables multi-auth linking, less data to Web3Auth         |
-| Identity trilemma: chose (wallet-only + unified) w/ SPOF  | Phase 12 | No mandatory email; SPOF mitigated by key export+IPFS     |
-| Phase 12 split into 12, 12.2, 12.3, 12.4                  | Phase 12 | Foundation->device registry->SIWE->MFA dependency chain   |
-| Core Kit WEB3AUTH_NETWORK uses DEVNET/MAINNET keys        | 12-02    | Different from PnP SDK's SAPPHIRE_DEVNET/SAPPHIRE_MAINNET |
-| Session JWT from coreKit.signatures (no authenticateUser) | 12-03    | Core Kit SDK lacks PnP authenticateUser(); extract from   |
-| importTssKey via localStorage one-time read-and-delete    | 12-05    | PnP migration key consumed once then removed              |
-| E2E uses CipherBox login UI directly (no modal iframe)    | 12-05    | Simpler, more reliable than Web3Auth modal automation     |
-| jose library for identity JWTs (not @nestjs/jwt)          | 12-01    | Separate signing keys (RS256) and audience from internal  |
-| Cross-auth-method email linking                           | 12-01    | Same email across Google/email auth -> same user account  |
-| ECIES re-wrapping for sharing (not proxy re-encryption)   | Research | Same wrapKey() function, server sees only ciphertexts     |
-| Versioning = stop unpinning old CIDs + metadata extension | Research | Nearly free on IPFS, no new crypto needed                 |
-| Read-only sharing only (no multi-writer IPNS)             | Research | Unsolved problem, deferred to v3                          |
-| minisearch + idb for client-side search                   | Research | ~8KB total, TypeScript-native, zero server interaction    |
+| Decision                                                  | Phase    | Rationale                                                                                                       |
+| --------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------- |
+| Replace PnP Modal SDK with MPC Core Kit                   | Phase 12 | Full MFA control, custom UX, programmatic factor mgmt                                                           |
+| CipherBox as identity provider (sub=userId)               | Phase 12 | Enables multi-auth linking, less data to Web3Auth                                                               |
+| Identity trilemma: chose (wallet-only + unified) w/ SPOF  | Phase 12 | No mandatory email; SPOF mitigated by key export+IPFS                                                           |
+| Phase 12 split into 12, 12.2, 12.3, 12.4                  | Phase 12 | Foundation->device registry->SIWE->MFA dependency chain                                                         |
+| Core Kit WEB3AUTH_NETWORK uses DEVNET/MAINNET keys        | 12-02    | Different from PnP SDK's SAPPHIRE_DEVNET/SAPPHIRE_MAINNET                                                       |
+| CipherBox JWT for backend auth (not coreKit.signatures)   | 12-04    | Core Kit signatures are session tokens, not verifiable JWTs. Pass CipherBox-issued JWT with loginType 'corekit' |
+| importTssKey via localStorage one-time read-and-delete    | 12-05    | PnP migration key consumed once then removed                                                                    |
+| E2E uses CipherBox login UI directly (no modal iframe)    | 12-05    | Simpler, more reliable than Web3Auth modal automation                                                           |
+| jose library for identity JWTs (not @nestjs/jwt)          | 12-01    | Separate signing keys (RS256) and audience from internal                                                        |
+| Cross-auth-method email linking                           | 12-01    | Same email across Google/email auth -> same user account                                                        |
+| ECIES re-wrapping for sharing (not proxy re-encryption)   | Research | Same wrapKey() function, server sees only ciphertexts                                                           |
+| Versioning = stop unpinning old CIDs + metadata extension | Research | Nearly free on IPFS, no new crypto needed                                                                       |
+| Read-only sharing only (no multi-writer IPNS)             | Research | Unsolved problem, deferred to v3                                                                                |
+| minisearch + idb for client-side search                   | Research | ~8KB total, TypeScript-native, zero server interaction                                                          |
 
 ### Pending Todos
 
@@ -108,11 +108,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-12
-Stopped at: Completed 12-PLAN-05 Tasks 1-3 (checkpoint pending)
+Stopped at: Phase 12 complete
 Resume file: None
-Next: 12-PLAN-05 Task 4 checkpoint verification (end-to-end auth flow)
+Next: Phase 12.1 (AES-CTR Streaming Encryption) — run /gsd:plan-phase 12.1
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-12 after completing 12-05 Tasks 1-3 (PnP Migration + Cleanup + E2E)_
+_Last updated: 2026-02-12 after completing Phase 12 (Core Kit Identity Provider Foundation)_
