@@ -90,7 +90,6 @@ See `.planning/milestones/m3/ROADMAP.md` for full M3 phase details.
 **Goal**: Replace PnP Modal SDK with MPC Core Kit and establish CipherBox backend as the identity provider for Web3Auth, building the foundation for MFA, SIWE, and cross-device approval in subsequent phases
 **Depends on**: Phase 10 (Milestone 1 complete)
 **Requirements**: MFA-01 (partial — foundation only), AUTH infrastructure
-**Research flag**: NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier setup, PnP→Core Kit key migration, email passwordless via Core Kit
 **Success Criteria** (what must be TRUE):
 
 1. User can log in via Google OAuth through CipherBox-branded UI (not Web3Auth modal)
@@ -100,11 +99,15 @@ See `.planning/milestones/m3/ROADMAP.md` for full M3 phase details.
 5. Existing PnP users' keys are preserved via `importTssKey` migration
 6. User's derived keypair (publicKey) remains identical after migration — vault data stays accessible
 
-**Plans:** 0 plans (outdated PnP-based plans deleted, needs replanning)
+**Plans:** 5 plans
 
 Plans:
 
-- [ ] TBD (run `/gsd:plan-phase 12` to break down)
+- [ ] 12-PLAN-01.md — Backend identity provider (JWKS, Google OAuth, email OTP, JWT issuing)
+- [ ] 12-PLAN-02.md — Core Kit SDK installation + React context provider
+- [ ] 12-PLAN-03.md — Frontend auth flow rewrite (loginWithJWT, key export, session)
+- [ ] 12-PLAN-04.md — Custom CipherBox-branded login UI (Google + email)
+- [ ] 12-PLAN-05.md — PnP migration (importTssKey), cleanup, and E2E verification
 
 ### Phase 12.1: AES-CTR Streaming Encryption (INSERTED)
 
@@ -274,7 +277,7 @@ Parallel phases:
 | 9. Desktop Client          | M1        | 7/7            | Complete    | 2026-02-08 |
 | 9.1 Env/DevOps/Staging     | M1        | 6/6            | Complete    | 2026-02-09 |
 | 10. Data Portability       | M1        | 3/3            | Complete    | 2026-02-11 |
-| 12. MFA                    | M2        | 0/2            | Not started | -          |
+| 12. Core Kit Identity      | M2        | 0/5            | Not started | -          |
 | 12.1 AES-CTR Streaming     | M2        | 0/TBD          | Not started | -          |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
