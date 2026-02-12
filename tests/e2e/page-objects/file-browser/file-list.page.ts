@@ -203,4 +203,70 @@ export class FileListPage {
     const targetFolder = this.getFolderItem(folderName);
     await sourceItem.dragTo(targetFolder);
   }
+
+  // ========================================
+  // Multi-selection methods
+  // ========================================
+
+  /**
+   * Ctrl+click (Meta on macOS) an item to toggle its selection.
+   */
+  async ctrlClickItem(name: string): Promise<void> {
+    await this.getItem(name).click({ modifiers: ['Meta'] });
+  }
+
+  /**
+   * Shift+click an item for range selection.
+   */
+  async shiftClickItem(name: string): Promise<void> {
+    await this.getItem(name).click({ modifiers: ['Shift'] });
+  }
+
+  /**
+   * Click the checkbox on an item row.
+   * Checkboxes appear on hover or when multi-select is active.
+   */
+  async clickCheckbox(name: string): Promise<void> {
+    const item = this.getItem(name);
+    const checkbox = item.locator('.file-list-item-checkbox');
+    await checkbox.click();
+  }
+
+  /**
+   * Click the header (select-all) checkbox.
+   */
+  async clickHeaderCheckbox(): Promise<void> {
+    await this.page.locator('.file-list-header-checkbox').click();
+  }
+
+  /**
+   * Check if the header checkbox is checked.
+   */
+  async isHeaderCheckboxChecked(): Promise<boolean> {
+    const ariaChecked = await this.page
+      .locator('.file-list-header-checkbox')
+      .getAttribute('aria-checked');
+    return ariaChecked === 'true';
+  }
+
+  /**
+   * Get names of all currently selected items.
+   */
+  async getSelectedItemNames(): Promise<string[]> {
+    const selected = this.page.locator('.file-list-item--selected .file-list-item-name');
+    const count = await selected.count();
+    const names: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const text = await selected.nth(i).textContent();
+      if (text) names.push(text);
+    }
+    return names;
+  }
+
+  /**
+   * Get the count of currently selected items.
+   */
+  async getSelectedCount(): Promise<number> {
+    return await this.page.locator('.file-list-item--selected').count();
+  }
 }

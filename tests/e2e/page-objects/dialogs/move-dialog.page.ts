@@ -178,9 +178,17 @@ export class MoveDialogPage {
 
   /**
    * Get the dialog title text.
-   * Returns "Move File" or "Move Folder".
+   * Returns "Move File", "Move Folder", or "Move N Items" (batch mode).
    */
   async getTitle(): Promise<string> {
     return (await this.title().textContent()) ?? '';
+  }
+
+  /**
+   * Get the dialog label text.
+   * In batch mode, renders "Move N selected items to:".
+   */
+  async getLabel(): Promise<string> {
+    return (await this.page.locator('.dialog-label').textContent()) ?? '';
   }
 }
