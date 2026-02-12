@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { StatusIndicator } from '../components/layout';
-import { AuthButton } from '../components/auth/AuthButton';
+import { GoogleLoginButton } from '../components/auth/GoogleLoginButton';
+import { EmailLoginForm } from '../components/auth/EmailLoginForm';
 import { MatrixBackground } from '../components/MatrixBackground';
 import { StagingBanner } from '../components/StagingBanner';
 import { useHealthControllerCheck } from '../api/health/health';
@@ -9,11 +10,13 @@ import { useAuth } from '../hooks/useAuth';
 
 /**
  * Login page with terminal aesthetic and matrix background.
- * Per design: > CIPHERBOX branding, [CONNECT] button, green-on-black theme.
+ * CipherBox-branded custom login UI with Google OAuth and email OTP.
+ * Replaces the old Web3Auth modal [CONNECT] button (Phase 12).
  */
 export function Login() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, loginWithGoogle, loginWithEmail } = useAuth();
   const navigate = useNavigate();
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   // Health check for disabling connect button when API is down
   const {
@@ -36,6 +39,30 @@ export function Login() {
       navigate('/files');
     }
   }, [isAuthenticated, navigate]);
+
+  const handleGoogleLogin = useCallback(
+    async (googleIdToken: string) => {
+      setLoginError(null);
+      try {
+        await loginWithGoogle(googleIdToken);
+      } catch (err) {
+        setLoginError(err instanceof Error ? err.message : 'Google login failed');
+      }
+    },
+    [loginWithGoogle]
+  );
+
+  const handleEmailLogin = useCallback(
+    async (email: string, otp: string) => {
+      setLoginError(null);
+      try {
+        await loginWithEmail(email, otp);
+      } catch (err) {
+        setLoginError(err instanceof Error ? err.message : 'Email login failed');
+      }
+    },
+    [loginWithEmail]
+  );
 
   // Show loading state while checking authentication
   if (isLoading) {
@@ -88,7 +115,22 @@ export function Login() {
           <p className="login-description">
             your files, encrypted on your device. we never see your data.
           </p>
-          <AuthButton apiDown={isApiDown} />
+
+          <div className="login-methods">
+            <GoogleLoginButton onLogin={handleGoogleLogin} disabled={isLoading || isApiDown} />
+
+            <div className="login-divider">
+              <span>{'// or'}</span>
+            </div>
+
+            <EmailLoginForm onLogin={handleEmailLogin} disabled={isLoading || isApiDown} />
+          </div>
+
+          {loginError && (
+            <div className="login-error" role="alert" aria-live="polite">
+              {loginError}
+            </div>
+          )}
         </div>
         <footer className="login-footer">
           <div className="footer-left">
