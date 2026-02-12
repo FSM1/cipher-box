@@ -10,30 +10,30 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 12 (first of 11 M2 phases: 11-17 + decimal insertions)
-Plan: 02 of Phase 12 (Plans 01 and 02 complete, Plan 03+ pending)
+Plan: 03 of Phase 12 (Plans 01-03 complete, Plan 04+ pending)
 Status: In progress
-Last activity: 2026-02-12 -- Completed 12-PLAN-01 (Identity Provider Backend)
+Last activity: 2026-02-12 -- Completed 12-PLAN-03 (Core Kit Auth Flow Wiring)
 
-Progress: [##########..........] 50% (M1 complete, M2 Phase 12 Plans 01-02 done)
+Progress: [##########..........] 50% (M1 complete, M2 Phase 12 Plans 01-03 done)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 75
+- Total plans completed: 76
 - Average duration: 4.6 min
-- Total execution time: 5.9 hours
+- Total execution time: 6.1 hours
 
 **By Phase (M1 summary):**
 
 | Phase          | Plans | Total   | Avg/Plan |
 | -------------- | ----- | ------- | -------- |
 | M1 (17 phases) | 72/72 | 5.6 hrs | 4.7 min  |
-| M2 Phase 12    | 3/??  | 18 min  | 6.0 min  |
+| M2 Phase 12    | 4/??  | 27 min  | 6.8 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 90m, 4m, 4m, 4m, 10m
+- Last 5 plans: 4m, 4m, 4m, 10m, 9m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -52,6 +52,7 @@ Recent decisions affecting current work:
 | Identity trilemma: chose (wallet-only + unified) w/ SPOF  | Phase 12 | No mandatory email; SPOF mitigated by key export+IPFS     |
 | Phase 12 split into 12, 12.2, 12.3, 12.4                  | Phase 12 | Foundation->device registry->SIWE->MFA dependency chain   |
 | Core Kit WEB3AUTH_NETWORK uses DEVNET/MAINNET keys        | 12-02    | Different from PnP SDK's SAPPHIRE_DEVNET/SAPPHIRE_MAINNET |
+| Session JWT from coreKit.signatures (no authenticateUser) | 12-03    | Core Kit SDK lacks PnP authenticateUser(); extract from   |
 | jose library for identity JWTs (not @nestjs/jwt)          | 12-01    | Separate signing keys (RS256) and audience from internal  |
 | Cross-auth-method email linking                           | 12-01    | Same email across Google/email auth -> same user account  |
 | ECIES re-wrapping for sharing (not proxy re-encryption)   | Research | Same wrapKey() function, server sees only ciphertexts     |
@@ -105,11 +106,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-12
-Stopped at: Completed 12-PLAN-01 (Identity Provider Backend)
+Stopped at: Completed 12-PLAN-03 (Core Kit Auth Flow Wiring)
 Resume file: None
-Next: Execute 12-PLAN-03 (Core Kit auth flow wiring)
+Next: Execute 12-PLAN-04 (Login UI)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-12 after completing 12-01 (Identity Provider Backend)_
+_Last updated: 2026-02-12 after completing 12-03 (Core Kit Auth Flow Wiring)_
