@@ -1,0 +1,17 @@
+import { EthereumJSErrorWithoutCode } from '@ethereumjs/util';
+export function getUpfrontCost(tx, baseFee) {
+    const prio = tx.maxPriorityFeePerGas;
+    const maxBase = tx.maxFeePerGas - baseFee;
+    const inclusionFeePerGas = prio < maxBase ? prio : maxBase;
+    const gasPrice = inclusionFeePerGas + baseFee;
+    return tx.gasLimit * gasPrice + tx.value;
+}
+export function getEffectivePriorityFee(tx, baseFee) {
+    if (baseFee === undefined || baseFee > tx.maxFeePerGas) {
+        throw EthereumJSErrorWithoutCode('Tx cannot pay baseFee');
+    }
+    // The remaining fee for the coinbase, which can take up to this value, capped at `maxPriorityFeePerGas`
+    const remainingFee = tx.maxFeePerGas - baseFee;
+    return tx.maxPriorityFeePerGas < remainingFee ? tx.maxPriorityFeePerGas : remainingFee;
+}
+//# sourceMappingURL=eip1559.js.map

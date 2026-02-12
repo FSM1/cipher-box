@@ -1,0 +1,1 @@
+{"version":3,"file":"queue-options.interface.d.ts","sourceRoot":"","sources":["../../lib/interfaces/queue-options.interface.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,YAAY,EAAE,MAAM,QAAQ,CAAC;AACtC,OAAO,EAAE,oBAAoB,EAAE,MAAM,sCAAsC,CAAC;AAE5E;;GAEG;AACH,MAAM,WAAW,gBACf,SAAQ,oBAAoB,CAAC,YAAY,EAAE,YAAY,CAAC;IACxD;;;SAGK;IACL,gBAAgB,CAAC,EAAE,OAAO,CAAC;CAC5B"}
