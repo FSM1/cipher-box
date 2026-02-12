@@ -1,4 +1,12 @@
-import { useState, useCallback, useEffect, useRef, type DragEvent, type MouseEvent } from 'react';
+import {
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+  useMemo,
+  type DragEvent,
+  type MouseEvent,
+} from 'react';
 import type { FolderChild, FileEntry } from '@cipherbox/crypto';
 import { useFolderNavigation } from '../../hooks/useFolderNavigation';
 import { useFolder } from '../../hooks/useFolder';
@@ -29,6 +37,7 @@ import { UploadModal } from './UploadModal';
 import { Breadcrumbs } from './Breadcrumbs';
 import { SyncIndicator } from './SyncIndicator';
 import { OfflineBanner } from './OfflineBanner';
+import { SelectionActionBar } from './SelectionActionBar';
 
 /**
  * Type guard for file entries.
@@ -374,8 +383,20 @@ export function FileBrowser() {
     [handleFileDrop]
   );
 
-  // Selection state (single selection per CONTEXT.md)
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  // Get current folder's children (needed early for selection logic)
+  const children = currentFolder?.children ?? [];
+  const hasChildren = children.length > 0;
+
+  // Multi-selection state
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const lastSelectedIdRef = useRef<string | null>(null);
+
+  // Compute selected items from IDs for action bar and batch operations
+  const selectedItems = useMemo(
+    () => children.filter((c) => selectedIds.has(c.id)),
+    [children, selectedIds]
+  );
+  const multiSelectActive = selectedIds.size > 0;
 
   // Dialog states
   const [confirmDialog, setConfirmDialog] = useState<DialogState>({ open: false, item: null });
@@ -404,23 +425,100 @@ export function FileBrowser() {
   // Clear selection when navigating to a new folder
   const handleNavigate = useCallback(
     (folderId: string) => {
-      setSelectedItemId(null);
+      setSelectedIds(new Set());
+      lastSelectedIdRef.current = null;
       navigateTo(folderId);
     },
     [navigateTo]
   );
 
-  // Handle item selection
-  const handleSelect = useCallback((itemId: string) => {
-    setSelectedItemId(itemId);
+  /**
+   * Handle item selection with modifier keys.
+   * - Plain click: single select (clears others)
+   * - Ctrl/Cmd+click: toggle selection
+   * - Shift+click: range select from last clicked to current
+   */
+  const handleSelect = useCallback(
+    (itemId: string, event: { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }) => {
+      const isCtrl = event.ctrlKey || event.metaKey;
+      const isShift = event.shiftKey;
+
+      if (isShift && lastSelectedIdRef.current) {
+        // Range select: select all items between lastSelected and current
+        // Use sorted children order so the range respects visual order
+        const sortedChildren = [...children].sort((a, b) => {
+          if (a.type === 'folder' && b.type !== 'folder') return -1;
+          if (a.type !== 'folder' && b.type === 'folder') return 1;
+          return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+        });
+
+        const ids = sortedChildren.map((c) => c.id);
+        const startIdx = ids.indexOf(lastSelectedIdRef.current);
+        const endIdx = ids.indexOf(itemId);
+
+        if (startIdx !== -1 && endIdx !== -1) {
+          const rangeStart = Math.min(startIdx, endIdx);
+          const rangeEnd = Math.max(startIdx, endIdx);
+          const rangeIds = ids.slice(rangeStart, rangeEnd + 1);
+
+          setSelectedIds((prev) => {
+            const next = new Set(prev);
+            for (const id of rangeIds) {
+              next.add(id);
+            }
+            return next;
+          });
+        }
+      } else if (isCtrl) {
+        // Toggle: add or remove from selection
+        setSelectedIds((prev) => {
+          const next = new Set(prev);
+          if (next.has(itemId)) {
+            next.delete(itemId);
+          } else {
+            next.add(itemId);
+          }
+          return next;
+        });
+        lastSelectedIdRef.current = itemId;
+      } else {
+        // Plain click: single select
+        setSelectedIds(new Set([itemId]));
+        lastSelectedIdRef.current = itemId;
+      }
+    },
+    [children]
+  );
+
+  // Select/deselect all items
+  const handleSelectAll = useCallback(() => {
+    if (selectedIds.size === children.length) {
+      // All selected -> deselect all
+      setSelectedIds(new Set());
+      lastSelectedIdRef.current = null;
+    } else {
+      // Select all
+      setSelectedIds(new Set(children.map((c) => c.id)));
+    }
+  }, [children, selectedIds.size]);
+
+  // Clear selection
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set());
+    lastSelectedIdRef.current = null;
   }, []);
 
   // Context menu handler - show context menu
+  // If right-clicked item is not in selection, select only that item
   const handleContextMenu = useCallback(
     (event: MouseEvent, item: FolderChild) => {
+      if (!selectedIds.has(item.id)) {
+        setSelectedIds(new Set([item.id]));
+        lastSelectedIdRef.current = item.id;
+      }
       contextMenu.show(event, item);
     },
-    [contextMenu]
+    [contextMenu, selectedIds]
   );
 
   // Drag start handler
@@ -513,6 +611,95 @@ export function FileBrowser() {
       setVideoPlayerDialog({ open: true, item });
     }
   }, [contextMenu.item]);
+
+  // --- Batch action handlers ---
+
+  // Batch delete state: stores multiple items for batch confirmation
+  const [batchDeleteDialog, setBatchDeleteDialog] = useState<{
+    open: boolean;
+    items: FolderChild[];
+  }>({ open: false, items: [] });
+
+  // Batch move state: stores items for batch move dialog
+  const [batchMoveDialog, setBatchMoveDialog] = useState<{
+    open: boolean;
+    items: FolderChild[];
+  }>({ open: false, items: [] });
+
+  // Open batch delete confirmation
+  const handleBatchDeleteClick = useCallback(() => {
+    if (selectedItems.length === 0) return;
+    setBatchDeleteDialog({ open: true, items: [...selectedItems] });
+  }, [selectedItems]);
+
+  // Open batch move dialog (uses first selected item for MoveDialog, moves all)
+  const handleBatchMoveClick = useCallback(() => {
+    if (selectedItems.length === 0) return;
+    setBatchMoveDialog({ open: true, items: [...selectedItems] });
+  }, [selectedItems]);
+
+  // Batch download: download all selected files sequentially
+  const handleBatchDownload = useCallback(async () => {
+    const files = selectedItems.filter(isFileEntry);
+    if (files.length === 0) return;
+
+    for (const file of files) {
+      try {
+        await download({
+          cid: file.cid,
+          iv: file.fileIv,
+          wrappedKey: file.fileKeyEncrypted,
+          originalName: file.name,
+        });
+      } catch (err) {
+        console.error(`Download failed for ${file.name}:`, err);
+      }
+    }
+  }, [selectedItems, download]);
+
+  // Confirm batch delete - delete all items sequentially
+  const handleBatchDeleteConfirm = useCallback(async () => {
+    const items = batchDeleteDialog.items;
+    if (items.length === 0) return;
+
+    try {
+      for (const item of items) {
+        await deleteItem(item.id, item.type, currentFolderId);
+      }
+      setBatchDeleteDialog({ open: false, items: [] });
+      clearSelection();
+    } catch (err) {
+      console.error('Batch delete failed:', err);
+    }
+  }, [batchDeleteDialog.items, deleteItem, currentFolderId, clearSelection]);
+
+  // Confirm batch move - move all items to destination
+  const handleBatchMoveConfirm = useCallback(
+    async (destinationFolderId: string) => {
+      const items = batchMoveDialog.items;
+      if (items.length === 0) return;
+
+      try {
+        for (const item of items) {
+          await moveItem(item.id, item.type, currentFolderId, destinationFolderId);
+        }
+        setBatchMoveDialog({ open: false, items: [] });
+        clearSelection();
+      } catch (err) {
+        console.error('Batch move failed:', err);
+      }
+    },
+    [batchMoveDialog.items, moveItem, currentFolderId, clearSelection]
+  );
+
+  // Close batch dialogs
+  const closeBatchDeleteDialog = useCallback(() => {
+    setBatchDeleteDialog({ open: false, items: [] });
+  }, []);
+
+  const closeBatchMoveDialog = useCallback(() => {
+    setBatchMoveDialog({ open: false, items: [] });
+  }, []);
 
   // Confirm rename
   const handleRenameConfirm = useCallback(
@@ -617,10 +804,6 @@ export function FileBrowser() {
     [createFolder, currentFolderId]
   );
 
-  // Get current folder's children
-  const children = currentFolder?.children ?? [];
-  const hasChildren = children.length > 0;
-
   // Build delete confirmation message
   const deleteMessage =
     confirmDialog.item?.type === 'folder'
@@ -695,15 +878,29 @@ export function FileBrowser() {
         </div>
       )}
 
+      {/* Selection action bar */}
+      {multiSelectActive && selectedIds.size > 1 && (
+        <SelectionActionBar
+          selectedItems={selectedItems}
+          isLoading={isOperating || isDownloading}
+          onClearSelection={clearSelection}
+          onDownload={handleBatchDownload}
+          onMove={handleBatchMoveClick}
+          onDelete={handleBatchDeleteClick}
+        />
+      )}
+
       {/* File list or empty state */}
       {!isLoading && hasChildren && (
         <FileList
           items={children}
-          selectedId={selectedItemId}
+          selectedIds={selectedIds}
+          multiSelectActive={multiSelectActive}
           parentId={currentFolderId}
           showParentRow={currentFolderId !== 'root'}
           onNavigateUp={navigateUp}
           onSelect={handleSelect}
+          onSelectAll={handleSelectAll}
           onNavigate={handleNavigate}
           onContextMenu={handleContextMenu}
           onDragStart={handleDragStart}
@@ -722,6 +919,7 @@ export function FileBrowser() {
           x={contextMenu.x}
           y={contextMenu.y}
           item={contextMenu.item}
+          selectedCount={selectedIds.size}
           onClose={contextMenu.hide}
           onDownload={isFileEntry(contextMenu.item) ? handleDownload : undefined}
           onEdit={
@@ -738,6 +936,13 @@ export function FileBrowser() {
           onMove={handleMoveClick}
           onDelete={handleDeleteClick}
           onDetails={handleDetailsClick}
+          onBatchDownload={
+            selectedIds.size > 1 && selectedItems.some(isFileEntry)
+              ? handleBatchDownload
+              : undefined
+          }
+          onBatchMove={selectedIds.size > 1 ? handleBatchMoveClick : undefined}
+          onBatchDelete={selectedIds.size > 1 ? handleBatchDeleteClick : undefined}
         />
       )}
 
@@ -837,6 +1042,28 @@ export function FileBrowser() {
             ? videoPlayerDialog.item
             : null
         }
+      />
+
+      {/* Batch delete confirmation dialog */}
+      <ConfirmDialog
+        open={batchDeleteDialog.open}
+        onClose={closeBatchDeleteDialog}
+        onConfirm={handleBatchDeleteConfirm}
+        title={`Delete ${batchDeleteDialog.items.length} Items?`}
+        message={`Are you sure you want to delete ${batchDeleteDialog.items.length} selected items? Any folders will also have their contents deleted. This cannot be undone.`}
+        confirmLabel="Delete All"
+        isDestructive
+        isLoading={isOperating}
+      />
+
+      {/* Batch move dialog */}
+      <MoveDialog
+        open={batchMoveDialog.open}
+        onClose={closeBatchMoveDialog}
+        onConfirm={handleBatchMoveConfirm}
+        item={batchMoveDialog.items[0] ?? null}
+        currentFolderId={currentFolderId}
+        isLoading={isOperating}
       />
 
       {/* Upload modal (self-manages visibility) */}

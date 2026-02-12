@@ -20,10 +20,15 @@ type FileListItemProps = {
   item: FolderChild;
   /** Whether this item is currently selected */
   isSelected: boolean;
+  /** Whether multi-selection mode is active (checkboxes visible) */
+  multiSelectActive: boolean;
   /** Parent folder ID (for drag data) */
   parentId: string;
-  /** Callback when item is clicked */
-  onSelect: (itemId: string) => void;
+  /** Callback when item is clicked (with modifier key info) */
+  onSelect: (
+    itemId: string,
+    event: { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }
+  ) => void;
   /** Callback when folder is double-clicked to navigate into */
   onNavigate: (folderId: string) => void;
   /** Callback when right-click context menu is requested */
@@ -71,6 +76,7 @@ function getItemIcon(item: FolderChild): string {
 export function FileListItem({
   item,
   isSelected,
+  multiSelectActive,
   parentId,
   onSelect,
   onNavigate,
@@ -88,10 +94,26 @@ export function FileListItem({
 
   /**
    * Handle single click - select the item.
+   * Passes modifier key state for multi-selection support.
    */
-  const handleClick = useCallback(() => {
-    onSelect(item.id);
-  }, [item.id, onSelect]);
+  const handleClick = useCallback(
+    (e: React.MouseEvent) => {
+      onSelect(item.id, { ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, metaKey: e.metaKey });
+    },
+    [item.id, onSelect]
+  );
+
+  /**
+   * Handle checkbox click - toggle selection without modifiers.
+   */
+  const handleCheckboxClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      // Checkbox click always toggles like Ctrl+click
+      onSelect(item.id, { ctrlKey: true, shiftKey: false, metaKey: false });
+    },
+    [item.id, onSelect]
+  );
 
   /**
    * Handle double click - navigate into folder.
@@ -314,8 +336,18 @@ export function FileListItem({
         }
       }}
     >
-      {/* Row 1: Icon + Name (for mobile top row) */}
+      {/* Row 1: Checkbox + Icon + Name (for mobile top row) */}
       <div className="file-list-item-row-top" role="gridcell">
+        <span
+          className={`file-list-item-checkbox${multiSelectActive ? ' file-list-item-checkbox--visible' : ''}`}
+          onClick={handleCheckboxClick}
+          role="checkbox"
+          aria-checked={isSelected}
+          aria-label={`Select ${item.name}`}
+          tabIndex={-1}
+        >
+          {isSelected ? '[x]' : '[ ]'}
+        </span>
         <span className="file-list-item-icon" aria-hidden="true">
           {getItemIcon(item)}
         </span>

@@ -6,16 +6,23 @@ import { ParentDirRow } from './ParentDirRow';
 type FileListProps = {
   /** Items to display (files and folders) */
   items: FolderChild[];
-  /** Currently selected item ID */
-  selectedId: string | null;
+  /** Set of currently selected item IDs */
+  selectedIds: Set<string>;
+  /** Whether multi-selection mode is active */
+  multiSelectActive: boolean;
   /** Parent folder ID (for drag operations) */
   parentId: string;
   /** Whether to show [..] PARENT_DIR row (non-root folders) */
   showParentRow?: boolean;
   /** Callback when [..] row is clicked to navigate up */
   onNavigateUp?: () => void;
-  /** Callback when an item is selected */
-  onSelect: (itemId: string) => void;
+  /** Callback when an item is selected (with modifier key info) */
+  onSelect: (
+    itemId: string,
+    event: { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }
+  ) => void;
+  /** Callback to select/deselect all items */
+  onSelectAll: () => void;
   /** Callback when navigating into a folder */
   onNavigate: (folderId: string) => void;
   /** Callback when context menu is requested */
@@ -75,11 +82,13 @@ function sortItems(items: FolderChild[]): FolderChild[] {
  */
 export function FileList({
   items,
-  selectedId,
+  selectedIds,
+  multiSelectActive,
   parentId,
   showParentRow,
   onNavigateUp,
   onSelect,
+  onSelectAll,
   onNavigate,
   onContextMenu,
   onDragStart,
@@ -87,12 +96,29 @@ export function FileList({
   onExternalFileDrop,
 }: FileListProps) {
   const sortedItems = sortItems(items);
+  const allSelected = items.length > 0 && selectedIds.size === items.length;
 
   return (
     <div className="file-list" role="grid">
       {/* Header row */}
       <div className="file-list-header" role="row">
         <div className="file-list-header-name" role="columnheader">
+          <span
+            className={`file-list-header-checkbox${multiSelectActive ? ' file-list-header-checkbox--visible' : ''}`}
+            onClick={onSelectAll}
+            role="checkbox"
+            aria-checked={allSelected}
+            aria-label={allSelected ? 'Deselect all' : 'Select all'}
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onSelectAll();
+              }
+            }}
+          >
+            {allSelected ? '[x]' : '[ ]'}
+          </span>
           [NAME]
         </div>
         <div className="file-list-header-size" role="columnheader">
@@ -110,7 +136,8 @@ export function FileList({
           <FileListItem
             key={item.id}
             item={item}
-            isSelected={selectedId === item.id}
+            isSelected={selectedIds.has(item.id)}
+            multiSelectActive={multiSelectActive}
             parentId={parentId}
             onSelect={onSelect}
             onNavigate={onNavigate}

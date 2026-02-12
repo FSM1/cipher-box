@@ -18,6 +18,8 @@ type ContextMenuProps = {
   y: number;
   /** The file or folder item */
   item: FolderChild;
+  /** Number of selected items (for multi-selection context) */
+  selectedCount: number;
   /** Callback to close the menu */
   onClose: () => void;
   /** Callback when download is clicked (files only) */
@@ -34,6 +36,12 @@ type ContextMenuProps = {
   onDelete: () => void;
   /** Callback when details is clicked */
   onDetails: () => void;
+  /** Callback for batch download (multi-selection) */
+  onBatchDownload?: () => void;
+  /** Callback for batch move (multi-selection) */
+  onBatchMove?: () => void;
+  /** Callback for batch delete (multi-selection) */
+  onBatchDelete?: () => void;
 };
 
 /**
@@ -52,6 +60,7 @@ export function ContextMenu({
   x,
   y,
   item,
+  selectedCount,
   onClose,
   onDownload,
   onEdit,
@@ -60,6 +69,9 @@ export function ContextMenu({
   onMove,
   onDelete,
   onDetails,
+  onBatchDownload,
+  onBatchMove,
+  onBatchDelete,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement | null>(null);
   const isFile = item.type === 'file';
@@ -164,11 +176,29 @@ export function ContextMenu({
     onClose();
   };
 
+  const handleBatchDownload = () => {
+    onBatchDownload?.();
+    onClose();
+  };
+
+  const handleBatchMove = () => {
+    onBatchMove?.();
+    onClose();
+  };
+
+  const handleBatchDelete = () => {
+    onBatchDelete?.();
+    onClose();
+  };
+
   // Combine refs for menu
   const setMenuRef = (node: HTMLDivElement | null) => {
     menuRef.current = node;
     refs.setFloating(node);
   };
+
+  // Multi-selection mode: show batch actions
+  const isMultiSelect = selectedCount > 1;
 
   return (
     <Portal>
@@ -177,75 +207,149 @@ export function ContextMenu({
         className="context-menu"
         style={floatingStyles}
         role="menu"
-        aria-label={`Actions for ${item.name}`}
+        aria-label={
+          isMultiSelect ? `Actions for ${selectedCount} items` : `Actions for ${item.name}`
+        }
       >
-        {/* Download - files only */}
-        {isFile && onDownload && (
-          <button
-            type="button"
-            className="context-menu-item"
-            onClick={handleDownload}
-            role="menuitem"
-          >
-            <span className="context-menu-item-icon">&#8595;</span>
-            Download
-          </button>
+        {isMultiSelect ? (
+          <>
+            {/* Multi-selection header */}
+            <div className="context-menu-header">{selectedCount} items selected</div>
+            <div className="context-menu-divider" role="separator" />
+
+            {/* Batch Download */}
+            {onBatchDownload && (
+              <button
+                type="button"
+                className="context-menu-item"
+                onClick={handleBatchDownload}
+                role="menuitem"
+              >
+                <span className="context-menu-item-icon">&#8595;</span>
+                Download files
+              </button>
+            )}
+
+            {/* Batch Move */}
+            {onBatchMove && (
+              <button
+                type="button"
+                className="context-menu-item"
+                onClick={handleBatchMove}
+                role="menuitem"
+              >
+                <span className="context-menu-item-icon">&#8594;</span>
+                Move to...
+              </button>
+            )}
+
+            {/* Divider before destructive action */}
+            <div className="context-menu-divider" role="separator" />
+
+            {/* Batch Delete */}
+            {onBatchDelete && (
+              <button
+                type="button"
+                className="context-menu-item context-menu-item--destructive"
+                onClick={handleBatchDelete}
+                role="menuitem"
+              >
+                <span className="context-menu-item-icon">&#128465;</span>
+                Delete {selectedCount} items
+              </button>
+            )}
+          </>
+        ) : (
+          <>
+            {/* Download - files only */}
+            {isFile && onDownload && (
+              <button
+                type="button"
+                className="context-menu-item"
+                onClick={handleDownload}
+                role="menuitem"
+              >
+                <span className="context-menu-item-icon">&#8595;</span>
+                Download
+              </button>
+            )}
+
+            {/* Edit - text files only */}
+            {isFile && onEdit && (
+              <button
+                type="button"
+                className="context-menu-item"
+                onClick={handleEdit}
+                role="menuitem"
+              >
+                <span className="context-menu-item-icon">&#9998;</span>
+                Edit
+              </button>
+            )}
+
+            {/* Preview - image files only */}
+            {isFile && onPreview && (
+              <button
+                type="button"
+                className="context-menu-item"
+                onClick={handlePreview}
+                role="menuitem"
+              >
+                <span className="context-menu-item-icon">&#128444;</span>
+                Preview
+              </button>
+            )}
+
+            {/* Rename */}
+            <button
+              type="button"
+              className="context-menu-item"
+              onClick={handleRename}
+              role="menuitem"
+            >
+              <span className="context-menu-item-icon">&#9998;</span>
+              Rename
+            </button>
+
+            {/* Move to... */}
+            {onMove && (
+              <button
+                type="button"
+                className="context-menu-item"
+                onClick={handleMove}
+                role="menuitem"
+              >
+                <span className="context-menu-item-icon">&#8594;</span>
+                Move to...
+              </button>
+            )}
+
+            {/* Details */}
+            <button
+              type="button"
+              className="context-menu-item"
+              onClick={handleDetails}
+              role="menuitem"
+            >
+              <span className="context-menu-item-icon">&#9432;</span>
+              Details
+            </button>
+
+            {/* Divider before destructive action */}
+            <div className="context-menu-divider" role="separator" />
+
+            {/* Delete */}
+            <button
+              type="button"
+              className="context-menu-item context-menu-item--destructive"
+              onClick={handleDelete}
+              role="menuitem"
+            >
+              <span className="context-menu-item-icon">&#128465;</span>
+              Delete
+            </button>
+          </>
         )}
-
-        {/* Edit - text files only */}
-        {isFile && onEdit && (
-          <button type="button" className="context-menu-item" onClick={handleEdit} role="menuitem">
-            <span className="context-menu-item-icon">&#9998;</span>
-            Edit
-          </button>
-        )}
-
-        {/* Preview - image files only */}
-        {isFile && onPreview && (
-          <button
-            type="button"
-            className="context-menu-item"
-            onClick={handlePreview}
-            role="menuitem"
-          >
-            <span className="context-menu-item-icon">&#128444;</span>
-            Preview
-          </button>
-        )}
-
-        {/* Rename */}
-        <button type="button" className="context-menu-item" onClick={handleRename} role="menuitem">
-          <span className="context-menu-item-icon">&#9998;</span>
-          Rename
-        </button>
-
-        {/* Move to... */}
-        {onMove && (
-          <button type="button" className="context-menu-item" onClick={handleMove} role="menuitem">
-            <span className="context-menu-item-icon">&#8594;</span>
-            Move to...
-          </button>
-        )}
-
-        {/* Details */}
-        <button type="button" className="context-menu-item" onClick={handleDetails} role="menuitem">
-          <span className="context-menu-item-icon">&#9432;</span>
-          Details
-        </button>
-
-        {/* Divider before destructive action */}
-        <div className="context-menu-divider" role="separator" />
-
-        {/* Delete */}
-        <button
-          type="button"
-          className="context-menu-item context-menu-item--destructive"
-          onClick={handleDelete}
-          role="menuitem"
-        >
-          <span className="context-menu-item-icon">&#128465;</span>
-          Delete
-        </button>
       </div>
     </Portal>
   );
