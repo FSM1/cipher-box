@@ -3,7 +3,7 @@ import { apiClient } from './client';
 type LoginRequest = {
   idToken: string;
   publicKey: string;
-  loginType: 'social' | 'external_wallet';
+  loginType: 'social' | 'external_wallet' | 'corekit';
   /** ADR-001: Wallet address for external wallet JWT verification */
   walletAddress?: string;
   /** ADR-001: Key derivation version for external wallet users */

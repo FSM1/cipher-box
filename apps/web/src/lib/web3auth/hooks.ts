@@ -10,7 +10,7 @@ export function useCoreKitAuth() {
    * Login with Google: Backend verifies Google idToken, issues CipherBox JWT,
    * then we call loginWithJWT on Core Kit.
    */
-  async function loginWithGoogle(googleIdToken: string): Promise<void> {
+  async function loginWithGoogle(googleIdToken: string): Promise<{ cipherboxJwt: string }> {
     if (!coreKit) throw new Error('Core Kit not initialized');
 
     // 1. Send Google idToken to CipherBox backend for verification + JWT issuance
@@ -33,12 +33,14 @@ export function useCoreKitAuth() {
     if (coreKit.status === COREKIT_STATUS.REQUIRED_SHARE) {
       console.warn('[CoreKit] REQUIRED_SHARE status -- MFA challenge needed (not yet implemented)');
     }
+
+    return { cipherboxJwt };
   }
 
   /**
    * Login with Email: Backend handles OTP send/verify, issues CipherBox JWT.
    */
-  async function loginWithEmailOtp(email: string, otp: string): Promise<void> {
+  async function loginWithEmailOtp(email: string, otp: string): Promise<{ cipherboxJwt: string }> {
     if (!coreKit) throw new Error('Core Kit not initialized');
 
     // 1. Verify OTP with backend, get CipherBox JWT
@@ -57,6 +59,8 @@ export function useCoreKitAuth() {
     if (coreKit.status === COREKIT_STATUS.REQUIRED_SHARE) {
       console.warn('[CoreKit] REQUIRED_SHARE status -- MFA challenge needed (not yet implemented)');
     }
+
+    return { cipherboxJwt };
   }
 
   /**

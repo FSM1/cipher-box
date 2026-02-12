@@ -1,11 +1,13 @@
 import { Injectable, Logger, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, Like } from 'typeorm';
+import * as jose from 'jose';
 import * as argon2 from 'argon2';
 import { User } from './entities/user.entity';
 import { AuthMethod } from './entities/auth-method.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { Web3AuthVerifierService } from './services/web3auth-verifier.service';
+import { JwtIssuerService } from './services/jwt-issuer.service';
 import { TokenService } from './services/token.service';
 import { LoginDto, LoginServiceResult } from './dto/login.dto';
 import { RefreshServiceResult, LogoutResponseDto } from './dto/token.dto';
@@ -17,6 +19,7 @@ export class AuthService {
 
   constructor(
     private web3AuthVerifier: Web3AuthVerifierService,
+    private jwtIssuerService: JwtIssuerService,
     private tokenService: TokenService,
     @InjectRepository(User)
     private userRepository: Repository<User>,
@@ -27,18 +30,35 @@ export class AuthService {
   ) {}
 
   async login(loginDto: LoginDto): Promise<LoginServiceResult> {
-    // 1. Verify Web3Auth token
-    // For external wallets, verify against wallet address (from JWT), not derived public key
-    const verificationKey =
-      loginDto.loginType === 'external_wallet' && loginDto.walletAddress
-        ? loginDto.walletAddress
-        : loginDto.publicKey;
+    // 1. Verify token based on login type
+    let payload: {
+      verifierId?: string;
+      sub?: string;
+      email?: string;
+      verifier?: string;
+      aggregateVerifier?: string;
+      wallets?: { type: string; public_key?: string; address?: string; curve?: string }[];
+    };
 
-    const payload = await this.web3AuthVerifier.verifyIdToken(
-      loginDto.idToken,
-      verificationKey,
-      loginDto.loginType
-    );
+    if (loginDto.loginType === 'corekit') {
+      // Core Kit login: verify the CipherBox-issued JWT using our own key.
+      // The client already authenticated via /auth/identity/* endpoints,
+      // received a CipherBox JWT, used it for Core Kit loginWithJWT,
+      // and now sends it here for backend session creation.
+      payload = await this.verifyCipherBoxJwt(loginDto.idToken);
+    } else {
+      // PnP / external wallet: verify Web3Auth-issued JWT
+      const verificationKey =
+        loginDto.loginType === 'external_wallet' && loginDto.walletAddress
+          ? loginDto.walletAddress
+          : loginDto.publicKey;
+
+      payload = await this.web3AuthVerifier.verifyIdToken(
+        loginDto.idToken,
+        verificationKey,
+        loginDto.loginType
+      );
+    }
 
     // 2. Find or create user
     let user = await this.userRepository.findOne({
@@ -81,8 +101,14 @@ export class AuthService {
     }
 
     // 3. Find or create auth method
-    const authMethodType = this.web3AuthVerifier.extractAuthMethodType(payload, loginDto.loginType);
-    const identifier = this.web3AuthVerifier.extractIdentifier(payload);
+    const authMethodType =
+      loginDto.loginType === 'corekit'
+        ? 'email_passwordless'
+        : this.web3AuthVerifier.extractAuthMethodType(payload, loginDto.loginType);
+    const identifier =
+      loginDto.loginType === 'corekit'
+        ? payload.sub || 'unknown'
+        : this.web3AuthVerifier.extractIdentifier(payload);
 
     let authMethod = await this.authMethodRepository.findOne({
       where: {
@@ -111,6 +137,29 @@ export class AuthService {
       refreshToken: tokens.refreshToken,
       isNewUser,
     };
+  }
+
+  /**
+   * Verify a CipherBox-issued JWT for Core Kit login flow.
+   * Since we are the identity provider, we verify against our own JWKS.
+   */
+  private async verifyCipherBoxJwt(
+    idToken: string
+  ): Promise<{ sub?: string; verifierId?: string }> {
+    try {
+      const jwksData = this.jwtIssuerService.getJwksData();
+      const jwks = jose.createLocalJWKSet(jwksData);
+      const { payload } = await jose.jwtVerify(idToken, jwks, {
+        issuer: 'cipherbox',
+        audience: 'web3auth',
+        algorithms: ['RS256'],
+      });
+      return { sub: payload.sub, verifierId: payload.sub };
+    } catch (error) {
+      throw new UnauthorizedException(
+        `Invalid CipherBox identity token: ${error instanceof Error ? error.message : 'verification failed'}`
+      );
+    }
   }
 
   async refresh(

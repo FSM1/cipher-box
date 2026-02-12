@@ -128,59 +128,42 @@ export function useAuth() {
 
   /**
    * Complete backend authentication after Core Kit login.
-   * Extracts Web3Auth session JWT from Core Kit signatures, then
-   * calls the existing /auth/login endpoint which handles placeholder
-   * publicKey resolution.
+   * Sends the CipherBox-issued JWT (which we used for Core Kit loginWithJWT)
+   * to the backend with loginType 'corekit'. The backend verifies it against
+   * its own JWKS since CipherBox is the identity provider.
    */
   const completeBackendAuth = useCallback(
-    async (authMethod: string): Promise<void> => {
-      if (!coreKit) throw new Error('Core Kit not available');
-
-      // 1. Get Web3Auth-signed session JWT from Core Kit signatures.
-      // Core Kit stores session tokens as JSON strings in signatures[].
-      // Each entry is { data: <JWT>, sig: <signature> }.
-      // The JWT is signed by Web3Auth nodes and verifiable against
-      // https://api-auth.web3auth.io/jwks (same as PnP authenticateUser).
-      const sigs = coreKit.signatures;
-      if (!sigs || sigs.length === 0) {
-        throw new Error('No Web3Auth session signatures available');
-      }
-      const sessionData = JSON.parse(sigs[0]) as {
-        data: string;
-        sig: string;
-      };
-      const web3authJwt = sessionData.data;
-
-      // 2. Get real publicKey from Core Kit TSS export
+    async (authMethod: string, cipherboxJwt: string): Promise<void> => {
+      // 1. Get real publicKey from Core Kit TSS export
       const publicKey = await getPublicKeyHex();
       if (!publicKey) {
         throw new Error('Failed to get publicKey from Core Kit');
       }
 
-      // 3. Authenticate with CipherBox backend
-      // Backend resolves placeholder publicKey if this is a new user
+      // 2. Authenticate with CipherBox backend
+      // Backend verifies our CipherBox JWT and resolves placeholder publicKey
       const response = await authApi.login({
-        idToken: web3authJwt,
+        idToken: cipherboxJwt,
         publicKey,
-        loginType: 'social',
+        loginType: 'corekit',
       });
 
-      // 4. Store access token (refresh token in HTTP-only cookie)
+      // 3. Store access token (refresh token in HTTP-only cookie)
       setAccessToken(response.accessToken);
 
-      // 5. Remember auth method for UX
+      // 4. Remember auth method for UX
       setLastAuthMethod(authMethod);
 
-      // 6. Initialize or load vault
+      // 5. Initialize or load vault
       await initializeOrLoadVault();
     },
-    [coreKit, getPublicKeyHex, setAccessToken, setLastAuthMethod, initializeOrLoadVault]
+    [getPublicKeyHex, setAccessToken, setLastAuthMethod, initializeOrLoadVault]
   );
 
   /**
    * Login with Google OAuth token.
    * Flow: Google idToken -> CipherBox backend -> CipherBox JWT ->
-   * Core Kit loginWithJWT -> authenticateUser -> backend /auth/login
+   * Core Kit loginWithJWT -> backend /auth/login (corekit type)
    */
   const loginWithGoogle = useCallback(
     async (googleIdToken: string): Promise<void> => {
@@ -188,7 +171,7 @@ export function useAuth() {
       setIsLoggingIn(true);
       try {
         // 1. Core Kit login via CipherBox identity provider
-        await coreKitLoginGoogle(googleIdToken);
+        const { cipherboxJwt } = await coreKitLoginGoogle(googleIdToken);
 
         // 2. Check if login landed in REQUIRED_SHARE
         if (coreKit?.status === COREKIT_STATUS.REQUIRED_SHARE) {
@@ -198,7 +181,7 @@ export function useAuth() {
         }
 
         // 3. Complete backend auth + vault init
-        await completeBackendAuth('google');
+        await completeBackendAuth('google', cipherboxJwt);
 
         // 4. Navigate to files
         navigate('/files');
@@ -215,7 +198,7 @@ export function useAuth() {
   /**
    * Login with Email OTP.
    * Flow: email+otp -> CipherBox backend -> CipherBox JWT ->
-   * Core Kit loginWithJWT -> authenticateUser -> backend /auth/login
+   * Core Kit loginWithJWT -> backend /auth/login (corekit type)
    */
   const loginWithEmail = useCallback(
     async (email: string, otp: string): Promise<void> => {
@@ -223,7 +206,7 @@ export function useAuth() {
       setIsLoggingIn(true);
       try {
         // 1. Core Kit login via CipherBox identity provider
-        await coreKitLoginEmail(email, otp);
+        const { cipherboxJwt } = await coreKitLoginEmail(email, otp);
 
         // 2. Check if login landed in REQUIRED_SHARE
         if (coreKit?.status === COREKIT_STATUS.REQUIRED_SHARE) {
@@ -232,7 +215,7 @@ export function useAuth() {
         }
 
         // 3. Complete backend auth + vault init
-        await completeBackendAuth('email_passwordless');
+        await completeBackendAuth('email_passwordless', cipherboxJwt);
 
         // 4. Navigate to files
         navigate('/files');
