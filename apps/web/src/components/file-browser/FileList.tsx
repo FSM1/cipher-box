@@ -28,11 +28,7 @@ type FileListProps = {
   /** Callback when drag starts */
   onDragStart: (event: DragEvent, item: FolderChild) => void;
   /** Callback when items are dropped onto a folder */
-  onDropOnFolder?: (
-    items: DragItem[],
-    sourceParentId: string,
-    destFolderId: string
-  ) => void;
+  onDropOnFolder?: (items: DragItem[], sourceParentId: string, destFolderId: string) => void;
   /** Callback when external files are dropped onto a folder */
   onExternalFileDrop?: (files: File[], destFolderId: string) => void;
 };
@@ -142,8 +138,7 @@ export function FileList({
             onDragStart={onDragStart}
             onDrop={
               onDropOnFolder && item.type === 'folder'
-                ? (dragItems, sourceParentId) =>
-                    onDropOnFolder(dragItems, sourceParentId, item.id)
+                ? (dragItems, sourceParentId) => onDropOnFolder(dragItems, sourceParentId, item.id)
                 : undefined
             }
             onExternalFileDrop={item.type === 'folder' ? onExternalFileDrop : undefined}

@@ -156,10 +156,7 @@ export function FileListItem({
         items = [{ id: item.id, type: item.type }];
       }
 
-      e.dataTransfer.setData(
-        'application/json',
-        JSON.stringify({ items, parentId })
-      );
+      e.dataTransfer.setData('application/json', JSON.stringify({ items, parentId }));
       e.dataTransfer.effectAllowed = 'move';
       onDragStart(e, item);
     },
