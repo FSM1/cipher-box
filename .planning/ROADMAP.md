@@ -47,8 +47,11 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 **Milestone Goal:** Elevate the staging MVP into a production-ready encrypted storage platform with sharing, search, MFA, file versioning, cross-platform desktop, and TEE failover.
 
 - [ ] **Phase 11: Cross-Platform Desktop** - Linux and Windows desktop apps (Tauri, platform-specific FUSE/virtual drive) -- can run in parallel
-- [ ] **Phase 12: Multi-Factor Authentication** - Web3Auth MFA factor configuration and backup recovery
+- [ ] **Phase 12: Core Kit Identity Provider Foundation** - Replace PnP Modal SDK with MPC Core Kit, CipherBox as identity provider
 - [ ] **Phase 12.1: AES-CTR Streaming Encryption** - AES-256-CTR for media files with byte-range decryption and in-browser playback (INSERTED)
+- [ ] **Phase 12.2: Encrypted Device Registry** - Encrypted device metadata on IPFS for cross-device infrastructure (INSERTED)
+- [ ] **Phase 12.3: SIWE + Unified Identity** - Wallet login via SIWE, multi-auth linking, ADR-001 migration (INSERTED)
+- [ ] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
 - [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
 - [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
@@ -82,25 +85,26 @@ See `.planning/milestones/m3/ROADMAP.md` for full M3 phase details.
 4. CI builds and packages desktop apps for all three platforms (macOS, Linux, Windows)
    **Plans**: TBD
 
-### Phase 12: Multi-Factor Authentication
+### Phase 12: Core Kit Identity Provider Foundation
 
-**Goal**: Users can strengthen account security with additional authentication factors and recovery options
+**Goal**: Replace PnP Modal SDK with MPC Core Kit and establish CipherBox backend as the identity provider for Web3Auth, building the foundation for MFA, SIWE, and cross-device approval in subsequent phases
 **Depends on**: Phase 10 (Milestone 1 complete)
-**Requirements**: MFA-01, MFA-02, MFA-03, MFA-04
-**Research flag**: Standard patterns -- Web3Auth mfaSettings is documented SDK configuration. Skip `/gsd:research-phase`.
+**Requirements**: MFA-01 (partial — foundation only), AUTH infrastructure
+**Research flag**: NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier setup, PnP→Core Kit key migration, email passwordless via Core Kit
 **Success Criteria** (what must be TRUE):
 
-1. User can enable MFA from the settings page and is guided through factor enrollment
-2. User can configure a device share as an additional MFA factor for login
-3. User can generate a backup recovery phrase and use it to regain vault access
-4. User's derived keypair (publicKey) remains identical after MFA enrollment -- vault data stays accessible without re-encryption
+1. User can log in via Google OAuth through CipherBox-branded UI (not Web3Auth modal)
+2. User can log in via email through CipherBox-branded UI
+3. CipherBox backend issues JWTs with `sub = userId`, verified by Web3Auth custom verifier
+4. Core Kit initialization, login, and private key export work end-to-end
+5. Existing PnP users' keys are preserved via `importTssKey` migration
+6. User's derived keypair (publicKey) remains identical after migration — vault data stays accessible
 
-**Plans:** 2 plans
+**Plans:** 0 plans (outdated PnP-based plans deleted, needs replanning)
 
 Plans:
 
-- [ ] 12-01-PLAN.md -- Configure Web3Auth MFA settings and add MFA status component to settings page
-- [ ] 12-02-PLAN.md -- Human verification of end-to-end MFA enrollment, recovery, and key identity
+- [ ] TBD (run `/gsd:plan-phase 12` to break down)
 
 ### Phase 12.1: AES-CTR Streaming Encryption (INSERTED)
 
@@ -116,6 +120,59 @@ Plans:
 4. Existing GCM-encrypted files remain fully readable -- encryptionMode field in metadata drives mode selection
 5. Upload pipeline streams file data through CTR encryption instead of loading entirely into memory
    **Plans**: TBD
+
+### Phase 12.2: Encrypted Device Registry (INSERTED)
+
+**Goal**: Encrypted device metadata stored on IPFS alongside user's vault, providing durable infrastructure for cross-device approval and resilience against backend rebuilds
+**Depends on**: Phase 12 (Core Kit foundation must be in place)
+**Requirements**: Infrastructure for MFA-02 (device management)
+**Research flag**: NEEDS `/gsd:research-phase` -- device registry schema design, encryption with user key, IPFS pinning strategy, discovery mechanism
+**Success Criteria** (what must be TRUE):
+
+1. Authenticated devices are tracked in an encrypted registry pinned on IPFS
+2. Device registry is encrypted with user's key and only readable by the user
+3. Device metadata includes public keys, device names, authorization status, and revocation capability
+4. Registry is discoverable and recoverable by any authenticated session
+
+Plans:
+
+- [ ] TBD (run `/gsd:plan-phase 12.2` to break down)
+
+### Phase 12.3: SIWE + Unified Identity (INSERTED)
+
+**Goal**: Wallet users can log in via SIWE and all auth methods (wallet, Google, email) resolve to the same CipherBox identity and Web3Auth key
+**Depends on**: Phase 12.2 (device registry for multi-device state)
+**Requirements**: AUTH unification, MFA-01 (wallet MFA prerequisite)
+**Research flag**: NEEDS `/gsd:research-phase` -- SIWE message format, backend verification, wallet address hashing in DB, multi-auth linking UX, ADR-001 migration path
+**Success Criteria** (what must be TRUE):
+
+1. Wallet user can sign SIWE message → CipherBox API verifies → issues JWT → Core Kit login succeeds
+2. User can link additional auth methods (second wallet, email) from settings
+3. Any linked auth method produces a JWT with same `sub = userId` → same Web3Auth key
+4. Wallet addresses are stored as hashes in the database (not plaintext)
+5. Existing ADR-001 wallet users are migrated to SIWE-based identity
+
+Plans:
+
+- [ ] TBD (run `/gsd:plan-phase 12.3` to break down)
+
+### Phase 12.4: MFA + Cross-Device Approval (INSERTED)
+
+**Goal**: Users can enroll in MFA with device shares and recovery phrases, and approve new devices from existing authenticated devices
+**Depends on**: Phase 12.3 (unified identity for consistent MFA across all auth methods)
+**Requirements**: MFA-01, MFA-02, MFA-03, MFA-04
+**Research flag**: NEEDS `/gsd:research-phase` -- Core Kit enableMFA() flow, createFactor/inputFactorKey for cross-device, bulletin board API design, ECIES ephemeral key exchange
+**Success Criteria** (what must be TRUE):
+
+1. User can enable MFA from settings and is guided through factor enrollment (device share + recovery phrase)
+2. User can approve a new device from an existing authenticated device (bulletin board pattern)
+3. User can recover access using recovery phrase when device share is lost
+4. User's derived keypair (publicKey) remains identical after MFA enrollment — vault data stays accessible
+5. MFA factors are manageable from settings (view, add, revoke)
+
+Plans:
+
+- [ ] TBD (run `/gsd:plan-phase 12.4` to break down)
 
 ### Phase 13: File Versioning
 

@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 12: Multi-Factor Authentication
+**Current focus:** Milestone 2 -- Phase 12: Core Kit Identity Provider Foundation
 
 ## Current Position
 
-Phase: 12 (first of 7 M2 phases: 11-17)
-Plan: Not yet planned
-Status: Ready to plan
-Last activity: 2026-02-11 -- Completed quick task 011: Login footer status indicator
+Phase: 12 (first of 11 M2 phases: 11-17 + decimal insertions)
+Plan: Not yet planned (outdated PnP-based plans deleted, needs replanning)
+Status: Context finalized, ready for research and planning
+Last activity: 2026-02-12 -- Phase 12 architectural discussion and scope refinement
 
-Progress: [##########..........] 50% (M1 complete, M2 0/7 phases)
+Progress: [##########..........] 50% (M1 complete, M2 0/11 phases)
 
 ## Performance Metrics
 
@@ -46,7 +46,10 @@ Recent decisions affecting current work:
 
 | Decision                                                  | Phase    | Rationale                                              |
 | --------------------------------------------------------- | -------- | ------------------------------------------------------ |
-| Web3Auth MFA via mfaSettings config                       | Research | SDK-native, no custom MFA layer needed for M2          |
+| Replace PnP Modal SDK with MPC Core Kit                   | Phase 12 | Full MFA control, custom UX, programmatic factor mgmt  |
+| CipherBox as identity provider (sub=userId)               | Phase 12 | Enables multi-auth linking, less data to Web3Auth      |
+| Identity trilemma: chose (wallet-only + unified) w/ SPOF  | Phase 12 | No mandatory email; SPOF mitigated by key export+IPFS  |
+| Phase 12 split into 12, 12.2, 12.3, 12.4                  | Phase 12 | Foundation→device registry→SIWE→MFA dependency chain   |
 | ECIES re-wrapping for sharing (not proxy re-encryption)   | Research | Same wrapKey() function, server sees only ciphertexts  |
 | Versioning = stop unpinning old CIDs + metadata extension | Research | Nearly free on IPFS, no new crypto needed              |
 | Read-only sharing only (no multi-writer IPNS)             | Research | Unsolved problem, deferred to v3                       |
@@ -63,10 +66,15 @@ Recent decisions affecting current work:
 ### Roadmap Evolution
 
 - Phase 12.1 inserted after Phase 12: AES-256-CTR streaming encryption for media files (INSERTED) — previously deferred as "future enhancement," promoted to M2 for early delivery after MFA stabilizes key derivation
+- Phase 12 rescoped from "MFA config" to "Core Kit Identity Provider Foundation" — PnP Modal SDK rejected for insufficient control
+- Phase 12.2 inserted: Encrypted Device Registry on IPFS — infrastructure for cross-device approval
+- Phase 12.3 inserted: SIWE + Unified Identity — wallet login unification, multi-auth linking
+- Phase 12.4 inserted: MFA + Cross-Device Approval — the actual MFA enrollment and device approval features
 
 ### Blockers/Concerns
 
-- Web3Auth MFA pricing: mfaSettings requires SCALE plan for production (free on devnet). Verify pricing before committing.
+- Web3Auth custom JWT verifier: requires Growth Plan for production (free on devnet). Verify pricing before committing.
+- CipherBox as identity SPOF: backend is trust anchor for auth. Mitigated by encrypted key export + IPFS device registry. One-way door — verifierId scheme is permanent.
 - Versioning + Sharing interaction: When shared folder has version history, should recipient see all versions? Decide during Phase 14 planning.
 
 ### Quick Tasks Completed
@@ -83,17 +91,21 @@ Recent decisions affecting current work:
 - Phase 14 (Sharing): NEEDS `/gsd:research-phase` -- revocation key rotation protocol
 - Phase 15 (Link Sharing): NEEDS `/gsd:research-phase` -- unauthenticated web viewer security
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
+- Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP→Core Kit key migration, email passwordless
 - Phase 12.1 (AES-CTR Streaming): NEEDS `/gsd:research-phase` -- MediaSource/Service Worker decryption, byte-range IPFS, CTR nonce management
+- Phase 12.2 (Device Registry): NEEDS `/gsd:research-phase` -- device registry schema, encryption with user key, IPFS pinning strategy
+- Phase 12.3 (SIWE + Identity): NEEDS `/gsd:research-phase` -- SIWE message format, wallet address hashing, multi-auth linking, ADR-001 migration
+- Phase 12.4 (MFA + Cross-Device): NEEDS `/gsd:research-phase` -- enableMFA() flow, bulletin board API, ECIES ephemeral key exchange
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
-Last session: 2026-02-11
-Stopped at: Completed quick task 011: Login footer status indicator
+Last session: 2026-02-12
+Stopped at: Phase 12 architectural discussion complete, context and roadmap updated
 Resume file: None
-Next: `/gsd:plan-phase 12` (Multi-Factor Authentication)
+Next: `/gsd:plan-phase 12` (Core Kit Identity Provider Foundation)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-11 after quick task 011 completion_
+_Last updated: 2026-02-12 after Phase 12 scope refinement_

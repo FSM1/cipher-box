@@ -1,123 +1,169 @@
-# Phase 12: Multi-Factor Authentication - Context
+# Phase 12: Core Kit Identity Provider Foundation - Context
 
 **Gathered:** 2026-02-12
-**Updated:** 2026-02-12 (architectural pivot: PnP Modal SDK → Core Kit for full MFA control)
-**Status:** Ready for re-research and replanning
+**Updated:** 2026-02-12 (scoped down from full MFA to identity provider foundation)
+**Status:** Ready for research and planning
 
 ## Phase Boundary
 
-Users can strengthen account security with additional authentication factors and recovery options. This phase replaces the PnP Modal SDK auth layer with Web3Auth Core Kit (or MPC Core Kit) to gain full control over MFA enrollment, cross-device share transfer, and recovery flows. It also adds SIWE (Sign-In with Ethereum) for wallet login unification. Cross-platform desktop MFA is a separate phase (11). Sharing and link generation are separate phases (14-15).
+Replace the PnP Modal SDK auth layer with Web3Auth MPC Core Kit and establish CipherBox backend as the identity provider for Web3Auth. This phase builds the foundation that all subsequent auth work depends on: custom login UI, Core Kit initialization, and JWT-based identity resolution. No MFA enrollment, no SIWE, no wallet unification — those are separate phases.
 
-## Architectural Pivot (2026-02-12)
+Cross-platform desktop MFA is a separate phase (11). Sharing and link generation are separate phases (14-15).
 
-### Why not PnP Modal SDK + mfaSettings?
+## Architectural Decisions (2026-02-12)
+
+### Why not PnP Modal SDK?
 
 The initial research (12-RESEARCH.md) found that the PnP Modal SDK approach (`mfaSettings` + React hooks) gives up too much control:
 
-- **No cross-device approval flow**: The old tKey/Core Kit had `requestDeviceShare()` / `approveDevice()` for approving a new device from an existing one. The PnP SDK hides this behind `manageMFA()` in Web3Auth's opaque modal iframe.
+- **No cross-device approval flow**: PnP SDK hides device management behind `manageMFA()` in an opaque modal iframe.
 - **No custom enrollment UX**: SDK handles all MFA UI in its modal — can't customize enrollment steps, recovery phrase presentation, or factor management.
 - **Device shares are ephemeral**: Browser localStorage is fragile. Without cross-device transfer, losing browser data means falling back to recovery phrase every time.
 - **No programmatic share management**: Can't build custom device sync or approval flows.
 - **External wallet MFA gap**: PnP SDK's MFA (Shamir splits) only applies to MPC-derived keys, not external wallet logins. Wallet users would bypass MFA entirely.
 
-### New direction: Core Kit + SIWE
+### The full architecture (spanning Phases 12–12.4)
 
-Replace PnP Modal SDK entirely with lower-level Core Kit for:
+The complete auth rework is split across multiple phases:
 
-1. **Full MFA control**: Custom enrollment UI, programmatic share management, cross-device approval
-2. **Custom login UI**: Build CipherBox-branded login screens instead of Web3Auth's modal
-3. **SIWE for wallets**: Wallet signs SIWE message → CipherBox API verifies → issues JWT → submitted to Web3Auth as custom verifier (sub = wallet address). This gives wallet users a Web3Auth-managed MPC key that CAN be protected by MFA.
-4. **Unified auth model**: Every user (social + wallet) gets a Web3Auth-managed key with full MFA support
+1. **Phase 12 (this phase):** Core Kit + CipherBox identity provider foundation
+2. **Phase 12.2:** Encrypted device registry on IPFS
+3. **Phase 12.3:** SIWE + unified identity (wallet unification)
+4. **Phase 12.4:** MFA enrollment + cross-device approval
 
-### Scope expansion
+### CipherBox as identity provider
 
-This turns Phase 12 from "configure SDK settings" into "replace auth layer + add MFA." Accepted tradeoff: bigger phase, but correct architecture for a zero-knowledge product.
+CipherBox backend becomes the sole identity provider for Web3Auth via a **single custom JWT verifier**:
 
-## Implementation Decisions
+- All auth methods (Google OAuth, email, future SIWE) flow through CipherBox backend
+- Backend verifies credentials, issues JWT with `sub = userId` (CipherBox internal user ID)
+- Web3Auth sees only CipherBox JWTs — never knows whether user logged in with Google, email, or wallet
+- Single custom verifier on Web3Auth dashboard, JWKS endpoint on CipherBox API
 
-### Enrollment flow
+**Why `userId` as verifierId (not email or wallet address):**
 
-- Claude's discretion on wizard vs single-page setup (pick best approach based on Core Kit patterns)
-- Proactive nudge: show a banner/notification suggesting MFA after first login, with dismiss option
-- **Mandatory first-time setup**: user must complete MFA enrollment before first vault access — no skip
-- If enrollment fails partway (browser closed, error), start fresh on next login — no partial resume
+- Enables future multi-auth linking (multiple wallets, wallet + email) without changing the verifierId
+- Less identity data leaks to Web3Auth (it only sees an opaque userId)
+- One-way door decision: once users have keys derived from this verifierId scheme, changing it means different keys
 
-### Recovery phrase UX
+### Identity trilemma
 
-- Claude's discretion on presentation format (word grid, sequential reveal, etc.)
-- Checkbox confirmation: "I have saved my recovery phrase in a safe place" — no quiz
-- Re-access to recovery phrase after setup: depends on Core Kit SDK capabilities (researcher to investigate)
-- **Prominent warning**: bold message explaining vault is permanently inaccessible if phrase is lost and device is unavailable
-- Allow recovery phrase regeneration from settings (invalidates old phrase)
+We identified a fundamental trilemma — pick any two:
 
-### Settings page layout
+1. **Wallet-only login** (no email required)
+2. **Unified identity** across auth methods (one MPC key, one vault)
+3. **No single point of failure** in the auth path
 
-- MFA section added to existing settings page
-- Claude's discretion on status card vs toggle vs other layout (user may want to see mockups during implementation)
-- Claude's discretion on whether MFA is a section within settings or a dedicated sub-page
-- **Show current auth method** (Google, email, etc.) alongside MFA status so user sees full auth picture
+**Chosen tradeoff: (1 + 2) with mitigations.** CipherBox backend is the identity trust anchor (SPOF for auth). Mitigations:
 
-### Factor types
+- **Hashed wallet addresses in DB** — `hash(wallet_address) → userId`, not plaintext. Reduces data breach exposure.
+- **Encrypted key export as break-glass** — password-encrypted private key export for disaster recovery (CipherBox ceases to exist entirely). Weaker than MFA, but specifically for catastrophic scenarios.
+- **Encrypted device registry on IPFS** (Phase 12.2) — durable metadata pinned alongside vault, recoverable if backend is rebuilt.
 
-- Support all factor types that Core Kit provides
-- Device share and recovery phrase are the minimum required (from success criteria)
-- **Cross-device approval**: Users should be able to approve a new device from an existing authenticated device
+### Multi-auth identity model
 
-### Login with MFA active
+Every user has a `userId`. They attach auth methods to it:
 
-- Custom second-factor UI built by CipherBox (not Web3Auth modal)
-- User should see which factors are available and choose one
-- Reference: ChainSafe Files (`github.com/chainsafe/ui-monorepo`) used SDK-based Web3Auth integration with significant customization — user has domain expertise here
+```text
+userId → wallet_A (primary, from signup)
+userId → wallet_B (added later from settings)
+userId → user@email.com (added later from settings)
+```
 
-### SIWE for wallet login
+Any linked method can produce a JWT with `sub = userId` → same Web3Auth account. Users choose their own recovery strategy:
 
-- Wallet user signs SIWE message with MetaMask/WalletConnect
-- CipherBox API verifies SIWE signature, issues a token
-- Token submitted to Web3Auth via custom verifier (sub = wallet address)
-- Web3Auth derives MPC key for this identity — wallet user now has MFA-protectable key
-- Eliminates the ADR-001 signature-derived key bifurcation
+- **Privacy maximalist:** link a second wallet, no email ever
+- **Convenience:** add an email as backup
+- **Belt and suspenders:** second wallet + email
 
-### Recovery flow
+All optional, all additive, no mandatory email.
 
-- Claude's discretion on recovery entry point (login page link vs automatic detection)
-- Must work when user has lost their device share
-- Cross-device approval should be the PRIMARY recovery path (not just recovery phrase)
+### Cross-device approval (Phase 12.4)
 
-### CRITICAL: Key identity after MFA
+Built on Core Kit's `createFactor()` / `inputFactorKey()` primitives, inspired by tKey's `ShareTransferModule` pattern:
 
-- Previous research confirmed: Shamir Secret Sharing splits the existing key, reconstructed key is identical
-- This should still hold with Core Kit — verify during research
-- Success Criterion 4 requires publicKey to remain identical after MFA enrollment
+- **Bulletin board pattern:** New device posts an ECIES ephemeral public key as a request. Existing device encrypts a fresh factor key to that public key. New device polls and decrypts.
+- **Storage split:** Database for the ephemeral handshake (mutable, short-lived). IPFS for the durable encrypted device registry (authorized devices, public keys, revocation status).
+- **tKey used a centralized metadata server** (`metadata.tor.us`), not raw IPFS, despite documentation suggesting otherwise. We use PostgreSQL for the bulletin board + IPFS for durable state.
 
-### Test automation
+### Key identity preservation
 
-- **Research required**: How does E2E testing work with Core Kit MFA?
-- If MFA is mandatory, automation needs a path
-- Researcher should investigate Core Kit test/devnet MFA behavior
+- Research confirmed: TSS key redistribution via `enableMFA()` preserves the underlying key (2/2 → 2/3 without changing the key)
+- `_UNSAFE_exportTssKey()` returns identical key before and after MFA enrollment
+- Critical for vault continuity — no re-encryption needed
+
+### PnP → Core Kit migration
+
+- PnP and Core Kit generate DIFFERENT private keys for the same user
+- Migration path: `importTssKey` parameter on first Core Kit login imports existing PnP key
+- Must be handled carefully in Phase 12 to preserve existing user vaults
+
+## Phase 12 Scope (This Phase Only)
+
+### What's IN scope
+
+- Replace PnP Modal SDK (`@web3auth/modal`) with MPC Core Kit (`@web3auth/mpc-core-kit`)
+- Build custom login UI (Google OAuth, email passwordless) — CipherBox-branded, not Web3Auth modal
+- CipherBox backend becomes identity provider: verify credentials, issue JWTs with `sub = userId`
+- Set up custom JWT verifier on Web3Auth dashboard + JWKS endpoint on API
+- Core Kit initialization with singleton pattern and COREKIT_STATUS state machine
+- Handle PnP → Core Kit key migration via `importTssKey`
+- Private key export via `_UNSAFE_exportTssKey()` for ECIES operations (existing vault flow)
+- Session persistence across page reloads
+
+### What's OUT of scope (future phases)
+
+- MFA enrollment (device share, recovery phrase, factor management) → Phase 12.4
+- SIWE for wallet login → Phase 12.3
+- Wallet-to-userId linking / multi-auth → Phase 12.3
+- Cross-device approval flow → Phase 12.4
+- Encrypted device registry on IPFS → Phase 12.2
+- Desktop app Core Kit integration → separate consideration
+
+### Implementation decisions for this phase
+
+- **Custom login UI**: Build CipherBox-branded login screens. Google OAuth button + email magic link input.
+- **Core Kit singleton**: Single instance, initialized once, managed via React context/provider.
+- **COREKIT_STATUS handling**: `NOT_INITIALIZED → INITIALIZED → LOGGED_IN`. Handle `REQUIRED_SHARE` status (will appear once MFA is enabled in Phase 12.4, but code should handle it gracefully now).
+- **Backend JWT flow**: Google OAuth → CipherBox API verifies → issues signed JWT → client submits to `loginWithJWT()`.
+- **Email passwordless**: Research needed — does Core Kit support email passwordless natively, or does CipherBox backend need to implement magic link flow?
+- **Key migration**: First login on Core Kit must detect existing PnP user and import their key.
 
 ### Claude's Discretion
 
-- Enrollment flow structure (wizard vs single-page)
-- Recovery phrase presentation format
-- Settings page layout for MFA section
-- Recovery flow entry point
-- Loading/error states during enrollment
-- Exact factor enrollment order
-- Login UI design (replacing Web3Auth modal)
+- Login UI design and layout
+- Error/loading states during Core Kit initialization and login
+- Session persistence strategy (Core Kit has built-in session management)
+- Whether to keep PnP SDK as temporary fallback during migration
+- Backend JWT endpoint design (REST path, token format, expiry)
 
-## Specific Ideas
+## Success Criteria
 
-- Reference: ChainSafe Files (`chainsafe/ui-monorepo`) — user previously built Web3Auth MFA integration with SDK-based approach allowing significant customization including cross-device approval
-- User expects MFA setup to be a hard requirement — security-first stance
-- SIWE unifies wallet + social login into one key management model
-- Cross-device approval is a key differentiator vs the simpler PnP approach
+1. User can log in via Google OAuth through CipherBox-branded UI (not Web3Auth modal)
+2. User can log in via email through CipherBox-branded UI
+3. CipherBox backend issues JWTs with `sub = userId`, verified by Web3Auth custom verifier
+4. Core Kit initialization, login, and private key export work end-to-end
+5. Existing PnP users' keys are preserved via `importTssKey` migration
+6. User's derived keypair (publicKey) remains identical after migration — vault data stays accessible
+
+## Research References
+
+- `12-RESEARCH.md` — PnP Modal SDK research (rejected approach, kept for reference)
+- `12-RESEARCH-corekit.md` — MPC Core Kit research (primary reference)
+- tKey ShareTransferModule architecture — documented in discussion, informs Phase 12.4
 
 ## Deferred Ideas
 
-None — discussion stayed within phase scope
+- SIWE for wallet login → Phase 12.3
+- Multi-auth identity linking → Phase 12.3
+- MFA enrollment + recovery phrase → Phase 12.4
+- Cross-device approval → Phase 12.4
+- Encrypted device registry on IPFS → Phase 12.2
+- Whether 12.2 + 12.3 should merge (depends on scope during planning)
+- Whether 12.4 should split into MFA + cross-device as separate phases
 
 ---
 
 _Phase: 12-multi-factor-authentication_
 _Context gathered: 2026-02-12_
-_Updated: 2026-02-12 (Core Kit pivot)_
+_Updated: 2026-02-12 (scoped to identity provider foundation)_
