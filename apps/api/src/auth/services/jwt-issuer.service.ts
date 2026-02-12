@@ -3,12 +3,13 @@ import { ConfigService } from '@nestjs/config';
 import * as jose from 'jose';
 
 const KID = 'cipherbox-identity-1';
+/** RSA private JWK fields to strip when creating the public JWK */
+const RSA_PRIVATE_FIELDS = new Set(['d', 'p', 'q', 'dp', 'dq', 'qi']);
 
 @Injectable()
 export class JwtIssuerService implements OnModuleInit {
   private readonly logger = new Logger(JwtIssuerService.name);
-  private privateKey!: jose.KeyLike;
-  private publicKey!: jose.KeyLike;
+  private privateKey!: jose.CryptoKey | jose.KeyObject;
   private publicJwk!: jose.JWK;
 
   constructor(private config: ConfigService) {}
@@ -19,21 +20,20 @@ export class JwtIssuerService implements OnModuleInit {
     if (pemKey) {
       this.logger.log('Loading RS256 identity keypair from IDENTITY_JWT_PRIVATE_KEY env var');
       this.privateKey = await jose.importPKCS8(pemKey, 'RS256');
-      // Derive public key from private key by exporting and re-importing
+      // Derive public JWK from private key (strip private fields)
       const privateJwk = await jose.exportJWK(this.privateKey);
-      // Remove private fields to create public JWK
-      const { d, p, q, dp, dq, qi, ...publicJwkData } = privateJwk;
+      const publicJwkData = Object.fromEntries(
+        Object.entries(privateJwk).filter(([k]) => !RSA_PRIVATE_FIELDS.has(k))
+      );
       this.publicJwk = { ...publicJwkData, kid: KID, alg: 'RS256', use: 'sig' };
-      this.publicKey = await jose.importJWK(this.publicJwk, 'RS256');
     } else {
       this.logger.warn(
-        'IDENTITY_JWT_PRIVATE_KEY not set — generating ephemeral RS256 keypair (dev/staging only)',
+        'IDENTITY_JWT_PRIVATE_KEY not set — generating ephemeral RS256 keypair (dev/staging only)'
       );
       const { publicKey, privateKey } = await jose.generateKeyPair('RS256', {
         modulusLength: 2048,
       });
       this.privateKey = privateKey;
-      this.publicKey = publicKey;
       const jwk = await jose.exportJWK(publicKey);
       this.publicJwk = { ...jwk, kid: KID, alg: 'RS256', use: 'sig' };
     }
