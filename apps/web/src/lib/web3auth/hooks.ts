@@ -3,29 +3,80 @@ import { useCoreKit } from './core-kit-provider';
 import { COREKIT_STATUS } from './core-kit';
 import { authApi } from '../api/auth';
 
+/**
+ * PnP -> Core Kit migration helper.
+ *
+ * PnP and Core Kit generate DIFFERENT private keys for the same user by default.
+ * For production migration, the user's PnP-derived private key must be imported
+ * via `importTssKey` during the first Core Kit `loginWithJWT` call.
+ *
+ * Flow:
+ * 1. A transitional build exports the PnP private key to localStorage
+ * 2. On first Core Kit login, this function reads and removes the key
+ * 3. The key is passed as `importTssKey` to `loginWithJWT`
+ * 4. Core Kit splits the imported key into TSS shares
+ * 5. Subsequent logins use Core Kit's native key derivation
+ *
+ * For devnet: We use fresh accounts (no migration needed).
+ * For production: This function would be called with the user's PnP private key.
+ */
+export function getMigrationKey(): string | undefined {
+  try {
+    const key = localStorage.getItem('__pnp_migration_key__');
+    if (key) {
+      // Use it once, then delete -- importTssKey is only for the first login
+      localStorage.removeItem('__pnp_migration_key__');
+      console.log('[CoreKit] PnP migration key found -- will import via importTssKey');
+      return key;
+    }
+  } catch {
+    // localStorage may be unavailable in some environments
+  }
+  return undefined;
+}
+
 export function useCoreKitAuth() {
   const { coreKit, status, isLoggedIn, isInitialized } = useCoreKit();
 
   /**
    * Login with Google: Backend verifies Google idToken, issues CipherBox JWT,
    * then we call loginWithJWT on Core Kit.
+   *
+   * @param googleIdToken - Google OAuth idToken from GIS callback
+   * @param migrationKey - Optional PnP private key for importTssKey migration
    */
-  async function loginWithGoogle(googleIdToken: string): Promise<{ cipherboxJwt: string }> {
+  async function loginWithGoogle(
+    googleIdToken: string,
+    migrationKey?: string
+  ): Promise<{ cipherboxJwt: string }> {
     if (!coreKit) throw new Error('Core Kit not initialized');
 
     // 1. Send Google idToken to CipherBox backend for verification + JWT issuance
     const { idToken: cipherboxJwt, userId } = await authApi.identityGoogle(googleIdToken);
 
-    // 2. Login to Core Kit with CipherBox JWT
+    // 2. Check for PnP migration key (auto-detect or explicit)
+    const importKey = migrationKey || getMigrationKey();
+
+    // 3. Login to Core Kit with CipherBox JWT
     // Web3Auth custom verifier name must match dashboard config
-    await coreKit.loginWithJWT({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const loginParams: any = {
       verifier: 'cipherbox-identity', // Single custom verifier for all CipherBox auth
       verifierId: userId,
       idToken: cipherboxJwt,
-    });
+    };
 
-    // 3. Handle status
+    // If migrating from PnP, import existing key so vault data remains accessible
+    if (importKey) {
+      loginParams.importTssKey = importKey;
+      console.log('[CoreKit] Importing PnP key via importTssKey for Google login');
+    }
+
+    await coreKit.loginWithJWT(loginParams);
+
+    // 4. Handle status
     if (coreKit.status === COREKIT_STATUS.LOGGED_IN) {
+      console.log('[CoreKit] Google login successful, publicKey:', coreKit.getPubKey?.() || 'N/A');
       await coreKit.commitChanges();
     }
     // REQUIRED_SHARE means MFA is enabled but device factor missing
@@ -39,21 +90,41 @@ export function useCoreKitAuth() {
 
   /**
    * Login with Email: Backend handles OTP send/verify, issues CipherBox JWT.
+   *
+   * @param email - User's email address
+   * @param otp - One-time password from email
+   * @param migrationKey - Optional PnP private key for importTssKey migration
    */
-  async function loginWithEmailOtp(email: string, otp: string): Promise<{ cipherboxJwt: string }> {
+  async function loginWithEmailOtp(
+    email: string,
+    otp: string,
+    migrationKey?: string
+  ): Promise<{ cipherboxJwt: string }> {
     if (!coreKit) throw new Error('Core Kit not initialized');
 
     // 1. Verify OTP with backend, get CipherBox JWT
     const { idToken: cipherboxJwt, userId } = await authApi.identityEmailVerify(email, otp);
 
-    // 2. Login to Core Kit
-    await coreKit.loginWithJWT({
+    // 2. Check for PnP migration key (auto-detect or explicit)
+    const importKey = migrationKey || getMigrationKey();
+
+    // 3. Login to Core Kit
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const loginParams: any = {
       verifier: 'cipherbox-identity',
       verifierId: userId,
       idToken: cipherboxJwt,
-    });
+    };
+
+    if (importKey) {
+      loginParams.importTssKey = importKey;
+      console.log('[CoreKit] Importing PnP key via importTssKey for email login');
+    }
+
+    await coreKit.loginWithJWT(loginParams);
 
     if (coreKit.status === COREKIT_STATUS.LOGGED_IN) {
+      console.log('[CoreKit] Email login successful, publicKey:', coreKit.getPubKey?.() || 'N/A');
       await coreKit.commitChanges();
     }
     if (coreKit.status === COREKIT_STATUS.REQUIRED_SHARE) {

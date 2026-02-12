@@ -18,8 +18,6 @@ import {
   bytesToHex,
 } from '@cipherbox/crypto';
 
-// TODO: Restore E2E test support for Core Kit auth (Plan 05, Task 3)
-
 export function useAuth() {
   const navigate = useNavigate();
   const {
@@ -97,6 +95,9 @@ export function useAuth() {
 
       if (is404) {
         // New user - initialize vault
+        console.log(
+          '[Auth] New user on Core Kit. If migrating from PnP, vault re-initialization may be needed.'
+        );
         const newVault = await initializeVault();
         const encryptedVault = await encryptVaultKeys(newVault, userKeypair.publicKey);
         const rootIpnsName = await deriveIpnsName(newVault.rootIpnsKeypair.publicKey);
@@ -139,6 +140,9 @@ export function useAuth() {
       if (!publicKey) {
         throw new Error('Failed to get publicKey from Core Kit');
       }
+
+      // Log Core Kit publicKey for debugging during migration period
+      console.log('[Auth] Core Kit publicKey:', publicKey);
 
       // 2. Authenticate with CipherBox backend
       // Backend verifies our CipherBox JWT and resolves placeholder publicKey
