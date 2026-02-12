@@ -2,7 +2,7 @@ import './polyfills';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Web3AuthProviderWrapper, WagmiProvider } from './lib/web3auth/provider';
+import { CoreKitProvider } from './lib/web3auth/core-kit-provider';
 import App from './App';
 import './index.css';
 
@@ -20,12 +20,10 @@ if (!rootElement) throw new Error('Root element not found');
 
 createRoot(rootElement).render(
   <StrictMode>
-    <Web3AuthProviderWrapper>
+    <CoreKitProvider>
       <QueryClientProvider client={queryClient}>
-        <WagmiProvider>
-          <App />
-        </WagmiProvider>
+        <App />
       </QueryClientProvider>
-    </Web3AuthProviderWrapper>
+    </CoreKitProvider>
   </StrictMode>
 );

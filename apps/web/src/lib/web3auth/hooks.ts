@@ -117,33 +117,6 @@ export function useCoreKitAuth() {
   };
 }
 
-/**
- * @deprecated Legacy PnP hook shim -- provides no-op stubs so existing consumers
- * (useAuth.ts) compile until Task 3 rewrites them for Core Kit.
- * Remove once useAuth.ts is fully migrated.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function useAuthFlow(): any {
-  return {
-    isConnected: false,
-    isLoading: true,
-    isInitialized: false,
-    userInfo: null,
-    web3Auth: null,
-    connect: async () => null,
-    connectTo: async () => null,
-    disconnect: async () => {},
-    getIdToken: async () => null,
-    getPublicKey: async () => null,
-    getWalletAddress: async () => null,
-    getLoginType: () => 'social' as const,
-    isSocialLogin: () => true,
-    deriveKeypairForExternalWallet: async () => null,
-    getDerivedPublicKeyHex: () => '',
-    getKeypairForVault: async () => null,
-  };
-}
-
 // Utility functions
 function hexToBytes(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2);

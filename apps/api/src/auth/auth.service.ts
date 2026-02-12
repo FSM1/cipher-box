@@ -1,6 +1,6 @@
-import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
+import { Repository, IsNull, Like } from 'typeorm';
 import * as argon2 from 'argon2';
 import { User } from './entities/user.entity';
 import { AuthMethod } from './entities/auth-method.entity';
@@ -13,6 +13,8 @@ import { LinkMethodDto, AuthMethodResponseDto } from './dto/link-method.dto';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private web3AuthVerifier: Web3AuthVerifierService,
     private tokenService: TokenService,
@@ -42,6 +44,25 @@ export class AuthService {
     let user = await this.userRepository.findOne({
       where: { publicKey: loginDto.publicKey },
     });
+
+    // 2b. Placeholder publicKey resolution for Core Kit identity provider.
+    // When a user first authenticates via CipherBox identity provider (Plan 12-01),
+    // they get a placeholder publicKey ('pending-core-kit-{userId}').
+    // After Core Kit login, the client calls /auth/login with the REAL publicKey.
+    // We need to find the placeholder user and update their publicKey.
+    if (!user) {
+      const verifierId = payload.verifierId || payload.sub;
+      if (verifierId) {
+        const placeholderUser = await this.userRepository.findOne({
+          where: { publicKey: Like(`pending-core-kit-${verifierId}%`) },
+        });
+        if (placeholderUser) {
+          this.logger.log(`Resolving placeholder publicKey for user ${placeholderUser.id}`);
+          placeholderUser.publicKey = loginDto.publicKey;
+          user = await this.userRepository.save(placeholderUser);
+        }
+      }
+    }
 
     // Determine derivation version for external wallets (ADR-001)
     const derivationVersion =

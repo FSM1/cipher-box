@@ -7,11 +7,11 @@ import { useAuth } from '../../hooks/useAuth';
  * Hover-triggered dropdown showing user email with settings and logout options.
  */
 export function UserMenu() {
-  const { userInfo, logout } = useAuth();
+  const { logout } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
 
-  // Get user email from Web3Auth user info
-  const email = userInfo?.email || 'User';
+  // TODO: Display user email from Core Kit session (Plan 04 Login UI)
+  const email = 'User';
 
   const handleLogout = async () => {
     setIsOpen(false);
