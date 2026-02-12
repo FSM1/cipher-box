@@ -1,0 +1,1 @@
+{"version":3,"file":"csp-detection.d.ts","sourceRoot":"","sources":["../../../src/lib/csp-detection.ts"],"names":[],"mappings":"AAGA,KAAK,aAAa,GAAG,4BAA4B,GAAG;IAClD,WAAW,CAAC,EAAE,SAAS,GAAG,QAAQ,CAAA;CACnC,CAAA;AACD,eAAO,MAAM,mBAAmB,MAAO,aAAa,YAEnD,CAAA;AAED,wBAAsB,sBAAsB,IAAI,OAAO,CAAC,IAAI,CAAC,CAS5D"}
