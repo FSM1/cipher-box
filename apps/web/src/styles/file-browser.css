@@ -572,6 +572,11 @@
   color: var(--color-green-primary);
 }
 
+.file-list-item-checkbox:focus-visible {
+  outline: 2px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
 /* Show checkbox on row hover even when not in multi-select mode */
 .file-list-item:hover .file-list-item-checkbox {
   display: inline;
@@ -623,6 +628,11 @@
   color: var(--color-text-primary);
 }
 
+.selection-action-bar-clear:focus-visible {
+  outline: 2px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
 .selection-action-bar-actions {
   display: flex;
   align-items: center;
@@ -635,7 +645,12 @@
 }
 
 .selection-action-bar-delete:hover:not(:disabled) {
-  box-shadow: 0 0 8px rgba(255, 0, 0, 0.2);
+  box-shadow: 0 0 8px rgb(255 0 0 / 20%);
+}
+
+.selection-action-bar-delete:focus-visible {
+  outline: 2px solid var(--color-error);
+  outline-offset: 1px;
 }
 
 /* ==========================================================================

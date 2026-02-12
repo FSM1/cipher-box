@@ -222,7 +222,15 @@ export function FileBrowser() {
     useFolderNavigation();
 
   // Folder operations
-  const { createFolder, renameItem, moveItem, deleteItem, isLoading: isOperating } = useFolder();
+  const {
+    createFolder,
+    renameItem,
+    moveItem,
+    moveItems,
+    deleteItem,
+    deleteItems,
+    isLoading: isOperating,
+  } = useFolder();
 
   // File download
   const { download, isDownloading } = useFileDownload();
@@ -657,39 +665,42 @@ export function FileBrowser() {
     }
   }, [selectedItems, download]);
 
-  // Confirm batch delete - delete all items sequentially
+  // Confirm batch delete - single IPNS publish for entire batch
   const handleBatchDeleteConfirm = useCallback(async () => {
     const items = batchDeleteDialog.items;
     if (items.length === 0) return;
 
     try {
-      for (const item of items) {
-        await deleteItem(item.id, item.type, currentFolderId);
-      }
+      await deleteItems(
+        items.map((i) => ({ id: i.id, type: i.type })),
+        currentFolderId
+      );
       setBatchDeleteDialog({ open: false, items: [] });
       clearSelection();
     } catch (err) {
       console.error('Batch delete failed:', err);
     }
-  }, [batchDeleteDialog.items, deleteItem, currentFolderId, clearSelection]);
+  }, [batchDeleteDialog.items, deleteItems, currentFolderId, clearSelection]);
 
-  // Confirm batch move - move all items to destination
+  // Confirm batch move - single IPNS publish for source + destination
   const handleBatchMoveConfirm = useCallback(
     async (destinationFolderId: string) => {
       const items = batchMoveDialog.items;
       if (items.length === 0) return;
 
       try {
-        for (const item of items) {
-          await moveItem(item.id, item.type, currentFolderId, destinationFolderId);
-        }
+        await moveItems(
+          items.map((i) => ({ id: i.id, type: i.type })),
+          currentFolderId,
+          destinationFolderId
+        );
         setBatchMoveDialog({ open: false, items: [] });
         clearSelection();
       } catch (err) {
         console.error('Batch move failed:', err);
       }
     },
-    [batchMoveDialog.items, moveItem, currentFolderId, clearSelection]
+    [batchMoveDialog.items, moveItems, currentFolderId, clearSelection]
   );
 
   // Close batch dialogs
@@ -1061,7 +1072,8 @@ export function FileBrowser() {
         open={batchMoveDialog.open}
         onClose={closeBatchMoveDialog}
         onConfirm={handleBatchMoveConfirm}
-        item={batchMoveDialog.items[0] ?? null}
+        item={null}
+        items={batchMoveDialog.items}
         currentFolderId={currentFolderId}
         isLoading={isOperating}
       />
