@@ -1,6 +1,6 @@
 import { type DragEvent, type MouseEvent } from 'react';
 import type { FolderChild } from '@cipherbox/crypto';
-import { FileListItem } from './FileListItem';
+import { FileListItem, type DragItem } from './FileListItem';
 import { ParentDirRow } from './ParentDirRow';
 
 type FileListProps = {
@@ -8,8 +8,6 @@ type FileListProps = {
   items: FolderChild[];
   /** Set of currently selected item IDs */
   selectedIds: Set<string>;
-  /** Whether multi-selection mode is active */
-  multiSelectActive: boolean;
   /** Parent folder ID (for drag operations) */
   parentId: string;
   /** Whether to show [..] PARENT_DIR row (non-root folders) */
@@ -29,10 +27,9 @@ type FileListProps = {
   onContextMenu: (event: MouseEvent, item: FolderChild) => void;
   /** Callback when drag starts */
   onDragStart: (event: DragEvent, item: FolderChild) => void;
-  /** Callback when an item is dropped onto a folder */
+  /** Callback when items are dropped onto a folder */
   onDropOnFolder?: (
-    sourceId: string,
-    sourceType: 'file' | 'folder',
+    items: DragItem[],
     sourceParentId: string,
     destFolderId: string
   ) => void;
@@ -83,7 +80,6 @@ function sortItems(items: FolderChild[]): FolderChild[] {
 export function FileList({
   items,
   selectedIds,
-  multiSelectActive,
   parentId,
   showParentRow,
   onNavigateUp,
@@ -104,7 +100,7 @@ export function FileList({
       <div className="file-list-header" role="row">
         <div className="file-list-header-name" role="columnheader">
           <span
-            className={`file-list-header-checkbox${multiSelectActive ? ' file-list-header-checkbox--visible' : ''}`}
+            className="file-list-header-checkbox"
             onClick={onSelectAll}
             role="checkbox"
             aria-checked={allSelected}
@@ -137,16 +133,17 @@ export function FileList({
             key={item.id}
             item={item}
             isSelected={selectedIds.has(item.id)}
-            multiSelectActive={multiSelectActive}
             parentId={parentId}
+            selectedIds={selectedIds}
+            allItems={items}
             onSelect={onSelect}
             onNavigate={onNavigate}
             onContextMenu={onContextMenu}
             onDragStart={onDragStart}
             onDrop={
               onDropOnFolder && item.type === 'folder'
-                ? (sourceId, sourceType, sourceParentId) =>
-                    onDropOnFolder(sourceId, sourceType, sourceParentId, item.id)
+                ? (dragItems, sourceParentId) =>
+                    onDropOnFolder(dragItems, sourceParentId, item.id)
                 : undefined
             }
             onExternalFileDrop={item.type === 'folder' ? onExternalFileDrop : undefined}

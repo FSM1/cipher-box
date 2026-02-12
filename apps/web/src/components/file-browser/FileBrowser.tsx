@@ -534,21 +534,25 @@ export function FileBrowser() {
     // Drag data is set by FileListItem component
   }, []);
 
-  // Drop on folder handler
+  // Drop on folder handler (supports single and multi-item drops)
   const handleDropOnFolder = useCallback(
     async (
-      sourceId: string,
-      sourceType: 'file' | 'folder',
+      items: Array<{ id: string; type: 'file' | 'folder' }>,
       sourceParentId: string,
       destFolderId: string
     ) => {
       try {
-        await moveItem(sourceId, sourceType, sourceParentId, destFolderId);
+        if (items.length === 1) {
+          await moveItem(items[0].id, items[0].type, sourceParentId, destFolderId);
+        } else {
+          await moveItems(items, sourceParentId, destFolderId);
+          clearSelection();
+        }
       } catch (err) {
         console.error('Move failed:', err);
       }
     },
-    [moveItem]
+    [moveItem, moveItems, clearSelection]
   );
 
   // Download action handler
@@ -906,7 +910,6 @@ export function FileBrowser() {
         <FileList
           items={children}
           selectedIds={selectedIds}
-          multiSelectActive={multiSelectActive}
           parentId={currentFolderId}
           showParentRow={currentFolderId !== 'root'}
           onNavigateUp={navigateUp}

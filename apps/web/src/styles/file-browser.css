@@ -530,7 +530,7 @@
 
 /* Header checkbox */
 .file-list-header-checkbox {
-  display: none;
+  display: inline;
   cursor: pointer;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
@@ -538,10 +538,6 @@
   color: var(--color-text-secondary);
   margin-right: 6px;
   flex-shrink: 0;
-}
-
-.file-list-header-checkbox--visible {
-  display: inline;
 }
 
 .file-list-header-checkbox:hover {
@@ -555,17 +551,13 @@
 
 /* Item checkbox */
 .file-list-item-checkbox {
-  display: none;
+  display: inline;
   cursor: pointer;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   margin-right: 4px;
   flex-shrink: 0;
-}
-
-.file-list-item-checkbox--visible {
-  display: inline;
 }
 
 .file-list-item-checkbox:hover {
@@ -575,16 +567,6 @@
 .file-list-item-checkbox:focus-visible {
   outline: 2px solid var(--color-green-primary);
   outline-offset: 1px;
-}
-
-/* Show checkbox on row hover even when not in multi-select mode */
-.file-list-item:hover .file-list-item-checkbox {
-  display: inline;
-}
-
-/* Always show header checkbox when any row is hovered */
-.file-list:hover .file-list-header-checkbox {
-  display: inline;
 }
 
 /* ==========================================================================
