@@ -33,7 +33,11 @@ services:
       - postgres_staging:/var/lib/postgresql/data
     logging: *default-logging
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${DB_USERNAME:-cipherbox}']
+      test:
+        [
+          'CMD-SHELL',
+          'pg_isready -U ${DB_USERNAME:-cipherbox} -d ${DB_DATABASE:-cipherbox_staging}',
+        ]
       interval: 5s
       timeout: 5s
       retries: 5
