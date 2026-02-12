@@ -224,6 +224,118 @@
         "tags": ["Auth"]
       }
     },
+    "/auth/.well-known/jwks.json": {
+      "get": {
+        "operationId": "IdentityController_getJwks",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JWKS containing RS256 public key for JWT verification"
+          }
+        },
+        "summary": "JWKS endpoint for CipherBox identity provider",
+        "tags": ["Identity"]
+      }
+    },
+    "/auth/identity/google": {
+      "post": {
+        "operationId": "IdentityController_googleLogin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoogleLoginDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "CipherBox JWT issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityTokenResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid Google token"
+          }
+        },
+        "summary": "Login with Google OAuth token, returns CipherBox identity JWT",
+        "tags": ["Identity"]
+      }
+    },
+    "/auth/identity/email/send-otp": {
+      "post": {
+        "operationId": "IdentityController_sendOtp",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendOtpDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OTP sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendOtpResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid email or rate limit exceeded"
+          }
+        },
+        "summary": "Send OTP to email address",
+        "tags": ["Identity"]
+      }
+    },
+    "/auth/identity/email/verify-otp": {
+      "post": {
+        "operationId": "IdentityController_verifyOtp",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyOtpDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OTP verified, JWT issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityTokenResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired OTP"
+          }
+        },
+        "summary": "Verify email OTP and return CipherBox identity JWT",
+        "tags": ["Identity"]
+      }
+    },
     "/ipfs/upload": {
       "post": {
         "description": "Pins encrypted file to IPFS, checks storage quota, and records the pin for quota tracking. All in one atomic request.",
@@ -647,6 +759,10 @@
       "description": "Authentication endpoints"
     },
     {
+      "name": "Identity",
+      "description": "CipherBox identity provider endpoints"
+    },
+    {
       "name": "Vault",
       "description": "Vault management endpoints"
     },
@@ -822,6 +938,76 @@
           }
         },
         "required": ["success"]
+      },
+      "GoogleLoginDto": {
+        "type": "object",
+        "properties": {
+          "idToken": {
+            "type": "string",
+            "description": "Google OAuth ID token (from Google Sign-In)",
+            "example": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+          }
+        },
+        "required": ["idToken"]
+      },
+      "IdentityTokenResponseDto": {
+        "type": "object",
+        "properties": {
+          "idToken": {
+            "type": "string",
+            "description": "CipherBox-signed RS256 JWT for Web3Auth custom verifier (sub=userId)",
+            "example": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+          },
+          "userId": {
+            "type": "string",
+            "description": "CipherBox internal user UUID",
+            "example": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+          },
+          "isNewUser": {
+            "type": "boolean",
+            "description": "Whether this is a newly created user",
+            "example": false
+          }
+        },
+        "required": ["idToken", "userId", "isNewUser"]
+      },
+      "SendOtpDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address to send OTP to",
+            "example": "user@example.com"
+          }
+        },
+        "required": ["email"]
+      },
+      "SendOtpResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the OTP was sent successfully",
+            "example": true
+          }
+        },
+        "required": ["success"]
+      },
+      "VerifyOtpDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address the OTP was sent to",
+            "example": "user@example.com"
+          },
+          "otp": {
+            "type": "string",
+            "description": "6-digit OTP code",
+            "example": "123456"
+          }
+        },
+        "required": ["email", "otp"]
       },
       "UploadResponseDto": {
         "type": "object",

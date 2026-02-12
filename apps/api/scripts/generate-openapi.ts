@@ -19,26 +19,34 @@ import { AuthController } from '../src/auth/auth.controller';
 import { AuthService } from '../src/auth/auth.service';
 import { Web3AuthVerifierService } from '../src/auth/services/web3auth-verifier.service';
 import { TokenService } from '../src/auth/services/token.service';
+import { JwtIssuerService } from '../src/auth/services/jwt-issuer.service';
+import { GoogleOAuthService } from '../src/auth/services/google-oauth.service';
+import { EmailOtpService } from '../src/auth/services/email-otp.service';
+import { IdentityController } from '../src/auth/controllers/identity.controller';
 import { IpfsController } from '../src/ipfs/ipfs.controller';
 import { IPFS_PROVIDER } from '../src/ipfs/providers';
 import { VaultController } from '../src/vault/vault.controller';
 import { VaultService } from '../src/vault/vault.service';
 import { IpnsController } from '../src/ipns/ipns.controller';
 import { IpnsService } from '../src/ipns/ipns.service';
+import { User } from '../src/auth/entities/user.entity';
+import { AuthMethod } from '../src/auth/entities/auth-method.entity';
+import { RefreshToken } from '../src/auth/entities/refresh-token.entity';
+import { getRepositoryToken } from '@nestjs/typeorm';
 
 // Mock providers for OpenAPI generation - these won't be called
 const mockRepository = {
-  provide: 'UserRepository',
+  provide: getRepositoryToken(User),
   useValue: {},
 };
 
 const mockAuthMethodRepository = {
-  provide: 'AuthMethodRepository',
+  provide: getRepositoryToken(AuthMethod),
   useValue: {},
 };
 
 const mockRefreshTokenRepository = {
-  provide: 'RefreshTokenRepository',
+  provide: getRepositoryToken(RefreshToken),
   useValue: {},
 };
 
@@ -58,7 +66,14 @@ const mockConfigService = {
     // ThrottlerModule is required because IpnsController uses ThrottlerGuard
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 10 }]),
   ],
-  controllers: [AppController, AuthController, IpfsController, VaultController, IpnsController],
+  controllers: [
+    AppController,
+    AuthController,
+    IdentityController,
+    IpfsController,
+    VaultController,
+    IpnsController,
+  ],
   providers: [
     AppService,
     {
@@ -71,6 +86,18 @@ const mockConfigService = {
     },
     {
       provide: TokenService,
+      useValue: {},
+    },
+    {
+      provide: JwtIssuerService,
+      useValue: { getJwksData: () => ({ keys: [] }) },
+    },
+    {
+      provide: GoogleOAuthService,
+      useValue: {},
+    },
+    {
+      provide: EmailOtpService,
       useValue: {},
     },
     {
@@ -108,6 +135,7 @@ async function generateOpenApiSpec() {
     .addTag('Health', 'Health check endpoints')
     .addTag('Root', 'API root endpoints')
     .addTag('Auth', 'Authentication endpoints')
+    .addTag('Identity', 'CipherBox identity provider endpoints')
     .addTag('Vault', 'Vault management endpoints')
     .addTag('Files', 'File operations endpoints')
     .addTag('IPFS', 'IPFS relay endpoints')
