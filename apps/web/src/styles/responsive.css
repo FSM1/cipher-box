@@ -89,6 +89,17 @@
     min-height: 200px;
   }
 
+  /* Selection action bar: stack on mobile */
+  .selection-action-bar {
+    flex-wrap: wrap;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-xs) var(--spacing-sm);
+  }
+
+  .selection-action-bar-actions {
+    flex-wrap: wrap;
+  }
+
   /* Context menu: touch-friendly */
   .context-menu {
     min-width: 200px;

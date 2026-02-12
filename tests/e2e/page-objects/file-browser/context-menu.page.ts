@@ -158,4 +158,52 @@ export class ContextMenuPage {
     // Click at a position outside the menu
     await this.page.mouse.click(0, 0);
   }
+
+  // ========================================
+  // Batch context menu methods
+  // ========================================
+
+  /**
+   * Get the batch header element (shows "N items selected").
+   */
+  header(): Locator {
+    return this.menu().locator('.context-menu-header');
+  }
+
+  /**
+   * Check if this is a batch context menu (has header).
+   */
+  async isBatchMenu(): Promise<boolean> {
+    return await this.header().isVisible();
+  }
+
+  /**
+   * Get the batch header text (e.g. "3 items selected").
+   */
+  async getHeaderText(): Promise<string> {
+    return (await this.header().textContent()) ?? '';
+  }
+
+  /**
+   * Click the batch download option ("Download files").
+   */
+  async clickBatchDownload(): Promise<void> {
+    await this.menu().locator('button[role="menuitem"]', { hasText: 'Download' }).click();
+  }
+
+  /**
+   * Click the batch move option ("Move to...").
+   */
+  async clickBatchMove(): Promise<void> {
+    await this.menu().locator('button[role="menuitem"]', { hasText: 'Move to...' }).click();
+  }
+
+  /**
+   * Click the batch delete option (e.g. "Delete 3 items").
+   */
+  async clickBatchDelete(): Promise<void> {
+    await this.menu()
+      .locator('button[role="menuitem"]', { hasText: /Delete \d+ items/ })
+      .click();
+  }
 }

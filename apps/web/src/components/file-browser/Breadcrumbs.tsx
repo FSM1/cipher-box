@@ -9,10 +9,9 @@ type BreadcrumbsProps = {
   onNavigate: (folderId: string) => void;
   /** @deprecated Callback to navigate up - use onNavigate with parent ID instead */
   onNavigateUp?: () => void;
-  /** Callback when an item is dropped onto a breadcrumb segment */
+  /** Callback when items are dropped onto a breadcrumb segment */
   onDrop?: (
-    sourceId: string,
-    sourceType: 'file' | 'folder',
+    items: Array<{ id: string; type: 'file' | 'folder' }>,
     sourceParentId: string,
     destFolderId: string
   ) => void;
@@ -133,18 +132,17 @@ export function Breadcrumbs({
 
       try {
         const parsed = JSON.parse(jsonData) as {
-          id: string;
-          type: 'file' | 'folder';
+          items: Array<{ id: string; type: 'file' | 'folder' }>;
           parentId: string;
         };
 
-        // Don't allow dropping onto self
-        if (parsed.id === destFolderId) return;
+        // Filter out items that are the dest folder or already in it
+        const validItems = parsed.items.filter(
+          (i) => i.id !== destFolderId && parsed.parentId !== destFolderId
+        );
+        if (validItems.length === 0) return;
 
-        // Don't allow dropping if already in this folder
-        if (parsed.parentId === destFolderId) return;
-
-        onDrop(parsed.id, parsed.type, parsed.parentId, destFolderId);
+        onDrop(validItems, parsed.parentId, destFolderId);
       } catch {
         // Invalid drag data, ignore
       }

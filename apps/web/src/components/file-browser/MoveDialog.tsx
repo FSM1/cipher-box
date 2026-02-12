@@ -15,9 +15,11 @@ type MoveDialogProps = {
   onClose: () => void;
   /** Callback when move is confirmed with destination folder ID */
   onConfirm: (destinationFolderId: string) => void;
-  /** The item being moved */
+  /** The item being moved (single-item mode) */
   item: FolderChild | null;
-  /** Current parent folder ID of the item */
+  /** Multiple items being moved (batch mode — takes precedence over item) */
+  items?: FolderChild[];
+  /** Current parent folder ID of the item(s) */
   currentFolderId: string;
   /** Loading state - disables buttons */
   isLoading?: boolean;
@@ -34,14 +36,16 @@ type FolderListItem = {
 /**
  * Build a flat list of folders for the move dialog.
  * Includes root + all loaded subfolders with depth information.
+ * Supports multiple items being moved (batch mode).
  */
 function buildFolderList(
   folders: Record<string, FolderNode>,
-  itemId: string,
-  itemType: 'file' | 'folder',
+  items: FolderChild[],
   currentFolderId: string
 ): FolderListItem[] {
   const result: FolderListItem[] = [];
+  const folderItemIds = new Set(items.filter((i) => i.type === 'folder').map((i) => i.id));
+  const hasFolders = folderItemIds.size > 0;
 
   // Add root folder
   const rootFolder = folders['root'];
@@ -53,7 +57,7 @@ function buildFolderList(
       name: 'My Vault',
       depth: 0,
       isDisabled: isCurrentFolder,
-      disabledReason: isCurrentFolder ? 'Item is already here' : undefined,
+      disabledReason: isCurrentFolder ? 'Items are already here' : undefined,
     });
   }
 
@@ -76,27 +80,25 @@ function buildFolderList(
     // Disable if this is the current folder
     if (folder.id === currentFolderId) {
       isDisabled = true;
-      disabledReason = 'Item is already here';
+      disabledReason = 'Items are already here';
     }
-    // Disable if moving to self (for folders)
-    else if (itemType === 'folder' && folder.id === itemId) {
+    // Disable if moving to self (for any folder in the batch)
+    else if (folderItemIds.has(folder.id)) {
       isDisabled = true;
       disabledReason = "Can't move folder into itself";
     }
-    // Disable if moving folder into its own descendant
-    else if (itemType === 'folder' && isDescendantOf(folder.id, itemId, folders)) {
-      isDisabled = true;
-      disabledReason = "Can't move folder into its subfolder";
-    }
-    // Disable if depth would exceed limit (for folders with subtrees)
-    else if (itemType === 'folder') {
-      const itemFolder = folders[itemId];
-      if (itemFolder) {
-        // Calculate potential new depth: dest depth + 1 (for moved folder) + subtree depth
-        const destDepth = depth;
-        // For simplicity, assume subtree depth is 0 for validation display
-        // Real validation happens on submit
-        if (destDepth >= MAX_FOLDER_DEPTH - 1) {
+    // Disable if destination is a descendant of any folder being moved
+    else if (hasFolders) {
+      for (const folderId of folderItemIds) {
+        if (isDescendantOf(folder.id, folderId, folders)) {
+          isDisabled = true;
+          disabledReason = "Can't move folder into its subfolder";
+          break;
+        }
+      }
+      // Disable if depth would exceed limit for any folder in the batch
+      if (!isDisabled) {
+        if (depth >= MAX_FOLDER_DEPTH - 1) {
           isDisabled = true;
           disabledReason = 'Would exceed maximum folder depth';
         }
@@ -116,15 +118,22 @@ function buildFolderList(
 }
 
 /**
- * Check if a name already exists in the destination folder.
+ * Check if any items' names collide with existing children in the destination.
+ * Returns the first colliding name, or null if no collisions.
  */
-function checkNameCollision(
+function checkNameCollisions(
   destFolder: FolderNode | undefined,
-  itemName: string,
-  itemId: string
-): boolean {
-  if (!destFolder) return false;
-  return destFolder.children.some((child) => child.name === itemName && child.id !== itemId);
+  items: FolderChild[]
+): string | null {
+  if (!destFolder) return null;
+  const itemIds = new Set(items.map((i) => i.id));
+  for (const item of items) {
+    const collision = destFolder.children.some(
+      (child) => child.name === item.name && !itemIds.has(child.id)
+    );
+    if (collision) return item.name;
+  }
+  return null;
 }
 
 /**
@@ -155,20 +164,30 @@ export function MoveDialog({
   onClose,
   onConfirm,
   item,
+  items: itemsProp,
   currentFolderId,
   isLoading = false,
 }: MoveDialogProps) {
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Derive resolved items array: batch prop takes precedence, else single item
+  const resolvedItems = useMemo(() => {
+    if (itemsProp && itemsProp.length > 0) return itemsProp;
+    if (item) return [item];
+    return [];
+  }, [itemsProp, item]);
+
+  const isBatch = resolvedItems.length > 1;
+
   // Get folders from store
   const folders = useFolderStore((state) => state.folders);
 
   // Build folder list
   const folderList = useMemo(() => {
-    if (!item) return [];
-    return buildFolderList(folders, item.id, item.type, currentFolderId);
-  }, [folders, item, currentFolderId]);
+    if (resolvedItems.length === 0) return [];
+    return buildFolderList(folders, resolvedItems, currentFolderId);
+  }, [folders, resolvedItems, currentFolderId]);
 
   // Reset selection when dialog opens
   useEffect(() => {
@@ -184,8 +203,8 @@ export function MoveDialog({
       return 'Please select a destination folder';
     }
 
-    if (!item) {
-      return 'No item selected';
+    if (resolvedItems.length === 0) {
+      return 'No items selected';
     }
 
     const selectedItem = folderList.find((f) => f.id === selectedFolderId);
@@ -193,14 +212,15 @@ export function MoveDialog({
       return selectedItem.disabledReason ?? 'Invalid destination';
     }
 
-    // Check for name collision
+    // Check for name collisions across all items
     const destFolder = folders[selectedFolderId];
-    if (checkNameCollision(destFolder, item.name, item.id)) {
-      return `An item named "${item.name}" already exists in the destination`;
+    const collidingName = checkNameCollisions(destFolder, resolvedItems);
+    if (collidingName) {
+      return `An item named "${collidingName}" already exists in the destination`;
     }
 
     return null;
-  }, [selectedFolderId, item, folderList, folders]);
+  }, [selectedFolderId, resolvedItems, folderList, folders]);
 
   const handleSubmit = useCallback(() => {
     const validationError = validate();
@@ -244,14 +264,21 @@ export function MoveDialog({
     [handleSelectFolder]
   );
 
-  const title = item?.type === 'folder' ? 'Move Folder' : 'Move File';
+  const title = isBatch
+    ? `Move ${resolvedItems.length} Items`
+    : resolvedItems[0]?.type === 'folder'
+      ? 'Move Folder'
+      : 'Move File';
+  const label = isBatch
+    ? `Move ${resolvedItems.length} selected items to:`
+    : `Move "${resolvedItems[0]?.name}" to:`;
   const isValid = !validate();
 
   return (
     <Modal open={open} onClose={handleCancel} title={title}>
       <div className="dialog-content">
         <div className="dialog-field">
-          <label className="dialog-label">Move "{item?.name}" to:</label>
+          <label className="dialog-label">{label}</label>
           <div className="move-dialog-folder-list" role="listbox" aria-label="Select destination">
             {folderList.length === 0 && (
               <div className="move-dialog-empty">No folders available</div>

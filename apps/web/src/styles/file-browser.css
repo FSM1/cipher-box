@@ -276,6 +276,11 @@
   background-color: var(--color-background);
 }
 
+.file-list-header-name {
+  display: flex;
+  align-items: center;
+}
+
 .file-list-body {
   flex: 1;
   min-height: 0;
@@ -517,6 +522,131 @@
   margin: 0;
   color: var(--color-text-dim);
   text-transform: lowercase;
+}
+
+/* ==========================================================================
+   Checkboxes (Multi-select)
+   ========================================================================== */
+
+/* Header checkbox */
+.file-list-header-checkbox {
+  display: inline;
+  cursor: pointer;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+  margin-right: 6px;
+  flex-shrink: 0;
+}
+
+.file-list-header-checkbox:hover {
+  color: var(--color-green-primary);
+}
+
+.file-list-header-checkbox:focus-visible {
+  outline: 2px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
+/* Item checkbox */
+.file-list-item-checkbox {
+  display: inline;
+  cursor: pointer;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+
+.file-list-item-checkbox:hover {
+  color: var(--color-green-primary);
+}
+
+.file-list-item-checkbox:focus-visible {
+  outline: 2px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
+/* ==========================================================================
+   Selection Action Bar
+   ========================================================================== */
+
+.selection-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  padding: var(--spacing-xs) 20px;
+  background-color: var(--color-green-darker);
+  border-bottom: var(--border-thickness) solid var(--color-green-primary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+}
+
+.selection-action-bar-info {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.selection-action-bar-count {
+  color: var(--color-green-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.selection-action-bar-clear {
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.selection-action-bar-clear:hover {
+  color: var(--color-text-primary);
+}
+
+.selection-action-bar-clear:focus-visible {
+  outline: 2px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
+.selection-action-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.selection-action-bar-delete {
+  color: var(--color-error);
+  border-color: var(--color-error);
+}
+
+.selection-action-bar-delete:hover:not(:disabled) {
+  box-shadow: 0 0 8px rgb(255 0 0 / 20%);
+}
+
+.selection-action-bar-delete:focus-visible {
+  outline: 2px solid var(--color-error);
+  outline-offset: 1px;
+}
+
+/* ==========================================================================
+   Context Menu Multi-select Header
+   ========================================================================== */
+
+.context-menu-header {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-green-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 /* Note: Mobile responsive styles are in responsive.css */
