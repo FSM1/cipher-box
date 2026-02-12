@@ -1,0 +1,27 @@
+All clean now. Here's a summary of everything implemented:
+
+## Summary
+
+### New file created:
+- **`tests/e2e/page-objects/file-browser/selection-action-bar.page.ts`** — Page object for the batch action bar with methods: `isVisible()`, `waitForVisible()`, `waitForHidden()`, `getCountText()`, `clickClear()`, `clickDownload()`, `clickMove()`, `clickDelete()`, `isDownloadVisible()`
+
+### Files modified:
+
+- **`file-list.page.ts`** — Added 6 multi-selection methods: `ctrlClickItem()`, `shiftClickItem()`, `clickCheckbox()`, `clickHeaderCheckbox()`, `isHeaderCheckboxChecked()`, `getSelectedItemNames()`, `getSelectedCount()`
+
+- **`context-menu.page.ts`** — Added 5 batch context menu methods: `header()`, `isBatchMenu()`, `getHeaderText()`, `clickBatchDownload()`, `clickBatchMove()`, `clickBatchDelete()`
+
+- **`move-dialog.page.ts`** — Added `getLabel()` method for batch mode label text
+
+- **`index.ts`** — Added `SelectionActionBarPage` export
+
+- **`full-workflow.spec.ts`** — Added **Phase 4: Multi-Select & Batch Actions** (14 tests: 4.0-4.13) and renumbered existing phases 4-8 → 5-9. Tests cover:
+  - 4.0: Setup (create isolated folder + 3 files + subfolder)
+  - 4.1-4.3: Click, Ctrl+click, Shift+click selection
+  - 4.4-4.5: Header checkbox and item checkboxes
+  - 4.6-4.7: Action bar count text and clear button
+  - 4.8-4.9: Batch context menu vs single-item override
+  - 4.10: Batch delete with "Delete All" confirmation
+  - 4.11: Batch move with dialog verification
+  - 4.12: Selection cleared on navigation
+  - 4.13: Cleanup (delete multiselect folder)

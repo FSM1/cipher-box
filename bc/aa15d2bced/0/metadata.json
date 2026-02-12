@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "bcaa15d2bced",
+  "session_id": "51cd65e4-217b-490d-a168-e0d0e9304f06",
+  "strategy": "auto-commit",
+  "created_at": "2026-02-12T20:36:54.331985Z",
+  "branch": "claude/multi-file-actions-selection-9fl2H",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/e2e/page-objects/dialogs/move-dialog.page.ts",
+    "tests/e2e/page-objects/file-browser/context-menu.page.ts",
+    "tests/e2e/page-objects/file-browser/file-list.page.ts",
+    "tests/e2e/page-objects/file-browser/index.ts",
+    "tests/e2e/page-objects/file-browser/selection-action-bar.page.ts",
+    "tests/e2e/tests/full-workflow.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "token_usage": {
+    "input_tokens": 41,
+    "cache_creation_tokens": 54991,
+    "cache_read_tokens": 3009693,
+    "output_tokens": 2932,
+    "api_call_count": 39,
+    "subagent_tokens": {
+      "input_tokens": 22,
+      "cache_creation_tokens": 57745,
+      "cache_read_tokens": 111569,
+      "output_tokens": 6,
+      "api_call_count": 4
+    }
+  }
+}
