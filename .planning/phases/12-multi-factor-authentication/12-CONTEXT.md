@@ -1,17 +1,43 @@
 # Phase 12: Multi-Factor Authentication - Context
 
 **Gathered:** 2026-02-12
-**Status:** Ready for planning
+**Updated:** 2026-02-12 (architectural pivot: PnP Modal SDK → Core Kit for full MFA control)
+**Status:** Ready for re-research and replanning
 
 ## Phase Boundary
 
-Users can strengthen account security with additional authentication factors and recovery options, using Web3Auth's `mfaSettings` configuration. This phase covers MFA enrollment, device share factor, backup recovery phrase, and settings page integration. Cross-platform desktop MFA is a separate phase (11). Sharing and link generation are separate phases (14-15).
+Users can strengthen account security with additional authentication factors and recovery options. This phase replaces the PnP Modal SDK auth layer with Web3Auth Core Kit (or MPC Core Kit) to gain full control over MFA enrollment, cross-device share transfer, and recovery flows. It also adds SIWE (Sign-In with Ethereum) for wallet login unification. Cross-platform desktop MFA is a separate phase (11). Sharing and link generation are separate phases (14-15).
+
+## Architectural Pivot (2026-02-12)
+
+### Why not PnP Modal SDK + mfaSettings?
+
+The initial research (12-RESEARCH.md) found that the PnP Modal SDK approach (`mfaSettings` + React hooks) gives up too much control:
+
+- **No cross-device approval flow**: The old tKey/Core Kit had `requestDeviceShare()` / `approveDevice()` for approving a new device from an existing one. The PnP SDK hides this behind `manageMFA()` in Web3Auth's opaque modal iframe.
+- **No custom enrollment UX**: SDK handles all MFA UI in its modal — can't customize enrollment steps, recovery phrase presentation, or factor management.
+- **Device shares are ephemeral**: Browser localStorage is fragile. Without cross-device transfer, losing browser data means falling back to recovery phrase every time.
+- **No programmatic share management**: Can't build custom device sync or approval flows.
+- **External wallet MFA gap**: PnP SDK's MFA (Shamir splits) only applies to MPC-derived keys, not external wallet logins. Wallet users would bypass MFA entirely.
+
+### New direction: Core Kit + SIWE
+
+Replace PnP Modal SDK entirely with lower-level Core Kit for:
+
+1. **Full MFA control**: Custom enrollment UI, programmatic share management, cross-device approval
+2. **Custom login UI**: Build CipherBox-branded login screens instead of Web3Auth's modal
+3. **SIWE for wallets**: Wallet signs SIWE message → CipherBox API verifies → issues JWT → submitted to Web3Auth as custom verifier (sub = wallet address). This gives wallet users a Web3Auth-managed MPC key that CAN be protected by MFA.
+4. **Unified auth model**: Every user (social + wallet) gets a Web3Auth-managed key with full MFA support
+
+### Scope expansion
+
+This turns Phase 12 from "configure SDK settings" into "replace auth layer + add MFA." Accepted tradeoff: bigger phase, but correct architecture for a zero-knowledge product.
 
 ## Implementation Decisions
 
 ### Enrollment flow
 
-- Claude's discretion on wizard vs single-page setup (pick best approach based on Web3Auth SDK patterns)
+- Claude's discretion on wizard vs single-page setup (pick best approach based on Core Kit patterns)
 - Proactive nudge: show a banner/notification suggesting MFA after first login, with dismiss option
 - **Mandatory first-time setup**: user must complete MFA enrollment before first vault access — no skip
 - If enrollment fails partway (browser closed, error), start fresh on next login — no partial resume
@@ -20,7 +46,7 @@ Users can strengthen account security with additional authentication factors and
 
 - Claude's discretion on presentation format (word grid, sequential reveal, etc.)
 - Checkbox confirmation: "I have saved my recovery phrase in a safe place" — no quiz
-- Re-access to recovery phrase after setup: depends on Web3Auth SDK capabilities (researcher to investigate)
+- Re-access to recovery phrase after setup: depends on Core Kit SDK capabilities (researcher to investigate)
 - **Prominent warning**: bold message explaining vault is permanently inaccessible if phrase is lost and device is unavailable
 - Allow recovery phrase regeneration from settings (invalidates old phrase)
 
@@ -33,32 +59,41 @@ Users can strengthen account security with additional authentication factors and
 
 ### Factor types
 
-- Support **all factor types that Web3Auth mfaSettings provides** out of the box (not just device share + recovery)
+- Support all factor types that Core Kit provides
 - Device share and recovery phrase are the minimum required (from success criteria)
+- **Cross-device approval**: Users should be able to approve a new device from an existing authenticated device
 
 ### Login with MFA active
 
-- Login UX for MFA second-factor depends heavily on Web3Auth SDK integration path
-- Researcher should investigate current SDK customization capabilities
-- Reference: ChainSafe Files (`github.com/chainsafe/ui-monorepo`) used SDK-based Web3Auth integration with significant customization — verify if this approach is still viable
+- Custom second-factor UI built by CipherBox (not Web3Auth modal)
+- User should see which factors are available and choose one
+- Reference: ChainSafe Files (`github.com/chainsafe/ui-monorepo`) used SDK-based Web3Auth integration with significant customization — user has domain expertise here
+
+### SIWE for wallet login
+
+- Wallet user signs SIWE message with MetaMask/WalletConnect
+- CipherBox API verifies SIWE signature, issues a token
+- Token submitted to Web3Auth via custom verifier (sub = wallet address)
+- Web3Auth derives MPC key for this identity — wallet user now has MFA-protectable key
+- Eliminates the ADR-001 signature-derived key bifurcation
 
 ### Recovery flow
 
 - Claude's discretion on recovery entry point (login page link vs automatic detection)
 - Must work when user has lost their device share
+- Cross-device approval should be the PRIMARY recovery path (not just recovery phrase)
 
 ### CRITICAL: Key identity after MFA
 
-- **Research required**: Does enabling MFA via Web3Auth `mfaSettings` change the derived private key?
-- If key changes: must decide between mandatory-MFA-for-all (single key path) vs optional-MFA with vault re-encryption
-- This decision blocks the architecture of the entire phase — researcher must answer definitively
+- Previous research confirmed: Shamir Secret Sharing splits the existing key, reconstructed key is identical
+- This should still hold with Core Kit — verify during research
 - Success Criterion 4 requires publicKey to remain identical after MFA enrollment
 
 ### Test automation
 
-- **Research required**: How does the E2E test account (`test_account_4718@example.com`) authenticate with MFA?
-- If MFA is mandatory, automation needs a path (hardcoded recovery phrase, pre-enrolled device share, or SDK bypass for test environments)
-- Researcher should investigate Web3Auth test/devnet MFA behavior
+- **Research required**: How does E2E testing work with Core Kit MFA?
+- If MFA is mandatory, automation needs a path
+- Researcher should investigate Core Kit test/devnet MFA behavior
 
 ### Claude's Discretion
 
@@ -68,12 +103,14 @@ Users can strengthen account security with additional authentication factors and
 - Recovery flow entry point
 - Loading/error states during enrollment
 - Exact factor enrollment order
+- Login UI design (replacing Web3Auth modal)
 
 ## Specific Ideas
 
-- Reference: ChainSafe Files (`chainsafe/ui-monorepo`) — user previously built Web3Auth MFA integration there with SDK-based approach that allowed significant customization. Verify if this integration pattern is still supported.
+- Reference: ChainSafe Files (`chainsafe/ui-monorepo`) — user previously built Web3Auth MFA integration with SDK-based approach allowing significant customization including cross-device approval
 - User expects MFA setup to be a hard requirement — security-first stance
-- The relationship between MFA enrollment and derived key identity is the single most important technical question for this phase
+- SIWE unifies wallet + social login into one key management model
+- Cross-device approval is a key differentiator vs the simpler PnP approach
 
 ## Deferred Ideas
 
@@ -83,3 +120,4 @@ None — discussion stayed within phase scope
 
 _Phase: 12-multi-factor-authentication_
 _Context gathered: 2026-02-12_
+_Updated: 2026-02-12 (Core Kit pivot)_
