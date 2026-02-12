@@ -1,0 +1,1 @@
+{"version":3,"file":"add.dto.js","sourceRoot":"","sources":["../../../src/ipfs/dto/add.dto.ts"],"names":[],"mappings":";;;;;;;;;;;;AAAA,6CAA8C;AAE9C,MAAa,cAAc;IAKzB,GAAG,CAAU;IAMb,IAAI,CAAU;CACf;AAZD,wCAYC;AAPC;IAJC,IAAA,qBAAW,EAAC;QACX,WAAW,EAAE,iCAAiC;QAC9C,OAAO,EAAE,6DAA6D;KACvE,CAAC;;2CACW;AAMb;IAJC,IAAA,qBAAW,EAAC;QACX,WAAW,EAAE,sCAAsC;QACnD,OAAO,EAAE,IAAI;KACd,CAAC;;4CACY"}
