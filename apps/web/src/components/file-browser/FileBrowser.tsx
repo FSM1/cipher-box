@@ -399,6 +399,17 @@ export function FileBrowser() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const lastSelectedIdRef = useRef<string | null>(null);
 
+  // Prune stale selectedIds when children change (sync refresh, upload, external delete)
+  const childIds = useMemo(() => new Set(children.map((c) => c.id)), [children]);
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const pruned = new Set([...prev].filter((id) => childIds.has(id)));
+      if (pruned.size === prev.size) return prev;
+      return pruned;
+    });
+  }, [childIds]);
+
   // Compute selected items from IDs for action bar and batch operations
   const selectedItems = useMemo(
     () => children.filter((c) => selectedIds.has(c.id)),

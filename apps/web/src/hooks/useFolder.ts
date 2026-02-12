@@ -373,8 +373,15 @@ export function useFolder() {
         const now = Date.now();
 
         // Validate all items
+        const batchNames = new Set<string>();
         for (const child of movedChildren) {
-          // Name collision check
+          // Intra-batch duplicate name check
+          if (batchNames.has(child.name)) {
+            throw new Error(`Multiple selected items share the name "${child.name}"`);
+          }
+          batchNames.add(child.name);
+
+          // Name collision check against destination
           const nameExists = destFolder.children.some((c) => c.name === child.name);
           if (nameExists) {
             throw new Error(`An item named "${child.name}" already exists in the destination`);
@@ -403,7 +410,7 @@ export function useFolder() {
           ...movedChildren.map((c) => ({ ...c, modifiedAt: now })),
         ];
 
-        await folderService.updateFolderMetadata({
+        const { newSequenceNumber: destSeq } = await folderService.updateFolderMetadata({
           folderId: destFolder.id,
           children: destChildren,
           folderKey: destFolder.folderKey,
@@ -415,19 +422,22 @@ export function useFolder() {
         // REMOVE all from source AFTER destination confirmed
         const sourceChildren = sourceFolder.children.filter((c) => !itemIds.has(c.id));
 
-        await folderService.updateFolderMetadata({
+        const { newSequenceNumber: sourceSeq } = await folderService.updateFolderMetadata({
           folderId: sourceFolder.id,
           children: sourceChildren,
           folderKey: sourceFolder.folderKey,
           ipnsPrivateKey: sourceFolder.ipnsPrivateKey,
           ipnsName: sourceFolder.ipnsName,
-          sequenceNumber: sourceFolder.sequenceNumber,
+          // Re-read sequence in case source === dest parent was updated above
+          sequenceNumber: sourceFolder.id === destFolder.id ? destSeq : sourceFolder.sequenceNumber,
         });
 
         // Update local state
         const store = useFolderStore.getState();
         store.updateFolderChildren(sourceParentId, sourceChildren);
         store.updateFolderChildren(destParentId, destChildren);
+        store.updateFolderSequence(destParentId, destSeq);
+        store.updateFolderSequence(sourceParentId, sourceSeq);
 
         for (const item of items) {
           if (item.type === 'folder') {
@@ -527,7 +537,22 @@ export function useFolder() {
         const itemIds = new Set(items.map((i) => i.id));
         const cidsToUnpin: string[] = [];
 
-        // Collect CIDs to unpin from files and recursive folder contents
+        // Collect CIDs to unpin and nested folder IDs to remove from store
+        const folderIdsToRemove: string[] = [];
+
+        const collectCidsAndFolders = (folderId: string) => {
+          folderIdsToRemove.push(folderId);
+          const folder = folders[folderId];
+          if (!folder) return;
+          for (const child of folder.children) {
+            if (child.type === 'file' && 'cid' in child) {
+              cidsToUnpin.push(child.cid);
+            } else if (child.type === 'folder') {
+              collectCidsAndFolders(child.id);
+            }
+          }
+        };
+
         for (const item of items) {
           if (item.type === 'file') {
             const file = parentFolder.children.find((c) => c.id === item.id && c.type === 'file');
@@ -535,19 +560,7 @@ export function useFolder() {
               cidsToUnpin.push(file.cid);
             }
           } else {
-            // Recursively collect CIDs from folder subtree
-            const collectCids = (folderId: string) => {
-              const folder = folders[folderId];
-              if (!folder) return;
-              for (const child of folder.children) {
-                if (child.type === 'file' && 'cid' in child) {
-                  cidsToUnpin.push(child.cid);
-                } else if (child.type === 'folder') {
-                  collectCids(child.id);
-                }
-              }
-            };
-            collectCids(item.id);
+            collectCidsAndFolders(item.id);
           }
         }
 
@@ -564,13 +577,11 @@ export function useFolder() {
           sequenceNumber: parentFolder.sequenceNumber,
         });
 
-        // Update local state
+        // Update local state — remove all nested folders from store
         const store = useFolderStore.getState();
         store.updateFolderChildren(parentId, updatedChildren);
-        for (const item of items) {
-          if (item.type === 'folder') {
-            store.removeFolder(item.id);
-          }
+        for (const folderId of folderIdsToRemove) {
+          store.removeFolder(folderId);
         }
 
         // Fire-and-forget unpin all CIDs
