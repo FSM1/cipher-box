@@ -1,0 +1,11 @@
+All 4 review comments addressed across 4 files. Here's a summary:
+
+**Comment 1 (Major) - Batch IPNS publish:** Added `deleteItems()` and `moveItems()` to `useFolder` hook. Batch delete removes all items from parent children in one pass and publishes IPNS once. Batch move adds all to dest (1 publish) then removes all from source (1 publish) — 2 total instead of 2N.
+
+**Comment 2 (Major) - MoveDialog batch validation:** Added `items` prop to `MoveDialog`. When batch mode is active: title shows item count, label says "Move N selected items to:", name collision checks run against ALL items, and ALL folder IDs in the batch are excluded from the destination list.
+
+**Comment 3 (Minor) - Missing focus-visible on item checkbox:** Added `:focus-visible` style for `.file-list-item-checkbox`.
+
+**Comment 4 (Minor) - Missing focus-visible + legacy rgba:** Added `:focus-visible` for `.selection-action-bar-clear` and `.selection-action-bar-delete`. Fixed `rgba(255, 0, 0, 0.2)` → `rgb(255 0 0 / 20%)`.
+
+Want me to commit these changes?

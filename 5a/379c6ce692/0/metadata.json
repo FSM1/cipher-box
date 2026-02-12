@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "5a379c6ce692",
+  "session_id": "453a46aa-4174-40a2-9027-e672efb502da",
+  "strategy": "auto-commit",
+  "created_at": "2026-02-12T20:19:17.069242Z",
+  "branch": "claude/multi-file-actions-selection-9fl2H",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/components/file-browser/FileBrowser.tsx",
+    "apps/web/src/components/file-browser/MoveDialog.tsx",
+    "apps/web/src/hooks/useFolder.ts",
+    "apps/web/src/styles/file-browser.css"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "23231852-4d5b-42e7-a069-d2d459cf1ad0",
+  "checkpoint_transcript_start": 12,
+  "transcript_lines_at_start": 12,
+  "token_usage": {
+    "input_tokens": 11225,
+    "cache_creation_tokens": 70365,
+    "cache_read_tokens": 3788920,
+    "output_tokens": 2370,
+    "api_call_count": 39
+  }
+}
