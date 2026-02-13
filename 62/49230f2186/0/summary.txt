@@ -1,0 +1,7 @@
+There's an old frontend on `5173` (PID 33189) that was already running before this session — that's why Vite picked `5177`. The current session has:
+
+- **API** (PID 79324) on `:3000` — the one we just started with correct CORS
+- **Frontend** (PID 72315) on `:5177` — our session
+- **Old frontend** (PID 33189) on `:5173` — pre-existing
+
+Want me to kill the old `5173` instance and restart the frontend on `5173` so CORS works with the default config? Or just use `5177` — the API is now configured to allow it. Try reloading the page and it should work.
