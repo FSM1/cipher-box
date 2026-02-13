@@ -1,0 +1,3 @@
+Logged the issue at `.planning/debug/expired-token-stuck-initializing.md` with symptoms, hypotheses, and key files to investigate when it becomes reproducible.
+
+What's the quick task you'd like to work on?

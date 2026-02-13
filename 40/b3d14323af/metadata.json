@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "40b3d14323af",
+  "strategy": "auto-commit",
+  "branch": "feat/quick-013-move-multi-select-bar-bottom",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/debug/expired-token-stuck-initializing.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/40/b3d14323af/0/metadata.json",
+      "transcript": "/40/b3d14323af/0/full.jsonl",
+      "context": "",
+      "content_hash": "/40/b3d14323af/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 2598,
+    "cache_read_tokens": 211164,
+    "output_tokens": 913,
+    "api_call_count": 5
+  }
+}

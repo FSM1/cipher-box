@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "40b3d14323af",
+  "session_id": "8dbf99fc-731b-49b2-a3de-2414d0a07b14",
+  "strategy": "auto-commit",
+  "created_at": "2026-02-13T00:49:04.416526Z",
+  "branch": "feat/quick-013-move-multi-select-bar-bottom",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/debug/expired-token-stuck-initializing.md"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "18a6c4b9-4f44-4c51-a6ef-f3b549c5d92d",
+  "checkpoint_transcript_start": 10,
+  "transcript_lines_at_start": 10,
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 2598,
+    "cache_read_tokens": 211164,
+    "output_tokens": 913,
+    "api_call_count": 5
+  }
+}
