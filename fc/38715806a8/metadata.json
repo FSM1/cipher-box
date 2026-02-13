@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "fc38715806a8",
+  "strategy": "auto-commit",
+  "branch": "feat/phase-12-multi-factor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/e2e.yml",
+    ".planning/STATE.md",
+    ".planning/security/REVIEW-2026-02-13-phase12-final.md",
+    "apps/api/src/auth/auth.controller.spec.ts",
+    "apps/api/src/auth/auth.service.ts",
+    "apps/api/src/auth/controllers/identity.controller.ts",
+    "apps/api/src/auth/dto/identity.dto.ts",
+    "apps/api/src/auth/dto/login.dto.ts",
+    "apps/api/src/auth/services/email-otp.service.ts",
+    "apps/api/src/auth/services/google-oauth.service.ts",
+    "apps/web/src/hooks/useAuth.ts",
+    "apps/web/src/lib/api/auth.ts",
+    "apps/web/src/lib/web3auth/hooks.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fc/38715806a8/0/metadata.json",
+      "transcript": "/fc/38715806a8/0/full.jsonl",
+      "context": "",
+      "content_hash": "/fc/38715806a8/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 704,
+    "cache_creation_tokens": 98941,
+    "cache_read_tokens": 9196159,
+    "output_tokens": 10452,
+    "api_call_count": 67
+  }
+}
