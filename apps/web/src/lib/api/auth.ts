@@ -17,6 +17,7 @@ type LoginResponse = {
 
 type TokenResponse = {
   accessToken: string;
+  email?: string;
 };
 
 /** Response from CipherBox identity provider endpoints */

@@ -14,6 +14,12 @@ export class TokenResponseDto {
     example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
   })
   refreshToken?: string;
+
+  @ApiPropertyOptional({
+    description: 'User email from their most recently used email auth method',
+    example: 'user@example.com',
+  })
+  email?: string;
 }
 
 export class DesktopRefreshDto {
@@ -38,4 +44,5 @@ export class LogoutResponseDto {
 export type RefreshServiceResult = {
   accessToken: string;
   refreshToken: string;
+  email?: string;
 };

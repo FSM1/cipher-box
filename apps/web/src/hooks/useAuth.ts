@@ -307,6 +307,11 @@ export function useAuth() {
           const response = await authApi.refresh();
           setAccessToken(response.accessToken);
 
+          // Restore email from backend if available
+          if (response.email) {
+            setUserEmail(response.email);
+          }
+
           // Load vault keys from Core Kit keypair
           await initializeOrLoadVault();
         } catch {
@@ -327,6 +332,7 @@ export function useAuth() {
     isAuthenticated,
     isLoggingIn,
     setAccessToken,
+    setUserEmail,
     initializeOrLoadVault,
     coreKitLogout,
   ]);

@@ -227,9 +227,16 @@ export class AuthService {
       validToken.user.publicKey
     );
 
+    // Look up user's email from their most recently used email auth method
+    const emailMethod = await this.authMethodRepository.findOne({
+      where: { userId: validToken.userId, type: 'email_passwordless' },
+      order: { lastUsedAt: 'DESC' },
+    });
+
     return {
       accessToken: newTokens.accessToken,
       refreshToken: newTokens.refreshToken,
+      email: emailMethod?.identifier,
     };
   }
 

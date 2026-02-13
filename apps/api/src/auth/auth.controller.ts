@@ -115,6 +115,7 @@ export class AuthController {
       return {
         accessToken: result.accessToken,
         refreshToken: result.refreshToken,
+        email: result.email,
       };
     }
 
@@ -123,6 +124,7 @@ export class AuthController {
 
     return {
       accessToken: result.accessToken,
+      email: result.email,
     };
   }
 

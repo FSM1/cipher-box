@@ -10,7 +10,7 @@ export function UserMenu() {
   const { logout, userEmail } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
 
-  const email = userEmail || 'User';
+  const email = userEmail || '[an0n]';
 
   const handleLogout = async () => {
     setIsOpen(false);
