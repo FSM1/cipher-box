@@ -292,6 +292,7 @@ export function useAuth() {
       // a backend access token yet
       if (coreKitLoggedIn && !isAuthenticated && !isLoggingIn && !restoringRef.current) {
         restoringRef.current = true;
+        setIsLoggingIn(true);
         try {
           // Try to refresh using the HTTP-only cookie first
           const response = await authApi.refresh();
@@ -315,6 +316,7 @@ export function useAuth() {
           }
         } finally {
           restoringRef.current = false;
+          setIsLoggingIn(false);
         }
       }
     };
