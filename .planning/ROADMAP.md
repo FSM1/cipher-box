@@ -129,7 +129,6 @@ Plans:
 **Goal**: Encrypted device metadata stored on IPFS alongside user's vault, providing durable infrastructure for cross-device approval and resilience against backend rebuilds
 **Depends on**: Phase 12 (Core Kit foundation must be in place)
 **Requirements**: Infrastructure for MFA-02 (device management)
-**Research flag**: NEEDS `/gsd:research-phase` -- device registry schema design, encryption with user key, IPFS pinning strategy, discovery mechanism
 **Success Criteria** (what must be TRUE):
 
 1. Authenticated devices are tracked in an encrypted registry pinned on IPFS
@@ -137,9 +136,13 @@ Plans:
 3. Device metadata includes public keys, device names, authorization status, and revocation capability
 4. Registry is discoverable and recoverable by any authenticated session
 
+**Plans:** 3 plans
+
 Plans:
 
-- [ ] TBD (run `/gsd:plan-phase 12.2` to break down)
+- [ ] 12.2-PLAN-01.md — Registry and device crypto primitives (types, HKDF IPNS derivation, ECIES encrypt/decrypt, device keygen, tests)
+- [ ] 12.2-PLAN-02.md — Device identity persistence (IndexedDB) and registry service (CRUD + IPFS/IPNS publish)
+- [ ] 12.2-PLAN-03.md — Auth flow integration (Zustand store, non-blocking init, polling, logout cleanup)
 
 ### Phase 12.3: SIWE + Unified Identity (INSERTED)
 
@@ -279,6 +282,7 @@ Parallel phases:
 | 10. Data Portability       | M1        | 3/3            | Complete    | 2026-02-11 |
 | 12. Core Kit Identity      | M2        | 0/5            | Not started | -          |
 | 12.1 AES-CTR Streaming     | M2        | 0/TBD          | Not started | -          |
+| 12.2 Device Registry       | M2        | 0/3            | Not started | -          |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
