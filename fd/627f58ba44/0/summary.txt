@@ -1,8 +1,0 @@
-Created `.learnings/2026-02-13-grafana-loki-token-scopes-and-staging-fixes.md` covering:
-
-- Grafana Cloud token scope gotcha (`read` vs `write`)
-- `pg_isready` default database name behavior
-- `docker compose restart` vs `up --force-recreate` for env changes
-- 1Password SSH agent not working in GSD subprocesses
-
-Want me to commit this to the current branch?

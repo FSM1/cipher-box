@@ -1,8 +1,0 @@
-It's hitting the staging API now (`https://api-staging.cipherbox.cc/health`), but getting blocked by **CORS** — the staging API doesn't allow requests from `http://localhost:5173`. The button shows "[API OFFLINE]" because of this.
-
-You have two options:
-
-1. **Add `localhost:5173` to the staging API's CORS config** — easiest if you want to develop locally against staging regularly
-2. **Use Vite's proxy** — proxy `/api` requests through Vite to avoid CORS entirely, no server changes needed
-
-Which would you prefer?
