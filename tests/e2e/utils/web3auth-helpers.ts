@@ -190,15 +190,17 @@ async function loginViaTestEndpoint(page: Page, email: string): Promise<void> {
 
   // 2.5. Set refresh token cookie in the browser context for session persistence
   const url = new URL(apiBase);
-  await page.context().addCookies([{
-    name: 'refresh_token',
-    value: refreshToken,
-    domain: url.hostname,
-    path: '/auth',
-    httpOnly: true,
-    secure: false, // dev mode
-    sameSite: 'Lax',
-  }]);
+  await page.context().addCookies([
+    {
+      name: 'refresh_token',
+      value: refreshToken,
+      domain: url.hostname,
+      path: '/auth',
+      httpOnly: true,
+      secure: false, // dev mode
+      sameSite: 'Lax',
+    },
+  ]);
 
   // 3. Navigate to app so we can inject state into Zustand stores
   await page.goto('/');
@@ -206,7 +208,9 @@ async function loginViaTestEndpoint(page: Page, email: string): Promise<void> {
   await injectTestAuthState(page);
 
   // 5. Navigate to files page via hash router (no full reload — preserves Zustand state)
-  await page.evaluate(() => { window.location.hash = '#/files'; });
+  await page.evaluate(() => {
+    window.location.hash = '#/files';
+  });
   await page.waitForURL('**/files', { timeout: 30000 });
 }
 
@@ -226,36 +230,33 @@ async function injectTestAuthState(page: Page): Promise<void> {
 
   // Inject auth + vault state into Zustand stores
   // Arrays are used because Uint8Array can't be serialized across page.evaluate boundary
-  await page.evaluate(
-    (data) => {
-      const stores = (window as Record<string, unknown>).__ZUSTAND_STORES as {
-        auth: { setState: (s: Record<string, unknown>) => void };
-        vault: { getState: () => { setVaultKeys: (k: Record<string, unknown>) => void } };
-      };
+  await page.evaluate((data) => {
+    const stores = (window as Record<string, unknown>).__ZUSTAND_STORES as {
+      auth: { setState: (s: Record<string, unknown>) => void };
+      vault: { getState: () => { setVaultKeys: (k: Record<string, unknown>) => void } };
+    };
 
-      stores.auth.setState({
-        accessToken: data.accessToken,
-        isAuthenticated: true,
-        lastAuthMethod: 'email_passwordless',
-        userEmail: data.email,
-        derivedKeypair: {
-          publicKey: new Uint8Array(data.publicKeyArr),
-          privateKey: new Uint8Array(data.privateKeyArr),
-        },
-      });
+    stores.auth.setState({
+      accessToken: data.accessToken,
+      isAuthenticated: true,
+      lastAuthMethod: 'email_passwordless',
+      userEmail: data.email,
+      derivedKeypair: {
+        publicKey: new Uint8Array(data.publicKeyArr),
+        privateKey: new Uint8Array(data.privateKeyArr),
+      },
+    });
 
-      stores.vault.getState().setVaultKeys({
-        rootFolderKey: new Uint8Array(data.rootFolderKeyArr),
-        rootIpnsKeypair: {
-          publicKey: new Uint8Array(data.rootIpnsPublicKeyArr),
-          privateKey: new Uint8Array(data.rootIpnsPrivateKeyArr),
-        },
-        rootIpnsName: data.rootIpnsName,
-        vaultId: data.vaultId,
-      });
-    },
-    cachedTestAuthState
-  );
+    stores.vault.getState().setVaultKeys({
+      rootFolderKey: new Uint8Array(data.rootFolderKeyArr),
+      rootIpnsKeypair: {
+        publicKey: new Uint8Array(data.rootIpnsPublicKeyArr),
+        privateKey: new Uint8Array(data.rootIpnsPrivateKeyArr),
+      },
+      rootIpnsName: data.rootIpnsName,
+      vaultId: data.vaultId,
+    });
+  }, cachedTestAuthState);
 }
 
 /**
@@ -286,7 +287,9 @@ export async function reinjectTestAuthAfterReload(page: Page): Promise<void> {
   await injectTestAuthState(page);
 
   // Navigate to files via hash router
-  await page.evaluate(() => { window.location.hash = '#/files'; });
+  await page.evaluate(() => {
+    window.location.hash = '#/files';
+  });
   await page.waitForURL('**/files', { timeout: 30000 });
 }
 
