@@ -105,7 +105,7 @@ Recent decisions affecting current work:
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
 - Phase 12.1 (AES-CTR Streaming): NEEDS `/gsd:research-phase` -- MediaSource/Service Worker decryption, byte-range IPFS, CTR nonce management
-- Phase 12.2 (Device Registry): NEEDS `/gsd:research-phase` -- device registry schema, encryption with user key, IPFS pinning strategy
+- Phase 12.2 (Device Registry): COMPLETE -- research and execution done
 - Phase 12.3 (SIWE + Identity): NEEDS `/gsd:research-phase` -- SIWE message format, wallet address hashing, multi-auth linking, ADR-001 migration
 - Phase 12.4 (MFA + Cross-Device): NEEDS `/gsd:research-phase` -- enableMFA() flow, bulletin board API, ECIES ephemeral key exchange
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
@@ -113,11 +113,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-13
-Stopped at: Completed 12.2-PLAN-03 (auth flow integration, Zustand store, polling)
+Stopped at: Phase 12.2 complete — all 3 plans executed, verified 4/4 must-haves
 Resume file: None
-Next: Phase 12.3 (SIWE + Unified Identity) — needs /gsd:research-phase first
+Next: Phase 12.3 (SIWE + Unified Identity) — needs /gsd:discuss-phase or /gsd:plan-phase
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-13 after completing 12.2-PLAN-03 (Phase 12.2 complete)_
+_Last updated: 2026-02-13 after completing Phase 12.2 (Encrypted Device Registry)_
