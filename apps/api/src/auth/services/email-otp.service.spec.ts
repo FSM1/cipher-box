@@ -17,6 +17,17 @@ jest.mock('ioredis', () => {
   return jest.fn().mockImplementation(() => mockRedis);
 });
 
+// Mock @sendgrid/mail — use require() to get mock reference after jest.mock hoisting
+jest.mock('@sendgrid/mail', () => ({
+  __esModule: true,
+  default: {
+    setApiKey: jest.fn(),
+    send: jest.fn().mockResolvedValue([{ statusCode: 202 }]),
+  },
+}));
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const mockSgMail = require('@sendgrid/mail').default;
+
 describe('EmailOtpService', () => {
   let service: EmailOtpService;
   let configService: { get: jest.Mock };
@@ -84,6 +95,65 @@ describe('EmailOtpService', () => {
       await expect(service.sendOtp('test@example.com')).rejects.toThrow(
         'Too many OTP requests. Please try again later.'
       );
+    });
+
+    it('should send email via SendGrid when configured', async () => {
+      // Create a service instance with SendGrid configured
+      const sgConfigService = {
+        get: jest.fn((key: string, defaultValue?: unknown) => {
+          if (key === 'SENDGRID_API_KEY') return 'SG.test-api-key';
+          if (key === 'SENDGRID_FROM_EMAIL') return 'test@cipherbox.cc';
+          return defaultValue;
+        }),
+      };
+      const sgService = new EmailOtpService(sgConfigService as unknown as ConfigService);
+
+      mockRedis.get.mockResolvedValueOnce(null); // rate limit check
+      mockRedis.incr.mockResolvedValueOnce(1);
+      mockSgMail.send.mockResolvedValueOnce([{ statusCode: 202 }]);
+
+      await sgService.sendOtp('user@example.com');
+
+      expect(mockSgMail.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: 'user@example.com',
+          from: 'test@cipherbox.cc',
+          subject: 'Your CipherBox verification code',
+          text: expect.stringContaining('verification code is:'),
+          html: expect.stringContaining('verification code is:'),
+        })
+      );
+    });
+
+    it('should not send email when SendGrid is not configured', async () => {
+      mockRedis.get.mockResolvedValueOnce(null); // rate limit check
+      mockRedis.incr.mockResolvedValueOnce(1);
+
+      await service.sendOtp('test@example.com');
+
+      expect(mockSgMail.send).not.toHaveBeenCalled();
+    });
+
+    it('should not throw when SendGrid send fails', async () => {
+      // Create a service instance with SendGrid configured
+      const sgConfigService = {
+        get: jest.fn((key: string, defaultValue?: unknown) => {
+          if (key === 'SENDGRID_API_KEY') return 'SG.test-api-key';
+          if (key === 'SENDGRID_FROM_EMAIL') return 'test@cipherbox.cc';
+          return defaultValue;
+        }),
+      };
+      const sgService = new EmailOtpService(sgConfigService as unknown as ConfigService);
+
+      mockRedis.get.mockResolvedValueOnce(null); // rate limit check
+      mockRedis.incr.mockResolvedValueOnce(1);
+      mockSgMail.send.mockRejectedValueOnce(new Error('SendGrid error'));
+
+      // Should not throw — OTP is stored in Redis regardless
+      await expect(sgService.sendOtp('user@example.com')).resolves.toBeUndefined();
+
+      // OTP should still be stored in Redis
+      expect(mockRedis.setex).toHaveBeenCalledWith('otp:user@example.com', 300, expect.any(String));
     });
   });
 

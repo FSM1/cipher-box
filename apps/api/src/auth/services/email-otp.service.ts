@@ -9,6 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import * as argon2 from 'argon2';
 import { randomInt } from 'crypto';
+import sgMail from '@sendgrid/mail';
 
 /** OTP validity in seconds */
 const OTP_TTL = 300; // 5 minutes
@@ -23,6 +24,8 @@ const MAX_VERIFY_ATTEMPTS = 5;
 export class EmailOtpService implements OnModuleDestroy {
   private readonly logger = new Logger(EmailOtpService.name);
   private readonly redis: Redis;
+  private readonly sendgridConfigured: boolean;
+  private readonly sendgridFromEmail: string;
 
   constructor(config: ConfigService) {
     this.redis = new Redis({
@@ -31,6 +34,18 @@ export class EmailOtpService implements OnModuleDestroy {
       password: config.get('REDIS_PASSWORD', undefined),
       lazyConnect: true,
     });
+
+    const apiKey = config.get<string>('SENDGRID_API_KEY', '');
+    this.sendgridFromEmail = config.get<string>('SENDGRID_FROM_EMAIL', 'noreply@cipherbox.cc');
+
+    if (apiKey) {
+      sgMail.setApiKey(apiKey);
+      this.sendgridConfigured = true;
+      this.logger.log('SendGrid email delivery enabled');
+    } else {
+      this.sendgridConfigured = false;
+      this.logger.log('SendGrid not configured — OTP codes will be logged in dev mode only');
+    }
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -72,6 +87,23 @@ export class EmailOtpService implements OnModuleDestroy {
     const currentAttempts = await this.redis.incr(rateLimitKey);
     if (currentAttempts === 1) {
       await this.redis.expire(rateLimitKey, RATE_LIMIT_TTL);
+    }
+
+    // Send OTP email via SendGrid (if configured)
+    if (this.sendgridConfigured) {
+      try {
+        await sgMail.send({
+          to: normalizedEmail,
+          from: this.sendgridFromEmail,
+          subject: 'Your CipherBox verification code',
+          text: `Your CipherBox verification code is: ${otp}\n\nThis code expires in 5 minutes. If you did not request this code, please ignore this email.`,
+          html: `<p>Your CipherBox verification code is:</p><p style="font-size:24px;font-weight:bold;letter-spacing:4px;margin:16px 0">${otp}</p><p>This code expires in 5 minutes. If you did not request this code, please ignore this email.</p>`,
+        });
+        this.logger.log(`OTP email sent to ${normalizedEmail}`);
+      } catch (error) {
+        // Do not throw — OTP is already stored in Redis, user can retry
+        this.logger.error(`Failed to send OTP email to ${normalizedEmail}`, (error as Error).stack);
+      }
     }
 
     // Log OTP in development mode only (not staging, not production)
