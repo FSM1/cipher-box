@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "875eba5d1da4",
+  "session_id": "f025f6b8-7e1e-41e7-89a0-a23c0b1ee192",
+  "strategy": "auto-commit",
+  "created_at": "2026-02-13T00:08:04.696719Z",
+  "branch": "feat/quick-013-move-multi-select-bar-bottom",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/.env.local"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "9bc033cf-98a1-4f86-9757-efce4471c006",
+  "checkpoint_transcript_start": 495,
+  "transcript_lines_at_start": 495,
+  "token_usage": {
+    "input_tokens": 17,
+    "cache_creation_tokens": 5223,
+    "cache_read_tokens": 1800221,
+    "output_tokens": 1011,
+    "api_call_count": 15
+  }
+}
