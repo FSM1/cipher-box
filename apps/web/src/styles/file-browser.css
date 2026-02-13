@@ -621,6 +621,15 @@
   gap: var(--spacing-xs);
 }
 
+.selection-action-bar .toolbar-btn--secondary {
+  color: var(--color-green-primary);
+  border-color: var(--color-green-dim);
+}
+
+.selection-action-bar .toolbar-btn--secondary:hover:not(:disabled) {
+  box-shadow: var(--glow-green);
+}
+
 .selection-action-bar-delete {
   color: var(--color-error);
   border-color: var(--color-error);
