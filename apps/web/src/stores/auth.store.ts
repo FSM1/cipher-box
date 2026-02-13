@@ -42,7 +42,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   accessToken: null,
   isAuthenticated: false,
   lastAuthMethod: null,
-  userEmail: null,
+  userEmail: localStorage.getItem('cipherbox:userEmail'),
   teeKeys: null,
 
   // ADR-001: Derived keypair state (memory-only)
@@ -52,7 +52,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   // Actions
   setAccessToken: (token) => set({ accessToken: token, isAuthenticated: true }),
   setLastAuthMethod: (method) => set({ lastAuthMethod: method }),
-  setUserEmail: (email) => set({ userEmail: email }),
+  setUserEmail: (email) => {
+    localStorage.setItem('cipherbox:userEmail', email);
+    set({ userEmail: email });
+  },
   setTeeKeys: (keys) => set({ teeKeys: keys }),
 
   // ADR-001: Set derived keypair for external wallet users
@@ -87,6 +90,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
     }
 
+    localStorage.removeItem('cipherbox:userEmail');
     set({
       accessToken: null,
       isAuthenticated: false,
