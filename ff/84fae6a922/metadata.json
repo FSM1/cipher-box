@@ -1,0 +1,17 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "ff84fae6a922",
+  "strategy": "auto-commit",
+  "branch": "feat/phase-12-multi-factor",
+  "checkpoints_count": 0,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/ff/84fae6a922/0/metadata.json",
+      "transcript": "/ff/84fae6a922/0/full.jsonl",
+      "context": "",
+      "content_hash": "/ff/84fae6a922/0/content_hash.txt",
+      "prompt": ""
+    }
+  ]
+}
