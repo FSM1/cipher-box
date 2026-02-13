@@ -7,11 +7,10 @@ import { useAuth } from '../../hooks/useAuth';
  * Hover-triggered dropdown showing user email with settings and logout options.
  */
 export function UserMenu() {
-  const { logout } = useAuth();
+  const { logout, userEmail } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
 
-  // TODO: Display user email from Core Kit session (Plan 04 Login UI)
-  const email = 'User';
+  const email = userEmail || 'User';
 
   const handleLogout = async () => {
     setIsOpen(false);

@@ -20,6 +20,7 @@ type AuthState = {
   accessToken: string | null;
   isAuthenticated: boolean;
   lastAuthMethod: string | null;
+  userEmail: string | null;
   teeKeys: TeeKeys | null;
 
   // ADR-001: Derived keypair for external wallets (memory-only)
@@ -28,6 +29,7 @@ type AuthState = {
 
   setAccessToken: (token: string) => void;
   setLastAuthMethod: (method: string) => void;
+  setUserEmail: (email: string) => void;
   setTeeKeys: (keys: TeeKeys) => void;
   setDerivedKeypair: (keypair: DerivedKeypair) => void;
   setIsExternalWallet: (isExternal: boolean) => void;
@@ -40,6 +42,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   accessToken: null,
   isAuthenticated: false,
   lastAuthMethod: null,
+  userEmail: null,
   teeKeys: null,
 
   // ADR-001: Derived keypair state (memory-only)
@@ -49,6 +52,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   // Actions
   setAccessToken: (token) => set({ accessToken: token, isAuthenticated: true }),
   setLastAuthMethod: (method) => set({ lastAuthMethod: method }),
+  setUserEmail: (email) => set({ userEmail: email }),
   setTeeKeys: (keys) => set({ teeKeys: keys }),
 
   // ADR-001: Set derived keypair for external wallet users
@@ -86,6 +90,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({
       accessToken: null,
       isAuthenticated: false,
+      userEmail: null,
       teeKeys: null,
       derivedKeypair: null,
       isExternalWallet: false,

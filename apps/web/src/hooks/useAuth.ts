@@ -34,8 +34,10 @@ export function useAuth() {
     accessToken,
     isAuthenticated,
     lastAuthMethod,
+    userEmail,
     setAccessToken,
     setLastAuthMethod,
+    setUserEmail,
     setDerivedKeypair,
     logout: clearAuthState,
   } = useAuthStore();
@@ -221,7 +223,10 @@ export function useAuth() {
         // 3. Complete backend auth + vault init
         await completeBackendAuth('email_passwordless', cipherboxJwt);
 
-        // 4. Navigate to files
+        // 4. Store email for display in UI
+        setUserEmail(email);
+
+        // 5. Navigate to files
         navigate('/files');
       } catch (error) {
         console.error('[useAuth] Email login failed:', error);
@@ -230,7 +235,7 @@ export function useAuth() {
         setIsLoggingIn(false);
       }
     },
-    [isLoggingIn, coreKit, coreKitLoginEmail, completeBackendAuth, navigate]
+    [isLoggingIn, coreKit, coreKitLoginEmail, completeBackendAuth, setUserEmail, navigate]
   );
 
   /**
@@ -330,7 +335,7 @@ export function useAuth() {
     isLoading,
     isAuthenticated,
     lastAuthMethod,
-    userInfo: null, // PnP userInfo removed; Plan 04 will show user info differently
+    userEmail,
     login,
     loginWithGoogle,
     loginWithEmail,
