@@ -74,8 +74,8 @@ export class EmailOtpService implements OnModuleDestroy {
       await this.redis.expire(rateLimitKey, RATE_LIMIT_TTL);
     }
 
-    // Log OTP in dev mode only (never in production)
-    if (process.env.NODE_ENV !== 'production') {
+    // Log OTP in development mode only (not staging, not production)
+    if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
       this.logger.warn(`DEV OTP for ${normalizedEmail}: ${otp}`);
     }
   }

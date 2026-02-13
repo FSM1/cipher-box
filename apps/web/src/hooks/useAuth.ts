@@ -143,8 +143,7 @@ export function useAuth() {
         throw new Error('Failed to get publicKey from Core Kit');
       }
 
-      // Log Core Kit publicKey for debugging during migration period
-      console.log('[Auth] Core Kit publicKey:', publicKey);
+      // publicKey available for debugging via DevTools if needed
 
       // 2. Authenticate with CipherBox backend
       // Backend verifies our CipherBox JWT and resolves placeholder publicKey

@@ -26,7 +26,7 @@ export function getMigrationKey(): string | undefined {
     if (key) {
       // Use it once, then delete -- importTssKey is only for the first login
       localStorage.removeItem('__pnp_migration_key__');
-      console.log('[CoreKit] PnP migration key found -- will import via importTssKey');
+      // Migration key found -- will import via importTssKey
       return key;
     }
   } catch {
@@ -69,14 +69,12 @@ export function useCoreKitAuth() {
     // If migrating from PnP, import existing key so vault data remains accessible
     if (importKey) {
       loginParams.importTssKey = importKey;
-      console.log('[CoreKit] Importing PnP key via importTssKey for Google login');
     }
 
     await coreKit.loginWithJWT(loginParams);
 
     // 4. Handle status
     if (coreKit.status === COREKIT_STATUS.LOGGED_IN) {
-      console.log('[CoreKit] Google login successful, publicKey:', coreKit.getPubKey?.() || 'N/A');
       await coreKit.commitChanges();
     }
     // REQUIRED_SHARE means MFA is enabled but device factor missing
@@ -118,13 +116,11 @@ export function useCoreKitAuth() {
 
     if (importKey) {
       loginParams.importTssKey = importKey;
-      console.log('[CoreKit] Importing PnP key via importTssKey for email login');
     }
 
     await coreKit.loginWithJWT(loginParams);
 
     if (coreKit.status === COREKIT_STATUS.LOGGED_IN) {
-      console.log('[CoreKit] Email login successful, publicKey:', coreKit.getPubKey?.() || 'N/A');
       await coreKit.commitChanges();
     }
     if (coreKit.status === COREKIT_STATUS.REQUIRED_SHARE) {

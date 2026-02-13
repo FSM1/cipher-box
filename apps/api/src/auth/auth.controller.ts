@@ -23,6 +23,8 @@ import {
   UnlinkMethodDto,
   UnlinkMethodResponseDto,
 } from './dto/link-method.dto';
+import { ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { User } from './entities/user.entity';
 
@@ -209,6 +211,8 @@ export class AuthController {
 
   @Post('test-login')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 900000 } })
   @ApiOperation({
     summary: 'Test-only login bypassing Core Kit (requires TEST_LOGIN_SECRET)',
   })

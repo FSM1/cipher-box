@@ -20,6 +20,12 @@ export class GoogleOAuthService {
 
   constructor(private config: ConfigService) {
     this.googleClientId = this.config.get<string>('GOOGLE_CLIENT_ID', '');
+    if (!this.googleClientId && this.config.get<string>('NODE_ENV') === 'production') {
+      throw new Error('GOOGLE_CLIENT_ID must be set in production');
+    }
+    if (!this.googleClientId) {
+      this.logger.warn('GOOGLE_CLIENT_ID not set — audience validation disabled (dev/staging only)');
+    }
   }
 
   private getJwks(): ReturnType<typeof jose.createRemoteJWKSet> {

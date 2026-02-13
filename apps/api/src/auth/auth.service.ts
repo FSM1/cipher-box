@@ -8,7 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Repository, IsNull, Like } from 'typeorm';
-import { createECDH, createHash } from 'crypto';
+import { createECDH, createHash, timingSafeEqual } from 'crypto';
 import * as jose from 'jose';
 import * as argon2 from 'argon2';
 import { User } from './entities/user.entity';
@@ -368,12 +368,23 @@ export class AuthService {
     publicKeyHex: string;
     privateKeyHex: string;
   }> {
-    // 1. Validate TEST_LOGIN_SECRET
+    // 1. Defense-in-depth: never allow in production regardless of env var
+    const nodeEnv = this.configService.get<string>('NODE_ENV');
+    if (nodeEnv === 'production') {
+      throw new ForbiddenException('Test login is not available in production');
+    }
+
+    // 2. Validate TEST_LOGIN_SECRET with timing-safe comparison
     const expectedSecret = this.configService.get<string>('TEST_LOGIN_SECRET');
     if (!expectedSecret) {
       throw new ForbiddenException('Test login is not enabled');
     }
-    if (secret !== expectedSecret) {
+    const secretBuf = Buffer.from(secret);
+    const expectedBuf = Buffer.from(expectedSecret);
+    if (
+      secretBuf.length !== expectedBuf.length ||
+      !timingSafeEqual(secretBuf, expectedBuf)
+    ) {
       throw new UnauthorizedException('Invalid test login secret');
     }
 
