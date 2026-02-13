@@ -123,6 +123,9 @@ export class AuthService {
         type: authMethodType,
         identifier,
       });
+    } else if (payload.email && authMethod.identifier !== payload.email) {
+      // Backfill: update identifier if we now have the email but previously stored UUID
+      authMethod.identifier = payload.email;
     }
 
     // 4. Update last used timestamp
