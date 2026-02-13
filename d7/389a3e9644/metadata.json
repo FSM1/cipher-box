@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "d7389a3e9644",
+  "strategy": "auto-commit",
+  "branch": "feat/phase-12-multi-factor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/.env.example",
+    "apps/web/.env.example"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d7/389a3e9644/0/metadata.json",
+      "transcript": "/d7/389a3e9644/0/full.jsonl",
+      "context": "",
+      "content_hash": "/d7/389a3e9644/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5,
+    "cache_creation_tokens": 1754,
+    "cache_read_tokens": 374991,
+    "output_tokens": 462,
+    "api_call_count": 3
+  }
+}
