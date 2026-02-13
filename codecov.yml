@@ -1,0 +1,35 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 2%
+      api:
+        paths:
+          - apps/api/src/**
+        target: 85%
+        threshold: 2%
+      crypto:
+        paths:
+          - packages/crypto/src/**
+        target: 80%
+        threshold: 2%
+    patch:
+      default:
+        target: 80%
+        threshold: 5%
+
+flags:
+  api:
+    paths:
+      - apps/api/src/**
+    carryforward: true
+  crypto:
+    paths:
+      - packages/crypto/src/**
+    carryforward: true
+
+comment:
+  layout: 'reach,diff,flags,files'
+  behavior: default
+  require_changes: true
