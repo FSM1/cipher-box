@@ -1,4 +1,5 @@
 import * as secp256k1 from '@noble/secp256k1';
+import { hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import { useCoreKit } from './core-kit-provider';
 import { COREKIT_STATUS } from './core-kit';
 import { authApi } from '../api/auth';
@@ -177,19 +178,4 @@ export function useCoreKitAuth() {
     getPublicKeyHex,
     logout,
   };
-}
-
-// Utility functions
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
-  }
-  return bytes;
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
 }

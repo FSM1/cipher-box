@@ -38,6 +38,11 @@ export class IdentityController {
   @ApiResponse({
     status: 200,
     description: 'JWKS containing RS256 public key for JWT verification',
+    schema: {
+      type: 'object',
+      properties: { keys: { type: 'array', items: { type: 'object' } } },
+      required: ['keys'],
+    },
   })
   getJwks(): { keys: object[] } {
     return this.jwtIssuerService.getJwksData();

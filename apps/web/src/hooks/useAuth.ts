@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCoreKitAuth } from '../lib/web3auth/hooks';
 import { authApi } from '../lib/api/auth';
@@ -41,6 +41,7 @@ export function useAuth() {
 
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const restoringRef = useRef(false);
 
   const isLoading = !coreKitInitialized || isLoggingIn || isLoggingOut;
 
@@ -289,7 +290,8 @@ export function useAuth() {
     const restoreSession = async () => {
       // Only restore if Core Kit has a session but we don't have
       // a backend access token yet
-      if (coreKitLoggedIn && !isAuthenticated && !isLoggingIn) {
+      if (coreKitLoggedIn && !isAuthenticated && !isLoggingIn && !restoringRef.current) {
+        restoringRef.current = true;
         try {
           // Try to refresh using the HTTP-only cookie first
           const response = await authApi.refresh();
@@ -311,6 +313,8 @@ export function useAuth() {
           } catch {
             // Ignore logout errors during cleanup
           }
+        } finally {
+          restoringRef.current = false;
         }
       }
     };

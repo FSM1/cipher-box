@@ -266,7 +266,23 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "JWKS containing RS256 public key for JWT verification"
+            "description": "JWKS containing RS256 public key for JWT verification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "keys": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": ["keys"]
+                }
+              }
+            }
           }
         },
         "summary": "JWKS endpoint for CipherBox identity provider",

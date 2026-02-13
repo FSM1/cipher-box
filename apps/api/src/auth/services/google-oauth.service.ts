@@ -60,9 +60,7 @@ export class GoogleOAuthService {
       this.logger.warn(
         `Google token verification failed: ${error instanceof Error ? error.message : 'unknown error'}`
       );
-      throw new UnauthorizedException(
-        `Invalid Google token: ${error instanceof Error ? error.message : 'verification failed'}`
-      );
+      throw new UnauthorizedException('Google token verification failed');
     }
 
     if (!payload.email) {

@@ -190,9 +190,10 @@ export class AuthService {
         email: payload.email as string | undefined,
       };
     } catch (error) {
-      throw new UnauthorizedException(
-        `Invalid CipherBox identity token: ${error instanceof Error ? error.message : 'verification failed'}`
+      this.logger.warn(
+        `CipherBox JWT verification failed: ${error instanceof Error ? error.message : 'unknown'}`
       );
+      throw new UnauthorizedException('Invalid CipherBox identity token');
     }
   }
 

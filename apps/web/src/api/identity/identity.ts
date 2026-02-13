@@ -23,6 +23,7 @@ import type {
 
 import type {
   GoogleLoginDto,
+  IdentityControllerGetJwks200,
   IdentityTokenResponseDto,
   SendOtpDto,
   SendOtpResponseDto,
@@ -35,7 +36,11 @@ import { customInstance } from '../custom-instance';
  * @summary JWKS endpoint for CipherBox identity provider
  */
 export const identityControllerGetJwks = (signal?: AbortSignal) => {
-  return customInstance<void>({ url: `/auth/.well-known/jwks.json`, method: 'GET', signal });
+  return customInstance<IdentityControllerGetJwks200>({
+    url: `/auth/.well-known/jwks.json`,
+    method: 'GET',
+    signal,
+  });
 };
 
 export const getIdentityControllerGetJwksQueryKey = () => {

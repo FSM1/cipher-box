@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsEmail, Length } from 'class-validator';
+import { IsString, IsNotEmpty, IsEmail, Length, Matches } from 'class-validator';
 
 export class GoogleLoginDto {
   @ApiProperty({
@@ -36,6 +36,7 @@ export class VerifyOtpDto {
   })
   @IsString()
   @Length(6, 6)
+  @Matches(/^\d{6}$/, { message: 'OTP must be exactly 6 digits' })
   otp!: string;
 }
 

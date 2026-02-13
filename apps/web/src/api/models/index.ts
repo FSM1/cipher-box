@@ -16,6 +16,8 @@ export * from './googleLoginDto';
 export * from './healthControllerCheck200';
 export * from './healthControllerCheck200Info';
 export * from './healthControllerCheck200InfoDatabase';
+export * from './identityControllerGetJwks200';
+export * from './identityControllerGetJwks200KeysItem';
 export * from './identityTokenResponseDto';
 export * from './initVaultDto';
 export * from './ipfsControllerUploadBody';

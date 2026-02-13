@@ -84,8 +84,7 @@ export function LinkedMethods() {
       </button>
 
       <p className="link-note">
-        Note: New auth methods must derive the same cryptographic key (via Web3Auth account
-        linking).
+        Note: New auth methods must derive the same cryptographic key (via account linking).
       </p>
     </div>
   );

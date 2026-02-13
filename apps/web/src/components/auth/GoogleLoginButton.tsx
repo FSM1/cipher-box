@@ -63,15 +63,21 @@ export function GoogleLoginButton({ onLogin, disabled }: GoogleLoginButtonProps)
       return;
     }
 
+    let cancelled = false;
+
     const script = document.createElement('script');
     script.src = 'https://accounts.google.com/gsi/client';
     script.async = true;
-    script.onload = () => setGisLoaded(true);
-    script.onerror = () => setError('Failed to load Google authentication');
+    script.onload = () => {
+      if (!cancelled) setGisLoaded(true);
+    };
+    script.onerror = () => {
+      if (!cancelled) setError('Failed to load Google authentication');
+    };
     document.body.appendChild(script);
 
     return () => {
-      // Only remove if we added it
+      cancelled = true;
       if (script.parentNode) {
         document.body.removeChild(script);
       }

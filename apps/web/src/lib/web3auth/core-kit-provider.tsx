@@ -26,9 +26,7 @@ const CoreKitContext = createContext<CoreKitContextValue | null>(null);
  *
  * Initializes Core Kit on mount (calls init() which checks for existing sessions).
  * Exposes the singleton instance and COREKIT_STATUS to child components.
- *
- * NOTE: Do NOT mount this in main.tsx yet -- that happens in Plan 03
- * when we swap providers. For now, this module is ready to use.
+ * Mounted at the top of the component tree in main.tsx.
  */
 export function CoreKitProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<COREKIT_STATUS>(COREKIT_STATUS.NOT_INITIALIZED);

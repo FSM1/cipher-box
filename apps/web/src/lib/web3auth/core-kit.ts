@@ -26,7 +26,10 @@ export function getCoreKit(): Web3AuthMPCCoreKit {
       tssLib,
     });
   }
-  return instance!;
+  if (!instance) {
+    throw new Error('getCoreKit() called outside browser environment');
+  }
+  return instance;
 }
 
 /**
