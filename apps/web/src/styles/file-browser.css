@@ -310,7 +310,6 @@
 
 .file-list-item--selected {
   background-color: var(--color-green-darker);
-  border-left: 2px solid var(--color-green-primary);
 }
 
 .file-list-item--selected:hover {
@@ -621,12 +620,26 @@
   gap: var(--spacing-xs);
 }
 
-.selection-action-bar-delete {
+.selection-action-bar .toolbar-btn--secondary {
+  color: var(--color-green-primary);
+  border-color: var(--color-green-dim);
+}
+
+.selection-action-bar .toolbar-btn--secondary:hover:not(:disabled) {
+  box-shadow: var(--glow-green);
+}
+
+.selection-action-bar .toolbar-btn--secondary:focus-visible {
+  outline: 2px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
+.selection-action-bar .selection-action-bar-delete {
   color: var(--color-error);
   border-color: var(--color-error);
 }
 
-.selection-action-bar-delete:hover:not(:disabled) {
+.selection-action-bar .selection-action-bar-delete:hover:not(:disabled) {
   box-shadow: 0 0 8px rgb(255 0 0 / 20%);
 }
 

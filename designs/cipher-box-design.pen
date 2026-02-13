@@ -419,6 +419,151 @@
                       "fontWeight": "normal"
                     }
                   ]
+                },
+                {
+                  "type": "frame",
+                  "id": "VVuqb",
+                  "name": "selectionActionBar",
+                  "width": "fill_container",
+                  "height": 40,
+                  "fill": "#003322",
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": {
+                      "top": 1
+                    },
+                    "fill": "#00D084"
+                  },
+                  "padding": [
+                    8,
+                    20
+                  ],
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "dnS95",
+                      "name": "info",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "ixg5c",
+                          "name": "count",
+                          "fill": "#00D084",
+                          "content": "3 files selected",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 11,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "OgAc2",
+                          "name": "clear",
+                          "fill": "#006644",
+                          "content": "[clear]",
+                          "fontFamily": "JetBrains Mono",
+                          "fontSize": 10,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "AHx76",
+                      "name": "actions",
+                      "gap": 8,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "HYAsS",
+                          "name": "downloadBtn",
+                          "stroke": {
+                            "align": "inside",
+                            "thickness": 1,
+                            "fill": "#006644"
+                          },
+                          "gap": 6,
+                          "padding": [
+                            6,
+                            12
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "0VVum",
+                              "name": "downloadLabel",
+                              "fill": "#00D084",
+                              "content": "↓ download",
+                              "fontFamily": "JetBrains Mono",
+                              "fontSize": 10,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "PNRWb",
+                          "name": "moveBtn",
+                          "stroke": {
+                            "align": "inside",
+                            "thickness": 1,
+                            "fill": "#006644"
+                          },
+                          "gap": 6,
+                          "padding": [
+                            6,
+                            12
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "K2cd8",
+                              "name": "moveLabel",
+                              "fill": "#00D084",
+                              "content": "→ move",
+                              "fontFamily": "JetBrains Mono",
+                              "fontSize": 10,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "6Ukay",
+                          "name": "deleteBtn",
+                          "stroke": {
+                            "align": "inside",
+                            "thickness": 1,
+                            "fill": "#EF4444"
+                          },
+                          "gap": 6,
+                          "padding": [
+                            6,
+                            12
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "J6R0D",
+                              "name": "deleteLabel",
+                              "fill": "#EF4444",
+                              "content": "🗑 delete",
+                              "fontFamily": "JetBrains Mono",
+                              "fontSize": 10,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
                 }
               ]
             }
