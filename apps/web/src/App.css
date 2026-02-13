@@ -105,6 +105,283 @@
   transform: none;
 }
 
+/* ==========================================================================
+   Custom Login UI - Auth Methods Container (Phase 12)
+   ========================================================================== */
+
+.login-methods {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--spacing-md);
+  width: 100%;
+  max-width: 320px;
+}
+
+/* Divider: "// or" between auth methods */
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  text-transform: lowercase;
+  letter-spacing: 0.1em;
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background-color: var(--color-border-dim);
+}
+
+/* ==========================================================================
+   Google Login Button
+   ========================================================================== */
+
+.google-login-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.google-login-btn {
+  padding: var(--spacing-sm) var(--spacing-lg);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  background-color: transparent;
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-green-primary);
+  border-radius: 0;
+  cursor: pointer;
+  transition: box-shadow 0.2s ease, background-color 0.2s ease, transform 0.1s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.google-login-btn:hover:not(:disabled) {
+  background-color: rgb(0 208 132 / 10%);
+  box-shadow: var(--glow-green);
+  transform: translateY(-1px);
+}
+
+.google-login-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.google-login-btn:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: 2px;
+}
+
+.google-login-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.google-login-btn--loading {
+  color: var(--color-text-secondary);
+  border-color: var(--color-text-secondary);
+}
+
+.google-login-btn--not-configured {
+  color: var(--color-text-dim);
+  border-color: var(--color-text-dim);
+}
+
+/* ==========================================================================
+   Email Login Form
+   ========================================================================== */
+
+.email-login-form {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.email-login-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.email-login-input,
+.otp-input {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  background-color: transparent;
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-dim);
+  border-radius: 0;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.email-login-input::placeholder,
+.otp-input::placeholder {
+  color: var(--color-text-dim);
+}
+
+.email-login-input:focus,
+.otp-input:focus {
+  border-color: var(--color-green-primary);
+  box-shadow: var(--glow-green);
+}
+
+.email-login-input:focus-visible,
+.otp-input:focus-visible {
+  outline: none;
+  border-color: var(--color-green-primary);
+  box-shadow: var(--glow-green);
+}
+
+.email-login-input:disabled,
+.otp-input:disabled {
+  opacity: 0.4;
+}
+
+.otp-input {
+  text-align: center;
+  letter-spacing: 0.3em;
+  font-size: var(--font-size-md);
+}
+
+/* Submit button ([SEND OTP] / [VERIFY]) */
+.email-login-submit {
+  padding: var(--spacing-xs) var(--spacing-lg);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  background-color: var(--color-green-primary);
+  color: var(--color-black);
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+  transition: box-shadow 0.2s ease, transform 0.1s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.email-login-submit:hover:not(:disabled) {
+  box-shadow: var(--glow-green);
+  transform: translateY(-1px);
+}
+
+.email-login-submit:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.email-login-submit:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: 2px;
+}
+
+.email-login-submit:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.email-login-submit--loading {
+  background-color: var(--color-green-dim);
+  color: var(--color-text-primary);
+}
+
+/* OTP header with back button and email display */
+.otp-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-xs);
+}
+
+.otp-back-btn {
+  padding: 2px var(--spacing-xs);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  background-color: transparent;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-dim);
+  border-radius: 0;
+  cursor: pointer;
+  transition: color 0.2s ease, border-color 0.2s ease;
+}
+
+.otp-back-btn:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  border-color: var(--color-green-primary);
+}
+
+.otp-back-btn:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
+.otp-email-display {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Resend button */
+.otp-resend-btn {
+  padding: var(--spacing-xs) 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  background-color: transparent;
+  color: var(--color-text-secondary);
+  border: none;
+  cursor: pointer;
+  text-align: center;
+  transition: color 0.2s ease;
+}
+
+.otp-resend-btn:hover:not(:disabled) {
+  color: var(--color-text-primary);
+}
+
+.otp-resend-btn:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
+.otp-resend-btn:disabled {
+  cursor: default;
+  color: var(--color-text-dim);
+}
+
+/* ==========================================================================
+   Login Error Message
+   ========================================================================== */
+
+.login-error {
+  margin-top: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-error);
+  background-color: rgb(239 68 68 / 8%);
+  border: 1px solid rgb(239 68 68 / 20%);
+  text-align: center;
+}
+
+/* ==========================================================================
+   Login Loading State
+   ========================================================================== */
+
+.login-loading {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  text-align: center;
+  margin-top: var(--spacing-xs);
+}
+
 /* Login page footer */
 .login-footer {
   position: absolute;

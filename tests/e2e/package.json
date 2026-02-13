@@ -10,6 +10,7 @@
     "test:report": "playwright show-report"
   },
   "devDependencies": {
+    "@cipherbox/crypto": "workspace:*",
     "@faker-js/faker": "^9.0.0",
     "@playwright/test": "^1.48.0",
     "@types/node": "^22.19.7",

@@ -104,6 +104,7 @@ jobs:
           VITE_WEB3AUTH_CLIENT_ID: ${{ secrets.VITE_WEB3AUTH_CLIENT_ID }}
           VITE_API_URL: ${{ vars.STAGING_API_URL }}
           VITE_ENVIRONMENT: staging
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
 
       - name: Upload web dist as artifact
         uses: actions/upload-artifact@v4
@@ -157,6 +158,9 @@ jobs:
           GRAFANA_LOKI_URL=${{ vars.GRAFANA_LOKI_URL }}
           GRAFANA_LOKI_USERNAME=${{ vars.GRAFANA_LOKI_USERNAME }}
           GRAFANA_LOKI_API_KEY=${{ secrets.GRAFANA_LOKI_API_KEY }}
+          SENDGRID_API_KEY=${{ secrets.SENDGRID_API_KEY }}
+          SENDGRID_FROM_EMAIL=${{ vars.SENDGRID_FROM_EMAIL }}
+          GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }}
           ENVEOF
           # Append image tag and lowercase owner (can't use shell vars in quoted heredoc)
           OWNER="${{ github.repository_owner }}"

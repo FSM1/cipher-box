@@ -1,11 +1,21 @@
-import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  UnauthorizedException,
+  BadRequestException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
+import { Repository, IsNull, Like } from 'typeorm';
+import { createECDH, createHash, timingSafeEqual } from 'crypto';
+import * as jose from 'jose';
 import * as argon2 from 'argon2';
 import { User } from './entities/user.entity';
 import { AuthMethod } from './entities/auth-method.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { Web3AuthVerifierService } from './services/web3auth-verifier.service';
+import { JwtIssuerService } from './services/jwt-issuer.service';
 import { TokenService } from './services/token.service';
 import { LoginDto, LoginServiceResult } from './dto/login.dto';
 import { RefreshServiceResult, LogoutResponseDto } from './dto/token.dto';
@@ -13,8 +23,12 @@ import { LinkMethodDto, AuthMethodResponseDto } from './dto/link-method.dto';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
+    private configService: ConfigService,
     private web3AuthVerifier: Web3AuthVerifierService,
+    private jwtIssuerService: JwtIssuerService,
     private tokenService: TokenService,
     @InjectRepository(User)
     private userRepository: Repository<User>,
@@ -25,23 +39,59 @@ export class AuthService {
   ) {}
 
   async login(loginDto: LoginDto): Promise<LoginServiceResult> {
-    // 1. Verify Web3Auth token
-    // For external wallets, verify against wallet address (from JWT), not derived public key
-    const verificationKey =
-      loginDto.loginType === 'external_wallet' && loginDto.walletAddress
-        ? loginDto.walletAddress
-        : loginDto.publicKey;
+    // 1. Verify token based on login type
+    let payload: {
+      verifierId?: string;
+      sub?: string;
+      email?: string;
+      verifier?: string;
+      aggregateVerifier?: string;
+      wallets?: { type: string; public_key?: string; address?: string; curve?: string }[];
+    };
 
-    const payload = await this.web3AuthVerifier.verifyIdToken(
-      loginDto.idToken,
-      verificationKey,
-      loginDto.loginType
-    );
+    if (loginDto.loginType === 'corekit') {
+      // Core Kit login: verify the CipherBox-issued JWT using our own key.
+      // The client already authenticated via /auth/identity/* endpoints,
+      // received a CipherBox JWT, used it for Core Kit loginWithJWT,
+      // and now sends it here for backend session creation.
+      payload = await this.verifyCipherBoxJwt(loginDto.idToken);
+    } else {
+      // PnP / external wallet: verify Web3Auth-issued JWT
+      const verificationKey =
+        loginDto.loginType === 'external_wallet' && loginDto.walletAddress
+          ? loginDto.walletAddress
+          : loginDto.publicKey;
+
+      payload = await this.web3AuthVerifier.verifyIdToken(
+        loginDto.idToken,
+        verificationKey,
+        loginDto.loginType
+      );
+    }
 
     // 2. Find or create user
     let user = await this.userRepository.findOne({
       where: { publicKey: loginDto.publicKey },
     });
+
+    // 2b. Placeholder publicKey resolution for Core Kit identity provider.
+    // When a user first authenticates via CipherBox identity provider (Plan 12-01),
+    // they get a placeholder publicKey ('pending-core-kit-{userId}').
+    // After Core Kit login, the client calls /auth/login with the REAL publicKey.
+    // We need to find the placeholder user and update their publicKey.
+    if (!user) {
+      const verifierId = payload.verifierId || payload.sub;
+      if (verifierId) {
+        const placeholderUser = await this.userRepository.findOne({
+          where: { publicKey: Like(`pending-core-kit-${verifierId}%`) },
+        });
+        if (placeholderUser) {
+          this.logger.log(`Resolving placeholder publicKey for user ${placeholderUser.id}`);
+          placeholderUser.publicKey = loginDto.publicKey;
+          user = await this.userRepository.save(placeholderUser);
+        }
+      }
+    }
 
     // Determine derivation version for external wallets (ADR-001)
     const derivationVersion =
@@ -60,22 +110,49 @@ export class AuthService {
     }
 
     // 3. Find or create auth method
-    const authMethodType = this.web3AuthVerifier.extractAuthMethodType(payload, loginDto.loginType);
-    const identifier = this.web3AuthVerifier.extractIdentifier(payload);
+    // For corekit logins, the identity controller already created the auth method
+    // (with the correct type: 'google' or 'email_passwordless'). Look up by
+    // userId + identifier to avoid creating duplicates with a hardcoded type.
+    let authMethod: AuthMethod | null;
 
-    let authMethod = await this.authMethodRepository.findOne({
-      where: {
-        userId: user.id,
-        type: authMethodType,
-      },
-    });
-
-    if (!authMethod) {
-      authMethod = await this.authMethodRepository.save({
-        userId: user.id,
-        type: authMethodType,
-        identifier,
+    if (loginDto.loginType === 'corekit') {
+      const identifier = payload.email || payload.sub || 'unknown';
+      authMethod = await this.authMethodRepository.findOne({
+        where: { userId: user.id, identifier },
       });
+      if (!authMethod) {
+        // Fallback: find any auth method for this user (identity controller should have created one)
+        authMethod = await this.authMethodRepository.findOne({
+          where: { userId: user.id },
+        });
+      }
+      if (!authMethod) {
+        // Safety net: create auth method if identity controller didn't (shouldn't happen in practice)
+        authMethod = await this.authMethodRepository.save({
+          userId: user.id,
+          type: 'email_passwordless',
+          identifier,
+        });
+      }
+    } else {
+      const authMethodType = this.web3AuthVerifier.extractAuthMethodType(
+        payload,
+        loginDto.loginType
+      );
+      const identifier = this.web3AuthVerifier.extractIdentifier(payload);
+      authMethod = await this.authMethodRepository.findOne({
+        where: { userId: user.id, type: authMethodType },
+      });
+      if (!authMethod) {
+        authMethod = await this.authMethodRepository.save({
+          userId: user.id,
+          type: authMethodType,
+          identifier,
+        });
+      } else if (payload.email && authMethod.identifier !== payload.email) {
+        // Backfill: update identifier if we now have the email but previously stored UUID
+        authMethod.identifier = payload.email;
+      }
     }
 
     // 4. Update last used timestamp
@@ -90,6 +167,34 @@ export class AuthService {
       refreshToken: tokens.refreshToken,
       isNewUser,
     };
+  }
+
+  /**
+   * Verify a CipherBox-issued JWT for Core Kit login flow.
+   * Since we are the identity provider, we verify against our own JWKS.
+   */
+  private async verifyCipherBoxJwt(
+    idToken: string
+  ): Promise<{ sub?: string; verifierId?: string; email?: string }> {
+    try {
+      const jwksData = this.jwtIssuerService.getJwksData();
+      const jwks = jose.createLocalJWKSet(jwksData);
+      const { payload } = await jose.jwtVerify(idToken, jwks, {
+        issuer: 'cipherbox',
+        audience: 'web3auth',
+        algorithms: ['RS256'],
+      });
+      return {
+        sub: payload.sub,
+        verifierId: payload.sub,
+        email: payload.email as string | undefined,
+      };
+    } catch (error) {
+      this.logger.warn(
+        `CipherBox JWT verification failed: ${error instanceof Error ? error.message : 'unknown'}`
+      );
+      throw new UnauthorizedException('Invalid CipherBox identity token');
+    }
   }
 
   async refresh(
@@ -157,9 +262,20 @@ export class AuthService {
       validToken.user.publicKey
     );
 
+    // Look up user's email from their most recently used auth method
+    // (covers both email_passwordless and google auth methods)
+    const emailMethod = await this.authMethodRepository.findOne({
+      where: [
+        { userId: validToken.userId, type: 'email_passwordless' },
+        { userId: validToken.userId, type: 'google' },
+      ],
+      order: { lastUsedAt: 'DESC' },
+    });
+
     return {
       accessToken: newTokens.accessToken,
       refreshToken: newTokens.refreshToken,
+      email: emailMethod?.identifier,
     };
   }
 
@@ -256,5 +372,114 @@ export class AuthService {
 
     // 4. Delete the method
     await this.authMethodRepository.remove(method);
+  }
+
+  /**
+   * Test-only login that bypasses Core Kit entirely.
+   * Guarded by TEST_LOGIN_SECRET env var — never available in production.
+   *
+   * Creates/finds user by email, generates a deterministic secp256k1 keypair,
+   * and issues tokens. Returns the keypair so E2E tests can initialize vaults.
+   */
+  async testLogin(
+    email: string,
+    secret: string
+  ): Promise<{
+    accessToken: string;
+    refreshToken: string;
+    isNewUser: boolean;
+    publicKeyHex: string;
+    privateKeyHex: string;
+  }> {
+    // 1. Defense-in-depth: never allow in production regardless of env var
+    const nodeEnv = this.configService.get<string>('NODE_ENV');
+    if (nodeEnv === 'production') {
+      throw new ForbiddenException('Test login is not available in production');
+    }
+
+    // 2. Validate TEST_LOGIN_SECRET with timing-safe comparison
+    const expectedSecret = this.configService.get<string>('TEST_LOGIN_SECRET');
+    if (!expectedSecret) {
+      throw new ForbiddenException('Test login is not enabled');
+    }
+    const secretBuf = Buffer.from(secret);
+    const expectedBuf = Buffer.from(expectedSecret);
+    if (secretBuf.length !== expectedBuf.length || !timingSafeEqual(secretBuf, expectedBuf)) {
+      throw new UnauthorizedException('Invalid test login secret');
+    }
+
+    // 2. Generate deterministic secp256k1 keypair from email
+    const { publicKeyHex, privateKeyHex } = this.generateDeterministicKeypair(email);
+
+    // 3. Find or create user by email
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const existingMethod = await this.authMethodRepository.findOne({
+      where: { type: 'email_passwordless', identifier: normalizedEmail },
+      relations: ['user'],
+    });
+
+    let user: User;
+    let isNewUser = false;
+
+    if (existingMethod) {
+      user = existingMethod.user;
+      // Update publicKey to match deterministic keypair (may differ from Core Kit key)
+      if (user.publicKey !== publicKeyHex) {
+        user.publicKey = publicKeyHex;
+        await this.userRepository.save(user);
+      }
+      existingMethod.lastUsedAt = new Date();
+      await this.authMethodRepository.save(existingMethod);
+    } else {
+      isNewUser = true;
+      user = await this.userRepository.save({ publicKey: publicKeyHex });
+      await this.authMethodRepository.save({
+        userId: user.id,
+        type: 'email_passwordless',
+        identifier: normalizedEmail,
+        lastUsedAt: new Date(),
+      });
+    }
+
+    // 4. Issue tokens
+    const tokens = await this.tokenService.createTokens(user.id, user.publicKey);
+
+    this.logger.log(`Test login: userId=${user.id}, isNew=${isNewUser}`);
+
+    return {
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      isNewUser,
+      publicKeyHex,
+      privateKeyHex,
+    };
+  }
+
+  /**
+   * Generate a deterministic secp256k1 keypair from an email address.
+   * Same email always produces the same keypair, enabling consistent
+   * vault encryption across test runs.
+   */
+  private generateDeterministicKeypair(email: string): {
+    publicKeyHex: string;
+    privateKeyHex: string;
+  } {
+    // Derive 32-byte private key from email via SHA-256
+    const seed = createHash('sha256')
+      .update(`cipherbox-test-keypair:${email.toLowerCase().trim()}`)
+      .digest();
+
+    // Ensure the seed is a valid secp256k1 private key (must be in [1, n-1])
+    const n = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141');
+    let keyInt = BigInt('0x' + seed.toString('hex'));
+    keyInt = (keyInt % (n - 1n)) + 1n;
+    const privateKeyHex = keyInt.toString(16).padStart(64, '0');
+
+    const ecdh = createECDH('secp256k1');
+    ecdh.setPrivateKey(Buffer.from(privateKeyHex, 'hex'));
+    const publicKeyHex = ecdh.getPublicKey().toString('hex'); // 65 bytes uncompressed
+
+    return { publicKeyHex, privateKeyHex };
   }
 }

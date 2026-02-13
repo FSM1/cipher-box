@@ -84,7 +84,7 @@ CipherBox is an ambitious demonstration of privacy-first encrypted cloud storage
 - Mobile apps (iOS/Android) — deferred to Milestone 3+
 - Linux/Windows desktop — moved to Milestone 2 (Phase 11)
 - Collaborative editing — deferred to Milestone 3+
-- AES-256-CTR streaming encryption — complexity, future enhancement
+- AES-256-CTR streaming encryption — moved to M2 Phase 12.1
 
 ## Context
 

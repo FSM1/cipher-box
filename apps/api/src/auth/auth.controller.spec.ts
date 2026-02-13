@@ -4,6 +4,7 @@ import { Response, Request as ExpressRequest } from 'express';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { ThrottlerGuard } from '@nestjs/throttler';
 import { LoginDto } from './dto/login.dto';
 import { LinkMethodDto } from './dto/link-method.dto';
 
@@ -51,6 +52,8 @@ describe('AuthController', () => {
       ],
     })
       .overrideGuard(JwtAuthGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(ThrottlerGuard)
       .useValue({ canActivate: () => true })
       .compile();
 

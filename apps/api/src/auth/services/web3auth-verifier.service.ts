@@ -1,6 +1,5 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import * as jose from 'jose';
-import { LoginType } from '../dto/login.dto';
 
 const JWKS_ENDPOINTS = {
   social: 'https://api-auth.web3auth.io/jwks',
@@ -27,7 +26,7 @@ interface Web3AuthPayload extends jose.JWTPayload {
 export class Web3AuthVerifierService {
   private jwksCache: Map<string, jose.JWTVerifyGetKey> = new Map();
 
-  private getJwks(loginType: LoginType): jose.JWTVerifyGetKey {
+  private getJwks(loginType: 'social' | 'external_wallet'): jose.JWTVerifyGetKey {
     const url = JWKS_ENDPOINTS[loginType];
     if (!this.jwksCache.has(url)) {
       this.jwksCache.set(url, jose.createRemoteJWKSet(new URL(url)));
@@ -38,7 +37,7 @@ export class Web3AuthVerifierService {
   async verifyIdToken(
     idToken: string,
     expectedPublicKeyOrAddress: string,
-    loginType: LoginType
+    loginType: 'social' | 'external_wallet'
   ): Promise<Web3AuthPayload> {
     const jwks = this.getJwks(loginType);
 
@@ -99,7 +98,7 @@ export class Web3AuthVerifierService {
 
   extractAuthMethodType(
     payload: Web3AuthPayload,
-    loginType: LoginType
+    loginType: 'social' | 'external_wallet'
   ): 'google' | 'apple' | 'github' | 'email_passwordless' | 'external_wallet' {
     if (loginType === 'external_wallet') {
       return 'external_wallet';

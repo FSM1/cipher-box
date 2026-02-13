@@ -7,11 +7,10 @@ import { useAuth } from '../../hooks/useAuth';
  * Hover-triggered dropdown showing user email with settings and logout options.
  */
 export function UserMenu() {
-  const { userInfo, logout } = useAuth();
+  const { logout, userEmail } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
 
-  // Get user email from Web3Auth user info
-  const email = userInfo?.email || 'User';
+  const email = userEmail || '[an0n]';
 
   const handleLogout = async () => {
     setIsOpen(false);

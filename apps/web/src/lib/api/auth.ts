@@ -3,7 +3,7 @@ import { apiClient } from './client';
 type LoginRequest = {
   idToken: string;
   publicKey: string;
-  loginType: 'social' | 'external_wallet';
+  loginType: 'social' | 'external_wallet' | 'corekit';
   /** ADR-001: Wallet address for external wallet JWT verification */
   walletAddress?: string;
   /** ADR-001: Key derivation version for external wallet users */
@@ -17,6 +17,15 @@ type LoginResponse = {
 
 type TokenResponse = {
   accessToken: string;
+  email?: string;
+};
+
+/** Response from CipherBox identity provider endpoints */
+type IdentityTokenResponse = {
+  idToken: string;
+  userId: string;
+  isNewUser: boolean;
+  email?: string;
 };
 
 export type AuthMethod = {
@@ -85,5 +94,35 @@ export const authApi = {
    */
   unlinkMethod: async (methodId: string): Promise<void> => {
     await apiClient.post('/auth/unlink', { methodId });
+  },
+
+  // --- CipherBox Identity Provider endpoints (Plan 12-01) ---
+
+  /** Get CipherBox identity JWT via Google OAuth token */
+  identityGoogle: async (googleIdToken: string): Promise<IdentityTokenResponse> => {
+    const response = await apiClient.post<IdentityTokenResponse>('/auth/identity/google', {
+      idToken: googleIdToken,
+    });
+    return response.data;
+  },
+
+  /** Send email OTP */
+  identityEmailSendOtp: async (email: string): Promise<{ success: boolean }> => {
+    const response = await apiClient.post<{ success: boolean }>('/auth/identity/email/send-otp', {
+      email,
+    });
+    return response.data;
+  },
+
+  /** Verify email OTP and get CipherBox identity JWT */
+  identityEmailVerify: async (email: string, otp: string): Promise<IdentityTokenResponse> => {
+    const response = await apiClient.post<IdentityTokenResponse>(
+      '/auth/identity/email/verify-otp',
+      {
+        email,
+        otp,
+      }
+    );
+    return response.data;
   },
 };

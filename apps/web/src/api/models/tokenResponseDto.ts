@@ -11,4 +11,6 @@ export interface TokenResponseDto {
   accessToken: string;
   /** New refresh token (only present for desktop clients using X-Client-Type: desktop header) */
   refreshToken?: string;
+  /** User email from their most recently used email auth method */
+  email?: string;
 }

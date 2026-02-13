@@ -224,6 +224,170 @@
         "tags": ["Auth"]
       }
     },
+    "/auth/test-login": {
+      "post": {
+        "operationId": "AuthController_testLogin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestLoginDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Test login successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestLoginResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid secret"
+          },
+          "403": {
+            "description": "Test login not enabled"
+          }
+        },
+        "summary": "Test-only login bypassing Core Kit (requires TEST_LOGIN_SECRET)",
+        "tags": ["Auth"]
+      }
+    },
+    "/auth/.well-known/jwks.json": {
+      "get": {
+        "operationId": "IdentityController_getJwks",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JWKS containing RS256 public key for JWT verification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "keys": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": ["keys"]
+                }
+              }
+            }
+          }
+        },
+        "summary": "JWKS endpoint for CipherBox identity provider",
+        "tags": ["Identity"]
+      }
+    },
+    "/auth/identity/google": {
+      "post": {
+        "operationId": "IdentityController_googleLogin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoogleLoginDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "CipherBox JWT issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityTokenResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid Google token"
+          }
+        },
+        "summary": "Login with Google OAuth token, returns CipherBox identity JWT",
+        "tags": ["Identity"]
+      }
+    },
+    "/auth/identity/email/send-otp": {
+      "post": {
+        "operationId": "IdentityController_sendOtp",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendOtpDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OTP sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendOtpResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid email or rate limit exceeded"
+          }
+        },
+        "summary": "Send OTP to email address",
+        "tags": ["Identity"]
+      }
+    },
+    "/auth/identity/email/verify-otp": {
+      "post": {
+        "operationId": "IdentityController_verifyOtp",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyOtpDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OTP verified, JWT issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityTokenResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired OTP"
+          }
+        },
+        "summary": "Verify email OTP and return CipherBox identity JWT",
+        "tags": ["Identity"]
+      }
+    },
     "/ipfs/upload": {
       "post": {
         "description": "Pins encrypted file to IPFS, checks storage quota, and records the pin for quota tracking. All in one atomic request.",
@@ -647,6 +811,10 @@
       "description": "Authentication endpoints"
     },
     {
+      "name": "Identity",
+      "description": "CipherBox identity provider endpoints"
+    },
+    {
       "name": "Vault",
       "description": "Vault management endpoints"
     },
@@ -689,7 +857,7 @@
           "loginType": {
             "type": "string",
             "description": "Type of login used",
-            "enum": ["social", "external_wallet"],
+            "enum": ["social", "external_wallet", "corekit"],
             "example": "social"
           },
           "walletAddress": {
@@ -749,6 +917,11 @@
             "type": "string",
             "description": "New refresh token (only present for desktop clients using X-Client-Type: desktop header)",
             "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+          },
+          "email": {
+            "type": "string",
+            "description": "User email from their most recently used email auth method",
+            "example": "user@example.com"
           }
         },
         "required": ["accessToken"]
@@ -822,6 +995,121 @@
           }
         },
         "required": ["success"]
+      },
+      "TestLoginDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address for the test user"
+          },
+          "secret": {
+            "type": "string",
+            "description": "Secret that must match TEST_LOGIN_SECRET env var"
+          }
+        },
+        "required": ["email", "secret"]
+      },
+      "TestLoginResponseDto": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "JWT access token"
+          },
+          "refreshToken": {
+            "type": "string",
+            "description": "Refresh token"
+          },
+          "isNewUser": {
+            "type": "boolean",
+            "description": "Whether this is a newly created user"
+          },
+          "publicKeyHex": {
+            "type": "string",
+            "description": "Uncompressed secp256k1 public key (hex, 130 chars)"
+          },
+          "privateKeyHex": {
+            "type": "string",
+            "description": "secp256k1 private key (hex, 64 chars)"
+          }
+        },
+        "required": ["accessToken", "refreshToken", "isNewUser", "publicKeyHex", "privateKeyHex"]
+      },
+      "GoogleLoginDto": {
+        "type": "object",
+        "properties": {
+          "idToken": {
+            "type": "string",
+            "description": "Google OAuth ID token (from Google Sign-In)",
+            "example": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+          }
+        },
+        "required": ["idToken"]
+      },
+      "IdentityTokenResponseDto": {
+        "type": "object",
+        "properties": {
+          "idToken": {
+            "type": "string",
+            "description": "CipherBox-signed RS256 JWT for Web3Auth custom verifier (sub=userId)",
+            "example": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+          },
+          "userId": {
+            "type": "string",
+            "description": "CipherBox internal user UUID",
+            "example": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+          },
+          "isNewUser": {
+            "type": "boolean",
+            "description": "Whether this is a newly created user",
+            "example": false
+          },
+          "email": {
+            "type": "string",
+            "description": "Verified email address from the identity provider",
+            "example": "user@example.com"
+          }
+        },
+        "required": ["idToken", "userId", "isNewUser"]
+      },
+      "SendOtpDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address to send OTP to",
+            "example": "user@example.com"
+          }
+        },
+        "required": ["email"]
+      },
+      "SendOtpResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the OTP was sent successfully",
+            "example": true
+          }
+        },
+        "required": ["success"]
+      },
+      "VerifyOtpDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address the OTP was sent to",
+            "example": "user@example.com"
+          },
+          "otp": {
+            "type": "string",
+            "description": "6-digit OTP code",
+            "example": "123456"
+          }
+        },
+        "required": ["email", "otp"]
       },
       "UploadResponseDto": {
         "type": "object",

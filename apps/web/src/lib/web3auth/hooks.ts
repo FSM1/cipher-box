@@ -1,269 +1,181 @@
-import {
-  useWeb3Auth,
-  useWeb3AuthConnect,
-  useWeb3AuthDisconnect,
-  useWeb3AuthUser,
-  useIdentityToken,
-} from '@web3auth/modal/react';
-import type { IProvider, AuthUserInfo } from '@web3auth/modal';
 import * as secp256k1 from '@noble/secp256k1';
-import {
-  deriveKeypairFromWallet,
-  bytesToHex as signatureBytesToHex,
-  type EIP1193Provider,
-} from '../crypto/signatureKeyDerivation';
+import { hexToBytes, bytesToHex } from '@cipherbox/crypto';
+import { useCoreKit } from './core-kit-provider';
+import { COREKIT_STATUS } from './core-kit';
+import { authApi } from '../api/auth';
 
-// External wallet auth connection types
-const EXTERNAL_WALLET_CONNECTIONS = [
-  'metamask',
-  'wallet_connect_v2',
-  'coinbase',
-  'phantom',
-] as const;
-
-export type UserInfo = Partial<AuthUserInfo>;
-
-export function useAuthFlow() {
-  const { isConnected, isInitialized, status, web3Auth } = useWeb3Auth();
-  const { connect, connectTo } = useWeb3AuthConnect();
-  const { disconnect } = useWeb3AuthDisconnect();
-  const { userInfo } = useWeb3AuthUser();
-  const { getIdentityToken } = useIdentityToken();
-
-  const isLoading = !isInitialized || status === 'connecting';
-
-  const getIdToken = async (): Promise<string | null> => {
-    try {
-      // Try authenticateUser directly (method exists at runtime but not in types)
-      if (web3Auth) {
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const authUser = await (web3Auth as any).authenticateUser();
-          if (authUser?.idToken) {
-            return authUser.idToken;
-          }
-        } catch {
-          // Fall through to hook method
-        }
-      }
-      // Fallback to hook method
-      const token = await getIdentityToken();
-      return token;
-    } catch {
-      return null;
+/**
+ * PnP -> Core Kit migration helper.
+ *
+ * PnP and Core Kit generate DIFFERENT private keys for the same user by default.
+ * For production migration, the user's PnP-derived private key must be imported
+ * via `importTssKey` during the first Core Kit `loginWithJWT` call.
+ *
+ * Flow:
+ * 1. A transitional build exports the PnP private key to localStorage
+ * 2. On first Core Kit login, this function reads and removes the key
+ * 3. The key is passed as `importTssKey` to `loginWithJWT`
+ * 4. Core Kit splits the imported key into TSS shares
+ * 5. Subsequent logins use Core Kit's native key derivation
+ *
+ * For devnet: We use fresh accounts (no migration needed).
+ * For production: This function would be called with the user's PnP private key.
+ */
+export function getMigrationKey(): string | undefined {
+  try {
+    const key = localStorage.getItem('__pnp_migration_key__');
+    if (key) {
+      // Use it once, then delete -- importTssKey is only for the first login
+      localStorage.removeItem('__pnp_migration_key__');
+      // Migration key found -- will import via importTssKey
+      return key;
     }
-  };
+  } catch {
+    // localStorage may be unavailable in some environments
+  }
+  return undefined;
+}
 
-  // Determine if this is a social login or external wallet
-  const isSocialLogin = (): boolean => {
-    // Check web3Auth connector name first (most reliable after connection)
+export function useCoreKitAuth() {
+  const { coreKit, status, isLoggedIn, isInitialized } = useCoreKit();
+
+  /**
+   * Shared Core Kit login logic: takes a CipherBox JWT and userId,
+   * handles migration key detection, loginWithJWT, and commitChanges.
+   */
+  async function loginWithCoreKit(
+    cipherboxJwt: string,
+    userId: string,
+    migrationKey?: string
+  ): Promise<void> {
+    if (!coreKit) throw new Error('Core Kit not initialized');
+
+    // Check for PnP migration key (auto-detect or explicit)
+    const importKey = migrationKey || getMigrationKey();
+
+    // Login to Core Kit with CipherBox JWT
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const connectorName = ((web3Auth as any)?.connectedConnectorName?.toLowerCase() ||
-      '') as string;
-    if (connectorName) {
-      // 'auth' connector is for social logins, others are external wallets
-      return connectorName === 'auth';
+    const loginParams: any = {
+      verifier: 'cipherbox-identity', // Single custom verifier for all CipherBox auth
+      verifierId: userId,
+      idToken: cipherboxJwt,
+    };
+
+    // If migrating from PnP, import existing key so vault data remains accessible
+    if (importKey) {
+      loginParams.importTssKey = importKey;
     }
 
-    // Fallback to userInfo check
-    if (!userInfo?.authConnection) return true; // Default to social
-    const connection = userInfo.authConnection.toLowerCase();
-    return !EXTERNAL_WALLET_CONNECTIONS.some((wallet) => connection.includes(wallet));
-  };
+    await coreKit.loginWithJWT(loginParams);
+
+    // Handle status
+    if (coreKit.status === COREKIT_STATUS.LOGGED_IN) {
+      await coreKit.commitChanges();
+    }
+    // REQUIRED_SHARE means MFA is enabled but device factor missing
+    // Phase 12.4 will handle this -- for now, throw so calling code can surface it
+    if (coreKit.status === COREKIT_STATUS.REQUIRED_SHARE) {
+      throw new Error(
+        'Additional verification required. Multi-factor recovery is not yet supported.'
+      );
+    }
+  }
 
   /**
-   * Get the public key for authentication.
-   * - Social logins: Derived from Web3Auth MPC private key
-   * - External wallets: Must use deriveKeypairForExternalWallet() first,
-   *   then pass the derived keypair's public key to the backend
+   * Login with Google: Backend verifies Google idToken, issues CipherBox JWT,
+   * then we call loginWithJWT on Core Kit.
+   *
+   * @param googleIdToken - Google OAuth idToken from GIS callback
+   * @param migrationKey - Optional PnP private key for importTssKey migration
    */
-  const getPublicKey = async (connectedProvider?: IProvider | null): Promise<string | null> => {
-    const currentProvider = connectedProvider || web3Auth?.provider;
-    if (!currentProvider) {
-      return null;
-    }
+  async function loginWithGoogle(
+    googleIdToken: string,
+    migrationKey?: string
+  ): Promise<{ cipherboxJwt: string; email?: string }> {
+    // 1. Send Google idToken to CipherBox backend for verification + JWT issuance
+    const { idToken: cipherboxJwt, userId, email } = await authApi.identityGoogle(googleIdToken);
+
+    // 2. Login to Core Kit
+    await loginWithCoreKit(cipherboxJwt, userId, migrationKey);
+
+    return { cipherboxJwt, email };
+  }
+
+  /**
+   * Login with Email: Backend handles OTP send/verify, issues CipherBox JWT.
+   *
+   * @param email - User's email address
+   * @param otp - One-time password from email
+   * @param migrationKey - Optional PnP private key for importTssKey migration
+   */
+  async function loginWithEmailOtp(
+    email: string,
+    otp: string,
+    migrationKey?: string
+  ): Promise<{ cipherboxJwt: string }> {
+    // 1. Verify OTP with backend, get CipherBox JWT
+    const { idToken: cipherboxJwt, userId } = await authApi.identityEmailVerify(email, otp);
+
+    // 2. Login to Core Kit
+    await loginWithCoreKit(cipherboxJwt, userId, migrationKey);
+
+    return { cipherboxJwt };
+  }
+
+  /**
+   * Get vault keypair from Core Kit's exported TSS key.
+   * Replaces the PnP provider.request('private_key') approach.
+   */
+  async function getVaultKeypair(): Promise<{
+    publicKey: Uint8Array;
+    privateKey: Uint8Array;
+  } | null> {
+    if (!coreKit || coreKit.status !== COREKIT_STATUS.LOGGED_IN) return null;
 
     try {
-      // For social logins, derive from private key
-      if (isSocialLogin()) {
-        const privateKey = await getPrivateKey(currentProvider);
-        if (privateKey) {
-          return derivePublicKeyFromPrivate(privateKey);
-        }
+      const privateKeyHex = await coreKit._UNSAFE_exportTssKey();
+      const privKeyHex = privateKeyHex.startsWith('0x') ? privateKeyHex.slice(2) : privateKeyHex;
+      const privateKey = hexToBytes(privKeyHex);
+      const publicKey = secp256k1.getPublicKey(privateKey, false); // uncompressed (65 bytes)
+      return { publicKey, privateKey };
+    } catch (err) {
+      console.error('[CoreKit] Failed to export TSS key:', err);
+      return null;
+    }
+  }
+
+  /**
+   * Get compressed public key hex for backend auth.
+   */
+  async function getPublicKeyHex(): Promise<string | null> {
+    const keypair = await getVaultKeypair();
+    if (!keypair) return null;
+    const compressed = secp256k1.getPublicKey(keypair.privateKey, true);
+    return bytesToHex(compressed);
+  }
+
+  /**
+   * Logout from Core Kit.
+   */
+  async function logout(): Promise<void> {
+    if (!coreKit) return;
+    try {
+      if (coreKit.status === COREKIT_STATUS.LOGGED_IN) {
+        await coreKit.logout();
       }
-
-      // External wallet: return wallet address (caller should derive keypair separately)
-      const accounts = await currentProvider.request<unknown, string[]>({
-        method: 'eth_accounts',
-      });
-      return accounts?.[0] ?? null;
-    } catch {
-      return null;
+    } catch (err) {
+      console.error('[CoreKit] Logout error:', err);
     }
-  };
-
-  /**
-   * Get the wallet address for external wallet users.
-   * This is used as input for signature-derived key derivation.
-   */
-  const getWalletAddress = async (connectedProvider?: IProvider | null): Promise<string | null> => {
-    const currentProvider = connectedProvider || web3Auth?.provider;
-    if (!currentProvider) {
-      return null;
-    }
-
-    try {
-      const accounts = await currentProvider.request<unknown, string[]>({
-        method: 'eth_accounts',
-      });
-      return accounts?.[0] ?? null;
-    } catch {
-      return null;
-    }
-  };
-
-  /**
-   * ADR-001: Derive keypair for external wallet users via signature.
-   * This prompts the user's wallet to sign an EIP-712 message,
-   * then derives a secp256k1 keypair from the signature.
-   *
-   * The derived keypair is used for ECIES operations (encryption/decryption)
-   * since external wallets never expose their private keys.
-   *
-   * @returns Derived keypair with publicKey and privateKey as Uint8Array
-   */
-  const deriveKeypairForExternalWallet = async (
-    connectedProvider?: IProvider | null
-  ): Promise<{ publicKey: Uint8Array; privateKey: Uint8Array } | null> => {
-    const currentProvider = connectedProvider || web3Auth?.provider;
-    if (!currentProvider) {
-      return null;
-    }
-
-    // Get wallet address
-    const walletAddress = await getWalletAddress(currentProvider);
-    if (!walletAddress) {
-      return null;
-    }
-
-    // Derive keypair from EIP-712 signature
-    // This will prompt the wallet to sign
-    const keypair = await deriveKeypairFromWallet(
-      currentProvider as unknown as EIP1193Provider,
-      walletAddress
-    );
-
-    return keypair;
-  };
-
-  /**
-   * Get the public key as hex string from a derived keypair.
-   * Used after deriveKeypairForExternalWallet() to get the publicKey for backend auth.
-   */
-  const getDerivedPublicKeyHex = (keypair: { publicKey: Uint8Array }): string => {
-    return signatureBytesToHex(keypair.publicKey);
-  };
-
-  // Get login type for backend authentication
-  const getLoginType = (): 'social' | 'external_wallet' => {
-    return isSocialLogin() ? 'social' : 'external_wallet';
-  };
-
-  /**
-   * Get secp256k1 keypair for vault operations (encryption/decryption).
-   * For social logins: derives from Web3Auth private key
-   * For external wallets: must use separately derived keypair from signature
-   *
-   * @returns Keypair with uncompressed public key (65 bytes) and private key (32 bytes)
-   */
-  const getKeypairForVault = async (
-    connectedProvider?: IProvider | null
-  ): Promise<{ publicKey: Uint8Array; privateKey: Uint8Array } | null> => {
-    const currentProvider = connectedProvider || web3Auth?.provider;
-    if (!currentProvider) {
-      return null;
-    }
-
-    // Only works for social logins - external wallets must use deriveKeypairForExternalWallet
-    if (!isSocialLogin()) {
-      return null;
-    }
-
-    const privateKeyHex = await getPrivateKey(currentProvider);
-    if (!privateKeyHex) {
-      return null;
-    }
-
-    const privKeyHex = privateKeyHex.startsWith('0x') ? privateKeyHex.slice(2) : privateKeyHex;
-    const privateKey = hexToBytes(privKeyHex);
-    // Get uncompressed public key (65 bytes with 0x04 prefix) for ECIES operations
-    const publicKey = secp256k1.getPublicKey(privateKey, false);
-
-    return { publicKey, privateKey };
-  };
+  }
 
   return {
-    isConnected,
-    isLoading,
+    status,
+    isLoggedIn,
     isInitialized,
-    userInfo: userInfo as UserInfo | null,
-    web3Auth,
-    connect,
-    connectTo,
-    disconnect,
-    getIdToken,
-    getPublicKey,
-    getWalletAddress,
-    getLoginType,
-    isSocialLogin,
-    deriveKeypairForExternalWallet,
-    getDerivedPublicKeyHex,
-    getKeypairForVault,
+    loginWithGoogle,
+    loginWithEmailOtp,
+    getVaultKeypair,
+    getPublicKeyHex,
+    logout,
   };
-}
-
-async function getPrivateKey(provider: IProvider): Promise<string | null> {
-  try {
-    // Web3Auth Modal uses 'private_key' for social logins
-    const privateKey = await provider.request<unknown, string>({
-      method: 'private_key',
-    });
-    return privateKey ?? null;
-  } catch {
-    // Fallback to eth_private_key for compatibility
-    try {
-      const privateKey = await provider.request<unknown, string>({
-        method: 'eth_private_key',
-      });
-      return privateKey ?? null;
-    } catch {
-      return null;
-    }
-  }
-}
-
-function derivePublicKeyFromPrivate(privateKey: string): string {
-  // Remove 0x prefix if present
-  const privKeyHex = privateKey.startsWith('0x') ? privateKey.slice(2) : privateKey;
-
-  // Derive compressed public key from private key using secp256k1
-  const privKeyBytes = hexToBytes(privKeyHex);
-  const pubKeyBytes = secp256k1.getPublicKey(privKeyBytes, true); // true = compressed
-
-  // Return as hex string (this is what Web3Auth stores in the JWT)
-  return bytesToHex(pubKeyBytes);
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
-  }
-  return bytes;
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
 }

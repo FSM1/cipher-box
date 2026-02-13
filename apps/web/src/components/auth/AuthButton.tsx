@@ -7,6 +7,10 @@ interface AuthButtonProps {
 /**
  * Sign In button that opens Web3Auth modal.
  * Disables with [API OFFLINE] text when API health check fails.
+ *
+ * @deprecated Replaced by GoogleLoginButton + EmailLoginForm in Phase 12.
+ * This component is no longer used from Login.tsx. Kept for backward
+ * compatibility until Plan 05 cleanup removes it entirely.
  */
 export function AuthButton({ apiDown }: AuthButtonProps) {
   const { login, isLoading } = useAuth();

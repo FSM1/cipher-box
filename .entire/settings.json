@@ -1,5 +1,10 @@
 {
-  "strategy": "auto-commit",
+  "strategy": "manual-commit",
   "enabled": true,
-  "telemetry": true
+  "telemetry": true,
+  "strategy_options": {
+    "summarize": {
+      "enabled": true
+    }
+  }
 }

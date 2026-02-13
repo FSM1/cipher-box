@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsIn, IsOptional, IsInt, Min } from 'class-validator';
 
-export type LoginType = 'social' | 'external_wallet';
+export type LoginType = 'social' | 'external_wallet' | 'corekit';
 
 export class LoginDto {
   @ApiProperty({
@@ -23,11 +23,11 @@ export class LoginDto {
 
   @ApiProperty({
     description: 'Type of login used',
-    enum: ['social', 'external_wallet'],
+    enum: ['social', 'external_wallet', 'corekit'],
     example: 'social',
   })
   @IsString()
-  @IsIn(['social', 'external_wallet'])
+  @IsIn(['social', 'external_wallet', 'corekit'])
   loginType!: LoginType;
 
   @ApiPropertyOptional({

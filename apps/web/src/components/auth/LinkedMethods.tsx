@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useLinkedMethods } from '../../hooks/useLinkedMethods';
-import { useAuthFlow } from '../../lib/web3auth/hooks';
+
+// TODO: Restore method linking with Core Kit auth flow (Phase 12.3 SIWE + Unified Identity)
 
 const METHOD_LABELS: Record<string, string> = {
   google: 'Google',
@@ -11,46 +12,12 @@ const METHOD_LABELS: Record<string, string> = {
 };
 
 export function LinkedMethods() {
-  const { methods, isLoading, linkMethod, unlinkMethod, isLinking, isUnlinking } =
-    useLinkedMethods();
-  const { connect, getIdToken, getLoginType } = useAuthFlow();
+  const { methods, isLoading, unlinkMethod, isUnlinking } = useLinkedMethods();
   const [linkError, setLinkError] = useState<string | null>(null);
 
   const handleLink = async () => {
-    setLinkError(null);
-    try {
-      // Open Web3Auth modal to authenticate with new method
-      await connect();
-      const idToken = await getIdToken();
-      const loginType = getLoginType();
-
-      if (!idToken) {
-        setLinkError('Failed to get authentication token');
-        return;
-      }
-
-      // Link the new method
-      await linkMethod({
-        idToken,
-        loginType,
-      });
-    } catch (error) {
-      console.error('Failed to link method:', error);
-      if (error instanceof Error) {
-        // Check for publicKey mismatch error from backend
-        if (error.message.includes('mismatch') || error.message.includes('Mismatch')) {
-          setLinkError(
-            'This auth method is linked to a different account. Both methods must derive the same key in Web3Auth.'
-          );
-        } else if (error.message.includes('already linked')) {
-          setLinkError('This auth method is already linked to your account.');
-        } else {
-          setLinkError(error.message);
-        }
-      } else {
-        setLinkError('Failed to link auth method');
-      }
-    }
+    // Method linking requires Core Kit integration -- deferred to Phase 12.3
+    setLinkError('Method linking is temporarily disabled during auth migration. Coming soon.');
   };
 
   const handleUnlink = async (methodId: string) => {
@@ -112,13 +79,12 @@ export function LinkedMethods() {
         ))}
       </ul>
 
-      <button onClick={handleLink} disabled={isLinking} className="link-button">
-        {isLinking ? 'Linking...' : 'Link Another Method'}
+      <button onClick={handleLink} className="link-button">
+        Link Another Method
       </button>
 
       <p className="link-note">
-        Note: New auth methods must derive the same cryptographic key (via Web3Auth account
-        linking).
+        Note: New auth methods must derive the same cryptographic key (via account linking).
       </p>
     </div>
   );

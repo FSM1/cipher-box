@@ -1,5 +1,9 @@
 import { test, expect, Page, Browser, BrowserContext } from '@playwright/test';
-import { loginViaEmail, TEST_CREDENTIALS } from '../utils/web3auth-helpers';
+import {
+  loginViaEmail,
+  reinjectTestAuthAfterReload,
+  TEST_CREDENTIALS,
+} from '../utils/web3auth-helpers';
 import { createTestTextFile, cleanupTestFiles } from '../utils/test-files';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
 import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';
@@ -535,15 +539,23 @@ test.describe.serial('Full Workflow', () => {
     navigationStack.length = 0;
     navigationStack.push('root');
 
+    // Re-inject test auth state after reload (test-login bypasses Core Kit
+    // so there's no persistent session to auto-restore). For real Core Kit
+    // flow this is a no-op.
+    await reinjectTestAuthAfterReload(page);
+
     // Wait for auth to restore (user menu becomes visible)
     await page.locator('[data-testid="user-menu"]').waitFor({
       state: 'visible',
       timeout: 30000,
     });
 
-    // Wait for initial sync to complete — workspace folder must appear
+    // Wait for initial sync to complete — all root items must appear
     // This proves IPNS root metadata was re-fetched and decrypted
     await fileList.waitForItemToAppear(workspaceFolder, { timeout: 60000 });
+
+    // Wait for files to appear too (sync may render folders before files)
+    await fileList.waitForItemToAppear(rootFiles[0].name, { timeout: 30000 });
 
     // Verify other root-level items are also visible
     // rootFiles[0] was moved to workspace in 5.1 — but Phase 5 hasn't run yet at this point
@@ -569,6 +581,9 @@ test.describe.serial('Full Workflow', () => {
     // Double-click workspace folder → exercises navigateTo cold-load
     await navigateIntoFolder(workspaceFolder);
 
+    // Wait for subfolder contents to load (IPNS resolve + decrypt after reload)
+    await fileList.waitForItemToAppear(documentsFolder, { timeout: 30000 });
+
     // Verify workspace children are visible (documents, images, projects)
     expect(await fileList.isItemVisible(documentsFolder)).toBe(true);
     expect(await fileList.isItemVisible(imagesFolder)).toBe(true);
@@ -576,6 +591,9 @@ test.describe.serial('Full Workflow', () => {
 
     // Navigate deeper into documents — exercises nested IPNS resolve + key unwrap
     await navigateIntoFolder(documentsFolder);
+
+    // Wait for document folder contents to load
+    await fileList.waitForItemToAppear(documentFiles[0].name, { timeout: 30000 });
 
     // Verify uploaded document files are visible
     for (const file of documentFiles) {
@@ -602,6 +620,9 @@ test.describe.serial('Full Workflow', () => {
   test('3.10 Upload file to subfolder after reload', async () => {
     // Navigate into images folder
     await navigateIntoFolder(imagesFolder);
+
+    // Wait for subfolder contents to load after post-reload navigation
+    await fileList.waitForItemToAppear(imageFiles[0].name, { timeout: 30000 });
 
     // Verify existing image files are present (from Phase 3.4)
     for (const file of imageFiles) {
@@ -1025,8 +1046,8 @@ test.describe.serial('Full Workflow', () => {
     // Click workspace breadcrumb to navigate directly there
     await breadcrumbs.clickBreadcrumb(workspaceFolder);
 
-    // Wait for navigation
-    await page.waitForTimeout(500);
+    // Wait for folder contents to load
+    await fileList.waitForItemToAppear(projectsFolder, { timeout: 15000 });
 
     // Verify we're at workspace - should see projects folder
     expect(await fileList.isItemVisible(projectsFolder)).toBe(true);
@@ -1304,7 +1325,8 @@ test.describe.serial('Full Workflow', () => {
     await logoutButton.click();
 
     await expect(page).toHaveURL(/localhost:\d+\/?(?:#\/?)?$/);
-    await expect(page.getByRole('button', { name: /\[CONNECT\]|sign in|login/i })).toBeVisible({
+    // Core Kit login page shows CipherBox's own email form instead of [CONNECT] button
+    await expect(page.locator('[data-testid="email-input"]')).toBeVisible({
       timeout: 10000,
     });
   });

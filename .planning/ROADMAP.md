@@ -47,7 +47,11 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 **Milestone Goal:** Elevate the staging MVP into a production-ready encrypted storage platform with sharing, search, MFA, file versioning, cross-platform desktop, and TEE failover.
 
 - [ ] **Phase 11: Cross-Platform Desktop** - Linux and Windows desktop apps (Tauri, platform-specific FUSE/virtual drive) -- can run in parallel
-- [ ] **Phase 12: Multi-Factor Authentication** - Web3Auth MFA factor configuration and backup recovery
+- [x] **Phase 12: Core Kit Identity Provider Foundation** - Replace PnP Modal SDK with MPC Core Kit, CipherBox as identity provider
+- [ ] **Phase 12.1: AES-CTR Streaming Encryption** - AES-256-CTR for media files with byte-range decryption and in-browser playback (INSERTED)
+- [ ] **Phase 12.2: Encrypted Device Registry** - Encrypted device metadata on IPFS for cross-device infrastructure (INSERTED)
+- [ ] **Phase 12.3: SIWE + Unified Identity** - Wallet login via SIWE, multi-auth linking, ADR-001 migration (INSERTED)
+- [ ] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
 - [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
 - [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
@@ -81,19 +85,97 @@ See `.planning/milestones/m3/ROADMAP.md` for full M3 phase details.
 4. CI builds and packages desktop apps for all three platforms (macOS, Linux, Windows)
    **Plans**: TBD
 
-### Phase 12: Multi-Factor Authentication
+### Phase 12: Core Kit Identity Provider Foundation
 
-**Goal**: Users can strengthen account security with additional authentication factors and recovery options
+**Goal**: Replace PnP Modal SDK with MPC Core Kit and establish CipherBox backend as the identity provider for Web3Auth, building the foundation for MFA, SIWE, and cross-device approval in subsequent phases
 **Depends on**: Phase 10 (Milestone 1 complete)
-**Requirements**: MFA-01, MFA-02, MFA-03, MFA-04
-**Research flag**: Standard patterns -- Web3Auth mfaSettings is documented SDK configuration. Skip `/gsd:research-phase`.
+**Requirements**: MFA-01 (partial — foundation only), AUTH infrastructure
 **Success Criteria** (what must be TRUE):
 
-1. User can enable MFA from the settings page and is guided through factor enrollment
-2. User can configure a device share as an additional MFA factor for login
-3. User can generate a backup recovery phrase and use it to regain vault access
-4. User's derived keypair (publicKey) remains identical after MFA enrollment -- vault data stays accessible without re-encryption
+1. User can log in via Google OAuth through CipherBox-branded UI (not Web3Auth modal)
+2. User can log in via email through CipherBox-branded UI
+3. CipherBox backend issues JWTs with `sub = userId`, verified by Web3Auth custom verifier
+4. Core Kit initialization, login, and private key export work end-to-end
+5. Existing PnP users' keys are preserved via `importTssKey` migration
+6. User's derived keypair (publicKey) remains identical after migration — vault data stays accessible
+
+**Plans:** 5 plans
+
+Plans:
+
+- [ ] 12-PLAN-01.md — Backend identity provider (JWKS, Google OAuth, email OTP, JWT issuing)
+- [ ] 12-PLAN-02.md — Core Kit SDK installation + React context provider
+- [ ] 12-PLAN-03.md — Frontend auth flow rewrite (loginWithJWT, key export, session)
+- [ ] 12-PLAN-04.md — Custom CipherBox-branded login UI (Google + email)
+- [ ] 12-PLAN-05.md — PnP migration (importTssKey), cleanup, and E2E verification
+
+### Phase 12.1: AES-CTR Streaming Encryption (INSERTED)
+
+**Goal**: Media files (video/audio) are encrypted with AES-256-CTR instead of GCM, enabling byte-range decryption for in-browser playback and efficient FUSE reads
+**Depends on**: Phase 12 (MFA must stabilize auth and key derivation first)
+**Requirements**: Spec'd in TECHNICAL_ARCHITECTURE.md (v1.1 roadmap item), DATA_FLOWS.md (CTR upload/download sequences)
+**Research flag**: NEEDS `/gsd:research-phase` -- MediaSource API + Service Worker decryption pipeline, byte-range IPFS fetching, CTR nonce/counter management for random-access reads
+**Success Criteria** (what must be TRUE):
+
+1. Media files (detected by MIME type) are encrypted with AES-256-CTR; all other files continue using AES-256-GCM
+2. User can play encrypted video/audio in-browser without downloading the entire file first (streaming decryption via MediaSource or Service Worker)
+3. Desktop FUSE client can decrypt CTR-encrypted files with random-access byte-range reads (no full-file download)
+4. Existing GCM-encrypted files remain fully readable -- encryptionMode field in metadata drives mode selection
+5. Upload pipeline streams file data through CTR encryption instead of loading entirely into memory
    **Plans**: TBD
+
+### Phase 12.2: Encrypted Device Registry (INSERTED)
+
+**Goal**: Encrypted device metadata stored on IPFS alongside user's vault, providing durable infrastructure for cross-device approval and resilience against backend rebuilds
+**Depends on**: Phase 12 (Core Kit foundation must be in place)
+**Requirements**: Infrastructure for MFA-02 (device management)
+**Research flag**: NEEDS `/gsd:research-phase` -- device registry schema design, encryption with user key, IPFS pinning strategy, discovery mechanism
+**Success Criteria** (what must be TRUE):
+
+1. Authenticated devices are tracked in an encrypted registry pinned on IPFS
+2. Device registry is encrypted with user's key and only readable by the user
+3. Device metadata includes public keys, device names, authorization status, and revocation capability
+4. Registry is discoverable and recoverable by any authenticated session
+
+Plans:
+
+- [ ] TBD (run `/gsd:plan-phase 12.2` to break down)
+
+### Phase 12.3: SIWE + Unified Identity (INSERTED)
+
+**Goal**: Wallet users can log in via SIWE and all auth methods (wallet, Google, email) resolve to the same CipherBox identity and Web3Auth key
+**Depends on**: Phase 12.2 (device registry for multi-device state)
+**Requirements**: AUTH unification, MFA-01 (wallet MFA prerequisite)
+**Research flag**: NEEDS `/gsd:research-phase` -- SIWE message format, backend verification, wallet address hashing in DB, multi-auth linking UX, ADR-001 migration path
+**Success Criteria** (what must be TRUE):
+
+1. Wallet user can sign SIWE message → CipherBox API verifies → issues JWT → Core Kit login succeeds
+2. User can link additional auth methods (second wallet, email) from settings
+3. Any linked auth method produces a JWT with same `sub = userId` → same Web3Auth key
+4. Wallet addresses are stored as hashes in the database (not plaintext)
+5. Existing ADR-001 wallet users are migrated to SIWE-based identity
+
+Plans:
+
+- [ ] TBD (run `/gsd:plan-phase 12.3` to break down)
+
+### Phase 12.4: MFA + Cross-Device Approval (INSERTED)
+
+**Goal**: Users can enroll in MFA with device shares and recovery phrases, and approve new devices from existing authenticated devices
+**Depends on**: Phase 12.3 (unified identity for consistent MFA across all auth methods)
+**Requirements**: MFA-01, MFA-02, MFA-03, MFA-04
+**Research flag**: NEEDS `/gsd:research-phase` -- Core Kit enableMFA() flow, createFactor/inputFactorKey for cross-device, bulletin board API design, ECIES ephemeral key exchange
+**Success Criteria** (what must be TRUE):
+
+1. User can enable MFA from settings and is guided through factor enrollment (device share + recovery phrase)
+2. User can approve a new device from an existing authenticated device (bulletin board pattern)
+3. User can recover access using recovery phrase when device share is lost
+4. User's derived keypair (publicKey) remains identical after MFA enrollment — vault data stays accessible
+5. MFA factors are manageable from settings (view, add, revoke)
+
+Plans:
+
+- [ ] TBD (run `/gsd:plan-phase 12.4` to break down)
 
 ### Phase 13: File Versioning
 
@@ -169,7 +251,7 @@ See `.planning/milestones/m3/ROADMAP.md` for full M3 phase details.
 
 **Execution Order:**
 
-Sequential order: 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
+Sequential order: 12 -> 12.1 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
 
 Parallel phases:
 
@@ -195,7 +277,8 @@ Parallel phases:
 | 9. Desktop Client          | M1        | 7/7            | Complete    | 2026-02-08 |
 | 9.1 Env/DevOps/Staging     | M1        | 6/6            | Complete    | 2026-02-09 |
 | 10. Data Portability       | M1        | 3/3            | Complete    | 2026-02-11 |
-| 12. MFA                    | M2        | 0/TBD          | Not started | -          |
+| 12. Core Kit Identity      | M2        | 0/5            | Not started | -          |
+| 12.1 AES-CTR Streaming     | M2        | 0/TBD          | Not started | -          |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
@@ -214,5 +297,5 @@ Milestone 1 shipped: 2026-02-11
 Milestone 2 roadmap created: 2026-02-11
 Milestone 3 roadmap created: 2026-02-11
 Total M1 phases: 17 | Total M1 plans: 72 | Depth: Comprehensive
-Total M2 phases: 7 | Total M2 plans: TBD | Depth: Comprehensive
+Total M2 phases: 8 | Total M2 plans: TBD | Depth: Comprehensive
 Total M3 phases: 4 | Total M3 plans: TBD | Depth: Comprehensive
