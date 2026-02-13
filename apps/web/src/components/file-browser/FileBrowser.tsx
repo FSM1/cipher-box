@@ -904,18 +904,6 @@ export function FileBrowser() {
         </div>
       )}
 
-      {/* Selection action bar */}
-      {multiSelectActive && selectedIds.size > 1 && (
-        <SelectionActionBar
-          selectedItems={selectedItems}
-          isLoading={isOperating || isDownloading}
-          onClearSelection={clearSelection}
-          onDownload={handleBatchDownload}
-          onMove={handleBatchMoveClick}
-          onDelete={handleBatchDeleteClick}
-        />
-      )}
-
       {/* File list or empty state */}
       {!isLoading && hasChildren && (
         <FileList
@@ -936,6 +924,18 @@ export function FileBrowser() {
 
       {!isLoading && (initialSyncComplete || currentFolderId !== 'root') && !hasChildren && (
         <EmptyState folderId={currentFolderId} />
+      )}
+
+      {/* Selection action bar */}
+      {multiSelectActive && selectedIds.size > 1 && (
+        <SelectionActionBar
+          selectedItems={selectedItems}
+          isLoading={isOperating || isDownloading}
+          onClearSelection={clearSelection}
+          onDownload={handleBatchDownload}
+          onMove={handleBatchMoveClick}
+          onDelete={handleBatchDeleteClick}
+        />
       )}
 
       {/* Context menu */}
