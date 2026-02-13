@@ -1,0 +1,5 @@
+Todo saved: `.planning/todos/pending/2026-02-13-ipfs-ipns-infra-monitoring.md`
+
+> **IPFS/IPNS infrastructure monitoring dashboard**
+> Area: api
+> Files: 0 referenced
