@@ -310,7 +310,6 @@
 
 .file-list-item--selected {
   background-color: var(--color-green-darker);
-  border-left: 2px solid var(--color-green-primary);
 }
 
 .file-list-item--selected:hover {
