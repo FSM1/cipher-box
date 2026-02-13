@@ -1,12 +1,16 @@
 import { UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import * as jose from 'jose';
 import { GoogleOAuthService } from './google-oauth.service';
 
 describe('GoogleOAuthService', () => {
   let service: GoogleOAuthService;
+  const mockConfigService = {
+    get: jest.fn().mockReturnValue('test-google-client-id'),
+  } as unknown as ConfigService;
 
   beforeEach(() => {
-    service = new GoogleOAuthService();
+    service = new GoogleOAuthService(mockConfigService);
     jest.clearAllMocks();
   });
 
@@ -72,6 +76,23 @@ describe('GoogleOAuthService', () => {
 
       // createRemoteJWKSet should only be called once (lazy init + reuse)
       expect(jose.createRemoteJWKSet).toHaveBeenCalledTimes(1);
+    });
+
+    it('should throw UnauthorizedException if email is not verified', async () => {
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({
+        payload: {
+          email: 'user@gmail.com',
+          sub: 'google-user-123',
+          email_verified: false,
+        },
+      });
+
+      await expect(service.verifyGoogleToken('unverified-email-token')).rejects.toThrow(
+        UnauthorizedException
+      );
+      await expect(service.verifyGoogleToken('unverified-email-token')).rejects.toThrow(
+        'Google email address is not verified'
+      );
     });
 
     it('should return undefined name when not present', async () => {

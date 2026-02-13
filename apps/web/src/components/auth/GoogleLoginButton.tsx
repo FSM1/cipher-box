@@ -100,8 +100,28 @@ export function GoogleLoginButton({ onLogin, disabled }: GoogleLoginButtonProps)
     setLoading(true);
     setError(null);
 
+    // Safety timeout: if Google prompt doesn't resolve within 60s
+    // (e.g., user closes popup without selecting), reset loading state
+    const timeoutId = setTimeout(() => {
+      setLoading(false);
+    }, 60000);
+
+    const originalHandleCredential = handleCredentialResponse;
+    const wrappedHandler = async (response: { credential: string }) => {
+      clearTimeout(timeoutId);
+      await originalHandleCredential(response);
+    };
+
+    // Re-initialize with wrapped handler to clear timeout on success
+    google.accounts.id.initialize({
+      client_id: clientId!,
+      callback: wrappedHandler,
+      auto_select: false,
+    });
+
     google.accounts.id.prompt((notification) => {
       if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+        clearTimeout(timeoutId);
         setError('Google popup was blocked. Please allow popups for this site.');
         setLoading(false);
       }

@@ -181,9 +181,9 @@ export function useAuth() {
 
         // 2. Check if login landed in REQUIRED_SHARE
         if (coreKit?.status === COREKIT_STATUS.REQUIRED_SHARE) {
-          // Phase 12.4 will handle MFA challenge UI
-          console.warn('[useAuth] REQUIRED_SHARE -- MFA not yet implemented');
-          return;
+          throw new Error(
+            'Additional verification required. Multi-factor recovery is not yet supported — please try a different login method.'
+          );
         }
 
         // 3. Complete backend auth + vault init
@@ -216,8 +216,9 @@ export function useAuth() {
 
         // 2. Check if login landed in REQUIRED_SHARE
         if (coreKit?.status === COREKIT_STATUS.REQUIRED_SHARE) {
-          console.warn('[useAuth] REQUIRED_SHARE -- MFA not yet implemented');
-          return;
+          throw new Error(
+            'Additional verification required. Multi-factor recovery is not yet supported — please try a different login method.'
+          );
         }
 
         // 3. Complete backend auth + vault init

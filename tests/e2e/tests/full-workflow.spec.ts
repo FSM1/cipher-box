@@ -1,5 +1,9 @@
 import { test, expect, Page, Browser, BrowserContext } from '@playwright/test';
-import { loginViaEmail, reinjectTestAuthAfterReload, TEST_CREDENTIALS } from '../utils/web3auth-helpers';
+import {
+  loginViaEmail,
+  reinjectTestAuthAfterReload,
+  TEST_CREDENTIALS,
+} from '../utils/web3auth-helpers';
 import { createTestTextFile, cleanupTestFiles } from '../utils/test-files';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
 import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';

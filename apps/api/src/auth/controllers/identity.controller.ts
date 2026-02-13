@@ -58,9 +58,7 @@ export class IdentityController {
     // 3. Sign CipherBox identity JWT (include email for auth method identifier)
     const idToken = await this.jwtIssuerService.signIdentityJwt(user.id, googlePayload.email);
 
-    this.logger.log(
-      `Google login: userId=${user.id}, email=${googlePayload.email}, isNew=${isNewUser}`
-    );
+    this.logger.log(`Google login: userId=${user.id}, isNew=${isNewUser}`);
 
     return { idToken, userId: user.id, isNewUser };
   }
@@ -79,6 +77,8 @@ export class IdentityController {
 
   @Post('identity/email/verify-otp')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 900000 } }) // 5 requests per 15 min per IP
   @ApiOperation({ summary: 'Verify email OTP and return CipherBox identity JWT' })
   @ApiResponse({
     status: 200,
@@ -96,7 +96,7 @@ export class IdentityController {
     // 3. Sign CipherBox identity JWT (include email for auth method identifier)
     const idToken = await this.jwtIssuerService.signIdentityJwt(user.id, dto.email);
 
-    this.logger.log(`Email OTP login: userId=${user.id}, email=${dto.email}, isNew=${isNewUser}`);
+    this.logger.log(`Email OTP login: userId=${user.id}, isNew=${isNewUser}`);
 
     return { idToken, userId: user.id, isNewUser };
   }
@@ -145,16 +145,17 @@ export class IdentityController {
         identifier: normalizedEmail,
         lastUsedAt: new Date(),
       });
-      this.logger.log(
-        `Linked ${authMethodType} to existing user ${anyMethodWithEmail.user.id} via email ${normalizedEmail}`
-      );
+      this.logger.log(`Linked ${authMethodType} to existing user ${anyMethodWithEmail.user.id}`);
       return { user: anyMethodWithEmail.user, isNewUser: false };
     }
 
-    // Create new user with placeholder publicKey
+    // Create new user with placeholder publicKey using userId (resolved in auth.service.ts)
     const newUser = await this.userRepository.save({
-      publicKey: `pending-core-kit-${Date.now()}`,
+      publicKey: `pending-core-kit-placeholder`,
     });
+    // Update placeholder with actual userId now that we have it
+    newUser.publicKey = `pending-core-kit-${newUser.id}`;
+    await this.userRepository.save(newUser);
 
     // Create auth method
     await this.authMethodRepository.save({

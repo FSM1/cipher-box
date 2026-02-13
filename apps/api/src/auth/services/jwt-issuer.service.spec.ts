@@ -13,13 +13,29 @@ describe('JwtIssuerService', () => {
   });
 
   describe('onModuleInit', () => {
-    it('should generate ephemeral keypair when IDENTITY_JWT_PRIVATE_KEY not set', async () => {
-      configService.get.mockReturnValue(undefined);
+    it('should generate ephemeral keypair when IDENTITY_JWT_PRIVATE_KEY not set in dev', async () => {
+      configService.get.mockImplementation((key: string) => {
+        if (key === 'IDENTITY_JWT_PRIVATE_KEY') return undefined;
+        if (key === 'NODE_ENV') return 'development';
+        return undefined;
+      });
 
       await service.onModuleInit();
 
       expect(jose.generateKeyPair).toHaveBeenCalledWith('RS256', { modulusLength: 2048 });
       expect(jose.exportJWK).toHaveBeenCalledWith('mock-public-key');
+    });
+
+    it('should throw in production when IDENTITY_JWT_PRIVATE_KEY not set', async () => {
+      configService.get.mockImplementation((key: string) => {
+        if (key === 'IDENTITY_JWT_PRIVATE_KEY') return undefined;
+        if (key === 'NODE_ENV') return 'production';
+        return undefined;
+      });
+
+      await expect(service.onModuleInit()).rejects.toThrow(
+        'IDENTITY_JWT_PRIVATE_KEY must be set in production'
+      );
     });
 
     it('should load keypair from env when IDENTITY_JWT_PRIVATE_KEY is set', async () => {

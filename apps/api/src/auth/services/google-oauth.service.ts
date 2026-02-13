@@ -1,7 +1,9 @@
 import { Injectable, UnauthorizedException, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import * as jose from 'jose';
 
 const GOOGLE_JWKS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
+const GOOGLE_ISSUER = 'https://accounts.google.com';
 
 interface GoogleTokenPayload {
   email: string;
@@ -14,6 +16,11 @@ interface GoogleTokenPayload {
 export class GoogleOAuthService {
   private readonly logger = new Logger(GoogleOAuthService.name);
   private jwks: ReturnType<typeof jose.createRemoteJWKSet> | null = null;
+  private readonly googleClientId: string;
+
+  constructor(private config: ConfigService) {
+    this.googleClientId = this.config.get<string>('GOOGLE_CLIENT_ID', '');
+  }
 
   private getJwks(): ReturnType<typeof jose.createRemoteJWKSet> {
     if (!this.jwks) {
@@ -32,9 +39,14 @@ export class GoogleOAuthService {
 
     let payload: GoogleTokenPayload;
     try {
-      const result = await jose.jwtVerify(idToken, jwks, {
+      const verifyOptions: jose.JWTVerifyOptions = {
         algorithms: ['RS256'],
-      });
+        issuer: GOOGLE_ISSUER,
+      };
+      if (this.googleClientId) {
+        verifyOptions.audience = this.googleClientId;
+      }
+      const result = await jose.jwtVerify(idToken, jwks, verifyOptions);
       payload = result.payload as unknown as GoogleTokenPayload;
     } catch (error) {
       this.logger.warn(
@@ -51,6 +63,10 @@ export class GoogleOAuthService {
 
     if (!payload.sub) {
       throw new UnauthorizedException('Google token missing sub claim');
+    }
+
+    if (payload.email_verified === false) {
+      throw new UnauthorizedException('Google email address is not verified');
     }
 
     return {

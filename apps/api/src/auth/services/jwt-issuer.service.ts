@@ -26,6 +26,11 @@ export class JwtIssuerService implements OnModuleInit {
         Object.entries(privateJwk).filter(([k]) => !RSA_PRIVATE_FIELDS.has(k))
       );
       this.publicJwk = { ...publicJwkData, kid: KID, alg: 'RS256', use: 'sig' };
+    } else if (this.config.get<string>('NODE_ENV') === 'production') {
+      throw new Error(
+        'IDENTITY_JWT_PRIVATE_KEY must be set in production. ' +
+          'Generate with: openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048'
+      );
     } else {
       this.logger.warn(
         'IDENTITY_JWT_PRIVATE_KEY not set — generating ephemeral RS256 keypair (dev/staging only)'
