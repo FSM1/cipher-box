@@ -1,0 +1,1 @@
+Clean — nothing else depended on `userInfo`. Vite should have hot-reloaded. Try logging in again with email OTP — the email should show in the user menu now.

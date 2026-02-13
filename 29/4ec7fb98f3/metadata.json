@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "294ec7fb98f3",
+  "strategy": "auto-commit",
+  "branch": "feat/phase-12-multi-factor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/components/layout/UserMenu.tsx",
+    "apps/web/src/hooks/useAuth.ts",
+    "apps/web/src/stores/auth.store.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/29/4ec7fb98f3/0/metadata.json",
+      "transcript": "/29/4ec7fb98f3/0/full.jsonl",
+      "context": "",
+      "content_hash": "/29/4ec7fb98f3/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 11715,
+    "cache_read_tokens": 1671448,
+    "output_tokens": 642,
+    "api_call_count": 16
+  }
+}

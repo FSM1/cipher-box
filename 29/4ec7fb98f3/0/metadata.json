@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "294ec7fb98f3",
+  "session_id": "2095544c-fa50-4027-b664-c37e578957ce",
+  "strategy": "auto-commit",
+  "created_at": "2026-02-13T02:10:30.393739Z",
+  "branch": "feat/phase-12-multi-factor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/components/layout/UserMenu.tsx",
+    "apps/web/src/hooks/useAuth.ts",
+    "apps/web/src/stores/auth.store.ts"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "52b7d507-ca64-4a74-9507-116348427e16",
+  "checkpoint_transcript_start": 425,
+  "transcript_lines_at_start": 425,
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 11715,
+    "cache_read_tokens": 1671448,
+    "output_tokens": 642,
+    "api_call_count": 16
+  }
+}

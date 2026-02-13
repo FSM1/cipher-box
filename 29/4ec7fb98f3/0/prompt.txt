@@ -1,0 +1,1 @@
+1 does seem like a decent path forward, though I feel like we might want to improve this in future.
