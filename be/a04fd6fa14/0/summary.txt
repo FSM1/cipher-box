@@ -1,0 +1,6 @@
+That's it. Now `userEmail` is:
+- **Hydrated from localStorage** on store creation (survives refresh/session restore)
+- **Persisted to localStorage** when set during login
+- **Cleared from localStorage** on logout
+
+The email isn't sensitive data, so this is safe — unlike tokens or keys which stay memory-only.
