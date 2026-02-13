@@ -407,6 +407,81 @@ describe('AuthService', () => {
       );
     });
 
+    it('should fall back to any auth method for corekit login when identifier not found', async () => {
+      const corekitLoginDto = {
+        idToken: 'cipherbox-jwt',
+        publicKey: 'abc123',
+        loginType: 'corekit' as const,
+      };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({
+        payload: { sub: 'user-123', email: 'test@example.com' },
+      });
+
+      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
+      const mockAuthMethod = {
+        id: 'am-1',
+        userId: 'user-id',
+        type: 'google',
+        identifier: 'different@example.com',
+        lastUsedAt: null,
+      };
+      userRepository.findOne.mockResolvedValue(mockUser);
+      // First authMethod findOne (by identifier): no match. Second (by userId only): found
+      authMethodRepository.findOne
+        .mockResolvedValueOnce(null) // identifier lookup - no match
+        .mockResolvedValueOnce(mockAuthMethod); // userId fallback - found
+      authMethodRepository.save.mockResolvedValue(mockAuthMethod);
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      await service.login(corekitLoginDto);
+
+      expect(web3AuthVerifier.extractAuthMethodType).not.toHaveBeenCalled();
+    });
+
+    it('should create auth method as safety net for corekit login when none found', async () => {
+      const corekitLoginDto = {
+        idToken: 'cipherbox-jwt',
+        publicKey: 'abc123',
+        loginType: 'corekit' as const,
+      };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({
+        payload: { sub: 'user-123', email: 'test@example.com' },
+      });
+
+      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
+      userRepository.findOne.mockResolvedValue(mockUser);
+      // Both corekit lookups return null
+      authMethodRepository.findOne
+        .mockResolvedValueOnce(null) // identifier lookup
+        .mockResolvedValueOnce(null); // userId fallback
+      const savedMethod = {
+        id: 'am-new',
+        userId: 'user-id',
+        type: 'email_passwordless',
+        identifier: 'test@example.com',
+        lastUsedAt: null,
+      };
+      authMethodRepository.save.mockResolvedValue(savedMethod);
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      await service.login(corekitLoginDto);
+
+      // Should create email_passwordless as safety net
+      expect(authMethodRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-id',
+          type: 'email_passwordless',
+          identifier: 'test@example.com',
+        })
+      );
+    });
+
     it('should backfill auth method identifier when email differs', async () => {
       const mockPayload = { verifier: 'google', email: 'real-email@example.com' };
       const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };

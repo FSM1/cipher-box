@@ -126,6 +126,14 @@ export class AuthService {
           where: { userId: user.id },
         });
       }
+      if (!authMethod) {
+        // Safety net: create auth method if identity controller didn't (shouldn't happen in practice)
+        authMethod = await this.authMethodRepository.save({
+          userId: user.id,
+          type: 'email_passwordless',
+          identifier,
+        });
+      }
     } else {
       const authMethodType = this.web3AuthVerifier.extractAuthMethodType(
         payload,
