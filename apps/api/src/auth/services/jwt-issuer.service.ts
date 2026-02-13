@@ -44,10 +44,14 @@ export class JwtIssuerService implements OnModuleInit {
   /**
    * Sign a CipherBox identity JWT for Web3Auth custom verifier consumption.
    *
-   * Claims: iss=cipherbox, aud=web3auth, sub=userId, exp=5min
+   * Claims: iss=cipherbox, aud=web3auth, sub=userId, email (optional), exp=5min
    */
-  async signIdentityJwt(userId: string): Promise<string> {
-    return new jose.SignJWT({ sub: userId })
+  async signIdentityJwt(userId: string, email?: string): Promise<string> {
+    const claims: Record<string, unknown> = { sub: userId };
+    if (email) {
+      claims.email = email;
+    }
+    return new jose.SignJWT(claims)
       .setProtectedHeader({ alg: 'RS256', kid: KID })
       .setIssuer('cipherbox')
       .setAudience('web3auth')

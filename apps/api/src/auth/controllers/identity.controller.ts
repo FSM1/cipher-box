@@ -55,8 +55,8 @@ export class IdentityController {
     // 2. Find or create user by email
     const { user, isNewUser } = await this.findOrCreateUserByEmail(googlePayload.email, 'google');
 
-    // 3. Sign CipherBox identity JWT
-    const idToken = await this.jwtIssuerService.signIdentityJwt(user.id);
+    // 3. Sign CipherBox identity JWT (include email for auth method identifier)
+    const idToken = await this.jwtIssuerService.signIdentityJwt(user.id, googlePayload.email);
 
     this.logger.log(
       `Google login: userId=${user.id}, email=${googlePayload.email}, isNew=${isNewUser}`
@@ -93,8 +93,8 @@ export class IdentityController {
     // 2. Find or create user by email
     const { user, isNewUser } = await this.findOrCreateUserByEmail(dto.email, 'email_passwordless');
 
-    // 3. Sign CipherBox identity JWT
-    const idToken = await this.jwtIssuerService.signIdentityJwt(user.id);
+    // 3. Sign CipherBox identity JWT (include email for auth method identifier)
+    const idToken = await this.jwtIssuerService.signIdentityJwt(user.id, dto.email);
 
     this.logger.log(`Email OTP login: userId=${user.id}, email=${dto.email}, isNew=${isNewUser}`);
 

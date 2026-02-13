@@ -107,7 +107,7 @@ export class AuthService {
         : this.web3AuthVerifier.extractAuthMethodType(payload, loginDto.loginType);
     const identifier =
       loginDto.loginType === 'corekit'
-        ? payload.sub || 'unknown'
+        ? payload.email || payload.sub || 'unknown'
         : this.web3AuthVerifier.extractIdentifier(payload);
 
     let authMethod = await this.authMethodRepository.findOne({
@@ -145,7 +145,7 @@ export class AuthService {
    */
   private async verifyCipherBoxJwt(
     idToken: string
-  ): Promise<{ sub?: string; verifierId?: string }> {
+  ): Promise<{ sub?: string; verifierId?: string; email?: string }> {
     try {
       const jwksData = this.jwtIssuerService.getJwksData();
       const jwks = jose.createLocalJWKSet(jwksData);
@@ -154,7 +154,11 @@ export class AuthService {
         audience: 'web3auth',
         algorithms: ['RS256'],
       });
-      return { sub: payload.sub, verifierId: payload.sub };
+      return {
+        sub: payload.sub,
+        verifierId: payload.sub,
+        email: payload.email as string | undefined,
+      };
     } catch (error) {
       throw new UnauthorizedException(
         `Invalid CipherBox identity token: ${error instanceof Error ? error.message : 'verification failed'}`
