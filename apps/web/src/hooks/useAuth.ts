@@ -121,6 +121,7 @@ export function useAuth() {
         });
       } else {
         console.error('[useAuth] Failed to load vault:', error);
+        throw error;
       }
     }
   }, [getVaultKeypair, setDerivedKeypair, setVaultKeys]);

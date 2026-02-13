@@ -681,7 +681,10 @@ describe('AuthService', () => {
 
       expect(result.email).toBe('test@example.com');
       expect(authMethodRepository.findOne).toHaveBeenCalledWith({
-        where: { userId: 'user-id', type: 'email_passwordless' },
+        where: [
+          { userId: 'user-id', type: 'email_passwordless' },
+          { userId: 'user-id', type: 'google' },
+        ],
         order: { lastUsedAt: 'DESC' },
       });
     });
