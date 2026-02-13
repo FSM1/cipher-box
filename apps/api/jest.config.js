@@ -13,6 +13,7 @@ module.exports = {
     '!**/dto/**', // Exclude DTOs (class definitions)
     '!**/entities/**', // Exclude TypeORM entities
     '!main.ts', // Exclude bootstrap
+    '!run-migrations.ts', // Exclude CLI migration runner
     '!app.controller.ts', // Exclude default NestJS app controller
     '!app.service.ts', // Exclude default NestJS app service
     '!health/**', // Exclude health check (infrastructure)

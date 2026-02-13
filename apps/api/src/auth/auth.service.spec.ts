@@ -1,9 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { UnauthorizedException, BadRequestException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { UnauthorizedException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import * as argon2 from 'argon2';
+import * as jose from 'jose';
 import { AuthService } from './auth.service';
 import { Web3AuthVerifierService } from './services/web3auth-verifier.service';
+import { JwtIssuerService } from './services/jwt-issuer.service';
 import { TokenService } from './services/token.service';
 import { User } from './entities/user.entity';
 import { AuthMethod } from './entities/auth-method.entity';
@@ -11,11 +14,13 @@ import { RefreshToken } from './entities/refresh-token.entity';
 
 describe('AuthService', () => {
   let service: AuthService;
+  let configService: Record<string, jest.Mock>;
   let web3AuthVerifier: jest.Mocked<Web3AuthVerifierService>;
+  let jwtIssuerService: Record<string, jest.Mock>;
   let tokenService: jest.Mocked<TokenService>;
-  let userRepository: jest.Mocked<Record<string, jest.Mock>>;
-  let authMethodRepository: jest.Mocked<Record<string, jest.Mock>>;
-  let refreshTokenRepository: jest.Mocked<Record<string, jest.Mock>>;
+  let userRepository: Record<string, jest.Mock>;
+  let authMethodRepository: Record<string, jest.Mock>;
+  let refreshTokenRepository: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     const mockUserRepo = {
@@ -49,10 +54,21 @@ describe('AuthService', () => {
       revokeAllUserTokens: jest.fn(),
     };
 
+    const mockConfigService = {
+      get: jest.fn(),
+    };
+
+    const mockJwtIssuerService = {
+      getJwksData: jest.fn(),
+      signIdentityJwt: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
+        { provide: ConfigService, useValue: mockConfigService },
         { provide: Web3AuthVerifierService, useValue: mockWeb3AuthVerifier },
+        { provide: JwtIssuerService, useValue: mockJwtIssuerService },
         { provide: TokenService, useValue: mockTokenService },
         { provide: getRepositoryToken(User), useValue: mockUserRepo },
         { provide: getRepositoryToken(AuthMethod), useValue: mockAuthMethodRepo },
@@ -61,7 +77,9 @@ describe('AuthService', () => {
     }).compile();
 
     service = module.get<AuthService>(AuthService);
+    configService = module.get(ConfigService);
     web3AuthVerifier = module.get(Web3AuthVerifierService);
+    jwtIssuerService = module.get(JwtIssuerService);
     tokenService = module.get(TokenService);
     userRepository = module.get(getRepositoryToken(User));
     authMethodRepository = module.get(getRepositoryToken(AuthMethod));
@@ -142,7 +160,11 @@ describe('AuthService', () => {
         derivationVersion: 1,
       };
       const mockPayload = { wallets: [{ type: 'ethereum', address: '0x123abc' }] };
-      const mockExistingUser = { id: 'user-id', publicKey: 'derived-key', derivationVersion: null };
+      const mockExistingUser = {
+        id: 'user-id',
+        publicKey: 'derived-key',
+        derivationVersion: null,
+      };
       const mockUpdatedUser = { id: 'user-id', publicKey: 'derived-key', derivationVersion: 1 };
       const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'external_wallet' };
       const mockTokens = { accessToken: 'at', refreshToken: 'rt' };
@@ -256,6 +278,153 @@ describe('AuthService', () => {
         'external_wallet'
       );
     });
+
+    it('should verify CipherBox JWT for corekit login type', async () => {
+      const corekitLoginDto = {
+        idToken: 'cipherbox-jwt',
+        publicKey: 'abc123',
+        loginType: 'corekit' as const,
+      };
+      const mockJwksData = { keys: [{ kty: 'RSA' }] };
+      const mockPayload = { sub: 'user-123', email: 'test@example.com' };
+
+      jwtIssuerService.getJwksData.mockReturnValue(mockJwksData);
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
+
+      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
+      const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'email_passwordless' };
+      const mockTokens = { accessToken: 'at', refreshToken: 'rt' };
+
+      userRepository.findOne.mockResolvedValue(mockUser);
+      authMethodRepository.findOne.mockResolvedValue(mockAuthMethod);
+      authMethodRepository.save.mockResolvedValue(mockAuthMethod);
+      tokenService.createTokens.mockResolvedValue(mockTokens);
+
+      const result = await service.login(corekitLoginDto);
+
+      expect(jose.jwtVerify).toHaveBeenCalledWith('cipherbox-jwt', 'mock-jwks', {
+        issuer: 'cipherbox',
+        audience: 'web3auth',
+        algorithms: ['RS256'],
+      });
+      expect(result.accessToken).toBe('at');
+      expect(web3AuthVerifier.verifyIdToken).not.toHaveBeenCalled();
+    });
+
+    it('should throw UnauthorizedException if CipherBox JWT verification fails', async () => {
+      const corekitLoginDto = {
+        idToken: 'bad-jwt',
+        publicKey: 'abc123',
+        loginType: 'corekit' as const,
+      };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockRejectedValue(new Error('token expired'));
+
+      await expect(service.login(corekitLoginDto)).rejects.toThrow(UnauthorizedException);
+      expect(tokenService.createTokens).not.toHaveBeenCalled();
+    });
+
+    it('should resolve placeholder publicKey for corekit login', async () => {
+      const corekitLoginDto = {
+        idToken: 'cipherbox-jwt',
+        publicKey: 'real-public-key',
+        loginType: 'corekit' as const,
+      };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({
+        payload: { sub: 'user-123', email: 'test@example.com' },
+      });
+
+      const placeholderUser = {
+        id: 'user-id',
+        publicKey: 'pending-core-kit-user-123-1234567890',
+        derivationVersion: null,
+      };
+      userRepository.findOne
+        .mockResolvedValueOnce(null) // not found by real publicKey
+        .mockResolvedValueOnce(placeholderUser); // found by placeholder
+      userRepository.save.mockResolvedValue({
+        ...placeholderUser,
+        publicKey: 'real-public-key',
+      });
+
+      const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'email_passwordless' };
+      authMethodRepository.findOne.mockResolvedValue(mockAuthMethod);
+      authMethodRepository.save.mockResolvedValue(mockAuthMethod);
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      const result = await service.login(corekitLoginDto);
+
+      expect(result.isNewUser).toBe(false);
+      expect(userRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({ publicKey: 'real-public-key' })
+      );
+    });
+
+    it('should use email_passwordless type and email as identifier for corekit login', async () => {
+      const corekitLoginDto = {
+        idToken: 'cipherbox-jwt',
+        publicKey: 'abc123',
+        loginType: 'corekit' as const,
+      };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({
+        payload: { sub: 'user-123', email: 'test@example.com' },
+      });
+
+      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
+      userRepository.findOne.mockResolvedValue(mockUser);
+      authMethodRepository.findOne.mockResolvedValue(null);
+      authMethodRepository.save.mockResolvedValue({ id: 'am-1' });
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      await service.login(corekitLoginDto);
+
+      // Should NOT call web3AuthVerifier methods for corekit login
+      expect(web3AuthVerifier.extractAuthMethodType).not.toHaveBeenCalled();
+      expect(web3AuthVerifier.extractIdentifier).not.toHaveBeenCalled();
+
+      // Should save auth method with email_passwordless type and email identifier
+      expect(authMethodRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-id',
+          type: 'email_passwordless',
+          identifier: 'test@example.com',
+        })
+      );
+    });
+
+    it('should backfill auth method identifier when email differs', async () => {
+      const mockPayload = { verifier: 'google', email: 'real-email@example.com' };
+      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
+      const mockAuthMethod = {
+        id: 'am-1',
+        userId: 'user-id',
+        type: 'google',
+        identifier: 'old-uuid-identifier',
+        lastUsedAt: null,
+      };
+      const mockTokens = { accessToken: 'at', refreshToken: 'rt' };
+
+      web3AuthVerifier.verifyIdToken.mockResolvedValue(mockPayload);
+      web3AuthVerifier.extractAuthMethodType.mockReturnValue('google');
+      web3AuthVerifier.extractIdentifier.mockReturnValue('real-email@example.com');
+      userRepository.findOne.mockResolvedValue(mockUser);
+      authMethodRepository.findOne.mockResolvedValue(mockAuthMethod);
+      authMethodRepository.save.mockResolvedValue(mockAuthMethod);
+      tokenService.createTokens.mockResolvedValue(mockTokens);
+
+      await service.login(loginDto);
+
+      expect(mockAuthMethod.identifier).toBe('real-email@example.com');
+    });
   });
 
   describe('refresh', () => {
@@ -313,6 +482,7 @@ describe('AuthService', () => {
         id: 'token-id',
         userId: 'user-id',
         tokenHash,
+        tokenPrefix: refreshToken.substring(0, 16),
         expiresAt: new Date(Date.now() + 86400000),
         revokedAt: null,
         user: { id: 'user-id', publicKey: 'pub-key' },
@@ -322,6 +492,7 @@ describe('AuthService', () => {
       refreshTokenRepository.find.mockResolvedValue([mockToken]);
       refreshTokenRepository.save.mockResolvedValue({ ...mockToken, revokedAt: new Date() });
       tokenService.createTokens.mockResolvedValue(mockNewTokens);
+      authMethodRepository.findOne.mockResolvedValue(null);
 
       const result = await service.refreshByToken(refreshToken);
 
@@ -336,6 +507,7 @@ describe('AuthService', () => {
         id: 'expired-id',
         userId: 'user-id',
         tokenHash,
+        tokenPrefix: refreshToken.substring(0, 16),
         expiresAt: new Date(Date.now() - 86400000),
         revokedAt: null,
         user: { id: 'user-id', publicKey: 'pub-key' },
@@ -365,6 +537,7 @@ describe('AuthService', () => {
         id: 'token-id',
         userId: 'user-id',
         tokenHash,
+        tokenPrefix: refreshToken.substring(0, 16),
         expiresAt: new Date(Date.now() + 86400000),
         revokedAt: null,
         user: { id: 'user-id', publicKey: 'pub-key' },
@@ -374,6 +547,7 @@ describe('AuthService', () => {
       refreshTokenRepository.find.mockResolvedValue([mockToken]);
       refreshTokenRepository.save.mockResolvedValue({ ...mockToken, revokedAt: new Date() });
       tokenService.createTokens.mockResolvedValue(mockNewTokens);
+      authMethodRepository.findOne.mockResolvedValue(null);
 
       await service.refreshByToken(refreshToken);
 
@@ -390,6 +564,7 @@ describe('AuthService', () => {
         id: 'token-id',
         userId: 'user-id',
         tokenHash: 'invalid-hash-format',
+        tokenPrefix: 'some-token-prefi',
         expiresAt: new Date(Date.now() + 86400000),
         revokedAt: null,
         user: { id: 'user-id', publicKey: 'pub-key' },
@@ -398,6 +573,36 @@ describe('AuthService', () => {
       refreshTokenRepository.find.mockResolvedValue([mockToken]);
 
       await expect(service.refreshByToken('some-token')).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('should include email in response when email auth method exists', async () => {
+      const refreshToken = 'valid-refresh-token';
+      const tokenHash = await argon2.hash(refreshToken);
+      const mockToken = {
+        id: 'token-id',
+        userId: 'user-id',
+        tokenHash,
+        tokenPrefix: refreshToken.substring(0, 16),
+        expiresAt: new Date(Date.now() + 86400000),
+        revokedAt: null,
+        user: { id: 'user-id', publicKey: 'pub-key' },
+      };
+
+      refreshTokenRepository.find.mockResolvedValue([mockToken]);
+      refreshTokenRepository.save.mockResolvedValue({ ...mockToken, revokedAt: new Date() });
+      tokenService.createTokens.mockResolvedValue({
+        accessToken: 'new-at',
+        refreshToken: 'new-rt',
+      });
+      authMethodRepository.findOne.mockResolvedValue({ identifier: 'test@example.com' });
+
+      const result = await service.refreshByToken(refreshToken);
+
+      expect(result.email).toBe('test@example.com');
+      expect(authMethodRepository.findOne).toHaveBeenCalledWith({
+        where: { userId: 'user-id', type: 'email_passwordless' },
+        order: { lastUsedAt: 'DESC' },
+      });
     });
   });
 
@@ -541,6 +746,136 @@ describe('AuthService', () => {
       await expect(service.unlinkMethod('user-id', 'method-id')).rejects.toThrow(
         'Cannot unlink your last auth method'
       );
+    });
+  });
+
+  describe('testLogin', () => {
+    it('should throw ForbiddenException if TEST_LOGIN_SECRET not set', async () => {
+      configService.get.mockReturnValue(undefined);
+
+      await expect(service.testLogin('test@example.com', 'any-secret')).rejects.toThrow(
+        ForbiddenException
+      );
+    });
+
+    it('should throw UnauthorizedException if secret does not match', async () => {
+      configService.get.mockReturnValue('correct-secret');
+
+      await expect(service.testLogin('test@example.com', 'wrong-secret')).rejects.toThrow(
+        UnauthorizedException
+      );
+    });
+
+    it('should create new user on first test login', async () => {
+      configService.get.mockReturnValue('test-secret');
+      authMethodRepository.findOne.mockResolvedValue(null);
+
+      const mockUser = { id: 'new-user-id', publicKey: 'generated-pubkey' };
+      userRepository.save.mockResolvedValue(mockUser);
+      authMethodRepository.save.mockResolvedValue({
+        id: 'am-1',
+        userId: 'new-user-id',
+        type: 'email_passwordless',
+      });
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      const result = await service.testLogin('Test@Example.com', 'test-secret');
+
+      expect(result.isNewUser).toBe(true);
+      expect(result.accessToken).toBe('at');
+      expect(result.refreshToken).toBe('rt');
+      expect(result.publicKeyHex).toBeDefined();
+      expect(result.privateKeyHex).toBeDefined();
+      expect(authMethodRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'email_passwordless',
+          identifier: 'test@example.com', // normalized
+        })
+      );
+    });
+
+    it('should return existing user on subsequent test login', async () => {
+      configService.get.mockReturnValue('test-secret');
+
+      const mockUser = { id: 'existing-id', publicKey: 'matching-key' };
+      const mockMethod = {
+        id: 'am-1',
+        userId: 'existing-id',
+        type: 'email_passwordless',
+        identifier: 'test@example.com',
+        user: mockUser,
+        lastUsedAt: null,
+      };
+      authMethodRepository.findOne.mockResolvedValue(mockMethod);
+      // The user's publicKey already matches (no save needed)
+      authMethodRepository.save.mockResolvedValue(mockMethod);
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      // We need the generated key to match mockUser.publicKey for the "no update" path.
+      // Since the key is deterministic, just allow any publicKey and check isNewUser.
+      const result = await service.testLogin('test@example.com', 'test-secret');
+
+      expect(result.isNewUser).toBe(false);
+    });
+
+    it('should update publicKey if different from existing', async () => {
+      configService.get.mockReturnValue('test-secret');
+
+      const mockUser = { id: 'user-id', publicKey: 'old-different-key' };
+      const mockMethod = {
+        user: mockUser,
+        lastUsedAt: null,
+      };
+      authMethodRepository.findOne.mockResolvedValue(mockMethod);
+      userRepository.save.mockResolvedValue(mockUser);
+      authMethodRepository.save.mockResolvedValue(mockMethod);
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      await service.testLogin('test@example.com', 'test-secret');
+
+      // publicKey should have been updated (deterministic key != 'old-different-key')
+      expect(userRepository.save).toHaveBeenCalled();
+    });
+
+    it('should generate deterministic keypair for same email', async () => {
+      configService.get.mockReturnValue('test-secret');
+      authMethodRepository.findOne.mockResolvedValue(null);
+      userRepository.save.mockResolvedValue({ id: 'id', publicKey: 'pk' });
+      authMethodRepository.save.mockResolvedValue({});
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      const result1 = await service.testLogin('test@example.com', 'test-secret');
+
+      // Reset mocks for second call
+      authMethodRepository.findOne.mockResolvedValue(null);
+      userRepository.save.mockResolvedValue({ id: 'id2', publicKey: 'pk' });
+      authMethodRepository.save.mockResolvedValue({});
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at2', refreshToken: 'rt2' });
+
+      const result2 = await service.testLogin('test@example.com', 'test-secret');
+
+      expect(result1.publicKeyHex).toBe(result2.publicKeyHex);
+      expect(result1.privateKeyHex).toBe(result2.privateKeyHex);
+    });
+
+    it('should generate different keypair for different emails', async () => {
+      configService.get.mockReturnValue('test-secret');
+      authMethodRepository.findOne.mockResolvedValue(null);
+      userRepository.save.mockResolvedValue({ id: 'id', publicKey: 'pk' });
+      authMethodRepository.save.mockResolvedValue({});
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      const result1 = await service.testLogin('user1@example.com', 'test-secret');
+
+      authMethodRepository.findOne.mockResolvedValue(null);
+      userRepository.save.mockResolvedValue({ id: 'id2', publicKey: 'pk' });
+      authMethodRepository.save.mockResolvedValue({});
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at2', refreshToken: 'rt2' });
+
+      const result2 = await service.testLogin('user2@example.com', 'test-secret');
+
+      expect(result1.publicKeyHex).not.toBe(result2.publicKeyHex);
+      expect(result1.privateKeyHex).not.toBe(result2.privateKeyHex);
     });
   });
 });
