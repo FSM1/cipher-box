@@ -1,0 +1,1 @@
+redis is runnig on the host 192.168.133.114

@@ -1,0 +1,1 @@
+I also updated `DB_HOST` to match since your Postgres is on the same host. Restart the API for the change to take effect — the OTP flow should work after that.

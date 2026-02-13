@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "4c3acd70e16e",
+  "session_id": "777e8787-94fe-4cd9-a326-080116e84ee4",
+  "strategy": "auto-commit",
+  "created_at": "2026-02-13T12:30:26.353848Z",
+  "branch": "feat/phase-12-multi-factor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/.env"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "8fcf1caa-e75e-438b-b803-89d4339f4f5b",
+  "checkpoint_transcript_start": 781,
+  "transcript_lines_at_start": 781,
+  "token_usage": {
+    "input_tokens": 7,
+    "cache_creation_tokens": 1828,
+    "cache_read_tokens": 753780,
+    "output_tokens": 272,
+    "api_call_count": 5
+  }
+}
