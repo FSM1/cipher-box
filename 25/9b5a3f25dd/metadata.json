@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "259b5a3f25dd",
+  "strategy": "auto-commit",
+  "branch": "feat/phase-12-multi-factor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/auth/auth.service.ts",
+    "apps/api/src/auth/controllers/identity.controller.ts",
+    "apps/api/src/auth/services/jwt-issuer.service.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/25/9b5a3f25dd/0/metadata.json",
+      "transcript": "/25/9b5a3f25dd/0/full.jsonl",
+      "context": "",
+      "content_hash": "/25/9b5a3f25dd/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 15,
+    "cache_creation_tokens": 12284,
+    "cache_read_tokens": 1312625,
+    "output_tokens": 1984,
+    "api_call_count": 13
+  }
+}

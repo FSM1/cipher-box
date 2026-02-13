@@ -1,0 +1,1 @@
+ok now when i refresh the app, the users uuid is displayed
