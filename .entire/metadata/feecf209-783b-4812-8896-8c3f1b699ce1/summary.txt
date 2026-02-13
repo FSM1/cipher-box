@@ -1,0 +1,35 @@
+12 clean commits across the phase. All done.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► PHASE 12.2 COMPLETE ✓
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Phase 12.2: Encrypted Device Registry**
+
+3 plans executed across 3 waves
+Goal verified ✓ (4/4 must-haves)
+
+| Plan | What it built | Duration |
+|------|--------------|----------|
+| 12.2-01 | Registry crypto primitives (HKDF IPNS derivation, ECIES encrypt/decrypt, device keygen, 27 tests) | 3 min |
+| 12.2-02 | Device identity (IndexedDB) + registry service (CRUD, IPFS pin, IPNS publish) | 4 min |
+| 12.2-03 | Zustand store, 60s polling hook, auth flow integration, logout cleanup | 3 min |
+| *fix* | Mounted orphan polling hook in FileBrowser | - |
+
+───────────────────────────────────────────────────────────────
+
+## ▶ Next Up
+
+**Phase 12.3: SIWE + Unified Identity** — Wallet login via SIWE, multi-auth linking, ADR-001 migration
+
+`/gsd:discuss-phase 12.3` — gather context and clarify approach
+
+<sub>`/clear` first → fresh context window</sub>
+
+───────────────────────────────────────────────────────────────
+
+**Also available:**
+- `/gsd:plan-phase 12.3` — skip discussion, plan directly
+- `/gsd:verify-work 12.2` — manual acceptance testing before continuing
+
+───────────────────────────────────────────────────────────────
