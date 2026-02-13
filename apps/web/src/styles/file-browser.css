@@ -580,7 +580,7 @@
   gap: var(--spacing-md);
   padding: var(--spacing-xs) 20px;
   background-color: var(--color-green-darker);
-  border-bottom: var(--border-thickness) solid var(--color-green-primary);
+  border-top: var(--border-thickness) solid var(--color-green-primary);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-sm);
 }
