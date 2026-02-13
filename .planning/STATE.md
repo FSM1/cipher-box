@@ -64,12 +64,10 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-4 pending todo(s):
+2 pending todo(s):
 
-- `2026-01-23-simple-text-file-editor-modal.md` -- Add simple text file editor modal (area: ui)
 - `2026-02-07-web-worker-large-file-encryption.md` -- Offload large file encryption to Web Worker (area: ui)
-- `2026-02-10-remove-debug-eprintln-statements.md` -- Remove debug eprintln! statements from FUSE code (area: desktop)
-- `2026-02-13-test-login-endpoint-for-e2e.md` -- Add test-login endpoint for E2E automation (area: testing)
+- `2026-02-10-fix-flaky-post-reload-e2e-tests.md` -- Fix flaky post-reload e2e tests (3.8, 3.10) (area: testing)
 
 ### Roadmap Evolution
 

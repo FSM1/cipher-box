@@ -28,6 +28,8 @@ import type {
   LoginDto,
   LoginResponseDto,
   LogoutResponseDto,
+  TestLoginDto,
+  TestLoginResponseDto,
   TokenResponseDto,
   UnlinkMethodDto,
   UnlinkMethodResponseDto,
@@ -521,6 +523,83 @@ export const useAuthControllerUnlinkMethod = <TError = void, TContext = unknown>
   TContext
 > => {
   const mutationOptions = getAuthControllerUnlinkMethodMutationOptions(options);
+
+  return useMutation(mutationOptions, queryClient);
+};
+/**
+ * @summary Test-only login bypassing Core Kit (requires TEST_LOGIN_SECRET)
+ */
+export const authControllerTestLogin = (testLoginDto: TestLoginDto, signal?: AbortSignal) => {
+  return customInstance<TestLoginResponseDto>({
+    url: `/auth/test-login`,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    data: testLoginDto,
+    signal,
+  });
+};
+
+export const getAuthControllerTestLoginMutationOptions = <
+  TError = void,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof authControllerTestLogin>>,
+    TError,
+    { data: TestLoginDto },
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof authControllerTestLogin>>,
+  TError,
+  { data: TestLoginDto },
+  TContext
+> => {
+  const mutationKey = ['authControllerTestLogin'];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof authControllerTestLogin>>,
+    { data: TestLoginDto }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return authControllerTestLogin(data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AuthControllerTestLoginMutationResult = NonNullable<
+  Awaited<ReturnType<typeof authControllerTestLogin>>
+>;
+export type AuthControllerTestLoginMutationBody = TestLoginDto;
+export type AuthControllerTestLoginMutationError = void;
+
+/**
+ * @summary Test-only login bypassing Core Kit (requires TEST_LOGIN_SECRET)
+ */
+export const useAuthControllerTestLogin = <TError = void, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof authControllerTestLogin>>,
+      TError,
+      { data: TestLoginDto },
+      TContext
+    >;
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof authControllerTestLogin>>,
+  TError,
+  { data: TestLoginDto },
+  TContext
+> => {
+  const mutationOptions = getAuthControllerTestLoginMutationOptions(options);
 
   return useMutation(mutationOptions, queryClient);
 };

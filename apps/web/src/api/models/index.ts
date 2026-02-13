@@ -36,6 +36,8 @@ export * from './sendOtpResponseDto';
 export * from './teeKeysDto';
 export * from './teeKeysDtoPreviousEpoch';
 export * from './teeKeysDtoPreviousPublicKey';
+export * from './testLoginDto';
+export * from './testLoginResponseDto';
 export * from './tokenResponseDto';
 export * from './unlinkMethodDto';
 export * from './unlinkMethodResponseDto';

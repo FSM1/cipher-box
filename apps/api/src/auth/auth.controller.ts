@@ -16,6 +16,7 @@ import { Response, Request as ExpressRequest } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto, LoginResponseDto } from './dto/login.dto';
 import { TokenResponseDto, DesktopRefreshDto, LogoutResponseDto } from './dto/token.dto';
+import { TestLoginDto, TestLoginResponseDto } from './dto/test-login.dto';
 import {
   LinkMethodDto,
   AuthMethodResponseDto,
@@ -204,5 +205,35 @@ export class AuthController {
   ): Promise<UnlinkMethodResponseDto> {
     await this.authService.unlinkMethod(req.user.id, unlinkDto.methodId);
     return { success: true };
+  }
+
+  @Post('test-login')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Test-only login bypassing Core Kit (requires TEST_LOGIN_SECRET)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Test login successful',
+    type: TestLoginResponseDto,
+  })
+  @ApiResponse({ status: 403, description: 'Test login not enabled' })
+  @ApiResponse({ status: 401, description: 'Invalid secret' })
+  async testLogin(
+    @Body() dto: TestLoginDto,
+    @Res({ passthrough: true }) res: Response
+  ): Promise<TestLoginResponseDto> {
+    const result = await this.authService.testLogin(dto.email, dto.secret);
+
+    // Set refresh token cookie (same as normal login for web clients)
+    res.cookie('refresh_token', result.refreshToken, REFRESH_TOKEN_COOKIE_OPTIONS);
+
+    return {
+      accessToken: result.accessToken,
+      refreshToken: result.refreshToken,
+      isNewUser: result.isNewUser,
+      publicKeyHex: result.publicKeyHex,
+      privateKeyHex: result.privateKeyHex,
+    };
   }
 }

@@ -224,6 +224,42 @@
         "tags": ["Auth"]
       }
     },
+    "/auth/test-login": {
+      "post": {
+        "operationId": "AuthController_testLogin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestLoginDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Test login successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestLoginResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid secret"
+          },
+          "403": {
+            "description": "Test login not enabled"
+          }
+        },
+        "summary": "Test-only login bypassing Core Kit (requires TEST_LOGIN_SECRET)",
+        "tags": ["Auth"]
+      }
+    },
     "/auth/.well-known/jwks.json": {
       "get": {
         "operationId": "IdentityController_getJwks",
@@ -865,6 +901,11 @@
             "type": "string",
             "description": "New refresh token (only present for desktop clients using X-Client-Type: desktop header)",
             "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+          },
+          "email": {
+            "type": "string",
+            "description": "User email from their most recently used email auth method",
+            "example": "user@example.com"
           }
         },
         "required": ["accessToken"]
@@ -938,6 +979,46 @@
           }
         },
         "required": ["success"]
+      },
+      "TestLoginDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address for the test user"
+          },
+          "secret": {
+            "type": "string",
+            "description": "Secret that must match TEST_LOGIN_SECRET env var"
+          }
+        },
+        "required": ["email", "secret"]
+      },
+      "TestLoginResponseDto": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "JWT access token"
+          },
+          "refreshToken": {
+            "type": "string",
+            "description": "Refresh token"
+          },
+          "isNewUser": {
+            "type": "boolean",
+            "description": "Whether this is a newly created user"
+          },
+          "publicKeyHex": {
+            "type": "string",
+            "description": "Uncompressed secp256k1 public key (hex, 130 chars)"
+          },
+          "privateKeyHex": {
+            "type": "string",
+            "description": "secp256k1 private key (hex, 64 chars)"
+          }
+        },
+        "required": ["accessToken", "refreshToken", "isNewUser", "publicKeyHex", "privateKeyHex"]
       },
       "GoogleLoginDto": {
         "type": "object",
