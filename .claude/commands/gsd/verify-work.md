@@ -54,21 +54,22 @@ Phase: $ARGUMENTS (optional)
 </process>
 
 <anti_patterns>
+
 - Don't use AskUserQuestion for test responses — plain text conversation
 - Don't ask severity — infer from description
 - Don't present full checklist upfront — one test at a time
 - Don't run automated tests — this is manual user validation
 - Don't fix issues during testing — log as gaps, diagnose after all tests complete
-</anti_patterns>
+  </anti_patterns>
 
 <offer_next>
 Output this markdown directly (not as a code block). Route based on UAT results:
 
-| Status | Route |
-|--------|-------|
-| All tests pass + more phases | Route A (next phase) |
-| All tests pass + last phase | Route B (milestone complete) |
-| Issues found + fix plans ready | Route C (execute fixes) |
+| Status                          | Route                         |
+| ------------------------------- | ----------------------------- |
+| All tests pass + more phases    | Route A (next phase)          |
+| All tests pass + last phase     | Route B (milestone complete)  |
+| Issues found + fix plans ready  | Route C (execute fixes)       |
 | Issues found + planning blocked | Route D (manual intervention) |
 
 ---
@@ -76,7 +77,7 @@ Output this markdown directly (not as a code block). Route based on UAT results:
 **Route A: All tests pass, more phases remain**
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- GSD ► PHASE {Z} VERIFIED ✓
+GSD ► PHASE {Z} VERIFIED ✓
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 **Phase {Z}: {Name}**
@@ -97,8 +98,10 @@ UAT complete ✓
 ───────────────────────────────────────────────────────────────
 
 **Also available:**
+
 - /gsd:plan-phase {Z+1} — skip discussion, plan directly
 - /gsd:execute-phase {Z+1} — skip to execution (if already planned)
+- /design:sync check — check if design file needs updating (UI phases)
 
 ───────────────────────────────────────────────────────────────
 
@@ -107,7 +110,7 @@ UAT complete ✓
 **Route B: All tests pass, milestone complete**
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- GSD ► PHASE {Z} VERIFIED ✓
+GSD ► PHASE {Z} VERIFIED ✓
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 **Phase {Z}: {Name}**
@@ -128,7 +131,9 @@ Final phase verified ✓
 ───────────────────────────────────────────────────────────────
 
 **Also available:**
+
 - /gsd:complete-milestone — skip audit, archive directly
+- /design:sync check — check if design file needs updating (UI phases)
 
 ───────────────────────────────────────────────────────────────
 
@@ -137,7 +142,7 @@ Final phase verified ✓
 **Route C: Issues found, fix plans ready**
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- GSD ► PHASE {Z} ISSUES FOUND ⚠
+GSD ► PHASE {Z} ISSUES FOUND ⚠
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 **Phase {Z}: {Name}**
@@ -163,7 +168,8 @@ Fix plans verified ✓
 ───────────────────────────────────────────────────────────────
 
 **Also available:**
-- cat .planning/phases/{phase_dir}/*-PLAN.md — review fix plans
+
+- cat .planning/phases/{phase_dir}/\*-PLAN.md — review fix plans
 - /gsd:plan-phase {Z} --gaps — regenerate fix plans
 
 ───────────────────────────────────────────────────────────────
@@ -173,7 +179,7 @@ Fix plans verified ✓
 **Route D: Issues found, planning blocked**
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- GSD ► PHASE {Z} BLOCKED ✗
+GSD ► PHASE {Z} BLOCKED ✗
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 **Phase {Z}: {Name}**
@@ -192,6 +198,7 @@ Fix planning blocked after {X} iterations
 **Manual intervention required**
 
 Review the issues above and either:
+
 1. Provide guidance for fix planning
 2. Manually address blockers
 3. Accept current state and continue
@@ -199,6 +206,7 @@ Review the issues above and either:
 ───────────────────────────────────────────────────────────────
 
 **Options:**
+
 - /gsd:plan-phase {Z} --gaps — retry fix planning with guidance
 - /gsd:discuss-phase {Z} — gather more context before replanning
 
@@ -206,6 +214,7 @@ Review the issues above and either:
 </offer_next>
 
 <success_criteria>
+
 - [ ] UAT.md created with tests from SUMMARY.md
 - [ ] Tests presented one at a time with expected behavior
 - [ ] Plain text responses (no structured forms)
@@ -216,4 +225,4 @@ Review the issues above and either:
 - [ ] If issues: gsd-planner creates fix plans from diagnosed gaps
 - [ ] If issues: gsd-plan-checker verifies fix plans (max 3 iterations)
 - [ ] Ready for `/gsd:execute-phase` when complete
-</success_criteria>
+      </success_criteria>
