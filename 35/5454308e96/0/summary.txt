@@ -1,0 +1,13 @@
+API recompiled and restarted cleanly. And IPNS even resolved successfully this time. Here's a summary of the changes:
+
+**Backend:**
+- `auth.service.ts`: `refreshByToken` now queries the user's `email_passwordless` auth method and returns the email
+- `auth.controller.ts`: Passes `email` through in the refresh response (both web and desktop)
+- `dto/token.dto.ts`: Added optional `email` field to `TokenResponseDto` and `RefreshServiceResult`
+
+**Frontend:**
+- `lib/api/auth.ts`: Added `email?: string` to `TokenResponse` type
+- `hooks/useAuth.ts`: Sets `userEmail` from refresh response during session restore
+- `components/layout/UserMenu.tsx`: Fallback changed from `'User'` to `'[an0n]'`
+
+Now on session refresh, the backend returns the email from the auth method table — no PII stored locally, and `[an0n]` shows when no email is available (e.g. Google login).

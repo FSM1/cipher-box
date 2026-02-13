@@ -1,0 +1,1 @@
+hmmm, given the privacy focus of the app, I think its better not to store any PII in local storage.
