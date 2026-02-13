@@ -359,6 +359,7 @@ All tests passed. Ready to continue.
 
 - `/gsd:plan-phase {next}` — Plan next phase
 - `/gsd:execute-phase {next}` — Execute next phase
+- `/design:sync check` — Check if design file needs updating (UI phases)
 ```
 
 </step>
