@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 Phase: 12 COMPLETE (first of 11 M2 phases: 11-17 + decimal insertions)
 Plan: All 5 plans executed and verified
 Status: Complete -- all checkpoints passed, E2E verified
-Last activity: 2026-02-13 -- Phase 12 verified end-to-end, security review complete
+Last activity: 2026-02-13 -- Quick task 015: SendGrid email OTP + Google OAuth staging wiring
 
 Progress: [##########..........] 55% (M1 complete, M2 Phase 12 complete)
 
