@@ -24,6 +24,23 @@ export const TEST_CREDENTIALS = {
 };
 
 /**
+ * Cached auth state from test-login endpoint.
+ * Used to re-inject state after page reload (since test-login bypasses
+ * Core Kit, there's no persistent session to restore from).
+ */
+let cachedTestAuthState: {
+  accessToken: string;
+  email: string;
+  publicKeyArr: number[];
+  privateKeyArr: number[];
+  rootFolderKeyArr: number[];
+  rootIpnsPublicKeyArr: number[];
+  rootIpnsPrivateKeyArr: number[];
+  rootIpnsName: string;
+  vaultId: string;
+} | null = null;
+
+/**
  * Performs email login through CipherBox's custom login UI.
  *
  * When TEST_LOGIN_SECRET is set, uses the /auth/test-login endpoint to bypass
@@ -96,7 +113,7 @@ async function loginViaTestEndpoint(page: Page, email: string): Promise<void> {
     throw new Error(`Test login failed (${loginResponse.status()}): ${body}`);
   }
 
-  const { accessToken, publicKeyHex, privateKeyHex } = await loginResponse.json();
+  const { accessToken, refreshToken, publicKeyHex, privateKeyHex } = await loginResponse.json();
   const publicKey = hexToBytes(publicKeyHex);
   const privateKey = hexToBytes(privateKeyHex);
 
@@ -158,15 +175,56 @@ async function loginViaTestEndpoint(page: Page, email: string): Promise<void> {
     rootIpnsPrivateKey = newVault.rootIpnsKeypair.privateKey;
   }
 
+  // Cache state for re-injection after page reloads
+  cachedTestAuthState = {
+    accessToken,
+    email,
+    publicKeyArr: Array.from(publicKey),
+    privateKeyArr: Array.from(privateKey),
+    rootFolderKeyArr: Array.from(rootFolderKey),
+    rootIpnsPublicKeyArr: Array.from(rootIpnsPublicKey),
+    rootIpnsPrivateKeyArr: Array.from(rootIpnsPrivateKey),
+    rootIpnsName,
+    vaultId,
+  };
+
+  // 2.5. Set refresh token cookie in the browser context for session persistence
+  const url = new URL(apiBase);
+  await page.context().addCookies([{
+    name: 'refresh_token',
+    value: refreshToken,
+    domain: url.hostname,
+    path: '/auth',
+    httpOnly: true,
+    secure: false, // dev mode
+    sameSite: 'Lax',
+  }]);
+
   // 3. Navigate to app so we can inject state into Zustand stores
   await page.goto('/');
+
+  await injectTestAuthState(page);
+
+  // 5. Navigate to files page via hash router (no full reload — preserves Zustand state)
+  await page.evaluate(() => { window.location.hash = '#/files'; });
+  await page.waitForURL('**/files', { timeout: 30000 });
+}
+
+/**
+ * Inject cached test auth state into Zustand stores.
+ * Used both during initial login and after page reloads.
+ */
+async function injectTestAuthState(page: Page): Promise<void> {
+  if (!cachedTestAuthState) {
+    throw new Error('No cached test auth state — call loginViaEmail first');
+  }
 
   // Wait for the app to load and expose stores (dev mode only)
   await page.waitForFunction(() => !!(window as Record<string, unknown>).__ZUSTAND_STORES, {
     timeout: 15000,
   });
 
-  // 4. Inject auth + vault state into Zustand stores
+  // Inject auth + vault state into Zustand stores
   // Arrays are used because Uint8Array can't be serialized across page.evaluate boundary
   await page.evaluate(
     (data) => {
@@ -196,21 +254,39 @@ async function loginViaTestEndpoint(page: Page, email: string): Promise<void> {
         vaultId: data.vaultId,
       });
     },
-    {
-      accessToken,
-      email,
-      publicKeyArr: Array.from(publicKey),
-      privateKeyArr: Array.from(privateKey),
-      rootFolderKeyArr: Array.from(rootFolderKey),
-      rootIpnsPublicKeyArr: Array.from(rootIpnsPublicKey),
-      rootIpnsPrivateKeyArr: Array.from(rootIpnsPrivateKey),
-      rootIpnsName,
-      vaultId,
-    }
+    cachedTestAuthState
   );
+}
 
-  // 5. Navigate to files page — app should see authenticated + vault loaded
-  await page.goto('/files');
+/**
+ * Re-inject test auth state after a page reload.
+ * Since test-login bypasses Core Kit, there's no persistent session —
+ * this function restores Zustand stores from the cached first login,
+ * refreshes the access token via the HTTP-only cookie, then navigates
+ * to /files.
+ *
+ * Call this after page.reload() in tests that use the test-login flow.
+ * For tests using the real Core Kit flow, this is a no-op (Core Kit
+ * auto-restores its session).
+ */
+export async function reinjectTestAuthAfterReload(page: Page): Promise<void> {
+  // If not using test-login, Core Kit handles session restore
+  if (!process.env.TEST_LOGIN_SECRET || !cachedTestAuthState) return;
+
+  // Try to refresh the access token via the cookie
+  const apiBase = process.env.API_BASE_URL || 'http://localhost:3000';
+  const refreshResponse = await page.request.post(`${apiBase}/auth/refresh`);
+
+  if (refreshResponse.ok()) {
+    const { accessToken, email } = await refreshResponse.json();
+    cachedTestAuthState.accessToken = accessToken;
+    if (email) cachedTestAuthState.email = email;
+  }
+
+  await injectTestAuthState(page);
+
+  // Navigate to files via hash router
+  await page.evaluate(() => { window.location.hash = '#/files'; });
   await page.waitForURL('**/files', { timeout: 30000 });
 }
 
