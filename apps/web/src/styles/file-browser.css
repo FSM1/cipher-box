@@ -629,12 +629,12 @@
   box-shadow: var(--glow-green);
 }
 
-.selection-action-bar-delete {
+.selection-action-bar .selection-action-bar-delete {
   color: var(--color-error);
   border-color: var(--color-error);
 }
 
-.selection-action-bar-delete:hover:not(:disabled) {
+.selection-action-bar .selection-action-bar-delete:hover:not(:disabled) {
   box-shadow: 0 0 8px rgb(255 0 0 / 20%);
 }
 
