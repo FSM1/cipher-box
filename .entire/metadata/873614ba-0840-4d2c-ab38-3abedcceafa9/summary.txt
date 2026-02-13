@@ -1,0 +1,46 @@
+Committed: `docs(12.2): capture phase context for Encrypted Device Registry`
+
+---
+
+## Decisions Captured
+
+### Registry Schema
+- Device ID = hash of device public key (deterministic, dedup-safe)
+- Rich metadata (name, platform, timestamps, app version, model, IP hash, status)
+- Status field revocation model (pending/authorized/revoked with audit trail)
+
+### Storage & Encryption
+- Separate IPNS name (independent from vault)
+- Deterministic IPNS derivation from privateKey
+- ECIES encryption with user's publicKey
+- Single encrypted JSON blob
+
+### Discovery & Recovery
+- Any session with privateKey can derive registry IPNS name
+- Auto-create on first auth
+- Subsequent devices register as "pending" (non-blocking until 12.4)
+
+### Concurrency & Conflicts
+- Last-write-wins with monotonic sequence counter
+- Periodic polling (~60s) for registry changes
+
+## Noted for Later
+- **Migrate vault IPNS to deterministic derivation** — future phase (todo logged)
+- **CRDT merge** — deferred, can add if concurrency issues arise
+- **Device approval gate** — Phase 12.4
+
+---
+
+## Next Up
+
+**Phase 12.2: Encrypted Device Registry** — Encrypted device metadata on IPFS for cross-device infrastructure
+
+`/gsd:plan-phase 12.2`
+
+<sub>`/clear` first for fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:plan-phase 12.2 --skip-research` — plan without research
+- Review/edit CONTEXT.md before continuing

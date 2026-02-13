@@ -1,0 +1,161 @@
+/**
+ * Responsive Styles - Terminal Aesthetic
+ *
+ * Mobile-first responsive design for the app shell and file browser.
+ * Breakpoint: 768px (tablet/desktop boundary)
+ *
+ * Mobile features:
+ * - AppShell switches to single column layout
+ * - App sidebar slides in as overlay (hidden by default)
+ * - Touch-friendly sizing
+ * - 2-column file list (date hidden)
+ */
+
+/* ==========================================================================
+   DEPRECATED: Old file-browser toggle/backdrop styles
+   No longer used - sidebar removed from FileBrowser in Phase 6.3
+   Now using AppShell layout with app-level sidebar
+   ========================================================================== */
+
+/*
+.file-browser-toggle { ... }
+.file-browser-backdrop { ... }
+.file-browser-sidebar-close { ... }
+*/
+
+/* ==========================================================================
+   AppShell Mobile Overlay
+   ========================================================================== */
+
+/* ==========================================================================
+   Mobile Layout Overrides
+   ========================================================================== */
+
+@media (max-width: 768px) {
+  /* AppShell: single column layout on mobile */
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'header'
+      'main'
+      'footer';
+  }
+
+  /* App header: tighter padding */
+  .app-header {
+    padding: var(--spacing-xs) var(--spacing-sm);
+  }
+
+  /* App footer: tighter padding */
+  .app-footer {
+    padding: var(--spacing-xs) var(--spacing-sm);
+  }
+
+  /* Footer links hidden on mobile */
+  .footer-center {
+    display: none;
+  }
+
+  /* File browser content area */
+  .file-browser-content {
+    padding: var(--spacing-sm);
+  }
+
+  /* Toolbar: wrap on narrow screens */
+  .file-browser-toolbar {
+    gap: var(--spacing-xs);
+    flex-wrap: wrap;
+  }
+
+  /* File list: 2-column layout on mobile (date hidden) */
+  .file-list-header {
+    grid-template-columns: 1fr 80px;
+    grid-template-areas: "name size";
+  }
+
+  .file-list-item {
+    grid-template-columns: 1fr 80px;
+    grid-template-areas: "name size";
+  }
+
+  .file-list-header-date,
+  .file-list-item-date {
+    display: none;
+  }
+
+  /* Empty state: smaller margins */
+  .empty-state {
+    margin: var(--spacing-md);
+    min-height: 200px;
+  }
+
+  /* Selection action bar: stack on mobile */
+  .selection-action-bar {
+    flex-wrap: wrap;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-xs) var(--spacing-sm);
+  }
+
+  .selection-action-bar-actions {
+    flex-wrap: wrap;
+  }
+
+  /* Context menu: touch-friendly */
+  .context-menu {
+    min-width: 200px;
+  }
+
+  .context-menu-item {
+    padding: var(--spacing-sm) var(--spacing-md);
+    font-size: var(--font-size-sm);
+  }
+
+  /* Dialogs: full width on small screens */
+  .modal-container {
+    max-width: calc(100vw - 2rem);
+    margin: var(--spacing-md);
+  }
+
+  /* Login: adjust spacing */
+  .login-container {
+    padding: var(--spacing-md);
+  }
+
+  .login-container h1 {
+    font-size: 1.5rem;
+  }
+}
+
+/* ==========================================================================
+   Desktop Layout (default)
+   ========================================================================== */
+
+@media (min-width: 769px) {
+  /* App sidebar always visible on desktop */
+  .app-sidebar {
+    position: relative;
+    transform: none;
+  }
+}
+
+/* ==========================================================================
+   Touch Interactions
+   ========================================================================== */
+
+/* Prevent text selection during long-press */
+.file-list-item {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Visual feedback for touch */
+@media (pointer: coarse) {
+  .file-list-item:active {
+    background-color: var(--color-green-darker);
+  }
+
+  .folder-tree-item:active {
+    background-color: var(--color-green-darker);
+  }
+}
