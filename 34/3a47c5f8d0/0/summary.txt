@@ -1,0 +1,5 @@
+Upload is working now. The file `cipherbox-test.txt` (26 B) uploaded successfully and appears in the file list. Storage shows 42 B / 500.0 MB.
+
+The fix was pointing `IPFS_LOCAL_API_URL` to `192.168.133.114:5001` where Kubo actually runs, instead of `localhost:5001`.
+
+Now, you mentioned wanting to work on the download and move buttons being barely visible. Should I pick that up now, or was there anything else you wanted to verify with the uploads first?
