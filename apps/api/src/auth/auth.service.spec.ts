@@ -366,7 +366,7 @@ describe('AuthService', () => {
       );
     });
 
-    it('should use email_passwordless type and email as identifier for corekit login', async () => {
+    it('should find existing auth method by identifier for corekit login (no duplicates)', async () => {
       const corekitLoginDto = {
         idToken: 'cipherbox-jwt',
         publicKey: 'abc123',
@@ -380,9 +380,17 @@ describe('AuthService', () => {
       });
 
       const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
+      const mockAuthMethod = {
+        id: 'am-1',
+        userId: 'user-id',
+        type: 'google',
+        identifier: 'test@example.com',
+        lastUsedAt: null,
+      };
       userRepository.findOne.mockResolvedValue(mockUser);
-      authMethodRepository.findOne.mockResolvedValue(null);
-      authMethodRepository.save.mockResolvedValue({ id: 'am-1' });
+      // Identity controller already created a 'google' auth method for this user
+      authMethodRepository.findOne.mockResolvedValue(mockAuthMethod);
+      authMethodRepository.save.mockResolvedValue(mockAuthMethod);
       tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
 
       await service.login(corekitLoginDto);
@@ -391,12 +399,10 @@ describe('AuthService', () => {
       expect(web3AuthVerifier.extractAuthMethodType).not.toHaveBeenCalled();
       expect(web3AuthVerifier.extractIdentifier).not.toHaveBeenCalled();
 
-      // Should save auth method with email_passwordless type and email identifier
-      expect(authMethodRepository.save).toHaveBeenCalledWith(
+      // Should look up by userId + identifier, not hardcode type
+      expect(authMethodRepository.findOne).toHaveBeenCalledWith(
         expect.objectContaining({
-          userId: 'user-id',
-          type: 'email_passwordless',
-          identifier: 'test@example.com',
+          where: { userId: 'user-id', identifier: 'test@example.com' },
         })
       );
     });

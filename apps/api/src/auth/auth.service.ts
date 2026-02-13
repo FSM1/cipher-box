@@ -110,31 +110,41 @@ export class AuthService {
     }
 
     // 3. Find or create auth method
-    const authMethodType =
-      loginDto.loginType === 'corekit'
-        ? 'email_passwordless'
-        : this.web3AuthVerifier.extractAuthMethodType(payload, loginDto.loginType);
-    const identifier =
-      loginDto.loginType === 'corekit'
-        ? payload.email || payload.sub || 'unknown'
-        : this.web3AuthVerifier.extractIdentifier(payload);
+    // For corekit logins, the identity controller already created the auth method
+    // (with the correct type: 'google' or 'email_passwordless'). Look up by
+    // userId + identifier to avoid creating duplicates with a hardcoded type.
+    let authMethod: AuthMethod | null;
 
-    let authMethod = await this.authMethodRepository.findOne({
-      where: {
-        userId: user.id,
-        type: authMethodType,
-      },
-    });
-
-    if (!authMethod) {
-      authMethod = await this.authMethodRepository.save({
-        userId: user.id,
-        type: authMethodType,
-        identifier,
+    if (loginDto.loginType === 'corekit') {
+      const identifier = payload.email || payload.sub || 'unknown';
+      authMethod = await this.authMethodRepository.findOne({
+        where: { userId: user.id, identifier },
       });
-    } else if (payload.email && authMethod.identifier !== payload.email) {
-      // Backfill: update identifier if we now have the email but previously stored UUID
-      authMethod.identifier = payload.email;
+      if (!authMethod) {
+        // Fallback: find any auth method for this user (identity controller should have created one)
+        authMethod = await this.authMethodRepository.findOne({
+          where: { userId: user.id },
+        });
+      }
+    } else {
+      const authMethodType = this.web3AuthVerifier.extractAuthMethodType(
+        payload,
+        loginDto.loginType
+      );
+      const identifier = this.web3AuthVerifier.extractIdentifier(payload);
+      authMethod = await this.authMethodRepository.findOne({
+        where: { userId: user.id, type: authMethodType },
+      });
+      if (!authMethod) {
+        authMethod = await this.authMethodRepository.save({
+          userId: user.id,
+          type: authMethodType,
+          identifier,
+        });
+      } else if (payload.email && authMethod.identifier !== payload.email) {
+        // Backfill: update identifier if we now have the email but previously stored UUID
+        authMethod.identifier = payload.email;
+      }
     }
 
     // 4. Update last used timestamp
