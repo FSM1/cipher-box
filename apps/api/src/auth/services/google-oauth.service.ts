@@ -24,7 +24,9 @@ export class GoogleOAuthService {
       throw new Error('GOOGLE_CLIENT_ID must be set in production');
     }
     if (!this.googleClientId) {
-      this.logger.warn('GOOGLE_CLIENT_ID not set — audience validation disabled (dev/staging only)');
+      this.logger.warn(
+        'GOOGLE_CLIENT_ID not set — audience validation disabled (dev/staging only)'
+      );
     }
   }
 

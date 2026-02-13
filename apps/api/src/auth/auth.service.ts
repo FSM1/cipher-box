@@ -381,10 +381,7 @@ export class AuthService {
     }
     const secretBuf = Buffer.from(secret);
     const expectedBuf = Buffer.from(expectedSecret);
-    if (
-      secretBuf.length !== expectedBuf.length ||
-      !timingSafeEqual(secretBuf, expectedBuf)
-    ) {
+    if (secretBuf.length !== expectedBuf.length || !timingSafeEqual(secretBuf, expectedBuf)) {
       throw new UnauthorizedException('Invalid test login secret');
     }
 
@@ -425,7 +422,7 @@ export class AuthService {
     // 4. Issue tokens
     const tokens = await this.tokenService.createTokens(user.id, user.publicKey);
 
-    this.logger.log(`Test login: userId=${user.id}, email=${normalizedEmail}, isNew=${isNewUser}`);
+    this.logger.log(`Test login: userId=${user.id}, isNew=${isNewUser}`);
 
     return {
       accessToken: tokens.accessToken,

@@ -13,4 +13,6 @@ export interface IdentityTokenResponseDto {
   userId: string;
   /** Whether this is a newly created user */
   isNewUser: boolean;
+  /** Verified email address from the identity provider */
+  email?: string;
 }

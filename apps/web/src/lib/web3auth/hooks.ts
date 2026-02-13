@@ -39,26 +39,20 @@ export function useCoreKitAuth() {
   const { coreKit, status, isLoggedIn, isInitialized } = useCoreKit();
 
   /**
-   * Login with Google: Backend verifies Google idToken, issues CipherBox JWT,
-   * then we call loginWithJWT on Core Kit.
-   *
-   * @param googleIdToken - Google OAuth idToken from GIS callback
-   * @param migrationKey - Optional PnP private key for importTssKey migration
+   * Shared Core Kit login logic: takes a CipherBox JWT and userId,
+   * handles migration key detection, loginWithJWT, and commitChanges.
    */
-  async function loginWithGoogle(
-    googleIdToken: string,
+  async function loginWithCoreKit(
+    cipherboxJwt: string,
+    userId: string,
     migrationKey?: string
-  ): Promise<{ cipherboxJwt: string }> {
+  ): Promise<void> {
     if (!coreKit) throw new Error('Core Kit not initialized');
 
-    // 1. Send Google idToken to CipherBox backend for verification + JWT issuance
-    const { idToken: cipherboxJwt, userId } = await authApi.identityGoogle(googleIdToken);
-
-    // 2. Check for PnP migration key (auto-detect or explicit)
+    // Check for PnP migration key (auto-detect or explicit)
     const importKey = migrationKey || getMigrationKey();
 
-    // 3. Login to Core Kit with CipherBox JWT
-    // Web3Auth custom verifier name must match dashboard config
+    // Login to Core Kit with CipherBox JWT
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const loginParams: any = {
       verifier: 'cipherbox-identity', // Single custom verifier for all CipherBox auth
@@ -73,17 +67,37 @@ export function useCoreKitAuth() {
 
     await coreKit.loginWithJWT(loginParams);
 
-    // 4. Handle status
+    // Handle status
     if (coreKit.status === COREKIT_STATUS.LOGGED_IN) {
       await coreKit.commitChanges();
     }
     // REQUIRED_SHARE means MFA is enabled but device factor missing
-    // Phase 12.4 will handle this -- for now, log a warning
+    // Phase 12.4 will handle this -- for now, throw so calling code can surface it
     if (coreKit.status === COREKIT_STATUS.REQUIRED_SHARE) {
-      console.warn('[CoreKit] REQUIRED_SHARE status -- MFA challenge needed (not yet implemented)');
+      throw new Error(
+        'Additional verification required. Multi-factor recovery is not yet supported.'
+      );
     }
+  }
 
-    return { cipherboxJwt };
+  /**
+   * Login with Google: Backend verifies Google idToken, issues CipherBox JWT,
+   * then we call loginWithJWT on Core Kit.
+   *
+   * @param googleIdToken - Google OAuth idToken from GIS callback
+   * @param migrationKey - Optional PnP private key for importTssKey migration
+   */
+  async function loginWithGoogle(
+    googleIdToken: string,
+    migrationKey?: string
+  ): Promise<{ cipherboxJwt: string; email?: string }> {
+    // 1. Send Google idToken to CipherBox backend for verification + JWT issuance
+    const { idToken: cipherboxJwt, userId, email } = await authApi.identityGoogle(googleIdToken);
+
+    // 2. Login to Core Kit
+    await loginWithCoreKit(cipherboxJwt, userId, migrationKey);
+
+    return { cipherboxJwt, email };
   }
 
   /**
@@ -98,34 +112,11 @@ export function useCoreKitAuth() {
     otp: string,
     migrationKey?: string
   ): Promise<{ cipherboxJwt: string }> {
-    if (!coreKit) throw new Error('Core Kit not initialized');
-
     // 1. Verify OTP with backend, get CipherBox JWT
     const { idToken: cipherboxJwt, userId } = await authApi.identityEmailVerify(email, otp);
 
-    // 2. Check for PnP migration key (auto-detect or explicit)
-    const importKey = migrationKey || getMigrationKey();
-
-    // 3. Login to Core Kit
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const loginParams: any = {
-      verifier: 'cipherbox-identity',
-      verifierId: userId,
-      idToken: cipherboxJwt,
-    };
-
-    if (importKey) {
-      loginParams.importTssKey = importKey;
-    }
-
-    await coreKit.loginWithJWT(loginParams);
-
-    if (coreKit.status === COREKIT_STATUS.LOGGED_IN) {
-      await coreKit.commitChanges();
-    }
-    if (coreKit.status === COREKIT_STATUS.REQUIRED_SHARE) {
-      console.warn('[CoreKit] REQUIRED_SHARE status -- MFA challenge needed (not yet implemented)');
-    }
+    // 2. Login to Core Kit
+    await loginWithCoreKit(cipherboxJwt, userId, migrationKey);
 
     return { cipherboxJwt };
   }

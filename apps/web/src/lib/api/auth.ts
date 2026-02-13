@@ -25,6 +25,7 @@ type IdentityTokenResponse = {
   idToken: string;
   userId: string;
   isNewUser: boolean;
+  email?: string;
 };
 
 export type AuthMethod = {

@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCoreKitAuth } from '../lib/web3auth/hooks';
-import { useCoreKit } from '../lib/web3auth/core-kit-provider';
-import { COREKIT_STATUS } from '../lib/web3auth/core-kit';
 import { authApi } from '../lib/api/auth';
 import { vaultApi } from '../lib/api/vault';
 import { useAuthStore } from '../stores/auth.store';
@@ -29,7 +27,6 @@ export function useAuth() {
     getPublicKeyHex,
     logout: coreKitLogout,
   } = useCoreKitAuth();
-  const { coreKit } = useCoreKit();
   const {
     accessToken,
     isAuthenticated,
@@ -60,8 +57,7 @@ export function useAuth() {
     const userKeypair = await getVaultKeypair();
 
     if (!userKeypair) {
-      console.error('[useAuth] Failed to get vault keypair from Core Kit');
-      return;
+      throw new Error('Failed to get vault keypair from Core Kit');
     }
 
     // Store keypair in auth store for crypto operations
@@ -176,17 +172,15 @@ export function useAuth() {
       setIsLoggingIn(true);
       try {
         // 1. Core Kit login via CipherBox identity provider
-        const { cipherboxJwt } = await coreKitLoginGoogle(googleIdToken);
+        const { cipherboxJwt, email } = await coreKitLoginGoogle(googleIdToken);
 
-        // 2. Check if login landed in REQUIRED_SHARE
-        if (coreKit?.status === COREKIT_STATUS.REQUIRED_SHARE) {
-          throw new Error(
-            'Additional verification required. Multi-factor recovery is not yet supported — please try a different login method.'
-          );
-        }
-
-        // 3. Complete backend auth + vault init
+        // 2. Complete backend auth + vault init
         await completeBackendAuth('google', cipherboxJwt);
+
+        // 3. Store email for UI display (returned from identity endpoint)
+        if (email) {
+          setUserEmail(email);
+        }
 
         // 4. Navigate to files
         navigate('/files');
@@ -197,7 +191,7 @@ export function useAuth() {
         setIsLoggingIn(false);
       }
     },
-    [isLoggingIn, coreKit, coreKitLoginGoogle, completeBackendAuth, navigate]
+    [isLoggingIn, coreKitLoginGoogle, completeBackendAuth, setUserEmail, navigate]
   );
 
   /**
@@ -213,14 +207,7 @@ export function useAuth() {
         // 1. Core Kit login via CipherBox identity provider
         const { cipherboxJwt } = await coreKitLoginEmail(email, otp);
 
-        // 2. Check if login landed in REQUIRED_SHARE
-        if (coreKit?.status === COREKIT_STATUS.REQUIRED_SHARE) {
-          throw new Error(
-            'Additional verification required. Multi-factor recovery is not yet supported — please try a different login method.'
-          );
-        }
-
-        // 3. Complete backend auth + vault init
+        // 2. Complete backend auth + vault init
         await completeBackendAuth('email_passwordless', cipherboxJwt);
 
         // 4. Store email for display in UI
@@ -235,7 +222,7 @@ export function useAuth() {
         setIsLoggingIn(false);
       }
     },
-    [isLoggingIn, coreKit, coreKitLoginEmail, completeBackendAuth, setUserEmail, navigate]
+    [isLoggingIn, coreKitLoginEmail, completeBackendAuth, setUserEmail, navigate]
   );
 
   /**

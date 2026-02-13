@@ -55,7 +55,7 @@ export class EmailOtpService implements OnModuleDestroy {
     }
 
     // Generate 6-digit OTP
-    const otp = randomInt(100000, 999999).toString();
+    const otp = randomInt(100000, 1000000).toString();
 
     // Hash OTP before storing
     const hashedOtp = await argon2.hash(otp);

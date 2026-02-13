@@ -60,7 +60,7 @@ export class IdentityController {
 
     this.logger.log(`Google login: userId=${user.id}, isNew=${isNewUser}`);
 
-    return { idToken, userId: user.id, isNewUser };
+    return { idToken, userId: user.id, isNewUser, email: googlePayload.email };
   }
 
   @Post('identity/email/send-otp')
@@ -98,7 +98,7 @@ export class IdentityController {
 
     this.logger.log(`Email OTP login: userId=${user.id}, isNew=${isNewUser}`);
 
-    return { idToken, userId: user.id, isNewUser };
+    return { idToken, userId: user.id, isNewUser, email: dto.email.toLowerCase().trim() };
   }
 
   /**
@@ -139,12 +139,27 @@ export class IdentityController {
 
     if (anyMethodWithEmail) {
       // Same email, different auth method -- link to existing user
-      await this.authMethodRepository.save({
-        userId: anyMethodWithEmail.user.id,
-        type: authMethodType,
-        identifier: normalizedEmail,
-        lastUsedAt: new Date(),
-      });
+      // Use upsert-like pattern to handle concurrent requests gracefully
+      try {
+        await this.authMethodRepository.save({
+          userId: anyMethodWithEmail.user.id,
+          type: authMethodType,
+          identifier: normalizedEmail,
+          lastUsedAt: new Date(),
+        });
+      } catch (error) {
+        // If a duplicate was created by a concurrent request, just find and use it
+        const existing = await this.authMethodRepository.findOne({
+          where: { userId: anyMethodWithEmail.user.id, type: authMethodType },
+          relations: ['user'],
+        });
+        if (existing) {
+          existing.lastUsedAt = new Date();
+          await this.authMethodRepository.save(existing);
+          return { user: existing.user, isNewUser: false };
+        }
+        throw error;
+      }
       this.logger.log(`Linked ${authMethodType} to existing user ${anyMethodWithEmail.user.id}`);
       return { user: anyMethodWithEmail.user, isNewUser: false };
     }

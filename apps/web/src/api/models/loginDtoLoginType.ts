@@ -14,4 +14,5 @@ export type LoginDtoLoginType = (typeof LoginDtoLoginType)[keyof typeof LoginDto
 export const LoginDtoLoginType = {
   social: 'social',
   external_wallet: 'external_wallet',
+  corekit: 'corekit',
 } as const;

@@ -23,7 +23,7 @@ export class LoginDto {
 
   @ApiProperty({
     description: 'Type of login used',
-    enum: ['social', 'external_wallet'],
+    enum: ['social', 'external_wallet', 'corekit'],
     example: 'social',
   })
   @IsString()

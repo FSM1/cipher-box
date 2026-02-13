@@ -57,6 +57,13 @@ export class IdentityTokenResponseDto {
     example: false,
   })
   isNewUser!: boolean;
+
+  @ApiProperty({
+    description: 'Verified email address from the identity provider',
+    example: 'user@example.com',
+    required: false,
+  })
+  email?: string;
 }
 
 export class SendOtpResponseDto {

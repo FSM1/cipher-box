@@ -841,7 +841,7 @@
           "loginType": {
             "type": "string",
             "description": "Type of login used",
-            "enum": ["social", "external_wallet"],
+            "enum": ["social", "external_wallet", "corekit"],
             "example": "social"
           },
           "walletAddress": {
@@ -1048,6 +1048,11 @@
             "type": "boolean",
             "description": "Whether this is a newly created user",
             "example": false
+          },
+          "email": {
+            "type": "string",
+            "description": "Verified email address from the identity provider",
+            "example": "user@example.com"
           }
         },
         "required": ["idToken", "userId", "isNewUser"]
