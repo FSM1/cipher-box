@@ -6,6 +6,7 @@ import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';
 import { ContextMenuPage } from '../page-objects/file-browser/context-menu.page';
 import { ParentDirPage } from '../page-objects/file-browser/parent-dir.page';
 import { BreadcrumbsPage } from '../page-objects/file-browser/breadcrumbs.page';
+import { SelectionActionBarPage } from '../page-objects/file-browser/selection-action-bar.page';
 import { RenameDialogPage } from '../page-objects/dialogs/rename-dialog.page';
 import { ConfirmDialogPage } from '../page-objects/dialogs/confirm-dialog.page';
 import { CreateFolderDialogPage } from '../page-objects/dialogs/create-folder-dialog.page';
@@ -22,9 +23,12 @@ import { TextEditorDialogPage } from '../page-objects/dialogs/text-editor-dialog
  * 3. Uploads multiple files at various folder levels (12+ files)
  * 3.5. Reloads page and verifies subfolder navigation from cold state
  *      (IPNS resolve + key unwrapping via navigateTo)
- * 4. Moves files between folders
- * 5. Edits a file (delete + re-upload with new content)
- * 6. Cleans up and logs out
+ * 4. Multi-file selection and batch actions
+ * 5. Moves files between folders
+ * 6. Edits a file (delete + re-upload with new content)
+ * 7. Renames files and folders
+ * 8. Cleans up
+ * 9. Logs out
  *
  * This approach tests a realistic user workflow with:
  * - Nested folder structure (workspace/documents, workspace/images, workspace/projects/active, etc.)
@@ -42,6 +46,7 @@ test.describe.serial('Full Workflow', () => {
   let contextMenu: ContextMenuPage;
   let parentDir: ParentDirPage;
   let breadcrumbs: BreadcrumbsPage;
+  let selectionBar: SelectionActionBarPage;
   let renameDialog: RenameDialogPage;
   let confirmDialog: ConfirmDialogPage;
   let createFolderDialog: CreateFolderDialogPage;
@@ -106,7 +111,7 @@ test.describe.serial('Full Workflow', () => {
   const editableFileOriginalContent = 'Original content before edit';
   const editableFileUpdatedContent = 'Updated content after edit - version 2';
 
-  // Content for in-place text editor test (Phase 5.5)
+  // Content for in-place text editor test (Phase 6.5)
   const textEditorEditedContent = 'Edited in-browser via text editor modal - version 3';
 
   // Track CID before/after text editor save to verify re-encryption
@@ -123,6 +128,7 @@ test.describe.serial('Full Workflow', () => {
     contextMenu = new ContextMenuPage(page);
     parentDir = new ParentDirPage(page);
     breadcrumbs = new BreadcrumbsPage(page);
+    selectionBar = new SelectionActionBarPage(page);
     renameDialog = new RenameDialogPage(page);
     confirmDialog = new ConfirmDialogPage(page);
     createFolderDialog = new CreateFolderDialogPage(page);
@@ -548,7 +554,7 @@ test.describe.serial('Full Workflow', () => {
     await fileList.waitForItemToAppear(rootFiles[0].name, { timeout: 30000 });
 
     // Verify other root-level items are also visible
-    // rootFiles[0] was moved to workspace in 4.1 — but Phase 4 hasn't run yet at this point
+    // rootFiles[0] was moved to workspace in 5.1 — but Phase 5 hasn't run yet at this point
     for (const file of rootFiles) {
       expect(await fileList.isItemVisible(file.name)).toBe(true);
     }
@@ -636,14 +642,292 @@ test.describe.serial('Full Workflow', () => {
   });
 
   // ============================================
-  // Phase 4: Move Files Between Folders
+  // Phase 4: Multi-Select & Batch Actions
+  // ============================================
+  // Tests multi-file selection (click, ctrl+click, shift+click, checkboxes,
+  // select-all) and batch operations (delete, move) via the action bar.
+
+  // Test data for Phase 4
+  const multiselectFolder = `multiselect-${timestamp}`;
+  const msFiles = [
+    { name: `ms-file-a-${timestamp}.txt`, content: 'Multiselect file A' },
+    { name: `ms-file-b-${timestamp}.txt`, content: 'Multiselect file B' },
+    { name: `ms-file-c-${timestamp}.txt`, content: 'Multiselect file C' },
+  ];
+  const batchDelFolder = `batch-del-${timestamp}`;
+
+  test('4.0 Setup: create multiselect folder with test files', async () => {
+    test.setTimeout(120000);
+
+    // Create the multiselect folder at root
+    await createFolder(multiselectFolder);
+    expect(await fileList.isItemVisible(multiselectFolder)).toBe(true);
+
+    // Navigate into it
+    await navigateIntoFolder(multiselectFolder);
+
+    // Upload 3 test files
+    for (const file of msFiles) {
+      await uploadFile(file.name, file.content);
+      expect(await fileList.isItemVisible(file.name)).toBe(true);
+    }
+
+    // Create a subfolder for move target
+    await createFolder(batchDelFolder);
+    expect(await fileList.isItemVisible(batchDelFolder)).toBe(true);
+  });
+
+  test('4.1 Single click selects one item, clicking another deselects first', async () => {
+    // Click file A → selected
+    await fileList.selectItem(msFiles[0].name);
+    expect(await fileList.isItemSelected(msFiles[0].name)).toBe(true);
+
+    // Click file B → A deselected, B selected
+    await fileList.selectItem(msFiles[1].name);
+    expect(await fileList.isItemSelected(msFiles[0].name)).toBe(false);
+    expect(await fileList.isItemSelected(msFiles[1].name)).toBe(true);
+
+    // Click empty space to deselect
+    await page.keyboard.press('Escape');
+  });
+
+  test('4.2 Ctrl+click toggles selection additively', async () => {
+    // Select A
+    await fileList.selectItem(msFiles[0].name);
+    expect(await fileList.isItemSelected(msFiles[0].name)).toBe(true);
+
+    // Ctrl+click B → both selected
+    await fileList.ctrlClickItem(msFiles[1].name);
+    expect(await fileList.isItemSelected(msFiles[0].name)).toBe(true);
+    expect(await fileList.isItemSelected(msFiles[1].name)).toBe(true);
+
+    // Ctrl+click A → only B selected
+    await fileList.ctrlClickItem(msFiles[0].name);
+    expect(await fileList.isItemSelected(msFiles[0].name)).toBe(false);
+    expect(await fileList.isItemSelected(msFiles[1].name)).toBe(true);
+
+    // Deselect all
+    await page.keyboard.press('Escape');
+  });
+
+  test('4.3 Shift+click selects range', async () => {
+    // Click file A as anchor
+    await fileList.selectItem(msFiles[0].name);
+
+    // Shift+click file C → files A, B, C should all be selected
+    await fileList.shiftClickItem(msFiles[2].name);
+
+    expect(await fileList.isItemSelected(msFiles[0].name)).toBe(true);
+    expect(await fileList.isItemSelected(msFiles[1].name)).toBe(true);
+    expect(await fileList.isItemSelected(msFiles[2].name)).toBe(true);
+
+    // Deselect all
+    await page.keyboard.press('Escape');
+  });
+
+  test('4.4 Header checkbox selects all / deselects all', async () => {
+    // Click header checkbox → all items selected
+    await fileList.clickHeaderCheckbox();
+    const selectedCount = await fileList.getSelectedCount();
+    // 3 files + 1 folder = 4 items
+    expect(selectedCount).toBe(4);
+    expect(await fileList.isHeaderCheckboxChecked()).toBe(true);
+
+    // Click again → all deselected
+    await fileList.clickHeaderCheckbox();
+    expect(await fileList.getSelectedCount()).toBe(0);
+    expect(await fileList.isHeaderCheckboxChecked()).toBe(false);
+  });
+
+  test('4.5 Item checkboxes toggle independently', async () => {
+    // Click checkbox on A → selected
+    await fileList.clickCheckbox(msFiles[0].name);
+    expect(await fileList.isItemSelected(msFiles[0].name)).toBe(true);
+
+    // Click checkbox on B → both selected
+    await fileList.clickCheckbox(msFiles[1].name);
+    expect(await fileList.isItemSelected(msFiles[0].name)).toBe(true);
+    expect(await fileList.isItemSelected(msFiles[1].name)).toBe(true);
+
+    // Click A's checkbox again → only B selected
+    await fileList.clickCheckbox(msFiles[0].name);
+    expect(await fileList.isItemSelected(msFiles[0].name)).toBe(false);
+    expect(await fileList.isItemSelected(msFiles[1].name)).toBe(true);
+
+    // Deselect all
+    await page.keyboard.press('Escape');
+  });
+
+  test('4.6 Action bar shows correct count text', async () => {
+    // Select 2 files
+    await fileList.selectItem(msFiles[0].name);
+    await fileList.ctrlClickItem(msFiles[1].name);
+
+    await selectionBar.waitForVisible();
+    const text1 = await selectionBar.getCountText();
+    expect(text1).toContain('2');
+    expect(text1).toMatch(/file/i);
+
+    // Add the folder to selection
+    await fileList.ctrlClickItem(batchDelFolder);
+    const text2 = await selectionBar.getCountText();
+    expect(text2).toMatch(/2 file/i);
+    expect(text2).toMatch(/1 folder/i);
+
+    // Deselect all
+    await page.keyboard.press('Escape');
+  });
+
+  test('4.7 Clear selection via action bar', async () => {
+    // Multi-select two items
+    await fileList.selectItem(msFiles[0].name);
+    await fileList.ctrlClickItem(msFiles[1].name);
+    await selectionBar.waitForVisible();
+
+    // Click clear
+    await selectionBar.clickClear();
+    expect(await fileList.getSelectedCount()).toBe(0);
+    await selectionBar.waitForHidden();
+  });
+
+  test('4.8 Batch context menu appears for multi-selection', async () => {
+    // Multi-select two files
+    await fileList.selectItem(msFiles[0].name);
+    await fileList.ctrlClickItem(msFiles[1].name);
+
+    // Right-click one of the selected items → batch context menu
+    await fileList.rightClickItem(msFiles[0].name);
+    await contextMenu.waitForOpen();
+
+    // Should have batch header
+    expect(await contextMenu.isBatchMenu()).toBe(true);
+    const headerText = await contextMenu.getHeaderText();
+    expect(headerText).toMatch(/2 items selected/i);
+
+    await contextMenu.closeWithEscape();
+    await page.keyboard.press('Escape'); // deselect
+  });
+
+  test('4.9 Right-click unselected item overrides multi-selection', async () => {
+    // Multi-select A and B
+    await fileList.selectItem(msFiles[0].name);
+    await fileList.ctrlClickItem(msFiles[1].name);
+    expect(await fileList.getSelectedCount()).toBe(2);
+
+    // Right-click C (not in selection) → should select only C, show normal menu
+    await fileList.rightClickItem(msFiles[2].name);
+    await contextMenu.waitForOpen();
+
+    expect(await contextMenu.isBatchMenu()).toBe(false);
+    expect(await fileList.isItemSelected(msFiles[2].name)).toBe(true);
+    expect(await fileList.getSelectedCount()).toBe(1);
+
+    await contextMenu.closeWithEscape();
+    await page.keyboard.press('Escape');
+  });
+
+  test('4.10 Batch delete via action bar', async () => {
+    // Upload 2 throwaway files for deletion
+    const delFile1 = { name: `del-1-${timestamp}.txt`, content: 'Delete me 1' };
+    const delFile2 = { name: `del-2-${timestamp}.txt`, content: 'Delete me 2' };
+    await uploadFile(delFile1.name, delFile1.content);
+    await uploadFile(delFile2.name, delFile2.content);
+
+    // Select both
+    await fileList.selectItem(delFile1.name);
+    await fileList.ctrlClickItem(delFile2.name);
+    await selectionBar.waitForVisible();
+
+    // Click delete on action bar
+    await selectionBar.clickDelete();
+    await confirmDialog.waitForOpen();
+
+    // Verify batch delete dialog
+    const title = await confirmDialog.getTitle();
+    expect(title).toMatch(/Delete 2 Items/i);
+    const label = await confirmDialog.getConfirmLabel();
+    expect(label).toBe('Delete All');
+
+    // Confirm
+    await confirmDialog.clickConfirm();
+    await confirmDialog.waitForClose({ timeout: 30000 });
+
+    // Both files should be gone
+    await fileList.waitForItemToDisappear(delFile1.name, { timeout: 15000 });
+    expect(await fileList.isItemVisible(delFile2.name)).toBe(false);
+  });
+
+  test('4.11 Batch move via action bar', async () => {
+    // Upload an extra file
+    const moveFile = { name: `move-extra-${timestamp}.txt`, content: 'Move me' };
+    await uploadFile(moveFile.name, moveFile.content);
+
+    // Select 2 items to move (file A + the new file)
+    await fileList.selectItem(msFiles[0].name);
+    await fileList.ctrlClickItem(moveFile.name);
+    await selectionBar.waitForVisible();
+
+    // Click move on action bar
+    await selectionBar.clickMove();
+    await moveDialog.waitForOpen();
+
+    // Verify batch move dialog
+    const dialogTitle = await moveDialog.getTitle();
+    expect(dialogTitle).toMatch(/Move 2 Items/i);
+    const label = await moveDialog.getLabel();
+    expect(label).toMatch(/Move 2 selected items to:/i);
+
+    // Select the subfolder as destination
+    await moveDialog.selectFolder(batchDelFolder);
+    await moveDialog.clickMove();
+    await moveDialog.waitForClose({ timeout: 15000 });
+
+    // Files should be gone from current view
+    await fileList.waitForItemToDisappear(msFiles[0].name, { timeout: 15000 });
+    expect(await fileList.isItemVisible(moveFile.name)).toBe(false);
+
+    // Navigate into subfolder and verify
+    await navigateIntoFolder(batchDelFolder);
+    expect(await fileList.isItemVisible(msFiles[0].name)).toBe(true);
+    expect(await fileList.isItemVisible(moveFile.name)).toBe(true);
+
+    // Navigate back
+    await navigateBack();
+  });
+
+  test('4.12 Selection cleared on folder navigation', async () => {
+    // Select an item
+    await fileList.selectItem(msFiles[1].name);
+    expect(await fileList.getSelectedCount()).toBe(1);
+
+    // Navigate into subfolder → selection should reset
+    await navigateIntoFolder(batchDelFolder);
+    expect(await fileList.getSelectedCount()).toBe(0);
+
+    // Navigate back
+    await navigateBack();
+  });
+
+  test('4.13 Cleanup: delete multiselect folder', async () => {
+    test.setTimeout(60000);
+
+    // Navigate to root
+    await navigateToRoot();
+
+    // Delete the multiselect folder
+    await deleteItem(multiselectFolder);
+    expect(await fileList.isItemVisible(multiselectFolder)).toBe(false);
+  });
+
+  // ============================================
+  // Phase 5: Move Files Between Folders
   // ============================================
   // Move operations via:
   // - Context menu "Move to..." → MoveDialog
   // - Drag-drop to folder rows in file list
   // - Drag-drop to breadcrumb segments
 
-  test('4.1 Move file via context menu (Move to...)', async () => {
+  test('5.1 Move file via context menu (Move to...)', async () => {
     // Navigate to root
     await navigateToRoot();
 
@@ -675,7 +959,7 @@ test.describe.serial('Full Workflow', () => {
     expect(await fileList.isItemVisible(fileToMove)).toBe(true);
   });
 
-  test('4.2 Move file between sibling folders via context menu', async () => {
+  test('5.2 Move file between sibling folders via context menu', async () => {
     // We're in workspace folder from previous test
     // Move one of the document files from documents to images folder
 
@@ -722,7 +1006,7 @@ test.describe.serial('Full Workflow', () => {
     expect(await fileList.isItemVisible(fileToMove)).toBe(true);
   });
 
-  test('4.3 Move file via drag-drop to breadcrumb', async () => {
+  test('5.3 Move file via drag-drop to breadcrumb', async () => {
     // We're in images folder from previous test
     // Drag a file to the workspace breadcrumb to move it up
 
@@ -745,7 +1029,7 @@ test.describe.serial('Full Workflow', () => {
     expect(await fileList.isItemVisible(fileToMove)).toBe(true);
   });
 
-  test('4.4 Navigate via breadcrumb click', async () => {
+  test('5.4 Navigate via breadcrumb click', async () => {
     // We're in workspace from previous test
     // Navigate into projects, then use breadcrumb to go back to workspace
 
@@ -766,10 +1050,10 @@ test.describe.serial('Full Workflow', () => {
   });
 
   // ============================================
-  // Phase 5: Edit File (Overwrite with New Content)
+  // Phase 6: Edit File (Overwrite with New Content)
   // ============================================
 
-  test('5.1 Edit file by deleting and re-uploading with new content', async () => {
+  test('6.1 Edit file by deleting and re-uploading with new content', async () => {
     // Navigate to root where editable file is
     await navigateToRoot();
 
@@ -808,12 +1092,12 @@ test.describe.serial('Full Workflow', () => {
   });
 
   // ============================================
-  // Phase 5.5: In-Browser Text Editor
+  // Phase 6.5: In-Browser Text Editor
   // ============================================
   // Exercises the full crypto round-trip: download → decrypt → edit → encrypt
   // → re-upload → update folder metadata → unpin old CID.
 
-  test('5.5.1 Edit option appears for text files only', async () => {
+  test('6.5.1 Edit option appears for text files only', async () => {
     // We're at root from 5.1
 
     // Right-click the text file — "Edit" should be in context menu
@@ -835,7 +1119,7 @@ test.describe.serial('Full Workflow', () => {
     await contextMenu.closeWithEscape();
   });
 
-  test('5.5.2 Open text editor, verify content loaded', async () => {
+  test('6.5.2 Open text editor, verify content loaded', async () => {
     // Right-click the editable file and click Edit
     await fileList.rightClickItem(editableFileName);
     await contextMenu.waitForOpen();
@@ -871,7 +1155,7 @@ test.describe.serial('Full Workflow', () => {
     await textEditorDialog.waitForClose();
   });
 
-  test('5.5.3 Edit content and save (full crypto round-trip)', async () => {
+  test('6.5.3 Edit content and save (full crypto round-trip)', async () => {
     // Record the original CID via Details dialog before editing
     await fileList.rightClickItem(editableFileName);
     await contextMenu.waitForOpen();
@@ -907,7 +1191,7 @@ test.describe.serial('Full Workflow', () => {
     expect(await fileList.isItemVisible(editableFileName)).toBe(true);
   });
 
-  test('5.5.4 Verify CID changed after edit (re-encryption confirmed)', async () => {
+  test('6.5.4 Verify CID changed after edit (re-encryption confirmed)', async () => {
     // Open Details dialog to verify the CID changed
     await fileList.rightClickItem(editableFileName);
     await contextMenu.waitForOpen();
@@ -924,7 +1208,7 @@ test.describe.serial('Full Workflow', () => {
     await detailsDialog.close();
   });
 
-  test('5.5.5 Re-open editor to verify saved content persists', async () => {
+  test('6.5.5 Re-open editor to verify saved content persists', async () => {
     // Re-open the editor to verify the new content was actually saved
     await fileList.rightClickItem(editableFileName);
     await contextMenu.waitForOpen();
@@ -942,10 +1226,10 @@ test.describe.serial('Full Workflow', () => {
   });
 
   // ============================================
-  // Phase 6: Rename Operations
+  // Phase 7: Rename Operations
   // ============================================
 
-  test('6.1 Rename a file', async () => {
+  test('7.1 Rename a file', async () => {
     // We're at root, rename one of the remaining root files
     const fileToRename = rootFiles[1].name;
     const newFileName = `renamed-${timestamp}.txt`;
@@ -966,7 +1250,7 @@ test.describe.serial('Full Workflow', () => {
     rootFiles[1].name = newFileName;
   });
 
-  test('6.2 Rename a folder', async () => {
+  test('7.2 Rename a folder', async () => {
     // Navigate into workspace and rename one of the folders
     await navigateIntoFolder(workspaceFolder);
 
@@ -987,10 +1271,10 @@ test.describe.serial('Full Workflow', () => {
   });
 
   // ============================================
-  // Phase 7: Cleanup
+  // Phase 8: Cleanup
   // ============================================
 
-  test('7.1 Delete workspace folder (recursive delete)', async () => {
+  test('8.1 Delete workspace folder (recursive delete)', async () => {
     // Navigate to root
     await navigateToRoot();
 
@@ -1001,12 +1285,12 @@ test.describe.serial('Full Workflow', () => {
     expect(await fileList.isItemVisible(workspaceFolder)).toBe(false);
   });
 
-  test('7.2 Delete remaining root files', async () => {
+  test('8.2 Delete remaining root files', async () => {
     // Delete remaining files at root
-    // Note: rootFiles[0] was moved to workspace in test 4.1, workspace was deleted in 7.1
+    // Note: rootFiles[0] was moved to workspace in test 5.1, workspace was deleted in 8.1
     // Some files may have been moved around, clean up what remains
     const filesToDelete = [
-      rootFiles[1].name, // This was renamed in test 6.1
+      rootFiles[1].name, // This was renamed in test 7.1
       rootFiles[2].name,
       editableFileName,
     ];
@@ -1020,10 +1304,10 @@ test.describe.serial('Full Workflow', () => {
   });
 
   // ============================================
-  // Phase 8: Logout
+  // Phase 9: Logout
   // ============================================
 
-  test('8.1 Logout', async () => {
+  test('9.1 Logout', async () => {
     // Phase 6.3: Logout is now in UserMenu dropdown
     const userMenu = page.locator('[data-testid="user-menu"]');
     await expect(userMenu).toBeVisible();

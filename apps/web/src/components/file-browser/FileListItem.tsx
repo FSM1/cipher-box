@@ -15,6 +15,9 @@ import { isExternalFileDrag } from '../../hooks/useDropUpload';
  */
 const LONG_PRESS_DURATION = 500;
 
+/** Drag payload item (id + type). */
+export type DragItem = { id: string; type: 'file' | 'folder' };
+
 type FileListItemProps = {
   /** The file or folder item to display */
   item: FolderChild;
@@ -22,16 +25,23 @@ type FileListItemProps = {
   isSelected: boolean;
   /** Parent folder ID (for drag data) */
   parentId: string;
-  /** Callback when item is clicked */
-  onSelect: (itemId: string) => void;
+  /** All currently selected item IDs (for multi-select drag) */
+  selectedIds: Set<string>;
+  /** All items in the current folder (for resolving types of selected IDs) */
+  allItems: FolderChild[];
+  /** Callback when item is clicked (with modifier key info) */
+  onSelect: (
+    itemId: string,
+    event: { ctrlKey: boolean; shiftKey: boolean; metaKey: boolean }
+  ) => void;
   /** Callback when folder is double-clicked to navigate into */
   onNavigate: (folderId: string) => void;
   /** Callback when right-click context menu is requested */
   onContextMenu: (event: MouseEvent, item: FolderChild) => void;
   /** Callback when drag starts */
   onDragStart: (event: DragEvent, item: FolderChild) => void;
-  /** Callback when an item is dropped onto this folder (folders only) */
-  onDrop?: (sourceId: string, sourceType: 'file' | 'folder', sourceParentId: string) => void;
+  /** Callback when items are dropped onto this folder (folders only) */
+  onDrop?: (items: DragItem[], sourceParentId: string) => void;
   /** Callback when external files are dropped onto this folder */
   onExternalFileDrop?: (files: File[], destFolderId: string) => void;
 };
@@ -72,6 +82,8 @@ export function FileListItem({
   item,
   isSelected,
   parentId,
+  selectedIds,
+  allItems,
   onSelect,
   onNavigate,
   onContextMenu,
@@ -88,10 +100,26 @@ export function FileListItem({
 
   /**
    * Handle single click - select the item.
+   * Passes modifier key state for multi-selection support.
    */
-  const handleClick = useCallback(() => {
-    onSelect(item.id);
-  }, [item.id, onSelect]);
+  const handleClick = useCallback(
+    (e: React.MouseEvent) => {
+      onSelect(item.id, { ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, metaKey: e.metaKey });
+    },
+    [item.id, onSelect]
+  );
+
+  /**
+   * Handle checkbox click - toggle selection without modifiers.
+   */
+  const handleCheckboxClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      // Checkbox click always toggles like Ctrl+click
+      onSelect(item.id, { ctrlKey: true, shiftKey: false, metaKey: false });
+    },
+    [item.id, onSelect]
+  );
 
   /**
    * Handle double click - navigate into folder.
@@ -118,19 +146,21 @@ export function FileListItem({
    */
   const handleDragStart = useCallback(
     (e: DragEvent) => {
-      // Set drag data for move operations
-      e.dataTransfer.setData(
-        'application/json',
-        JSON.stringify({
-          id: item.id,
-          type: item.type,
-          parentId,
-        })
-      );
+      // Build items array: if dragged item is part of multi-selection, include all selected
+      let items: DragItem[];
+      if (isSelected && selectedIds.size > 1) {
+        items = allItems
+          .filter((i) => selectedIds.has(i.id))
+          .map((i) => ({ id: i.id, type: i.type }));
+      } else {
+        items = [{ id: item.id, type: item.type }];
+      }
+
+      e.dataTransfer.setData('application/json', JSON.stringify({ items, parentId }));
       e.dataTransfer.effectAllowed = 'move';
       onDragStart(e, item);
     },
-    [item, parentId, onDragStart]
+    [item, isSelected, selectedIds, allItems, parentId, onDragStart]
   );
 
   /**
@@ -254,18 +284,17 @@ export function FileListItem({
 
       try {
         const parsed = JSON.parse(jsonData) as {
-          id: string;
-          type: 'file' | 'folder';
+          items: DragItem[];
           parentId: string;
         };
 
-        // Don't allow dropping onto self
-        if (parsed.id === item.id) return;
+        // Filter out items that are this folder or already in this folder
+        const validItems = parsed.items.filter(
+          (i) => i.id !== item.id && parsed.parentId !== item.id
+        );
+        if (validItems.length === 0) return;
 
-        // Don't allow dropping if already in this folder
-        if (parsed.parentId === item.id) return;
-
-        onDrop(parsed.id, parsed.type, parsed.parentId);
+        onDrop(validItems, parsed.parentId);
       } catch {
         // Invalid drag data, ignore
       }
@@ -314,8 +343,25 @@ export function FileListItem({
         }
       }}
     >
-      {/* Row 1: Icon + Name (for mobile top row) */}
+      {/* Row 1: Checkbox + Icon + Name (for mobile top row) */}
       <div className="file-list-item-row-top" role="gridcell">
+        <span
+          className="file-list-item-checkbox"
+          onClick={handleCheckboxClick}
+          role="checkbox"
+          aria-checked={isSelected}
+          aria-label={`Select ${item.name}`}
+          tabIndex={-1}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              e.stopPropagation();
+              onSelect(item.id, { ctrlKey: true, shiftKey: false, metaKey: false });
+            }
+          }}
+        >
+          {isSelected ? '[x]' : '[ ]'}
+        </span>
         <span className="file-list-item-icon" aria-hidden="true">
           {getItemIcon(item)}
         </span>

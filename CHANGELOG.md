@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.8.0](https://github.com/FSM1/cipher-box/compare/v0.7.4...v0.8.0) (2026-02-12)
+
+
+### Features
+
+* Add multi-selection and batch operations to file browser ([#114](https://github.com/FSM1/cipher-box/issues/114)) ([c2fef51](https://github.com/FSM1/cipher-box/commit/c2fef510e8256107f1e9f5105f885d6930c71bd9))
+
+
+### Bug Fixes
+
+* **docker:** add database name to postgres healthcheck ([#116](https://github.com/FSM1/cipher-box/issues/116)) ([3f58d46](https://github.com/FSM1/cipher-box/commit/3f58d46255a17463540645c6e1c0cbeda98e846d))
+
+## [0.7.4](https://github.com/FSM1/cipher-box/compare/v0.7.3...v0.7.4) (2026-02-11)
+
+
+### Bug Fixes
+
+* **web:** improve modal-close focus styling per PR review ([b1f5141](https://github.com/FSM1/cipher-box/commit/b1f5141190495550b6ea91121b3f49786537cd23))
+* **web:** replace double-outline focus style with thicker border ([#111](https://github.com/FSM1/cipher-box/issues/111)) ([b1f5141](https://github.com/FSM1/cipher-box/commit/b1f5141190495550b6ea91121b3f49786537cd23))
+
 ## [0.7.3](https://github.com/FSM1/cipher-box/compare/v0.7.2...v0.7.3) (2026-02-11)
 
 

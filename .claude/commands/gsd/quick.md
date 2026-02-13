@@ -454,6 +454,56 @@ Expected:
 
 ---
 
+### Step 6c: Design sync check (UI tasks only)
+
+If `IS_UI_TASK=true` and a `.pen` file exists, offer a lightweight design sync:
+
+```bash
+DESIGN_FILE=$(ls designs/*.pen 2>/dev/null | head -1)
+```
+
+**Only runs if both conditions are true:**
+
+- `IS_UI_TASK=true`
+- `DESIGN_FILE` is non-empty
+
+```bash
+# Get changed CSS/TSX files on this branch
+CHANGED_UI=$(git diff --name-only main...HEAD -- '*.css' '*.tsx' 2>/dev/null | grep -v '^$')
+```
+
+If UI files changed, offer sync check:
+
+```text
+AskUserQuestion(
+  header: "Design Sync",
+  question: "UI files changed on this branch. Check if design needs updating?",
+  options: [
+    { label: "Yes, sync design", description: "Run lightweight design sync (defaults to updating design to match code)" },
+    { label: "Skip", description: "Continue without checking design" }
+  ],
+  multiSelect: false
+)
+```
+
+**If "Yes, sync design":**
+
+Run a lightweight version of `/design:sync` inline:
+
+1. Get changed CSS/TSX files (already computed above)
+2. Map to design frames using `designs/DESIGN.md` component hierarchy
+3. For mapped files: extract CSS values, compare against Pencil frames via `mcp__pencil__batch_get`
+4. Default direction: **update design to match code** (code was just written)
+5. Apply `mcp__pencil__batch_design` updates for any mismatches
+6. Take screenshot to verify
+7. Report changes and remind user to save Pencil file
+
+**If "Skip":** Continue to Step 7.
+
+**Non-blocking:** This step never prevents task completion. If Pencil MCP is unavailable or errors occur, log a note and continue.
+
+---
+
 ### Step 7: Update STATE.md
 
 Update STATE.md with quick task completion record.

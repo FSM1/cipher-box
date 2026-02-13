@@ -339,6 +339,126 @@ export function useFolder() {
   );
 
   /**
+   * Move multiple files/folders to a destination in a single batch.
+   *
+   * Uses add-before-remove pattern. Publishes IPNS once for the destination
+   * and once for the source (2 total), regardless of how many items are moved.
+   *
+   * @param items - Array of { id, type } to move
+   * @param sourceParentId - Current parent folder ID (all items must share the same parent)
+   * @param destParentId - Destination parent folder ID
+   */
+  const handleMoveItems = useCallback(
+    async (
+      items: Array<{ id: string; type: 'file' | 'folder' }>,
+      sourceParentId: string,
+      destParentId: string
+    ): Promise<void> => {
+      setState({ isLoading: true, error: null });
+      try {
+        const folders = useFolderStore.getState().folders;
+        const vault = useVaultStore.getState();
+
+        const sourceFolder =
+          sourceParentId === 'root' ? getRootFolderState(vault, folders) : folders[sourceParentId];
+        const destFolder =
+          destParentId === 'root' ? getRootFolderState(vault, folders) : folders[destParentId];
+
+        if (!sourceFolder || !destFolder) {
+          throw new Error('Source or destination folder not found');
+        }
+
+        const itemIds = new Set(items.map((i) => i.id));
+        const movedChildren = sourceFolder.children.filter((c) => itemIds.has(c.id));
+        const now = Date.now();
+
+        // Validate all items
+        const batchNames = new Set<string>();
+        for (const child of movedChildren) {
+          // Intra-batch duplicate name check
+          if (batchNames.has(child.name)) {
+            throw new Error(`Multiple selected items share the name "${child.name}"`);
+          }
+          batchNames.add(child.name);
+
+          // Name collision check against destination
+          const nameExists = destFolder.children.some((c) => c.name === child.name);
+          if (nameExists) {
+            throw new Error(`An item named "${child.name}" already exists in the destination`);
+          }
+
+          if (child.type === 'folder') {
+            // Prevent moving folder into itself or descendant
+            if (folderService.isDescendantOf(destFolder.id, child.id, folders)) {
+              throw new Error(`Cannot move "${child.name}" into itself or its subfolder`);
+            }
+
+            // Depth limit check
+            const destDepth = folderService.getDepth(destFolder.id, folders);
+            const subtreeDepth = folderService.calculateSubtreeDepth(child.id, folders);
+            if (destDepth + 1 + subtreeDepth > MAX_FOLDER_DEPTH) {
+              throw new Error(
+                `Cannot move "${child.name}": would exceed maximum folder depth of ${MAX_FOLDER_DEPTH}`
+              );
+            }
+          }
+        }
+
+        // ADD all to destination FIRST (add-before-remove pattern)
+        const destChildren = [
+          ...destFolder.children,
+          ...movedChildren.map((c) => ({ ...c, modifiedAt: now })),
+        ];
+
+        const { newSequenceNumber: destSeq } = await folderService.updateFolderMetadata({
+          folderId: destFolder.id,
+          children: destChildren,
+          folderKey: destFolder.folderKey,
+          ipnsPrivateKey: destFolder.ipnsPrivateKey,
+          ipnsName: destFolder.ipnsName,
+          sequenceNumber: destFolder.sequenceNumber,
+        });
+
+        // REMOVE all from source AFTER destination confirmed
+        const sourceChildren = sourceFolder.children.filter((c) => !itemIds.has(c.id));
+
+        const { newSequenceNumber: sourceSeq } = await folderService.updateFolderMetadata({
+          folderId: sourceFolder.id,
+          children: sourceChildren,
+          folderKey: sourceFolder.folderKey,
+          ipnsPrivateKey: sourceFolder.ipnsPrivateKey,
+          ipnsName: sourceFolder.ipnsName,
+          // Re-read sequence in case source === dest parent was updated above
+          sequenceNumber: sourceFolder.id === destFolder.id ? destSeq : sourceFolder.sequenceNumber,
+        });
+
+        // Update local state
+        const store = useFolderStore.getState();
+        store.updateFolderChildren(sourceParentId, sourceChildren);
+        store.updateFolderChildren(destParentId, destChildren);
+        store.updateFolderSequence(destParentId, destSeq);
+        store.updateFolderSequence(sourceParentId, sourceSeq);
+
+        for (const item of items) {
+          if (item.type === 'folder') {
+            const movedFolder = folders[item.id];
+            if (movedFolder) {
+              store.setFolder({ ...movedFolder, parentId: destParentId });
+            }
+          }
+        }
+
+        setState({ isLoading: false, error: null });
+      } catch (err) {
+        const error = err instanceof Error ? err.message : 'Failed to move items';
+        setState({ isLoading: false, error });
+        throw err;
+      }
+    },
+    []
+  );
+
+  /**
    * Delete a file or folder.
    *
    * @param itemId - ID of item to delete
@@ -383,6 +503,93 @@ export function useFolder() {
         setState({ isLoading: false, error: null });
       } catch (err) {
         const error = err instanceof Error ? err.message : 'Failed to delete';
+        setState({ isLoading: false, error });
+        throw err;
+      }
+    },
+    []
+  );
+
+  /**
+   * Delete multiple files/folders in a single IPNS publish.
+   *
+   * Removes all items from parent's children array, collects CIDs to unpin,
+   * then publishes metadata and IPNS once for the entire batch.
+   *
+   * @param items - Array of { id, type } to delete
+   * @param parentId - Parent folder ID (all items must share the same parent)
+   */
+  const handleDeleteItems = useCallback(
+    async (
+      items: Array<{ id: string; type: 'file' | 'folder' }>,
+      parentId: string
+    ): Promise<void> => {
+      setState({ isLoading: true, error: null });
+      try {
+        const folders = useFolderStore.getState().folders;
+        const vault = useVaultStore.getState();
+
+        const parentFolder =
+          parentId === 'root' ? getRootFolderState(vault, folders) : folders[parentId];
+
+        if (!parentFolder) throw new Error('Parent folder not found');
+
+        const itemIds = new Set(items.map((i) => i.id));
+        const cidsToUnpin: string[] = [];
+
+        // Collect CIDs to unpin and nested folder IDs to remove from store
+        const folderIdsToRemove: string[] = [];
+
+        const collectCidsAndFolders = (folderId: string) => {
+          folderIdsToRemove.push(folderId);
+          const folder = folders[folderId];
+          if (!folder) return;
+          for (const child of folder.children) {
+            if (child.type === 'file' && 'cid' in child) {
+              cidsToUnpin.push(child.cid);
+            } else if (child.type === 'folder') {
+              collectCidsAndFolders(child.id);
+            }
+          }
+        };
+
+        for (const item of items) {
+          if (item.type === 'file') {
+            const file = parentFolder.children.find((c) => c.id === item.id && c.type === 'file');
+            if (file && 'cid' in file) {
+              cidsToUnpin.push(file.cid);
+            }
+          } else {
+            collectCidsAndFolders(item.id);
+          }
+        }
+
+        // Remove all items from parent's children in one pass
+        const updatedChildren = parentFolder.children.filter((c) => !itemIds.has(c.id));
+
+        // Single IPNS publish for the entire batch
+        await folderService.updateFolderMetadata({
+          folderId: parentFolder.id,
+          children: updatedChildren,
+          folderKey: parentFolder.folderKey,
+          ipnsPrivateKey: parentFolder.ipnsPrivateKey,
+          ipnsName: parentFolder.ipnsName,
+          sequenceNumber: parentFolder.sequenceNumber,
+        });
+
+        // Update local state — remove all nested folders from store
+        const store = useFolderStore.getState();
+        store.updateFolderChildren(parentId, updatedChildren);
+        for (const folderId of folderIdsToRemove) {
+          store.removeFolder(folderId);
+        }
+
+        // Fire-and-forget unpin all CIDs
+        Promise.all(cidsToUnpin.map((cid) => unpinFromIpfs(cid).catch(() => {})));
+
+        setState({ isLoading: false, error: null });
+      } catch (err) {
+        const error = err instanceof Error ? err.message : 'Failed to delete items';
         setState({ isLoading: false, error });
         throw err;
       }
@@ -600,7 +807,9 @@ export function useFolder() {
     createFolder: handleCreate,
     renameItem: handleRename,
     moveItem: handleMove,
+    moveItems: handleMoveItems,
     deleteItem: handleDelete,
+    deleteItems: handleDeleteItems,
     addFile: handleAddFile,
     addFiles: handleAddFiles,
     updateFile: handleUpdateFile,
