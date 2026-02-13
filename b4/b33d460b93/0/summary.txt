@@ -1,0 +1,18 @@
+Committed successfully. Here's a summary of what was done:
+
+**Backend (`apps/api`)**:
+- `POST /auth/test-login` endpoint accepting `{ email, secret }`
+- Validates `TEST_LOGIN_SECRET` env var — endpoint is disabled if not set
+- Generates deterministic secp256k1 keypair from email (same email = same keypair every time)
+- Creates/finds user + auth method, issues access + refresh tokens
+- Returns `{ accessToken, refreshToken, publicKeyHex, privateKeyHex, isNewUser }`
+
+**Frontend (`apps/web`)**:
+- Exposes Zustand stores on `window.__ZUSTAND_STORES` in dev mode for E2E state injection
+- Regenerated API client with new endpoint types
+
+**E2E (`tests/e2e`)**:
+- When `TEST_LOGIN_SECRET` is set, `loginViaEmail()` uses the test endpoint instead of Core Kit
+- Handles vault init/load using `@cipherbox/crypto` in Node.js (no Web3Auth dependency)
+- Injects auth + vault state into Zustand stores via `page.evaluate`
+- Falls back to full Core Kit flow when `TEST_LOGIN_SECRET` is not set

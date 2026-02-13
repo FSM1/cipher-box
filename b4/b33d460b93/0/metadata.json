@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "b4b33d460b93",
+  "session_id": "7d2ac826-d010-4236-a188-fa2f49390cae",
+  "strategy": "auto-commit",
+  "created_at": "2026-02-13T03:47:15.734976Z",
+  "branch": "feat/phase-12-multi-factor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    "apps/api/.env",
+    "apps/api/.env.example",
+    "apps/api/src/auth/auth.controller.ts",
+    "apps/api/src/auth/auth.service.ts",
+    "apps/api/src/auth/dto/test-login.dto.ts",
+    "apps/web/src/main.tsx",
+    "tests/e2e/.env",
+    "tests/e2e/.env.example",
+    "tests/e2e/package.json",
+    "tests/e2e/utils/web3auth-helpers.ts"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "20ed8d0f-a67d-4632-a019-9247414a4a8a",
+  "checkpoint_transcript_start": 163,
+  "transcript_lines_at_start": 163,
+  "token_usage": {
+    "input_tokens": 158,
+    "cache_creation_tokens": 33953,
+    "cache_read_tokens": 8983672,
+    "output_tokens": 7309,
+    "api_call_count": 63
+  }
+}

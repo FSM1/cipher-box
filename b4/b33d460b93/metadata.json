@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "b4b33d460b93",
+  "strategy": "auto-commit",
+  "branch": "feat/phase-12-multi-factor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    "apps/api/.env",
+    "apps/api/.env.example",
+    "apps/api/src/auth/auth.controller.ts",
+    "apps/api/src/auth/auth.service.ts",
+    "apps/api/src/auth/dto/test-login.dto.ts",
+    "apps/web/src/main.tsx",
+    "tests/e2e/.env",
+    "tests/e2e/.env.example",
+    "tests/e2e/package.json",
+    "tests/e2e/utils/web3auth-helpers.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b4/b33d460b93/0/metadata.json",
+      "transcript": "/b4/b33d460b93/0/full.jsonl",
+      "context": "",
+      "content_hash": "/b4/b33d460b93/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 158,
+    "cache_creation_tokens": 33953,
+    "cache_read_tokens": 8983672,
+    "output_tokens": 7309,
+    "api_call_count": 63
+  }
+}
