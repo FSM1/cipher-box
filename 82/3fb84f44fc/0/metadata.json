@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "823fb84f44fc",
+  "session_id": "0bf632ac-cddf-4e84-8cdb-a7c76df4420f",
+  "strategy": "auto-commit",
+  "created_at": "2026-02-13T13:17:06.507875Z",
+  "branch": "feat/phase-12-multi-factor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".gitignore",
+    ".planning/security/REVIEW-2026-02-13-pr123.md",
+    "apps/api/.env.example",
+    "apps/api/src/auth/auth.controller.ts",
+    "apps/api/src/auth/auth.service.ts",
+    "apps/api/src/auth/services/email-otp.service.ts",
+    "apps/api/src/auth/services/google-oauth.service.ts",
+    "apps/web/src/hooks/useAuth.ts",
+    "apps/web/src/lib/web3auth/hooks.ts",
+    "cipherbox-test.txt"
+  ],
+  "agent": "Claude Code",
+  "transcript_identifier_at_start": "665ec8af-a7d4-46d0-a06c-f5693494fe09",
+  "checkpoint_transcript_start": 9,
+  "transcript_lines_at_start": 9,
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 135202,
+    "cache_read_tokens": 4002275,
+    "output_tokens": 1577,
+    "api_call_count": 30,
+    "subagent_tokens": {
+      "input_tokens": 417,
+      "cache_creation_tokens": 164676,
+      "cache_read_tokens": 1154348,
+      "output_tokens": 170,
+      "api_call_count": 27
+    }
+  }
+}

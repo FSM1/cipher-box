@@ -1,0 +1,21 @@
+All fixes applied and tests pass. Here's a summary of everything fixed:
+
+**Changes made (8 files, 38 insertions, 15 deletions):**
+
+| Fix | File | What changed |
+|-----|------|-------------|
+| **C-01** | `.gitignore` | Changed `.env` to `**/.env` (recursive match) |
+| **C-01** | `apps/api/.env`, `tests/e2e/.env`, `cipherbox-test.txt` | Untracked from git (`git rm --cached`) |
+| **C-02** | `google-oauth.service.ts` | Added production guard: throws if `GOOGLE_CLIENT_ID` unset in production, warns in dev/staging |
+| **C-02** | `.env.example` | Added `GOOGLE_CLIENT_ID` and `IDENTITY_JWT_PRIVATE_KEY` entries |
+| **H-01** | `auth.service.ts` | Replaced `!==` with `crypto.timingSafeEqual()` for secret comparison |
+| **H-02** | `auth.service.ts` | Added `NODE_ENV === 'production'` rejection as defense-in-depth |
+| **H-03** | `auth.controller.ts` | Added `@UseGuards(ThrottlerGuard)` and `@Throttle` (5 req/15min) to test-login |
+| **M-01** | `hooks.ts` | Removed 5 `console.log` calls leaking public keys and migration events |
+| **M-01** | `useAuth.ts` | Removed `console.log` of public key on login |
+| **M-02** | `email-otp.service.ts` | Narrowed OTP logging to `development` only (was `!== 'production'`, which included staging) |
+
+**Still needed (manual action required):**
+1. **Rotate secrets immediately:** JWT_SECRET, Pinata JWT/API key (they're in git history permanently)
+2. **Consider** running `gitleaks` or BFG Repo Cleaner on git history
+3. **Commit** these changes (shall I commit them?)

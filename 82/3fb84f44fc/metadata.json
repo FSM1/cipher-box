@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.2",
+  "checkpoint_id": "823fb84f44fc",
+  "strategy": "auto-commit",
+  "branch": "feat/phase-12-multi-factor",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".gitignore",
+    ".planning/security/REVIEW-2026-02-13-pr123.md",
+    "apps/api/.env.example",
+    "apps/api/src/auth/auth.controller.ts",
+    "apps/api/src/auth/auth.service.ts",
+    "apps/api/src/auth/services/email-otp.service.ts",
+    "apps/api/src/auth/services/google-oauth.service.ts",
+    "apps/web/src/hooks/useAuth.ts",
+    "apps/web/src/lib/web3auth/hooks.ts",
+    "cipherbox-test.txt"
+  ],
+  "sessions": [
+    {
+      "metadata": "/82/3fb84f44fc/0/metadata.json",
+      "transcript": "/82/3fb84f44fc/0/full.jsonl",
+      "context": "",
+      "content_hash": "/82/3fb84f44fc/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 135202,
+    "cache_read_tokens": 4002275,
+    "output_tokens": 1577,
+    "api_call_count": 30
+  }
+}
