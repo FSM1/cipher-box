@@ -2,35 +2,33 @@
 
 **Session ID:** 24c1ea04-c260-46f6-bc55-26dd7ed202af
 
-**Commit Message:** Ok i have updated the jwks endpoint
+**Commit Message:** Ok can you address all the coderabbit comments. great work on such a cle
 
 ## Prompt
 
-ok i have updated the jwks endpoint
+ok can you address all the coderabbit comments. great work on such a clean PR
 
 ## Summary
 
-## Test Results Summary — Phase 12.2 Encrypted Device Registry
+All done. Here's a summary of the three fixes:
 
-| Test | Description | Result |
-|------|-------------|--------|
-| **Test 1** | First login creates registry on IPFS | **PASSED** — Registry created with 1 authorized device, encrypted and published via IPNS |
-| **Test 2** | Second device registers as pending | **PASSED** — New device added with `status: 'pending'`, original device stays `authorized`, sequence number incremented |
-| **Test 3** | Registry survives page refresh | **PASSED** — Same device ID from IndexedDB after refresh, registry re-synced from IPNS on session restore |
+1. **Heartbeat debounce** (`device-registry.service.ts`): Now compares `appVersion` and `deviceModel` before/after — debounce only applies when those haven't changed, so metadata updates always publish immediately.
 
-### Issues encountered during testing (not bugs in Phase 12.2):
-1. **Web3Auth JWKS** — Verifier needed its JWK endpoint updated to point to ngrok tunnel (dashboard config, not a code issue)
-2. **IPFS node unreachable** — `IPFS_LOCAL_API_URL` in `.env` pointed to `localhost:5001` but the Kubo node runs on the Docker host (`192.168.133.114:5001`). This is a local env config issue, not a code bug.
+2. **Async Ed25519 key derivation** (`derive-ipns.ts`): Switched `ed.getPublicKey()` to `await ed.getPublicKeyAsync()` — no longer relies on `sha512Sync` being set as a side effect from other module imports.
+
+3. **JSON.parse error wrapping** (`encrypt.ts`): `JSON.parse` + `validateDeviceRegistry` now wrapped in try/catch — `CryptoError` from schema validation passes through, everything else becomes `CryptoError('DECRYPTION_FAILED')`.
+
+All 162 tests pass, web build clean, pushed, and all 3 CodeRabbit threads replied to and resolved. PR #125 is ready to merge.
 
 ## Key Actions
 
-- - **mcp__playwright__browser_navigate**: 
-- - **mcp__playwright__browser_wait_for**: 
-- - **mcp__playwright__browser_click**: 
-- - **mcp__playwright__browser_type**: 
-- - **mcp__playwright__browser_click**: 
-- - **Bash**: Get fresh OTP from API logs
-- - **mcp__playwright__browser_type**: 
-- - **mcp__playwright__browser_click**: 
-- - **mcp__playwright__browser_wait_for**: 
-- - **mcp__playwright__browser_console_messages**: 
+- - **Read**: /Users/michael/Code/cipher-box/apps/web/src/services/device-registry.service.ts
+- - **Read**: /Users/michael/Code/cipher-box/packages/crypto/src/registry/derive-ipns.ts
+- - **Read**: /Users/michael/Code/cipher-box/packages/crypto/src/registry/encrypt.ts
+- - **Grep**: getPublicKeyAsync|getPublicKey
+- - **Grep**: class CryptoError
+- - **Grep**: sha512Sync|sha512
+- - **Read**: /Users/michael/Code/cipher-box/packages/crypto/src/types.ts
+- - **Grep**: CryptoErrorCode
+- - **Edit**: /Users/michael/Code/cipher-box/packages/crypto/src/registry/derive-ipns.ts
+- - **Edit**: /Users/michael/Code/cipher-box/packages/crypto/src/registry/encrypt.ts

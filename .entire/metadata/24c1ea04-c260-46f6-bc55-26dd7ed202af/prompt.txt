@@ -1,1 +1,1 @@
-ok i have updated the jwks endpoint
+ok can you address all the coderabbit comments. great work on such a clean PR
