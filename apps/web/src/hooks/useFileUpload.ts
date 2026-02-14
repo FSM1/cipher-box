@@ -50,20 +50,20 @@ export function useFileUpload() {
     useUploadStore();
 
   const { usedBytes, limitBytes, remainingBytes, canUpload, fetchQuota } = useQuotaStore();
-  const { derivedKeypair } = useAuthStore();
+  const { vaultKeypair } = useAuthStore();
 
   const upload = useCallback(
     async (files: File[]): Promise<UploadedFile[]> => {
-      if (!derivedKeypair) {
+      if (!vaultKeypair) {
         throw new Error('No keypair available - please log in again');
       }
 
       // Refresh quota before upload
       await fetchQuota();
 
-      return uploadFiles(files, derivedKeypair.publicKey);
+      return uploadFiles(files, vaultKeypair.publicKey);
     },
-    [derivedKeypair, fetchQuota]
+    [vaultKeypair, fetchQuota]
   );
 
   return {

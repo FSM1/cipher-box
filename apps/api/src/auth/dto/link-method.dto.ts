@@ -1,23 +1,48 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsIn } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsString, IsNotEmpty, IsIn, ValidateIf } from 'class-validator';
 
 export class LinkMethodDto {
-  @ApiProperty({ description: 'Web3Auth ID token from the new auth method' })
+  @ApiProperty({
+    description:
+      'CipherBox-issued JWT identity token (required for Google/email, not used for wallet)',
+  })
+  @ValidateIf((o) => o.loginType !== 'wallet')
   @IsString()
   @IsNotEmpty()
   idToken!: string;
 
-  @ApiProperty({ description: 'Login type', enum: ['social', 'external_wallet'] })
+  @ApiProperty({
+    description: 'Auth method type to link',
+    enum: ['google', 'email', 'wallet'],
+  })
   @IsString()
-  @IsIn(['social', 'external_wallet'])
-  loginType!: 'social' | 'external_wallet';
+  @IsIn(['google', 'email', 'wallet'])
+  loginType!: 'google' | 'email' | 'wallet';
+
+  @ApiPropertyOptional({ description: 'Wallet address (required when loginType is wallet)' })
+  @ValidateIf((o) => o.loginType === 'wallet')
+  @IsNotEmpty()
+  @IsString()
+  walletAddress?: string;
+
+  @ApiPropertyOptional({ description: 'SIWE message (required when loginType is wallet)' })
+  @ValidateIf((o) => o.loginType === 'wallet')
+  @IsNotEmpty()
+  @IsString()
+  siweMessage?: string;
+
+  @ApiPropertyOptional({ description: 'SIWE signature (required when loginType is wallet)' })
+  @ValidateIf((o) => o.loginType === 'wallet')
+  @IsNotEmpty()
+  @IsString()
+  siweSignature?: string;
 }
 
 export class AuthMethodResponseDto {
   @ApiProperty()
   id!: string;
 
-  @ApiProperty({ enum: ['google', 'apple', 'github', 'email_passwordless', 'external_wallet'] })
+  @ApiProperty({ enum: ['google', 'apple', 'github', 'email', 'wallet'] })
   type!: string;
 
   @ApiProperty({ description: 'Email or wallet address' })

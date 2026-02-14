@@ -30,7 +30,6 @@ export class FullSchema1700000000000 implements MigrationInterface {
       CREATE TABLE "users" (
         "id"                uuid NOT NULL DEFAULT uuid_generate_v4(),
         "publicKey"         varchar NOT NULL,
-        "derivationVersion" integer,
         "createdAt"         TIMESTAMP NOT NULL DEFAULT now(),
         "updatedAt"         TIMESTAMP NOT NULL DEFAULT now(),
         CONSTRAINT "PK_users" PRIMARY KEY ("id"),
@@ -66,17 +65,24 @@ export class FullSchema1700000000000 implements MigrationInterface {
     // ──────────────────────────────────────────────
     await queryRunner.query(`
       CREATE TABLE "auth_methods" (
-        "id"         uuid NOT NULL DEFAULT uuid_generate_v4(),
-        "userId"     uuid NOT NULL,
-        "type"       varchar NOT NULL,
-        "identifier" varchar NOT NULL,
-        "lastUsedAt" TIMESTAMP,
-        "createdAt"  TIMESTAMP NOT NULL DEFAULT now(),
+        "id"                  uuid NOT NULL DEFAULT uuid_generate_v4(),
+        "userId"              uuid NOT NULL,
+        "type"                varchar NOT NULL,
+        "identifier"          varchar NOT NULL,
+        "identifier_hash"     varchar(64),
+        "identifier_display"  varchar(15),
+        "lastUsedAt"          TIMESTAMP,
+        "createdAt"           TIMESTAMP NOT NULL DEFAULT now(),
         CONSTRAINT "PK_auth_methods" PRIMARY KEY ("id"),
         CONSTRAINT "FK_auth_methods_user" FOREIGN KEY ("userId")
           REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE NO ACTION
       )
     `);
+
+    // Index on identifier_hash for wallet address lookup
+    await queryRunner.query(
+      `CREATE INDEX "IDX_auth_methods_identifier_hash" ON "auth_methods" ("identifier_hash")`
+    );
 
     // ──────────────────────────────────────────────
     // 4. vaults

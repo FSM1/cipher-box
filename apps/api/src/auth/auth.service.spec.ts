@@ -5,9 +5,9 @@ import { UnauthorizedException, BadRequestException, ForbiddenException } from '
 import * as argon2 from 'argon2';
 import * as jose from 'jose';
 import { AuthService } from './auth.service';
-import { Web3AuthVerifierService } from './services/web3auth-verifier.service';
 import { JwtIssuerService } from './services/jwt-issuer.service';
 import { TokenService } from './services/token.service';
+import { SiweService } from './services/siwe.service';
 import { User } from './entities/user.entity';
 import { AuthMethod } from './entities/auth-method.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
@@ -15,9 +15,9 @@ import { RefreshToken } from './entities/refresh-token.entity';
 describe('AuthService', () => {
   let service: AuthService;
   let configService: Record<string, jest.Mock>;
-  let web3AuthVerifier: jest.Mocked<Web3AuthVerifierService>;
   let jwtIssuerService: Record<string, jest.Mock>;
   let tokenService: jest.Mocked<TokenService>;
+  let siweService: Record<string, jest.Mock>;
   let userRepository: Record<string, jest.Mock>;
   let authMethodRepository: Record<string, jest.Mock>;
   let refreshTokenRepository: Record<string, jest.Mock>;
@@ -42,12 +42,6 @@ describe('AuthService', () => {
       update: jest.fn(),
     };
 
-    const mockWeb3AuthVerifier = {
-      verifyIdToken: jest.fn(),
-      extractAuthMethodType: jest.fn(),
-      extractIdentifier: jest.fn(),
-    };
-
     const mockTokenService = {
       createTokens: jest.fn(),
       rotateRefreshToken: jest.fn(),
@@ -63,13 +57,20 @@ describe('AuthService', () => {
       signIdentityJwt: jest.fn(),
     };
 
+    const mockSiweService = {
+      generateNonce: jest.fn(),
+      verifySiweMessage: jest.fn(),
+      hashWalletAddress: jest.fn(),
+      truncateWalletAddress: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
         { provide: ConfigService, useValue: mockConfigService },
-        { provide: Web3AuthVerifierService, useValue: mockWeb3AuthVerifier },
         { provide: JwtIssuerService, useValue: mockJwtIssuerService },
         { provide: TokenService, useValue: mockTokenService },
+        { provide: SiweService, useValue: mockSiweService },
         { provide: getRepositoryToken(User), useValue: mockUserRepo },
         { provide: getRepositoryToken(AuthMethod), useValue: mockAuthMethodRepo },
         { provide: getRepositoryToken(RefreshToken), useValue: mockRefreshTokenRepo },
@@ -78,9 +79,9 @@ describe('AuthService', () => {
 
     service = module.get<AuthService>(AuthService);
     configService = module.get(ConfigService);
-    web3AuthVerifier = module.get(Web3AuthVerifierService);
     jwtIssuerService = module.get(JwtIssuerService);
     tokenService = module.get(TokenService);
+    siweService = module.get(SiweService);
     userRepository = module.get(getRepositoryToken(User));
     authMethodRepository = module.get(getRepositoryToken(AuthMethod));
     refreshTokenRepository = module.get(getRepositoryToken(RefreshToken));
@@ -92,26 +93,28 @@ describe('AuthService', () => {
 
   describe('login', () => {
     const loginDto = {
-      idToken: 'valid-token',
+      idToken: 'cipherbox-jwt',
       publicKey: 'abc123',
-      loginType: 'social' as const,
+      loginType: 'corekit' as const,
     };
 
     it('should create new user on first login', async () => {
-      const mockPayload = { verifier: 'google', email: 'test@example.com' };
-      const mockUser = { id: 'new-user-id', publicKey: 'abc123', derivationVersion: null };
-      const mockAuthMethod = { id: 'am-1', userId: 'new-user-id', type: 'google' };
+      const mockPayload = { sub: 'user-123', email: 'test@example.com' };
+      const mockUser = { id: 'new-user-id', publicKey: 'abc123' };
+      const mockAuthMethod = { id: 'am-1', userId: 'new-user-id', type: 'email' };
       const mockTokens = { accessToken: 'at', refreshToken: 'rt' };
 
-      web3AuthVerifier.verifyIdToken.mockResolvedValue(mockPayload);
-      web3AuthVerifier.extractAuthMethodType.mockReturnValue('google');
-      web3AuthVerifier.extractIdentifier.mockReturnValue('test@example.com');
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
       userRepository.findOne.mockResolvedValue(null);
       userRepository.save.mockResolvedValue(mockUser);
-      authMethodRepository.findOne.mockResolvedValue(null);
+      authMethodRepository.findOne
+        .mockResolvedValueOnce(null) // identifier lookup
+        .mockResolvedValueOnce(null); // userId fallback
       authMethodRepository.save
-        .mockResolvedValueOnce(mockAuthMethod)
-        .mockResolvedValueOnce(mockAuthMethod);
+        .mockResolvedValueOnce(mockAuthMethod) // safety net create
+        .mockResolvedValueOnce(mockAuthMethod); // lastUsedAt update
       tokenService.createTokens.mockResolvedValue(mockTokens);
 
       const result = await service.login(loginDto);
@@ -121,24 +124,24 @@ describe('AuthService', () => {
       expect(result.refreshToken).toBe('rt');
       expect(userRepository.save).toHaveBeenCalledWith({
         publicKey: 'abc123',
-        derivationVersion: null,
       });
     });
 
     it('should return existing user on subsequent login', async () => {
-      const mockPayload = { verifier: 'google', email: 'test@example.com' };
-      const mockUser = { id: 'existing-id', publicKey: 'abc123', derivationVersion: null };
+      const mockPayload = { sub: 'user-123', email: 'test@example.com' };
+      const mockUser = { id: 'existing-id', publicKey: 'abc123' };
       const mockAuthMethod = {
         id: 'am-1',
         userId: 'existing-id',
         type: 'google',
+        identifier: 'test@example.com',
         lastUsedAt: null,
       };
       const mockTokens = { accessToken: 'at', refreshToken: 'rt' };
 
-      web3AuthVerifier.verifyIdToken.mockResolvedValue(mockPayload);
-      web3AuthVerifier.extractAuthMethodType.mockReturnValue('google');
-      web3AuthVerifier.extractIdentifier.mockReturnValue('test@example.com');
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
       userRepository.findOne.mockResolvedValue(mockUser);
       authMethodRepository.findOne.mockResolvedValue(mockAuthMethod);
       authMethodRepository.save.mockResolvedValue(mockAuthMethod);
@@ -151,80 +154,21 @@ describe('AuthService', () => {
       expect(userRepository.save).not.toHaveBeenCalled();
     });
 
-    it('should update derivation version for external wallets', async () => {
-      const externalLoginDto = {
-        idToken: 'valid-token',
-        publicKey: 'derived-key',
-        loginType: 'external_wallet' as const,
-        walletAddress: '0x123abc',
-        derivationVersion: 1,
-      };
-      const mockPayload = { wallets: [{ type: 'ethereum', address: '0x123abc' }] };
-      const mockExistingUser = {
-        id: 'user-id',
-        publicKey: 'derived-key',
-        derivationVersion: null,
-      };
-      const mockUpdatedUser = { id: 'user-id', publicKey: 'derived-key', derivationVersion: 1 };
-      const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'external_wallet' };
-      const mockTokens = { accessToken: 'at', refreshToken: 'rt' };
-
-      web3AuthVerifier.verifyIdToken.mockResolvedValue(mockPayload);
-      web3AuthVerifier.extractAuthMethodType.mockReturnValue('external_wallet');
-      web3AuthVerifier.extractIdentifier.mockReturnValue('0x123abc');
-      userRepository.findOne.mockResolvedValue(mockExistingUser);
-      userRepository.save.mockResolvedValue(mockUpdatedUser);
-      authMethodRepository.findOne.mockResolvedValue(mockAuthMethod);
-      authMethodRepository.save.mockResolvedValue(mockAuthMethod);
-      tokenService.createTokens.mockResolvedValue(mockTokens);
-
-      await service.login(externalLoginDto);
-
-      expect(userRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({
-          derivationVersion: 1,
-        })
-      );
-    });
-
-    it('should create auth method if not exists', async () => {
-      const mockPayload = { verifier: 'google', email: 'new@example.com' };
-      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
-      const mockTokens = { accessToken: 'at', refreshToken: 'rt' };
-
-      web3AuthVerifier.verifyIdToken.mockResolvedValue(mockPayload);
-      web3AuthVerifier.extractAuthMethodType.mockReturnValue('google');
-      web3AuthVerifier.extractIdentifier.mockReturnValue('new@example.com');
-      userRepository.findOne.mockResolvedValue(mockUser);
-      authMethodRepository.findOne.mockResolvedValue(null);
-      authMethodRepository.save.mockResolvedValue({ id: 'am-new', type: 'google' });
-      tokenService.createTokens.mockResolvedValue(mockTokens);
-
-      await service.login(loginDto);
-
-      expect(authMethodRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'user-id',
-          type: 'google',
-          identifier: 'new@example.com',
-        })
-      );
-    });
-
     it('should update lastUsedAt on auth method', async () => {
-      const mockPayload = { verifier: 'google', email: 'test@example.com' };
-      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
+      const mockPayload = { sub: 'user-123', email: 'test@example.com' };
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
       const mockAuthMethod = {
         id: 'am-1',
         userId: 'user-id',
         type: 'google',
+        identifier: 'test@example.com',
         lastUsedAt: new Date('2020-01-01'),
       };
       const mockTokens = { accessToken: 'at', refreshToken: 'rt' };
 
-      web3AuthVerifier.verifyIdToken.mockResolvedValue(mockPayload);
-      web3AuthVerifier.extractAuthMethodType.mockReturnValue('google');
-      web3AuthVerifier.extractIdentifier.mockReturnValue('test@example.com');
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
       userRepository.findOne.mockResolvedValue(mockUser);
       authMethodRepository.findOne.mockResolvedValue(mockAuthMethod);
       authMethodRepository.save.mockResolvedValue(mockAuthMethod);
@@ -239,61 +183,124 @@ describe('AuthService', () => {
       );
     });
 
-    it('should throw if Web3Auth token verification fails', async () => {
-      web3AuthVerifier.verifyIdToken.mockRejectedValue(
-        new UnauthorizedException('Invalid Web3Auth token')
-      );
+    it('should throw UnauthorizedException if CipherBox JWT verification fails', async () => {
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockRejectedValue(new Error('token expired'));
 
       await expect(service.login(loginDto)).rejects.toThrow(UnauthorizedException);
       expect(tokenService.createTokens).not.toHaveBeenCalled();
     });
 
-    it('should use walletAddress for verification when loginType is external_wallet', async () => {
-      const externalLoginDto = {
-        idToken: 'valid-token',
-        publicKey: 'derived-key',
-        loginType: 'external_wallet' as const,
-        walletAddress: '0x123abc',
-        derivationVersion: 1,
-      };
-      const mockPayload = { wallets: [{ type: 'ethereum', address: '0x123abc' }] };
-      const mockUser = { id: 'user-id', publicKey: 'derived-key', derivationVersion: 1 };
-      const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'external_wallet' };
-      const mockTokens = { accessToken: 'at', refreshToken: 'rt' };
+    it('should handle non-Error thrown during JWT verification', async () => {
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockRejectedValue('string-error');
 
-      web3AuthVerifier.verifyIdToken.mockResolvedValue(mockPayload);
-      web3AuthVerifier.extractAuthMethodType.mockReturnValue('external_wallet');
-      web3AuthVerifier.extractIdentifier.mockReturnValue('0x123abc');
-      userRepository.findOne.mockResolvedValue(null);
-      userRepository.save.mockResolvedValue(mockUser);
-      authMethodRepository.findOne.mockResolvedValue(null);
-      authMethodRepository.save.mockResolvedValue(mockAuthMethod);
-      tokenService.createTokens.mockResolvedValue(mockTokens);
-
-      await service.login(externalLoginDto);
-
-      expect(web3AuthVerifier.verifyIdToken).toHaveBeenCalledWith(
-        'valid-token',
-        '0x123abc',
-        'external_wallet'
-      );
+      await expect(service.login(loginDto)).rejects.toThrow(UnauthorizedException);
     });
 
-    it('should verify CipherBox JWT for corekit login type', async () => {
-      const corekitLoginDto = {
-        idToken: 'cipherbox-jwt',
-        publicKey: 'abc123',
-        loginType: 'corekit' as const,
-      };
-      const mockJwksData = { keys: [{ kty: 'RSA' }] };
-      const mockPayload = { sub: 'user-123', email: 'test@example.com' };
+    it('should use sub as identifier when email is not present', async () => {
+      const mockPayload = { sub: 'user-123' }; // no email
 
-      jwtIssuerService.getJwksData.mockReturnValue(mockJwksData);
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
       (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
       (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
 
-      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
-      const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'email_passwordless' };
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
+      userRepository.findOne.mockResolvedValue(mockUser);
+      authMethodRepository.findOne.mockResolvedValue(null);
+      authMethodRepository.findOne
+        .mockResolvedValueOnce(null) // identifier lookup with sub
+        .mockResolvedValueOnce(null); // userId fallback
+      const savedMethod = {
+        id: 'am-new',
+        userId: 'user-id',
+        type: 'email',
+        identifier: 'user-123',
+        lastUsedAt: null,
+      };
+      authMethodRepository.save.mockResolvedValue(savedMethod);
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      await service.login(loginDto);
+
+      expect(authMethodRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          identifier: 'user-123',
+        })
+      );
+    });
+
+    it('should use unknown as identifier when neither email nor sub is present', async () => {
+      const mockPayload = {}; // no email, no sub
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
+
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
+      userRepository.findOne.mockResolvedValue(null);
+      userRepository.save.mockResolvedValue(mockUser);
+      authMethodRepository.findOne
+        .mockResolvedValueOnce(null) // identifier lookup
+        .mockResolvedValueOnce(null); // userId fallback
+      const savedMethod = {
+        id: 'am-new',
+        userId: 'user-id',
+        type: 'email',
+        identifier: 'unknown',
+        lastUsedAt: null,
+      };
+      authMethodRepository.save.mockResolvedValue(savedMethod);
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      await service.login(loginDto);
+
+      expect(authMethodRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          identifier: 'unknown',
+        })
+      );
+    });
+
+    it('should skip placeholder resolution when no verifierId or sub', async () => {
+      const mockPayload = { email: 'test@example.com' }; // no sub, no verifierId
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
+
+      userRepository.findOne.mockResolvedValue(null); // no user found by publicKey, no placeholder search
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
+      userRepository.save.mockResolvedValue(mockUser);
+      authMethodRepository.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      authMethodRepository.save.mockResolvedValue({
+        id: 'am-new',
+        userId: 'user-id',
+        type: 'email',
+        identifier: 'test@example.com',
+        lastUsedAt: null,
+      });
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      const result = await service.login(loginDto);
+
+      // Should create new user since placeholder search was skipped
+      expect(result.isNewUser).toBe(true);
+      // findOne called once for publicKey lookup, NOT for placeholder
+      expect(userRepository.findOne).toHaveBeenCalledTimes(1);
+    });
+
+    it('should verify CipherBox JWT with correct parameters', async () => {
+      const mockPayload = { sub: 'user-123', email: 'test@example.com' };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [{ kty: 'RSA' }] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
+
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
+      const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'email' };
       const mockTokens = { accessToken: 'at', refreshToken: 'rt' };
 
       userRepository.findOne.mockResolvedValue(mockUser);
@@ -301,7 +308,7 @@ describe('AuthService', () => {
       authMethodRepository.save.mockResolvedValue(mockAuthMethod);
       tokenService.createTokens.mockResolvedValue(mockTokens);
 
-      const result = await service.login(corekitLoginDto);
+      const result = await service.login(loginDto);
 
       expect(jose.jwtVerify).toHaveBeenCalledWith('cipherbox-jwt', 'mock-jwks', {
         issuer: 'cipherbox',
@@ -309,22 +316,6 @@ describe('AuthService', () => {
         algorithms: ['RS256'],
       });
       expect(result.accessToken).toBe('at');
-      expect(web3AuthVerifier.verifyIdToken).not.toHaveBeenCalled();
-    });
-
-    it('should throw UnauthorizedException if CipherBox JWT verification fails', async () => {
-      const corekitLoginDto = {
-        idToken: 'bad-jwt',
-        publicKey: 'abc123',
-        loginType: 'corekit' as const,
-      };
-
-      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
-      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
-      (jose.jwtVerify as jest.Mock).mockRejectedValue(new Error('token expired'));
-
-      await expect(service.login(corekitLoginDto)).rejects.toThrow(UnauthorizedException);
-      expect(tokenService.createTokens).not.toHaveBeenCalled();
     });
 
     it('should resolve placeholder publicKey for corekit login', async () => {
@@ -343,7 +334,6 @@ describe('AuthService', () => {
       const placeholderUser = {
         id: 'user-id',
         publicKey: 'pending-core-kit-user-123-1234567890',
-        derivationVersion: null,
       };
       userRepository.findOne
         .mockResolvedValueOnce(null) // not found by real publicKey
@@ -353,7 +343,7 @@ describe('AuthService', () => {
         publicKey: 'real-public-key',
       });
 
-      const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'email_passwordless' };
+      const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'email' };
       authMethodRepository.findOne.mockResolvedValue(mockAuthMethod);
       authMethodRepository.save.mockResolvedValue(mockAuthMethod);
       tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
@@ -366,20 +356,14 @@ describe('AuthService', () => {
       );
     });
 
-    it('should find existing auth method by identifier for corekit login (no duplicates)', async () => {
-      const corekitLoginDto = {
-        idToken: 'cipherbox-jwt',
-        publicKey: 'abc123',
-        loginType: 'corekit' as const,
-      };
-
+    it('should find existing auth method by identifier (no duplicates)', async () => {
       jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
       (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
       (jose.jwtVerify as jest.Mock).mockResolvedValue({
         payload: { sub: 'user-123', email: 'test@example.com' },
       });
 
-      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
       const mockAuthMethod = {
         id: 'am-1',
         userId: 'user-id',
@@ -393,11 +377,7 @@ describe('AuthService', () => {
       authMethodRepository.save.mockResolvedValue(mockAuthMethod);
       tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
 
-      await service.login(corekitLoginDto);
-
-      // Should NOT call web3AuthVerifier methods for corekit login
-      expect(web3AuthVerifier.extractAuthMethodType).not.toHaveBeenCalled();
-      expect(web3AuthVerifier.extractIdentifier).not.toHaveBeenCalled();
+      await service.login(loginDto);
 
       // Should look up by userId + identifier, not hardcode type
       expect(authMethodRepository.findOne).toHaveBeenCalledWith(
@@ -407,20 +387,14 @@ describe('AuthService', () => {
       );
     });
 
-    it('should fall back to any auth method for corekit login when identifier not found', async () => {
-      const corekitLoginDto = {
-        idToken: 'cipherbox-jwt',
-        publicKey: 'abc123',
-        loginType: 'corekit' as const,
-      };
-
+    it('should fall back to any auth method when identifier not found', async () => {
       jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
       (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
       (jose.jwtVerify as jest.Mock).mockResolvedValue({
         payload: { sub: 'user-123', email: 'test@example.com' },
       });
 
-      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
       const mockAuthMethod = {
         id: 'am-1',
         userId: 'user-id',
@@ -436,75 +410,82 @@ describe('AuthService', () => {
       authMethodRepository.save.mockResolvedValue(mockAuthMethod);
       tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
 
-      await service.login(corekitLoginDto);
+      await service.login(loginDto);
 
-      expect(web3AuthVerifier.extractAuthMethodType).not.toHaveBeenCalled();
+      // Second findOne should use userId only
+      expect(authMethodRepository.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { userId: 'user-id' },
+        })
+      );
     });
 
-    it('should create auth method as safety net for corekit login when none found', async () => {
-      const corekitLoginDto = {
-        idToken: 'cipherbox-jwt',
-        publicKey: 'abc123',
-        loginType: 'corekit' as const,
-      };
-
+    it('should create auth method as safety net when none found', async () => {
       jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
       (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
       (jose.jwtVerify as jest.Mock).mockResolvedValue({
         payload: { sub: 'user-123', email: 'test@example.com' },
       });
 
-      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
       userRepository.findOne.mockResolvedValue(mockUser);
-      // Both corekit lookups return null
+      // Both lookups return null
       authMethodRepository.findOne
         .mockResolvedValueOnce(null) // identifier lookup
         .mockResolvedValueOnce(null); // userId fallback
       const savedMethod = {
         id: 'am-new',
         userId: 'user-id',
-        type: 'email_passwordless',
+        type: 'email',
         identifier: 'test@example.com',
         lastUsedAt: null,
       };
       authMethodRepository.save.mockResolvedValue(savedMethod);
       tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
 
-      await service.login(corekitLoginDto);
+      await service.login(loginDto);
 
-      // Should create email_passwordless as safety net
+      // Should create email as safety net
       expect(authMethodRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: 'user-id',
-          type: 'email_passwordless',
+          type: 'email',
           identifier: 'test@example.com',
         })
       );
     });
 
-    it('should backfill auth method identifier when email differs', async () => {
-      const mockPayload = { verifier: 'google', email: 'real-email@example.com' };
-      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
-      const mockAuthMethod = {
-        id: 'am-1',
+    it('should infer wallet type in safety net when identifier starts with 0x', async () => {
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({
+        payload: { sub: 'user-123', email: '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045' },
+      });
+
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
+      userRepository.findOne.mockResolvedValue(mockUser);
+      authMethodRepository.findOne
+        .mockResolvedValueOnce(null) // identifier lookup
+        .mockResolvedValueOnce(null); // userId fallback
+      const savedMethod = {
+        id: 'am-wallet',
         userId: 'user-id',
-        type: 'google',
-        identifier: 'old-uuid-identifier',
+        type: 'wallet',
+        identifier: '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045',
         lastUsedAt: null,
       };
-      const mockTokens = { accessToken: 'at', refreshToken: 'rt' };
-
-      web3AuthVerifier.verifyIdToken.mockResolvedValue(mockPayload);
-      web3AuthVerifier.extractAuthMethodType.mockReturnValue('google');
-      web3AuthVerifier.extractIdentifier.mockReturnValue('real-email@example.com');
-      userRepository.findOne.mockResolvedValue(mockUser);
-      authMethodRepository.findOne.mockResolvedValue(mockAuthMethod);
-      authMethodRepository.save.mockResolvedValue(mockAuthMethod);
-      tokenService.createTokens.mockResolvedValue(mockTokens);
+      authMethodRepository.save.mockResolvedValue(savedMethod);
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
 
       await service.login(loginDto);
 
-      expect(mockAuthMethod.identifier).toBe('real-email@example.com');
+      expect(authMethodRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-id',
+          type: 'wallet',
+          identifier: '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045',
+        })
+      );
     });
   });
 
@@ -682,7 +663,7 @@ describe('AuthService', () => {
       expect(result.email).toBe('test@example.com');
       expect(authMethodRepository.findOne).toHaveBeenCalledWith({
         where: [
-          { userId: 'user-id', type: 'email_passwordless' },
+          { userId: 'user-id', type: 'email' },
           { userId: 'user-id', type: 'google' },
         ],
         order: { lastUsedAt: 'DESC' },
@@ -697,13 +678,15 @@ describe('AuthService', () => {
           id: 'am-1',
           type: 'google',
           identifier: 'test@example.com',
+          identifierDisplay: null,
           lastUsedAt: new Date(),
           createdAt: new Date('2024-01-01'),
         },
         {
           id: 'am-2',
-          type: 'github',
-          identifier: 'user123',
+          type: 'email',
+          identifier: 'user@example.com',
+          identifierDisplay: null,
           lastUsedAt: null,
           createdAt: new Date('2024-02-01'),
         },
@@ -719,7 +702,29 @@ describe('AuthService', () => {
       });
       expect(result).toHaveLength(2);
       expect(result[0].type).toBe('google');
-      expect(result[1].type).toBe('github');
+      expect(result[0].identifier).toBe('test@example.com');
+      expect(result[1].type).toBe('email');
+    });
+
+    it('should return truncated display address for wallet methods', async () => {
+      const mockMethods = [
+        {
+          id: 'am-1',
+          type: 'wallet',
+          identifier: 'sha256-hash-of-address',
+          identifierDisplay: '0xAbCd...1234',
+          identifierHash: 'sha256-hash-of-address',
+          lastUsedAt: new Date(),
+          createdAt: new Date('2024-01-01'),
+        },
+      ];
+
+      authMethodRepository.find.mockResolvedValue(mockMethods);
+
+      const result = await service.getLinkedMethods('user-id');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].identifier).toBe('0xAbCd...1234');
     });
 
     it('should return empty array if no methods', async () => {
@@ -733,70 +738,271 @@ describe('AuthService', () => {
 
   describe('linkMethod', () => {
     const linkDto = {
-      idToken: 'new-token',
-      loginType: 'social' as const,
+      idToken: 'cipherbox-link-jwt',
+      loginType: 'google' as const,
     };
 
-    it('should verify token and create new auth method', async () => {
+    it('should verify CipherBox JWT and create new auth method', async () => {
       const mockUser = { id: 'user-id', publicKey: 'pub-key' };
-      const mockPayload = { verifier: 'github', verifierId: 'gh-user' };
+      const mockPayload = { sub: 'user-123', email: 'user@example.com' };
       const mockMethod = {
         id: 'new-am',
-        type: 'github',
-        identifier: 'gh-user',
+        type: 'google',
+        identifier: 'user@example.com',
         lastUsedAt: new Date(),
         createdAt: new Date(),
       };
 
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
+
       userRepository.findOne.mockResolvedValue(mockUser);
-      web3AuthVerifier.verifyIdToken.mockResolvedValue(mockPayload);
-      web3AuthVerifier.extractAuthMethodType.mockReturnValue('github');
-      web3AuthVerifier.extractIdentifier.mockReturnValue('gh-user');
       authMethodRepository.findOne.mockResolvedValue(null);
       authMethodRepository.save.mockResolvedValue(mockMethod);
       authMethodRepository.find.mockResolvedValue([mockMethod]);
 
       const result = await service.linkMethod('user-id', linkDto);
 
-      expect(web3AuthVerifier.verifyIdToken).toHaveBeenCalledWith('new-token', 'pub-key', 'social');
+      expect(jose.jwtVerify).toHaveBeenCalled();
       expect(authMethodRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: 'user-id',
-          type: 'github',
-          identifier: 'gh-user',
+          type: 'google',
+          identifier: 'user@example.com',
         })
       );
       expect(result).toHaveLength(1);
     });
 
-    it('should throw BadRequestException if method already linked', async () => {
+    it('should throw BadRequestException if method already linked to same user', async () => {
       const mockUser = { id: 'user-id', publicKey: 'pub-key' };
-      const mockPayload = { verifier: 'github', verifierId: 'gh-user' };
-      const existingMethod = { id: 'existing', type: 'github', identifier: 'gh-user' };
+      const mockPayload = { sub: 'user-123', email: 'user@example.com' };
+      const existingMethod = { id: 'existing', type: 'google', identifier: 'user@example.com' };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
 
       userRepository.findOne.mockResolvedValue(mockUser);
-      web3AuthVerifier.verifyIdToken.mockResolvedValue(mockPayload);
-      web3AuthVerifier.extractAuthMethodType.mockReturnValue('github');
-      web3AuthVerifier.extractIdentifier.mockReturnValue('gh-user');
-      authMethodRepository.findOne.mockResolvedValue(existingMethod);
+      // First findOne: cross-account check returns null (no other user has it)
+      // Second findOne: same-user check returns existing method
+      authMethodRepository.findOne
+        .mockResolvedValueOnce(null) // cross-account
+        .mockResolvedValueOnce(existingMethod); // same-user duplicate
 
       await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow(BadRequestException);
+      // Reset mocks for second assertion
+      userRepository.findOne.mockResolvedValue(mockUser);
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
+      authMethodRepository.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(existingMethod);
       await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow(
         'This auth method is already linked to your account'
       );
+    });
+
+    it('should throw BadRequestException for cross-account collision (google/email)', async () => {
+      const mockUser = { id: 'user-id', publicKey: 'pub-key' };
+      const mockPayload = { sub: 'user-123', email: 'user@example.com' };
+      const otherAccountMethod = {
+        id: 'other-am',
+        type: 'google',
+        identifier: 'user@example.com',
+        userId: 'other-user-id',
+      };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
+
+      userRepository.findOne.mockResolvedValue(mockUser);
+      // Cross-account check finds a method on a different user
+      authMethodRepository.findOne.mockResolvedValueOnce(otherAccountMethod);
+
+      await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow(BadRequestException);
+      // Reset for message check
+      userRepository.findOne.mockResolvedValue(mockUser);
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
+      authMethodRepository.findOne.mockResolvedValueOnce(otherAccountMethod);
+      await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow(
+        'already linked to another account'
+      );
+    });
+
+    it('should include "Google account" in cross-account collision message for google type', async () => {
+      const mockUser = { id: 'user-id', publicKey: 'pub-key' };
+      const mockPayload = { sub: 'user-123', email: 'user@example.com' };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
+      userRepository.findOne.mockResolvedValue(mockUser);
+      authMethodRepository.findOne.mockResolvedValueOnce({
+        id: 'other-am',
+        type: 'google',
+        identifier: 'user@example.com',
+        userId: 'other-user-id',
+      });
+
+      await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow('Google account');
+    });
+
+    it('should include "email" in cross-account collision message for email type', async () => {
+      const mockUser = { id: 'user-id', publicKey: 'pub-key' };
+      const mockPayload = { sub: 'user-123', email: 'user@example.com' };
+      const emailLinkDto = {
+        idToken: 'cipherbox-link-jwt',
+        loginType: 'email' as const,
+      };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
+      userRepository.findOne.mockResolvedValue(mockUser);
+      authMethodRepository.findOne.mockResolvedValueOnce({
+        id: 'other-am',
+        type: 'email',
+        identifier: 'user@example.com',
+        userId: 'other-user-id',
+      });
+
+      await expect(service.linkMethod('user-id', emailLinkDto)).rejects.toThrow('This email');
     });
 
     it('should throw UnauthorizedException if user not found', async () => {
       userRepository.findOne.mockResolvedValue(null);
 
       await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow(UnauthorizedException);
+      userRepository.findOne.mockResolvedValue(null);
       await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow('User not found');
+    });
+
+    it('should throw UnauthorizedException if CipherBox JWT verification fails during linking', async () => {
+      const mockUser = { id: 'user-id', publicKey: 'pub-key' };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockRejectedValue(new Error('expired'));
+
+      userRepository.findOne.mockResolvedValue(mockUser);
+
+      await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('should link wallet method with SIWE verification', async () => {
+      // Use a properly formatted EIP-4361 SIWE message so parseSiweMessage can extract the nonce
+      const siweMessage = [
+        'localhost wants you to sign in with your Ethereum account:',
+        '0xAbCdEf1234567890AbCdEf1234567890AbCdEf12',
+        '',
+        'Sign in to CipherBox encrypted storage',
+        '',
+        'URI: http://localhost:5173',
+        'Version: 1',
+        'Chain ID: 1',
+        'Nonce: testnonce123',
+        'Issued At: 2026-01-01T00:00:00.000Z',
+      ].join('\n');
+
+      const walletLinkDto = {
+        idToken: '',
+        loginType: 'wallet' as const,
+        walletAddress: '0xAbCdEf1234567890AbCdEf1234567890AbCdEf12',
+        siweMessage,
+        siweSignature: '0xmocksignature',
+      };
+      const mockUser = { id: 'user-id', publicKey: 'pub-key' };
+      const mockMethod = {
+        id: 'new-am',
+        type: 'wallet',
+        identifier: 'addr-hash',
+        identifierDisplay: '0xAbCd...Ef12',
+        lastUsedAt: new Date(),
+        createdAt: new Date(),
+      };
+
+      userRepository.findOne.mockResolvedValue(mockUser);
+      siweService.verifySiweMessage.mockResolvedValue('0xAbCdEf1234567890AbCdEf1234567890AbCdEf12');
+      siweService.hashWalletAddress.mockReturnValue('addr-hash');
+      siweService.truncateWalletAddress.mockReturnValue('0xAbCd...Ef12');
+      authMethodRepository.findOne.mockResolvedValue(null); // no collision, no duplicate
+      authMethodRepository.save.mockResolvedValue(mockMethod);
+      authMethodRepository.find.mockResolvedValue([mockMethod]);
+
+      const result = await service.linkMethod('user-id', walletLinkDto);
+
+      expect(siweService.verifySiweMessage).toHaveBeenCalled();
+      expect(siweService.hashWalletAddress).toHaveBeenCalled();
+      expect(authMethodRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-id',
+          type: 'wallet',
+          identifier: 'addr-hash',
+          identifierHash: 'addr-hash',
+          identifierDisplay: '0xAbCd...Ef12',
+        })
+      );
+      expect(result).toHaveLength(1);
+    });
+
+    it('should throw BadRequestException for wallet cross-account collision', async () => {
+      const siweMsg = [
+        'localhost wants you to sign in with your Ethereum account:',
+        '0xAbCdEf1234567890AbCdEf1234567890AbCdEf12',
+        '',
+        'Sign in to CipherBox encrypted storage',
+        '',
+        'URI: http://localhost:5173',
+        'Version: 1',
+        'Chain ID: 1',
+        'Nonce: testnonce123',
+        'Issued At: 2026-01-01T00:00:00.000Z',
+      ].join('\n');
+
+      const walletLinkDto = {
+        idToken: '',
+        loginType: 'wallet' as const,
+        walletAddress: '0xAbCdEf1234567890AbCdEf1234567890AbCdEf12',
+        siweMessage: siweMsg,
+        siweSignature: '0xmocksignature',
+      };
+      const mockUser = { id: 'user-id', publicKey: 'pub-key' };
+
+      userRepository.findOne.mockResolvedValue(mockUser);
+      siweService.verifySiweMessage.mockResolvedValue('0xAbCdEf1234567890AbCdEf1234567890AbCdEf12');
+      siweService.hashWalletAddress.mockReturnValue('addr-hash');
+      // Cross-account: wallet linked to different user
+      authMethodRepository.findOne.mockResolvedValueOnce({
+        id: 'other-am',
+        userId: 'other-user-id',
+      });
+
+      await expect(service.linkMethod('user-id', walletLinkDto)).rejects.toThrow(
+        BadRequestException
+      );
+    });
+
+    it('should throw BadRequestException when wallet SIWE fields missing', async () => {
+      const walletLinkDto = {
+        idToken: '',
+        loginType: 'wallet' as const,
+        // Missing walletAddress, siweMessage, siweSignature
+      };
+      const mockUser = { id: 'user-id', publicKey: 'pub-key' };
+
+      userRepository.findOne.mockResolvedValue(mockUser);
+
+      await expect(service.linkMethod('user-id', walletLinkDto)).rejects.toThrow(
+        BadRequestException
+      );
     });
   });
 
   describe('unlinkMethod', () => {
     it('should remove auth method', async () => {
-      const mockMethod = { id: 'method-id', userId: 'user-id', type: 'github' };
+      const mockMethod = { id: 'method-id', userId: 'user-id', type: 'google' };
 
       authMethodRepository.findOne.mockResolvedValue(mockMethod);
       authMethodRepository.count.mockResolvedValue(2);
@@ -834,6 +1040,20 @@ describe('AuthService', () => {
   });
 
   describe('testLogin', () => {
+    it('should throw ForbiddenException in production environment', async () => {
+      configService.get.mockImplementation((key: string) => {
+        if (key === 'NODE_ENV') return 'production';
+        return 'test-secret';
+      });
+
+      await expect(service.testLogin('test@example.com', 'test-secret')).rejects.toThrow(
+        ForbiddenException
+      );
+      await expect(service.testLogin('test@example.com', 'test-secret')).rejects.toThrow(
+        'Test login is not available in production'
+      );
+    });
+
     it('should throw ForbiddenException if TEST_LOGIN_SECRET not set', async () => {
       configService.get.mockReturnValue(undefined);
 
@@ -859,7 +1079,7 @@ describe('AuthService', () => {
       authMethodRepository.save.mockResolvedValue({
         id: 'am-1',
         userId: 'new-user-id',
-        type: 'email_passwordless',
+        type: 'email',
       });
       tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
 
@@ -872,7 +1092,7 @@ describe('AuthService', () => {
       expect(result.privateKeyHex).toBeDefined();
       expect(authMethodRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: 'email_passwordless',
+          type: 'email',
           identifier: 'test@example.com', // normalized
         })
       );
@@ -885,7 +1105,7 @@ describe('AuthService', () => {
       const mockMethod = {
         id: 'am-1',
         userId: 'existing-id',
-        type: 'email_passwordless',
+        type: 'email',
         identifier: 'test@example.com',
         user: mockUser,
         lastUsedAt: null,

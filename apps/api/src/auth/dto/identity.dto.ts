@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsEmail, Length, Matches } from 'class-validator';
+import { IsString, IsNotEmpty, IsEmail, Length, Matches, MaxLength } from 'class-validator';
 
 export class GoogleLoginDto {
   @ApiProperty({
@@ -65,6 +65,28 @@ export class IdentityTokenResponseDto {
     required: false,
   })
   email?: string;
+}
+
+export class WalletVerifyDto {
+  @ApiProperty({
+    description: 'EIP-4361 SIWE message string',
+    example: 'example.com wants you to sign in with your Ethereum account...',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(2048)
+  message!: string;
+
+  @ApiProperty({
+    description: 'Wallet signature of the SIWE message (hex with 0x prefix)',
+    example: '0xabc123...',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @Matches(/^0x[0-9a-fA-F]{130}$/, {
+    message: 'signature must be a 65-byte hex string with 0x prefix',
+  })
+  signature!: string;
 }
 
 export class SendOtpResponseDto {

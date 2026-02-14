@@ -56,7 +56,7 @@ export function useFilePreview({
       try {
         // Use getState() to avoid stale closures in async callbacks
         const auth = useAuthStore.getState();
-        if (!auth.derivedKeypair) {
+        if (!auth.vaultKeypair) {
           throw new Error('No keypair available - please log in again');
         }
 
@@ -67,12 +67,12 @@ export function useFilePreview({
             wrappedKey: item.fileKeyEncrypted,
             originalName: item.name,
           },
-          auth.derivedKeypair.privateKey
+          auth.vaultKeypair.privateKey
         );
 
         if (cancelled) return;
 
-        const blob = new Blob([plaintext.buffer as ArrayBuffer], { type: mimeType });
+        const blob = new Blob([plaintext as BlobPart], { type: mimeType });
         url = URL.createObjectURL(blob);
 
         setDecryptedData(plaintext);

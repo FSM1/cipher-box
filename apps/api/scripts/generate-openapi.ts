@@ -22,6 +22,7 @@ import { TokenService } from '../src/auth/services/token.service';
 import { JwtIssuerService } from '../src/auth/services/jwt-issuer.service';
 import { GoogleOAuthService } from '../src/auth/services/google-oauth.service';
 import { EmailOtpService } from '../src/auth/services/email-otp.service';
+import { SiweService } from '../src/auth/services/siwe.service';
 import { IdentityController } from '../src/auth/controllers/identity.controller';
 import { IpfsController } from '../src/ipfs/ipfs.controller';
 import { IPFS_PROVIDER } from '../src/ipfs/providers';
@@ -33,6 +34,7 @@ import { User } from '../src/auth/entities/user.entity';
 import { AuthMethod } from '../src/auth/entities/auth-method.entity';
 import { RefreshToken } from '../src/auth/entities/refresh-token.entity';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 
 // Mock providers for OpenAPI generation - these won't be called
 const mockRepository = {
@@ -56,7 +58,7 @@ const mockJwtService = {
 };
 
 const mockConfigService = {
-  provide: 'ConfigService',
+  provide: ConfigService,
   useValue: { get: () => 'mock-value' },
 };
 
@@ -98,6 +100,10 @@ const mockConfigService = {
     },
     {
       provide: EmailOtpService,
+      useValue: {},
+    },
+    {
+      provide: SiweService,
       useValue: {},
     },
     {

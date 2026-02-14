@@ -1,10 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import * as jose from 'jose';
 
-const JWKS_ENDPOINTS = {
-  social: 'https://api-auth.web3auth.io/jwks',
-  external_wallet: 'https://authjs.web3auth.io/jwks',
-} as const;
+const JWKS_URL = 'https://api-auth.web3auth.io/jwks';
 
 interface Web3AuthWallet {
   type: string;
@@ -22,24 +19,24 @@ interface Web3AuthPayload extends jose.JWTPayload {
   aggregateVerifier?: string;
 }
 
+/**
+ * Verifies Web3Auth-issued JWTs against the Web3Auth JWKS endpoint.
+ * Used for verifying Core Kit session tokens when needed.
+ * Note: Primary auth flow uses CipherBox-issued JWTs verified by JwtIssuerService.
+ */
 @Injectable()
 export class Web3AuthVerifierService {
-  private jwksCache: Map<string, jose.JWTVerifyGetKey> = new Map();
+  private jwks: jose.JWTVerifyGetKey | null = null;
 
-  private getJwks(loginType: 'social' | 'external_wallet'): jose.JWTVerifyGetKey {
-    const url = JWKS_ENDPOINTS[loginType];
-    if (!this.jwksCache.has(url)) {
-      this.jwksCache.set(url, jose.createRemoteJWKSet(new URL(url)));
+  private getJwks(): jose.JWTVerifyGetKey {
+    if (!this.jwks) {
+      this.jwks = jose.createRemoteJWKSet(new URL(JWKS_URL));
     }
-    return this.jwksCache.get(url)!;
+    return this.jwks;
   }
 
-  async verifyIdToken(
-    idToken: string,
-    expectedPublicKeyOrAddress: string,
-    loginType: 'social' | 'external_wallet'
-  ): Promise<Web3AuthPayload> {
-    const jwks = this.getJwks(loginType);
+  async verifyIdToken(idToken: string, expectedPublicKey: string): Promise<Web3AuthPayload> {
+    const jwks = this.getJwks();
 
     let payload: Web3AuthPayload;
     try {
@@ -53,25 +50,15 @@ export class Web3AuthVerifierService {
       );
     }
 
-    // Verify wallet/public key matches based on login type
-    if (loginType === 'social') {
-      const walletKey = payload.wallets?.find(
-        (w) => w.type === 'web3auth_app_key' && w.curve === 'secp256k1'
-      );
-      if (!walletKey?.public_key) {
-        throw new UnauthorizedException('No secp256k1 public key found in token');
-      }
-      if (walletKey.public_key !== expectedPublicKeyOrAddress) {
-        throw new UnauthorizedException('Public key mismatch');
-      }
-    } else {
-      const wallet = payload.wallets?.find((w) => w.type === 'ethereum');
-      if (!wallet?.address) {
-        throw new UnauthorizedException('No ethereum address found in token');
-      }
-      if (wallet.address.toLowerCase() !== expectedPublicKeyOrAddress.toLowerCase()) {
-        throw new UnauthorizedException('Wallet address mismatch');
-      }
+    // Verify secp256k1 public key matches
+    const walletKey = payload.wallets?.find(
+      (w) => w.type === 'web3auth_app_key' && w.curve === 'secp256k1'
+    );
+    if (!walletKey?.public_key) {
+      throw new UnauthorizedException('No secp256k1 public key found in token');
+    }
+    if (walletKey.public_key !== expectedPublicKey) {
+      throw new UnauthorizedException('Public key mismatch');
     }
 
     return payload;
@@ -97,13 +84,8 @@ export class Web3AuthVerifierService {
   }
 
   extractAuthMethodType(
-    payload: Web3AuthPayload,
-    loginType: 'social' | 'external_wallet'
-  ): 'google' | 'apple' | 'github' | 'email_passwordless' | 'external_wallet' {
-    if (loginType === 'external_wallet') {
-      return 'external_wallet';
-    }
-
+    payload: Web3AuthPayload
+  ): 'google' | 'apple' | 'github' | 'email' | 'wallet' {
     // Detect auth method from verifier
     const verifier = payload.verifier?.toLowerCase() || '';
     const aggregateVerifier = payload.aggregateVerifier?.toLowerCase() || '';
@@ -122,15 +104,15 @@ export class Web3AuthVerifierService {
       verifier.includes('passwordless') ||
       aggregateVerifier.includes('email')
     ) {
-      return 'email_passwordless';
+      return 'email';
     }
 
-    // Default to email_passwordless if email is present
+    // Default to email if email is present
     if (payload.email) {
-      return 'email_passwordless';
+      return 'email';
     }
 
     // Fallback
-    return 'email_passwordless';
+    return 'email';
   }
 }

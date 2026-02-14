@@ -8,12 +8,7 @@ import {
 } from 'typeorm';
 import { User } from './user.entity';
 
-export type AuthMethodType =
-  | 'google'
-  | 'apple'
-  | 'github'
-  | 'email_passwordless'
-  | 'external_wallet';
+export type AuthMethodType = 'google' | 'apple' | 'github' | 'email' | 'wallet';
 
 @Entity('auth_methods')
 export class AuthMethod {
@@ -28,6 +23,14 @@ export class AuthMethod {
 
   @Column()
   identifier!: string;
+
+  /** SHA-256 hash of wallet address for fast lookup (wallet auth methods only) */
+  @Column({ name: 'identifier_hash', type: 'varchar', length: 64, nullable: true })
+  identifierHash!: string | null;
+
+  /** Truncated wallet address for display, e.g. "0xAbCd...1234" (wallet auth methods only) */
+  @Column({ name: 'identifier_display', type: 'varchar', length: 15, nullable: true })
+  identifierDisplay!: string | null;
 
   @Column('timestamp', { nullable: true })
   lastUsedAt!: Date | null;

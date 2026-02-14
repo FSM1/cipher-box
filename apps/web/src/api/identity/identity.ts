@@ -24,10 +24,12 @@ import type {
 import type {
   GoogleLoginDto,
   IdentityControllerGetJwks200,
+  IdentityControllerGetWalletNonce200,
   IdentityTokenResponseDto,
   SendOtpDto,
   SendOtpResponseDto,
   VerifyOtpDto,
+  WalletVerifyDto,
 } from '../models';
 
 import { customInstance } from '../custom-instance';
@@ -381,6 +383,204 @@ export const useIdentityControllerVerifyOtp = <TError = void, TContext = unknown
   TContext
 > => {
   const mutationOptions = getIdentityControllerVerifyOtpMutationOptions(options);
+
+  return useMutation(mutationOptions, queryClient);
+};
+/**
+ * @summary Generate SIWE nonce for wallet login
+ */
+export const identityControllerGetWalletNonce = (signal?: AbortSignal) => {
+  return customInstance<IdentityControllerGetWalletNonce200>({
+    url: `/auth/identity/wallet/nonce`,
+    method: 'GET',
+    signal,
+  });
+};
+
+export const getIdentityControllerGetWalletNonceQueryKey = () => {
+  return [`/auth/identity/wallet/nonce`] as const;
+};
+
+export const getIdentityControllerGetWalletNonceQueryOptions = <
+  TData = Awaited<ReturnType<typeof identityControllerGetWalletNonce>>,
+  TError = unknown,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<Awaited<ReturnType<typeof identityControllerGetWalletNonce>>, TError, TData>
+  >;
+}) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getIdentityControllerGetWalletNonceQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof identityControllerGetWalletNonce>>> = ({
+    signal,
+  }) => identityControllerGetWalletNonce(signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof identityControllerGetWalletNonce>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type IdentityControllerGetWalletNonceQueryResult = NonNullable<
+  Awaited<ReturnType<typeof identityControllerGetWalletNonce>>
+>;
+export type IdentityControllerGetWalletNonceQueryError = unknown;
+
+export function useIdentityControllerGetWalletNonce<
+  TData = Awaited<ReturnType<typeof identityControllerGetWalletNonce>>,
+  TError = unknown,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof identityControllerGetWalletNonce>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof identityControllerGetWalletNonce>>,
+          TError,
+          Awaited<ReturnType<typeof identityControllerGetWalletNonce>>
+        >,
+        'initialData'
+      >;
+  },
+  queryClient?: QueryClient
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useIdentityControllerGetWalletNonce<
+  TData = Awaited<ReturnType<typeof identityControllerGetWalletNonce>>,
+  TError = unknown,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof identityControllerGetWalletNonce>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof identityControllerGetWalletNonce>>,
+          TError,
+          Awaited<ReturnType<typeof identityControllerGetWalletNonce>>
+        >,
+        'initialData'
+      >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useIdentityControllerGetWalletNonce<
+  TData = Awaited<ReturnType<typeof identityControllerGetWalletNonce>>,
+  TError = unknown,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof identityControllerGetWalletNonce>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary Generate SIWE nonce for wallet login
+ */
+
+export function useIdentityControllerGetWalletNonce<
+  TData = Awaited<ReturnType<typeof identityControllerGetWalletNonce>>,
+  TError = unknown,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof identityControllerGetWalletNonce>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getIdentityControllerGetWalletNonceQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  query.queryKey = queryOptions.queryKey;
+
+  return query;
+}
+
+/**
+ * @summary Verify SIWE wallet signature and return CipherBox identity JWT
+ */
+export const identityControllerWalletLogin = (
+  walletVerifyDto: WalletVerifyDto,
+  signal?: AbortSignal
+) => {
+  return customInstance<IdentityTokenResponseDto>({
+    url: `/auth/identity/wallet`,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    data: walletVerifyDto,
+    signal,
+  });
+};
+
+export const getIdentityControllerWalletLoginMutationOptions = <
+  TError = void,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof identityControllerWalletLogin>>,
+    TError,
+    { data: WalletVerifyDto },
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof identityControllerWalletLogin>>,
+  TError,
+  { data: WalletVerifyDto },
+  TContext
+> => {
+  const mutationKey = ['identityControllerWalletLogin'];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof identityControllerWalletLogin>>,
+    { data: WalletVerifyDto }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return identityControllerWalletLogin(data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type IdentityControllerWalletLoginMutationResult = NonNullable<
+  Awaited<ReturnType<typeof identityControllerWalletLogin>>
+>;
+export type IdentityControllerWalletLoginMutationBody = WalletVerifyDto;
+export type IdentityControllerWalletLoginMutationError = void;
+
+/**
+ * @summary Verify SIWE wallet signature and return CipherBox identity JWT
+ */
+export const useIdentityControllerWalletLogin = <TError = void, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof identityControllerWalletLogin>>,
+      TError,
+      { data: WalletVerifyDto },
+      TContext
+    >;
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof identityControllerWalletLogin>>,
+  TError,
+  { data: WalletVerifyDto },
+  TContext
+> => {
+  const mutationOptions = getIdentityControllerWalletLoginMutationOptions(options);
 
   return useMutation(mutationOptions, queryClient);
 };

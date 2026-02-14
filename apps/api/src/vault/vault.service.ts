@@ -192,15 +192,6 @@ export class VaultService {
       where: { id: userId },
     });
 
-    // Determine derivation info from user's derivationVersion
-    let derivationInfo: VaultExportDto['derivationInfo'] = null;
-    if (user) {
-      derivationInfo = {
-        method: user.derivationVersion === null ? 'web3auth' : 'external-wallet',
-        derivationVersion: user.derivationVersion,
-      };
-    }
-
     return {
       format: 'cipherbox-vault-export',
       version: '1.0',
@@ -208,7 +199,7 @@ export class VaultService {
       rootIpnsName: vault.rootIpnsName,
       encryptedRootFolderKey: vault.encryptedRootFolderKey.toString('hex'),
       encryptedRootIpnsPrivateKey: vault.encryptedRootIpnsPrivateKey.toString('hex'),
-      derivationInfo,
+      derivationMethod: user ? 'web3auth' : null,
     };
   }
 

@@ -69,7 +69,7 @@ describe('AuthController', () => {
     const loginDto: LoginDto = {
       idToken: 'mock-web3auth-token',
       publicKey: '04abcd1234567890',
-      loginType: 'social',
+      loginType: 'corekit',
     };
 
     it('should call authService.login with loginDto', async () => {
@@ -137,7 +137,7 @@ describe('AuthController', () => {
     const loginDto: LoginDto = {
       idToken: 'mock-web3auth-token',
       publicKey: '04abcd1234567890',
-      loginType: 'social',
+      loginType: 'corekit',
     };
 
     it('should return refreshToken in body when X-Client-Type: desktop header is present', async () => {
@@ -464,7 +464,7 @@ describe('AuthController', () => {
   describe('linkMethod', () => {
     const linkDto: LinkMethodDto = {
       idToken: 'mock-link-token',
-      loginType: 'social',
+      loginType: 'corekit',
     };
 
     it('should call authService.linkMethod with user.id and linkDto', async () => {

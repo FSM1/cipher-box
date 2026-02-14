@@ -580,11 +580,10 @@ describe('VaultService', () => {
   });
 
   describe('getExportData', () => {
-    it('should return export DTO with hex-encoded keys and derivation info for social login user', async () => {
+    it('should return export DTO with hex-encoded keys and derivation method', async () => {
       mockVaultRepo.findOne.mockResolvedValue(mockVaultEntity);
       mockUserRepo.findOne.mockResolvedValue({
         id: testUserId,
-        derivationVersion: null,
       });
 
       const result = await service.getExportData(testUserId);
@@ -595,34 +594,27 @@ describe('VaultService', () => {
       expect(result.encryptedRootFolderKey).toBe(testEncryptedRootFolderKey);
       expect(result.encryptedRootIpnsPrivateKey).toBe(testEncryptedRootIpnsPrivateKey);
       expect(result.exportedAt).toBeDefined();
-      expect(result.derivationInfo).toEqual({
-        method: 'web3auth',
-        derivationVersion: null,
-      });
+      expect(result.derivationMethod).toBe('web3auth');
     });
 
-    it('should return external-wallet derivation info for wallet user', async () => {
+    it('should return web3auth derivation method for all users (Core Kit)', async () => {
       mockVaultRepo.findOne.mockResolvedValue(mockVaultEntity);
       mockUserRepo.findOne.mockResolvedValue({
         id: testUserId,
-        derivationVersion: 1,
       });
 
       const result = await service.getExportData(testUserId);
 
-      expect(result.derivationInfo).toEqual({
-        method: 'external-wallet',
-        derivationVersion: 1,
-      });
+      expect(result.derivationMethod).toBe('web3auth');
     });
 
-    it('should return null derivationInfo when user not found', async () => {
+    it('should return null derivationMethod when user not found', async () => {
       mockVaultRepo.findOne.mockResolvedValue(mockVaultEntity);
       mockUserRepo.findOne.mockResolvedValue(null);
 
       const result = await service.getExportData(testUserId);
 
-      expect(result.derivationInfo).toBeNull();
+      expect(result.derivationMethod).toBeNull();
     });
 
     it('should throw NotFoundException if vault does not exist', async () => {
@@ -634,7 +626,7 @@ describe('VaultService', () => {
 
     it('should include ISO 8601 exportedAt timestamp', async () => {
       mockVaultRepo.findOne.mockResolvedValue(mockVaultEntity);
-      mockUserRepo.findOne.mockResolvedValue({ id: testUserId, derivationVersion: null });
+      mockUserRepo.findOne.mockResolvedValue({ id: testUserId });
 
       const before = new Date().toISOString();
       const result = await service.getExportData(testUserId);

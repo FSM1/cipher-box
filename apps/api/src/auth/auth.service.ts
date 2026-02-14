@@ -7,16 +7,16 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { Repository, IsNull, Like } from 'typeorm';
+import { Repository, IsNull, Like, Not } from 'typeorm';
 import { createECDH, createHash, timingSafeEqual } from 'crypto';
 import * as jose from 'jose';
 import * as argon2 from 'argon2';
 import { User } from './entities/user.entity';
 import { AuthMethod } from './entities/auth-method.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
-import { Web3AuthVerifierService } from './services/web3auth-verifier.service';
 import { JwtIssuerService } from './services/jwt-issuer.service';
 import { TokenService } from './services/token.service';
+import { SiweService } from './services/siwe.service';
 import { LoginDto, LoginServiceResult } from './dto/login.dto';
 import { RefreshServiceResult, LogoutResponseDto } from './dto/token.dto';
 import { LinkMethodDto, AuthMethodResponseDto } from './dto/link-method.dto';
@@ -27,9 +27,9 @@ export class AuthService {
 
   constructor(
     private configService: ConfigService,
-    private web3AuthVerifier: Web3AuthVerifierService,
     private jwtIssuerService: JwtIssuerService,
     private tokenService: TokenService,
+    private siweService: SiweService,
     @InjectRepository(User)
     private userRepository: Repository<User>,
     @InjectRepository(AuthMethod)
@@ -39,35 +39,9 @@ export class AuthService {
   ) {}
 
   async login(loginDto: LoginDto): Promise<LoginServiceResult> {
-    // 1. Verify token based on login type
-    let payload: {
-      verifierId?: string;
-      sub?: string;
-      email?: string;
-      verifier?: string;
-      aggregateVerifier?: string;
-      wallets?: { type: string; public_key?: string; address?: string; curve?: string }[];
-    };
-
-    if (loginDto.loginType === 'corekit') {
-      // Core Kit login: verify the CipherBox-issued JWT using our own key.
-      // The client already authenticated via /auth/identity/* endpoints,
-      // received a CipherBox JWT, used it for Core Kit loginWithJWT,
-      // and now sends it here for backend session creation.
-      payload = await this.verifyCipherBoxJwt(loginDto.idToken);
-    } else {
-      // PnP / external wallet: verify Web3Auth-issued JWT
-      const verificationKey =
-        loginDto.loginType === 'external_wallet' && loginDto.walletAddress
-          ? loginDto.walletAddress
-          : loginDto.publicKey;
-
-      payload = await this.web3AuthVerifier.verifyIdToken(
-        loginDto.idToken,
-        verificationKey,
-        loginDto.loginType
-      );
-    }
+    // 1. Verify CipherBox-issued JWT.
+    // All auth methods now go through: CipherBox identity provider -> Core Kit loginWithJWT -> /auth/login.
+    const payload = await this.verifyCipherBoxJwt(loginDto.idToken);
 
     // 2. Find or create user
     let user = await this.userRepository.findOne({
@@ -75,7 +49,7 @@ export class AuthService {
     });
 
     // 2b. Placeholder publicKey resolution for Core Kit identity provider.
-    // When a user first authenticates via CipherBox identity provider (Plan 12-01),
+    // When a user first authenticates via CipherBox identity provider,
     // they get a placeholder publicKey ('pending-core-kit-{userId}').
     // After Core Kit login, the client calls /auth/login with the REAL publicKey.
     // We need to find the placeholder user and update their publicKey.
@@ -93,66 +67,38 @@ export class AuthService {
       }
     }
 
-    // Determine derivation version for external wallets (ADR-001)
-    const derivationVersion =
-      loginDto.loginType === 'external_wallet' ? (loginDto.derivationVersion ?? 1) : null;
-
     const isNewUser = !user;
     if (!user) {
       user = await this.userRepository.save({
         publicKey: loginDto.publicKey,
-        derivationVersion,
       });
-    } else if (user.derivationVersion !== derivationVersion) {
-      // Update derivation version if changed (e.g., migration to v2)
-      user.derivationVersion = derivationVersion;
-      await this.userRepository.save(user);
     }
 
     // 3. Find or create auth method
-    // For corekit logins, the identity controller already created the auth method
-    // (with the correct type: 'google' or 'email_passwordless'). Look up by
+    // The identity controller already created the auth method
+    // (with the correct type: 'google', 'email', or 'wallet'). Look up by
     // userId + identifier to avoid creating duplicates with a hardcoded type.
     let authMethod: AuthMethod | null;
 
-    if (loginDto.loginType === 'corekit') {
-      const identifier = payload.email || payload.sub || 'unknown';
+    const identifier = payload.email || payload.sub || 'unknown';
+    authMethod = await this.authMethodRepository.findOne({
+      where: { userId: user.id, identifier },
+    });
+    if (!authMethod) {
+      // Fallback: find any auth method for this user (identity controller should have created one)
       authMethod = await this.authMethodRepository.findOne({
-        where: { userId: user.id, identifier },
+        where: { userId: user.id },
       });
-      if (!authMethod) {
-        // Fallback: find any auth method for this user (identity controller should have created one)
-        authMethod = await this.authMethodRepository.findOne({
-          where: { userId: user.id },
-        });
-      }
-      if (!authMethod) {
-        // Safety net: create auth method if identity controller didn't (shouldn't happen in practice)
-        authMethod = await this.authMethodRepository.save({
-          userId: user.id,
-          type: 'email_passwordless',
-          identifier,
-        });
-      }
-    } else {
-      const authMethodType = this.web3AuthVerifier.extractAuthMethodType(
-        payload,
-        loginDto.loginType
-      );
-      const identifier = this.web3AuthVerifier.extractIdentifier(payload);
-      authMethod = await this.authMethodRepository.findOne({
-        where: { userId: user.id, type: authMethodType },
+    }
+    if (!authMethod) {
+      // Safety net: create auth method if identity controller didn't (shouldn't happen in practice)
+      // All logins go through loginType='corekit' now, but infer type from identifier format
+      const inferredType = identifier.startsWith('0x') ? 'wallet' : 'email';
+      authMethod = await this.authMethodRepository.save({
+        userId: user.id,
+        type: inferredType,
+        identifier,
       });
-      if (!authMethod) {
-        authMethod = await this.authMethodRepository.save({
-          userId: user.id,
-          type: authMethodType,
-          identifier,
-        });
-      } else if (payload.email && authMethod.identifier !== payload.email) {
-        // Backfill: update identifier if we now have the email but previously stored UUID
-        authMethod.identifier = payload.email;
-      }
     }
 
     // 4. Update last used timestamp
@@ -263,10 +209,10 @@ export class AuthService {
     );
 
     // Look up user's email from their most recently used auth method
-    // (covers both email_passwordless and google auth methods)
+    // (covers both email and google auth methods)
     const emailMethod = await this.authMethodRepository.findOne({
       where: [
-        { userId: validToken.userId, type: 'email_passwordless' },
+        { userId: validToken.userId, type: 'email' },
         { userId: validToken.userId, type: 'google' },
       ],
       order: { lastUsedAt: 'DESC' },
@@ -281,6 +227,8 @@ export class AuthService {
 
   /**
    * Get all linked auth methods for a user.
+   * For wallet methods, returns the truncated display address (e.g. "0xAbCd...1234")
+   * instead of the raw identifier hash.
    */
   async getLinkedMethods(userId: string): Promise<AuthMethodResponseDto[]> {
     const methods = await this.authMethodRepository.find({
@@ -291,7 +239,10 @@ export class AuthService {
     return methods.map((method) => ({
       id: method.id,
       type: method.type,
-      identifier: method.identifier,
+      identifier:
+        method.type === 'wallet' && method.identifierDisplay
+          ? method.identifierDisplay
+          : method.identifier,
       lastUsedAt: method.lastUsedAt,
       createdAt: method.createdAt,
     }));
@@ -299,29 +250,61 @@ export class AuthService {
 
   /**
    * Link a new auth method to an existing user account.
-   * CRITICAL: The new auth method's publicKey must match the user's publicKey
-   * (ensuring both auth methods derive the same keypair via Web3Auth group connections)
+   *
+   * For Google/email: verifies CipherBox-issued JWT to confirm ownership of the new method.
+   * For wallet: verifies SIWE message+signature to confirm wallet ownership.
+   *
+   * Cross-account collision: if the auth method already belongs to a different user,
+   * a BadRequestException is thrown (user must unlink from the other account first).
    */
   async linkMethod(userId: string, linkDto: LinkMethodDto): Promise<AuthMethodResponseDto[]> {
-    // 1. Get the user to find their publicKey
+    // 1. Get the user
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
 
-    // 2. Verify the new idToken with Web3AuthVerifierService
-    // This also validates that the new token's publicKey matches the user's publicKey
-    const payload = await this.web3AuthVerifier.verifyIdToken(
-      linkDto.idToken,
-      user.publicKey,
-      linkDto.loginType
-    );
+    const authMethodType = linkDto.loginType;
 
-    // 3. Extract type and identifier from token payload
-    const authMethodType = this.web3AuthVerifier.extractAuthMethodType(payload, linkDto.loginType);
-    const identifier = this.web3AuthVerifier.extractIdentifier(payload);
+    if (authMethodType === 'wallet') {
+      // Wallet linking: verify SIWE message + signature
+      return this.linkWalletMethod(userId, linkDto);
+    }
 
-    // 4. Check if this exact method (type + identifier) is already linked
+    // Google/email linking: verify CipherBox-issued JWT
+    return this.linkJwtMethod(userId, linkDto);
+  }
+
+  /**
+   * Link a Google or email auth method via CipherBox JWT verification.
+   */
+  private async linkJwtMethod(
+    userId: string,
+    linkDto: LinkMethodDto
+  ): Promise<AuthMethodResponseDto[]> {
+    // 1. Verify the CipherBox-issued JWT
+    const payload = await this.verifyCipherBoxJwt(linkDto.idToken);
+
+    // 2. Determine type and identifier
+    const authMethodType = linkDto.loginType;
+    const identifier = payload.email || payload.sub || 'unknown';
+
+    // 3. Check cross-account collision: same identifier linked to a different user
+    const crossAccountMethod = await this.authMethodRepository.findOne({
+      where: {
+        type: authMethodType,
+        identifier,
+        userId: Not(userId),
+      },
+    });
+
+    if (crossAccountMethod) {
+      throw new BadRequestException(
+        `This ${authMethodType === 'google' ? 'Google account' : 'email'} is already linked to another account`
+      );
+    }
+
+    // 4. Check if this exact method is already linked to this user
     const existingMethod = await this.authMethodRepository.findOne({
       where: {
         userId,
@@ -343,6 +326,79 @@ export class AuthService {
     });
 
     // 6. Return updated list of methods
+    return this.getLinkedMethods(userId);
+  }
+
+  /**
+   * Link a wallet auth method via SIWE verification.
+   */
+  private async linkWalletMethod(
+    userId: string,
+    linkDto: LinkMethodDto
+  ): Promise<AuthMethodResponseDto[]> {
+    // 1. Validate required SIWE fields
+    if (!linkDto.walletAddress || !linkDto.siweMessage || !linkDto.siweSignature) {
+      throw new BadRequestException(
+        'walletAddress, siweMessage, and siweSignature are required for wallet linking'
+      );
+    }
+
+    // 2. Verify SIWE signature
+    const domain = this.configService.get<string>('SIWE_DOMAIN', 'localhost');
+    const { parseSiweMessage } = await import('viem/siwe');
+    const parsed = parseSiweMessage(linkDto.siweMessage);
+    if (!parsed.nonce) {
+      throw new BadRequestException('Invalid SIWE message: missing nonce');
+    }
+
+    const walletAddress = await this.siweService.verifySiweMessage(
+      linkDto.siweMessage,
+      linkDto.siweSignature as `0x${string}`,
+      parsed.nonce,
+      domain
+    );
+
+    // 3. Hash the wallet address for lookup
+    const addressHash = this.siweService.hashWalletAddress(walletAddress);
+
+    // 4. Check cross-account collision: same wallet linked to a different user
+    const crossAccountMethod = await this.authMethodRepository.findOne({
+      where: {
+        type: 'wallet',
+        identifierHash: addressHash,
+        userId: Not(userId),
+      },
+    });
+
+    if (crossAccountMethod) {
+      throw new BadRequestException('This wallet is already linked to another account');
+    }
+
+    // 5. Check if this wallet is already linked to this user
+    const existingMethod = await this.authMethodRepository.findOne({
+      where: {
+        userId,
+        type: 'wallet',
+        identifierHash: addressHash,
+      },
+    });
+
+    if (existingMethod) {
+      throw new BadRequestException('This wallet is already linked to your account');
+    }
+
+    // 6. Create wallet auth method with hash + truncated display
+    const truncated = this.siweService.truncateWalletAddress(walletAddress);
+    await this.authMethodRepository.save({
+      userId,
+      type: 'wallet',
+      identifier: addressHash,
+      identifierHash: addressHash,
+      identifierDisplay: truncated,
+      lastUsedAt: new Date(),
+    });
+
+    // 7. Return updated list of methods
     return this.getLinkedMethods(userId);
   }
 
@@ -415,7 +471,7 @@ export class AuthService {
     const normalizedEmail = email.toLowerCase().trim();
 
     const existingMethod = await this.authMethodRepository.findOne({
-      where: { type: 'email_passwordless', identifier: normalizedEmail },
+      where: { type: 'email', identifier: normalizedEmail },
       relations: ['user'],
     });
 
@@ -436,7 +492,7 @@ export class AuthService {
       user = await this.userRepository.save({ publicKey: publicKeyHex });
       await this.authMethodRepository.save({
         userId: user.id,
-        type: 'email_passwordless',
+        type: 'email',
         identifier: normalizedEmail,
         lastUsedAt: new Date(),
       });

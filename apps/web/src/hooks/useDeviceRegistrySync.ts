@@ -35,7 +35,7 @@ export function useDeviceRegistrySync(): void {
     if (!useDeviceRegistryStore.getState().isInitialized) return;
 
     // Read fresh state for privateKey (avoid stale closures)
-    const privateKey = useAuthStore.getState().derivedKeypair?.privateKey;
+    const privateKey = useAuthStore.getState().vaultKeypair?.privateKey;
     if (!privateKey) return; // Not logged in
 
     // Skip if already syncing

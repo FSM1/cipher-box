@@ -8,10 +8,10 @@ type TeeKeys = {
 };
 
 /**
- * Derived keypair for external wallet users (ADR-001)
- * These keys are memory-only and never persisted to storage.
+ * User's secp256k1 vault keypair from Core Kit TSS export.
+ * Memory-only, never persisted.
  */
-type DerivedKeypair = {
+type VaultKeypair = {
   publicKey: Uint8Array;
   privateKey: Uint8Array;
 };
@@ -23,17 +23,14 @@ type AuthState = {
   userEmail: string | null;
   teeKeys: TeeKeys | null;
 
-  // ADR-001: Derived keypair for external wallets (memory-only)
-  derivedKeypair: DerivedKeypair | null;
-  isExternalWallet: boolean;
+  /** User's vault keypair (memory-only, from Core Kit TSS export) */
+  vaultKeypair: VaultKeypair | null;
 
   setAccessToken: (token: string) => void;
   setLastAuthMethod: (method: string) => void;
   setUserEmail: (email: string) => void;
   setTeeKeys: (keys: TeeKeys) => void;
-  setDerivedKeypair: (keypair: DerivedKeypair) => void;
-  setIsExternalWallet: (isExternal: boolean) => void;
-  clearDerivedKeypair: () => void;
+  setVaultKeypair: (keypair: VaultKeypair) => void;
   logout: () => void;
 };
 
@@ -45,9 +42,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   userEmail: null,
   teeKeys: null,
 
-  // ADR-001: Derived keypair state (memory-only)
-  derivedKeypair: null,
-  isExternalWallet: false,
+  /** User's vault keypair (memory-only) */
+  vaultKeypair: null,
 
   // Actions
   setAccessToken: (token) => set({ accessToken: token, isAuthenticated: true }),
@@ -55,35 +51,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   setUserEmail: (email) => set({ userEmail: email }),
   setTeeKeys: (keys) => set({ teeKeys: keys }),
 
-  // ADR-001: Set derived keypair for external wallet users
-  setDerivedKeypair: (keypair) => set({ derivedKeypair: keypair }),
-  setIsExternalWallet: (isExternal) => set({ isExternalWallet: isExternal }),
-
-  // ADR-001: Clear derived keypair with best-effort memory clearing
-  // [SECURITY: MEDIUM-02] Zero-fill sensitive key material before clearing
-  clearDerivedKeypair: () => {
-    const state = get();
-    if (state.derivedKeypair) {
-      // Best-effort memory clearing - overwrite with zeros
-      if (state.derivedKeypair.privateKey) {
-        state.derivedKeypair.privateKey.fill(0);
-      }
-      if (state.derivedKeypair.publicKey) {
-        state.derivedKeypair.publicKey.fill(0);
-      }
-    }
-    set({ derivedKeypair: null });
-  },
+  /** Store vault keypair from Core Kit TSS export */
+  setVaultKeypair: (keypair) => set({ vaultKeypair: keypair }),
 
   logout: () => {
-    // Clear derived keypair with memory clearing before logout
+    // [SECURITY: MEDIUM-02] Zero-fill sensitive key material before clearing
     const state = get();
-    if (state.derivedKeypair) {
-      if (state.derivedKeypair.privateKey) {
-        state.derivedKeypair.privateKey.fill(0);
+    if (state.vaultKeypair) {
+      if (state.vaultKeypair.privateKey) {
+        state.vaultKeypair.privateKey.fill(0);
       }
-      if (state.derivedKeypair.publicKey) {
-        state.derivedKeypair.publicKey.fill(0);
+      if (state.vaultKeypair.publicKey) {
+        state.vaultKeypair.publicKey.fill(0);
       }
     }
 
@@ -92,8 +71,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       isAuthenticated: false,
       userEmail: null,
       teeKeys: null,
-      derivedKeypair: null,
-      isExternalWallet: false,
+      vaultKeypair: null,
     });
   },
 }));

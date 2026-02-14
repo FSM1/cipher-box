@@ -7,12 +7,13 @@
  */
 
 /**
- * Login type
+ * Auth method type to link
  */
 export type LinkMethodDtoLoginType =
   (typeof LinkMethodDtoLoginType)[keyof typeof LinkMethodDtoLoginType];
 
 export const LinkMethodDtoLoginType = {
-  social: 'social',
-  external_wallet: 'external_wallet',
+  google: 'google',
+  email: 'email',
+  wallet: 'wallet',
 } as const;

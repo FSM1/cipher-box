@@ -7,12 +7,10 @@
  */
 
 /**
- * Type of login used
+ * Type of login used (always corekit)
  */
 export type LoginDtoLoginType = (typeof LoginDtoLoginType)[keyof typeof LoginDtoLoginType];
 
 export const LoginDtoLoginType = {
-  social: 'social',
-  external_wallet: 'external_wallet',
   corekit: 'corekit',
 } as const;
