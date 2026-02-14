@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 12.3 in progress (SIWE + Unified Identity)
+**Current focus:** Milestone 2 -- Phase 12.3 complete (SIWE + Unified Identity)
 
 ## Current Position
 
 Phase: 12.3 (SIWE + Unified Identity)
-Plan: 3 of 4 planned
-Status: In progress
-Last activity: 2026-02-14 -- Completed 12.3-03-PLAN.md (Frontend Wallet Login + ADR-001 Cleanup)
+Plan: 4 of 4 planned
+Status: Phase complete
+Last activity: 2026-02-14 -- Completed 12.3-04-PLAN.md (Link/Unlink Methods + Settings UI)
 
-Progress: [#############.......] 65% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 plan 3/4)
+Progress: [##############......] 68% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 84
+- Total plans completed: 85
 - Average duration: 4.7 min
-- Total execution time: 7.01 hours
+- Total execution time: 7.13 hours
 
 **By Phase (M1 summary):**
 
@@ -31,11 +31,11 @@ Progress: [#############.......] 65% (M1 complete, M2 Phase 12 complete, Phase 1
 | M1 (17 phases) | 72/72 | 5.6 hrs | 4.7 min  |
 | M2 Phase 12    | 5/5   | 45 min  | 9.0 min  |
 | M2 Phase 12.2  | 3/3   | 10 min  | 3.3 min  |
-| M2 Phase 12.3  | 3/4   | 32 min  | 10.7 min |
+| M2 Phase 12.3  | 4/4   | 39 min  | 9.8 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 3m, 16m, 9m, 7m
+- Last 5 plans: 3m, 16m, 9m, 7m, 7m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -72,6 +72,9 @@ Recent decisions affecting current work:
 | connectAsync for wallet SIWE flow (not useEffect-based)        | 12.3-03  | Simpler async flow; avoids address-watching complexity                                                          |
 | Disconnect wagmi after SIWE verification                       | 12.3-03  | No persistent wallet connection needed; Core Kit handles ongoing auth                                           |
 | vaultKeypair naming for auth store keypair                     | 12.3-03  | Clear purpose naming; replaces misleading ADR-001 derivedKeypair                                                |
+| Reuse login components in link mode (settings)                 | 12.3-04  | GoogleLoginButton/EmailLoginForm reused via callback props; no separate link components                         |
+| Multiple wallets allowed per account                           | 12.3-04  | Wallet always shows as available to link; CONTEXT.md requirement                                                |
+| Cross-account collision via TypeORM Not()                      | 12.3-04  | Check same identifier with different userId before allowing link                                                |
 
 ### Pending Todos
 
@@ -118,18 +121,18 @@ Recent decisions affecting current work:
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
 - Phase 12.1 (AES-CTR Streaming): NEEDS `/gsd:research-phase` -- MediaSource/Service Worker decryption, byte-range IPFS, CTR nonce management
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
-- Phase 12.3 (SIWE + Identity): IN PROGRESS -- plan 3/4 complete (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login)
+- Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
 - Phase 12.4 (MFA + Cross-Device): NEEDS `/gsd:research-phase` -- enableMFA() flow, bulletin board API, ECIES ephemeral key exchange
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
 Last session: 2026-02-14
-Stopped at: Completed 12.3-03-PLAN.md (Frontend Wallet Login + ADR-001 Cleanup)
+Stopped at: Completed 12.3-04-PLAN.md (Link/Unlink Methods + Settings UI)
 Resume file: None
-Next: Phase 12.3 Plan 04 (Link/Unlink Methods + Settings UI)
+Next: Phase 12.4 (MFA + Cross-Device Approval) -- needs `/gsd:research-phase` first
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-14 after completing Phase 12.3 Plan 03_
+_Last updated: 2026-02-14 after completing Phase 12.3 Plan 04 (Phase 12.3 complete)_
