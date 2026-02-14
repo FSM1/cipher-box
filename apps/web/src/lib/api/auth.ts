@@ -3,11 +3,7 @@ import { apiClient } from './client';
 type LoginRequest = {
   idToken: string;
   publicKey: string;
-  loginType: 'social' | 'external_wallet' | 'corekit';
-  /** ADR-001: Wallet address for external wallet JWT verification */
-  walletAddress?: string;
-  /** ADR-001: Key derivation version for external wallet users */
-  derivationVersion?: number;
+  loginType: 'corekit';
 };
 
 type LoginResponse = {
@@ -30,7 +26,7 @@ type IdentityTokenResponse = {
 
 export type AuthMethod = {
   id: string;
-  type: 'google' | 'apple' | 'github' | 'email_passwordless' | 'external_wallet';
+  type: 'google' | 'apple' | 'github' | 'email' | 'wallet';
   identifier: string;
   lastUsedAt: string | null;
   createdAt: string;
@@ -38,7 +34,7 @@ export type AuthMethod = {
 
 type LinkMethodRequest = {
   idToken: string;
-  loginType: 'social' | 'external_wallet';
+  loginType: 'google' | 'email' | 'wallet';
 };
 
 export const authApi = {
@@ -123,6 +119,21 @@ export const authApi = {
         otp,
       }
     );
+    return response.data;
+  },
+
+  /** Get a SIWE nonce for wallet login */
+  identityWalletNonce: async (): Promise<{ nonce: string }> => {
+    const response = await apiClient.get<{ nonce: string }>('/auth/identity/wallet/nonce');
+    return response.data;
+  },
+
+  /** Verify SIWE wallet signature and get CipherBox identity JWT */
+  identityWalletVerify: async (data: {
+    message: string;
+    signature: string;
+  }): Promise<IdentityTokenResponse> => {
+    const response = await apiClient.post<IdentityTokenResponse>('/auth/identity/wallet', data);
     return response.data;
   },
 };

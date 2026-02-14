@@ -27,6 +27,7 @@ export function useAuth() {
     isInitialized: coreKitInitialized,
     loginWithGoogle: coreKitLoginGoogle,
     loginWithEmailOtp: coreKitLoginEmail,
+    loginWithWallet: coreKitLoginWallet,
     getVaultKeypair,
     getPublicKeyHex,
     logout: coreKitLogout,
@@ -236,7 +237,7 @@ export function useAuth() {
         const { cipherboxJwt } = await coreKitLoginEmail(email, otp);
 
         // 2. Complete backend auth + vault init
-        await completeBackendAuth('email_passwordless', cipherboxJwt);
+        await completeBackendAuth('email', cipherboxJwt);
 
         // 4. Store email for display in UI
         setUserEmail(email);
@@ -251,6 +252,34 @@ export function useAuth() {
       }
     },
     [isLoggingIn, coreKitLoginEmail, completeBackendAuth, setUserEmail, navigate]
+  );
+
+  /**
+   * Login with Wallet (SIWE).
+   * Flow: Wallet connects + signs SIWE message -> backend verifies ->
+   * CipherBox JWT -> Core Kit loginWithJWT -> backend /auth/login (corekit type)
+   */
+  const loginWithWallet = useCallback(
+    async (cipherboxJwt: string, userId: string): Promise<void> => {
+      if (isLoggingIn) return;
+      setIsLoggingIn(true);
+      try {
+        // 1. Core Kit login via CipherBox identity provider
+        await coreKitLoginWallet(cipherboxJwt, userId);
+
+        // 2. Complete backend auth + vault init
+        await completeBackendAuth('wallet', cipherboxJwt);
+
+        // 3. Navigate to files
+        navigate('/files');
+      } catch (error) {
+        console.error('[useAuth] Wallet login failed:', error);
+        throw error;
+      } finally {
+        setIsLoggingIn(false);
+      }
+    },
+    [isLoggingIn, coreKitLoginWallet, completeBackendAuth, navigate]
   );
 
   /**
@@ -367,6 +396,7 @@ export function useAuth() {
     login,
     loginWithGoogle,
     loginWithEmail,
+    loginWithWallet,
     logout,
   };
 }
