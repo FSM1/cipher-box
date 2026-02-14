@@ -1,0 +1,46 @@
+Committed: `docs(12.3): capture phase context`
+
+---
+
+Created: `.planning/phases/12.3-siwe-unified-identity/12.3-CONTEXT.md`
+
+## Decisions Captured
+
+### Wallet Login Flow
+- EIP-6963/EIP-1193 multi-wallet solution (ConnectKit or similar)
+- Custom SIWE statement for phishing protection
+
+### Auth Method Linking
+- Dedicated settings page showing all methods at a glance
+- Re-verify current method before linking (hard requirement)
+- Block unlinking last method, block cross-account links
+- Multiple wallets per account allowed
+
+### ADR-001 Migration
+- **Clean break** — no migration, DB wipe before release
+- Remove all ADR-001 code, importTssKey, legacy DB columns
+
+### Identity Conflicts
+- Block linking if method belongs to another account
+- Hash + encrypted plaintext for wallet address storage
+- Login types simplified to 'google', 'email', 'wallet'
+
+## Noted for Later
+- Account merging — future phase
+- Wallet social recovery — Phase 12.4
+
+---
+
+## Next Up
+
+**Phase 12.3: SIWE + Unified Identity** — Wallet login via SIWE, multi-auth linking, ADR-001 removal
+
+`/gsd:plan-phase 12.3`
+
+<sub>`/clear` first for fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:plan-phase 12.3 --skip-research` — plan without research
+- Review/edit CONTEXT.md before continuing
