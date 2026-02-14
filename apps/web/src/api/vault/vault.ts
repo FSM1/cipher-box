@@ -21,9 +21,9 @@ import type {
   UseQueryResult,
 } from '@tanstack/react-query';
 
-import type { InitVaultDto, QuotaResponseDto, VaultExportDto, VaultResponseDto } from '.././models';
+import type { InitVaultDto, QuotaResponseDto, VaultExportDto, VaultResponseDto } from '../models';
 
-import { customInstance } from '.././custom-instance';
+import { customInstance } from '../custom-instance';
 
 /**
  * Create a new vault with encrypted keys on first sign-in. Returns 409 Conflict if vault already exists.

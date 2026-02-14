@@ -26,9 +26,9 @@ import type {
   UnpinDto,
   UnpinResponseDto,
   UploadResponseDto,
-} from '.././models';
+} from '../models';
 
-import { customInstance } from '.././custom-instance';
+import { customInstance } from '../custom-instance';
 
 /**
  * Pins encrypted file to IPFS, checks storage quota, and records the pin for quota tracking. All in one atomic request.
