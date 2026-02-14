@@ -77,12 +77,13 @@ export class AuthService {
     // 3. Find or create auth method
     // The identity controller already created the auth method
     // (with the correct type: 'google', 'email', or 'wallet'). Look up by
-    // userId + identifier to avoid creating duplicates with a hardcoded type.
+    // userId + identifierHash to avoid creating duplicates with a hardcoded type.
     let authMethod: AuthMethod | null;
 
     const identifier = payload.email || payload.sub || 'unknown';
+    const identifierHash = createHash('sha256').update(identifier).digest('hex');
     authMethod = await this.authMethodRepository.findOne({
-      where: { userId: user.id, identifier },
+      where: { userId: user.id, identifierHash },
     });
     if (!authMethod) {
       // Fallback: find any auth method for this user (identity controller should have created one)
@@ -97,7 +98,9 @@ export class AuthService {
       authMethod = await this.authMethodRepository.save({
         userId: user.id,
         type: inferredType,
-        identifier,
+        identifier: identifierHash,
+        identifierHash,
+        identifierDisplay: identifier,
       });
     }
 
@@ -221,14 +224,14 @@ export class AuthService {
     return {
       accessToken: newTokens.accessToken,
       refreshToken: newTokens.refreshToken,
-      email: emailMethod?.identifier,
+      email: emailMethod?.identifierDisplay || emailMethod?.identifier,
     };
   }
 
   /**
    * Get all linked auth methods for a user.
-   * For wallet methods, returns the truncated display address (e.g. "0xAbCd...1234")
-   * instead of the raw identifier hash.
+   * Returns identifierDisplay (human-readable) for all method types.
+   * Falls back to identifier if identifierDisplay is not set.
    */
   async getLinkedMethods(userId: string): Promise<AuthMethodResponseDto[]> {
     const methods = await this.authMethodRepository.find({
@@ -239,10 +242,7 @@ export class AuthService {
     return methods.map((method) => ({
       id: method.id,
       type: method.type,
-      identifier:
-        method.type === 'wallet' && method.identifierDisplay
-          ? method.identifierDisplay
-          : method.identifier,
+      identifier: method.identifierDisplay || method.identifier,
       lastUsedAt: method.lastUsedAt,
       createdAt: method.createdAt,
     }));
@@ -285,15 +285,16 @@ export class AuthService {
     // 1. Verify the CipherBox-issued JWT
     const payload = await this.verifyCipherBoxJwt(linkDto.idToken);
 
-    // 2. Determine type and identifier
+    // 2. Determine type and identifier, hash for lookup
     const authMethodType = linkDto.loginType;
     const identifier = payload.email || payload.sub || 'unknown';
+    const identifierHash = createHash('sha256').update(identifier).digest('hex');
 
     // 3. Check cross-account collision: same identifier linked to a different user
     const crossAccountMethod = await this.authMethodRepository.findOne({
       where: {
         type: authMethodType,
-        identifier,
+        identifierHash,
         userId: Not(userId),
       },
     });
@@ -309,7 +310,7 @@ export class AuthService {
       where: {
         userId,
         type: authMethodType,
-        identifier,
+        identifierHash,
       },
     });
 
@@ -317,11 +318,13 @@ export class AuthService {
       throw new BadRequestException('This auth method is already linked to your account');
     }
 
-    // 5. Create new AuthMethod entity
+    // 5. Create new AuthMethod entity with hashed identifier
     await this.authMethodRepository.save({
       userId,
       type: authMethodType,
-      identifier,
+      identifier: identifierHash,
+      identifierHash,
+      identifierDisplay: identifier,
       lastUsedAt: new Date(),
     });
 
@@ -467,11 +470,12 @@ export class AuthService {
     // 2. Generate deterministic secp256k1 keypair from email
     const { publicKeyHex, privateKeyHex } = this.generateDeterministicKeypair(email);
 
-    // 3. Find or create user by email
+    // 3. Find or create user by email (hash-based lookup)
     const normalizedEmail = email.toLowerCase().trim();
+    const identifierHash = createHash('sha256').update(normalizedEmail).digest('hex');
 
     const existingMethod = await this.authMethodRepository.findOne({
-      where: { type: 'email', identifier: normalizedEmail },
+      where: { type: 'email', identifierHash },
       relations: ['user'],
     });
 
@@ -493,7 +497,9 @@ export class AuthService {
       await this.authMethodRepository.save({
         userId: user.id,
         type: 'email',
-        identifier: normalizedEmail,
+        identifier: identifierHash,
+        identifierHash,
+        identifierDisplay: normalizedEmail,
         lastUsedAt: new Date(),
       });
     }
