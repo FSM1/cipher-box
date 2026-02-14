@@ -164,7 +164,7 @@ export class IdentityController implements OnModuleDestroy {
     );
 
     // 4. Sign CipherBox identity JWT (include email for auth method identifier)
-    const idToken = await this.jwtIssuerService.signIdentityJwt(user.id, dto.email);
+    const idToken = await this.jwtIssuerService.signIdentityJwt(user.id, normalizedEmail);
 
     this.logger.log(`Email OTP login: userId=${user.id}, isNew=${isNewUser}`);
 

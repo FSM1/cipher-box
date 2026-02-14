@@ -389,6 +389,9 @@ importers:
       '@faker-js/faker':
         specifier: ^9.0.0
         version: 9.9.0
+      '@noble/ed25519':
+        specifier: ^2.2.3
+        version: 2.3.0
       '@playwright/test':
         specifier: ^1.48.0
         version: 1.57.0
