@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 12.3.1 (Pre-Wipe Identity Cleanup)
-Plan: 1 of 4 planned
+Plan: 2 of 4 planned
 Status: In progress
-Last activity: 2026-02-14 -- Completed 12.3.1-01-PLAN.md (Deterministic Vault IPNS Derivation)
+Last activity: 2026-02-14 -- Completed 12.3.1-02-PLAN.md (SHA-256 Hashed Identifiers)
 
-Progress: [##############......] 68% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 plan 1/4)
+Progress: [##############......] 69% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 plan 2/4)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 86
-- Average duration: 4.7 min
-- Total execution time: 7.20 hours
+- Total plans completed: 87
+- Average duration: 4.8 min
+- Total execution time: 7.37 hours
 
 **By Phase (M1 summary):**
 
@@ -32,11 +32,11 @@ Progress: [##############......] 68% (M1 complete, M2 Phase 12 complete, Phase 1
 | M2 Phase 12     | 5/5   | 45 min  | 9.0 min  |
 | M2 Phase 12.2   | 3/3   | 10 min  | 3.3 min  |
 | M2 Phase 12.3   | 4/4   | 39 min  | 9.8 min  |
-| M2 Phase 12.3.1 | 1/4   | 4 min   | 4.0 min  |
+| M2 Phase 12.3.1 | 2/4   | 14 min  | 7.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 16m, 9m, 7m, 7m, 4m
+- Last 5 plans: 9m, 7m, 7m, 4m, 10m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -78,6 +78,9 @@ Recent decisions affecting current work:
 | Cross-account collision via TypeORM Not()                        | 12.3-04   | Check same identifier with different userId before allowing link                                                |
 | Vault IPNS: same salt, different HKDF info for domain separation | 12.3.1-01 | HKDF info is primary domain separator; "cipherbox-vault-ipns-v1" vs registry's info                             |
 | rootIpnsPublicKey removed from EncryptedVaultKeys                | 12.3.1-01 | Derivable from private key; reduces stored data, eliminates inconsistency                                       |
+| Google login hashes sub (not email) for identifierHash           | 12.3.1-02 | Sub is immutable Google user ID; email can change. Privacy-preserving lookup.                                   |
+| Cross-method email auto-linking removed                          | 12.3.1-02 | Each auth method is independent; users link explicitly via Settings, not auto-linked by email match             |
+| identifier column stores hash for all auth types                 | 12.3.1-02 | identifier=identifierHash for consistency; identifierDisplay holds human-readable value                         |
 
 ### Pending Todos
 
