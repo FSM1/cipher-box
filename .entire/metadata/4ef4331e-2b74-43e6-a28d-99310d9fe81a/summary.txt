@@ -1,5 +1,5 @@
-Pushed. The three CI fixes:
+Todo saved: `.planning/todos/pending/2026-02-14-fix-orval-generated-client-any-warnings.md`
 
-1. **Test coverage** (82.89% < 84%): Added 3 tests — wallet-type inference in safety net, and both branches of the cross-account collision error message. Coverage now 85.52%.
-2. **E2E build** (`Uint8Array` not `BlobPart`): TS 5.9 generic `Uint8Array<ArrayBufferLike>` doesn't satisfy `BlobPart`. Cast to `BlobPart` in both `ImagePreviewDialog.tsx` and `useFilePreview.ts`.
-3. **API Spec & Client**: Was already correct from the CodeRabbit fix commit — CI just hadn't run against that code yet. The new push will trigger a fresh CI run.
+  Fix no-explicit-any warnings in generated API client
+  Area: tooling
+  Files: 2 referenced
