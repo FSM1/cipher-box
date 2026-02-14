@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>a3d7ba2</task-id>
+<status>failed</status>
+<summary>Agent "Execute plan 12.3-01" failed: classifyHandoffIfNeeded is not defined</summary>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/a3d7ba2.output
