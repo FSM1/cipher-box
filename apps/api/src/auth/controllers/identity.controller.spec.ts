@@ -3,6 +3,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { ConfigService } from '@nestjs/config';
 import { UnauthorizedException } from '@nestjs/common';
+import { createHash } from 'crypto';
 import { IdentityController } from './identity.controller';
 import { JwtIssuerService } from '../services/jwt-issuer.service';
 import { GoogleOAuthService } from '../services/google-oauth.service';
@@ -25,6 +26,11 @@ const mockParseSiweMessage = jest.fn();
 jest.mock('viem/siwe', () => ({
   parseSiweMessage: (...args: unknown[]) => mockParseSiweMessage(...args),
 }));
+
+/** Helper: compute expected SHA-256 hex hash */
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
 
 describe('IdentityController', () => {
   let controller: IdentityController;
@@ -54,6 +60,7 @@ describe('IdentityController', () => {
       generateNonce: jest.fn(),
       verifySiweMessage: jest.fn(),
       hashWalletAddress: jest.fn(),
+      hashIdentifier: jest.fn((value: string) => sha256Hex(value)),
       truncateWalletAddress: jest.fn(),
     };
 
@@ -122,16 +129,18 @@ describe('IdentityController', () => {
   });
 
   describe('googleLogin', () => {
-    it('should verify Google token and return CipherBox JWT for new user', async () => {
+    it('should hash googlePayload.sub (not email) and create new user', async () => {
+      const googleSub = 'google-123';
+      const googleEmail = 'user@gmail.com';
+      const expectedHash = sha256Hex(googleSub);
+
       googleOAuthService.verifyGoogleToken.mockResolvedValue({
-        email: 'user@gmail.com',
-        sub: 'google-123',
+        email: googleEmail,
+        sub: googleSub,
       });
 
       // No existing auth method -- new user
-      authMethodRepository.findOne
-        .mockResolvedValueOnce(null) // by type + identifier
-        .mockResolvedValueOnce(null); // by any identifier
+      authMethodRepository.findOne.mockResolvedValue(null);
 
       const mockUser = { id: 'new-user-id' };
       userRepository.save.mockResolvedValue(mockUser);
@@ -145,10 +154,19 @@ describe('IdentityController', () => {
       expect(result.idToken).toBe('cipherbox-jwt');
       expect(result.userId).toBe('new-user-id');
       expect(result.isNewUser).toBe(true);
+      expect(result.email).toBe(googleEmail);
       expect(googleOAuthService.verifyGoogleToken).toHaveBeenCalledWith('google-token');
-      expect(jwtIssuerService.signIdentityJwt).toHaveBeenCalledWith(
-        'new-user-id',
-        'user@gmail.com'
+      // Verify hashIdentifier was called with sub (NOT email)
+      expect(siweService.hashIdentifier).toHaveBeenCalledWith(googleSub);
+      expect(jwtIssuerService.signIdentityJwt).toHaveBeenCalledWith('new-user-id', googleEmail);
+      // Verify auth method created with hash + display
+      expect(authMethodRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          identifier: expectedHash,
+          identifierHash: expectedHash,
+          identifierDisplay: googleEmail,
+          type: 'google',
+        })
       );
     });
 
@@ -173,6 +191,15 @@ describe('IdentityController', () => {
 
       expect(result.isNewUser).toBe(false);
       expect(result.userId).toBe('existing-id');
+      // Should look up by identifierHash
+      expect(authMethodRepository.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            type: 'google',
+            identifierHash: sha256Hex('google-123'),
+          }),
+        })
+      );
     });
   });
 
@@ -189,12 +216,13 @@ describe('IdentityController', () => {
 
   describe('verifyOtp', () => {
     it('should verify OTP and return CipherBox JWT for new user', async () => {
+      const email = 'test@example.com';
+      const expectedHash = sha256Hex(email);
+
       emailOtpService.verifyOtp.mockResolvedValue(undefined);
 
       // No existing auth method -- new user
-      authMethodRepository.findOne
-        .mockResolvedValueOnce(null) // by type + identifier
-        .mockResolvedValueOnce(null); // by any identifier
+      authMethodRepository.findOne.mockResolvedValue(null);
 
       const mockUser = { id: 'new-user-id' };
       userRepository.save.mockResolvedValue(mockUser);
@@ -202,45 +230,48 @@ describe('IdentityController', () => {
       jwtIssuerService.signIdentityJwt.mockResolvedValue('cipherbox-jwt');
 
       const result = await controller.verifyOtp({
-        email: 'test@example.com',
+        email,
         otp: '123456',
       });
 
       expect(result.idToken).toBe('cipherbox-jwt');
       expect(result.userId).toBe('new-user-id');
       expect(result.isNewUser).toBe(true);
-      expect(emailOtpService.verifyOtp).toHaveBeenCalledWith('test@example.com', '123456');
+      expect(emailOtpService.verifyOtp).toHaveBeenCalledWith(email, '123456');
+      // Verify auth method created with hash + display
+      expect(authMethodRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          identifier: expectedHash,
+          identifierHash: expectedHash,
+          identifierDisplay: email,
+          type: 'email',
+        })
+      );
     });
 
-    it('should link to existing user when email matches different auth type', async () => {
+    it('should create SEPARATE user when email matches existing Google user (no auto-linking)', async () => {
+      const email = 'shared@example.com';
+
       emailOtpService.verifyOtp.mockResolvedValue(undefined);
 
-      // No existing email method
-      authMethodRepository.findOne
-        .mockResolvedValueOnce(null) // by email type
-        .mockResolvedValueOnce({
-          // found by any identifier (google method with same email)
-          user: { id: 'existing-id' },
-        });
+      // No existing email auth method with this hash
+      authMethodRepository.findOne.mockResolvedValue(null);
 
+      const mockUser = { id: 'new-email-user-id' };
+      userRepository.save.mockResolvedValue(mockUser);
       authMethodRepository.save.mockResolvedValue({});
       jwtIssuerService.signIdentityJwt.mockResolvedValue('cipherbox-jwt');
 
       const result = await controller.verifyOtp({
-        email: 'test@example.com',
+        email,
         otp: '123456',
       });
 
-      expect(result.isNewUser).toBe(false);
-      expect(result.userId).toBe('existing-id');
-      // Should have saved a new email auth method for existing user
-      expect(authMethodRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: 'existing-id',
-          type: 'email',
-          identifier: 'test@example.com',
-        })
-      );
+      // Should create a NEW user, not link to existing Google user
+      expect(result.isNewUser).toBe(true);
+      expect(result.userId).toBe('new-email-user-id');
+      // findOne should only be called once (by type + identifierHash), NOT a second time for cross-method
+      expect(authMethodRepository.findOne).toHaveBeenCalledTimes(1);
     });
 
     it('should return existing user on subsequent email login', async () => {

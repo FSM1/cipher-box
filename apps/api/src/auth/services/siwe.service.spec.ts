@@ -66,6 +66,28 @@ describe('SiweService', () => {
     });
   });
 
+  describe('hashIdentifier', () => {
+    it('should return consistent SHA-256 hex for a known input', () => {
+      const hash = service.hashIdentifier('test@example.com');
+      expect(hash).toMatch(/^[0-9a-f]{64}$/);
+      // Same input should always produce the same hash
+      const hash2 = service.hashIdentifier('test@example.com');
+      expect(hash).toBe(hash2);
+    });
+
+    it('should NOT normalize input (caller must normalize)', () => {
+      const hash1 = service.hashIdentifier('Test@Example.com');
+      const hash2 = service.hashIdentifier('test@example.com');
+      expect(hash1).not.toBe(hash2);
+    });
+
+    it('should produce different hashes for different inputs', () => {
+      const hash1 = service.hashIdentifier('user1@example.com');
+      const hash2 = service.hashIdentifier('user2@example.com');
+      expect(hash1).not.toBe(hash2);
+    });
+  });
+
   describe('truncateWalletAddress', () => {
     it('should truncate to first 6 + "..." + last 4 chars', () => {
       const addr = '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045';
