@@ -70,6 +70,17 @@ export class SiweService {
   }
 
   /**
+   * Hash any identifier (email, Google sub, etc.) for database lookup.
+   * The caller is responsible for normalization (e.g., lowercasing email).
+   * Unlike hashWalletAddress, this does NOT apply EIP-55 checksumming.
+   *
+   * @returns SHA-256 hex digest of the value (64 chars)
+   */
+  hashIdentifier(value: string): string {
+    return createHash('sha256').update(value).digest('hex');
+  }
+
+  /**
    * Truncate a wallet address for display purposes.
    * Returns first 6 + "..." + last 4 characters (e.g. "0xAbCd...1234").
    * The full plaintext address is NEVER stored in the database.

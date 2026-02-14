@@ -24,12 +24,12 @@ export class AuthMethod {
   @Column()
   identifier!: string;
 
-  /** SHA-256 hash of wallet address for fast lookup (wallet auth methods only) */
+  /** SHA-256 hash of the canonical identifier for all auth method types */
   @Column({ name: 'identifier_hash', type: 'varchar', length: 64, nullable: true })
   identifierHash!: string | null;
 
-  /** Truncated wallet address for display, e.g. "0xAbCd...1234" (wallet auth methods only) */
-  @Column({ name: 'identifier_display', type: 'varchar', length: 15, nullable: true })
+  /** Human-readable display value for all auth method types */
+  @Column({ name: 'identifier_display', type: 'varchar', length: 255, nullable: true })
   identifierDisplay!: string | null;
 
   @Column('timestamp', { nullable: true })

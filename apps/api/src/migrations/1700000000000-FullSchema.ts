@@ -70,7 +70,7 @@ export class FullSchema1700000000000 implements MigrationInterface {
         "type"                varchar NOT NULL,
         "identifier"          varchar NOT NULL,
         "identifier_hash"     varchar(64),
-        "identifier_display"  varchar(15),
+        "identifier_display"  varchar(255),
         "lastUsedAt"          TIMESTAMP,
         "createdAt"           TIMESTAMP NOT NULL DEFAULT now(),
         CONSTRAINT "PK_auth_methods" PRIMARY KEY ("id"),
@@ -82,6 +82,11 @@ export class FullSchema1700000000000 implements MigrationInterface {
     // Index on identifier_hash for wallet address lookup
     await queryRunner.query(
       `CREATE INDEX "IDX_auth_methods_identifier_hash" ON "auth_methods" ("identifier_hash")`
+    );
+
+    // Composite index on (type, identifier_hash) for efficient auth method lookups
+    await queryRunner.query(
+      `CREATE INDEX "IDX_auth_methods_type_hash" ON "auth_methods" ("type", "identifier_hash")`
     );
 
     // ──────────────────────────────────────────────
