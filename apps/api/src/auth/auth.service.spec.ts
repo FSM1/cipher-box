@@ -7,6 +7,7 @@ import * as jose from 'jose';
 import { AuthService } from './auth.service';
 import { JwtIssuerService } from './services/jwt-issuer.service';
 import { TokenService } from './services/token.service';
+import { SiweService } from './services/siwe.service';
 import { User } from './entities/user.entity';
 import { AuthMethod } from './entities/auth-method.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
@@ -16,6 +17,7 @@ describe('AuthService', () => {
   let configService: Record<string, jest.Mock>;
   let jwtIssuerService: Record<string, jest.Mock>;
   let tokenService: jest.Mocked<TokenService>;
+  let siweService: Record<string, jest.Mock>;
   let userRepository: Record<string, jest.Mock>;
   let authMethodRepository: Record<string, jest.Mock>;
   let refreshTokenRepository: Record<string, jest.Mock>;
@@ -55,12 +57,20 @@ describe('AuthService', () => {
       signIdentityJwt: jest.fn(),
     };
 
+    const mockSiweService = {
+      generateNonce: jest.fn(),
+      verifySiweMessage: jest.fn(),
+      hashWalletAddress: jest.fn(),
+      truncateWalletAddress: jest.fn(),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AuthService,
         { provide: ConfigService, useValue: mockConfigService },
         { provide: JwtIssuerService, useValue: mockJwtIssuerService },
         { provide: TokenService, useValue: mockTokenService },
+        { provide: SiweService, useValue: mockSiweService },
         { provide: getRepositoryToken(User), useValue: mockUserRepo },
         { provide: getRepositoryToken(AuthMethod), useValue: mockAuthMethodRepo },
         { provide: getRepositoryToken(RefreshToken), useValue: mockRefreshTokenRepo },
@@ -71,6 +81,7 @@ describe('AuthService', () => {
     configService = module.get(ConfigService);
     jwtIssuerService = module.get(JwtIssuerService);
     tokenService = module.get(TokenService);
+    siweService = module.get(SiweService);
     userRepository = module.get(getRepositoryToken(User));
     authMethodRepository = module.get(getRepositoryToken(AuthMethod));
     refreshTokenRepository = module.get(getRepositoryToken(RefreshToken));
@@ -634,6 +645,7 @@ describe('AuthService', () => {
           id: 'am-1',
           type: 'google',
           identifier: 'test@example.com',
+          identifierDisplay: null,
           lastUsedAt: new Date(),
           createdAt: new Date('2024-01-01'),
         },
@@ -641,6 +653,7 @@ describe('AuthService', () => {
           id: 'am-2',
           type: 'email',
           identifier: 'user@example.com',
+          identifierDisplay: null,
           lastUsedAt: null,
           createdAt: new Date('2024-02-01'),
         },
@@ -656,7 +669,29 @@ describe('AuthService', () => {
       });
       expect(result).toHaveLength(2);
       expect(result[0].type).toBe('google');
+      expect(result[0].identifier).toBe('test@example.com');
       expect(result[1].type).toBe('email');
+    });
+
+    it('should return truncated display address for wallet methods', async () => {
+      const mockMethods = [
+        {
+          id: 'am-1',
+          type: 'wallet',
+          identifier: 'sha256-hash-of-address',
+          identifierDisplay: '0xAbCd...1234',
+          identifierHash: 'sha256-hash-of-address',
+          lastUsedAt: new Date(),
+          createdAt: new Date('2024-01-01'),
+        },
+      ];
+
+      authMethodRepository.find.mockResolvedValue(mockMethods);
+
+      const result = await service.getLinkedMethods('user-id');
+
+      expect(result).toHaveLength(1);
+      expect(result[0].identifier).toBe('0xAbCd...1234');
     });
 
     it('should return empty array if no methods', async () => {
@@ -707,7 +742,7 @@ describe('AuthService', () => {
       expect(result).toHaveLength(1);
     });
 
-    it('should throw BadRequestException if method already linked', async () => {
+    it('should throw BadRequestException if method already linked to same user', async () => {
       const mockUser = { id: 'user-id', publicKey: 'pub-key' };
       const mockPayload = { sub: 'user-123', email: 'user@example.com' };
       const existingMethod = { id: 'existing', type: 'google', identifier: 'user@example.com' };
@@ -717,11 +752,49 @@ describe('AuthService', () => {
       (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
 
       userRepository.findOne.mockResolvedValue(mockUser);
-      authMethodRepository.findOne.mockResolvedValue(existingMethod);
+      // First findOne: cross-account check returns null (no other user has it)
+      // Second findOne: same-user check returns existing method
+      authMethodRepository.findOne
+        .mockResolvedValueOnce(null) // cross-account
+        .mockResolvedValueOnce(existingMethod); // same-user duplicate
 
       await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow(BadRequestException);
+      // Reset mocks for second assertion
+      userRepository.findOne.mockResolvedValue(mockUser);
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
+      authMethodRepository.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(existingMethod);
       await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow(
         'This auth method is already linked to your account'
+      );
+    });
+
+    it('should throw BadRequestException for cross-account collision (google/email)', async () => {
+      const mockUser = { id: 'user-id', publicKey: 'pub-key' };
+      const mockPayload = { sub: 'user-123', email: 'user@example.com' };
+      const otherAccountMethod = {
+        id: 'other-am',
+        type: 'google',
+        identifier: 'user@example.com',
+        userId: 'other-user-id',
+      };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
+
+      userRepository.findOne.mockResolvedValue(mockUser);
+      // Cross-account check finds a method on a different user
+      authMethodRepository.findOne.mockResolvedValueOnce(otherAccountMethod);
+
+      await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow(BadRequestException);
+      // Reset for message check
+      userRepository.findOne.mockResolvedValue(mockUser);
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
+      authMethodRepository.findOne.mockResolvedValueOnce(otherAccountMethod);
+      await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow(
+        'already linked to another account'
       );
     });
 
@@ -729,6 +802,7 @@ describe('AuthService', () => {
       userRepository.findOne.mockResolvedValue(null);
 
       await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow(UnauthorizedException);
+      userRepository.findOne.mockResolvedValue(null);
       await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow('User not found');
     });
 
@@ -742,6 +816,114 @@ describe('AuthService', () => {
       userRepository.findOne.mockResolvedValue(mockUser);
 
       await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('should link wallet method with SIWE verification', async () => {
+      // Use a properly formatted EIP-4361 SIWE message so parseSiweMessage can extract the nonce
+      const siweMessage = [
+        'localhost wants you to sign in with your Ethereum account:',
+        '0xAbCdEf1234567890AbCdEf1234567890AbCdEf12',
+        '',
+        'Sign in to CipherBox encrypted storage',
+        '',
+        'URI: http://localhost:5173',
+        'Version: 1',
+        'Chain ID: 1',
+        'Nonce: testnonce123',
+        'Issued At: 2026-01-01T00:00:00.000Z',
+      ].join('\n');
+
+      const walletLinkDto = {
+        idToken: '',
+        loginType: 'wallet' as const,
+        walletAddress: '0xAbCdEf1234567890AbCdEf1234567890AbCdEf12',
+        siweMessage,
+        siweSignature: '0xmocksignature',
+      };
+      const mockUser = { id: 'user-id', publicKey: 'pub-key' };
+      const mockMethod = {
+        id: 'new-am',
+        type: 'wallet',
+        identifier: 'addr-hash',
+        identifierDisplay: '0xAbCd...Ef12',
+        lastUsedAt: new Date(),
+        createdAt: new Date(),
+      };
+
+      userRepository.findOne.mockResolvedValue(mockUser);
+      siweService.verifySiweMessage.mockResolvedValue('0xAbCdEf1234567890AbCdEf1234567890AbCdEf12');
+      siweService.hashWalletAddress.mockReturnValue('addr-hash');
+      siweService.truncateWalletAddress.mockReturnValue('0xAbCd...Ef12');
+      authMethodRepository.findOne.mockResolvedValue(null); // no collision, no duplicate
+      authMethodRepository.save.mockResolvedValue(mockMethod);
+      authMethodRepository.find.mockResolvedValue([mockMethod]);
+
+      const result = await service.linkMethod('user-id', walletLinkDto);
+
+      expect(siweService.verifySiweMessage).toHaveBeenCalled();
+      expect(siweService.hashWalletAddress).toHaveBeenCalled();
+      expect(authMethodRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-id',
+          type: 'wallet',
+          identifier: 'addr-hash',
+          identifierHash: 'addr-hash',
+          identifierDisplay: '0xAbCd...Ef12',
+        })
+      );
+      expect(result).toHaveLength(1);
+    });
+
+    it('should throw BadRequestException for wallet cross-account collision', async () => {
+      const siweMsg = [
+        'localhost wants you to sign in with your Ethereum account:',
+        '0xAbCdEf1234567890AbCdEf1234567890AbCdEf12',
+        '',
+        'Sign in to CipherBox encrypted storage',
+        '',
+        'URI: http://localhost:5173',
+        'Version: 1',
+        'Chain ID: 1',
+        'Nonce: testnonce123',
+        'Issued At: 2026-01-01T00:00:00.000Z',
+      ].join('\n');
+
+      const walletLinkDto = {
+        idToken: '',
+        loginType: 'wallet' as const,
+        walletAddress: '0xAbCdEf1234567890AbCdEf1234567890AbCdEf12',
+        siweMessage: siweMsg,
+        siweSignature: '0xmocksignature',
+      };
+      const mockUser = { id: 'user-id', publicKey: 'pub-key' };
+
+      userRepository.findOne.mockResolvedValue(mockUser);
+      siweService.verifySiweMessage.mockResolvedValue('0xAbCdEf1234567890AbCdEf1234567890AbCdEf12');
+      siweService.hashWalletAddress.mockReturnValue('addr-hash');
+      // Cross-account: wallet linked to different user
+      authMethodRepository.findOne.mockResolvedValueOnce({
+        id: 'other-am',
+        userId: 'other-user-id',
+      });
+
+      await expect(service.linkMethod('user-id', walletLinkDto)).rejects.toThrow(
+        BadRequestException
+      );
+    });
+
+    it('should throw BadRequestException when wallet SIWE fields missing', async () => {
+      const walletLinkDto = {
+        idToken: '',
+        loginType: 'wallet' as const,
+        // Missing walletAddress, siweMessage, siweSignature
+      };
+      const mockUser = { id: 'user-id', publicKey: 'pub-key' };
+
+      userRepository.findOne.mockResolvedValue(mockUser);
+
+      await expect(service.linkMethod('user-id', walletLinkDto)).rejects.toThrow(
+        BadRequestException
+      );
     });
   });
 

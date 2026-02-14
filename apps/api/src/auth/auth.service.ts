@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { Repository, IsNull, Like } from 'typeorm';
+import { Repository, IsNull, Like, Not } from 'typeorm';
 import { createECDH, createHash, timingSafeEqual } from 'crypto';
 import * as jose from 'jose';
 import * as argon2 from 'argon2';
@@ -16,6 +16,7 @@ import { AuthMethod } from './entities/auth-method.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { JwtIssuerService } from './services/jwt-issuer.service';
 import { TokenService } from './services/token.service';
+import { SiweService } from './services/siwe.service';
 import { LoginDto, LoginServiceResult } from './dto/login.dto';
 import { RefreshServiceResult, LogoutResponseDto } from './dto/token.dto';
 import { LinkMethodDto, AuthMethodResponseDto } from './dto/link-method.dto';
@@ -28,6 +29,7 @@ export class AuthService {
     private configService: ConfigService,
     private jwtIssuerService: JwtIssuerService,
     private tokenService: TokenService,
+    private siweService: SiweService,
     @InjectRepository(User)
     private userRepository: Repository<User>,
     @InjectRepository(AuthMethod)
@@ -223,6 +225,8 @@ export class AuthService {
 
   /**
    * Get all linked auth methods for a user.
+   * For wallet methods, returns the truncated display address (e.g. "0xAbCd...1234")
+   * instead of the raw identifier hash.
    */
   async getLinkedMethods(userId: string): Promise<AuthMethodResponseDto[]> {
     const methods = await this.authMethodRepository.find({
@@ -233,7 +237,10 @@ export class AuthService {
     return methods.map((method) => ({
       id: method.id,
       type: method.type,
-      identifier: method.identifier,
+      identifier:
+        method.type === 'wallet' && method.identifierDisplay
+          ? method.identifierDisplay
+          : method.identifier,
       lastUsedAt: method.lastUsedAt,
       createdAt: method.createdAt,
     }));
@@ -241,8 +248,12 @@ export class AuthService {
 
   /**
    * Link a new auth method to an existing user account.
-   * The CipherBox-issued JWT is verified to confirm the user's identity,
-   * then a new auth method record is created.
+   *
+   * For Google/email: verifies CipherBox-issued JWT to confirm ownership of the new method.
+   * For wallet: verifies SIWE message+signature to confirm wallet ownership.
+   *
+   * Cross-account collision: if the auth method already belongs to a different user,
+   * a BadRequestException is thrown (user must unlink from the other account first).
    */
   async linkMethod(userId: string, linkDto: LinkMethodDto): Promise<AuthMethodResponseDto[]> {
     // 1. Get the user
@@ -251,14 +262,47 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
-    // 2. Verify the CipherBox-issued JWT
+    const authMethodType = linkDto.loginType;
+
+    if (authMethodType === 'wallet') {
+      // Wallet linking: verify SIWE message + signature
+      return this.linkWalletMethod(userId, linkDto);
+    }
+
+    // Google/email linking: verify CipherBox-issued JWT
+    return this.linkJwtMethod(userId, linkDto);
+  }
+
+  /**
+   * Link a Google or email auth method via CipherBox JWT verification.
+   */
+  private async linkJwtMethod(
+    userId: string,
+    linkDto: LinkMethodDto
+  ): Promise<AuthMethodResponseDto[]> {
+    // 1. Verify the CipherBox-issued JWT
     const payload = await this.verifyCipherBoxJwt(linkDto.idToken);
 
-    // 3. Determine type and identifier
+    // 2. Determine type and identifier
     const authMethodType = linkDto.loginType;
     const identifier = payload.email || payload.sub || 'unknown';
 
-    // 4. Check if this exact method (type + identifier) is already linked
+    // 3. Check cross-account collision: same identifier linked to a different user
+    const crossAccountMethod = await this.authMethodRepository.findOne({
+      where: {
+        type: authMethodType,
+        identifier,
+        userId: Not(userId),
+      },
+    });
+
+    if (crossAccountMethod) {
+      throw new BadRequestException(
+        `This ${authMethodType === 'google' ? 'email' : 'email'} is already linked to another account`
+      );
+    }
+
+    // 4. Check if this exact method is already linked to this user
     const existingMethod = await this.authMethodRepository.findOne({
       where: {
         userId,
@@ -280,6 +324,79 @@ export class AuthService {
     });
 
     // 6. Return updated list of methods
+    return this.getLinkedMethods(userId);
+  }
+
+  /**
+   * Link a wallet auth method via SIWE verification.
+   */
+  private async linkWalletMethod(
+    userId: string,
+    linkDto: LinkMethodDto
+  ): Promise<AuthMethodResponseDto[]> {
+    // 1. Validate required SIWE fields
+    if (!linkDto.walletAddress || !linkDto.siweMessage || !linkDto.siweSignature) {
+      throw new BadRequestException(
+        'walletAddress, siweMessage, and siweSignature are required for wallet linking'
+      );
+    }
+
+    // 2. Verify SIWE signature
+    const domain = this.configService.get<string>('SIWE_DOMAIN', 'localhost');
+    const { parseSiweMessage } = await import('viem/siwe');
+    const parsed = parseSiweMessage(linkDto.siweMessage);
+    if (!parsed.nonce) {
+      throw new BadRequestException('Invalid SIWE message: missing nonce');
+    }
+
+    const walletAddress = await this.siweService.verifySiweMessage(
+      linkDto.siweMessage,
+      linkDto.siweSignature as `0x${string}`,
+      parsed.nonce,
+      domain
+    );
+
+    // 3. Hash the wallet address for lookup
+    const addressHash = this.siweService.hashWalletAddress(walletAddress);
+
+    // 4. Check cross-account collision: same wallet linked to a different user
+    const crossAccountMethod = await this.authMethodRepository.findOne({
+      where: {
+        type: 'wallet',
+        identifierHash: addressHash,
+        userId: Not(userId),
+      },
+    });
+
+    if (crossAccountMethod) {
+      throw new BadRequestException('This wallet is already linked to another account');
+    }
+
+    // 5. Check if this wallet is already linked to this user
+    const existingMethod = await this.authMethodRepository.findOne({
+      where: {
+        userId,
+        type: 'wallet',
+        identifierHash: addressHash,
+      },
+    });
+
+    if (existingMethod) {
+      throw new BadRequestException('This wallet is already linked to your account');
+    }
+
+    // 6. Create wallet auth method with hash + truncated display
+    const truncated = this.siweService.truncateWalletAddress(walletAddress);
+    await this.authMethodRepository.save({
+      userId,
+      type: 'wallet',
+      identifier: addressHash,
+      identifierHash: addressHash,
+      identifierDisplay: truncated,
+      lastUsedAt: new Date(),
+    });
+
+    // 7. Return updated list of methods
     return this.getLinkedMethods(userId);
   }
 

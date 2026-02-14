@@ -35,6 +35,9 @@ export type AuthMethod = {
 type LinkMethodRequest = {
   idToken: string;
   loginType: 'google' | 'email' | 'wallet';
+  walletAddress?: string;
+  siweMessage?: string;
+  siweSignature?: string;
 };
 
 export const authApi = {
