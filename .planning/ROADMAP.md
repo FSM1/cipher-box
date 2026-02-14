@@ -288,7 +288,7 @@ Parallel phases:
 | 12. Core Kit Identity      | M2        | 5/5            | Complete    | 2026-02-13 |
 | 12.1 AES-CTR Streaming     | M2        | 0/TBD          | Not started | -          |
 | 12.2 Device Registry       | M2        | 3/3            | Complete    | 2026-02-13 |
-| 12.3 SIWE + Identity       | M2        | 0/4            | In progress | -          |
+| 12.3 SIWE + Identity       | M2        | 0/4            | Planned     | -          |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
