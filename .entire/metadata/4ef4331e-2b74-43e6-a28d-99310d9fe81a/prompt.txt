@@ -1,4 +1,4 @@
-lets add the todo, to make sure this is all well documented.
+
 
 ---
 
@@ -175,4 +175,4 @@ Would you like to:
 </success_criteria>
 
 
-ARGUMENTS: Migrate auth method identifiers to SHA-256 hashed lookup with privacy-preserving storage - Google auth methods currently use mutable email as identifier instead of stable Google `sub`. All three auth method types (Google, email, wallet) should use a uniform pattern: `identifier_hash = SHA-256(stable_id)` for lookup, `identifier_display` for human-readable UI. Google: hash the `sub` not the email. Email: hash the normalized email. Wallet: already done. This aligns with CipherBox's zero-knowledge philosophy and protects against DB breach enumeration. Area: auth. Files: apps/api/src/auth/controllers/identity.controller.ts, apps/api/src/auth/auth.service.ts, apps/api/src/auth/entities/auth-method.entity.ts, apps/api/src/auth/services/google-oauth.service.ts
+ARGUMENTS: extend e2e tests to cover wallet and MFA flows

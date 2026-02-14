@@ -1,10 +1,8 @@
-Committed: `docs: capture todo - Migrate auth method identifiers to SHA-256 hashed lookup`
+Todo saved: `.planning/todos/pending/2026-02-14-extend-e2e-tests-wallet-and-mfa-flows.md`
 
-Todo saved: `.planning/todos/pending/2026-02-14-migrate-auth-identifiers-to-hashed-lookup.md`
-
-  Migrate auth method identifiers to SHA-256 hashed lookup
-  Area: auth
-  Files: 5 referenced
+  Extend E2E tests to cover wallet and MFA flows
+  Area: testing
+  Files: 3 referenced
 
 ---
 

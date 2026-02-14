@@ -7,7 +7,7 @@ Capture an idea, task, or issue that surfaces during a GSD s
 
 ## Prompt
 
-lets add the todo, to make sure this is all well documented.
+
 
 ---
 
@@ -184,17 +184,15 @@ Would you like to:
 </success_criteria>
 
 
-ARGUMENTS: Migrate auth method identifiers to SHA-256 hashed lookup with privacy-preserving storage - Google auth methods currently use mutable email as identifier instead of stable Google `sub`. All three auth method types (Google, email, wallet) should use a uniform pattern: `identifier_hash = SHA-256(stable_id)` for lookup, `identifier_display` for human-readable UI. Google: hash the `sub` not the email. Email: hash the normalized email. Wallet: already done. This aligns with CipherBox's zero-knowledge philosophy and protects against DB breach enumeration. Area: auth. Files: apps/api/src/auth/controllers/identity.controller.ts, apps/api/src/auth/auth.service.ts, apps/api/src/auth/entities/auth-method.entity.ts, apps/api/src/auth/services/google-oauth.service.ts
+ARGUMENTS: extend e2e tests to cover wallet and MFA flows
 
 ## Summary
 
-Committed: `docs: capture todo - Migrate auth method identifiers to SHA-256 hashed lookup`
+Todo saved: `.planning/todos/pending/2026-02-14-extend-e2e-tests-wallet-and-mfa-flows.md`
 
-Todo saved: `.planning/todos/pending/2026-02-14-migrate-auth-identifiers-to-hashed-lookup.md`
-
-  Migrate auth method identifiers to SHA-256 hashed lookup
-  Area: auth
-  Files: 5 referenced
+  Extend E2E tests to cover wallet and MFA flows
+  Area: testing
+  Files: 3 referenced
 
 ---
 
@@ -206,13 +204,11 @@ Would you like to:
 
 ## Key Actions
 
-- - **Skill**: 
 - - **Bash**: Ensure todo directories exist
 - - **Bash**: Check existing todo areas
-- - **Grep**: identifier.*hash|SHA-256.*auth|hashed.*lookup|privacy.*identifier
+- - **Grep**: e2e.*wallet|wallet.*e2e|MFA.*test|e2e.*MFA
 - - **Bash**: Get timestamp
-- - **Write**: /Users/michael/Code/cipher-box/.planning/todos/pending/2026-02-14-migrate-auth-identifiers-to-hashed-lookup.md
-- - **Bash**: Count pending todos
+- - **Write**: /Users/michael/Code/cipher-box/.planning/todos/pending/2026-02-14-extend-e2e-tests-wallet-and-mfa-flows.md
+- - **Read**: /Users/michael/Code/cipher-box/.planning/STATE.md
 - - **Edit**: /Users/michael/Code/cipher-box/.planning/STATE.md
-- - **Bash**: Commit the new todo and state update
-- - **Bash**: Retry commit (1Password agent flaky)
+- - **Bash**: Commit todo and state update
