@@ -21,8 +21,8 @@ Progress: [###############.....] 73% (M1 complete, M2 Phase 12 complete, Phase 1
 **Velocity:**
 
 - Total plans completed: 89
-- Average duration: 4.8 min
-- Total execution time: 7.6 hours
+- Average duration: 4.9 min
+- Total execution time: 7.7 hours
 
 **By Phase (M1 summary):**
 
@@ -32,11 +32,11 @@ Progress: [###############.....] 73% (M1 complete, M2 Phase 12 complete, Phase 1
 | M2 Phase 12     | 5/5   | 45 min  | 9.0 min  |
 | M2 Phase 12.2   | 3/3   | 10 min  | 3.3 min  |
 | M2 Phase 12.3   | 4/4   | 39 min  | 9.8 min  |
-| M2 Phase 12.3.1 | 4/4   | 28 min  | 7.0 min  |
+| M2 Phase 12.3.1 | 4/4   | 38 min  | 9.5 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 10m, 8m, 6m, 6m
+- Last 5 plans: 10m, 4m, 10m, 18m, 6m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -81,6 +81,7 @@ Recent decisions affecting current work:
 | Google login hashes sub (not email) for identifierHash           | 12.3.1-02 | Sub is immutable Google user ID; email can change. Privacy-preserving lookup.                                   |
 | Cross-method email auto-linking removed                          | 12.3.1-02 | Each auth method is independent; users link explicitly via Settings, not auto-linked by email match             |
 | identifier column stores hash for all auth types                 | 12.3.1-02 | identifier=identifierHash for consistency; identifierDisplay holds human-readable value                         |
+| rootIpnsPublicKey removed from vault entity/DTO/API/frontend     | 12.3.1-03 | Derivable from privateKey via HKDF; reduces schema, eliminates inconsistency                                    |
 | Plan 04 work completed by Plan 03 broader scope                  | 12.3.1-04 | Desktop Rust, E2E helpers, controller spec changes committed in Plan 03 execution                               |
 
 ### Pending Todos
