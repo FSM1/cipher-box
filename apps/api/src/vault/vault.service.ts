@@ -192,15 +192,6 @@ export class VaultService {
       where: { id: userId },
     });
 
-    // All users now use Core Kit (web3auth) key derivation
-    let derivationInfo: VaultExportDto['derivationInfo'] = null;
-    if (user) {
-      derivationInfo = {
-        method: 'web3auth',
-        derivationVersion: null,
-      };
-    }
-
     return {
       format: 'cipherbox-vault-export',
       version: '1.0',
@@ -208,7 +199,7 @@ export class VaultService {
       rootIpnsName: vault.rootIpnsName,
       encryptedRootFolderKey: vault.encryptedRootFolderKey.toString('hex'),
       encryptedRootIpnsPrivateKey: vault.encryptedRootIpnsPrivateKey.toString('hex'),
-      derivationInfo,
+      derivationMethod: user ? 'web3auth' : null,
     };
   }
 

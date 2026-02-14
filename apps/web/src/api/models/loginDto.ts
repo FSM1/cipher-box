@@ -8,17 +8,10 @@
 import type { LoginDtoLoginType } from './loginDtoLoginType';
 
 export interface LoginDto {
-  /** JWT ID token from Web3Auth */
+  /** CipherBox-issued JWT identity token */
   idToken: string;
-  /** secp256k1 public key for social login, or signature-derived public key for external wallet (ADR-001) */
+  /** secp256k1 public key exported from Core Kit after loginWithJWT */
   publicKey: string;
-  /** Type of login used */
+  /** Type of login used (always corekit) */
   loginType: LoginDtoLoginType;
-  /** Wallet address for external wallet users. Used for JWT verification. The publicKey field contains the derived key. */
-  walletAddress?: string;
-  /**
-   * Key derivation version for external wallet users (ADR-001). Required for external_wallet loginType.
-   * @minimum 1
-   */
-  derivationVersion?: number;
 }

@@ -14,7 +14,6 @@ import * as argon2 from 'argon2';
 import { User } from './entities/user.entity';
 import { AuthMethod } from './entities/auth-method.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
-import { Web3AuthVerifierService } from './services/web3auth-verifier.service';
 import { JwtIssuerService } from './services/jwt-issuer.service';
 import { TokenService } from './services/token.service';
 import { LoginDto, LoginServiceResult } from './dto/login.dto';
@@ -27,7 +26,6 @@ export class AuthService {
 
   constructor(
     private configService: ConfigService,
-    private web3AuthVerifier: Web3AuthVerifierService,
     private jwtIssuerService: JwtIssuerService,
     private tokenService: TokenService,
     @InjectRepository(User)
@@ -39,35 +37,9 @@ export class AuthService {
   ) {}
 
   async login(loginDto: LoginDto): Promise<LoginServiceResult> {
-    // 1. Verify token based on login type
-    let payload: {
-      verifierId?: string;
-      sub?: string;
-      email?: string;
-      verifier?: string;
-      aggregateVerifier?: string;
-      wallets?: { type: string; public_key?: string; address?: string; curve?: string }[];
-    };
-
-    if (loginDto.loginType === 'corekit') {
-      // Core Kit login: verify the CipherBox-issued JWT using our own key.
-      // The client already authenticated via /auth/identity/* endpoints,
-      // received a CipherBox JWT, used it for Core Kit loginWithJWT,
-      // and now sends it here for backend session creation.
-      payload = await this.verifyCipherBoxJwt(loginDto.idToken);
-    } else {
-      // PnP / external wallet: verify Web3Auth-issued JWT
-      const verificationKey =
-        loginDto.loginType === 'external_wallet' && loginDto.walletAddress
-          ? loginDto.walletAddress
-          : loginDto.publicKey;
-
-      payload = await this.web3AuthVerifier.verifyIdToken(
-        loginDto.idToken,
-        verificationKey,
-        loginDto.loginType
-      );
-    }
+    // 1. Verify CipherBox-issued JWT.
+    // All auth methods now go through: CipherBox identity provider -> Core Kit loginWithJWT -> /auth/login.
+    const payload = await this.verifyCipherBoxJwt(loginDto.idToken);
 
     // 2. Find or create user
     let user = await this.userRepository.findOne({
@@ -75,7 +47,7 @@ export class AuthService {
     });
 
     // 2b. Placeholder publicKey resolution for Core Kit identity provider.
-    // When a user first authenticates via CipherBox identity provider (Plan 12-01),
+    // When a user first authenticates via CipherBox identity provider,
     // they get a placeholder publicKey ('pending-core-kit-{userId}').
     // After Core Kit login, the client calls /auth/login with the REAL publicKey.
     // We need to find the placeholder user and update their publicKey.
@@ -101,49 +73,28 @@ export class AuthService {
     }
 
     // 3. Find or create auth method
-    // For corekit logins, the identity controller already created the auth method
-    // (with the correct type: 'google' or 'email'). Look up by
+    // The identity controller already created the auth method
+    // (with the correct type: 'google', 'email', or 'wallet'). Look up by
     // userId + identifier to avoid creating duplicates with a hardcoded type.
     let authMethod: AuthMethod | null;
 
-    if (loginDto.loginType === 'corekit') {
-      const identifier = payload.email || payload.sub || 'unknown';
+    const identifier = payload.email || payload.sub || 'unknown';
+    authMethod = await this.authMethodRepository.findOne({
+      where: { userId: user.id, identifier },
+    });
+    if (!authMethod) {
+      // Fallback: find any auth method for this user (identity controller should have created one)
       authMethod = await this.authMethodRepository.findOne({
-        where: { userId: user.id, identifier },
+        where: { userId: user.id },
       });
-      if (!authMethod) {
-        // Fallback: find any auth method for this user (identity controller should have created one)
-        authMethod = await this.authMethodRepository.findOne({
-          where: { userId: user.id },
-        });
-      }
-      if (!authMethod) {
-        // Safety net: create auth method if identity controller didn't (shouldn't happen in practice)
-        authMethod = await this.authMethodRepository.save({
-          userId: user.id,
-          type: 'email',
-          identifier,
-        });
-      }
-    } else {
-      const authMethodType = this.web3AuthVerifier.extractAuthMethodType(
-        payload,
-        loginDto.loginType
-      );
-      const identifier = this.web3AuthVerifier.extractIdentifier(payload);
-      authMethod = await this.authMethodRepository.findOne({
-        where: { userId: user.id, type: authMethodType },
+    }
+    if (!authMethod) {
+      // Safety net: create auth method if identity controller didn't (shouldn't happen in practice)
+      authMethod = await this.authMethodRepository.save({
+        userId: user.id,
+        type: 'email',
+        identifier,
       });
-      if (!authMethod) {
-        authMethod = await this.authMethodRepository.save({
-          userId: user.id,
-          type: authMethodType,
-          identifier,
-        });
-      } else if (payload.email && authMethod.identifier !== payload.email) {
-        // Backfill: update identifier if we now have the email but previously stored UUID
-        authMethod.identifier = payload.email;
-      }
     }
 
     // 4. Update last used timestamp
@@ -290,27 +241,22 @@ export class AuthService {
 
   /**
    * Link a new auth method to an existing user account.
-   * CRITICAL: The new auth method's publicKey must match the user's publicKey
-   * (ensuring both auth methods derive the same keypair via Web3Auth group connections)
+   * The CipherBox-issued JWT is verified to confirm the user's identity,
+   * then a new auth method record is created.
    */
   async linkMethod(userId: string, linkDto: LinkMethodDto): Promise<AuthMethodResponseDto[]> {
-    // 1. Get the user to find their publicKey
+    // 1. Get the user
     const user = await this.userRepository.findOne({ where: { id: userId } });
     if (!user) {
       throw new UnauthorizedException('User not found');
     }
 
-    // 2. Verify the new idToken with Web3AuthVerifierService
-    // This also validates that the new token's publicKey matches the user's publicKey
-    const payload = await this.web3AuthVerifier.verifyIdToken(
-      linkDto.idToken,
-      user.publicKey,
-      linkDto.loginType
-    );
+    // 2. Verify the CipherBox-issued JWT
+    const payload = await this.verifyCipherBoxJwt(linkDto.idToken);
 
-    // 3. Extract type and identifier from token payload
-    const authMethodType = this.web3AuthVerifier.extractAuthMethodType(payload, linkDto.loginType);
-    const identifier = this.web3AuthVerifier.extractIdentifier(payload);
+    // 3. Determine type and identifier
+    const authMethodType = linkDto.loginType;
+    const identifier = payload.email || payload.sub || 'unknown';
 
     // 4. Check if this exact method (type + identifier) is already linked
     const existingMethod = await this.authMethodRepository.findOne({

@@ -8,8 +8,14 @@
 import type { LinkMethodDtoLoginType } from './linkMethodDtoLoginType';
 
 export interface LinkMethodDto {
-  /** Web3Auth ID token from the new auth method */
+  /** CipherBox-issued JWT identity token for the new auth method */
   idToken: string;
-  /** Login type */
+  /** Auth method type to link */
   loginType: LinkMethodDtoLoginType;
+  /** Wallet address (required when loginType is wallet) */
+  walletAddress?: string;
+  /** SIWE message (required when loginType is wallet) */
+  siweMessage?: string;
+  /** SIWE signature (required when loginType is wallet) */
+  siweSignature?: string;
 }

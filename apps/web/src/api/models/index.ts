@@ -49,6 +49,7 @@ export * from './unpinResponseDto';
 export * from './uploadResponseDto';
 export * from './vaultExportDto';
 export * from './vaultExportDtoDerivationInfo';
+export * from './vaultExportDtoDerivationMethod';
 export * from './vaultResponseDto';
 export * from './vaultResponseDtoInitializedAt';
 export * from './vaultResponseDtoTeeKeys';

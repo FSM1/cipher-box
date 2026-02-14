@@ -905,30 +905,19 @@
         "properties": {
           "idToken": {
             "type": "string",
-            "description": "JWT ID token from Web3Auth",
-            "example": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9..."
+            "description": "CipherBox-issued JWT identity token",
+            "example": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
           },
           "publicKey": {
             "type": "string",
-            "description": "secp256k1 public key for social login, or signature-derived public key for external wallet (ADR-001)",
+            "description": "secp256k1 public key exported from Core Kit after loginWithJWT",
             "example": "0x04..."
           },
           "loginType": {
             "type": "string",
-            "description": "Type of login used",
-            "enum": ["social", "external_wallet", "corekit"],
-            "example": "social"
-          },
-          "walletAddress": {
-            "type": "string",
-            "description": "Wallet address for external wallet users. Used for JWT verification. The publicKey field contains the derived key.",
-            "example": "0x742d35Cc6634C0532925a3b844Bc9e7595f..."
-          },
-          "derivationVersion": {
-            "type": "number",
-            "description": "Key derivation version for external wallet users (ADR-001). Required for external_wallet loginType.",
-            "example": 1,
-            "minimum": 1
+            "description": "Type of login used (always corekit)",
+            "enum": ["corekit"],
+            "example": "corekit"
           }
         },
         "required": ["idToken", "publicKey", "loginType"]
@@ -1027,12 +1016,24 @@
         "properties": {
           "idToken": {
             "type": "string",
-            "description": "Web3Auth ID token from the new auth method"
+            "description": "CipherBox-issued JWT identity token for the new auth method"
           },
           "loginType": {
             "type": "string",
-            "description": "Login type",
-            "enum": ["social", "external_wallet"]
+            "description": "Auth method type to link",
+            "enum": ["google", "email", "wallet"]
+          },
+          "walletAddress": {
+            "type": "string",
+            "description": "Wallet address (required when loginType is wallet)"
+          },
+          "siweMessage": {
+            "type": "string",
+            "description": "SIWE message (required when loginType is wallet)"
+          },
+          "siweSignature": {
+            "type": "string",
+            "description": "SIWE signature (required when loginType is wallet)"
           }
         },
         "required": ["idToken", "loginType"]
@@ -1360,24 +1361,6 @@
           "initializedAt"
         ]
       },
-      "DerivationInfoDto": {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "description": "Authentication method used to derive the private key. \"web3auth\" = social login (key managed by Web3Auth MPC), \"external-wallet\" = EIP-712 signature-derived key.",
-            "example": "web3auth",
-            "enum": ["web3auth", "external-wallet"]
-          },
-          "derivationVersion": {
-            "type": "object",
-            "description": "Key derivation version for external wallet users. null for social logins, 1+ for external wallet derivation versions.",
-            "example": 1,
-            "nullable": true
-          }
-        },
-        "required": ["method", "derivationVersion"]
-      },
       "VaultExportDto": {
         "type": "object",
         "properties": {
@@ -1411,14 +1394,11 @@
             "description": "ECIES-wrapped Ed25519 IPNS private key (hex-encoded)",
             "example": "a1b2c3d4e5f6..."
           },
-          "derivationInfo": {
-            "description": "Hints about how the private key was derived, to assist recovery tools",
-            "nullable": true,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/DerivationInfoDto"
-              }
-            ]
+          "derivationMethod": {
+            "type": "object",
+            "description": "Key derivation method used. Always \"web3auth\" for Core Kit users. Null if user record not found.",
+            "example": "web3auth",
+            "nullable": true
           }
         },
         "required": [

@@ -5,7 +5,7 @@
  * Zero-knowledge encrypted cloud storage API
  * OpenAPI spec version: 0.1.0
  */
-import type { VaultExportDtoDerivationInfo } from './vaultExportDtoDerivationInfo';
+import type { VaultExportDtoDerivationMethod } from './vaultExportDtoDerivationMethod';
 
 export interface VaultExportDto {
   /** Export format identifier */
@@ -21,8 +21,8 @@ export interface VaultExportDto {
   /** ECIES-wrapped Ed25519 IPNS private key (hex-encoded) */
   encryptedRootIpnsPrivateKey: string;
   /**
-   * Hints about how the private key was derived, to assist recovery tools
+   * Key derivation method used. Always "web3auth" for Core Kit users. Null if user record not found.
    * @nullable
    */
-  derivationInfo?: VaultExportDtoDerivationInfo;
+  derivationMethod?: VaultExportDtoDerivationMethod;
 }

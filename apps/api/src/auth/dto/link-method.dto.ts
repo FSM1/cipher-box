@@ -1,16 +1,34 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsIn } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsString, IsNotEmpty, IsIn, IsOptional } from 'class-validator';
 
 export class LinkMethodDto {
-  @ApiProperty({ description: 'Web3Auth ID token from the new auth method' })
+  @ApiProperty({ description: 'CipherBox-issued JWT identity token for the new auth method' })
   @IsString()
   @IsNotEmpty()
   idToken!: string;
 
-  @ApiProperty({ description: 'Login type', enum: ['social', 'external_wallet'] })
+  @ApiProperty({
+    description: 'Auth method type to link',
+    enum: ['google', 'email', 'wallet'],
+  })
   @IsString()
-  @IsIn(['social', 'external_wallet'])
-  loginType!: 'social' | 'external_wallet';
+  @IsIn(['google', 'email', 'wallet'])
+  loginType!: 'google' | 'email' | 'wallet';
+
+  @ApiPropertyOptional({ description: 'Wallet address (required when loginType is wallet)' })
+  @IsOptional()
+  @IsString()
+  walletAddress?: string;
+
+  @ApiPropertyOptional({ description: 'SIWE message (required when loginType is wallet)' })
+  @IsOptional()
+  @IsString()
+  siweMessage?: string;
+
+  @ApiPropertyOptional({ description: 'SIWE signature (required when loginType is wallet)' })
+  @IsOptional()
+  @IsString()
+  siweSignature?: string;
 }
 
 export class AuthMethodResponseDto {
