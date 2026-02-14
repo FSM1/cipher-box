@@ -39,17 +39,6 @@ export class InitVaultDto {
   encryptedRootIpnsPrivateKey!: string;
 
   @ApiProperty({
-    description: 'Ed25519 IPNS public key (32 bytes, hex-encoded)',
-    example: 'a1b2c3d4e5f6...(64 hex characters for 32 bytes)',
-  })
-  @IsString()
-  @IsNotEmpty()
-  @Matches(/^[0-9a-fA-F]+$/, {
-    message: 'rootIpnsPublicKey must be hex-encoded',
-  })
-  rootIpnsPublicKey!: string;
-
-  @ApiProperty({
     description: 'IPNS name (libp2p-key multihash, base58btc or base36)',
     example: 'k51qzi5uqu5dg...',
   })
@@ -85,12 +74,6 @@ export class VaultResponseDto {
     example: 'a1b2c3d4e5f6...',
   })
   encryptedRootIpnsPrivateKey!: string;
-
-  @ApiProperty({
-    description: 'Ed25519 IPNS public key (32 bytes, hex-encoded)',
-    example: 'a1b2c3d4e5f6...(64 hex characters for 32 bytes)',
-  })
-  rootIpnsPublicKey!: string;
 
   @ApiProperty({
     description: 'IPNS name for root folder',

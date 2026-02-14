@@ -52,7 +52,6 @@ export class VaultService {
       ownerPublicKey: Buffer.from(dto.ownerPublicKey, 'hex'),
       encryptedRootFolderKey: Buffer.from(dto.encryptedRootFolderKey, 'hex'),
       encryptedRootIpnsPrivateKey: Buffer.from(dto.encryptedRootIpnsPrivateKey, 'hex'),
-      rootIpnsPublicKey: Buffer.from(dto.rootIpnsPublicKey, 'hex'),
       rootIpnsName: dto.rootIpnsName,
       initializedAt: null,
     });
@@ -212,7 +211,6 @@ export class VaultService {
       ownerPublicKey: vault.ownerPublicKey.toString('hex'),
       encryptedRootFolderKey: vault.encryptedRootFolderKey.toString('hex'),
       encryptedRootIpnsPrivateKey: vault.encryptedRootIpnsPrivateKey.toString('hex'),
-      rootIpnsPublicKey: vault.rootIpnsPublicKey.toString('hex'),
       rootIpnsName: vault.rootIpnsName,
       createdAt: vault.createdAt,
       initializedAt: vault.initializedAt,
