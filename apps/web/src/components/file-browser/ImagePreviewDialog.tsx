@@ -84,7 +84,7 @@ export function ImagePreviewDialog({ open, onClose, item }: ImagePreviewDialogPr
         if (cancelled) return;
 
         const mime = getMimeType(item.name);
-        const blob = new Blob([plaintext.buffer as ArrayBuffer], { type: mime });
+        const blob = new Blob([plaintext], { type: mime });
         url = URL.createObjectURL(blob);
 
         setDecryptedData(plaintext);

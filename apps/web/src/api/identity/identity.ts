@@ -30,9 +30,9 @@ import type {
   SendOtpResponseDto,
   VerifyOtpDto,
   WalletVerifyDto,
-} from '../models';
+} from '.././models';
 
-import { customInstance } from '../custom-instance';
+import { customInstance } from '.././custom-instance';
 
 /**
  * @summary JWKS endpoint for CipherBox identity provider

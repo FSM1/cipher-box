@@ -8,7 +8,7 @@
 import type { LinkMethodDtoLoginType } from './linkMethodDtoLoginType';
 
 export interface LinkMethodDto {
-  /** CipherBox-issued JWT identity token for the new auth method */
+  /** CipherBox-issued JWT identity token (required for Google/email, not used for wallet) */
   idToken: string;
   /** Auth method type to link */
   loginType: LinkMethodDtoLoginType;

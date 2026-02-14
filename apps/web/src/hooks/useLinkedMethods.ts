@@ -47,5 +47,6 @@ export function useLinkedMethods() {
     isUnlinking: unlinkMutation.isPending,
     linkError: linkMutation.error,
     unlinkError: unlinkMutation.error,
+    resetLinkError: linkMutation.reset,
   };
 }

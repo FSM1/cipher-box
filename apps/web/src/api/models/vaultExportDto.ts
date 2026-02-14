@@ -5,7 +5,6 @@
  * Zero-knowledge encrypted cloud storage API
  * OpenAPI spec version: 0.1.0
  */
-import type { VaultExportDtoDerivationMethod } from './vaultExportDtoDerivationMethod';
 
 export interface VaultExportDto {
   /** Export format identifier */
@@ -24,5 +23,5 @@ export interface VaultExportDto {
    * Key derivation method used. Always "web3auth" for Core Kit users. Null if user record not found.
    * @nullable
    */
-  derivationMethod?: VaultExportDtoDerivationMethod;
+  derivationMethod?: string | null;
 }

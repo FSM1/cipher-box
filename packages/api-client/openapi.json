@@ -1016,7 +1016,7 @@
         "properties": {
           "idToken": {
             "type": "string",
-            "description": "CipherBox-issued JWT identity token for the new auth method"
+            "description": "CipherBox-issued JWT identity token (required for Google/email, not used for wallet)"
           },
           "loginType": {
             "type": "string",
@@ -1395,7 +1395,7 @@
             "example": "a1b2c3d4e5f6..."
           },
           "derivationMethod": {
-            "type": "object",
+            "type": "string",
             "description": "Key derivation method used. Always \"web3auth\" for Core Kit users. Null if user record not found.",
             "example": "web3auth",
             "nullable": true

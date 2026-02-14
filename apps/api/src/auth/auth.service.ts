@@ -92,9 +92,11 @@ export class AuthService {
     }
     if (!authMethod) {
       // Safety net: create auth method if identity controller didn't (shouldn't happen in practice)
+      // All logins go through loginType='corekit' now, but infer type from identifier format
+      const inferredType = identifier.startsWith('0x') ? 'wallet' : 'email';
       authMethod = await this.authMethodRepository.save({
         userId: user.id,
-        type: 'email',
+        type: inferredType,
         identifier,
       });
     }
@@ -298,7 +300,7 @@ export class AuthService {
 
     if (crossAccountMethod) {
       throw new BadRequestException(
-        `This ${authMethodType === 'google' ? 'email' : 'email'} is already linked to another account`
+        `This ${authMethodType === 'google' ? 'Google account' : 'email'} is already linked to another account`
       );
     }
 
