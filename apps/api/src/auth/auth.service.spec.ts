@@ -99,7 +99,7 @@ describe('AuthService', () => {
 
     it('should create new user on first login', async () => {
       const mockPayload = { verifier: 'google', email: 'test@example.com' };
-      const mockUser = { id: 'new-user-id', publicKey: 'abc123', derivationVersion: null };
+      const mockUser = { id: 'new-user-id', publicKey: 'abc123' };
       const mockAuthMethod = { id: 'am-1', userId: 'new-user-id', type: 'google' };
       const mockTokens = { accessToken: 'at', refreshToken: 'rt' };
 
@@ -121,13 +121,12 @@ describe('AuthService', () => {
       expect(result.refreshToken).toBe('rt');
       expect(userRepository.save).toHaveBeenCalledWith({
         publicKey: 'abc123',
-        derivationVersion: null,
       });
     });
 
     it('should return existing user on subsequent login', async () => {
       const mockPayload = { verifier: 'google', email: 'test@example.com' };
-      const mockUser = { id: 'existing-id', publicKey: 'abc123', derivationVersion: null };
+      const mockUser = { id: 'existing-id', publicKey: 'abc123' };
       const mockAuthMethod = {
         id: 'am-1',
         userId: 'existing-id',
@@ -151,45 +150,38 @@ describe('AuthService', () => {
       expect(userRepository.save).not.toHaveBeenCalled();
     });
 
-    it('should update derivation version for external wallets', async () => {
+    it('should handle external wallet login without derivationVersion', async () => {
       const externalLoginDto = {
         idToken: 'valid-token',
         publicKey: 'derived-key',
         loginType: 'external_wallet' as const,
         walletAddress: '0x123abc',
-        derivationVersion: 1,
       };
       const mockPayload = { wallets: [{ type: 'ethereum', address: '0x123abc' }] };
       const mockExistingUser = {
         id: 'user-id',
         publicKey: 'derived-key',
-        derivationVersion: null,
       };
-      const mockUpdatedUser = { id: 'user-id', publicKey: 'derived-key', derivationVersion: 1 };
-      const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'external_wallet' };
+      const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'wallet' };
       const mockTokens = { accessToken: 'at', refreshToken: 'rt' };
 
       web3AuthVerifier.verifyIdToken.mockResolvedValue(mockPayload);
-      web3AuthVerifier.extractAuthMethodType.mockReturnValue('external_wallet');
+      web3AuthVerifier.extractAuthMethodType.mockReturnValue('wallet');
       web3AuthVerifier.extractIdentifier.mockReturnValue('0x123abc');
       userRepository.findOne.mockResolvedValue(mockExistingUser);
-      userRepository.save.mockResolvedValue(mockUpdatedUser);
       authMethodRepository.findOne.mockResolvedValue(mockAuthMethod);
       authMethodRepository.save.mockResolvedValue(mockAuthMethod);
       tokenService.createTokens.mockResolvedValue(mockTokens);
 
-      await service.login(externalLoginDto);
+      const result = await service.login(externalLoginDto);
 
-      expect(userRepository.save).toHaveBeenCalledWith(
-        expect.objectContaining({
-          derivationVersion: 1,
-        })
-      );
+      expect(result.isNewUser).toBe(false);
+      expect(userRepository.save).not.toHaveBeenCalled();
     });
 
     it('should create auth method if not exists', async () => {
       const mockPayload = { verifier: 'google', email: 'new@example.com' };
-      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
       const mockTokens = { accessToken: 'at', refreshToken: 'rt' };
 
       web3AuthVerifier.verifyIdToken.mockResolvedValue(mockPayload);
@@ -213,7 +205,7 @@ describe('AuthService', () => {
 
     it('should update lastUsedAt on auth method', async () => {
       const mockPayload = { verifier: 'google', email: 'test@example.com' };
-      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
       const mockAuthMethod = {
         id: 'am-1',
         userId: 'user-id',
@@ -254,15 +246,14 @@ describe('AuthService', () => {
         publicKey: 'derived-key',
         loginType: 'external_wallet' as const,
         walletAddress: '0x123abc',
-        derivationVersion: 1,
       };
       const mockPayload = { wallets: [{ type: 'ethereum', address: '0x123abc' }] };
-      const mockUser = { id: 'user-id', publicKey: 'derived-key', derivationVersion: 1 };
-      const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'external_wallet' };
+      const mockUser = { id: 'user-id', publicKey: 'derived-key' };
+      const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'wallet' };
       const mockTokens = { accessToken: 'at', refreshToken: 'rt' };
 
       web3AuthVerifier.verifyIdToken.mockResolvedValue(mockPayload);
-      web3AuthVerifier.extractAuthMethodType.mockReturnValue('external_wallet');
+      web3AuthVerifier.extractAuthMethodType.mockReturnValue('wallet');
       web3AuthVerifier.extractIdentifier.mockReturnValue('0x123abc');
       userRepository.findOne.mockResolvedValue(null);
       userRepository.save.mockResolvedValue(mockUser);
@@ -292,8 +283,8 @@ describe('AuthService', () => {
       (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
       (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
 
-      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
-      const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'email_passwordless' };
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
+      const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'email' };
       const mockTokens = { accessToken: 'at', refreshToken: 'rt' };
 
       userRepository.findOne.mockResolvedValue(mockUser);
@@ -343,7 +334,6 @@ describe('AuthService', () => {
       const placeholderUser = {
         id: 'user-id',
         publicKey: 'pending-core-kit-user-123-1234567890',
-        derivationVersion: null,
       };
       userRepository.findOne
         .mockResolvedValueOnce(null) // not found by real publicKey
@@ -353,7 +343,7 @@ describe('AuthService', () => {
         publicKey: 'real-public-key',
       });
 
-      const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'email_passwordless' };
+      const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'email' };
       authMethodRepository.findOne.mockResolvedValue(mockAuthMethod);
       authMethodRepository.save.mockResolvedValue(mockAuthMethod);
       tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
@@ -379,7 +369,7 @@ describe('AuthService', () => {
         payload: { sub: 'user-123', email: 'test@example.com' },
       });
 
-      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
       const mockAuthMethod = {
         id: 'am-1',
         userId: 'user-id',
@@ -420,7 +410,7 @@ describe('AuthService', () => {
         payload: { sub: 'user-123', email: 'test@example.com' },
       });
 
-      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
       const mockAuthMethod = {
         id: 'am-1',
         userId: 'user-id',
@@ -454,7 +444,7 @@ describe('AuthService', () => {
         payload: { sub: 'user-123', email: 'test@example.com' },
       });
 
-      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
       userRepository.findOne.mockResolvedValue(mockUser);
       // Both corekit lookups return null
       authMethodRepository.findOne
@@ -463,7 +453,7 @@ describe('AuthService', () => {
       const savedMethod = {
         id: 'am-new',
         userId: 'user-id',
-        type: 'email_passwordless',
+        type: 'email',
         identifier: 'test@example.com',
         lastUsedAt: null,
       };
@@ -476,7 +466,7 @@ describe('AuthService', () => {
       expect(authMethodRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
           userId: 'user-id',
-          type: 'email_passwordless',
+          type: 'email',
           identifier: 'test@example.com',
         })
       );
@@ -484,7 +474,7 @@ describe('AuthService', () => {
 
     it('should backfill auth method identifier when email differs', async () => {
       const mockPayload = { verifier: 'google', email: 'real-email@example.com' };
-      const mockUser = { id: 'user-id', publicKey: 'abc123', derivationVersion: null };
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
       const mockAuthMethod = {
         id: 'am-1',
         userId: 'user-id',
@@ -682,7 +672,7 @@ describe('AuthService', () => {
       expect(result.email).toBe('test@example.com');
       expect(authMethodRepository.findOne).toHaveBeenCalledWith({
         where: [
-          { userId: 'user-id', type: 'email_passwordless' },
+          { userId: 'user-id', type: 'email' },
           { userId: 'user-id', type: 'google' },
         ],
         order: { lastUsedAt: 'DESC' },
@@ -859,7 +849,7 @@ describe('AuthService', () => {
       authMethodRepository.save.mockResolvedValue({
         id: 'am-1',
         userId: 'new-user-id',
-        type: 'email_passwordless',
+        type: 'email',
       });
       tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
 
@@ -872,7 +862,7 @@ describe('AuthService', () => {
       expect(result.privateKeyHex).toBeDefined();
       expect(authMethodRepository.save).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: 'email_passwordless',
+          type: 'email',
           identifier: 'test@example.com', // normalized
         })
       );
@@ -885,7 +875,7 @@ describe('AuthService', () => {
       const mockMethod = {
         id: 'am-1',
         userId: 'existing-id',
-        type: 'email_passwordless',
+        type: 'email',
         identifier: 'test@example.com',
         user: mockUser,
         lastUsedAt: null,

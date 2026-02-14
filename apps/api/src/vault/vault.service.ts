@@ -192,12 +192,12 @@ export class VaultService {
       where: { id: userId },
     });
 
-    // Determine derivation info from user's derivationVersion
+    // All users now use Core Kit (web3auth) key derivation
     let derivationInfo: VaultExportDto['derivationInfo'] = null;
     if (user) {
       derivationInfo = {
-        method: user.derivationVersion === null ? 'web3auth' : 'external-wallet',
-        derivationVersion: user.derivationVersion,
+        method: 'web3auth',
+        derivationVersion: null,
       };
     }
 

@@ -99,9 +99,9 @@ export class Web3AuthVerifierService {
   extractAuthMethodType(
     payload: Web3AuthPayload,
     loginType: 'social' | 'external_wallet'
-  ): 'google' | 'apple' | 'github' | 'email_passwordless' | 'external_wallet' {
+  ): 'google' | 'apple' | 'github' | 'email' | 'wallet' {
     if (loginType === 'external_wallet') {
-      return 'external_wallet';
+      return 'wallet';
     }
 
     // Detect auth method from verifier
@@ -122,15 +122,15 @@ export class Web3AuthVerifierService {
       verifier.includes('passwordless') ||
       aggregateVerifier.includes('email')
     ) {
-      return 'email_passwordless';
+      return 'email';
     }
 
-    // Default to email_passwordless if email is present
+    // Default to email if email is present
     if (payload.email) {
-      return 'email_passwordless';
+      return 'email';
     }
 
     // Fallback
-    return 'email_passwordless';
+    return 'email';
   }
 }

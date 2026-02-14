@@ -204,12 +204,12 @@ describe('Web3AuthVerifierService', () => {
   });
 
   describe('extractAuthMethodType', () => {
-    it("should return 'external_wallet' for external_wallet loginType", () => {
+    it("should return 'wallet' for external_wallet loginType", () => {
       const payload = { verifier: 'any' };
 
       const result = service.extractAuthMethodType(payload, 'external_wallet');
 
-      expect(result).toBe('external_wallet');
+      expect(result).toBe('wallet');
     });
 
     it("should return 'google' if verifier contains 'google'", () => {
@@ -236,36 +236,36 @@ describe('Web3AuthVerifierService', () => {
       expect(result).toBe('github');
     });
 
-    it("should return 'email_passwordless' if verifier contains 'email'", () => {
+    it("should return 'email' if verifier contains 'email'", () => {
       const payload = { verifier: 'tkey-email-passwordless' };
 
       const result = service.extractAuthMethodType(payload, 'social');
 
-      expect(result).toBe('email_passwordless');
+      expect(result).toBe('email');
     });
 
-    it("should return 'email_passwordless' if verifier contains 'passwordless'", () => {
+    it("should return 'email' if verifier contains 'passwordless'", () => {
       const payload = { verifier: 'auth0-passwordless-prod' };
 
       const result = service.extractAuthMethodType(payload, 'social');
 
-      expect(result).toBe('email_passwordless');
+      expect(result).toBe('email');
     });
 
-    it("should return 'email_passwordless' as default if email present", () => {
+    it("should return 'email' as default if email present", () => {
       const payload = { verifier: 'unknown-provider', email: 'user@example.com' };
 
       const result = service.extractAuthMethodType(payload, 'social');
 
-      expect(result).toBe('email_passwordless');
+      expect(result).toBe('email');
     });
 
-    it("should return 'email_passwordless' as fallback for unknown verifier", () => {
+    it("should return 'email' as fallback for unknown verifier", () => {
       const payload = { verifier: 'unknown-provider' };
 
       const result = service.extractAuthMethodType(payload, 'social');
 
-      expect(result).toBe('email_passwordless');
+      expect(result).toBe('email');
     });
 
     it("should detect 'google' from aggregateVerifier", () => {
@@ -292,12 +292,12 @@ describe('Web3AuthVerifierService', () => {
       expect(result).toBe('github');
     });
 
-    it("should detect 'email_passwordless' from aggregateVerifier containing 'email'", () => {
+    it("should detect 'email' from aggregateVerifier containing 'email'", () => {
       const payload = { aggregateVerifier: 'tkey-email-aggregate' };
 
       const result = service.extractAuthMethodType(payload, 'social');
 
-      expect(result).toBe('email_passwordless');
+      expect(result).toBe('email');
     });
   });
 });

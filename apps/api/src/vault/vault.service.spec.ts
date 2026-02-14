@@ -601,18 +601,17 @@ describe('VaultService', () => {
       });
     });
 
-    it('should return external-wallet derivation info for wallet user', async () => {
+    it('should return web3auth derivation info for all users (Core Kit)', async () => {
       mockVaultRepo.findOne.mockResolvedValue(mockVaultEntity);
       mockUserRepo.findOne.mockResolvedValue({
         id: testUserId,
-        derivationVersion: 1,
       });
 
       const result = await service.getExportData(testUserId);
 
       expect(result.derivationInfo).toEqual({
-        method: 'external-wallet',
-        derivationVersion: 1,
+        method: 'web3auth',
+        derivationVersion: null,
       });
     });
 

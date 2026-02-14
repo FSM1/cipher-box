@@ -13,6 +13,6 @@ export const AuthMethodResponseDtoType = {
   google: 'google',
   apple: 'apple',
   github: 'github',
-  email_passwordless: 'email_passwordless',
-  external_wallet: 'external_wallet',
+  email: 'email',
+  wallet: 'wallet',
 } as const;

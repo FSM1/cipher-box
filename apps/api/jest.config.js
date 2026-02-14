@@ -40,7 +40,7 @@ module.exports = {
     },
     '**/auth/auth.service.ts': {
       lines: 90,
-      branches: 84, // 84.61% actual; one edge case uncovered (derivationVersion null check)
+      branches: 84, // 84.05% actual after Phase 12.3 schema cleanup
     },
     '**/auth/services/token.service.ts': {
       lines: 90,

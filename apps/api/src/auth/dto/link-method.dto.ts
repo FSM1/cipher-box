@@ -17,7 +17,7 @@ export class AuthMethodResponseDto {
   @ApiProperty()
   id!: string;
 
-  @ApiProperty({ enum: ['google', 'apple', 'github', 'email_passwordless', 'external_wallet'] })
+  @ApiProperty({ enum: ['google', 'apple', 'github', 'email', 'wallet'] })
   type!: string;
 
   @ApiProperty({ description: 'Email or wallet address' })

@@ -93,25 +93,16 @@ export class AuthService {
       }
     }
 
-    // Determine derivation version for external wallets (ADR-001)
-    const derivationVersion =
-      loginDto.loginType === 'external_wallet' ? (loginDto.derivationVersion ?? 1) : null;
-
     const isNewUser = !user;
     if (!user) {
       user = await this.userRepository.save({
         publicKey: loginDto.publicKey,
-        derivationVersion,
       });
-    } else if (user.derivationVersion !== derivationVersion) {
-      // Update derivation version if changed (e.g., migration to v2)
-      user.derivationVersion = derivationVersion;
-      await this.userRepository.save(user);
     }
 
     // 3. Find or create auth method
     // For corekit logins, the identity controller already created the auth method
-    // (with the correct type: 'google' or 'email_passwordless'). Look up by
+    // (with the correct type: 'google' or 'email'). Look up by
     // userId + identifier to avoid creating duplicates with a hardcoded type.
     let authMethod: AuthMethod | null;
 
@@ -130,7 +121,7 @@ export class AuthService {
         // Safety net: create auth method if identity controller didn't (shouldn't happen in practice)
         authMethod = await this.authMethodRepository.save({
           userId: user.id,
-          type: 'email_passwordless',
+          type: 'email',
           identifier,
         });
       }
@@ -263,10 +254,10 @@ export class AuthService {
     );
 
     // Look up user's email from their most recently used auth method
-    // (covers both email_passwordless and google auth methods)
+    // (covers both email and google auth methods)
     const emailMethod = await this.authMethodRepository.findOne({
       where: [
-        { userId: validToken.userId, type: 'email_passwordless' },
+        { userId: validToken.userId, type: 'email' },
         { userId: validToken.userId, type: 'google' },
       ],
       order: { lastUsedAt: 'DESC' },
@@ -415,7 +406,7 @@ export class AuthService {
     const normalizedEmail = email.toLowerCase().trim();
 
     const existingMethod = await this.authMethodRepository.findOne({
-      where: { type: 'email_passwordless', identifier: normalizedEmail },
+      where: { type: 'email', identifier: normalizedEmail },
       relations: ['user'],
     });
 
@@ -436,7 +427,7 @@ export class AuthService {
       user = await this.userRepository.save({ publicKey: publicKeyHex });
       await this.authMethodRepository.save({
         userId: user.id,
-        type: 'email_passwordless',
+        type: 'email',
         identifier: normalizedEmail,
         lastUsedAt: new Date(),
       });

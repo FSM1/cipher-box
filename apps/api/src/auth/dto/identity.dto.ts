@@ -67,6 +67,27 @@ export class IdentityTokenResponseDto {
   email?: string;
 }
 
+export class WalletVerifyDto {
+  @ApiProperty({
+    description: 'EIP-4361 SIWE message string',
+    example: 'example.com wants you to sign in with your Ethereum account...',
+  })
+  @IsString()
+  @IsNotEmpty()
+  message!: string;
+
+  @ApiProperty({
+    description: 'Wallet signature of the SIWE message (hex with 0x prefix)',
+    example: '0xabc123...',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @Matches(/^0x[0-9a-fA-F]+$/, {
+    message: 'signature must be a hex string with 0x prefix',
+  })
+  signature!: string;
+}
+
 export class SendOtpResponseDto {
   @ApiProperty({
     description: 'Whether the OTP was sent successfully',

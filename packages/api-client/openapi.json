@@ -388,6 +388,65 @@
         "tags": ["Identity"]
       }
     },
+    "/auth/identity/wallet/nonce": {
+      "get": {
+        "operationId": "IdentityController_getWalletNonce",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Nonce generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "nonce": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["nonce"]
+                }
+              }
+            }
+          }
+        },
+        "summary": "Generate SIWE nonce for wallet login",
+        "tags": ["Identity"]
+      }
+    },
+    "/auth/identity/wallet": {
+      "post": {
+        "operationId": "IdentityController_walletLogin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WalletVerifyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Wallet verified, JWT issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityTokenResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid nonce or signature"
+          }
+        },
+        "summary": "Verify SIWE wallet signature and return CipherBox identity JWT",
+        "tags": ["Identity"]
+      }
+    },
     "/ipfs/upload": {
       "post": {
         "description": "Pins encrypted file to IPFS, checks storage quota, and records the pin for quota tracking. All in one atomic request.",
@@ -945,7 +1004,7 @@
           },
           "type": {
             "type": "string",
-            "enum": ["google", "apple", "github", "email_passwordless", "external_wallet"]
+            "enum": ["google", "apple", "github", "email", "wallet"]
           },
           "identifier": {
             "type": "string",
@@ -1110,6 +1169,22 @@
           }
         },
         "required": ["email", "otp"]
+      },
+      "WalletVerifyDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "EIP-4361 SIWE message string",
+            "example": "example.com wants you to sign in with your Ethereum account..."
+          },
+          "signature": {
+            "type": "string",
+            "description": "Wallet signature of the SIWE message (hex with 0x prefix)",
+            "example": "0xabc123..."
+          }
+        },
+        "required": ["message", "signature"]
       },
       "UploadResponseDto": {
         "type": "object",
