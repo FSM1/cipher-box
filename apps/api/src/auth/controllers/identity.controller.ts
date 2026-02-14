@@ -95,7 +95,7 @@ export class IdentityController implements OnModuleDestroy {
 
     // 2. Hash Google sub (immutable user ID) -- NOT email (which can change)
     const identifierHash = this.siweService.hashIdentifier(googlePayload.sub);
-    const normalizedEmail = googlePayload.email?.toLowerCase().trim() ?? googlePayload.email;
+    const normalizedEmail = googlePayload.email?.toLowerCase().trim() ?? '';
 
     // 3. Find or create user by hashed identifier
     const { user, isNewUser } = await this.findOrCreateUserByIdentifier(
@@ -284,9 +284,10 @@ export class IdentityController implements OnModuleDestroy {
       return { user: existingMethod.user, isNewUser: false };
     }
 
-    // No cross-method linking -- create new user with placeholder publicKey
+    // No cross-method linking -- create new user with unique temporary publicKey
+    const tempId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const newUser = await this.userRepository.save({
-      publicKey: `pending-core-kit-placeholder`,
+      publicKey: `pending-core-kit-${tempId}`,
     });
     // Update placeholder with actual userId now that we have it
     newUser.publicKey = `pending-core-kit-${newUser.id}`;
