@@ -65,11 +65,13 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-3 pending todo(s):
+5 pending todo(s):
 
 - `2026-02-07-web-worker-large-file-encryption.md` -- Offload large file encryption to Web Worker (area: ui)
 - `2026-02-10-fix-flaky-post-reload-e2e-tests.md` -- Fix flaky post-reload e2e tests (3.8, 3.10) (area: testing)
+- `2026-02-13-deterministic-vault-ipns-derivation.md` -- Migrate vault IPNS key to deterministic derivation from user privateKey (area: crypto)
 - `2026-02-14-bring-your-own-ipfs-node.md` -- Add bring-your-own IPFS node support (area: api)
+- `2026-02-14-file-metadata-evolution-v2.md` -- Split file metadata into per-file IPNS objects (area: crypto)
 
 ### Roadmap Evolution
 
