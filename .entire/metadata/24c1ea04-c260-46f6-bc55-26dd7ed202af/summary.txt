@@ -1,9 +1,15 @@
-All done. Here's a summary of the three fixes:
+Todo saved: `.planning/todos/pending/2026-02-14-file-metadata-evolution-v2.md`
 
-1. **Heartbeat debounce** (`device-registry.service.ts`): Now compares `appVersion` and `deviceModel` before/after — debounce only applies when those haven't changed, so metadata updates always publish immediately.
+```
+  Split file metadata into per-file IPNS objects (v2)
+  Area: crypto
+  Files: 5 referenced
+```
 
-2. **Async Ed25519 key derivation** (`derive-ipns.ts`): Switched `ed.getPublicKey()` to `await ed.getPublicKeyAsync()` — no longer relies on `sha512Sync` being set as a side effect from other module imports.
+---
 
-3. **JSON.parse error wrapping** (`encrypt.ts`): `JSON.parse` + `validateDeviceRegistry` now wrapped in try/catch — `CryptoError` from schema validation passes through, everything else becomes `CryptoError('DECRYPTION_FAILED')`.
+Would you like to:
 
-All 162 tests pass, web build clean, pushed, and all 3 CodeRabbit threads replied to and resolved. PR #125 is ready to merge.
+1. Continue with current work (switch back to main)
+2. Add another todo
+3. View all todos (`/gsd:check-todos`)
