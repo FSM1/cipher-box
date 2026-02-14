@@ -1,33 +1,7 @@
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- GSD ► PHASE 12.3 PLANNED ✓
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Todo saved: `.planning/todos/pending/2026-02-14-erc-1271-contract-wallet-authentication.md`
 
-**Phase 12.3: SIWE + Unified Identity** — 4 plan(s) in 4 wave(s)
+  **Add ERC-1271 contract wallet authentication support**
+  Area: auth
+  Files: 2 referenced
 
-| Wave | Plans | What it builds |
-|------|-------|----------------|
-| 1    | 01    | Backend SIWE service, schema evolution, wallet identity endpoints |
-| 2    | 02    | Backend ADR-001 cleanup (auth service, vault, verifier, API client regen) |
-| 3    | 03    | Frontend wallet login (wagmi, WalletLoginButton, SIWE flow) + ADR-001 cleanup |
-| 4    | 04    | Settings page auth method management (view, link, unlink) |
-
-Research: Completed
-Verification: Passed (2 warnings fixed — stale AES encryption references updated to truncated display)
-
-───────────────────────────────────────────────────────────────
-
-## ▶ Next Up
-
-**Execute Phase 12.3** — run all 4 plans
-
-`/gsd:execute-phase 12.3`
-
-<sub>`/clear` first → fresh context window</sub>
-
-───────────────────────────────────────────────────────────────
-
-**Also available:**
-- `cat .planning/phases/12.3-siwe-unified-identity/*-PLAN.md` — review plans
-- `/gsd:plan-phase 12.3 --research` — re-research first
-
-───────────────────────────────────────────────────────────────
+Smart contract wallets (Safe, Argent, etc.) need on-chain `isValidSignature` calls — separate from Phase 12.3's EOA-only SIWE flow.
