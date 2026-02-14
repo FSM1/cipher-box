@@ -1,6 +1,4 @@
-Both threads already auto-resolved. All done:
+Done. Fixed both nitpicks in `310d22b`:
 
-- **Bug fix**: `dto.email` → `normalizedEmail` in JWT signing (CodeRabbit comment 1)
-- **E2E fix**: Added `@noble/ed25519` as direct devDependency (CodeRabbit comment 2)
-- **Coverage fix**: Added 2 tests for missing SIWE nonce + duplicate wallet link branches (85.52% > 84% threshold)
-- Both review threads resolved, replies posted, pushed to PR
+1. **Google email normalization**: `googlePayload.email` is now `.toLowerCase().trim()` before being used as `identifierDisplay` and in JWT signing — consistent with the email-OTP path
+2. **Deduplicated wallet user creation**: Removed `findOrCreateUserByWallet` (~40 lines), widened `findOrCreateUserByIdentifier` to accept `'wallet'` type, caller passes truncated address as display. Also fixed the stale JSDoc referencing the old `findOrCreateUserByEmail` name.
