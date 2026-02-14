@@ -72,7 +72,7 @@ export function useFilePreview({
 
         if (cancelled) return;
 
-        const blob = new Blob([plaintext.buffer as ArrayBuffer], { type: mimeType });
+        const blob = new Blob([plaintext as BlobPart], { type: mimeType });
         url = URL.createObjectURL(blob);
 
         setDecryptedData(plaintext);

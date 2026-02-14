@@ -1,13 +1,5 @@
-Todo saved: `.planning/todos/pending/2026-02-14-extend-e2e-tests-wallet-and-mfa-flows.md`
+Pushed. The three CI fixes:
 
-  Extend E2E tests to cover wallet and MFA flows
-  Area: testing
-  Files: 3 referenced
-
----
-
-Would you like to:
-
-1. Continue with current work
-2. Add another todo
-3. View all todos (`/gsd:check-todos`)
+1. **Test coverage** (82.89% < 84%): Added 3 tests — wallet-type inference in safety net, and both branches of the cross-account collision error message. Coverage now 85.52%.
+2. **E2E build** (`Uint8Array` not `BlobPart`): TS 5.9 generic `Uint8Array<ArrayBufferLike>` doesn't satisfy `BlobPart`. Cast to `BlobPart` in both `ImagePreviewDialog.tsx` and `useFilePreview.ts`.
+3. **API Spec & Client**: Was already correct from the CodeRabbit fix commit — CI just hadn't run against that code yet. The new push will trigger a fresh CI run.
