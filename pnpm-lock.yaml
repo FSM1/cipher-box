@@ -139,6 +139,9 @@ importers:
       typeorm:
         specifier: ^0.3.28
         version: 0.3.28(ioredis@5.9.2)(pg@8.17.1)(ts-node@10.9.2(@types/node@22.19.7)(typescript@5.9.3))
+      viem:
+        specifier: ^2.44.4
+        version: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
     devDependencies:
       '@nestjs/cli':
         specifier: ^11.0.0
