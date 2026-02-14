@@ -13,6 +13,7 @@
 import { wrapKey } from '../ecies/encrypt';
 import { unwrapKey } from '../ecies/decrypt';
 import { validateDeviceRegistry } from './schema';
+import { CryptoError } from '../types';
 import type { DeviceRegistry } from './types';
 
 /**
@@ -51,6 +52,11 @@ export async function decryptRegistry(
 ): Promise<DeviceRegistry> {
   const plaintext = await unwrapKey(encrypted, userPrivateKey);
   const json = new TextDecoder().decode(plaintext);
-  const parsed = JSON.parse(json);
-  return validateDeviceRegistry(parsed);
+  try {
+    const parsed = JSON.parse(json);
+    return validateDeviceRegistry(parsed);
+  } catch (error) {
+    if (error instanceof CryptoError) throw error;
+    throw new CryptoError('Registry decryption produced invalid data', 'DECRYPTION_FAILED');
+  }
 }

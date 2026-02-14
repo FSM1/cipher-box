@@ -53,7 +53,7 @@ export async function deriveRegistryIpnsKeypair(userPrivateKey: Uint8Array): Pro
   });
 
   // 2. Derive Ed25519 public key from seed (deterministic)
-  const ed25519PublicKey = ed.getPublicKey(ed25519Seed);
+  const ed25519PublicKey = await ed.getPublicKeyAsync(ed25519Seed);
 
   // 3. Derive IPNS name from Ed25519 public key (k51... format)
   const ipnsName = await deriveIpnsName(ed25519PublicKey);

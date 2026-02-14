@@ -100,15 +100,21 @@ export async function initializeOrSyncRegistry(params: {
         // Nothing changed at all
         needsPublish = false;
       } else if (existingDevice) {
-        // Only heartbeat fields changed -- check debounce
+        // Device existed -- check if only heartbeat fields changed
         const beforeParsed = JSON.parse(beforeJson) as DeviceRegistry;
         const beforeDevice = beforeParsed.devices.find(
           (d) => d.deviceId === params.deviceKeypair.deviceId
         );
         if (beforeDevice) {
-          const timeSinceLastSeen = Date.now() - beforeDevice.lastSeenAt;
-          if (timeSinceLastSeen < HEARTBEAT_DEBOUNCE_MS) {
-            needsPublish = false;
+          const metadataChanged =
+            beforeDevice.appVersion !== existingDevice.appVersion ||
+            beforeDevice.deviceModel !== existingDevice.deviceModel;
+          if (!metadataChanged) {
+            // Only lastSeenAt changed -- apply debounce
+            const timeSinceLastSeen = Date.now() - beforeDevice.lastSeenAt;
+            if (timeSinceLastSeen < HEARTBEAT_DEBOUNCE_MS) {
+              needsPublish = false;
+            }
           }
         }
       }
