@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 12.3 (SIWE + Unified Identity)
-Plan: 1 of 4 planned
+Plan: 2 of 4 planned
 Status: In progress
-Last activity: 2026-02-14 -- Completed 12.3-01-PLAN.md (Backend SIWE Service and Wallet Endpoints)
+Last activity: 2026-02-14 -- Completed 12.3-02-PLAN.md (ADR-001 Cleanup)
 
-Progress: [############........] 59% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 plan 1/4)
+Progress: [############........] 60% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 plan 2/4)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 82
+- Total plans completed: 83
 - Average duration: 4.7 min
-- Total execution time: 6.74 hours
+- Total execution time: 6.89 hours
 
 **By Phase (M1 summary):**
 
@@ -31,12 +31,12 @@ Progress: [############........] 59% (M1 complete, M2 Phase 12 complete, Phase 1
 | M1 (17 phases) | 72/72 | 5.6 hrs | 4.7 min  |
 | M2 Phase 12    | 5/5   | 45 min  | 9.0 min  |
 | M2 Phase 12.2  | 3/3   | 10 min  | 3.3 min  |
-| M2 Phase 12.3  | 1/4   | 16 min  | 16 min   |
+| M2 Phase 12.3  | 2/4   | 25 min  | 12.5 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 7m, 3m, 4m, 3m, 16m
-- Trend: Stable (12.3-01 longer due to schema evolution + type renames across codebase)
+- Last 5 plans: 3m, 4m, 3m, 16m, 9m
+- Trend: Stable
 
 Updated after each plan completion.
 
@@ -66,6 +66,9 @@ Recent decisions affecting current work:
 | Wallet addr: SHA-256 hash + truncated display (no encrypt)     | 12.3-01  | Simpler than hash+encrypted; full plaintext never stored                                                        |
 | Auth types: email_passwordless->email, external_wallet->wallet | 12.3-01  | Clean method-based naming for simplified auth type system                                                       |
 | derivationVersion removed (ADR-001 clean break)                | 12.3-01  | DB will be wiped, no migration needed, clean Core Kit-only schema                                               |
+| Web3AuthVerifierService decoupled from auth.service            | 12.3-02  | No longer injected; all login/link flows use CipherBox JWT verification                                         |
+| LinkMethodDto uses auth method types directly                  | 12.3-02  | google/email/wallet instead of routing through social/external_wallet loginType                                 |
+| Vault export derivationInfo simplified to derivationMethod     | 12.3-02  | Always 'web3auth' for Core Kit users; no derivationVersion needed                                               |
 
 ### Pending Todos
 
@@ -112,7 +115,7 @@ Recent decisions affecting current work:
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
 - Phase 12.1 (AES-CTR Streaming): NEEDS `/gsd:research-phase` -- MediaSource/Service Worker decryption, byte-range IPFS, CTR nonce management
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
-- Phase 12.3 (SIWE + Identity): IN PROGRESS -- plan 1/4 complete (backend SIWE service + wallet endpoints)
+- Phase 12.3 (SIWE + Identity): IN PROGRESS -- plan 2/4 complete (backend SIWE service + wallet endpoints, ADR-001 cleanup)
 - Phase 12.4 (MFA + Cross-Device): NEEDS `/gsd:research-phase` -- enableMFA() flow, bulletin board API, ECIES ephemeral key exchange
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
