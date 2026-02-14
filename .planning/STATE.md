@@ -9,10 +9,10 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 
 ## Current Position
 
-Phase: 12.2 (Encrypted Device Registry)
-Plan: 3 of 3 complete
-Status: Phase complete
-Last activity: 2026-02-13 -- Completed 12.2-PLAN-03 (auth flow integration, Zustand store, polling)
+Phase: 12.3 (SIWE + Unified Identity)
+Plan: 0 of 4 planned
+Status: Planned (research + planning complete, ready for execution)
+Last activity: 2026-02-14 -- Phase 12.3 researched and planned (4 plans in 4 waves)
 
 Progress: [############........] 58% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete)
 
@@ -106,16 +106,16 @@ Recent decisions affecting current work:
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
 - Phase 12.1 (AES-CTR Streaming): NEEDS `/gsd:research-phase` -- MediaSource/Service Worker decryption, byte-range IPFS, CTR nonce management
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
-- Phase 12.3 (SIWE + Identity): NEEDS `/gsd:research-phase` -- SIWE message format, wallet address hashing, multi-auth linking, ADR-001 migration
+- Phase 12.3 (SIWE + Identity): COMPLETE -- research and planning done (4 plans)
 - Phase 12.4 (MFA + Cross-Device): NEEDS `/gsd:research-phase` -- enableMFA() flow, bulletin board API, ECIES ephemeral key exchange
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
-Last session: 2026-02-13
-Stopped at: Phase 12.2 complete — all 3 plans executed, verified 4/4 must-haves
+Last session: 2026-02-14
+Stopped at: Phase 12.3 planned — 4 plans in 4 waves, research + checker verification passed
 Resume file: None
-Next: Phase 12.3 (SIWE + Unified Identity) — needs /gsd:discuss-phase or /gsd:plan-phase
+Next: Phase 12.3 (SIWE + Unified Identity) — ready for /gsd:execute-phase 12.3
 
 ---
 
