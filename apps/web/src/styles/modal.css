@@ -1,0 +1,113 @@
+/**
+ * Modal Styles - Terminal Aesthetic
+ *
+ * Modal overlay and container for dialogs
+ * Green border, black background, terminal feel
+ */
+
+/* ==========================================================================
+   Modal Backdrop
+   ========================================================================== */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgb(0 0 0 / 85%);
+  overflow: hidden;
+}
+
+.matrix-canvas--modal {
+  position: absolute;
+  z-index: 0;
+}
+
+/* ==========================================================================
+   Modal Container
+   ========================================================================== */
+
+.modal-container {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 500px;
+  max-height: 90vh;
+  margin: var(--spacing-md);
+  overflow: hidden;
+  background-color: var(--color-background);
+  border: var(--border-thickness) solid var(--color-border);
+  border-radius: 0;
+  box-shadow: 0 25px 50px -12px rgb(0 0 0 / 50%), var(--glow-green);
+}
+
+/* ==========================================================================
+   Modal Header
+   ========================================================================== */
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-md);
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.modal-title {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-primary);
+}
+
+/* ==========================================================================
+   Modal Close Button
+   ========================================================================== */
+
+.modal-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  margin-left: auto;
+  font-size: 1.25rem;
+  font-weight: var(--font-weight-normal);
+  line-height: 1;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  background: transparent;
+  border: var(--border-thickness) solid var(--color-border);
+  border-radius: 0;
+  transition: background-color 0.15s ease, color 0.15s ease,
+    border-color 0.15s ease, border-width 0.15s ease;
+}
+
+.modal-close:hover {
+  background-color: var(--color-green-darker);
+  color: var(--color-text-primary);
+}
+
+.modal-close:focus-visible {
+  border-color: var(--color-green-primary);
+  border-width: 2px;
+  box-shadow: var(--glow-green);
+  outline: none;
+}
+
+/* ==========================================================================
+   Modal Body
+   ========================================================================== */
+
+.modal-body {
+  padding: var(--spacing-md);
+  overflow-y: auto;
+  max-height: calc(90vh - 80px);
+  color: var(--color-text-primary);
+}

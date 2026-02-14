@@ -1,0 +1,275 @@
+/**
+ * Dialog Styles - Terminal Aesthetic
+ *
+ * Dialog content for rename, delete confirmation, etc.
+ * Green accents, monospace font, dark only
+ */
+
+/* ==========================================================================
+   Dialog Content
+   ========================================================================== */
+
+.dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+/* ==========================================================================
+   Dialog Message
+   ========================================================================== */
+
+.dialog-message {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  color: var(--color-text-primary);
+}
+
+/* ==========================================================================
+   Dialog Field
+   ========================================================================== */
+
+.dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+/* ==========================================================================
+   Dialog Label
+   ========================================================================== */
+
+.dialog-label {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-secondary);
+}
+
+/* ==========================================================================
+   Dialog Input
+   ========================================================================== */
+
+.dialog-input {
+  width: 100%;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  background-color: var(--color-background);
+  border: var(--border-thickness) solid var(--color-border);
+  border-radius: 0;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.dialog-input:focus {
+  border-color: var(--color-green-primary);
+  border-width: 2px;
+  padding: calc(var(--spacing-xs) - 1px) calc(var(--spacing-sm) - 1px);
+  box-shadow: var(--glow-green);
+  outline: none;
+}
+
+.dialog-input--error {
+  border-color: var(--color-error);
+}
+
+.dialog-input--error:focus {
+  border-color: var(--color-error);
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
+}
+
+.dialog-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dialog-input::placeholder {
+  color: var(--color-text-secondary);
+}
+
+/* ==========================================================================
+   Dialog Error
+   ========================================================================== */
+
+.dialog-error {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-error);
+}
+
+/* ==========================================================================
+   Dialog Actions
+   ========================================================================== */
+
+.dialog-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  justify-content: flex-end;
+  margin-top: var(--spacing-xs);
+}
+
+/* ==========================================================================
+   Dialog Button Base
+   ========================================================================== */
+
+.dialog-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-xs) var(--spacing-md);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-normal);
+  line-height: 1.5;
+  border: var(--border-thickness) solid transparent;
+  border-radius: 0;
+  cursor: pointer;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease,
+    border-color 0.15s ease, border-width 0.15s ease;
+}
+
+.dialog-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dialog-button:focus-visible {
+  border-color: var(--color-green-primary);
+  border-width: 2px;
+  padding: calc(var(--spacing-xs) - 1px) calc(var(--spacing-md) - 1px);
+  outline: none;
+}
+
+/* ==========================================================================
+   Secondary Button (Cancel)
+   ========================================================================== */
+
+.dialog-button--secondary {
+  color: var(--color-text-primary);
+  background-color: transparent;
+  border: var(--border-thickness) solid var(--color-border);
+}
+
+.dialog-button--secondary:hover:not(:disabled) {
+  background-color: var(--color-green-darker);
+  box-shadow: var(--glow-green);
+}
+
+/* ==========================================================================
+   Primary Button (Confirm)
+   ========================================================================== */
+
+.dialog-button--primary {
+  color: var(--color-black);
+  background-color: var(--color-green-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.dialog-button--primary:hover:not(:disabled) {
+  box-shadow: var(--glow-green);
+}
+
+/* ==========================================================================
+   Destructive Button (Delete)
+   ========================================================================== */
+
+.dialog-button--destructive {
+  color: var(--color-black);
+  background-color: var(--color-error);
+  font-weight: var(--font-weight-semibold);
+}
+
+.dialog-button--destructive:hover:not(:disabled) {
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.6);
+}
+
+/* ==========================================================================
+   Move Dialog - Folder List
+   ========================================================================== */
+
+.move-dialog-folder-list {
+  max-height: 300px;
+  overflow-y: auto;
+  border: var(--border-thickness) solid var(--color-border);
+  background-color: var(--color-background);
+}
+
+.move-dialog-folder-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.move-dialog-folder-item:last-child {
+  border-bottom: none;
+}
+
+.move-dialog-folder-item:hover:not(.move-dialog-folder-item--disabled) {
+  background-color: var(--color-green-darker);
+}
+
+.move-dialog-folder-item:focus {
+  outline: none;
+  background-color: var(--color-green-darker);
+}
+
+.move-dialog-folder-item--selected {
+  background-color: var(--color-green-darker);
+  border-left: 2px solid var(--color-green-primary);
+}
+
+.move-dialog-folder-item--selected:hover {
+  background-color: var(--color-green-darker);
+}
+
+.move-dialog-folder-item--disabled {
+  color: var(--color-green-dim);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.move-dialog-folder-item--disabled:hover {
+  background-color: transparent;
+}
+
+.move-dialog-folder-icon {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  flex-shrink: 0;
+}
+
+.move-dialog-folder-item--disabled .move-dialog-folder-icon {
+  color: var(--color-green-dim);
+}
+
+.move-dialog-folder-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text-primary);
+}
+
+.move-dialog-folder-item--disabled .move-dialog-folder-name {
+  color: var(--color-green-dim);
+}
+
+.move-dialog-empty {
+  padding: var(--spacing-md);
+  text-align: center;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
