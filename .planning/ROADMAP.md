@@ -50,7 +50,8 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 12: Core Kit Identity Provider Foundation** - Replace PnP Modal SDK with MPC Core Kit, CipherBox as identity provider
 - [ ] **Phase 12.1: AES-CTR Streaming Encryption** - AES-256-CTR for media files with byte-range decryption and in-browser playback (INSERTED)
 - [x] **Phase 12.2: Encrypted Device Registry** - Encrypted device metadata on IPFS for cross-device infrastructure (INSERTED)
-- [ ] **Phase 12.3: SIWE + Unified Identity** - Wallet login via SIWE, multi-auth linking, ADR-001 cleanup (INSERTED)
+- [x] **Phase 12.3: SIWE + Unified Identity** - Wallet login via SIWE, multi-auth linking, ADR-001 cleanup (INSERTED)
+- [ ] **Phase 12.3.1: Pre-Wipe Identity Cleanup** - Deterministic IPNS derivation, hashed identifiers, remove auto-linking (INSERTED)
 - [ ] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
 - [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
@@ -167,10 +168,28 @@ Plans:
 - [x] 12.3-03-PLAN.md — Frontend wallet login (wagmi, WalletLoginButton, SIWE flow) + ADR-001 cleanup (rename derivedKeypair to vaultKeypair)
 - [x] 12.3-04-PLAN.md — Settings page auth method management (view, link, unlink)
 
+### Phase 12.3.1: Pre-Wipe Identity Cleanup (INSERTED)
+
+**Goal**: Implement schema-level identity changes as clean breaks before database wipe, avoiding throwaway migration code: deterministic vault IPNS derivation, SHA-256 hashed identifiers for all auth methods, and removal of cross-method email auto-linking
+**Depends on**: Phase 12.3 (SIWE + unified identity complete)
+**Requirements**: Self-sovereign recovery infrastructure, privacy-preserving auth storage
+**Research flag**: Skip — builds on established patterns (HKDF from Phase 12.2, SHA-256 hashing from Phase 12.3 wallet work)
+**Success Criteria** (what must be TRUE):
+
+1. Vault IPNS keypair is derived deterministically from user's privateKey via HKDF (context: "cipherbox-vault-ipns-v1") — no random keygen, no backend dependency for vault discovery
+2. All auth method identifiers are stored as SHA-256 hashes: Google uses SHA-256(google_sub), email uses SHA-256(normalized_email), wallet uses SHA-256(checksummed_address)
+3. Each auth method (google, email, wallet) is an independent identity — no cross-method email auto-linking; users link methods explicitly via Settings
+4. Self-sovereign recovery path works: recovery phrase → privateKey → derive vault IPNS key → resolve IPNS → decrypt vault metadata
+5. TEE republishing updated to use deterministically derived IPNS keys
+
+Plans:
+
+- [ ] TBD (run `/gsd:plan-phase 12.3.1` to break down)
+
 ### Phase 12.4: MFA + Cross-Device Approval (INSERTED)
 
 **Goal**: Users can enroll in MFA with device shares and recovery phrases, and approve new devices from existing authenticated devices
-**Depends on**: Phase 12.3 (unified identity for consistent MFA across all auth methods)
+**Depends on**: Phase 12.3.1 (identity cleanup complete, deterministic IPNS for recovery)
 **Requirements**: MFA-01, MFA-02, MFA-03, MFA-04
 **Research flag**: NEEDS `/gsd:research-phase` -- Core Kit enableMFA() flow, createFactor/inputFactorKey for cross-device, bulletin board API design, ECIES ephemeral key exchange
 **Success Criteria** (what must be TRUE):
@@ -289,6 +308,7 @@ Parallel phases:
 | 12.1 AES-CTR Streaming     | M2        | 0/TBD          | Not started | -          |
 | 12.2 Device Registry       | M2        | 3/3            | Complete    | 2026-02-13 |
 | 12.3 SIWE + Identity       | M2        | 4/4            | Complete    | 2026-02-14 |
+| 12.3.1 Identity Cleanup    | M2        | 0/TBD          | Not started | -          |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
