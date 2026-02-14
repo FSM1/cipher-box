@@ -79,11 +79,11 @@ export function useAuth() {
       }
 
       // Vault exists - decrypt keys and load into store
+      // decryptVaultKeys derives the IPNS public key internally from the decrypted private key
       const decryptedVault = await decryptVaultKeys(
         {
           encryptedRootFolderKey: hexToBytes(existingVault.encryptedRootFolderKey),
           encryptedIpnsPrivateKey: hexToBytes(existingVault.encryptedRootIpnsPrivateKey),
-          rootIpnsPublicKey: hexToBytes(existingVault.rootIpnsPublicKey),
         },
         userKeypair.privateKey
       );
@@ -102,7 +102,7 @@ export function useAuth() {
         console.log(
           '[Auth] New user on Core Kit. If migrating from PnP, vault re-initialization may be needed.'
         );
-        const newVault = await initializeVault();
+        const newVault = await initializeVault(userKeypair.privateKey);
         const encryptedVault = await encryptVaultKeys(newVault, userKeypair.publicKey);
         const rootIpnsName = await deriveIpnsName(newVault.rootIpnsKeypair.publicKey);
 
@@ -110,7 +110,6 @@ export function useAuth() {
           ownerPublicKey: bytesToHex(userKeypair.publicKey),
           encryptedRootFolderKey: bytesToHex(encryptedVault.encryptedRootFolderKey),
           encryptedRootIpnsPrivateKey: bytesToHex(encryptedVault.encryptedIpnsPrivateKey),
-          rootIpnsPublicKey: bytesToHex(encryptedVault.rootIpnsPublicKey),
           rootIpnsName,
         });
 

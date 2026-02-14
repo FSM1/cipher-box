@@ -70,6 +70,17 @@ export class SiweService {
   }
 
   /**
+   * Hash any identifier (email, Google sub, etc.) for database lookup.
+   * The caller is responsible for normalization (e.g., lowercasing email).
+   * Unlike hashWalletAddress, this does NOT apply EIP-55 checksumming.
+   *
+   * @returns SHA-256 hex digest of the value (64 chars)
+   */
+  hashIdentifier(value: string): string {
+    return createHash('sha256').update(value).digest('hex');
+  }
+
+  /**
    * Truncate a wallet address for display purposes.
    * Returns first 6 + "..." + last 4 characters (e.g. "0xAbCd...1234").
    * The full plaintext address is NEVER stored in the database.
@@ -77,5 +88,20 @@ export class SiweService {
   truncateWalletAddress(address: string): string {
     const checksummed = getAddress(address);
     return `${checksummed.slice(0, 6)}...${checksummed.slice(-4)}`;
+  }
+
+  /**
+   * Truncate an email for display purposes.
+   * Returns first 3 + "..." + last 2 of local part + full domain.
+   * Short local parts (≤5 chars) are shown in full.
+   * Examples: "michael@gmail.com" → "mic...el@gmail.com", "bob@x.com" → "bob@x.com"
+   */
+  truncateEmail(email: string): string {
+    const atIndex = email.indexOf('@');
+    if (atIndex === -1) return email;
+    const local = email.slice(0, atIndex);
+    const domain = email.slice(atIndex);
+    if (local.length <= 5) return email;
+    return `${local.slice(0, 3)}...${local.slice(-2)}${domain}`;
   }
 }

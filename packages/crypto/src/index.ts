@@ -50,6 +50,7 @@ export {
   initializeVault,
   encryptVaultKeys,
   decryptVaultKeys,
+  deriveVaultIpnsKeypair,
   type VaultInit,
   type EncryptedVaultKeys,
 } from './vault';

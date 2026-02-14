@@ -17,6 +17,7 @@ import { RefreshToken } from './entities/refresh-token.entity';
 import { JwtIssuerService } from './services/jwt-issuer.service';
 import { TokenService } from './services/token.service';
 import { SiweService } from './services/siwe.service';
+import { parseSiweMessage } from 'viem/siwe';
 import { LoginDto, LoginServiceResult } from './dto/login.dto';
 import { RefreshServiceResult, LogoutResponseDto } from './dto/token.dto';
 import { LinkMethodDto, AuthMethodResponseDto } from './dto/link-method.dto';
@@ -77,12 +78,17 @@ export class AuthService {
     // 3. Find or create auth method
     // The identity controller already created the auth method
     // (with the correct type: 'google', 'email', or 'wallet'). Look up by
-    // userId + identifier to avoid creating duplicates with a hardcoded type.
+    // userId + identifierHash to avoid creating duplicates with a hardcoded type.
     let authMethod: AuthMethod | null;
 
-    const identifier = payload.email || payload.sub || 'unknown';
+    const identifier = payload.email || payload.sub;
+    if (!identifier) {
+      this.logger.warn('CipherBox JWT missing both email and sub claims');
+      throw new UnauthorizedException('Invalid identity token: missing identifier');
+    }
+    const identifierHash = this.siweService.hashIdentifier(identifier);
     authMethod = await this.authMethodRepository.findOne({
-      where: { userId: user.id, identifier },
+      where: { userId: user.id, identifierHash },
     });
     if (!authMethod) {
       // Fallback: find any auth method for this user (identity controller should have created one)
@@ -94,10 +100,16 @@ export class AuthService {
       // Safety net: create auth method if identity controller didn't (shouldn't happen in practice)
       // All logins go through loginType='corekit' now, but infer type from identifier format
       const inferredType = identifier.startsWith('0x') ? 'wallet' : 'email';
+      const display =
+        inferredType === 'wallet'
+          ? this.siweService.truncateWalletAddress(identifier)
+          : this.siweService.truncateEmail(identifier);
       authMethod = await this.authMethodRepository.save({
         userId: user.id,
         type: inferredType,
-        identifier,
+        identifier: identifierHash,
+        identifierHash,
+        identifierDisplay: display,
       });
     }
 
@@ -221,14 +233,14 @@ export class AuthService {
     return {
       accessToken: newTokens.accessToken,
       refreshToken: newTokens.refreshToken,
-      email: emailMethod?.identifier,
+      email: emailMethod?.identifierDisplay || emailMethod?.identifier,
     };
   }
 
   /**
    * Get all linked auth methods for a user.
-   * For wallet methods, returns the truncated display address (e.g. "0xAbCd...1234")
-   * instead of the raw identifier hash.
+   * Returns identifierDisplay (human-readable) for all method types.
+   * Falls back to identifier if identifierDisplay is not set.
    */
   async getLinkedMethods(userId: string): Promise<AuthMethodResponseDto[]> {
     const methods = await this.authMethodRepository.find({
@@ -239,10 +251,7 @@ export class AuthService {
     return methods.map((method) => ({
       id: method.id,
       type: method.type,
-      identifier:
-        method.type === 'wallet' && method.identifierDisplay
-          ? method.identifierDisplay
-          : method.identifier,
+      identifier: method.identifierDisplay || method.identifier,
       lastUsedAt: method.lastUsedAt,
       createdAt: method.createdAt,
     }));
@@ -285,15 +294,19 @@ export class AuthService {
     // 1. Verify the CipherBox-issued JWT
     const payload = await this.verifyCipherBoxJwt(linkDto.idToken);
 
-    // 2. Determine type and identifier
+    // 2. Determine type and identifier, hash for lookup
     const authMethodType = linkDto.loginType;
-    const identifier = payload.email || payload.sub || 'unknown';
+    const identifier = payload.email || payload.sub;
+    if (!identifier) {
+      throw new BadRequestException('Cannot determine identifier from JWT');
+    }
+    const identifierHash = this.siweService.hashIdentifier(identifier);
 
     // 3. Check cross-account collision: same identifier linked to a different user
     const crossAccountMethod = await this.authMethodRepository.findOne({
       where: {
         type: authMethodType,
-        identifier,
+        identifierHash,
         userId: Not(userId),
       },
     });
@@ -309,7 +322,7 @@ export class AuthService {
       where: {
         userId,
         type: authMethodType,
-        identifier,
+        identifierHash,
       },
     });
 
@@ -317,11 +330,13 @@ export class AuthService {
       throw new BadRequestException('This auth method is already linked to your account');
     }
 
-    // 5. Create new AuthMethod entity
+    // 5. Create new AuthMethod entity with hashed identifier
     await this.authMethodRepository.save({
       userId,
       type: authMethodType,
-      identifier,
+      identifier: identifierHash,
+      identifierHash,
+      identifierDisplay: payload.email ? this.siweService.truncateEmail(payload.email) : identifier,
       lastUsedAt: new Date(),
     });
 
@@ -345,7 +360,6 @@ export class AuthService {
 
     // 2. Verify SIWE signature
     const domain = this.configService.get<string>('SIWE_DOMAIN', 'localhost');
-    const { parseSiweMessage } = await import('viem/siwe');
     const parsed = parseSiweMessage(linkDto.siweMessage);
     if (!parsed.nonce) {
       throw new BadRequestException('Invalid SIWE message: missing nonce');
@@ -467,11 +481,12 @@ export class AuthService {
     // 2. Generate deterministic secp256k1 keypair from email
     const { publicKeyHex, privateKeyHex } = this.generateDeterministicKeypair(email);
 
-    // 3. Find or create user by email
+    // 3. Find or create user by email (hash-based lookup)
     const normalizedEmail = email.toLowerCase().trim();
+    const identifierHash = this.siweService.hashIdentifier(normalizedEmail);
 
     const existingMethod = await this.authMethodRepository.findOne({
-      where: { type: 'email', identifier: normalizedEmail },
+      where: { type: 'email', identifierHash },
       relations: ['user'],
     });
 
@@ -493,7 +508,9 @@ export class AuthService {
       await this.authMethodRepository.save({
         userId: user.id,
         type: 'email',
-        identifier: normalizedEmail,
+        identifier: identifierHash,
+        identifierHash,
+        identifierDisplay: this.siweService.truncateEmail(normalizedEmail),
         lastUsedAt: new Date(),
       });
     }

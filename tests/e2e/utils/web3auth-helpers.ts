@@ -7,6 +7,7 @@ import {
   hexToBytes,
   bytesToHex,
 } from '@cipherbox/crypto';
+import * as ed from '@noble/ed25519';
 
 /**
  * Test credentials from environment variables.
@@ -124,7 +125,6 @@ async function loginViaTestEndpoint(page: Page, email: string): Promise<void> {
 
   let vaultId: string;
   let rootFolderKey: Uint8Array;
-  let rootIpnsPublicKey: Uint8Array;
   let rootIpnsPrivateKey: Uint8Array;
   let rootIpnsName: string;
 
@@ -138,17 +138,15 @@ async function loginViaTestEndpoint(page: Page, email: string): Promise<void> {
       {
         encryptedRootFolderKey: hexToBytes(vault.encryptedRootFolderKey),
         encryptedIpnsPrivateKey: hexToBytes(vault.encryptedRootIpnsPrivateKey),
-        rootIpnsPublicKey: hexToBytes(vault.rootIpnsPublicKey),
       },
       privateKey
     );
 
     rootFolderKey = decrypted.rootFolderKey;
-    rootIpnsPublicKey = decrypted.rootIpnsKeypair.publicKey;
     rootIpnsPrivateKey = decrypted.rootIpnsKeypair.privateKey;
   } else {
     // New user — initialize vault
-    const newVault = await initializeVault();
+    const newVault = await initializeVault(privateKey);
     const encrypted = await encryptVaultKeys(newVault, publicKey);
     rootIpnsName = await deriveIpnsName(newVault.rootIpnsKeypair.publicKey);
 
@@ -158,7 +156,6 @@ async function loginViaTestEndpoint(page: Page, email: string): Promise<void> {
         ownerPublicKey: publicKeyHex,
         encryptedRootFolderKey: bytesToHex(encrypted.encryptedRootFolderKey),
         encryptedRootIpnsPrivateKey: bytesToHex(encrypted.encryptedIpnsPrivateKey),
-        rootIpnsPublicKey: bytesToHex(encrypted.rootIpnsPublicKey),
         rootIpnsName,
       },
     });
@@ -171,9 +168,11 @@ async function loginViaTestEndpoint(page: Page, email: string): Promise<void> {
     const initResult = await initResponse.json();
     vaultId = initResult.id;
     rootFolderKey = newVault.rootFolderKey;
-    rootIpnsPublicKey = newVault.rootIpnsKeypair.publicKey;
     rootIpnsPrivateKey = newVault.rootIpnsKeypair.privateKey;
   }
+
+  // Derive IPNS public key from private key (deterministic Ed25519 derivation)
+  const rootIpnsPublicKey = await ed.getPublicKeyAsync(rootIpnsPrivateKey);
 
   // Cache state for re-injection after page reloads
   cachedTestAuthState = {

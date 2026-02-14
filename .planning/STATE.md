@@ -5,37 +5,38 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 12.3 complete (SIWE + Unified Identity)
+**Current focus:** Milestone 2 -- Phase 12.3.1 complete (Pre-Wipe Identity Cleanup)
 
 ## Current Position
 
-Phase: 12.3 (SIWE + Unified Identity)
+Phase: 12.3.1 (Pre-Wipe Identity Cleanup)
 Plan: 4 of 4 planned
 Status: Phase complete
-Last activity: 2026-02-14 -- Completed 12.3-04-PLAN.md (Link/Unlink Methods + Settings UI)
+Last activity: 2026-02-14 -- Completed 12.3.1-04-PLAN.md (Downstream rootIpnsPublicKey Cleanup)
 
-Progress: [##############......] 68% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete)
+Progress: [###############.....] 73% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 85
-- Average duration: 4.7 min
-- Total execution time: 7.13 hours
+- Total plans completed: 89
+- Average duration: 4.9 min
+- Total execution time: 7.7 hours
 
 **By Phase (M1 summary):**
 
-| Phase          | Plans | Total   | Avg/Plan |
-| -------------- | ----- | ------- | -------- |
-| M1 (17 phases) | 72/72 | 5.6 hrs | 4.7 min  |
-| M2 Phase 12    | 5/5   | 45 min  | 9.0 min  |
-| M2 Phase 12.2  | 3/3   | 10 min  | 3.3 min  |
-| M2 Phase 12.3  | 4/4   | 39 min  | 9.8 min  |
+| Phase           | Plans | Total   | Avg/Plan |
+| --------------- | ----- | ------- | -------- |
+| M1 (17 phases)  | 72/72 | 5.6 hrs | 4.7 min  |
+| M2 Phase 12     | 5/5   | 45 min  | 9.0 min  |
+| M2 Phase 12.2   | 3/3   | 10 min  | 3.3 min  |
+| M2 Phase 12.3   | 4/4   | 39 min  | 9.8 min  |
+| M2 Phase 12.3.1 | 4/4   | 38 min  | 9.5 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 3m, 16m, 9m, 7m, 7m
+- Last 5 plans: 10m, 4m, 10m, 18m, 6m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -47,34 +48,41 @@ Updated after each plan completion.
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-| Decision                                                       | Phase    | Rationale                                                                                                       |
-| -------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------- |
-| Replace PnP Modal SDK with MPC Core Kit                        | Phase 12 | Full MFA control, custom UX, programmatic factor mgmt                                                           |
-| CipherBox as identity provider (sub=userId)                    | Phase 12 | Enables multi-auth linking, less data to Web3Auth                                                               |
-| Identity trilemma: chose (wallet-only + unified) w/ SPOF       | Phase 12 | No mandatory email; SPOF mitigated by key export+IPFS                                                           |
-| Phase 12 split into 12, 12.2, 12.3, 12.4                       | Phase 12 | Foundation->device registry->SIWE->MFA dependency chain                                                         |
-| Core Kit WEB3AUTH_NETWORK uses DEVNET/MAINNET keys             | 12-02    | Different from PnP SDK's SAPPHIRE_DEVNET/SAPPHIRE_MAINNET                                                       |
-| CipherBox JWT for backend auth (not coreKit.signatures)        | 12-04    | Core Kit signatures are session tokens, not verifiable JWTs. Pass CipherBox-issued JWT with loginType 'corekit' |
-| importTssKey via localStorage one-time read-and-delete         | 12-05    | PnP migration key consumed once then removed                                                                    |
-| E2E uses CipherBox login UI directly (no modal iframe)         | 12-05    | Simpler, more reliable than Web3Auth modal automation                                                           |
-| jose library for identity JWTs (not @nestjs/jwt)               | 12-01    | Separate signing keys (RS256) and audience from internal                                                        |
-| Cross-auth-method email linking                                | 12-01    | Same email across Google/email auth -> same user account                                                        |
-| ECIES re-wrapping for sharing (not proxy re-encryption)        | Research | Same wrapKey() function, server sees only ciphertexts                                                           |
-| Versioning = stop unpinning old CIDs + metadata extension      | Research | Nearly free on IPFS, no new crypto needed                                                                       |
-| Read-only sharing only (no multi-writer IPNS)                  | Research | Unsolved problem, deferred to v3                                                                                |
-| minisearch + idb for client-side search                        | Research | ~8KB total, TypeScript-native, zero server interaction                                                          |
-| Wallet addr: SHA-256 hash + truncated display (no encrypt)     | 12.3-01  | Simpler than hash+encrypted; full plaintext never stored                                                        |
-| Auth types: email_passwordless->email, external_wallet->wallet | 12.3-01  | Clean method-based naming for simplified auth type system                                                       |
-| derivationVersion removed (ADR-001 clean break)                | 12.3-01  | DB will be wiped, no migration needed, clean Core Kit-only schema                                               |
-| Web3AuthVerifierService decoupled from auth.service            | 12.3-02  | No longer injected; all login/link flows use CipherBox JWT verification                                         |
-| LinkMethodDto uses auth method types directly                  | 12.3-02  | google/email/wallet instead of routing through social/external_wallet loginType                                 |
-| Vault export derivationInfo simplified to derivationMethod     | 12.3-02  | Always 'web3auth' for Core Kit users; no derivationVersion needed                                               |
-| connectAsync for wallet SIWE flow (not useEffect-based)        | 12.3-03  | Simpler async flow; avoids address-watching complexity                                                          |
-| Disconnect wagmi after SIWE verification                       | 12.3-03  | No persistent wallet connection needed; Core Kit handles ongoing auth                                           |
-| vaultKeypair naming for auth store keypair                     | 12.3-03  | Clear purpose naming; replaces misleading ADR-001 derivedKeypair                                                |
-| Reuse login components in link mode (settings)                 | 12.3-04  | GoogleLoginButton/EmailLoginForm reused via callback props; no separate link components                         |
-| Multiple wallets allowed per account                           | 12.3-04  | Wallet always shows as available to link; CONTEXT.md requirement                                                |
-| Cross-account collision via TypeORM Not()                      | 12.3-04  | Check same identifier with different userId before allowing link                                                |
+| Decision                                                         | Phase     | Rationale                                                                                                       |
+| ---------------------------------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------- |
+| Replace PnP Modal SDK with MPC Core Kit                          | Phase 12  | Full MFA control, custom UX, programmatic factor mgmt                                                           |
+| CipherBox as identity provider (sub=userId)                      | Phase 12  | Enables multi-auth linking, less data to Web3Auth                                                               |
+| Identity trilemma: chose (wallet-only + unified) w/ SPOF         | Phase 12  | No mandatory email; SPOF mitigated by key export+IPFS                                                           |
+| Phase 12 split into 12, 12.2, 12.3, 12.4                         | Phase 12  | Foundation->device registry->SIWE->MFA dependency chain                                                         |
+| Core Kit WEB3AUTH_NETWORK uses DEVNET/MAINNET keys               | 12-02     | Different from PnP SDK's SAPPHIRE_DEVNET/SAPPHIRE_MAINNET                                                       |
+| CipherBox JWT for backend auth (not coreKit.signatures)          | 12-04     | Core Kit signatures are session tokens, not verifiable JWTs. Pass CipherBox-issued JWT with loginType 'corekit' |
+| importTssKey via localStorage one-time read-and-delete           | 12-05     | PnP migration key consumed once then removed                                                                    |
+| E2E uses CipherBox login UI directly (no modal iframe)           | 12-05     | Simpler, more reliable than Web3Auth modal automation                                                           |
+| jose library for identity JWTs (not @nestjs/jwt)                 | 12-01     | Separate signing keys (RS256) and audience from internal                                                        |
+| Cross-auth-method email linking                                  | 12-01     | Same email across Google/email auth -> same user account                                                        |
+| ECIES re-wrapping for sharing (not proxy re-encryption)          | Research  | Same wrapKey() function, server sees only ciphertexts                                                           |
+| Versioning = stop unpinning old CIDs + metadata extension        | Research  | Nearly free on IPFS, no new crypto needed                                                                       |
+| Read-only sharing only (no multi-writer IPNS)                    | Research  | Unsolved problem, deferred to v3                                                                                |
+| minisearch + idb for client-side search                          | Research  | ~8KB total, TypeScript-native, zero server interaction                                                          |
+| Wallet addr: SHA-256 hash + truncated display (no encrypt)       | 12.3-01   | Simpler than hash+encrypted; full plaintext never stored                                                        |
+| Auth types: email_passwordless->email, external_wallet->wallet   | 12.3-01   | Clean method-based naming for simplified auth type system                                                       |
+| derivationVersion removed (ADR-001 clean break)                  | 12.3-01   | DB will be wiped, no migration needed, clean Core Kit-only schema                                               |
+| Web3AuthVerifierService decoupled from auth.service              | 12.3-02   | No longer injected; all login/link flows use CipherBox JWT verification                                         |
+| LinkMethodDto uses auth method types directly                    | 12.3-02   | google/email/wallet instead of routing through social/external_wallet loginType                                 |
+| Vault export derivationInfo simplified to derivationMethod       | 12.3-02   | Always 'web3auth' for Core Kit users; no derivationVersion needed                                               |
+| connectAsync for wallet SIWE flow (not useEffect-based)          | 12.3-03   | Simpler async flow; avoids address-watching complexity                                                          |
+| Disconnect wagmi after SIWE verification                         | 12.3-03   | No persistent wallet connection needed; Core Kit handles ongoing auth                                           |
+| vaultKeypair naming for auth store keypair                       | 12.3-03   | Clear purpose naming; replaces misleading ADR-001 derivedKeypair                                                |
+| Reuse login components in link mode (settings)                   | 12.3-04   | GoogleLoginButton/EmailLoginForm reused via callback props; no separate link components                         |
+| Multiple wallets allowed per account                             | 12.3-04   | Wallet always shows as available to link; CONTEXT.md requirement                                                |
+| Cross-account collision via TypeORM Not()                        | 12.3-04   | Check same identifier with different userId before allowing link                                                |
+| Vault IPNS: same salt, different HKDF info for domain separation | 12.3.1-01 | HKDF info is primary domain separator; "cipherbox-vault-ipns-v1" vs registry's info                             |
+| rootIpnsPublicKey removed from EncryptedVaultKeys                | 12.3.1-01 | Derivable from private key; reduces stored data, eliminates inconsistency                                       |
+| Google login hashes sub (not email) for identifierHash           | 12.3.1-02 | Sub is immutable Google user ID; email can change. Privacy-preserving lookup.                                   |
+| Cross-method email auto-linking removed                          | 12.3.1-02 | Each auth method is independent; users link explicitly via Settings, not auto-linked by email match             |
+| identifier column stores hash for all auth types                 | 12.3.1-02 | identifier=identifierHash for consistency; identifierDisplay holds human-readable value                         |
+| rootIpnsPublicKey removed from vault entity/DTO/API/frontend     | 12.3.1-03 | Derivable from privateKey via HKDF; reduces schema, eliminates inconsistency                                    |
+| Plan 04 work completed by Plan 03 broader scope                  | 12.3.1-04 | Desktop Rust, E2E helpers, controller spec changes committed in Plan 03 execution                               |
 
 ### Pending Todos
 
@@ -130,11 +138,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-14
-Stopped at: Completed 12.3-04-PLAN.md (Link/Unlink Methods + Settings UI)
+Stopped at: Completed 12.3.1-04-PLAN.md (Downstream rootIpnsPublicKey Cleanup) -- Phase 12.3.1 complete
 Resume file: None
-Next: Phase 12.3.1 (Pre-Wipe Identity Cleanup) -- ready to plan
+Next: Phase 12.4 (MFA + Cross-Device Approval) -- needs research phase first
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-14 after completing Phase 12.3 Plan 04 (Phase 12.3 complete)_
+_Last updated: 2026-02-14 after completing Phase 12.3.1 Plan 04 (Downstream rootIpnsPublicKey Cleanup)_

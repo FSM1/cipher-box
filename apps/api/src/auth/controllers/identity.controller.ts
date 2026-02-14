@@ -93,11 +93,19 @@ export class IdentityController implements OnModuleDestroy {
     // 1. Verify Google token
     const googlePayload = await this.googleOAuthService.verifyGoogleToken(dto.idToken);
 
-    // 2. Find or create user by email
-    const { user, isNewUser } = await this.findOrCreateUserByEmail(googlePayload.email, 'google');
+    // 2. Hash Google sub (immutable user ID) -- NOT email (which can change)
+    const identifierHash = this.siweService.hashIdentifier(googlePayload.sub);
+    const normalizedEmail = googlePayload.email?.toLowerCase().trim() ?? '';
 
-    // 3. Sign CipherBox identity JWT (include email for auth method identifier)
-    const idToken = await this.jwtIssuerService.signIdentityJwt(user.id, googlePayload.email);
+    // 3. Find or create user by hashed identifier
+    const { user, isNewUser } = await this.findOrCreateUserByIdentifier(
+      identifierHash,
+      this.siweService.truncateEmail(normalizedEmail),
+      'google'
+    );
+
+    // 4. Sign CipherBox identity JWT (include email for auth method identifier)
+    const idToken = await this.jwtIssuerService.signIdentityJwt(user.id, normalizedEmail);
 
     this.logger.log(`Google login: userId=${user.id}, isNew=${isNewUser}`);
 
@@ -145,11 +153,19 @@ export class IdentityController implements OnModuleDestroy {
     // 1. Verify OTP
     await this.emailOtpService.verifyOtp(dto.email, dto.otp);
 
-    // 2. Find or create user by email
-    const { user, isNewUser } = await this.findOrCreateUserByEmail(dto.email, 'email');
+    // 2. Normalize email and hash for identifier
+    const normalizedEmail = dto.email.toLowerCase().trim();
+    const identifierHash = this.siweService.hashIdentifier(normalizedEmail);
 
-    // 3. Sign CipherBox identity JWT (include email for auth method identifier)
-    const idToken = await this.jwtIssuerService.signIdentityJwt(user.id, dto.email);
+    // 3. Find or create user by hashed identifier
+    const { user, isNewUser } = await this.findOrCreateUserByIdentifier(
+      identifierHash,
+      this.siweService.truncateEmail(normalizedEmail),
+      'email'
+    );
+
+    // 4. Sign CipherBox identity JWT (include email for auth method identifier)
+    const idToken = await this.jwtIssuerService.signIdentityJwt(user.id, normalizedEmail);
 
     this.logger.log(`Email OTP login: userId=${user.id}, isNew=${isNewUser}`);
 
@@ -157,7 +173,7 @@ export class IdentityController implements OnModuleDestroy {
       idToken,
       userId: user.id,
       isNewUser,
-      email: dto.email.toLowerCase().trim(),
+      email: normalizedEmail,
     };
   }
 
@@ -222,7 +238,12 @@ export class IdentityController implements OnModuleDestroy {
 
     // 5. Find or create user by wallet address hash
     const addressHash = this.siweService.hashWalletAddress(walletAddress);
-    const { user, isNewUser } = await this.findOrCreateUserByWallet(addressHash, walletAddress);
+    const truncated = this.siweService.truncateWalletAddress(walletAddress);
+    const { user, isNewUser } = await this.findOrCreateUserByIdentifier(
+      addressHash,
+      truncated,
+      'wallet'
+    );
 
     // 6. Issue CipherBox JWT (sub=userId)
     const idToken = await this.jwtIssuerService.signIdentityJwt(user.id);
@@ -233,23 +254,25 @@ export class IdentityController implements OnModuleDestroy {
   }
 
   /**
-   * Find an existing user by email in the AuthMethod table, or create a new user.
+   * Find an existing user by hashed identifier in the AuthMethod table, or create a new user.
+   *
+   * Each auth method type is independent -- no cross-method email matching.
+   * Users link methods explicitly via Settings, not auto-linked by email.
    *
    * For identity provider flow, the publicKey is set to a placeholder because
    * the actual MPC-derived publicKey is not known until the client completes
    * Core Kit login with the CipherBox JWT.
    */
-  private async findOrCreateUserByEmail(
-    email: string,
-    authMethodType: 'google' | 'email'
+  private async findOrCreateUserByIdentifier(
+    identifierHash: string,
+    identifierDisplay: string,
+    authMethodType: 'google' | 'email' | 'wallet'
   ): Promise<{ user: User; isNewUser: boolean }> {
-    const normalizedEmail = email.toLowerCase().trim();
-
-    // Look for existing auth method with this email
+    // Look for existing auth method with this hash
     const existingMethod = await this.authMethodRepository.findOne({
       where: {
         type: authMethodType,
-        identifier: normalizedEmail,
+        identifierHash,
       },
       relations: ['user'],
     });
@@ -261,102 +284,22 @@ export class IdentityController implements OnModuleDestroy {
       return { user: existingMethod.user, isNewUser: false };
     }
 
-    // Also check if this email exists under any auth method type
-    // (e.g., user signed up with Google, now logging in with email)
-    const anyMethodWithEmail = await this.authMethodRepository.findOne({
-      where: { identifier: normalizedEmail },
-      relations: ['user'],
-    });
-
-    if (anyMethodWithEmail) {
-      // Same email, different auth method -- link to existing user
-      // Use upsert-like pattern to handle concurrent requests gracefully
-      try {
-        await this.authMethodRepository.save({
-          userId: anyMethodWithEmail.user.id,
-          type: authMethodType,
-          identifier: normalizedEmail,
-          lastUsedAt: new Date(),
-        });
-      } catch (error) {
-        // If a duplicate was created by a concurrent request, just find and use it
-        const existing = await this.authMethodRepository.findOne({
-          where: {
-            userId: anyMethodWithEmail.user.id,
-            type: authMethodType,
-          },
-          relations: ['user'],
-        });
-        if (existing) {
-          existing.lastUsedAt = new Date();
-          await this.authMethodRepository.save(existing);
-          return { user: existing.user, isNewUser: false };
-        }
-        throw error;
-      }
-      this.logger.log(`Linked ${authMethodType} to existing user ${anyMethodWithEmail.user.id}`);
-      return { user: anyMethodWithEmail.user, isNewUser: false };
-    }
-
-    // Create new user with placeholder publicKey using userId (resolved in auth.service.ts)
+    // No cross-method linking -- create new user with unique temporary publicKey
+    const tempId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const newUser = await this.userRepository.save({
-      publicKey: `pending-core-kit-placeholder`,
+      publicKey: `pending-core-kit-${tempId}`,
     });
     // Update placeholder with actual userId now that we have it
     newUser.publicKey = `pending-core-kit-${newUser.id}`;
     await this.userRepository.save(newUser);
 
-    // Create auth method
+    // Create auth method with hash-based identifier
     await this.authMethodRepository.save({
       userId: newUser.id,
       type: authMethodType,
-      identifier: normalizedEmail,
-      lastUsedAt: new Date(),
-    });
-
-    return { user: newUser, isNewUser: true };
-  }
-
-  /**
-   * Find an existing user by wallet address hash, or create a new user.
-   *
-   * Same placeholder publicKey pattern as findOrCreateUserByEmail.
-   */
-  private async findOrCreateUserByWallet(
-    addressHash: string,
-    walletAddress: string
-  ): Promise<{ user: User; isNewUser: boolean }> {
-    // Look for existing auth method with this wallet address hash
-    const existingMethod = await this.authMethodRepository.findOne({
-      where: {
-        type: 'wallet',
-        identifierHash: addressHash,
-      },
-      relations: ['user'],
-    });
-
-    if (existingMethod) {
-      // Update last used timestamp
-      existingMethod.lastUsedAt = new Date();
-      await this.authMethodRepository.save(existingMethod);
-      return { user: existingMethod.user, isNewUser: false };
-    }
-
-    // Create new user with placeholder publicKey
-    const newUser = await this.userRepository.save({
-      publicKey: `pending-core-kit-placeholder`,
-    });
-    newUser.publicKey = `pending-core-kit-${newUser.id}`;
-    await this.userRepository.save(newUser);
-
-    // Create wallet auth method with hash + truncated display
-    const truncated = this.siweService.truncateWalletAddress(walletAddress);
-    await this.authMethodRepository.save({
-      userId: newUser.id,
-      type: 'wallet',
-      identifier: addressHash, // hash stored as identifier for consistency
-      identifierHash: addressHash,
-      identifierDisplay: truncated,
+      identifier: identifierHash,
+      identifierHash,
+      identifierDisplay,
       lastUsedAt: new Date(),
     });
 

@@ -66,6 +66,28 @@ describe('SiweService', () => {
     });
   });
 
+  describe('hashIdentifier', () => {
+    it('should return consistent SHA-256 hex for a known input', () => {
+      const hash = service.hashIdentifier('test@example.com');
+      expect(hash).toMatch(/^[0-9a-f]{64}$/);
+      // Same input should always produce the same hash
+      const hash2 = service.hashIdentifier('test@example.com');
+      expect(hash).toBe(hash2);
+    });
+
+    it('should NOT normalize input (caller must normalize)', () => {
+      const hash1 = service.hashIdentifier('Test@Example.com');
+      const hash2 = service.hashIdentifier('test@example.com');
+      expect(hash1).not.toBe(hash2);
+    });
+
+    it('should produce different hashes for different inputs', () => {
+      const hash1 = service.hashIdentifier('user1@example.com');
+      const hash2 = service.hashIdentifier('user2@example.com');
+      expect(hash1).not.toBe(hash2);
+    });
+  });
+
   describe('truncateWalletAddress', () => {
     it('should truncate to first 6 + "..." + last 4 chars', () => {
       const addr = '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045';
@@ -85,6 +107,26 @@ describe('SiweService', () => {
 
       expect(result).toBe('0xd8dA...6045');
       expect(mockGetAddress).toHaveBeenCalledWith(lowercaseAddr);
+    });
+  });
+
+  describe('truncateEmail', () => {
+    it('should truncate long local part: first 3 + "..." + last 2 + domain', () => {
+      expect(service.truncateEmail('michael@gmail.com')).toBe('mic...el@gmail.com');
+    });
+
+    it('should not truncate short local parts (≤5 chars)', () => {
+      expect(service.truncateEmail('bob@x.com')).toBe('bob@x.com');
+      expect(service.truncateEmail('alice@example.com')).toBe('alice@example.com');
+      expect(service.truncateEmail('jo@a.co')).toBe('jo@a.co');
+    });
+
+    it('should truncate exactly 6-char local part', () => {
+      expect(service.truncateEmail('abcdef@test.com')).toBe('abc...ef@test.com');
+    });
+
+    it('should return as-is if no @ symbol', () => {
+      expect(service.truncateEmail('noemail')).toBe('noemail');
     });
   });
 

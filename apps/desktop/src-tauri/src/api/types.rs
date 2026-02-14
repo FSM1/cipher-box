@@ -54,7 +54,6 @@ pub struct InitVaultRequest {
     pub owner_public_key: String,
     pub encrypted_root_folder_key: String,
     pub encrypted_root_ipns_private_key: String,
-    pub root_ipns_public_key: String,
     pub root_ipns_name: String,
 }
 
@@ -65,6 +64,5 @@ pub struct VaultResponse {
     pub encrypted_root_folder_key: String,
     pub root_ipns_name: String,
     pub encrypted_root_ipns_private_key: String,
-    pub root_ipns_public_key: String,
     pub tee_keys: Option<TeeKeysResponse>,
 }

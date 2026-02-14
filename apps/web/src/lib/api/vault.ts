@@ -11,7 +11,6 @@ export type VaultResponse = {
   ownerPublicKey: string;
   encryptedRootFolderKey: string;
   encryptedRootIpnsPrivateKey: string;
-  rootIpnsPublicKey: string;
   rootIpnsName: string;
   teeKeys: {
     currentEpoch: number;
@@ -25,7 +24,6 @@ export type InitVaultDto = {
   ownerPublicKey: string;
   encryptedRootFolderKey: string;
   encryptedRootIpnsPrivateKey: string;
-  rootIpnsPublicKey: string;
   rootIpnsName: string;
 };
 

@@ -1248,11 +1248,6 @@
             "description": "ECIES-wrapped Ed25519 IPNS private key (hex-encoded)",
             "example": "a1b2c3d4e5f6..."
           },
-          "rootIpnsPublicKey": {
-            "type": "string",
-            "description": "Ed25519 IPNS public key (32 bytes, hex-encoded)",
-            "example": "a1b2c3d4e5f6...(64 hex characters for 32 bytes)"
-          },
           "rootIpnsName": {
             "type": "string",
             "description": "IPNS name (libp2p-key multihash, base58btc or base36)",
@@ -1263,7 +1258,6 @@
           "ownerPublicKey",
           "encryptedRootFolderKey",
           "encryptedRootIpnsPrivateKey",
-          "rootIpnsPublicKey",
           "rootIpnsName"
         ]
       },
@@ -1318,11 +1312,6 @@
             "description": "ECIES-wrapped Ed25519 IPNS private key (hex-encoded)",
             "example": "a1b2c3d4e5f6..."
           },
-          "rootIpnsPublicKey": {
-            "type": "string",
-            "description": "Ed25519 IPNS public key (32 bytes, hex-encoded)",
-            "example": "a1b2c3d4e5f6...(64 hex characters for 32 bytes)"
-          },
           "rootIpnsName": {
             "type": "string",
             "description": "IPNS name for root folder",
@@ -1355,7 +1344,6 @@
           "ownerPublicKey",
           "encryptedRootFolderKey",
           "encryptedRootIpnsPrivateKey",
-          "rootIpnsPublicKey",
           "rootIpnsName",
           "createdAt",
           "initializedAt"

@@ -25,12 +25,13 @@ export type VaultInit = {
  *
  * The server stores these encrypted blobs without any knowledge of
  * the plaintext keys. Only the user's ECIES private key can decrypt them.
+ *
+ * The IPNS public key is NOT stored -- it is derived from the IPNS private
+ * key after decryption (deterministic Ed25519 derivation).
  */
 export type EncryptedVaultKeys = {
   /** Root folder key ECIES-wrapped with user's publicKey */
   encryptedRootFolderKey: Uint8Array;
   /** IPNS private key ECIES-wrapped with user's publicKey */
   encryptedIpnsPrivateKey: Uint8Array;
-  /** Public key for IPNS name derivation (not secret) */
-  rootIpnsPublicKey: Uint8Array;
 };

@@ -46,10 +46,6 @@ pub struct AppState {
     /// Memory only, never persisted to disk.
     pub root_ipns_private_key: RwLock<Option<Vec<u8>>>,
 
-    /// 32-byte Ed25519 IPNS public key for root folder.
-    /// Needed for IPNS record creation (the record includes the public key).
-    pub root_ipns_public_key: RwLock<Option<Vec<u8>>>,
-
     /// Authenticated user ID (JWT `sub` claim).
     pub user_id: RwLock<Option<String>>,
 
@@ -78,7 +74,6 @@ impl AppState {
             root_folder_key: RwLock::new(None),
             root_ipns_name: RwLock::new(None),
             root_ipns_private_key: RwLock::new(None),
-            root_ipns_public_key: RwLock::new(None),
             user_id: RwLock::new(None),
             tee_keys: RwLock::new(None),
             is_authenticated: RwLock::new(false),
@@ -110,11 +105,6 @@ impl AppState {
         }
         {
             let mut key = self.root_ipns_private_key.write().await;
-            if let Some(ref mut k) = *key { k.zeroize(); }
-            *key = None;
-        }
-        {
-            let mut key = self.root_ipns_public_key.write().await;
             if let Some(ref mut k) = *key { k.zeroize(); }
             *key = None;
         }
