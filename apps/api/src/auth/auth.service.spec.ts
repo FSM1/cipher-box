@@ -960,6 +960,69 @@ describe('AuthService', () => {
       );
     });
 
+    it('should throw BadRequestException when SIWE message has no nonce', async () => {
+      const siweMsg = [
+        'localhost wants you to sign in with your Ethereum account:',
+        '0xAbCdEf1234567890AbCdEf1234567890AbCdEf12',
+        '',
+        'Sign in to CipherBox encrypted storage',
+        '',
+        'URI: http://localhost:5173',
+        'Version: 1',
+        'Chain ID: 1',
+        'Issued At: 2026-01-01T00:00:00.000Z',
+      ].join('\n');
+
+      const walletLinkDto = {
+        idToken: '',
+        loginType: 'wallet' as const,
+        walletAddress: '0xAbCdEf1234567890AbCdEf1234567890AbCdEf12',
+        siweMessage: siweMsg,
+        siweSignature: '0xmocksignature',
+      };
+      const mockUser = { id: 'user-id', publicKey: 'pub-key' };
+
+      userRepository.findOne.mockResolvedValue(mockUser);
+
+      await expect(service.linkMethod('user-id', walletLinkDto)).rejects.toThrow('missing nonce');
+    });
+
+    it('should throw BadRequestException when wallet already linked to same user', async () => {
+      const siweMsg = [
+        'localhost wants you to sign in with your Ethereum account:',
+        '0xAbCdEf1234567890AbCdEf1234567890AbCdEf12',
+        '',
+        'Sign in to CipherBox encrypted storage',
+        '',
+        'URI: http://localhost:5173',
+        'Version: 1',
+        'Chain ID: 1',
+        'Nonce: testnonce123',
+        'Issued At: 2026-01-01T00:00:00.000Z',
+      ].join('\n');
+
+      const walletLinkDto = {
+        idToken: '',
+        loginType: 'wallet' as const,
+        walletAddress: '0xAbCdEf1234567890AbCdEf1234567890AbCdEf12',
+        siweMessage: siweMsg,
+        siweSignature: '0xmocksignature',
+      };
+      const mockUser = { id: 'user-id', publicKey: 'pub-key' };
+
+      userRepository.findOne.mockResolvedValue(mockUser);
+      siweService.verifySiweMessage.mockResolvedValue('0xAbCdEf1234567890AbCdEf1234567890AbCdEf12');
+      siweService.hashWalletAddress.mockReturnValue('addr-hash');
+      // No cross-account collision, but same-user duplicate
+      authMethodRepository.findOne
+        .mockResolvedValueOnce(null) // cross-account check
+        .mockResolvedValueOnce({ id: 'existing-am', userId: 'user-id' }); // same-user check
+
+      await expect(service.linkMethod('user-id', walletLinkDto)).rejects.toThrow(
+        'already linked to your account'
+      );
+    });
+
     it('should throw BadRequestException when wallet SIWE fields missing', async () => {
       const walletLinkDto = {
         idToken: '',
