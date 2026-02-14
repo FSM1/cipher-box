@@ -1,0 +1,51 @@
+# Dependencies (installed in Docker build)
+node_modules
+**/node_modules
+
+# Git
+.git
+.gitignore
+
+# GitHub
+.github
+
+# Planning and documentation
+.planning
+.learnings
+.claude
+00-Preliminary-R&D
+
+# Apps not needed for API build
+apps/web
+apps/desktop
+
+# TEE worker (separate Dockerfile)
+tee-worker
+
+# Tests and tools
+tests
+tools
+
+# Design files
+designs
+
+# Build outputs (built in Docker)
+**/dist
+**/coverage
+
+# Documentation
+*.md
+
+# Environment files (secrets injected at runtime)
+.env*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode
+.idea
+*.swp
+*.swo

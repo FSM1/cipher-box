@@ -1,0 +1,9 @@
+[env]
+# Use FUSE-T instead of macFUSE (no kernel extension required)
+PKG_CONFIG_PATH = { value = "pkg-config", relative = true, force = true }
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-rpath,/usr/local/lib"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-rpath,/usr/local/lib"]
