@@ -67,7 +67,7 @@ export function ImagePreviewDialog({ open, onClose, item }: ImagePreviewDialogPr
     (async () => {
       try {
         const auth = useAuthStore.getState();
-        if (!auth.derivedKeypair) {
+        if (!auth.vaultKeypair) {
           throw new Error('No keypair available - please log in again');
         }
 
@@ -78,7 +78,7 @@ export function ImagePreviewDialog({ open, onClose, item }: ImagePreviewDialogPr
             wrappedKey: item.fileKeyEncrypted,
             originalName: item.name,
           },
-          auth.derivedKeypair.privateKey
+          auth.vaultKeypair.privateKey
         );
 
         if (cancelled) return;

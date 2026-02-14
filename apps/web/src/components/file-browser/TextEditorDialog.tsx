@@ -52,7 +52,7 @@ export function TextEditorDialog({ open, onClose, item, parentFolderId }: TextEd
     (async () => {
       try {
         const auth = useAuthStore.getState();
-        if (!auth.derivedKeypair) {
+        if (!auth.vaultKeypair) {
           throw new Error('No keypair available - please log in again');
         }
 
@@ -63,7 +63,7 @@ export function TextEditorDialog({ open, onClose, item, parentFolderId }: TextEd
             wrappedKey: item.fileKeyEncrypted,
             originalName: item.name,
           },
-          auth.derivedKeypair.privateKey
+          auth.vaultKeypair.privateKey
         );
 
         if (cancelled) return;
@@ -97,7 +97,7 @@ export function TextEditorDialog({ open, onClose, item, parentFolderId }: TextEd
 
     try {
       const auth = useAuthStore.getState();
-      if (!auth.derivedKeypair) {
+      if (!auth.vaultKeypair) {
         throw new Error('No keypair available - please log in again');
       }
 
@@ -106,7 +106,7 @@ export function TextEditorDialog({ open, onClose, item, parentFolderId }: TextEd
       const file = new File([encoded], item.name);
 
       // 2. Encrypt with new key/IV
-      const encrypted = await encryptFile(file, auth.derivedKeypair.publicKey);
+      const encrypted = await encryptFile(file, auth.vaultKeypair.publicKey);
 
       // 3. Upload to IPFS
       // Use .slice() to get a clean copy with its own ArrayBuffer,

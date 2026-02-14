@@ -7,8 +7,8 @@ const METHOD_LABELS: Record<string, string> = {
   google: 'Google',
   apple: 'Apple',
   github: 'GitHub',
-  email_passwordless: 'Email',
-  external_wallet: 'Wallet',
+  email: 'Email',
+  wallet: 'Wallet',
 };
 
 export function LinkedMethods() {

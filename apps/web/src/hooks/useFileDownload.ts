@@ -19,11 +19,11 @@ export function useFileDownload() {
     reset,
   } = useDownloadStore();
 
-  const { derivedKeypair } = useAuthStore();
+  const { vaultKeypair } = useAuthStore();
 
   const download = useCallback(
     async (metadata: FileMetadata): Promise<void> => {
-      if (!derivedKeypair) {
+      if (!vaultKeypair) {
         throw new Error('No keypair available - please log in again');
       }
 
@@ -31,7 +31,7 @@ export function useFileDownload() {
         startDownload(metadata.originalName);
 
         // Download with progress tracking
-        await downloadAndSaveFile(metadata, derivedKeypair.privateKey, (loaded, total) => {
+        await downloadAndSaveFile(metadata, vaultKeypair.privateKey, (loaded, total) => {
           setProgress(loaded, total);
         });
 
@@ -48,7 +48,7 @@ export function useFileDownload() {
         throw err;
       }
     },
-    [derivedKeypair, startDownload, setProgress, setDecrypting, setSuccess, setError]
+    [vaultKeypair, startDownload, setProgress, setDecrypting, setSuccess, setError]
   );
 
   return {

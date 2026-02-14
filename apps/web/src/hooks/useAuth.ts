@@ -40,7 +40,7 @@ export function useAuth() {
     setAccessToken,
     setLastAuthMethod,
     setUserEmail,
-    setDerivedKeypair,
+    setVaultKeypair,
     logout: clearAuthState,
   } = useAuthStore();
 
@@ -67,7 +67,7 @@ export function useAuth() {
     }
 
     // Store keypair in auth store for crypto operations
-    setDerivedKeypair(userKeypair);
+    setVaultKeypair(userKeypair);
 
     try {
       // Try to fetch existing vault
@@ -152,7 +152,7 @@ export function useAuth() {
         console.error('[Auth] Device registry init failed (non-blocking):', error);
       }
     })();
-  }, [getVaultKeypair, setDerivedKeypair, setVaultKeys]);
+  }, [getVaultKeypair, setVaultKeypair, setVaultKeys]);
 
   /**
    * Complete backend authentication after Core Kit login.
