@@ -182,9 +182,13 @@ Plans:
 4. Self-sovereign recovery path works: recovery phrase → privateKey → derive vault IPNS key → resolve IPNS → decrypt vault metadata
 5. TEE republishing updated to use deterministically derived IPNS keys
 
+**Plans:** 3 plans
+
 Plans:
 
-- [ ] TBD (run `/gsd:plan-phase 12.3.1` to break down)
+- [ ] 12.3.1-01-PLAN.md — Crypto: deterministic vault IPNS keypair derivation (HKDF) + updated initializeVault + tests
+- [ ] 12.3.1-02-PLAN.md — Backend: SHA-256 hashed identifiers for all auth methods + remove cross-method auto-linking
+- [ ] 12.3.1-03-PLAN.md — Backend vault schema + frontend vault init for deterministic IPNS + API client regen
 
 ### Phase 12.4: MFA + Cross-Device Approval (INSERTED)
 
@@ -308,7 +312,7 @@ Parallel phases:
 | 12.1 AES-CTR Streaming     | M2        | 0/TBD          | Not started | -          |
 | 12.2 Device Registry       | M2        | 3/3            | Complete    | 2026-02-13 |
 | 12.3 SIWE + Identity       | M2        | 4/4            | Complete    | 2026-02-14 |
-| 12.3.1 Identity Cleanup    | M2        | 0/TBD          | Not started | -          |
+| 12.3.1 Identity Cleanup    | M2        | 0/3            | Not started | -          |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
