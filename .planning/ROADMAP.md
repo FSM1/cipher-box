@@ -162,10 +162,10 @@ Plans:
 
 Plans:
 
-- [ ] 12.3-01-PLAN.md — Backend SIWE service, schema evolution, wallet identity endpoints
-- [ ] 12.3-02-PLAN.md — Backend ADR-001 cleanup (auth service, vault export, verifier, API client regen)
-- [ ] 12.3-03-PLAN.md — Frontend wallet login (wagmi, WalletLoginButton, SIWE flow) + ADR-001 cleanup (rename derivedKeypair to vaultKeypair)
-- [ ] 12.3-04-PLAN.md — Settings page auth method management (view, link, unlink)
+- [x] 12.3-01-PLAN.md — Backend SIWE service, schema evolution, wallet identity endpoints
+- [x] 12.3-02-PLAN.md — Backend ADR-001 cleanup (auth service, vault export, verifier, API client regen)
+- [x] 12.3-03-PLAN.md — Frontend wallet login (wagmi, WalletLoginButton, SIWE flow) + ADR-001 cleanup (rename derivedKeypair to vaultKeypair)
+- [x] 12.3-04-PLAN.md — Settings page auth method management (view, link, unlink)
 
 ### Phase 12.4: MFA + Cross-Device Approval (INSERTED)
 
@@ -288,7 +288,7 @@ Parallel phases:
 | 12. Core Kit Identity      | M2        | 5/5            | Complete    | 2026-02-13 |
 | 12.1 AES-CTR Streaming     | M2        | 0/TBD          | Not started | -          |
 | 12.2 Device Registry       | M2        | 3/3            | Complete    | 2026-02-13 |
-| 12.3 SIWE + Identity       | M2        | 0/4            | Planned     | -          |
+| 12.3 SIWE + Identity       | M2        | 4/4            | Complete    | 2026-02-14 |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
