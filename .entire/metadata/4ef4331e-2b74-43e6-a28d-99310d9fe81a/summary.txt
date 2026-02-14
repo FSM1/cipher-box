@@ -1,18 +1,15 @@
-All done. Here's the summary:
+Committed: `docs: capture todo - Migrate auth method identifiers to SHA-256 hashed lookup`
 
-**10 review comments addressed, replied to, and resolved:**
+Todo saved: `.planning/todos/pending/2026-02-14-migrate-auth-identifiers-to-hashed-lookup.md`
 
-| # | File | Issue | Fix |
-|---|------|-------|-----|
-| 1 | `auth.service.ts:100` | Safety-net hardcodes `type: 'email'` | Infers type from identifier format |
-| 2 | `auth.service.ts:303` | Ternary bug — both branches return 'email' | Fixed: 'Google account' vs 'email' |
-| 3 | `identity.controller.ts:213` | SIWE_DOMAIN missing from .env.example | Added to .env.example |
-| 4 | `identity.dto.ts:89` | No length constraints on SIWE fields | MaxLength(2048) + exact sig regex |
-| 5 | `siwe.service.ts:5` | verifyMessage from wrong import path | Moved to `'viem'` root, updated test mocks |
-| 6 | `vault-export.dto.ts:51` | OpenAPI generates object instead of string | Added `type: String` to decorator |
-| 7 | `vaultExportDtoDerivationMethod.ts` | Same root cause as #6 | Fixed via #6 + client regen |
-| 8 | `walletVerifyDto.ts:14` | orval version mismatch | Not a real issue — `^7.3.0` resolves to 7.18.0 |
-| 9 | `LinkedMethods.tsx:142` | idToken @IsNotEmpty blocks wallet linking | @ValidateIf conditional validation |
-| 10 | `LinkedMethods.tsx:212` | Dismiss doesn't clear mutation error | Added resetLinkError() to dismiss handler |
+  Migrate auth method identifiers to SHA-256 hashed lookup
+  Area: auth
+  Files: 5 referenced
 
-Also fixed `ImagePreviewDialog.tsx` `.buffer` on Uint8Array (pre-existing bug from web app CLAUDE.md guidelines). All 200 tests passing.
+---
+
+Would you like to:
+
+1. Continue with current work
+2. Add another todo
+3. View all todos (`/gsd:check-todos`)
