@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 12.2 complete (Encrypted Device Registry)
+**Current focus:** Milestone 2 -- Phase 12.3 in progress (SIWE + Unified Identity)
 
 ## Current Position
 
 Phase: 12.3 (SIWE + Unified Identity)
-Plan: 0 of 4 planned
-Status: Planned (research + planning complete, ready for execution)
-Last activity: 2026-02-14 -- Phase 12.3 researched and planned (4 plans in 4 waves)
+Plan: 1 of 4 planned
+Status: In progress
+Last activity: 2026-02-14 -- Completed 12.3-01-PLAN.md (Backend SIWE Service and Wallet Endpoints)
 
-Progress: [############........] 58% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete)
+Progress: [############........] 59% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 plan 1/4)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 81
-- Average duration: 4.6 min
-- Total execution time: 6.47 hours
+- Total plans completed: 82
+- Average duration: 4.7 min
+- Total execution time: 6.74 hours
 
 **By Phase (M1 summary):**
 
@@ -31,11 +31,12 @@ Progress: [############........] 58% (M1 complete, M2 Phase 12 complete, Phase 1
 | M1 (17 phases) | 72/72 | 5.6 hrs | 4.7 min  |
 | M2 Phase 12    | 5/5   | 45 min  | 9.0 min  |
 | M2 Phase 12.2  | 3/3   | 10 min  | 3.3 min  |
+| M2 Phase 12.3  | 1/4   | 16 min  | 16 min   |
 
 **Recent Trend:**
 
-- Last 5 plans: 6m, 7m, 3m, 4m, 3m
-- Trend: Stable
+- Last 5 plans: 7m, 3m, 4m, 3m, 16m
+- Trend: Stable (12.3-01 longer due to schema evolution + type renames across codebase)
 
 Updated after each plan completion.
 
@@ -46,22 +47,25 @@ Updated after each plan completion.
 Decisions are logged in PROJECT.md Key Decisions table.
 Recent decisions affecting current work:
 
-| Decision                                                  | Phase    | Rationale                                                                                                       |
-| --------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------- |
-| Replace PnP Modal SDK with MPC Core Kit                   | Phase 12 | Full MFA control, custom UX, programmatic factor mgmt                                                           |
-| CipherBox as identity provider (sub=userId)               | Phase 12 | Enables multi-auth linking, less data to Web3Auth                                                               |
-| Identity trilemma: chose (wallet-only + unified) w/ SPOF  | Phase 12 | No mandatory email; SPOF mitigated by key export+IPFS                                                           |
-| Phase 12 split into 12, 12.2, 12.3, 12.4                  | Phase 12 | Foundation->device registry->SIWE->MFA dependency chain                                                         |
-| Core Kit WEB3AUTH_NETWORK uses DEVNET/MAINNET keys        | 12-02    | Different from PnP SDK's SAPPHIRE_DEVNET/SAPPHIRE_MAINNET                                                       |
-| CipherBox JWT for backend auth (not coreKit.signatures)   | 12-04    | Core Kit signatures are session tokens, not verifiable JWTs. Pass CipherBox-issued JWT with loginType 'corekit' |
-| importTssKey via localStorage one-time read-and-delete    | 12-05    | PnP migration key consumed once then removed                                                                    |
-| E2E uses CipherBox login UI directly (no modal iframe)    | 12-05    | Simpler, more reliable than Web3Auth modal automation                                                           |
-| jose library for identity JWTs (not @nestjs/jwt)          | 12-01    | Separate signing keys (RS256) and audience from internal                                                        |
-| Cross-auth-method email linking                           | 12-01    | Same email across Google/email auth -> same user account                                                        |
-| ECIES re-wrapping for sharing (not proxy re-encryption)   | Research | Same wrapKey() function, server sees only ciphertexts                                                           |
-| Versioning = stop unpinning old CIDs + metadata extension | Research | Nearly free on IPFS, no new crypto needed                                                                       |
-| Read-only sharing only (no multi-writer IPNS)             | Research | Unsolved problem, deferred to v3                                                                                |
-| minisearch + idb for client-side search                   | Research | ~8KB total, TypeScript-native, zero server interaction                                                          |
+| Decision                                                       | Phase    | Rationale                                                                                                       |
+| -------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------- |
+| Replace PnP Modal SDK with MPC Core Kit                        | Phase 12 | Full MFA control, custom UX, programmatic factor mgmt                                                           |
+| CipherBox as identity provider (sub=userId)                    | Phase 12 | Enables multi-auth linking, less data to Web3Auth                                                               |
+| Identity trilemma: chose (wallet-only + unified) w/ SPOF       | Phase 12 | No mandatory email; SPOF mitigated by key export+IPFS                                                           |
+| Phase 12 split into 12, 12.2, 12.3, 12.4                       | Phase 12 | Foundation->device registry->SIWE->MFA dependency chain                                                         |
+| Core Kit WEB3AUTH_NETWORK uses DEVNET/MAINNET keys             | 12-02    | Different from PnP SDK's SAPPHIRE_DEVNET/SAPPHIRE_MAINNET                                                       |
+| CipherBox JWT for backend auth (not coreKit.signatures)        | 12-04    | Core Kit signatures are session tokens, not verifiable JWTs. Pass CipherBox-issued JWT with loginType 'corekit' |
+| importTssKey via localStorage one-time read-and-delete         | 12-05    | PnP migration key consumed once then removed                                                                    |
+| E2E uses CipherBox login UI directly (no modal iframe)         | 12-05    | Simpler, more reliable than Web3Auth modal automation                                                           |
+| jose library for identity JWTs (not @nestjs/jwt)               | 12-01    | Separate signing keys (RS256) and audience from internal                                                        |
+| Cross-auth-method email linking                                | 12-01    | Same email across Google/email auth -> same user account                                                        |
+| ECIES re-wrapping for sharing (not proxy re-encryption)        | Research | Same wrapKey() function, server sees only ciphertexts                                                           |
+| Versioning = stop unpinning old CIDs + metadata extension      | Research | Nearly free on IPFS, no new crypto needed                                                                       |
+| Read-only sharing only (no multi-writer IPNS)                  | Research | Unsolved problem, deferred to v3                                                                                |
+| minisearch + idb for client-side search                        | Research | ~8KB total, TypeScript-native, zero server interaction                                                          |
+| Wallet addr: SHA-256 hash + truncated display (no encrypt)     | 12.3-01  | Simpler than hash+encrypted; full plaintext never stored                                                        |
+| Auth types: email_passwordless->email, external_wallet->wallet | 12.3-01  | Clean method-based naming for simplified auth type system                                                       |
+| derivationVersion removed (ADR-001 clean break)                | 12.3-01  | DB will be wiped, no migration needed, clean Core Kit-only schema                                               |
 
 ### Pending Todos
 
@@ -108,18 +112,18 @@ Recent decisions affecting current work:
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
 - Phase 12.1 (AES-CTR Streaming): NEEDS `/gsd:research-phase` -- MediaSource/Service Worker decryption, byte-range IPFS, CTR nonce management
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
-- Phase 12.3 (SIWE + Identity): COMPLETE -- research and planning done (4 plans)
+- Phase 12.3 (SIWE + Identity): IN PROGRESS -- plan 1/4 complete (backend SIWE service + wallet endpoints)
 - Phase 12.4 (MFA + Cross-Device): NEEDS `/gsd:research-phase` -- enableMFA() flow, bulletin board API, ECIES ephemeral key exchange
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
 Last session: 2026-02-14
-Stopped at: Phase 12.3 planned — 4 plans in 4 waves, research + checker verification passed
+Stopped at: Completed 12.3-01-PLAN.md (Backend SIWE Service and Wallet Endpoints)
 Resume file: None
-Next: Phase 12.3 (SIWE + Unified Identity) — ready for /gsd:execute-phase 12.3
+Next: Phase 12.3 Plan 02 (Frontend Wallet Login + SIWE Flow)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-13 after completing Phase 12.2 (Encrypted Device Registry)_
+_Last updated: 2026-02-14 after completing Phase 12.3 Plan 01_
