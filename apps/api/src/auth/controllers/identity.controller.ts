@@ -95,16 +95,17 @@ export class IdentityController implements OnModuleDestroy {
 
     // 2. Hash Google sub (immutable user ID) -- NOT email (which can change)
     const identifierHash = this.siweService.hashIdentifier(googlePayload.sub);
+    const normalizedEmail = googlePayload.email?.toLowerCase().trim() ?? googlePayload.email;
 
     // 3. Find or create user by hashed identifier
     const { user, isNewUser } = await this.findOrCreateUserByIdentifier(
       identifierHash,
-      googlePayload.email,
+      normalizedEmail,
       'google'
     );
 
     // 4. Sign CipherBox identity JWT (include email for auth method identifier)
-    const idToken = await this.jwtIssuerService.signIdentityJwt(user.id, googlePayload.email);
+    const idToken = await this.jwtIssuerService.signIdentityJwt(user.id, normalizedEmail);
 
     this.logger.log(`Google login: userId=${user.id}, isNew=${isNewUser}`);
 
@@ -237,7 +238,12 @@ export class IdentityController implements OnModuleDestroy {
 
     // 5. Find or create user by wallet address hash
     const addressHash = this.siweService.hashWalletAddress(walletAddress);
-    const { user, isNewUser } = await this.findOrCreateUserByWallet(addressHash, walletAddress);
+    const truncated = this.siweService.truncateWalletAddress(walletAddress);
+    const { user, isNewUser } = await this.findOrCreateUserByIdentifier(
+      addressHash,
+      truncated,
+      'wallet'
+    );
 
     // 6. Issue CipherBox JWT (sub=userId)
     const idToken = await this.jwtIssuerService.signIdentityJwt(user.id);
@@ -260,7 +266,7 @@ export class IdentityController implements OnModuleDestroy {
   private async findOrCreateUserByIdentifier(
     identifierHash: string,
     identifierDisplay: string,
-    authMethodType: 'google' | 'email'
+    authMethodType: 'google' | 'email' | 'wallet'
   ): Promise<{ user: User; isNewUser: boolean }> {
     // Look for existing auth method with this hash
     const existingMethod = await this.authMethodRepository.findOne({
@@ -293,52 +299,6 @@ export class IdentityController implements OnModuleDestroy {
       identifier: identifierHash,
       identifierHash,
       identifierDisplay,
-      lastUsedAt: new Date(),
-    });
-
-    return { user: newUser, isNewUser: true };
-  }
-
-  /**
-   * Find an existing user by wallet address hash, or create a new user.
-   *
-   * Same placeholder publicKey pattern as findOrCreateUserByEmail.
-   */
-  private async findOrCreateUserByWallet(
-    addressHash: string,
-    walletAddress: string
-  ): Promise<{ user: User; isNewUser: boolean }> {
-    // Look for existing auth method with this wallet address hash
-    const existingMethod = await this.authMethodRepository.findOne({
-      where: {
-        type: 'wallet',
-        identifierHash: addressHash,
-      },
-      relations: ['user'],
-    });
-
-    if (existingMethod) {
-      // Update last used timestamp
-      existingMethod.lastUsedAt = new Date();
-      await this.authMethodRepository.save(existingMethod);
-      return { user: existingMethod.user, isNewUser: false };
-    }
-
-    // Create new user with placeholder publicKey
-    const newUser = await this.userRepository.save({
-      publicKey: `pending-core-kit-placeholder`,
-    });
-    newUser.publicKey = `pending-core-kit-${newUser.id}`;
-    await this.userRepository.save(newUser);
-
-    // Create wallet auth method with hash + truncated display
-    const truncated = this.siweService.truncateWalletAddress(walletAddress);
-    await this.authMethodRepository.save({
-      userId: newUser.id,
-      type: 'wallet',
-      identifier: addressHash, // hash stored as identifier for consistency
-      identifierHash: addressHash,
-      identifierDisplay: truncated,
       lastUsedAt: new Date(),
     });
 
