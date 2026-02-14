@@ -454,6 +454,39 @@ describe('AuthService', () => {
         })
       );
     });
+
+    it('should infer wallet type in safety net when identifier starts with 0x', async () => {
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({
+        payload: { sub: 'user-123', email: '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045' },
+      });
+
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
+      userRepository.findOne.mockResolvedValue(mockUser);
+      authMethodRepository.findOne
+        .mockResolvedValueOnce(null) // identifier lookup
+        .mockResolvedValueOnce(null); // userId fallback
+      const savedMethod = {
+        id: 'am-wallet',
+        userId: 'user-id',
+        type: 'wallet',
+        identifier: '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045',
+        lastUsedAt: null,
+      };
+      authMethodRepository.save.mockResolvedValue(savedMethod);
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      await service.login(loginDto);
+
+      expect(authMethodRepository.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-id',
+          type: 'wallet',
+          identifier: '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045',
+        })
+      );
+    });
   });
 
   describe('refresh', () => {
@@ -796,6 +829,46 @@ describe('AuthService', () => {
       await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow(
         'already linked to another account'
       );
+    });
+
+    it('should include "Google account" in cross-account collision message for google type', async () => {
+      const mockUser = { id: 'user-id', publicKey: 'pub-key' };
+      const mockPayload = { sub: 'user-123', email: 'user@example.com' };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
+      userRepository.findOne.mockResolvedValue(mockUser);
+      authMethodRepository.findOne.mockResolvedValueOnce({
+        id: 'other-am',
+        type: 'google',
+        identifier: 'user@example.com',
+        userId: 'other-user-id',
+      });
+
+      await expect(service.linkMethod('user-id', linkDto)).rejects.toThrow('Google account');
+    });
+
+    it('should include "email" in cross-account collision message for email type', async () => {
+      const mockUser = { id: 'user-id', publicKey: 'pub-key' };
+      const mockPayload = { sub: 'user-123', email: 'user@example.com' };
+      const emailLinkDto = {
+        idToken: 'cipherbox-link-jwt',
+        loginType: 'email' as const,
+      };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({ payload: mockPayload });
+      userRepository.findOne.mockResolvedValue(mockUser);
+      authMethodRepository.findOne.mockResolvedValueOnce({
+        id: 'other-am',
+        type: 'email',
+        identifier: 'user@example.com',
+        userId: 'other-user-id',
+      });
+
+      await expect(service.linkMethod('user-id', emailLinkDto)).rejects.toThrow('This email');
     });
 
     it('should throw UnauthorizedException if user not found', async () => {
