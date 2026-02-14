@@ -67,8 +67,8 @@ describe('AuthService', () => {
       generateNonce: jest.fn(),
       verifySiweMessage: jest.fn(),
       hashWalletAddress: jest.fn(),
-      hashIdentifier: jest.fn(),
-      truncateWalletAddress: jest.fn(),
+      hashIdentifier: jest.fn((value: string) => createHash('sha256').update(value).digest('hex')),
+      truncateWalletAddress: jest.fn((addr: string) => `${addr.slice(0, 6)}...${addr.slice(-4)}`),
       truncateEmail: jest.fn((email: string) => {
         const at = email.indexOf('@');
         if (at === -1) return email;
@@ -324,6 +324,7 @@ describe('AuthService', () => {
     it('should infer wallet type in safety net when identifier starts with 0x', async () => {
       const walletAddr = '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045';
       const identifierHash = sha256Hex(walletAddr);
+      const truncatedAddr = `${walletAddr.slice(0, 6)}...${walletAddr.slice(-4)}`;
 
       jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
       (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
@@ -342,7 +343,7 @@ describe('AuthService', () => {
         type: 'wallet',
         identifier: identifierHash,
         identifierHash,
-        identifierDisplay: walletAddr,
+        identifierDisplay: truncatedAddr,
         lastUsedAt: null,
       };
       authMethodRepository.save.mockResolvedValue(savedMethod);
@@ -356,9 +357,23 @@ describe('AuthService', () => {
           type: 'wallet',
           identifier: identifierHash,
           identifierHash,
-          identifierDisplay: walletAddr,
+          identifierDisplay: truncatedAddr,
         })
       );
+    });
+
+    it('should throw UnauthorizedException when JWT has no email or sub', async () => {
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({
+        payload: {},
+      });
+
+      const mockUser = { id: 'user-id', publicKey: 'abc123' };
+      userRepository.findOne.mockResolvedValue(mockUser);
+
+      await expect(service.login(loginDto)).rejects.toThrow(UnauthorizedException);
+      await expect(service.login(loginDto)).rejects.toThrow('missing identifier');
     });
 
     it('should skip placeholder resolution when no verifierId or sub', async () => {

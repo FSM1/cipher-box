@@ -17,6 +17,7 @@ import { RefreshToken } from './entities/refresh-token.entity';
 import { JwtIssuerService } from './services/jwt-issuer.service';
 import { TokenService } from './services/token.service';
 import { SiweService } from './services/siwe.service';
+import { parseSiweMessage } from 'viem/siwe';
 import { LoginDto, LoginServiceResult } from './dto/login.dto';
 import { RefreshServiceResult, LogoutResponseDto } from './dto/token.dto';
 import { LinkMethodDto, AuthMethodResponseDto } from './dto/link-method.dto';
@@ -80,8 +81,12 @@ export class AuthService {
     // userId + identifierHash to avoid creating duplicates with a hardcoded type.
     let authMethod: AuthMethod | null;
 
-    const identifier = payload.email || payload.sub || 'unknown';
-    const identifierHash = createHash('sha256').update(identifier).digest('hex');
+    const identifier = payload.email || payload.sub;
+    if (!identifier) {
+      this.logger.warn('CipherBox JWT missing both email and sub claims');
+      throw new UnauthorizedException('Invalid identity token: missing identifier');
+    }
+    const identifierHash = this.siweService.hashIdentifier(identifier);
     authMethod = await this.authMethodRepository.findOne({
       where: { userId: user.id, identifierHash },
     });
@@ -291,8 +296,11 @@ export class AuthService {
 
     // 2. Determine type and identifier, hash for lookup
     const authMethodType = linkDto.loginType;
-    const identifier = payload.email || payload.sub || 'unknown';
-    const identifierHash = createHash('sha256').update(identifier).digest('hex');
+    const identifier = payload.email || payload.sub;
+    if (!identifier) {
+      throw new BadRequestException('Cannot determine identifier from JWT');
+    }
+    const identifierHash = this.siweService.hashIdentifier(identifier);
 
     // 3. Check cross-account collision: same identifier linked to a different user
     const crossAccountMethod = await this.authMethodRepository.findOne({
@@ -328,7 +336,7 @@ export class AuthService {
       type: authMethodType,
       identifier: identifierHash,
       identifierHash,
-      identifierDisplay: this.siweService.truncateEmail(identifier),
+      identifierDisplay: payload.email ? this.siweService.truncateEmail(payload.email) : identifier,
       lastUsedAt: new Date(),
     });
 
@@ -352,7 +360,6 @@ export class AuthService {
 
     // 2. Verify SIWE signature
     const domain = this.configService.get<string>('SIWE_DOMAIN', 'localhost');
-    const { parseSiweMessage } = await import('viem/siwe');
     const parsed = parseSiweMessage(linkDto.siweMessage);
     if (!parsed.nonce) {
       throw new BadRequestException('Invalid SIWE message: missing nonce');
@@ -476,7 +483,7 @@ export class AuthService {
 
     // 3. Find or create user by email (hash-based lookup)
     const normalizedEmail = email.toLowerCase().trim();
-    const identifierHash = createHash('sha256').update(normalizedEmail).digest('hex');
+    const identifierHash = this.siweService.hashIdentifier(normalizedEmail);
 
     const existingMethod = await this.authMethodRepository.findOne({
       where: { type: 'email', identifierHash },
