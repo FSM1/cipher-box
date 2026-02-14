@@ -25,3 +25,4 @@ Current E2E tests only cover email OTP login. Wallet flows present a challenge s
 - Add wallet linking E2E test from Settings page
 - Add cross-method vault consistency test (login with email, upload file, login with wallet, verify file present)
 - After Phase 12.4: extend to cover MFA enrollment, device approval, and factor recovery flows
+- Re-enable E2E as blocking in CI (`continue-on-error: true` added to `.github/workflows/e2e.yml` during auth rework)

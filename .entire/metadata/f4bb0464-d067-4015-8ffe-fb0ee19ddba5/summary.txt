@@ -1,1 +1,1 @@
-Done. E2E tests will still run on PRs for visibility but won't block merges. Added a `TODO` comment so we remember to re-enable them once the auth work stabilizes after Phase 12.4.
+Done. Removed the inline TODO from the workflow and added the re-enablement task to the E2E testing todo instead.

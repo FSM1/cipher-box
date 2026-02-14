@@ -1,1 +1,1 @@
-the e2e tests are failing, but I am thinking that we make these optional for now, while all these auth tickets are being completed.
+remove your TODO, and add this to the existing GSD e2e testing todo
