@@ -1,0 +1,20 @@
+Phase 12.3.1 inserted. Here's the summary:
+
+**Phase 12.3.1: Pre-Wipe Identity Cleanup** inserted after Phase 12.3:
+- **Directory:** `.planning/phases/12.3.1-pre-wipe-identity-cleanup/`
+- **Scope:** Deterministic IPNS derivation, SHA-256 hashed identifiers, remove auto-linking
+- **Status:** Not planned yet
+- **Marker:** (INSERTED) — pre-wipe clean-break work
+- **2 todos absorbed:** deterministic IPNS derivation, hashed identifier migration
+
+Phase 12.4 dependency updated to depend on 12.3.1.
+
+---
+
+## Next Up
+
+**Phase 12.3.1: Pre-Wipe Identity Cleanup** — ready to plan
+
+`/gsd:plan-phase 12.3.1`
+
+<sub>`/clear` first for fresh context window</sub>
