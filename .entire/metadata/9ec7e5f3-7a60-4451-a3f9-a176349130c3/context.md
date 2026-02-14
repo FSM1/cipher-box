@@ -2,28 +2,29 @@
 
 **Session ID:** 9ec7e5f3-7a60-4451-a3f9-a176349130c3
 
-**Commit Message:** Https://github.com/FSM1/cipher-box/pull/127#pullrequestreview-3802265188
+**Commit Message:** Yeah please
 
 ## Prompt
 
-https://github.com/FSM1/cipher-box/pull/127#pullrequestreview-3802265188 there are 2 nitpick comments on the latest review, specifically around code duplication  in identity.controller. please fix both these nitpicks
+yeah please
 
 ## Summary
 
-Done. Fixed both nitpicks in `310d22b`:
+Pushed `e930b9f`. Email addresses are now truncated consistently across all storage paths:
 
-1. **Google email normalization**: `googlePayload.email` is now `.toLowerCase().trim()` before being used as `identifierDisplay` and in JWT signing — consistent with the email-OTP path
-2. **Deduplicated wallet user creation**: Removed `findOrCreateUserByWallet` (~40 lines), widened `findOrCreateUserByIdentifier` to accept `'wallet'` type, caller passes truncated address as display. Also fixed the stale JSDoc referencing the old `findOrCreateUserByEmail` name.
+- `michael@gmail.com` → `mic...el@gmail.com`
+- `bob@x.com` → `bob@x.com` (short local, shown in full)
+- Mirrors the wallet pattern (`0xAbCd...Ef12`)
 
 ## Key Actions
 
-- - **Bash**: Get latest review comments
+- - **Grep**: identifierDisplay|truncateWalletAddress|truncate
+- - **Read**: /Users/michael/Code/cipher-box/apps/api/src/auth/services/siwe.service.ts
 - - **Read**: /Users/michael/Code/cipher-box/apps/api/src/auth/controllers/identity.controller.ts
-- - **Read**: /Users/michael/Code/cipher-box/apps/api/src/auth/controllers/identity.controller.ts
-- - **Grep**: findOrCreateUserByWallet
+- - **Read**: /Users/michael/Code/cipher-box/apps/api/src/auth/auth.service.ts
+- - **Read**: /Users/michael/Code/cipher-box/apps/api/src/auth/auth.service.ts
+- - **Read**: /Users/michael/Code/cipher-box/apps/api/src/auth/auth.service.ts
+- - **Edit**: /Users/michael/Code/cipher-box/apps/api/src/auth/services/siwe.service.ts
 - - **Edit**: /Users/michael/Code/cipher-box/apps/api/src/auth/controllers/identity.controller.ts
 - - **Edit**: /Users/michael/Code/cipher-box/apps/api/src/auth/controllers/identity.controller.ts
-- - **Read**: /Users/michael/Code/cipher-box/apps/api/src/auth/controllers/identity.controller.ts
-- - **Edit**: /Users/michael/Code/cipher-box/apps/api/src/auth/controllers/identity.controller.ts
-- - **Edit**: /Users/michael/Code/cipher-box/apps/api/src/auth/controllers/identity.controller.ts
-- - **Bash**: Run API tests and check results
+- - **Read**: /Users/michael/Code/cipher-box/apps/api/src/auth/auth.service.ts

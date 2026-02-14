@@ -100,7 +100,7 @@ export class IdentityController implements OnModuleDestroy {
     // 3. Find or create user by hashed identifier
     const { user, isNewUser } = await this.findOrCreateUserByIdentifier(
       identifierHash,
-      normalizedEmail,
+      this.siweService.truncateEmail(normalizedEmail),
       'google'
     );
 
@@ -160,7 +160,7 @@ export class IdentityController implements OnModuleDestroy {
     // 3. Find or create user by hashed identifier
     const { user, isNewUser } = await this.findOrCreateUserByIdentifier(
       identifierHash,
-      normalizedEmail,
+      this.siweService.truncateEmail(normalizedEmail),
       'email'
     );
 
