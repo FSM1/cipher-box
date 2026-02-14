@@ -1,0 +1,46 @@
+Phase completion committed. Now let me check if this is a UI phase (it's not — identity/crypto cleanup) and proceed to offer next steps.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► PHASE 12.3.1 COMPLETE ✓
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Phase 12.3.1: Pre-Wipe Identity Cleanup**
+
+4 plans executed across 2 waves
+Goal verified ✓ (5/5 must-haves)
+
+| Wave | Plans | Status |
+|------|-------|--------|
+| 1 | 01, 02 | ✓ Complete |
+| 2 | 03, 04 | ✓ Complete |
+
+### Plan Details
+
+1. **12.3.1-01**: Deterministic vault IPNS derivation via HKDF — `deriveVaultIpnsKeypair()`, `EncryptedVaultKeys` cleanup, 169 tests pass
+2. **12.3.1-02**: SHA-256 hashed identifiers for all auth methods, cross-method auto-linking removed
+3. **12.3.1-03**: Vault entity/DTO/service `rootIpnsPublicKey` removal, frontend deterministic IPNS wiring, API client regen
+4. **12.3.1-04**: Desktop Rust, E2E helpers, controller spec cleanup (mostly covered by Plan 03)
+
+### Issues Encountered
+
+- Lint-staged stash cycle corrupted one commit in Plan 03 (required fix commit)
+- 1Password SSH agent became briefly unavailable during Plan 03 (one unsigned commit)
+
+───────────────────────────────────────────────────────────────
+
+## ▶ Next Up
+
+**Phase 12.4: MFA + Cross-Device Approval** — Users can enroll in MFA with device shares and recovery phrases, and approve new devices from existing authenticated devices
+
+`/gsd:discuss-phase 12.4` — gather context and clarify approach
+
+<sub>`/clear` first → fresh context window</sub>
+
+───────────────────────────────────────────────────────────────
+
+**Also available:**
+
+- `/gsd:plan-phase 12.4` — skip discussion, plan directly
+- `/gsd:verify-work 12.3.1` — manual acceptance testing before continuing
+
+───────────────────────────────────────────────────────────────
