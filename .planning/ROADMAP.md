@@ -51,7 +51,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [ ] **Phase 12.1: AES-CTR Streaming Encryption** - AES-256-CTR for media files with byte-range decryption and in-browser playback (INSERTED)
 - [x] **Phase 12.2: Encrypted Device Registry** - Encrypted device metadata on IPFS for cross-device infrastructure (INSERTED)
 - [x] **Phase 12.3: SIWE + Unified Identity** - Wallet login via SIWE, multi-auth linking, ADR-001 cleanup (INSERTED)
-- [ ] **Phase 12.3.1: Pre-Wipe Identity Cleanup** - Deterministic IPNS derivation, hashed identifiers, remove auto-linking (INSERTED)
+- [x] **Phase 12.3.1: Pre-Wipe Identity Cleanup** - Deterministic IPNS derivation, hashed identifiers, remove auto-linking (INSERTED)
 - [ ] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
 - [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
@@ -186,10 +186,10 @@ Plans:
 
 Plans:
 
-- [ ] 12.3.1-01-PLAN.md — Crypto: deterministic vault IPNS keypair derivation (HKDF) + updated initializeVault/encryptVaultKeys/decryptVaultKeys + EncryptedVaultKeys type cleanup + tests
-- [ ] 12.3.1-02-PLAN.md — Backend: SHA-256 hashed identifiers for all auth methods + remove cross-method auto-linking
-- [ ] 12.3.1-03-PLAN.md — Backend vault schema + frontend vault init for deterministic IPNS + API client regen
-- [ ] 12.3.1-04-PLAN.md — Codebase-wide cleanup: desktop Rust, E2E helpers, controller spec rootIpnsPublicKey removal
+- [x] 12.3.1-01-PLAN.md — Crypto: deterministic vault IPNS keypair derivation (HKDF) + updated initializeVault/encryptVaultKeys/decryptVaultKeys + EncryptedVaultKeys type cleanup + tests
+- [x] 12.3.1-02-PLAN.md — Backend: SHA-256 hashed identifiers for all auth methods + remove cross-method auto-linking
+- [x] 12.3.1-03-PLAN.md — Backend vault schema + frontend vault init for deterministic IPNS + API client regen
+- [x] 12.3.1-04-PLAN.md — Codebase-wide cleanup: desktop Rust, E2E helpers, controller spec rootIpnsPublicKey removal
 
 ### Phase 12.4: MFA + Cross-Device Approval (INSERTED)
 
@@ -313,7 +313,7 @@ Parallel phases:
 | 12.1 AES-CTR Streaming     | M2        | 0/TBD          | Not started | -          |
 | 12.2 Device Registry       | M2        | 3/3            | Complete    | 2026-02-13 |
 | 12.3 SIWE + Identity       | M2        | 4/4            | Complete    | 2026-02-14 |
-| 12.3.1 Identity Cleanup    | M2        | 0/4            | Not started | -          |
+| 12.3.1 Identity Cleanup    | M2        | 4/4            | Complete    | 2026-02-14 |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
