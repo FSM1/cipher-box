@@ -95,12 +95,16 @@ export class AuthService {
       // Safety net: create auth method if identity controller didn't (shouldn't happen in practice)
       // All logins go through loginType='corekit' now, but infer type from identifier format
       const inferredType = identifier.startsWith('0x') ? 'wallet' : 'email';
+      const display =
+        inferredType === 'wallet'
+          ? this.siweService.truncateWalletAddress(identifier)
+          : this.siweService.truncateEmail(identifier);
       authMethod = await this.authMethodRepository.save({
         userId: user.id,
         type: inferredType,
         identifier: identifierHash,
         identifierHash,
-        identifierDisplay: identifier,
+        identifierDisplay: display,
       });
     }
 
@@ -324,7 +328,7 @@ export class AuthService {
       type: authMethodType,
       identifier: identifierHash,
       identifierHash,
-      identifierDisplay: identifier,
+      identifierDisplay: this.siweService.truncateEmail(identifier),
       lastUsedAt: new Date(),
     });
 
@@ -499,7 +503,7 @@ export class AuthService {
         type: 'email',
         identifier: identifierHash,
         identifierHash,
-        identifierDisplay: normalizedEmail,
+        identifierDisplay: this.siweService.truncateEmail(normalizedEmail),
         lastUsedAt: new Date(),
       });
     }

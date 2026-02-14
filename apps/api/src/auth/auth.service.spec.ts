@@ -69,6 +69,14 @@ describe('AuthService', () => {
       hashWalletAddress: jest.fn(),
       hashIdentifier: jest.fn(),
       truncateWalletAddress: jest.fn(),
+      truncateEmail: jest.fn((email: string) => {
+        const at = email.indexOf('@');
+        if (at === -1) return email;
+        const local = email.slice(0, at);
+        const domain = email.slice(at);
+        if (local.length <= 5) return email;
+        return `${local.slice(0, 3)}...${local.slice(-2)}${domain}`;
+      }),
     };
 
     const module: TestingModule = await Test.createTestingModule({

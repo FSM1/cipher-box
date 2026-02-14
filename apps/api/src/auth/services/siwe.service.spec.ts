@@ -110,6 +110,26 @@ describe('SiweService', () => {
     });
   });
 
+  describe('truncateEmail', () => {
+    it('should truncate long local part: first 3 + "..." + last 2 + domain', () => {
+      expect(service.truncateEmail('michael@gmail.com')).toBe('mic...el@gmail.com');
+    });
+
+    it('should not truncate short local parts (≤5 chars)', () => {
+      expect(service.truncateEmail('bob@x.com')).toBe('bob@x.com');
+      expect(service.truncateEmail('alice@example.com')).toBe('alice@example.com');
+      expect(service.truncateEmail('jo@a.co')).toBe('jo@a.co');
+    });
+
+    it('should truncate exactly 6-char local part', () => {
+      expect(service.truncateEmail('abcdef@test.com')).toBe('abc...ef@test.com');
+    });
+
+    it('should return as-is if no @ symbol', () => {
+      expect(service.truncateEmail('noemail')).toBe('noemail');
+    });
+  });
+
   describe('verifySiweMessage', () => {
     const testMessage = 'example.com wants you to sign in with your Ethereum account...';
     const testSignature = '0xabc123' as `0x${string}`;

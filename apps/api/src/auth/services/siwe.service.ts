@@ -89,4 +89,19 @@ export class SiweService {
     const checksummed = getAddress(address);
     return `${checksummed.slice(0, 6)}...${checksummed.slice(-4)}`;
   }
+
+  /**
+   * Truncate an email for display purposes.
+   * Returns first 3 + "..." + last 2 of local part + full domain.
+   * Short local parts (≤5 chars) are shown in full.
+   * Examples: "michael@gmail.com" → "mic...el@gmail.com", "bob@x.com" → "bob@x.com"
+   */
+  truncateEmail(email: string): string {
+    const atIndex = email.indexOf('@');
+    if (atIndex === -1) return email;
+    const local = email.slice(0, atIndex);
+    const domain = email.slice(atIndex);
+    if (local.length <= 5) return email;
+    return `${local.slice(0, 3)}...${local.slice(-2)}${domain}`;
+  }
 }
