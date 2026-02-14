@@ -13,6 +13,7 @@ import { useFolder } from '../../hooks/useFolder';
 import { useFileDownload } from '../../hooks/useFileDownload';
 import { useContextMenu } from '../../hooks/useContextMenu';
 import { useSyncPolling } from '../../hooks/useSyncPolling';
+import { useDeviceRegistrySync } from '../../hooks/useDeviceRegistrySync';
 import { useDropUpload, isExternalFileDrag } from '../../hooks/useDropUpload';
 import { useVaultStore } from '../../stores/vault.store';
 import { useFolderStore } from '../../stores/folder.store';
@@ -295,6 +296,9 @@ export function FileBrowser() {
 
   // Start sync polling (30s interval, pauses when backgrounded/offline)
   useSyncPolling(handleSync);
+
+  // Device registry polling (60s interval, independent from vault sync)
+  useDeviceRegistrySync();
 
   // External drag state — tracks when files from OS are being dragged over
   const [isDraggingExternal, setIsDraggingExternal] = useState(false);

@@ -49,7 +49,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [ ] **Phase 11: Cross-Platform Desktop** - Linux and Windows desktop apps (Tauri, platform-specific FUSE/virtual drive) -- can run in parallel
 - [x] **Phase 12: Core Kit Identity Provider Foundation** - Replace PnP Modal SDK with MPC Core Kit, CipherBox as identity provider
 - [ ] **Phase 12.1: AES-CTR Streaming Encryption** - AES-256-CTR for media files with byte-range decryption and in-browser playback (INSERTED)
-- [ ] **Phase 12.2: Encrypted Device Registry** - Encrypted device metadata on IPFS for cross-device infrastructure (INSERTED)
+- [x] **Phase 12.2: Encrypted Device Registry** - Encrypted device metadata on IPFS for cross-device infrastructure (INSERTED)
 - [ ] **Phase 12.3: SIWE + Unified Identity** - Wallet login via SIWE, multi-auth linking, ADR-001 migration (INSERTED)
 - [ ] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
 - [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
@@ -129,7 +129,6 @@ Plans:
 **Goal**: Encrypted device metadata stored on IPFS alongside user's vault, providing durable infrastructure for cross-device approval and resilience against backend rebuilds
 **Depends on**: Phase 12 (Core Kit foundation must be in place)
 **Requirements**: Infrastructure for MFA-02 (device management)
-**Research flag**: NEEDS `/gsd:research-phase` -- device registry schema design, encryption with user key, IPFS pinning strategy, discovery mechanism
 **Success Criteria** (what must be TRUE):
 
 1. Authenticated devices are tracked in an encrypted registry pinned on IPFS
@@ -137,9 +136,13 @@ Plans:
 3. Device metadata includes public keys, device names, authorization status, and revocation capability
 4. Registry is discoverable and recoverable by any authenticated session
 
+**Plans:** 3 plans
+
 Plans:
 
-- [ ] TBD (run `/gsd:plan-phase 12.2` to break down)
+- [x] 12.2-PLAN-01.md — Registry and device crypto primitives (types, HKDF IPNS derivation, ECIES encrypt/decrypt, device keygen, tests)
+- [x] 12.2-PLAN-02.md — Device identity persistence (IndexedDB) and registry service (CRUD + IPFS/IPNS publish)
+- [x] 12.2-PLAN-03.md — Auth flow integration (Zustand store, non-blocking init, polling, logout cleanup)
 
 ### Phase 12.3: SIWE + Unified Identity (INSERTED)
 
@@ -277,8 +280,9 @@ Parallel phases:
 | 9. Desktop Client          | M1        | 7/7            | Complete    | 2026-02-08 |
 | 9.1 Env/DevOps/Staging     | M1        | 6/6            | Complete    | 2026-02-09 |
 | 10. Data Portability       | M1        | 3/3            | Complete    | 2026-02-11 |
-| 12. Core Kit Identity      | M2        | 0/5            | Not started | -          |
+| 12. Core Kit Identity      | M2        | 5/5            | Complete    | 2026-02-13 |
 | 12.1 AES-CTR Streaming     | M2        | 0/TBD          | Not started | -          |
+| 12.2 Device Registry       | M2        | 3/3            | Complete    | 2026-02-13 |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |

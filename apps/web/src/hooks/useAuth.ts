@@ -7,6 +7,7 @@ import { useAuthStore } from '../stores/auth.store';
 import { useVaultStore } from '../stores/vault.store';
 import { useFolderStore } from '../stores/folder.store';
 import { useSyncStore } from '../stores/sync.store';
+import { useDeviceRegistryStore } from '../stores/device-registry.store';
 import {
   initializeVault,
   encryptVaultKeys,
@@ -15,6 +16,9 @@ import {
   hexToBytes,
   bytesToHex,
 } from '@cipherbox/crypto';
+import { getOrCreateDeviceIdentity } from '../lib/device/identity';
+import { detectDeviceInfo } from '../lib/device/info';
+import { initializeOrSyncRegistry } from '../services/device-registry.service';
 
 export function useAuth() {
   const navigate = useNavigate();
@@ -125,6 +129,28 @@ export function useAuth() {
         throw error;
       }
     }
+
+    // Non-blocking device registry initialization (fire-and-forget)
+    // Placed after vault load so registry failures never block login
+    void (async () => {
+      try {
+        const deviceKeypair = await getOrCreateDeviceIdentity();
+        const deviceInfo = detectDeviceInfo();
+        const result = await initializeOrSyncRegistry({
+          userPrivateKey: userKeypair.privateKey,
+          userPublicKey: userKeypair.publicKey,
+          deviceKeypair,
+          deviceInfo: { ...deviceInfo, ipHash: '' },
+        });
+        if (result) {
+          useDeviceRegistryStore
+            .getState()
+            .setRegistry(result.registry, result.ipnsName, deviceKeypair.deviceId);
+        }
+      } catch (error) {
+        console.error('[Auth] Device registry init failed (non-blocking):', error);
+      }
+    })();
   }, [getVaultKeypair, setDerivedKeypair, setVaultKeys]);
 
   /**
@@ -266,6 +292,7 @@ export function useAuth() {
       useFolderStore.getState().clearFolders();
       useVaultStore.getState().clearVaultKeys();
       useSyncStore.getState().reset();
+      useDeviceRegistryStore.getState().clearRegistry();
       clearAuthState();
 
       // 4. Navigate to login
@@ -276,6 +303,7 @@ export function useAuth() {
       useFolderStore.getState().clearFolders();
       useVaultStore.getState().clearVaultKeys();
       useSyncStore.getState().reset();
+      useDeviceRegistryStore.getState().clearRegistry();
       clearAuthState();
       navigate('/');
     } finally {

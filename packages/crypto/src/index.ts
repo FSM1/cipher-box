@@ -89,6 +89,21 @@ export {
   type EncryptedFolderMetadata,
 } from './folder';
 
+// Device registry types and encryption
+export {
+  encryptRegistry,
+  decryptRegistry,
+  deriveRegistryIpnsKeypair,
+  validateDeviceRegistry,
+  type DeviceEntry,
+  type DeviceRegistry,
+  type DeviceAuthStatus,
+  type DevicePlatform,
+} from './registry';
+
+// Device identity (per-device Ed25519 keypair)
+export { generateDeviceKeypair, deriveDeviceId, type DeviceKeypair } from './device';
+
 // Utility functions (only safe public utilities)
 export {
   hexToBytes,

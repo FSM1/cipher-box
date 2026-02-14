@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 12 complete, next: Phase 12.1 (AES-CTR Streaming)
+**Current focus:** Milestone 2 -- Phase 12.2 complete (Encrypted Device Registry)
 
 ## Current Position
 
-Phase: 12 COMPLETE (first of 11 M2 phases: 11-17 + decimal insertions)
-Plan: All 5 plans executed and verified
-Status: Complete -- all checkpoints passed, E2E verified
-Last activity: 2026-02-13 -- Quick task 015: SendGrid email OTP + Google OAuth staging wiring
+Phase: 12.2 (Encrypted Device Registry)
+Plan: 3 of 3 complete
+Status: Phase complete
+Last activity: 2026-02-13 -- Completed 12.2-PLAN-03 (auth flow integration, Zustand store, polling)
 
-Progress: [##########..........] 55% (M1 complete, M2 Phase 12 complete)
+Progress: [############........] 58% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 78
+- Total plans completed: 81
 - Average duration: 4.6 min
-- Total execution time: 6.3 hours
+- Total execution time: 6.47 hours
 
 **By Phase (M1 summary):**
 
@@ -30,10 +30,11 @@ Progress: [##########..........] 55% (M1 complete, M2 Phase 12 complete)
 | -------------- | ----- | ------- | -------- |
 | M1 (17 phases) | 72/72 | 5.6 hrs | 4.7 min  |
 | M2 Phase 12    | 5/5   | 45 min  | 9.0 min  |
+| M2 Phase 12.2  | 3/3   | 10 min  | 3.3 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 10m, 9m, 6m, 7m
+- Last 5 plans: 6m, 7m, 3m, 4m, 3m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -104,7 +105,7 @@ Recent decisions affecting current work:
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
 - Phase 12.1 (AES-CTR Streaming): NEEDS `/gsd:research-phase` -- MediaSource/Service Worker decryption, byte-range IPFS, CTR nonce management
-- Phase 12.2 (Device Registry): NEEDS `/gsd:research-phase` -- device registry schema, encryption with user key, IPFS pinning strategy
+- Phase 12.2 (Device Registry): COMPLETE -- research and execution done
 - Phase 12.3 (SIWE + Identity): NEEDS `/gsd:research-phase` -- SIWE message format, wallet address hashing, multi-auth linking, ADR-001 migration
 - Phase 12.4 (MFA + Cross-Device): NEEDS `/gsd:research-phase` -- enableMFA() flow, bulletin board API, ECIES ephemeral key exchange
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
@@ -112,11 +113,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-13
-Stopped at: Quick task 015 complete (SendGrid + Google OAuth staging)
+Stopped at: Phase 12.2 complete — all 3 plans executed, verified 4/4 must-haves
 Resume file: None
-Next: Phase 12.1 (AES-CTR Streaming Encryption) — run /gsd:plan-phase 12.1
+Next: Phase 12.3 (SIWE + Unified Identity) — needs /gsd:discuss-phase or /gsd:plan-phase
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-13 after completing quick task 015 (SendGrid email OTP + Google OAuth staging)_
+_Last updated: 2026-02-13 after completing Phase 12.2 (Encrypted Device Registry)_
