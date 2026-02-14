@@ -409,7 +409,6 @@ async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Result<(), Str
         owner_public_key: hex::encode(public_key),
         encrypted_root_folder_key: hex::encode(&encrypted_root_folder_key),
         encrypted_root_ipns_private_key: hex::encode(&encrypted_ipns_private_key),
-        root_ipns_public_key: hex::encode(&ipns_pub_array),
         root_ipns_name: root_ipns_name.clone(),
     };
 
@@ -485,8 +484,8 @@ async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Result<(), Str
 /// Decrypts:
 /// - Root folder AES-256 key (32 bytes) from ECIES-wrapped hex
 /// - Root IPNS Ed25519 private key (32 bytes) from ECIES-wrapped hex
-/// - Root IPNS Ed25519 public key (32 bytes) from hex
 ///
+/// The IPNS public key is derivable from the private key if ever needed.
 /// Stores all keys in AppState (memory only).
 async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), String> {
     log::info!("Fetching and decrypting vault keys");
@@ -532,11 +531,6 @@ async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), String> {
         crypto::ecies::unwrap_key(&encrypted_root_ipns_private_key, &private_key)
             .map_err(|e| format!("Failed to decrypt root IPNS private key: {}", e))?;
     *state.root_ipns_private_key.write().await = Some(root_ipns_private_key);
-
-    // Decode root IPNS public key (not encrypted, just hex-encoded)
-    let root_ipns_public_key = hex::decode(&vault.root_ipns_public_key)
-        .map_err(|_| "Invalid rootIpnsPublicKey hex")?;
-    *state.root_ipns_public_key.write().await = Some(root_ipns_public_key);
 
     // Store IPNS name and TEE keys
     *state.root_ipns_name.write().await = Some(vault.root_ipns_name);
