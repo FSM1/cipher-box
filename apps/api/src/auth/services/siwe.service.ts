@@ -2,7 +2,7 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { createHash, randomBytes } from 'crypto';
 import { getAddress } from 'viem';
 import { parseSiweMessage, validateSiweMessage } from 'viem/siwe';
-import { verifyMessage } from 'viem/utils';
+import { verifyMessage } from 'viem';
 
 @Injectable()
 export class SiweService {

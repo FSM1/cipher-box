@@ -47,6 +47,7 @@ export class VaultExportDto {
       'Key derivation method used. Always "web3auth" for Core Kit users. Null if user record not found.',
     example: 'web3auth',
     nullable: true,
+    type: String,
   })
   derivationMethod!: string | null;
 }

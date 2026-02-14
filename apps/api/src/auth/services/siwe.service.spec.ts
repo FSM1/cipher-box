@@ -10,6 +10,7 @@ jest.mock('viem', () => ({
     }
     return addr;
   }),
+  verifyMessage: jest.fn(),
 }));
 
 jest.mock('viem/siwe', () => ({
@@ -17,13 +18,8 @@ jest.mock('viem/siwe', () => ({
   validateSiweMessage: jest.fn(),
 }));
 
-jest.mock('viem/utils', () => ({
-  verifyMessage: jest.fn(),
-}));
-
-import { getAddress } from 'viem';
+import { getAddress, verifyMessage } from 'viem';
 import { parseSiweMessage, validateSiweMessage } from 'viem/siwe';
-import { verifyMessage } from 'viem/utils';
 
 const mockGetAddress = getAddress as jest.Mock;
 const mockParseSiweMessage = parseSiweMessage as jest.Mock;

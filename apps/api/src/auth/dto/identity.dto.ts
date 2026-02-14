@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsEmail, Length, Matches } from 'class-validator';
+import { IsString, IsNotEmpty, IsEmail, Length, Matches, MaxLength } from 'class-validator';
 
 export class GoogleLoginDto {
   @ApiProperty({
@@ -74,6 +74,7 @@ export class WalletVerifyDto {
   })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(2048)
   message!: string;
 
   @ApiProperty({
@@ -82,8 +83,8 @@ export class WalletVerifyDto {
   })
   @IsString()
   @IsNotEmpty()
-  @Matches(/^0x[0-9a-fA-F]+$/, {
-    message: 'signature must be a hex string with 0x prefix',
+  @Matches(/^0x[0-9a-fA-F]{130}$/, {
+    message: 'signature must be a 65-byte hex string with 0x prefix',
   })
   signature!: string;
 }

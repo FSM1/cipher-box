@@ -38,6 +38,7 @@ export function LinkedMethods() {
     isLinking,
     isUnlinking,
     linkError: mutationLinkError,
+    resetLinkError,
   } = useLinkedMethods();
 
   const [linkingType, setLinkingType] = useState<LinkingType>(null);
@@ -202,7 +203,10 @@ export function LinkedMethods() {
           {displayError}
           <button
             type="button"
-            onClick={() => setActionError(null)}
+            onClick={() => {
+              setActionError(null);
+              resetLinkError();
+            }}
             className="linked-methods-error-dismiss"
             aria-label="Dismiss error"
           >

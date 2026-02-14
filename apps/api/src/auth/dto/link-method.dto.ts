@@ -1,8 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsIn, IsOptional } from 'class-validator';
+import { IsString, IsNotEmpty, IsIn, ValidateIf } from 'class-validator';
 
 export class LinkMethodDto {
-  @ApiProperty({ description: 'CipherBox-issued JWT identity token for the new auth method' })
+  @ApiProperty({
+    description:
+      'CipherBox-issued JWT identity token (required for Google/email, not used for wallet)',
+  })
+  @ValidateIf((o) => o.loginType !== 'wallet')
   @IsString()
   @IsNotEmpty()
   idToken!: string;
@@ -16,17 +20,20 @@ export class LinkMethodDto {
   loginType!: 'google' | 'email' | 'wallet';
 
   @ApiPropertyOptional({ description: 'Wallet address (required when loginType is wallet)' })
-  @IsOptional()
+  @ValidateIf((o) => o.loginType === 'wallet')
+  @IsNotEmpty()
   @IsString()
   walletAddress?: string;
 
   @ApiPropertyOptional({ description: 'SIWE message (required when loginType is wallet)' })
-  @IsOptional()
+  @ValidateIf((o) => o.loginType === 'wallet')
+  @IsNotEmpty()
   @IsString()
   siweMessage?: string;
 
   @ApiPropertyOptional({ description: 'SIWE signature (required when loginType is wallet)' })
-  @IsOptional()
+  @ValidateIf((o) => o.loginType === 'wallet')
+  @IsNotEmpty()
   @IsString()
   siweSignature?: string;
 }
