@@ -49,8 +49,6 @@ describe('VaultService', () => {
   const testEncryptedRootFolderKey = 'b'.repeat(64);
   const testEncryptedRootIpnsPrivateKey = 'c'.repeat(128);
   const testRootIpnsName = 'k51qzi5uqu5dg12345';
-  const testRootIpnsPublicKey = 'd'.repeat(64); // 32-byte Ed25519 public key
-
   const mockVaultEntity: Vault = {
     id: testVaultId,
     ownerId: testUserId,
@@ -58,7 +56,6 @@ describe('VaultService', () => {
     encryptedRootFolderKey: Buffer.from(testEncryptedRootFolderKey, 'hex'),
     encryptedRootIpnsPrivateKey: Buffer.from(testEncryptedRootIpnsPrivateKey, 'hex'),
     rootIpnsName: testRootIpnsName,
-    rootIpnsPublicKey: Buffer.from(testRootIpnsPublicKey, 'hex'),
     createdAt: new Date('2026-01-20T12:00:00.000Z'),
     initializedAt: null,
     updatedAt: new Date('2026-01-20T12:00:00.000Z'),
@@ -70,7 +67,6 @@ describe('VaultService', () => {
     encryptedRootFolderKey: testEncryptedRootFolderKey,
     encryptedRootIpnsPrivateKey: testEncryptedRootIpnsPrivateKey,
     rootIpnsName: testRootIpnsName,
-    rootIpnsPublicKey: testRootIpnsPublicKey,
   };
 
   beforeEach(async () => {
@@ -168,7 +164,6 @@ describe('VaultService', () => {
         encryptedRootFolderKey: Buffer.from(testEncryptedRootFolderKey, 'hex'),
         encryptedRootIpnsPrivateKey: Buffer.from(testEncryptedRootIpnsPrivateKey, 'hex'),
         rootIpnsName: testRootIpnsName,
-        rootIpnsPublicKey: Buffer.from(testRootIpnsPublicKey, 'hex'),
         initializedAt: null,
       });
       expect(mockVaultRepo.save).toHaveBeenCalled();
@@ -221,7 +216,6 @@ describe('VaultService', () => {
         encryptedRootFolderKey: 'ccdd',
         encryptedRootIpnsPrivateKey: 'eeff',
         rootIpnsName: testRootIpnsName,
-        rootIpnsPublicKey: '1122',
       };
 
       const shortVault = {
@@ -229,7 +223,6 @@ describe('VaultService', () => {
         ownerPublicKey: Buffer.from('aabb', 'hex'),
         encryptedRootFolderKey: Buffer.from('ccdd', 'hex'),
         encryptedRootIpnsPrivateKey: Buffer.from('eeff', 'hex'),
-        rootIpnsPublicKey: Buffer.from('1122', 'hex'),
       };
 
       mockVaultRepo.findOne.mockResolvedValue(null);
@@ -259,7 +252,6 @@ describe('VaultService', () => {
         encryptedRootFolderKey: testEncryptedRootFolderKey,
         encryptedRootIpnsPrivateKey: testEncryptedRootIpnsPrivateKey,
         rootIpnsName: testRootIpnsName,
-        rootIpnsPublicKey: testRootIpnsPublicKey,
         createdAt: mockVaultEntity.createdAt,
         initializedAt: null,
         teeKeys: null,
@@ -580,11 +572,10 @@ describe('VaultService', () => {
   });
 
   describe('getExportData', () => {
-    it('should return export DTO with hex-encoded keys and derivation info for social login user', async () => {
+    it('should return export DTO with hex-encoded keys and derivation method', async () => {
       mockVaultRepo.findOne.mockResolvedValue(mockVaultEntity);
       mockUserRepo.findOne.mockResolvedValue({
         id: testUserId,
-        derivationVersion: null,
       });
 
       const result = await service.getExportData(testUserId);
@@ -595,34 +586,27 @@ describe('VaultService', () => {
       expect(result.encryptedRootFolderKey).toBe(testEncryptedRootFolderKey);
       expect(result.encryptedRootIpnsPrivateKey).toBe(testEncryptedRootIpnsPrivateKey);
       expect(result.exportedAt).toBeDefined();
-      expect(result.derivationInfo).toEqual({
-        method: 'web3auth',
-        derivationVersion: null,
-      });
+      expect(result.derivationMethod).toBe('web3auth');
     });
 
-    it('should return external-wallet derivation info for wallet user', async () => {
+    it('should return web3auth derivation method for all users (Core Kit)', async () => {
       mockVaultRepo.findOne.mockResolvedValue(mockVaultEntity);
       mockUserRepo.findOne.mockResolvedValue({
         id: testUserId,
-        derivationVersion: 1,
       });
 
       const result = await service.getExportData(testUserId);
 
-      expect(result.derivationInfo).toEqual({
-        method: 'external-wallet',
-        derivationVersion: 1,
-      });
+      expect(result.derivationMethod).toBe('web3auth');
     });
 
-    it('should return null derivationInfo when user not found', async () => {
+    it('should return null derivationMethod when user not found', async () => {
       mockVaultRepo.findOne.mockResolvedValue(mockVaultEntity);
       mockUserRepo.findOne.mockResolvedValue(null);
 
       const result = await service.getExportData(testUserId);
 
-      expect(result.derivationInfo).toBeNull();
+      expect(result.derivationMethod).toBeNull();
     });
 
     it('should throw NotFoundException if vault does not exist', async () => {
@@ -634,7 +618,7 @@ describe('VaultService', () => {
 
     it('should include ISO 8601 exportedAt timestamp', async () => {
       mockVaultRepo.findOne.mockResolvedValue(mockVaultEntity);
-      mockUserRepo.findOne.mockResolvedValue({ id: testUserId, derivationVersion: null });
+      mockUserRepo.findOne.mockResolvedValue({ id: testUserId });
 
       const before = new Date().toISOString();
       const result = await service.getExportData(testUserId);

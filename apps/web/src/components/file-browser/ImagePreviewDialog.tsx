@@ -67,7 +67,7 @@ export function ImagePreviewDialog({ open, onClose, item }: ImagePreviewDialogPr
     (async () => {
       try {
         const auth = useAuthStore.getState();
-        if (!auth.derivedKeypair) {
+        if (!auth.vaultKeypair) {
           throw new Error('No keypair available - please log in again');
         }
 
@@ -78,13 +78,13 @@ export function ImagePreviewDialog({ open, onClose, item }: ImagePreviewDialogPr
             wrappedKey: item.fileKeyEncrypted,
             originalName: item.name,
           },
-          auth.derivedKeypair.privateKey
+          auth.vaultKeypair.privateKey
         );
 
         if (cancelled) return;
 
         const mime = getMimeType(item.name);
-        const blob = new Blob([plaintext.buffer as ArrayBuffer], { type: mime });
+        const blob = new Blob([plaintext as BlobPart], { type: mime });
         url = URL.createObjectURL(blob);
 
         setDecryptedData(plaintext);

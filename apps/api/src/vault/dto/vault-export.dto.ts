@@ -1,28 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 /**
- * Derivation info hints how the user's private key was derived.
- * Helps recovery tools determine how to prompt for key input.
- */
-export class DerivationInfoDto {
-  @ApiProperty({
-    description:
-      'Authentication method used to derive the private key. "web3auth" = social login (key managed by Web3Auth MPC), "external-wallet" = EIP-712 signature-derived key.',
-    example: 'web3auth',
-    enum: ['web3auth', 'external-wallet'],
-  })
-  method!: 'web3auth' | 'external-wallet';
-
-  @ApiProperty({
-    description:
-      'Key derivation version for external wallet users. null for social logins, 1+ for external wallet derivation versions.',
-    example: 1,
-    nullable: true,
-  })
-  derivationVersion!: number | null;
-}
-
-/**
  * Response DTO for vault export.
  * Contains the minimal data needed for independent recovery:
  * root IPNS name + encrypted root keys.
@@ -65,9 +43,11 @@ export class VaultExportDto {
   encryptedRootIpnsPrivateKey!: string;
 
   @ApiPropertyOptional({
-    description: 'Hints about how the private key was derived, to assist recovery tools',
-    type: DerivationInfoDto,
+    description:
+      'Key derivation method used. Always "web3auth" for Core Kit users. Null if user record not found.',
+    example: 'web3auth',
     nullable: true,
+    type: String,
   })
-  derivationInfo!: DerivationInfoDto | null;
+  derivationMethod!: string | null;
 }

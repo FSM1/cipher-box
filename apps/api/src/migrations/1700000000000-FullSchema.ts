@@ -30,7 +30,6 @@ export class FullSchema1700000000000 implements MigrationInterface {
       CREATE TABLE "users" (
         "id"                uuid NOT NULL DEFAULT uuid_generate_v4(),
         "publicKey"         varchar NOT NULL,
-        "derivationVersion" integer,
         "createdAt"         TIMESTAMP NOT NULL DEFAULT now(),
         "updatedAt"         TIMESTAMP NOT NULL DEFAULT now(),
         CONSTRAINT "PK_users" PRIMARY KEY ("id"),
@@ -66,17 +65,29 @@ export class FullSchema1700000000000 implements MigrationInterface {
     // ──────────────────────────────────────────────
     await queryRunner.query(`
       CREATE TABLE "auth_methods" (
-        "id"         uuid NOT NULL DEFAULT uuid_generate_v4(),
-        "userId"     uuid NOT NULL,
-        "type"       varchar NOT NULL,
-        "identifier" varchar NOT NULL,
-        "lastUsedAt" TIMESTAMP,
-        "createdAt"  TIMESTAMP NOT NULL DEFAULT now(),
+        "id"                  uuid NOT NULL DEFAULT uuid_generate_v4(),
+        "userId"              uuid NOT NULL,
+        "type"                varchar NOT NULL,
+        "identifier"          varchar NOT NULL,
+        "identifier_hash"     varchar(64),
+        "identifier_display"  varchar(255),
+        "lastUsedAt"          TIMESTAMP,
+        "createdAt"           TIMESTAMP NOT NULL DEFAULT now(),
         CONSTRAINT "PK_auth_methods" PRIMARY KEY ("id"),
         CONSTRAINT "FK_auth_methods_user" FOREIGN KEY ("userId")
           REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE NO ACTION
       )
     `);
+
+    // Index on identifier_hash for wallet address lookup
+    await queryRunner.query(
+      `CREATE INDEX "IDX_auth_methods_identifier_hash" ON "auth_methods" ("identifier_hash")`
+    );
+
+    // Composite index on (type, identifier_hash) for efficient auth method lookups
+    await queryRunner.query(
+      `CREATE INDEX "IDX_auth_methods_type_hash" ON "auth_methods" ("type", "identifier_hash")`
+    );
 
     // ──────────────────────────────────────────────
     // 4. vaults
@@ -88,7 +99,6 @@ export class FullSchema1700000000000 implements MigrationInterface {
         "owner_public_key"             bytea NOT NULL,
         "encrypted_root_folder_key"    bytea NOT NULL,
         "encrypted_root_ipns_private_key" bytea NOT NULL,
-        "root_ipns_public_key"         bytea NOT NULL,
         "root_ipns_name"               varchar(255) NOT NULL,
         "created_at"                   TIMESTAMP NOT NULL DEFAULT now(),
         "initialized_at"               TIMESTAMP,

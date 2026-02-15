@@ -120,10 +120,10 @@ export function useFolder() {
 
         // Get user's ECIES keypair for vault cryptographic operations (public + private keys stored in memory after login)
         // The public key is used here for key wrapping; the private key remains client-side for decryption operations.
-        if (!auth.derivedKeypair) {
+        if (!auth.vaultKeypair) {
           throw new Error('No ECIES keypair available - please log in again');
         }
-        const userPublicKey = auth.derivedKeypair.publicKey;
+        const userPublicKey = auth.vaultKeypair.publicKey;
 
         // Create the folder (generates keys, wraps with user public key, TEE-encrypts IPNS key)
         const { folder, ipnsPrivateKey, folderKey, encryptedIpnsPrivateKey, keyEpoch } =

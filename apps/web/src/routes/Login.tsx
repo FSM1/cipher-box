@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { StatusIndicator } from '../components/layout';
 import { GoogleLoginButton } from '../components/auth/GoogleLoginButton';
 import { EmailLoginForm } from '../components/auth/EmailLoginForm';
+import { WalletLoginButton } from '../components/auth/WalletLoginButton';
 import { MatrixBackground } from '../components/MatrixBackground';
 import { StagingBanner } from '../components/StagingBanner';
 import { useHealthControllerCheck } from '../api/health/health';
@@ -14,7 +15,8 @@ import { useAuth } from '../hooks/useAuth';
  * Replaces the old Web3Auth modal [CONNECT] button (Phase 12).
  */
 export function Login() {
-  const { isAuthenticated, isLoading, loginWithGoogle, loginWithEmail } = useAuth();
+  const { isAuthenticated, isLoading, loginWithGoogle, loginWithEmail, loginWithWallet } =
+    useAuth();
   const navigate = useNavigate();
   const [loginError, setLoginError] = useState<string | null>(null);
 
@@ -62,6 +64,18 @@ export function Login() {
       }
     },
     [loginWithEmail]
+  );
+
+  const handleWalletLogin = useCallback(
+    async (idToken: string, userId: string) => {
+      setLoginError(null);
+      try {
+        await loginWithWallet(idToken, userId);
+      } catch (err) {
+        setLoginError(err instanceof Error ? err.message : 'Wallet login failed');
+      }
+    },
+    [loginWithWallet]
   );
 
   // Show loading state while checking authentication
@@ -124,6 +138,12 @@ export function Login() {
             </div>
 
             <EmailLoginForm onLogin={handleEmailLogin} disabled={isLoading || isApiDown} />
+
+            <div className="login-divider">
+              <span>{'// or'}</span>
+            </div>
+
+            <WalletLoginButton onLogin={handleWalletLogin} disabled={isLoading || isApiDown} />
           </div>
 
           {loginError && (

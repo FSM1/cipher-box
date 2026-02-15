@@ -13,8 +13,6 @@ export interface InitVaultDto {
   encryptedRootFolderKey: string;
   /** ECIES-wrapped Ed25519 IPNS private key (hex-encoded) */
   encryptedRootIpnsPrivateKey: string;
-  /** Ed25519 IPNS public key (32 bytes, hex-encoded) */
-  rootIpnsPublicKey: string;
   /** IPNS name (libp2p-key multihash, base58btc or base36) */
   rootIpnsName: string;
 }

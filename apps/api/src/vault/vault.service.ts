@@ -52,7 +52,6 @@ export class VaultService {
       ownerPublicKey: Buffer.from(dto.ownerPublicKey, 'hex'),
       encryptedRootFolderKey: Buffer.from(dto.encryptedRootFolderKey, 'hex'),
       encryptedRootIpnsPrivateKey: Buffer.from(dto.encryptedRootIpnsPrivateKey, 'hex'),
-      rootIpnsPublicKey: Buffer.from(dto.rootIpnsPublicKey, 'hex'),
       rootIpnsName: dto.rootIpnsName,
       initializedAt: null,
     });
@@ -192,15 +191,6 @@ export class VaultService {
       where: { id: userId },
     });
 
-    // Determine derivation info from user's derivationVersion
-    let derivationInfo: VaultExportDto['derivationInfo'] = null;
-    if (user) {
-      derivationInfo = {
-        method: user.derivationVersion === null ? 'web3auth' : 'external-wallet',
-        derivationVersion: user.derivationVersion,
-      };
-    }
-
     return {
       format: 'cipherbox-vault-export',
       version: '1.0',
@@ -208,7 +198,7 @@ export class VaultService {
       rootIpnsName: vault.rootIpnsName,
       encryptedRootFolderKey: vault.encryptedRootFolderKey.toString('hex'),
       encryptedRootIpnsPrivateKey: vault.encryptedRootIpnsPrivateKey.toString('hex'),
-      derivationInfo,
+      derivationMethod: user ? 'web3auth' : null,
     };
   }
 
@@ -221,7 +211,6 @@ export class VaultService {
       ownerPublicKey: vault.ownerPublicKey.toString('hex'),
       encryptedRootFolderKey: vault.encryptedRootFolderKey.toString('hex'),
       encryptedRootIpnsPrivateKey: vault.encryptedRootIpnsPrivateKey.toString('hex'),
-      rootIpnsPublicKey: vault.rootIpnsPublicKey.toString('hex'),
       rootIpnsName: vault.rootIpnsName,
       createdAt: vault.createdAt,
       initializedAt: vault.initializedAt,

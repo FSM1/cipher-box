@@ -198,9 +198,9 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
       }
 
       // Get user's ECIES private key for unwrapping
-      const derivedKeypair = useAuthStore.getState().derivedKeypair;
-      if (!derivedKeypair) {
-        console.error('Cannot load folder: no derived keypair available');
+      const vaultKeypair = useAuthStore.getState().vaultKeypair;
+      if (!vaultKeypair) {
+        console.error('Cannot load folder: no vault keypair available');
         return;
       }
 
@@ -228,11 +228,11 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         // Unwrap keys using user's ECIES private key
         const folderKey = await unwrapKey(
           hexToBytes(folderEntry.folderKeyEncrypted),
-          derivedKeypair.privateKey
+          vaultKeypair.privateKey
         );
         const ipnsPrivateKey = await unwrapKey(
           hexToBytes(folderEntry.ipnsPrivateKeyEncrypted),
-          derivedKeypair.privateKey
+          vaultKeypair.privateKey
         );
 
         // Load folder metadata from IPNS (retry if IPNS hasn't propagated yet)

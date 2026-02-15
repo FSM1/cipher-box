@@ -50,7 +50,8 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 12: Core Kit Identity Provider Foundation** - Replace PnP Modal SDK with MPC Core Kit, CipherBox as identity provider
 - [ ] **Phase 12.1: AES-CTR Streaming Encryption** - AES-256-CTR for media files with byte-range decryption and in-browser playback (INSERTED)
 - [x] **Phase 12.2: Encrypted Device Registry** - Encrypted device metadata on IPFS for cross-device infrastructure (INSERTED)
-- [ ] **Phase 12.3: SIWE + Unified Identity** - Wallet login via SIWE, multi-auth linking, ADR-001 migration (INSERTED)
+- [x] **Phase 12.3: SIWE + Unified Identity** - Wallet login via SIWE, multi-auth linking, ADR-001 cleanup (INSERTED)
+- [x] **Phase 12.3.1: Pre-Wipe Identity Cleanup** - Deterministic IPNS derivation, hashed identifiers, remove auto-linking (INSERTED)
 - [ ] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
 - [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
@@ -149,23 +150,51 @@ Plans:
 **Goal**: Wallet users can log in via SIWE and all auth methods (wallet, Google, email) resolve to the same CipherBox identity and Web3Auth key
 **Depends on**: Phase 12.2 (device registry for multi-device state)
 **Requirements**: AUTH unification, MFA-01 (wallet MFA prerequisite)
-**Research flag**: NEEDS `/gsd:research-phase` -- SIWE message format, backend verification, wallet address hashing in DB, multi-auth linking UX, ADR-001 migration path
+**Research flag**: COMPLETE -- SIWE message format, backend verification, wallet address hashing, multi-auth linking UX researched
 **Success Criteria** (what must be TRUE):
 
-1. Wallet user can sign SIWE message → CipherBox API verifies → issues JWT → Core Kit login succeeds
+1. Wallet user can sign SIWE message -> CipherBox API verifies -> issues JWT -> Core Kit login succeeds
 2. User can link additional auth methods (second wallet, email) from settings
-3. Any linked auth method produces a JWT with same `sub = userId` → same Web3Auth key
+3. Any linked auth method produces a JWT with same `sub = userId` -> same Web3Auth key
 4. Wallet addresses are stored as hashes in the database (not plaintext)
-5. Existing ADR-001 wallet users are migrated to SIWE-based identity
+5. ADR-001 legacy code (signatureKeyDerivation, derivationVersion, external_wallet) is fully removed (clean break, no migration needed)
+
+**Plans:** 4 plans
 
 Plans:
 
-- [ ] TBD (run `/gsd:plan-phase 12.3` to break down)
+- [x] 12.3-01-PLAN.md — Backend SIWE service, schema evolution, wallet identity endpoints
+- [x] 12.3-02-PLAN.md — Backend ADR-001 cleanup (auth service, vault export, verifier, API client regen)
+- [x] 12.3-03-PLAN.md — Frontend wallet login (wagmi, WalletLoginButton, SIWE flow) + ADR-001 cleanup (rename derivedKeypair to vaultKeypair)
+- [x] 12.3-04-PLAN.md — Settings page auth method management (view, link, unlink)
+
+### Phase 12.3.1: Pre-Wipe Identity Cleanup (INSERTED)
+
+**Goal**: Implement schema-level identity changes as clean breaks before database wipe, avoiding throwaway migration code: deterministic vault IPNS derivation, SHA-256 hashed identifiers for all auth methods, and removal of cross-method email auto-linking
+**Depends on**: Phase 12.3 (SIWE + unified identity complete)
+**Requirements**: Self-sovereign recovery infrastructure, privacy-preserving auth storage
+**Research flag**: Skip — builds on established patterns (HKDF from Phase 12.2, SHA-256 hashing from Phase 12.3 wallet work)
+**Success Criteria** (what must be TRUE):
+
+1. Vault IPNS keypair is derived deterministically from user's privateKey via HKDF (context: "cipherbox-vault-ipns-v1") — no random keygen, no backend dependency for vault discovery
+2. All auth method identifiers are stored as SHA-256 hashes: Google uses SHA-256(google_sub), email uses SHA-256(normalized_email), wallet uses SHA-256(checksummed_address)
+3. Each auth method (google, email, wallet) is an independent identity — no cross-method email auto-linking; users link methods explicitly via Settings
+4. Self-sovereign recovery path works: recovery phrase → privateKey → derive vault IPNS key → resolve IPNS → decrypt vault metadata
+5. TEE republishing continues to work — ipns.service.ts has no rootIpnsPublicKey dependency (passive compatibility, verified by grep)
+
+**Plans:** 4 plans
+
+Plans:
+
+- [x] 12.3.1-01-PLAN.md — Crypto: deterministic vault IPNS keypair derivation (HKDF) + updated initializeVault/encryptVaultKeys/decryptVaultKeys + EncryptedVaultKeys type cleanup + tests
+- [x] 12.3.1-02-PLAN.md — Backend: SHA-256 hashed identifiers for all auth methods + remove cross-method auto-linking
+- [x] 12.3.1-03-PLAN.md — Backend vault schema + frontend vault init for deterministic IPNS + API client regen
+- [x] 12.3.1-04-PLAN.md — Codebase-wide cleanup: desktop Rust, E2E helpers, controller spec rootIpnsPublicKey removal
 
 ### Phase 12.4: MFA + Cross-Device Approval (INSERTED)
 
 **Goal**: Users can enroll in MFA with device shares and recovery phrases, and approve new devices from existing authenticated devices
-**Depends on**: Phase 12.3 (unified identity for consistent MFA across all auth methods)
+**Depends on**: Phase 12.3.1 (identity cleanup complete, deterministic IPNS for recovery)
 **Requirements**: MFA-01, MFA-02, MFA-03, MFA-04
 **Research flag**: NEEDS `/gsd:research-phase` -- Core Kit enableMFA() flow, createFactor/inputFactorKey for cross-device, bulletin board API design, ECIES ephemeral key exchange
 **Success Criteria** (what must be TRUE):
@@ -283,6 +312,8 @@ Parallel phases:
 | 12. Core Kit Identity      | M2        | 5/5            | Complete    | 2026-02-13 |
 | 12.1 AES-CTR Streaming     | M2        | 0/TBD          | Not started | -          |
 | 12.2 Device Registry       | M2        | 3/3            | Complete    | 2026-02-13 |
+| 12.3 SIWE + Identity       | M2        | 4/4            | Complete    | 2026-02-14 |
+| 12.3.1 Identity Cleanup    | M2        | 4/4            | Complete    | 2026-02-14 |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |

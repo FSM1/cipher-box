@@ -1,6 +1,14 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { authApi, AuthMethod } from '../lib/api/auth';
 
+type LinkPayload = {
+  idToken: string;
+  loginType: 'google' | 'email' | 'wallet';
+  walletAddress?: string;
+  siweMessage?: string;
+  siweSignature?: string;
+};
+
 export function useLinkedMethods() {
   const queryClient = useQueryClient();
 
@@ -14,7 +22,7 @@ export function useLinkedMethods() {
   });
 
   const linkMutation = useMutation({
-    mutationFn: authApi.linkMethod,
+    mutationFn: (payload: LinkPayload) => authApi.linkMethod(payload),
     onSuccess: (updatedMethods) => {
       // Update cache with the returned list
       queryClient.setQueryData(['auth-methods'], updatedMethods);
@@ -39,5 +47,6 @@ export function useLinkedMethods() {
     isUnlinking: unlinkMutation.isPending,
     linkError: linkMutation.error,
     unlinkError: unlinkMutation.error,
+    resetLinkError: linkMutation.reset,
   };
 }

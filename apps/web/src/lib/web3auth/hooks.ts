@@ -4,54 +4,15 @@ import { useCoreKit } from './core-kit-provider';
 import { COREKIT_STATUS } from './core-kit';
 import { authApi } from '../api/auth';
 
-/**
- * PnP -> Core Kit migration helper.
- *
- * PnP and Core Kit generate DIFFERENT private keys for the same user by default.
- * For production migration, the user's PnP-derived private key must be imported
- * via `importTssKey` during the first Core Kit `loginWithJWT` call.
- *
- * Flow:
- * 1. A transitional build exports the PnP private key to localStorage
- * 2. On first Core Kit login, this function reads and removes the key
- * 3. The key is passed as `importTssKey` to `loginWithJWT`
- * 4. Core Kit splits the imported key into TSS shares
- * 5. Subsequent logins use Core Kit's native key derivation
- *
- * For devnet: We use fresh accounts (no migration needed).
- * For production: This function would be called with the user's PnP private key.
- */
-export function getMigrationKey(): string | undefined {
-  try {
-    const key = localStorage.getItem('__pnp_migration_key__');
-    if (key) {
-      // Use it once, then delete -- importTssKey is only for the first login
-      localStorage.removeItem('__pnp_migration_key__');
-      // Migration key found -- will import via importTssKey
-      return key;
-    }
-  } catch {
-    // localStorage may be unavailable in some environments
-  }
-  return undefined;
-}
-
 export function useCoreKitAuth() {
   const { coreKit, status, isLoggedIn, isInitialized } = useCoreKit();
 
   /**
    * Shared Core Kit login logic: takes a CipherBox JWT and userId,
-   * handles migration key detection, loginWithJWT, and commitChanges.
+   * calls loginWithJWT and commitChanges.
    */
-  async function loginWithCoreKit(
-    cipherboxJwt: string,
-    userId: string,
-    migrationKey?: string
-  ): Promise<void> {
+  async function loginWithCoreKit(cipherboxJwt: string, userId: string): Promise<void> {
     if (!coreKit) throw new Error('Core Kit not initialized');
-
-    // Check for PnP migration key (auto-detect or explicit)
-    const importKey = migrationKey || getMigrationKey();
 
     // Login to Core Kit with CipherBox JWT
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -60,11 +21,6 @@ export function useCoreKitAuth() {
       verifierId: userId,
       idToken: cipherboxJwt,
     };
-
-    // If migrating from PnP, import existing key so vault data remains accessible
-    if (importKey) {
-      loginParams.importTssKey = importKey;
-    }
 
     await coreKit.loginWithJWT(loginParams);
 
@@ -86,17 +42,15 @@ export function useCoreKitAuth() {
    * then we call loginWithJWT on Core Kit.
    *
    * @param googleIdToken - Google OAuth idToken from GIS callback
-   * @param migrationKey - Optional PnP private key for importTssKey migration
    */
   async function loginWithGoogle(
-    googleIdToken: string,
-    migrationKey?: string
+    googleIdToken: string
   ): Promise<{ cipherboxJwt: string; email?: string }> {
     // 1. Send Google idToken to CipherBox backend for verification + JWT issuance
     const { idToken: cipherboxJwt, userId, email } = await authApi.identityGoogle(googleIdToken);
 
     // 2. Login to Core Kit
-    await loginWithCoreKit(cipherboxJwt, userId, migrationKey);
+    await loginWithCoreKit(cipherboxJwt, userId);
 
     return { cipherboxJwt, email };
   }
@@ -106,18 +60,30 @@ export function useCoreKitAuth() {
    *
    * @param email - User's email address
    * @param otp - One-time password from email
-   * @param migrationKey - Optional PnP private key for importTssKey migration
    */
-  async function loginWithEmailOtp(
-    email: string,
-    otp: string,
-    migrationKey?: string
-  ): Promise<{ cipherboxJwt: string }> {
+  async function loginWithEmailOtp(email: string, otp: string): Promise<{ cipherboxJwt: string }> {
     // 1. Verify OTP with backend, get CipherBox JWT
     const { idToken: cipherboxJwt, userId } = await authApi.identityEmailVerify(email, otp);
 
     // 2. Login to Core Kit
-    await loginWithCoreKit(cipherboxJwt, userId, migrationKey);
+    await loginWithCoreKit(cipherboxJwt, userId);
+
+    return { cipherboxJwt };
+  }
+
+  /**
+   * Login with Wallet: Backend verifies SIWE signature, issues CipherBox JWT,
+   * then we call loginWithJWT on Core Kit.
+   *
+   * @param cipherboxJwt - CipherBox identity JWT from wallet verification
+   * @param userId - CipherBox user ID
+   */
+  async function loginWithWallet(
+    cipherboxJwt: string,
+    userId: string
+  ): Promise<{ cipherboxJwt: string }> {
+    // Login to Core Kit with the CipherBox JWT
+    await loginWithCoreKit(cipherboxJwt, userId);
 
     return { cipherboxJwt };
   }
@@ -174,6 +140,7 @@ export function useCoreKitAuth() {
     isInitialized,
     loginWithGoogle,
     loginWithEmailOtp,
+    loginWithWallet,
     getVaultKeypair,
     getPublicKeyHex,
     logout,

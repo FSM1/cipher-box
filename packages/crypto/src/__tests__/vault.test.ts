@@ -21,7 +21,8 @@ function generateTestKeypair(): { publicKey: Uint8Array; privateKey: Uint8Array 
 describe('Vault Initialization', () => {
   describe('initializeVault', () => {
     it('should return valid VaultInit structure', async () => {
-      const vault = await initializeVault();
+      const userKeypair = generateTestKeypair();
+      const vault = await initializeVault(userKeypair.privateKey);
 
       expect(vault).toHaveProperty('rootFolderKey');
       expect(vault).toHaveProperty('rootIpnsKeypair');
@@ -30,34 +31,41 @@ describe('Vault Initialization', () => {
     });
 
     it('should generate 32-byte root folder key', async () => {
-      const vault = await initializeVault();
+      const userKeypair = generateTestKeypair();
+      const vault = await initializeVault(userKeypair.privateKey);
 
       expect(vault.rootFolderKey.length).toBe(AES_KEY_SIZE);
     });
 
     it('should generate Ed25519 keypair with correct sizes', async () => {
-      const vault = await initializeVault();
+      const userKeypair = generateTestKeypair();
+      const vault = await initializeVault(userKeypair.privateKey);
 
       expect(vault.rootIpnsKeypair.publicKey.length).toBe(ED25519_PUBLIC_KEY_SIZE);
       expect(vault.rootIpnsKeypair.privateKey.length).toBe(ED25519_PRIVATE_KEY_SIZE);
     });
 
-    it('should produce unique keys on each initialization', async () => {
-      const vault1 = await initializeVault();
-      const vault2 = await initializeVault();
-      const vault3 = await initializeVault();
+    it('should produce unique folder keys but deterministic IPNS keys for different private keys', async () => {
+      const userKeypair1 = generateTestKeypair();
+      const userKeypair2 = generateTestKeypair();
+      const userKeypair3 = generateTestKeypair();
 
-      // Root folder keys should be unique
+      const vault1 = await initializeVault(userKeypair1.privateKey);
+      const vault2 = await initializeVault(userKeypair2.privateKey);
+      const vault3 = await initializeVault(userKeypair3.privateKey);
+
+      // Root folder keys should be unique (random)
       expect(vault1.rootFolderKey).not.toEqual(vault2.rootFolderKey);
       expect(vault2.rootFolderKey).not.toEqual(vault3.rootFolderKey);
 
-      // IPNS keypairs should be unique
+      // IPNS keypairs should be unique for different private keys
       expect(vault1.rootIpnsKeypair.publicKey).not.toEqual(vault2.rootIpnsKeypair.publicKey);
       expect(vault1.rootIpnsKeypair.privateKey).not.toEqual(vault2.rootIpnsKeypair.privateKey);
     });
 
     it('should generate keys with high entropy', async () => {
-      const vault = await initializeVault();
+      const userKeypair = generateTestKeypair();
+      const vault = await initializeVault(userKeypair.privateKey);
 
       // Check root folder key has non-trivial entropy
       const folderKeyUnique = new Set(vault.rootFolderKey);
@@ -73,19 +81,18 @@ describe('Vault Initialization', () => {
 describe('Vault Key Encryption/Decryption', () => {
   describe('encryptVaultKeys', () => {
     it('should return EncryptedVaultKeys structure', async () => {
-      const vault = await initializeVault();
       const userKeypair = generateTestKeypair();
+      const vault = await initializeVault(userKeypair.privateKey);
 
       const encrypted = await encryptVaultKeys(vault, userKeypair.publicKey);
 
       expect(encrypted).toHaveProperty('encryptedRootFolderKey');
       expect(encrypted).toHaveProperty('encryptedIpnsPrivateKey');
-      expect(encrypted).toHaveProperty('rootIpnsPublicKey');
     });
 
     it('should produce encrypted data larger than plaintext', async () => {
-      const vault = await initializeVault();
       const userKeypair = generateTestKeypair();
+      const vault = await initializeVault(userKeypair.privateKey);
 
       const encrypted = await encryptVaultKeys(vault, userKeypair.publicKey);
 
@@ -96,19 +103,9 @@ describe('Vault Key Encryption/Decryption', () => {
       );
     });
 
-    it('should preserve IPNS public key in plaintext', async () => {
-      const vault = await initializeVault();
-      const userKeypair = generateTestKeypair();
-
-      const encrypted = await encryptVaultKeys(vault, userKeypair.publicKey);
-
-      // Public key should be identical (not encrypted)
-      expect(encrypted.rootIpnsPublicKey).toEqual(vault.rootIpnsKeypair.publicKey);
-    });
-
     it('should produce different encrypted data each time due to ECIES ephemeral keys', async () => {
-      const vault = await initializeVault();
       const userKeypair = generateTestKeypair();
+      const vault = await initializeVault(userKeypair.privateKey);
 
       const encrypted1 = await encryptVaultKeys(vault, userKeypair.publicKey);
       const encrypted2 = await encryptVaultKeys(vault, userKeypair.publicKey);
@@ -121,8 +118,8 @@ describe('Vault Key Encryption/Decryption', () => {
 
   describe('decryptVaultKeys', () => {
     it('should recover original keys after encrypt/decrypt round-trip', async () => {
-      const vault = await initializeVault();
       const userKeypair = generateTestKeypair();
+      const vault = await initializeVault(userKeypair.privateKey);
 
       const encrypted = await encryptVaultKeys(vault, userKeypair.publicKey);
       const decrypted = await decryptVaultKeys(encrypted, userKeypair.privateKey);
@@ -133,9 +130,9 @@ describe('Vault Key Encryption/Decryption', () => {
     });
 
     it('should throw with wrong private key', async () => {
-      const vault = await initializeVault();
       const userKeypair1 = generateTestKeypair();
       const userKeypair2 = generateTestKeypair();
+      const vault = await initializeVault(userKeypair1.privateKey);
 
       const encrypted = await encryptVaultKeys(vault, userKeypair1.publicKey);
 
@@ -145,8 +142,8 @@ describe('Vault Key Encryption/Decryption', () => {
     });
 
     it('should throw on tampered encrypted root folder key', async () => {
-      const vault = await initializeVault();
       const userKeypair = generateTestKeypair();
+      const vault = await initializeVault(userKeypair.privateKey);
 
       const encrypted = await encryptVaultKeys(vault, userKeypair.publicKey);
 
@@ -161,8 +158,8 @@ describe('Vault Key Encryption/Decryption', () => {
     });
 
     it('should throw on tampered encrypted IPNS private key', async () => {
-      const vault = await initializeVault();
       const userKeypair = generateTestKeypair();
+      const vault = await initializeVault(userKeypair.privateKey);
 
       const encrypted = await encryptVaultKeys(vault, userKeypair.publicKey);
 
@@ -179,8 +176,8 @@ describe('Vault Key Encryption/Decryption', () => {
 
   describe('full lifecycle', () => {
     it('should work for multiple encrypt/decrypt cycles', async () => {
-      const vault = await initializeVault();
       const userKeypair = generateTestKeypair();
+      const vault = await initializeVault(userKeypair.privateKey);
 
       // Simulate multiple login sessions
       for (let i = 0; i < 3; i++) {
@@ -194,22 +191,22 @@ describe('Vault Key Encryption/Decryption', () => {
     });
 
     it('should work with different user keypairs for different users', async () => {
-      // Simulate two different users with the same vault keys
-      // (This wouldn't happen in practice, but tests the crypto works)
-      const vault = await initializeVault();
-
+      // Simulate two different users
       const user1Keypair = generateTestKeypair();
       const user2Keypair = generateTestKeypair();
 
+      const vault1 = await initializeVault(user1Keypair.privateKey);
+      const vault2 = await initializeVault(user2Keypair.privateKey);
+
       // User 1 encrypts and can decrypt
-      const encrypted1 = await encryptVaultKeys(vault, user1Keypair.publicKey);
+      const encrypted1 = await encryptVaultKeys(vault1, user1Keypair.publicKey);
       const decrypted1 = await decryptVaultKeys(encrypted1, user1Keypair.privateKey);
-      expect(decrypted1.rootFolderKey).toEqual(vault.rootFolderKey);
+      expect(decrypted1.rootFolderKey).toEqual(vault1.rootFolderKey);
 
       // User 2 encrypts and can decrypt
-      const encrypted2 = await encryptVaultKeys(vault, user2Keypair.publicKey);
+      const encrypted2 = await encryptVaultKeys(vault2, user2Keypair.publicKey);
       const decrypted2 = await decryptVaultKeys(encrypted2, user2Keypair.privateKey);
-      expect(decrypted2.rootFolderKey).toEqual(vault.rootFolderKey);
+      expect(decrypted2.rootFolderKey).toEqual(vault2.rootFolderKey);
 
       // User 1 cannot decrypt User 2's encrypted keys
       await expect(decryptVaultKeys(encrypted2, user1Keypair.privateKey)).rejects.toThrow();

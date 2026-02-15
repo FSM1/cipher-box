@@ -41,7 +41,13 @@ export function Settings() {
         </button>
       </header>
       <main className="settings-main">
-        <section className="settings-section">
+        <section className="settings-section" aria-labelledby="settings-account-heading">
+          <h2 id="settings-account-heading" className="settings-section-heading">
+            {'// account & security'}
+          </h2>
+          <p className="settings-section-description">
+            manage your authentication methods and account security.
+          </p>
           <LinkedMethods />
         </section>
       </main>

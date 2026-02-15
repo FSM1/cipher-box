@@ -11,6 +11,7 @@ import { TokenService } from './services/token.service';
 import { JwtIssuerService } from './services/jwt-issuer.service';
 import { GoogleOAuthService } from './services/google-oauth.service';
 import { EmailOtpService } from './services/email-otp.service';
+import { SiweService } from './services/siwe.service';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { User } from './entities/user.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
@@ -36,6 +37,7 @@ import { AuthMethod } from './entities/auth-method.entity';
     JwtIssuerService,
     GoogleOAuthService,
     EmailOtpService,
+    SiweService,
     JwtStrategy,
   ],
   exports: [AuthService, JwtModule],
