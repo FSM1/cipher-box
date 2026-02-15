@@ -1,7 +1,7 @@
 # CipherBox Design System
 
 **Source:** `designs/cipher-box-design.pen`
-**Last Updated:** 2026-01-30
+**Last Updated:** 2026-02-15
 **Status:** Active design system reference
 
 This document serves as the persistent design context for UI mockup generation. Load this file before any Pencil MCP interaction to ensure consistent outputs.
@@ -56,45 +56,45 @@ This document serves as the persistent design context for UI mockup generation. 
 ### Desktop (1440 x 900)
 
 ```text
-┌─────────────────────────────────────────────────────────────────┐
-│  > CIPHERBOX                    ● [CONNECTED] user@matrix.cloud │
-├─────────────────────────────────────────────────────────────────┤
-│  ~/storage/documents/projects                                   │
-│  ┌─────────┐ ┌───────────┐ ┌───────────┐                       │
-│  │--upload │ │ --new-dir │ │ --refresh │                       │
-│  └─────────┘ └───────────┘ └───────────┘                       │
-│  ┌─────────────────────────────────────────────────────────────┐│
-│  │ NAME                    SIZE      TYPE       MODIFIED       ││
-│  ├─────────────────────────────────────────────────────────────┤│
-│  │ [DIR] ..               --        directory  --              ││
-│  │ [DIR] backup_archives  4.2 GB    directory  2026-01-15      ││
-│  │ [FILE] report.pdf      2.4 MB    document   2026-01-20      ││
-│  │ [FILE] data.enc        156 KB    encrypted  2026-01-22      ││
-│  └─────────────────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────────────────┘
++-------------------------------------------------------------+
+|  > CIPHERBOX                    [CONNECTED] user@matrix.cloud |
++-------------------------------------------------------------+
+|  ~/storage/documents/projects                                 |
+|  +----------+ +-----------+ +-----------+                     |
+|  | --upload  | | --new-dir | | --refresh |                    |
+|  +----------+ +-----------+ +-----------+                     |
+|  +-----------------------------------------------------------+|
+|  | NAME                    SIZE      TYPE       MODIFIED      ||
+|  +-----------------------------------------------------------+|
+|  | [DIR] ..               --        directory  --             ||
+|  | [DIR] backup_archives  4.2 GB    directory  2026-01-15     ||
+|  | [FILE] report.pdf      2.4 MB    document   2026-01-20    ||
+|  | [FILE] data.enc        156 KB    encrypted  2026-01-22    ||
+|  +-----------------------------------------------------------+|
++-------------------------------------------------------------+
 ```
 
 ### Component Hierarchy
 
 ```text
 frame (root - 1440x900)
-├── header (n386r)
-│   ├── headerLeft (zNr0C)
-│   │   ├── prompt (D7afA) - ">"
-│   │   └── appName (iJ5Gn) - "CIPHERBOX"
-│   └── headerRight (VA9WI)
-│       ├── statusDot (MhpBr) - with glow effect
-│       ├── statusText (8u2AP) - "[CONNECTED]"
-│       └── userInfo (Mwofn) - email
-├── mainContent (zRTYl)
-│   ├── breadcrumbBar (HLKjX)
-│   ├── controlBar (uMUQZ)
-│   │   ├── btnUpload (1nlwl) - primary filled
-│   │   ├── btnNewFolder (5usp9) - outline
-│   │   └── btnRefresh (aa0ZP) - outline
-│   └── fileListContainer (A87rp)
-│       ├── fileListHeader (JIRd2)
-│       └── rows (7tF1E, MKlFi, ...)
++-- header (n386r)
+|   +-- headerLeft (zNr0C)
+|   |   +-- prompt (D7afA) - ">"
+|   |   +-- appName (iJ5Gn) - "CIPHERBOX"
+|   +-- headerRight (VA9WI)
+|       +-- statusDot (MhpBr) - with glow effect
+|       +-- statusText (8u2AP) - "[CONNECTED]"
+|       +-- userInfo (Mwofn) - email
++-- mainContent (zRTYl)
+|   +-- breadcrumbBar (HLKjX)
+|   +-- controlBar (uMUQZ)
+|   |   +-- btnUpload (1nlwl) - primary filled
+|   |   +-- btnNewFolder (5usp9) - outline
+|   |   +-- btnRefresh (aa0ZP) - outline
+|   +-- fileListContainer (A87rp)
+|       +-- fileListHeader (JIRd2)
+|       +-- rows (7tF1E, MKlFi, ...)
 ```
 
 ## Component Library
@@ -129,6 +129,16 @@ frame (root - 1440x900)
 | Font       | JetBrains Mono 11px |
 | Weight     | 400                 |
 
+### Button - Danger (Filled)
+
+| Property   | Value               |
+| ---------- | ------------------- |
+| Background | `#EF4444`           |
+| Text color | `#FFFFFF`           |
+| Padding    | 8px 20px            |
+| Font       | JetBrains Mono 11px |
+| Weight     | 600                 |
+
 ### File Row
 
 | Property       | Value                     |
@@ -148,6 +158,41 @@ frame (root - 1440x900)
 | Fill     | `#00D084`             |
 | Glow     | 10px blur `#00D08466` |
 
+### Modal Pattern
+
+| Property       | Value                                     |
+| -------------- | ----------------------------------------- |
+| Background     | `#000000`                                 |
+| Border         | 1px `#003322` (or `#00D084` for emphasis) |
+| Width          | 500px (standard), up to 560px for wizards |
+| Layout         | vertical                                  |
+| Header padding | 16px 24px                                 |
+| Body padding   | 24px                                      |
+| Action padding | 16px 24px                                 |
+| Backdrop       | `#000000CC`                               |
+| Close button   | 32x32, border `#003322`, text `#006644`   |
+
+### Wizard Step Indicator
+
+| Property  | Value                                   |
+| --------- | --------------------------------------- |
+| Format    | `[1/3] STEP_NAME` with `---` separators |
+| Active    | `#00D084`, fontWeight 600               |
+| Completed | `#00D084` with checkmark prefix         |
+| Inactive  | `#006644`                               |
+| Separator | `#003322`                               |
+| Padding   | 16px 24px, bottom border `#003322`      |
+
+### Settings Row (Device/Factor)
+
+| Property       | Value                            |
+| -------------- | -------------------------------- |
+| Padding        | 12px 0                           |
+| Border         | 1px bottom `#003322`             |
+| Name color     | `#00D084` (12px, weight 600)     |
+| Metadata color | `#006644` (10px)                 |
+| Status dot     | 6px circle, color matches status |
+
 ## Interaction Patterns
 
 ### Hover States
@@ -165,20 +210,29 @@ frame (root - 1440x900)
 
 - **Skeleton:** Pulsing `#003322` blocks
 - **Spinner:** Terminal-style cursor blink or `[...]`
+- **Waiting:** `[ ... ]` at 24px, bold, with countdown timer
 
 ### Error States
 
 - **Color:** `#EF4444` (red) for errors
 - **Border:** 1px `#EF4444`
 - **Text:** `#EF4444` for error messages
+- **Warning box:** 1px border `#EF444444`, text `#EF4444CC`
 
 ## Design Decision Log
 
 Record design decisions made during discuss-phase sessions.
 
-| Date       | Phase | Decision                                  | Rationale                |
-| ---------- | ----- | ----------------------------------------- | ------------------------ |
-| 2026-01-30 | -     | Initial design system extracted from .pen | Baseline for consistency |
+| Date       | Phase | Decision                                                           | Rationale                                                   |
+| ---------- | ----- | ------------------------------------------------------------------ | ----------------------------------------------------------- |
+| 2026-01-30 | -     | Initial design system extracted from .pen                          | Baseline for consistency                                    |
+| 2026-02-15 | 12.4  | Wizard uses 3-step flow: Setup > Recovery > Confirm                | Balances information density with progressive disclosure    |
+| 2026-02-15 | 12.4  | Recovery phrase shown as 4x3 word grid with numbered cells         | Clear, scannable layout for 12-word phrase                  |
+| 2026-02-15 | 12.4  | Device approval modal uses primary border + glow effect            | Draws urgent attention vs standard modals with muted border |
+| 2026-02-15 | 12.4  | Danger button pattern added (red fill, white text)                 | Needed for DENY action in approval flow                     |
+| 2026-02-15 | 12.4  | Settings Security page uses dedicated sub-nav item                 | Security section separate from general settings             |
+| 2026-02-15 | 12.4  | New device waiting state uses full-page centered card (no sidebar) | Pre-auth state, user doesn't have vault access yet          |
+| 2026-02-15 | 12.4  | Checkbox acknowledgment for recovery phrase confirmation           | User explicitly confirms they saved the phrase              |
 
 ---
 

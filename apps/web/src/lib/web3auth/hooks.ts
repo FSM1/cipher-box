@@ -4,14 +4,22 @@ import { useCoreKit } from './core-kit-provider';
 import { COREKIT_STATUS } from './core-kit';
 import { authApi } from '../api/auth';
 
+export type CoreKitLoginResult = 'logged_in' | 'required_share';
+
 export function useCoreKitAuth() {
-  const { coreKit, status, isLoggedIn, isInitialized } = useCoreKit();
+  const { coreKit, status, isLoggedIn, isInitialized, isRequiredShare } = useCoreKit();
 
   /**
    * Shared Core Kit login logic: takes a CipherBox JWT and userId,
    * calls loginWithJWT and commitChanges.
+   *
+   * Returns 'logged_in' if device factor found, 'required_share' if MFA
+   * is enabled but this device lacks a factor (caller should show recovery UI).
    */
-  async function loginWithCoreKit(cipherboxJwt: string, userId: string): Promise<void> {
+  async function loginWithCoreKit(
+    cipherboxJwt: string,
+    userId: string
+  ): Promise<CoreKitLoginResult> {
     if (!coreKit) throw new Error('Core Kit not initialized');
 
     // Login to Core Kit with CipherBox JWT
@@ -27,14 +35,17 @@ export function useCoreKitAuth() {
     // Handle status
     if (coreKit.status === COREKIT_STATUS.LOGGED_IN) {
       await coreKit.commitChanges();
+      return 'logged_in';
     }
-    // REQUIRED_SHARE means MFA is enabled but device factor missing
-    // Phase 12.4 will handle this -- for now, throw so calling code can surface it
+
+    // REQUIRED_SHARE means MFA is enabled but device factor missing.
+    // Return without throwing -- the caller (useAuth) will handle this
+    // by obtaining a temporary backend token and showing recovery/approval UI.
     if (coreKit.status === COREKIT_STATUS.REQUIRED_SHARE) {
-      throw new Error(
-        'Additional verification required. Multi-factor recovery is not yet supported.'
-      );
+      return 'required_share';
     }
+
+    throw new Error(`Unexpected Core Kit status: ${coreKit.status}`);
   }
 
   /**
@@ -45,14 +56,14 @@ export function useCoreKitAuth() {
    */
   async function loginWithGoogle(
     googleIdToken: string
-  ): Promise<{ cipherboxJwt: string; email?: string }> {
+  ): Promise<{ cipherboxJwt: string; email?: string; userId: string; status: CoreKitLoginResult }> {
     // 1. Send Google idToken to CipherBox backend for verification + JWT issuance
     const { idToken: cipherboxJwt, userId, email } = await authApi.identityGoogle(googleIdToken);
 
     // 2. Login to Core Kit
-    await loginWithCoreKit(cipherboxJwt, userId);
+    const coreKitStatus = await loginWithCoreKit(cipherboxJwt, userId);
 
-    return { cipherboxJwt, email };
+    return { cipherboxJwt, email, userId, status: coreKitStatus };
   }
 
   /**
@@ -61,14 +72,17 @@ export function useCoreKitAuth() {
    * @param email - User's email address
    * @param otp - One-time password from email
    */
-  async function loginWithEmailOtp(email: string, otp: string): Promise<{ cipherboxJwt: string }> {
+  async function loginWithEmailOtp(
+    email: string,
+    otp: string
+  ): Promise<{ cipherboxJwt: string; userId: string; status: CoreKitLoginResult }> {
     // 1. Verify OTP with backend, get CipherBox JWT
     const { idToken: cipherboxJwt, userId } = await authApi.identityEmailVerify(email, otp);
 
     // 2. Login to Core Kit
-    await loginWithCoreKit(cipherboxJwt, userId);
+    const coreKitStatus = await loginWithCoreKit(cipherboxJwt, userId);
 
-    return { cipherboxJwt };
+    return { cipherboxJwt, userId, status: coreKitStatus };
   }
 
   /**
@@ -81,11 +95,11 @@ export function useCoreKitAuth() {
   async function loginWithWallet(
     cipherboxJwt: string,
     userId: string
-  ): Promise<{ cipherboxJwt: string }> {
+  ): Promise<{ cipherboxJwt: string; userId: string; status: CoreKitLoginResult }> {
     // Login to Core Kit with the CipherBox JWT
-    await loginWithCoreKit(cipherboxJwt, userId);
+    const coreKitStatus = await loginWithCoreKit(cipherboxJwt, userId);
 
-    return { cipherboxJwt };
+    return { cipherboxJwt, userId, status: coreKitStatus };
   }
 
   /**
@@ -138,6 +152,7 @@ export function useCoreKitAuth() {
     status,
     isLoggedIn,
     isInitialized,
+    isRequiredShare,
     loginWithGoogle,
     loginWithEmailOtp,
     loginWithWallet,

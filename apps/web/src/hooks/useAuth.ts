@@ -8,6 +8,7 @@ import { useVaultStore } from '../stores/vault.store';
 import { useFolderStore } from '../stores/folder.store';
 import { useSyncStore } from '../stores/sync.store';
 import { useDeviceRegistryStore } from '../stores/device-registry.store';
+import { useMfaStore } from '../stores/mfa.store';
 import {
   initializeVault,
   encryptVaultKeys,
@@ -25,6 +26,7 @@ export function useAuth() {
   const {
     isLoggedIn: coreKitLoggedIn,
     isInitialized: coreKitInitialized,
+    isRequiredShare,
     loginWithGoogle: coreKitLoginGoogle,
     loginWithEmailOtp: coreKitLoginEmail,
     loginWithWallet: coreKitLoginWallet,
@@ -47,6 +49,11 @@ export function useAuth() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const restoringRef = useRef(false);
+
+  // Pending auth state for REQUIRED_SHARE flow
+  // Stored so completeRequiredShare() can resume after factor input
+  const [pendingCipherboxJwt, setPendingCipherboxJwt] = useState<string | null>(null);
+  const [pendingAuthMethod, setPendingAuthMethod] = useState<string | null>(null);
 
   const isLoading = !coreKitInitialized || isLoggingIn || isLoggingOut;
 
@@ -190,6 +197,32 @@ export function useAuth() {
   );
 
   /**
+   * Complete the login flow after REQUIRED_SHARE is resolved.
+   * Called after inputFactorKey() succeeds (from recovery phrase or cross-device approval).
+   * Uses the stored pendingCipherboxJwt to call completeBackendAuth with the REAL publicKey
+   * (since Core Kit is now LOGGED_IN), then navigates to /files.
+   */
+  const completeRequiredShare = useCallback(async (): Promise<void> => {
+    const jwt = pendingCipherboxJwt;
+    const method = pendingAuthMethod;
+
+    if (!jwt || !method) {
+      throw new Error('No pending auth info for REQUIRED_SHARE completion');
+    }
+
+    // Core Kit should now be LOGGED_IN after inputFactorKey()
+    // Complete backend auth with the REAL publicKey (replaces the placeholder session)
+    await completeBackendAuth(method, jwt);
+
+    // Clear pending state
+    setPendingCipherboxJwt(null);
+    setPendingAuthMethod(null);
+
+    // Navigate to files
+    navigate('/files');
+  }, [pendingCipherboxJwt, pendingAuthMethod, completeBackendAuth, navigate]);
+
+  /**
    * Login with Google OAuth token.
    * Flow: Google idToken -> CipherBox backend -> CipherBox JWT ->
    * Core Kit loginWithJWT -> backend /auth/login (corekit type)
@@ -200,8 +233,41 @@ export function useAuth() {
       setIsLoggingIn(true);
       try {
         // 1. Core Kit login via CipherBox identity provider
-        const { cipherboxJwt, email } = await coreKitLoginGoogle(googleIdToken);
+        const {
+          cipherboxJwt,
+          email,
+          userId,
+          status: coreKitStatus,
+        } = await coreKitLoginGoogle(googleIdToken);
 
+        if (coreKitStatus === 'required_share') {
+          // MFA enabled but device factor missing.
+          // Store pending auth info for later completion after factor input.
+          setPendingCipherboxJwt(cipherboxJwt);
+          setPendingAuthMethod('google');
+
+          // Obtain temporary backend access token so the new device can
+          // call bulletin board API endpoints (device-approval/*).
+          // Uses placeholder publicKey since Core Kit is in REQUIRED_SHARE
+          // state and we can't export the TSS key yet.
+          const tempLoginResponse = await authApi.login({
+            idToken: cipherboxJwt,
+            publicKey: `pending-core-kit-${userId}`,
+            loginType: 'corekit',
+          });
+          setAccessToken(tempLoginResponse.accessToken);
+
+          if (email) {
+            setUserEmail(email);
+          }
+
+          // Do NOT call completeBackendAuth() or navigate('/files')
+          // The component tree will see isRequiredShare === true and
+          // render recovery/approval UI.
+          return;
+        }
+
+        // Normal path: Core Kit logged in, proceed as before
         // 2. Complete backend auth + vault init
         await completeBackendAuth('google', cipherboxJwt);
 
@@ -219,7 +285,7 @@ export function useAuth() {
         setIsLoggingIn(false);
       }
     },
-    [isLoggingIn, coreKitLoginGoogle, completeBackendAuth, setUserEmail, navigate]
+    [isLoggingIn, coreKitLoginGoogle, completeBackendAuth, setAccessToken, setUserEmail, navigate]
   );
 
   /**
@@ -233,15 +299,25 @@ export function useAuth() {
       setIsLoggingIn(true);
       try {
         // 1. Core Kit login via CipherBox identity provider
-        const { cipherboxJwt } = await coreKitLoginEmail(email, otp);
+        const { cipherboxJwt, userId, status: coreKitStatus } = await coreKitLoginEmail(email, otp);
 
-        // 2. Complete backend auth + vault init
+        if (coreKitStatus === 'required_share') {
+          setPendingCipherboxJwt(cipherboxJwt);
+          setPendingAuthMethod('email');
+
+          const tempLoginResponse = await authApi.login({
+            idToken: cipherboxJwt,
+            publicKey: `pending-core-kit-${userId}`,
+            loginType: 'corekit',
+          });
+          setAccessToken(tempLoginResponse.accessToken);
+          setUserEmail(email);
+          return;
+        }
+
+        // Normal path
         await completeBackendAuth('email', cipherboxJwt);
-
-        // 4. Store email for display in UI
         setUserEmail(email);
-
-        // 5. Navigate to files
         navigate('/files');
       } catch (error) {
         console.error('[useAuth] Email login failed:', error);
@@ -250,7 +326,7 @@ export function useAuth() {
         setIsLoggingIn(false);
       }
     },
-    [isLoggingIn, coreKitLoginEmail, completeBackendAuth, setUserEmail, navigate]
+    [isLoggingIn, coreKitLoginEmail, completeBackendAuth, setAccessToken, setUserEmail, navigate]
   );
 
   /**
@@ -264,12 +340,23 @@ export function useAuth() {
       setIsLoggingIn(true);
       try {
         // 1. Core Kit login via CipherBox identity provider
-        await coreKitLoginWallet(cipherboxJwt, userId);
+        const { status: coreKitStatus } = await coreKitLoginWallet(cipherboxJwt, userId);
 
-        // 2. Complete backend auth + vault init
+        if (coreKitStatus === 'required_share') {
+          setPendingCipherboxJwt(cipherboxJwt);
+          setPendingAuthMethod('wallet');
+
+          const tempLoginResponse = await authApi.login({
+            idToken: cipherboxJwt,
+            publicKey: `pending-core-kit-${userId}`,
+            loginType: 'corekit',
+          });
+          setAccessToken(tempLoginResponse.accessToken);
+          return;
+        }
+
+        // Normal path
         await completeBackendAuth('wallet', cipherboxJwt);
-
-        // 3. Navigate to files
         navigate('/files');
       } catch (error) {
         console.error('[useAuth] Wallet login failed:', error);
@@ -278,7 +365,7 @@ export function useAuth() {
         setIsLoggingIn(false);
       }
     },
-    [isLoggingIn, coreKitLoginWallet, completeBackendAuth, navigate]
+    [isLoggingIn, coreKitLoginWallet, completeBackendAuth, setAccessToken, navigate]
   );
 
   /**
@@ -321,9 +408,14 @@ export function useAuth() {
       useVaultStore.getState().clearVaultKeys();
       useSyncStore.getState().reset();
       useDeviceRegistryStore.getState().clearRegistry();
+      useMfaStore.getState().reset();
       clearAuthState();
 
-      // 4. Navigate to login
+      // 4. Clear pending REQUIRED_SHARE state
+      setPendingCipherboxJwt(null);
+      setPendingAuthMethod(null);
+
+      // 5. Navigate to login
       navigate('/');
     } catch (error) {
       console.error('[useAuth] Logout failed:', error);
@@ -332,7 +424,10 @@ export function useAuth() {
       useVaultStore.getState().clearVaultKeys();
       useSyncStore.getState().reset();
       useDeviceRegistryStore.getState().clearRegistry();
+      useMfaStore.getState().reset();
       clearAuthState();
+      setPendingCipherboxJwt(null);
+      setPendingAuthMethod(null);
       navigate('/');
     } finally {
       setIsLoggingOut(false);
@@ -390,12 +485,15 @@ export function useAuth() {
   return {
     isLoading,
     isAuthenticated,
+    isRequiredShare,
     lastAuthMethod,
     userEmail,
+    pendingAuthMethod,
     login,
     loginWithGoogle,
     loginWithEmail,
     loginWithWallet,
+    completeRequiredShare,
     logout,
   };
 }

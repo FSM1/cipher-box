@@ -33,7 +33,7 @@ type DeviceRegistryState = {
  * Used by:
  * - useAuth (sets registry after login, clears on logout)
  * - useDeviceRegistrySync (updates registry on polling)
- * - Future Phase 12.4 device approval UI
+ * - DeviceApprovalModal + useDeviceApproval (cross-device approval flow)
  */
 export const useDeviceRegistryStore = create<DeviceRegistryState>((set) => ({
   // State

@@ -30,6 +30,8 @@ import { VaultController } from '../src/vault/vault.controller';
 import { VaultService } from '../src/vault/vault.service';
 import { IpnsController } from '../src/ipns/ipns.controller';
 import { IpnsService } from '../src/ipns/ipns.service';
+import { DeviceApprovalController } from '../src/device-approval/device-approval.controller';
+import { DeviceApprovalService } from '../src/device-approval/device-approval.service';
 import { User } from '../src/auth/entities/user.entity';
 import { AuthMethod } from '../src/auth/entities/auth-method.entity';
 import { RefreshToken } from '../src/auth/entities/refresh-token.entity';
@@ -75,6 +77,7 @@ const mockConfigService = {
     IpfsController,
     VaultController,
     IpnsController,
+    DeviceApprovalController,
   ],
   providers: [
     AppService,
@@ -118,6 +121,10 @@ const mockConfigService = {
       provide: IpnsService,
       useValue: {},
     },
+    {
+      provide: DeviceApprovalService,
+      useValue: {},
+    },
     mockRepository,
     mockAuthMethodRepository,
     mockRefreshTokenRepository,
@@ -146,6 +153,7 @@ async function generateOpenApiSpec() {
     .addTag('Files', 'File operations endpoints')
     .addTag('IPFS', 'IPFS relay endpoints')
     .addTag('IPNS', 'IPNS relay endpoints')
+    .addTag('device-approval', 'Cross-device approval endpoints')
     .build();
 
   // Create document from the app

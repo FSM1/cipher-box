@@ -13,6 +13,16 @@ import { User } from './entities/user.entity';
 import { AuthMethod } from './entities/auth-method.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 
+// Mock ioredis to prevent real Redis connections in tests
+const mockRedisInstance = {
+  del: jest.fn().mockResolvedValue(1),
+  set: jest.fn().mockResolvedValue('OK'),
+  quit: jest.fn().mockResolvedValue('OK'),
+};
+jest.mock('ioredis', () => {
+  return jest.fn().mockImplementation(() => mockRedisInstance);
+});
+
 /** Helper: compute expected SHA-256 hex hash */
 function sha256Hex(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -103,7 +113,11 @@ describe('AuthService', () => {
   });
 
   afterEach(() => {
-    jest.resetAllMocks();
+    jest.clearAllMocks();
+    // Restore redis mock defaults after clearAllMocks
+    mockRedisInstance.del.mockResolvedValue(1);
+    mockRedisInstance.set.mockResolvedValue('OK');
+    mockRedisInstance.quit.mockResolvedValue('OK');
   });
 
   describe('login', () => {
@@ -727,7 +741,8 @@ describe('AuthService', () => {
 
       const result = await service.getLinkedMethods('user-id');
 
-      expect(result[0].identifier).toBe('legacy-plaintext-email');
+      // H-09: Falls back to '[redacted]' when identifierDisplay is null (prevents PII leakage)
+      expect(result[0].identifier).toBe('[redacted]');
     });
 
     it('should return empty array if no methods', async () => {
