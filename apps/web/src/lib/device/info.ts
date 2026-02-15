@@ -12,7 +12,7 @@ import { bytesToHex, CRYPTO_VERSION, type DevicePlatform } from '@cipherbox/cryp
  * Auto-detect device information from the browser environment.
  *
  * Returns platform-appropriate metadata for the device registry entry.
- * Device name and model are kept simple -- users can rename in Phase 12.4.
+ * Device name and model are kept simple -- users can rename in Settings.
  *
  * @returns Device metadata for registry registration
  */

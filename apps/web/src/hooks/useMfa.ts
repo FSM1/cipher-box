@@ -76,11 +76,29 @@ export function useMfa() {
       // Commit any pending changes first (CRITICAL for manualSync mode -- Pitfall 1)
       await coreKit.commitChanges();
 
+      // Capture TSS public key BEFORE enableMFA for stability verification (MFA-04)
+      const preMfaTssPub = coreKit.getKeyDetails().tssPubKey;
+
       // enableMFA creates device factor + recovery factor atomically
       const backupFactorKeyHex = await coreKit.enableMFA({});
 
       // Commit the MFA changes
       await coreKit.commitChanges();
+
+      // Defensive check: verify TSS public key unchanged after MFA enrollment (MFA-04)
+      const postMfaTssPub = coreKit.getKeyDetails().tssPubKey;
+      if (preMfaTssPub?.x && preMfaTssPub?.y && postMfaTssPub?.x && postMfaTssPub?.y) {
+        const preX = preMfaTssPub.x.toString('hex');
+        const preY = preMfaTssPub.y.toString('hex');
+        const postX = postMfaTssPub.x.toString('hex');
+        const postY = postMfaTssPub.y.toString('hex');
+        if (preX !== postX || preY !== postY) {
+          console.error('[MFA] CRITICAL: TSS public key changed after enableMFA!', {
+            pre: { x: preX, y: preY },
+            post: { x: postX, y: postY },
+          });
+        }
+      }
 
       // Convert to 24-word mnemonic for user display
       const mnemonic = keyToMnemonic(backupFactorKeyHex);
