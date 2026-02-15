@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 12.4 (MFA + Cross-Device Approval)
-Plan: 1 of 5 planned
+Plan: 2 of 5 planned
 Status: In progress
-Last activity: 2026-02-15 -- Completed 12.4-01-PLAN.md (Bulletin Board API)
+Last activity: 2026-02-15 -- Completed 12.4-02-PLAN.md (MFA Hook + Login Flow)
 
-Progress: [################....] 78% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 plan 1/5)
+Progress: [################....] 79% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 plan 2/5)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 90
-- Average duration: 4.9 min
-- Total execution time: 7.8 hours
+- Total plans completed: 91
+- Average duration: 5.0 min
+- Total execution time: 8.1 hours
 
 **By Phase (M1 summary):**
 
@@ -33,11 +33,11 @@ Progress: [################....] 78% (M1 complete, M2 Phase 12 complete, Phase 1
 | M2 Phase 12.2   | 3/3   | 10 min  | 3.3 min  |
 | M2 Phase 12.3   | 4/4   | 39 min  | 9.8 min  |
 | M2 Phase 12.3.1 | 4/4   | 38 min  | 9.5 min  |
-| M2 Phase 12.4   | 1/5   | 8 min   | 8.0 min  |
+| M2 Phase 12.4   | 2/5   | 28 min  | 14.0 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 10m, 18m, 6m, 8m
+- Last 5 plans: 10m, 18m, 6m, 8m, 20m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -86,6 +86,9 @@ Recent decisions affecting current work:
 | Plan 04 work completed by Plan 03 broader scope                  | 12.3.1-04 | Desktop Rust, E2E helpers, controller spec changes committed in Plan 03 execution                               |
 | Auto-expire on read (no cron for 5min TTL)                       | 12.4-01   | Pending requests past TTL marked expired on getStatus; simpler than background cleanup                          |
 | Hard delete on cancel (not status change)                        | 12.4-01   | Cancelled requests have no audit value; 5min TTL keeps table small                                              |
+| loginWithCoreKit returns typed union (not void)                  | 12.4-02   | 'logged_in' or 'required_share' enables callers to branch without catching errors                               |
+| Placeholder publicKey for REQUIRED_SHARE temp auth               | 12.4-02   | 'pending-core-kit-{userId}' allows bulletin board API access before TSS key available                           |
+| Pending auth state in React useState (not Zustand)               | 12.4-02   | Component-scoped, cleared on unmount or logout; no need for global persistence                                  |
 
 ### Pending Todos
 
@@ -135,17 +138,17 @@ Recent decisions affecting current work:
 - Phase 12.1 (AES-CTR Streaming): NEEDS `/gsd:research-phase` -- MediaSource/Service Worker decryption, byte-range IPFS, CTR nonce management
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
 - Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
-- Phase 12.4 (MFA + Cross-Device): COMPLETE research, IN PROGRESS execution -- Plan 01 (bulletin board API) done, Plans 02-05 remaining
+- Phase 12.4 (MFA + Cross-Device): COMPLETE research, IN PROGRESS execution -- Plans 01-02 done, Plans 03-05 remaining
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 12.4-01-PLAN.md (Bulletin Board API)
+Stopped at: Completed 12.4-02-PLAN.md (MFA Hook + Login Flow)
 Resume file: None
-Next: 12.4-02-PLAN.md (next plan in Phase 12.4)
+Next: 12.4-03-PLAN.md (next plan in Phase 12.4)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-15 after completing Phase 12.4 Plan 01 (Bulletin Board API)_
+_Last updated: 2026-02-15 after completing Phase 12.4 Plan 02 (MFA Hook + Login Flow)_
