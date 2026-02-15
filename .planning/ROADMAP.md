@@ -52,7 +52,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 12.2: Encrypted Device Registry** - Encrypted device metadata on IPFS for cross-device infrastructure (INSERTED)
 - [x] **Phase 12.3: SIWE + Unified Identity** - Wallet login via SIWE, multi-auth linking, ADR-001 cleanup (INSERTED)
 - [x] **Phase 12.3.1: Pre-Wipe Identity Cleanup** - Deterministic IPNS derivation, hashed identifiers, remove auto-linking (INSERTED)
-- [ ] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
+- [x] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
 - [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
 - [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
@@ -209,11 +209,11 @@ Plans:
 
 Plans:
 
-- [ ] 12.4-01-PLAN.md — Backend bulletin board API (DeviceApproval entity, service, controller, DTOs)
-- [ ] 12.4-02-PLAN.md — MFA hooks + store + REQUIRED_SHARE login flow branching
-- [ ] 12.4-03-PLAN.md — MFA enrollment wizard + Settings Security tab UI
-- [ ] 12.4-04-PLAN.md — Cross-device approval flow (waiting screen, approval modal, recovery input, enrollment prompt)
-- [ ] 12.4-05-PLAN.md — API client regen + integration verification + cleanup
+- [x] 12.4-01-PLAN.md — Backend bulletin board API (DeviceApproval entity, service, controller, DTOs)
+- [x] 12.4-02-PLAN.md — MFA hooks + store + REQUIRED_SHARE login flow branching
+- [x] 12.4-03-PLAN.md — MFA enrollment wizard + Settings Security tab UI
+- [x] 12.4-04-PLAN.md — Cross-device approval flow (waiting screen, approval modal, recovery input, enrollment prompt)
+- [x] 12.4-05-PLAN.md — API client regen + integration verification + cleanup
 
 ### Phase 13: File Versioning
 
@@ -320,7 +320,7 @@ Parallel phases:
 | 12.2 Device Registry       | M2        | 3/3            | Complete    | 2026-02-13 |
 | 12.3 SIWE + Identity       | M2        | 4/4            | Complete    | 2026-02-14 |
 | 12.3.1 Identity Cleanup    | M2        | 4/4            | Complete    | 2026-02-14 |
-| 12.4 MFA + Cross-Device    | M2        | 0/5            | Planning    | -          |
+| 12.4 MFA + Cross-Device    | M2        | 5/5            | Complete    | 2026-02-15 |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
