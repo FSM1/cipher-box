@@ -29150,7 +29150,7 @@
                   "id": "yMZ03",
                   "name": "progBar",
                   "width": "fill_container",
-                  "height": 4,
+                  "height": 3,
                   "gap": 4,
                   "children": [
                     {
@@ -29158,7 +29158,7 @@
                       "id": "tkfOV",
                       "name": "prog1",
                       "width": "fill_container",
-                      "height": 4,
+                      "height": 3,
                       "fill": "#00D084"
                     },
                     {
@@ -29166,7 +29166,7 @@
                       "id": "s4nx6",
                       "name": "prog2",
                       "width": "fill_container",
-                      "height": 4,
+                      "height": 3,
                       "fill": "#00D084"
                     },
                     {
@@ -29174,7 +29174,7 @@
                       "id": "jmywr",
                       "name": "prog3",
                       "width": "fill_container",
-                      "height": 4,
+                      "height": 3,
                       "fill": "#003322"
                     }
                   ]
