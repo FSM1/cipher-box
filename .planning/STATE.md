@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 12.4 in progress (MFA + Cross-Device Approval)
+**Current focus:** Milestone 2 -- Phase 12.4 complete (MFA + Cross-Device Approval)
 
 ## Current Position
 
 Phase: 12.4 (MFA + Cross-Device Approval)
-Plan: 4 of 5 planned
-Status: In progress
-Last activity: 2026-02-15 -- Completed 12.4-04-PLAN.md (Cross-Device Approval Flow UI + Recovery Input + MFA Enrollment Prompt)
+Plan: 5 of 5 planned
+Status: Phase complete
+Last activity: 2026-02-15 -- Completed 12.4-05-PLAN.md (API Client Regeneration + Integration Verification + Keypair Stability Check)
 
-Progress: [################....] 80% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 plan 4/5)
+Progress: [#################...] 85% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 93
+- Total plans completed: 94
 - Average duration: 5.0 min
-- Total execution time: 8.4 hours
+- Total execution time: 8.5 hours
 
 **By Phase (M1 summary):**
 
@@ -33,11 +33,11 @@ Progress: [################....] 80% (M1 complete, M2 Phase 12 complete, Phase 1
 | M2 Phase 12.2   | 3/3   | 10 min  | 3.3 min  |
 | M2 Phase 12.3   | 4/4   | 39 min  | 9.8 min  |
 | M2 Phase 12.3.1 | 4/4   | 38 min  | 9.5 min  |
-| M2 Phase 12.4   | 4/5   | 43 min  | 10.8 min |
+| M2 Phase 12.4   | 5/5   | 47 min  | 9.4 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 6m, 8m, 20m, 6m, 9m
+- Last 5 plans: 8m, 20m, 6m, 9m, 4m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -96,6 +96,8 @@ Recent decisions affecting current work:
 | MFA prompt dismissal persisted in localStorage by user email     | 12.4-04   | Key is cipherbox*mfa_prompt_dismissed*{email} for cross-session persistence, fallback to 'default'               |
 | DeviceApprovalModal mounted in AppShell after AppFooter          | 12.4-04   | Fixed overlay visible on all authenticated pages regardless of current route                                     |
 | LoginFooter extracted to avoid duplication in Login.tsx          | 12.4-04   | Three render paths (normal, waiting, recovery) share the same footer component                                   |
+| Generated client wrapper pattern for device-approval service     | 12.4-05   | deviceApprovalApi wraps Orval-generated functions for backward-compatible import surface                         |
+| tssPubKey defensive check as permanent enableMfa() guard         | 12.4-05   | Logs CRITICAL if keypair changes after MFA enrollment; does not throw (enrollment already succeeded)             |
 
 ### Pending Todos
 
@@ -145,17 +147,17 @@ Recent decisions affecting current work:
 - Phase 12.1 (AES-CTR Streaming): NEEDS `/gsd:research-phase` -- MediaSource/Service Worker decryption, byte-range IPFS, CTR nonce management
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
 - Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
-- Phase 12.4 (MFA + Cross-Device): COMPLETE research, IN PROGRESS execution -- Plans 01-04 done, Plan 05 remaining
+- Phase 12.4 (MFA + Cross-Device): COMPLETE -- all 5 plans done (bulletin board API, MFA hooks, enrollment wizard, cross-device approval, integration verification)
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 12.4-04-PLAN.md (Cross-Device Approval Flow UI + Recovery Input + MFA Enrollment Prompt)
+Stopped at: Completed 12.4-05-PLAN.md (API Client Regeneration + Integration Verification + Keypair Stability Check)
 Resume file: None
-Next: 12.4-05-PLAN.md (next plan in Phase 12.4)
+Next: Phase 12.4 complete. Next phase to be determined.
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-15 after completing Phase 12.4 Plan 04 (Cross-Device Approval Flow UI)_
+_Last updated: 2026-02-15 after completing Phase 12.4 Plan 05 (API Client Regeneration + Integration Verification)_
