@@ -240,6 +240,9 @@ importers:
       '@tanstack/react-query':
         specifier: ^5.62.0
         version: 5.90.19(react@18.3.1)
+      '@tkey/common-types':
+        specifier: ^15.1.0
+        version: 15.1.0(@babel/runtime@7.28.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
       '@toruslabs/tss-dkls-lib':
         specifier: ^4.1.0
         version: 4.1.0
@@ -252,6 +255,9 @@ importers:
       axios:
         specifier: ^1.13.2
         version: 1.13.2
+      bn.js:
+        specifier: ^5.2.1
+        version: 5.2.2
       buffer:
         specifier: ^6.0.3
         version: 6.0.3
@@ -295,6 +301,9 @@ importers:
       '@rollup/plugin-replace':
         specifier: ^6.0.3
         version: 6.0.3(rollup@4.55.2)
+      '@types/bn.js':
+        specifier: ^5.1.6
+        version: 5.2.0
       '@types/react':
         specifier: ^18.3.20
         version: 18.3.27

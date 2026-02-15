@@ -117,10 +117,10 @@ Requirements for production release. Each maps to roadmap phases 12+.
 
 ### Multi-Factor Authentication
 
-- [ ] **MFA-01**: User can enable MFA via Web3Auth settings
-- [ ] **MFA-02**: User can configure device share as an MFA factor
-- [ ] **MFA-03**: User can generate and store a backup recovery phrase
-- [ ] **MFA-04**: MFA enrollment does not change the derived keypair (vault remains accessible)
+- [x] **MFA-01**: User can enable MFA via Web3Auth settings
+- [x] **MFA-02**: User can configure device share as an MFA factor
+- [x] **MFA-03**: User can generate and store a backup recovery phrase
+- [x] **MFA-04**: MFA enrollment does not change the derived keypair (vault remains accessible)
 
 ### File Versioning
 
@@ -272,123 +272,123 @@ Explicitly excluded. Documented to prevent scope creep.
 
 Which phases cover which requirements. Updated during roadmap creation.
 
-| Requirement | Phase    | Status   |
-| ----------- | -------- | -------- |
-| AUTH-01     | Phase 2  | Complete |
-| AUTH-02     | Phase 2  | Complete |
-| AUTH-03     | Phase 2  | Complete |
-| AUTH-04     | Phase 2  | Complete |
-| AUTH-05     | Phase 2  | Complete |
-| AUTH-06     | Phase 2  | Complete |
-| AUTH-07     | Phase 2  | Complete |
-| CRYPT-01    | Phase 3  | Complete |
-| CRYPT-02    | Phase 3  | Complete |
-| CRYPT-03    | Phase 3  | Complete |
-| CRYPT-04    | Phase 3  | Complete |
-| CRYPT-05    | Phase 3  | Complete |
-| CRYPT-06    | Phase 3  | Complete |
-| FILE-01     | Phase 4  | Complete |
-| FILE-02     | Phase 4  | Complete |
-| FILE-03     | Phase 4  | Complete |
-| FILE-04     | Phase 5  | Complete |
-| FILE-05     | Phase 5  | Complete |
-| FILE-06     | Phase 4  | Complete |
-| FILE-07     | Phase 4  | Complete |
-| FOLD-01     | Phase 5  | Complete |
-| FOLD-02     | Phase 5  | Complete |
-| FOLD-03     | Phase 5  | Complete |
-| FOLD-04     | Phase 5  | Complete |
-| FOLD-05     | Phase 5  | Complete |
-| FOLD-06     | Phase 5  | Complete |
-| API-01      | Phase 2  | Complete |
-| API-02      | Phase 2  | Complete |
-| API-03      | Phase 4  | Complete |
-| API-04      | Phase 4  | Complete |
-| API-05      | Phase 5  | Complete |
-| API-06      | Phase 4  | Complete |
-| API-07      | Phase 4  | Complete |
-| API-08      | Phase 8  | Complete |
-| SYNC-01     | Phase 7  | Complete |
-| SYNC-02     | Phase 9  | Complete |
-| SYNC-03     | Phase 7  | Complete |
-| TEE-01      | Phase 8  | Complete |
-| TEE-02      | Phase 8  | Complete |
-| TEE-03      | Phase 8  | Complete |
-| TEE-04      | Phase 8  | Complete |
-| TEE-05      | Phase 8  | Complete |
-| WEB-01      | Phase 6  | Complete |
-| WEB-02      | Phase 6  | Complete |
-| WEB-03      | Phase 6  | Complete |
-| WEB-04      | Phase 6  | Complete |
-| WEB-05      | Phase 6  | Complete |
-| WEB-06      | Phase 6  | Complete |
-| DESK-01     | Phase 9  | Complete |
-| DESK-02     | Phase 9  | Complete |
-| DESK-03     | Phase 9  | Complete |
-| DESK-04     | Phase 9  | Complete |
-| DESK-05     | Phase 9  | Complete |
-| DESK-06     | Phase 9  | Complete |
-| DESK-07     | Phase 9  | Complete |
-| PORT-01     | Phase 10 | Complete |
-| PORT-02     | Phase 10 | Complete |
-| PORT-03     | Phase 10 | Complete |
-| MFA-01      | Phase 12 | Pending  |
-| MFA-02      | Phase 12 | Pending  |
-| MFA-03      | Phase 12 | Pending  |
-| MFA-04      | Phase 12 | Pending  |
-| VER-01      | Phase 13 | Pending  |
-| VER-02      | Phase 13 | Pending  |
-| VER-03      | Phase 13 | Pending  |
-| VER-04      | Phase 13 | Pending  |
-| VER-05      | Phase 13 | Pending  |
-| SHARE-01    | Phase 14 | Pending  |
-| SHARE-02    | Phase 14 | Pending  |
-| SHARE-03    | Phase 14 | Pending  |
-| SHARE-04    | Phase 14 | Pending  |
-| SHARE-05    | Phase 14 | Pending  |
-| SHARE-06    | Phase 15 | Pending  |
-| SHARE-07    | Phase 15 | Pending  |
-| SRCH-01     | Phase 15 | Pending  |
-| SRCH-02     | Phase 15 | Pending  |
-| SRCH-03     | Phase 15 | Pending  |
-| SYNC-04     | Phase 16 | Pending  |
-| SYNC-05     | Phase 16 | Pending  |
-| SYNC-06     | Phase 16 | Pending  |
-| TEE-06      | Phase 17 | Pending  |
-| PLAT-01     | Phase 11 | Pending  |
-| PLAT-02     | Phase 11 | Pending  |
-| BILL-01     | Phase 18 | Pending  |
-| BILL-02     | Phase 18 | Pending  |
-| BILL-03     | Phase 18 | Pending  |
-| BILL-04     | Phase 18 | Pending  |
-| BILL-05     | Phase 18 | Pending  |
-| BILL-06     | Phase 18 | Pending  |
-| BILL-07     | Phase 18 | Pending  |
-| BILL-08     | Phase 18 | Pending  |
-| TEAM-01     | Phase 19 | Pending  |
-| TEAM-02     | Phase 19 | Pending  |
-| TEAM-03     | Phase 19 | Pending  |
-| TEAM-04     | Phase 19 | Pending  |
-| TEAM-05     | Phase 19 | Pending  |
-| TEAM-06     | Phase 19 | Pending  |
-| TEAM-07     | Phase 19 | Pending  |
-| TEAM-08     | Phase 19 | Pending  |
-| TEAM-09     | Phase 19 | Pending  |
-| EDIT-01     | Phase 20 | Pending  |
-| EDIT-02     | Phase 20 | Pending  |
-| EDIT-03     | Phase 20 | Pending  |
-| EDIT-04     | Phase 20 | Pending  |
-| EDIT-05     | Phase 20 | Pending  |
-| EDIT-06     | Phase 20 | Pending  |
-| EDIT-07     | Phase 20 | Pending  |
-| EDIT-08     | Phase 20 | Pending  |
-| EDIT-09     | Phase 20 | Pending  |
-| SIGN-01     | Phase 21 | Pending  |
-| SIGN-02     | Phase 21 | Pending  |
-| SIGN-03     | Phase 21 | Pending  |
-| SIGN-04     | Phase 21 | Pending  |
-| SIGN-05     | Phase 21 | Pending  |
-| SIGN-06     | Phase 21 | Pending  |
+| Requirement | Phase      | Status   |
+| ----------- | ---------- | -------- |
+| AUTH-01     | Phase 2    | Complete |
+| AUTH-02     | Phase 2    | Complete |
+| AUTH-03     | Phase 2    | Complete |
+| AUTH-04     | Phase 2    | Complete |
+| AUTH-05     | Phase 2    | Complete |
+| AUTH-06     | Phase 2    | Complete |
+| AUTH-07     | Phase 2    | Complete |
+| CRYPT-01    | Phase 3    | Complete |
+| CRYPT-02    | Phase 3    | Complete |
+| CRYPT-03    | Phase 3    | Complete |
+| CRYPT-04    | Phase 3    | Complete |
+| CRYPT-05    | Phase 3    | Complete |
+| CRYPT-06    | Phase 3    | Complete |
+| FILE-01     | Phase 4    | Complete |
+| FILE-02     | Phase 4    | Complete |
+| FILE-03     | Phase 4    | Complete |
+| FILE-04     | Phase 5    | Complete |
+| FILE-05     | Phase 5    | Complete |
+| FILE-06     | Phase 4    | Complete |
+| FILE-07     | Phase 4    | Complete |
+| FOLD-01     | Phase 5    | Complete |
+| FOLD-02     | Phase 5    | Complete |
+| FOLD-03     | Phase 5    | Complete |
+| FOLD-04     | Phase 5    | Complete |
+| FOLD-05     | Phase 5    | Complete |
+| FOLD-06     | Phase 5    | Complete |
+| API-01      | Phase 2    | Complete |
+| API-02      | Phase 2    | Complete |
+| API-03      | Phase 4    | Complete |
+| API-04      | Phase 4    | Complete |
+| API-05      | Phase 5    | Complete |
+| API-06      | Phase 4    | Complete |
+| API-07      | Phase 4    | Complete |
+| API-08      | Phase 8    | Complete |
+| SYNC-01     | Phase 7    | Complete |
+| SYNC-02     | Phase 9    | Complete |
+| SYNC-03     | Phase 7    | Complete |
+| TEE-01      | Phase 8    | Complete |
+| TEE-02      | Phase 8    | Complete |
+| TEE-03      | Phase 8    | Complete |
+| TEE-04      | Phase 8    | Complete |
+| TEE-05      | Phase 8    | Complete |
+| WEB-01      | Phase 6    | Complete |
+| WEB-02      | Phase 6    | Complete |
+| WEB-03      | Phase 6    | Complete |
+| WEB-04      | Phase 6    | Complete |
+| WEB-05      | Phase 6    | Complete |
+| WEB-06      | Phase 6    | Complete |
+| DESK-01     | Phase 9    | Complete |
+| DESK-02     | Phase 9    | Complete |
+| DESK-03     | Phase 9    | Complete |
+| DESK-04     | Phase 9    | Complete |
+| DESK-05     | Phase 9    | Complete |
+| DESK-06     | Phase 9    | Complete |
+| DESK-07     | Phase 9    | Complete |
+| PORT-01     | Phase 10   | Complete |
+| PORT-02     | Phase 10   | Complete |
+| PORT-03     | Phase 10   | Complete |
+| MFA-01      | Phase 12.4 | Complete |
+| MFA-02      | Phase 12.4 | Complete |
+| MFA-03      | Phase 12.4 | Complete |
+| MFA-04      | Phase 12.4 | Complete |
+| VER-01      | Phase 13   | Pending  |
+| VER-02      | Phase 13   | Pending  |
+| VER-03      | Phase 13   | Pending  |
+| VER-04      | Phase 13   | Pending  |
+| VER-05      | Phase 13   | Pending  |
+| SHARE-01    | Phase 14   | Pending  |
+| SHARE-02    | Phase 14   | Pending  |
+| SHARE-03    | Phase 14   | Pending  |
+| SHARE-04    | Phase 14   | Pending  |
+| SHARE-05    | Phase 14   | Pending  |
+| SHARE-06    | Phase 15   | Pending  |
+| SHARE-07    | Phase 15   | Pending  |
+| SRCH-01     | Phase 15   | Pending  |
+| SRCH-02     | Phase 15   | Pending  |
+| SRCH-03     | Phase 15   | Pending  |
+| SYNC-04     | Phase 16   | Pending  |
+| SYNC-05     | Phase 16   | Pending  |
+| SYNC-06     | Phase 16   | Pending  |
+| TEE-06      | Phase 17   | Pending  |
+| PLAT-01     | Phase 11   | Pending  |
+| PLAT-02     | Phase 11   | Pending  |
+| BILL-01     | Phase 18   | Pending  |
+| BILL-02     | Phase 18   | Pending  |
+| BILL-03     | Phase 18   | Pending  |
+| BILL-04     | Phase 18   | Pending  |
+| BILL-05     | Phase 18   | Pending  |
+| BILL-06     | Phase 18   | Pending  |
+| BILL-07     | Phase 18   | Pending  |
+| BILL-08     | Phase 18   | Pending  |
+| TEAM-01     | Phase 19   | Pending  |
+| TEAM-02     | Phase 19   | Pending  |
+| TEAM-03     | Phase 19   | Pending  |
+| TEAM-04     | Phase 19   | Pending  |
+| TEAM-05     | Phase 19   | Pending  |
+| TEAM-06     | Phase 19   | Pending  |
+| TEAM-07     | Phase 19   | Pending  |
+| TEAM-08     | Phase 19   | Pending  |
+| TEAM-09     | Phase 19   | Pending  |
+| EDIT-01     | Phase 20   | Pending  |
+| EDIT-02     | Phase 20   | Pending  |
+| EDIT-03     | Phase 20   | Pending  |
+| EDIT-04     | Phase 20   | Pending  |
+| EDIT-05     | Phase 20   | Pending  |
+| EDIT-06     | Phase 20   | Pending  |
+| EDIT-07     | Phase 20   | Pending  |
+| EDIT-08     | Phase 20   | Pending  |
+| EDIT-09     | Phase 20   | Pending  |
+| SIGN-01     | Phase 21   | Pending  |
+| SIGN-02     | Phase 21   | Pending  |
+| SIGN-03     | Phase 21   | Pending  |
+| SIGN-04     | Phase 21   | Pending  |
+| SIGN-05     | Phase 21   | Pending  |
+| SIGN-06     | Phase 21   | Pending  |
 
 **Milestone 1 Coverage:**
 

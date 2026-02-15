@@ -12,6 +12,7 @@ import { VaultModule } from './vault/vault.module';
 import { IpnsModule } from './ipns/ipns.module';
 import { TeeModule } from './tee/tee.module';
 import { RepublishModule } from './republish/republish.module';
+import { DeviceApprovalModule } from './device-approval/device-approval.module';
 import { User } from './auth/entities/user.entity';
 import { RefreshToken } from './auth/entities/refresh-token.entity';
 import { AuthMethod } from './auth/entities/auth-method.entity';
@@ -20,6 +21,7 @@ import { FolderIpns } from './ipns/entities';
 import { TeeKeyState } from './tee/tee-key-state.entity';
 import { TeeKeyRotationLog } from './tee/tee-key-rotation-log.entity';
 import { IpnsRepublishSchedule } from './republish/republish-schedule.entity';
+import { DeviceApproval } from './device-approval/device-approval.entity';
 
 @Module({
   imports: [
@@ -70,6 +72,7 @@ import { IpnsRepublishSchedule } from './republish/republish-schedule.entity';
           TeeKeyState,
           TeeKeyRotationLog,
           IpnsRepublishSchedule,
+          DeviceApproval,
         ],
         synchronize: ['development', 'test'].includes(
           configService.get<string>('NODE_ENV', 'development')
@@ -88,6 +91,7 @@ import { IpnsRepublishSchedule } from './republish/republish-schedule.entity';
     IpnsModule,
     TeeModule,
     RepublishModule,
+    DeviceApprovalModule,
   ],
   controllers: [AppController],
   providers: [AppService],

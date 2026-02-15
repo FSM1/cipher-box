@@ -8,10 +8,15 @@
 
 export * from './authMethodResponseDto';
 export * from './authMethodResponseDtoType';
+export * from './createApprovalDto';
 export * from './derivationInfoDto';
 export * from './derivationInfoDtoDerivationVersion';
 export * from './derivationInfoDtoMethod';
 export * from './desktopRefreshDto';
+export * from './deviceApprovalControllerCreateRequest201';
+export * from './deviceApprovalControllerGetPending200Item';
+export * from './deviceApprovalControllerGetStatus200';
+export * from './deviceApprovalControllerGetStatus200Status';
 export * from './googleLoginDto';
 export * from './healthControllerCheck200';
 export * from './healthControllerCheck200Info';
@@ -34,6 +39,8 @@ export * from './publishIpnsResponseDto';
 export * from './quotaResponseDto';
 export * from './refreshDto';
 export * from './resolveIpnsResponseDto';
+export * from './respondApprovalDto';
+export * from './respondApprovalDtoAction';
 export * from './sendOtpDto';
 export * from './sendOtpResponseDto';
 export * from './teeKeysDto';

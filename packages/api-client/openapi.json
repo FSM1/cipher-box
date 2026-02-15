@@ -807,6 +807,236 @@
         "tags": ["IPNS"]
       }
     },
+    "/device-approval/request": {
+      "post": {
+        "description": "New device creates an approval request with an ephemeral public key for ECIES key exchange. Request expires after 5 minutes.",
+        "operationId": "DeviceApprovalController_createRequest",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApprovalDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Approval request created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create device approval request",
+        "tags": ["device-approval"]
+      }
+    },
+    "/device-approval/{requestId}/status": {
+      "get": {
+        "description": "New device polls this endpoint to check if the request has been approved, denied, or expired. Returns the encrypted factor key on approval.",
+        "operationId": "DeviceApprovalController_getStatus",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Approval status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": ["pending", "approved", "denied", "expired"]
+                    },
+                    "encryptedFactorKey": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "ECIES-encrypted factor key (hex)"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Request not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Poll approval request status",
+        "tags": ["device-approval"]
+      }
+    },
+    "/device-approval/pending": {
+      "get": {
+        "description": "Existing device fetches all non-expired pending approval requests for the authenticated user.",
+        "operationId": "DeviceApprovalController_getPending",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "List of pending approval requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "properties": {
+                      "requestId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "deviceId": {
+                        "type": "string"
+                      },
+                      "deviceName": {
+                        "type": "string"
+                      },
+                      "ephemeralPublicKey": {
+                        "type": "string"
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "expiresAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List pending approval requests",
+        "tags": ["device-approval"]
+      }
+    },
+    "/device-approval/{requestId}/respond": {
+      "post": {
+        "description": "Existing device approves or denies an approval request. On approve, includes the ECIES-encrypted factor key.",
+        "operationId": "DeviceApprovalController_respond",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RespondApprovalDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Response recorded"
+          },
+          "400": {
+            "description": "Already responded or expired"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Request not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Respond to approval request",
+        "tags": ["device-approval"]
+      }
+    },
+    "/device-approval/{requestId}": {
+      "delete": {
+        "description": "New device cancels its own pending approval request (cleanup on navigation away or recovery phrase used).",
+        "operationId": "DeviceApprovalController_cancel",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Request cancelled"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Request not found or not pending"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Cancel approval request",
+        "tags": ["device-approval"]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "HealthController_check",
@@ -888,6 +1118,10 @@
     {
       "name": "IPNS",
       "description": "IPNS relay endpoints"
+    },
+    {
+      "name": "device-approval",
+      "description": "Cross-device approval endpoints"
     }
   ],
   "servers": [],
@@ -910,8 +1144,8 @@
           },
           "publicKey": {
             "type": "string",
-            "description": "secp256k1 public key exported from Core Kit after loginWithJWT",
-            "example": "0x04..."
+            "description": "secp256k1 public key exported from Core Kit after loginWithJWT (uncompressed, 130 hex chars)",
+            "example": "04abc123..."
           },
           "loginType": {
             "type": "string",
@@ -1503,6 +1737,49 @@
           }
         },
         "required": ["success", "cid", "sequenceNumber"]
+      },
+      "CreateApprovalDto": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "description": "Device ID (SHA-256 hash of device Ed25519 public key)",
+            "example": "a1b2c3d4e5f6..."
+          },
+          "deviceName": {
+            "type": "string",
+            "description": "Human-readable device name (e.g., \"Chrome on macOS\")",
+            "example": "Chrome on macOS"
+          },
+          "ephemeralPublicKey": {
+            "type": "string",
+            "description": "Ephemeral secp256k1 public key in hex (uncompressed) for ECIES key exchange",
+            "example": "04abc123..."
+          }
+        },
+        "required": ["deviceId", "deviceName", "ephemeralPublicKey"]
+      },
+      "RespondApprovalDto": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "Approval action",
+            "enum": ["approve", "deny"],
+            "example": "approve"
+          },
+          "encryptedFactorKey": {
+            "type": "string",
+            "description": "ECIES-encrypted factor key in hex (required when action is approve)",
+            "example": "04abc123..."
+          },
+          "respondedByDeviceId": {
+            "type": "string",
+            "description": "Device ID of the responding (approving/denying) device",
+            "example": "a1b2c3d4e5f6..."
+          }
+        },
+        "required": ["action", "respondedByDeviceId"]
       }
     }
   }
