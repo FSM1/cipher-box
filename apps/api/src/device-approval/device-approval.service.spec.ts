@@ -14,6 +14,11 @@ describe('DeviceApprovalService', () => {
     save: jest.Mock;
     find: jest.Mock;
     remove: jest.Mock;
+    manager: {
+      transaction: jest.Mock;
+      findOne: jest.Mock;
+      save: jest.Mock;
+    };
   };
 
   const testUserId = '550e8400-e29b-41d4-a716-446655440000';
@@ -45,12 +50,24 @@ describe('DeviceApprovalService', () => {
   });
 
   beforeEach(async () => {
+    const mockManager = {
+      findOne: jest.fn(),
+      save: jest.fn(),
+    };
     mockRepo = {
       findOne: jest.fn(),
       create: jest.fn(),
       save: jest.fn(),
       find: jest.fn(),
       remove: jest.fn(),
+      manager: {
+        ...mockManager,
+        transaction: jest
+          .fn()
+          .mockImplementation(async (cb: (manager: typeof mockManager) => Promise<void>) => {
+            await cb(mockManager);
+          }),
+      },
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -241,8 +258,8 @@ describe('DeviceApprovalService', () => {
   describe('respond', () => {
     it('should approve request, store encrypted key, and set respondedBy', async () => {
       const approval = makePendingApproval();
-      mockRepo.findOne.mockResolvedValue(approval);
-      mockRepo.save.mockResolvedValue(approval);
+      mockRepo.manager.findOne.mockResolvedValue(approval);
+      mockRepo.manager.save.mockResolvedValue(approval);
 
       const dto: RespondApprovalDto = {
         action: 'approve',
@@ -255,13 +272,13 @@ describe('DeviceApprovalService', () => {
       expect(approval.status).toBe('approved');
       expect(approval.encryptedFactorKey).toBe(testEncryptedFactorKey);
       expect(approval.respondedBy).toBe(testRespondingDeviceId);
-      expect(mockRepo.save).toHaveBeenCalledWith(approval);
+      expect(mockRepo.manager.save).toHaveBeenCalledWith(approval);
     });
 
     it('should deny request without setting encrypted key', async () => {
       const approval = makePendingApproval();
-      mockRepo.findOne.mockResolvedValue(approval);
-      mockRepo.save.mockResolvedValue(approval);
+      mockRepo.manager.findOne.mockResolvedValue(approval);
+      mockRepo.manager.save.mockResolvedValue(approval);
 
       const dto: RespondApprovalDto = {
         action: 'deny',
@@ -273,11 +290,11 @@ describe('DeviceApprovalService', () => {
       expect(approval.status).toBe('denied');
       expect(approval.encryptedFactorKey).toBeNull();
       expect(approval.respondedBy).toBe(testRespondingDeviceId);
-      expect(mockRepo.save).toHaveBeenCalledWith(approval);
+      expect(mockRepo.manager.save).toHaveBeenCalledWith(approval);
     });
 
     it('should throw NotFoundException when request not found', async () => {
-      mockRepo.findOne.mockResolvedValue(null);
+      mockRepo.manager.findOne.mockResolvedValue(null);
 
       const dto: RespondApprovalDto = {
         action: 'approve',
@@ -295,7 +312,7 @@ describe('DeviceApprovalService', () => {
 
     it('should throw BadRequestException when already responded to', async () => {
       const approvedApproval = makePendingApproval({ status: 'approved' });
-      mockRepo.findOne.mockResolvedValue(approvedApproval);
+      mockRepo.manager.findOne.mockResolvedValue(approvedApproval);
 
       const dto: RespondApprovalDto = {
         action: 'approve',
@@ -309,15 +326,15 @@ describe('DeviceApprovalService', () => {
       await expect(service.respond(testRequestId, testUserId, dto)).rejects.toThrow(
         'Approval request has already been responded to'
       );
-      expect(mockRepo.save).not.toHaveBeenCalled();
+      expect(mockRepo.manager.save).not.toHaveBeenCalled();
     });
 
     it('should throw BadRequestException when expired and mark status as expired', async () => {
       const expiredApproval = makePendingApproval({
         expiresAt: new Date(Date.now() - 1000),
       });
-      mockRepo.findOne.mockResolvedValue(expiredApproval);
-      mockRepo.save.mockResolvedValue(expiredApproval);
+      mockRepo.manager.findOne.mockResolvedValue(expiredApproval);
+      mockRepo.manager.save.mockResolvedValue(expiredApproval);
 
       const dto: RespondApprovalDto = {
         action: 'approve',
@@ -329,12 +346,12 @@ describe('DeviceApprovalService', () => {
         new BadRequestException('Approval request has expired')
       );
       expect(expiredApproval.status).toBe('expired');
-      expect(mockRepo.save).toHaveBeenCalledWith(expiredApproval);
+      expect(mockRepo.manager.save).toHaveBeenCalledWith(expiredApproval);
     });
 
     it('should throw BadRequestException for self-approval (H-02)', async () => {
       const approval = makePendingApproval();
-      mockRepo.findOne.mockResolvedValue(approval);
+      mockRepo.manager.findOne.mockResolvedValue(approval);
 
       const dto: RespondApprovalDto = {
         action: 'approve',
@@ -348,12 +365,12 @@ describe('DeviceApprovalService', () => {
       await expect(service.respond(testRequestId, testUserId, dto)).rejects.toThrow(
         'A device cannot approve its own request'
       );
-      expect(mockRepo.save).not.toHaveBeenCalled();
+      expect(mockRepo.manager.save).not.toHaveBeenCalled();
     });
 
     it('should throw BadRequestException when approving without encryptedFactorKey (H-03)', async () => {
       const approval = makePendingApproval();
-      mockRepo.findOne.mockResolvedValue(approval);
+      mockRepo.manager.findOne.mockResolvedValue(approval);
 
       const dto: RespondApprovalDto = {
         action: 'approve',
@@ -366,7 +383,7 @@ describe('DeviceApprovalService', () => {
       await expect(service.respond(testRequestId, testUserId, dto)).rejects.toThrow(
         'encryptedFactorKey is required when approving'
       );
-      expect(mockRepo.save).not.toHaveBeenCalled();
+      expect(mockRepo.manager.save).not.toHaveBeenCalled();
     });
   });
 

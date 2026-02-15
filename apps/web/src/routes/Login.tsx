@@ -148,6 +148,11 @@ export function Login() {
               onBack={handleBackToWaiting}
             />
           )}
+          {loginError && (
+            <div className="login-error" role="alert" aria-live="polite">
+              {loginError}
+            </div>
+          )}
           <LoginFooter />
         </div>
       </>

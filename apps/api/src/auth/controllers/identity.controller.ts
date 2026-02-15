@@ -220,7 +220,13 @@ export class IdentityController implements OnModuleDestroy {
 
     // 2. Consume nonce from Redis (single-use)
     const nonceKey = `siwe:nonce:${parsed.nonce}`;
-    const nonceDeleted = await this.redis.del(nonceKey);
+    let nonceDeleted: number;
+    try {
+      nonceDeleted = await this.redis.del(nonceKey);
+    } catch (err) {
+      this.logger.error('Redis error during nonce consumption', err);
+      throw new UnauthorizedException('Nonce verification failed');
+    }
     if (!nonceDeleted) {
       throw new UnauthorizedException('Invalid or expired nonce');
     }

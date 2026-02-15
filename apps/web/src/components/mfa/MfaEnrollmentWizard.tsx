@@ -17,12 +17,13 @@ type WizardStep = 1 | 2 | 3;
  * Step 3: Confirmation that MFA is enabled with factor count.
  */
 export function MfaEnrollmentWizard({ onComplete, onCancel }: MfaEnrollmentWizardProps) {
-  const { enableMfa, factorCount, threshold } = useMfa();
+  const { enableMfa, checkMfaStatus, factorCount, threshold } = useMfa();
 
   const [step, setStep] = useState<WizardStep>(1);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mnemonic, setMnemonic] = useState<string[]>([]);
+  const [partiallyEnabled, setPartiallyEnabled] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
 
   const handleEnableMfa = useCallback(async () => {
@@ -34,9 +35,20 @@ export function MfaEnrollmentWizard({ onComplete, onCancel }: MfaEnrollmentWizar
       setIsLoading(false);
     } catch (err) {
       setIsLoading(false);
-      setError(err instanceof Error ? err.message : 'Failed to enable MFA');
+      // If MFA was partially enabled (server succeeded but post-check failed),
+      // guide user to recovery instead of a broken retry loop
+      const mfaStatus = checkMfaStatus();
+      if (mfaStatus.isMfaEnabled) {
+        setPartiallyEnabled(true);
+        setError(
+          'MFA was enabled but an error occurred. Please close this dialog and use ' +
+            '"Regenerate Recovery Phrase" in Settings > Security to obtain your recovery phrase.'
+        );
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to enable MFA');
+      }
     }
-  }, [enableMfa]);
+  }, [enableMfa, checkMfaStatus]);
 
   const handleGoToStep2 = useCallback(() => {
     setStep(2);
@@ -139,13 +151,15 @@ export function MfaEnrollmentWizard({ onComplete, onCancel }: MfaEnrollmentWizar
             {error && (
               <div className="mfa-wizard-error" role="alert">
                 <p>{error}</p>
-                <button
-                  type="button"
-                  className="mfa-wizard-btn mfa-wizard-btn-secondary"
-                  onClick={handleEnableMfa}
-                >
-                  --retry
-                </button>
+                {!partiallyEnabled && (
+                  <button
+                    type="button"
+                    className="mfa-wizard-btn mfa-wizard-btn-secondary"
+                    onClick={handleEnableMfa}
+                  >
+                    --retry
+                  </button>
+                )}
               </div>
             )}
 

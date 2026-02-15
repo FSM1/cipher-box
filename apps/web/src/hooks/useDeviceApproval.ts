@@ -103,17 +103,17 @@ export function useDeviceApproval() {
    */
   const handleApprovalSuccess = useCallback(
     async (encryptedFactorKeyHex: string) => {
-      const ephPrivKey = ephemeralPrivKeyRef.current;
-      if (!ephPrivKey) {
-        throw new Error('Ephemeral private key not available');
-      }
-      if (!coreKit) {
-        throw new Error('Core Kit not initialized');
-      }
-
       setApprovalStatus('completing');
 
       try {
+        const ephPrivKey = ephemeralPrivKeyRef.current;
+        if (!ephPrivKey) {
+          throw new Error('Ephemeral private key not available');
+        }
+        if (!coreKit) {
+          throw new Error('Core Kit not initialized');
+        }
+
         // 1. ECIES-decrypt the factor key
         const encrypted = hexToBytes(encryptedFactorKeyHex);
         const factorKeyBytes = await unwrapKey(encrypted, ephPrivKey);
@@ -141,12 +141,13 @@ export function useDeviceApproval() {
 
         setApprovalStatus('approved');
       } catch (err) {
+        stopRequesterPolling();
         clearEphemeralKey();
         setApprovalError(err instanceof Error ? err.message : 'Failed to complete approval');
         setApprovalStatus('error');
       }
     },
-    [coreKit, inputFactorKey, completeRequiredShare, clearEphemeralKey]
+    [coreKit, inputFactorKey, completeRequiredShare, clearEphemeralKey, stopRequesterPolling]
   );
 
   /**

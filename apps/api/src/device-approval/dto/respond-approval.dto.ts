@@ -1,5 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsIn, ValidateIf, IsHexadecimal, Length } from 'class-validator';
+import {
+  IsString,
+  IsNotEmpty,
+  IsIn,
+  ValidateIf,
+  IsHexadecimal,
+  Length,
+  MaxLength,
+} from 'class-validator';
 
 export class RespondApprovalDto {
   @ApiProperty({
@@ -19,6 +27,7 @@ export class RespondApprovalDto {
   @IsString()
   @IsNotEmpty()
   @IsHexadecimal()
+  @MaxLength(1024, { message: 'encryptedFactorKey exceeds maximum expected size' })
   encryptedFactorKey?: string;
 
   @ApiProperty({

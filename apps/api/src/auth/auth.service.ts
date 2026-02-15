@@ -383,7 +383,13 @@ export class AuthService implements OnModuleDestroy {
 
     // Consume nonce from Redis (single-use) — same pattern as identity.controller.ts walletLogin
     const nonceKey = `siwe:nonce:${parsed.nonce}`;
-    const nonceDeleted = await this.redis.del(nonceKey);
+    let nonceDeleted: number;
+    try {
+      nonceDeleted = await this.redis.del(nonceKey);
+    } catch (err) {
+      this.logger.error('Redis error during nonce consumption', err);
+      throw new BadRequestException('Nonce verification failed');
+    }
     if (!nonceDeleted) {
       throw new BadRequestException('Invalid or expired nonce');
     }

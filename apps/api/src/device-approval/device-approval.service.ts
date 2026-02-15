@@ -101,40 +101,43 @@ export class DeviceApprovalService {
    * On approve, stores the ECIES-encrypted factor key.
    */
   async respond(requestId: string, userId: string, dto: RespondApprovalDto): Promise<void> {
-    const approval = await this.repo.findOne({
-      where: { id: requestId, userId },
-    });
+    await this.repo.manager.transaction(async (manager) => {
+      const approval = await manager.findOne(DeviceApproval, {
+        where: { id: requestId, userId },
+        lock: { mode: 'pessimistic_write' },
+      });
 
-    if (!approval) {
-      throw new NotFoundException('Approval request not found');
-    }
-
-    if (approval.status !== 'pending') {
-      throw new BadRequestException('Approval request has already been responded to');
-    }
-
-    if (approval.expiresAt < new Date()) {
-      approval.status = 'expired';
-      await this.repo.save(approval);
-      throw new BadRequestException('Approval request has expired');
-    }
-
-    // H-02: Prevent self-approval — responding device must differ from requesting device
-    if (dto.respondedByDeviceId === approval.deviceId) {
-      throw new BadRequestException('A device cannot approve its own request');
-    }
-
-    if (dto.action === 'approve') {
-      // H-03: Require encryptedFactorKey when approving (defense-in-depth)
-      if (!dto.encryptedFactorKey) {
-        throw new BadRequestException('encryptedFactorKey is required when approving');
+      if (!approval) {
+        throw new NotFoundException('Approval request not found');
       }
-      approval.encryptedFactorKey = dto.encryptedFactorKey;
-    }
 
-    approval.status = dto.action === 'approve' ? 'approved' : 'denied';
-    approval.respondedBy = dto.respondedByDeviceId;
-    await this.repo.save(approval);
+      if (approval.status !== 'pending') {
+        throw new BadRequestException('Approval request has already been responded to');
+      }
+
+      if (approval.expiresAt < new Date()) {
+        approval.status = 'expired';
+        await manager.save(approval);
+        throw new BadRequestException('Approval request has expired');
+      }
+
+      // H-02: Prevent self-approval — responding device must differ from requesting device
+      if (dto.respondedByDeviceId === approval.deviceId) {
+        throw new BadRequestException('A device cannot approve its own request');
+      }
+
+      if (dto.action === 'approve') {
+        // H-03: Require encryptedFactorKey when approving (defense-in-depth)
+        if (!dto.encryptedFactorKey) {
+          throw new BadRequestException('encryptedFactorKey is required when approving');
+        }
+        approval.encryptedFactorKey = dto.encryptedFactorKey;
+      }
+
+      approval.status = dto.action === 'approve' ? 'approved' : 'denied';
+      approval.respondedBy = dto.respondedByDeviceId;
+      await manager.save(approval);
+    });
   }
 
   /**
