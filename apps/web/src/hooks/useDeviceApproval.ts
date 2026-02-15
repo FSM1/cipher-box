@@ -144,7 +144,6 @@ export function useDeviceApproval() {
         clearEphemeralKey();
         setApprovalError(err instanceof Error ? err.message : 'Failed to complete approval');
         setApprovalStatus('error');
-        throw err;
       }
     },
     [coreKit, inputFactorKey, completeRequiredShare, clearEphemeralKey]
@@ -158,25 +157,29 @@ export function useDeviceApproval() {
       stopRequesterPolling();
 
       const poll = async () => {
+        // Separate network fetch from success handling so network errors
+        // don't swallow failures from handleApprovalSuccess/completeRequiredShare
+        let result: ApprovalStatusResponse;
         try {
-          const result: ApprovalStatusResponse = await deviceApprovalApi.getStatus(requestId);
-
-          if (result.status === 'approved' && result.encryptedFactorKey) {
-            stopRequesterPolling();
-            await handleApprovalSuccess(result.encryptedFactorKey);
-          } else if (result.status === 'denied') {
-            stopRequesterPolling();
-            clearEphemeralKey();
-            setApprovalStatus('denied');
-          } else if (result.status === 'expired') {
-            stopRequesterPolling();
-            clearEphemeralKey();
-            setApprovalStatus('expired');
-          }
-          // 'pending' -> continue polling
+          result = await deviceApprovalApi.getStatus(requestId);
         } catch {
           // Network error -- continue polling, don't crash
+          return;
         }
+
+        if (result.status === 'approved' && result.encryptedFactorKey) {
+          stopRequesterPolling();
+          await handleApprovalSuccess(result.encryptedFactorKey);
+        } else if (result.status === 'denied') {
+          stopRequesterPolling();
+          clearEphemeralKey();
+          setApprovalStatus('denied');
+        } else if (result.status === 'expired') {
+          stopRequesterPolling();
+          clearEphemeralKey();
+          setApprovalStatus('expired');
+        }
+        // 'pending' -> continue polling
       };
 
       requesterPollRef.current = setInterval(poll, 3000);
