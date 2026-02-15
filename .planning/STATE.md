@@ -105,7 +105,9 @@ Recent decisions affecting current work:
 
 - `2026-02-07-web-worker-large-file-encryption.md` -- Offload large file encryption to Web Worker (area: ui)
 - `2026-02-10-fix-flaky-post-reload-e2e-tests.md` -- Fix flaky post-reload e2e tests (3.8, 3.10) (area: testing)
+- `2026-02-13-deterministic-vault-ipns-derivation.md` -- Migrate vault IPNS key to deterministic derivation from user privateKey (area: crypto)
 - `2026-02-14-bring-your-own-ipfs-node.md` -- Add bring-your-own IPFS node support (area: api)
+- `2026-02-14-file-metadata-evolution-v2.md` -- Split file metadata into per-file IPNS objects (area: crypto)
 - `2026-02-14-erc-1271-contract-wallet-authentication.md` -- Add ERC-1271 contract wallet authentication support (area: auth)
 - `2026-02-14-extend-e2e-tests-wallet-and-mfa-flows.md` -- Extend E2E tests to cover wallet and MFA flows (area: testing)
 - `2026-02-14-fix-orval-generated-client-any-warnings.md` -- Fix no-explicit-any warnings in generated API client (area: tooling)
