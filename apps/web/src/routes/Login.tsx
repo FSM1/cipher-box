@@ -4,21 +4,35 @@ import { StatusIndicator } from '../components/layout';
 import { GoogleLoginButton } from '../components/auth/GoogleLoginButton';
 import { EmailLoginForm } from '../components/auth/EmailLoginForm';
 import { WalletLoginButton } from '../components/auth/WalletLoginButton';
+import { DeviceWaitingScreen } from '../components/mfa/DeviceWaitingScreen';
+import { RecoveryInput } from '../components/mfa/RecoveryInput';
 import { MatrixBackground } from '../components/MatrixBackground';
 import { StagingBanner } from '../components/StagingBanner';
 import { useHealthControllerCheck } from '../api/health/health';
 import { useAuth } from '../hooks/useAuth';
 
+type MfaView = 'waiting' | 'recovery';
+
 /**
  * Login page with terminal aesthetic and matrix background.
  * CipherBox-branded custom login UI with Google OAuth and email OTP.
- * Replaces the old Web3Auth modal [CONNECT] button (Phase 12).
+ *
+ * When REQUIRED_SHARE is detected (MFA enabled, new device), switches
+ * to either DeviceWaitingScreen or RecoveryInput instead of the login form.
  */
 export function Login() {
-  const { isAuthenticated, isLoading, loginWithGoogle, loginWithEmail, loginWithWallet } =
-    useAuth();
+  const {
+    isAuthenticated,
+    isLoading,
+    isRequiredShare,
+    completeRequiredShare,
+    loginWithGoogle,
+    loginWithEmail,
+    loginWithWallet,
+  } = useAuth();
   const navigate = useNavigate();
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [mfaView, setMfaView] = useState<MfaView>('waiting');
 
   // Health check for disabling connect button when API is down
   const {
@@ -78,6 +92,25 @@ export function Login() {
     [loginWithWallet]
   );
 
+  const handleRecoveryFallback = useCallback(() => {
+    setMfaView('recovery');
+  }, []);
+
+  const handleBackToWaiting = useCallback(() => {
+    setMfaView('waiting');
+  }, []);
+
+  const handleRecoveryComplete = useCallback(async () => {
+    // Recovery succeeded: Core Kit is now LOGGED_IN.
+    // completeRequiredShare() will do backend auth + vault load + navigate.
+    await completeRequiredShare();
+  }, [completeRequiredShare]);
+
+  const handleApprovalComplete = useCallback(() => {
+    // Approval flow already called completeRequiredShare() inside the hook.
+    // Nothing extra needed here -- navigation happens in completeRequiredShare.
+  }, []);
+
   // Show loading state while checking authentication
   if (isLoading) {
     return (
@@ -86,33 +119,31 @@ export function Login() {
         <div className="login-container">
           <MatrixBackground opacity={0.3} frameInterval={50} />
           <div className="loading">initializing...</div>
-          <footer className="login-footer">
-            <div className="footer-left">
-              <span className="footer-copyright">(c) 2026 CipherBox</span>
-            </div>
-            <div className="footer-center">
-              <a href="#" className="footer-link">
-                [help]
-              </a>
-              <a href="#" className="footer-link">
-                [privacy]
-              </a>
-              <a href="#" className="footer-link">
-                [terms]
-              </a>
-              <a
-                href="https://github.com/fsm1/cipher-box"
-                className="footer-link"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                [github]
-              </a>
-            </div>
-            <div className="footer-right">
-              <StatusIndicator />
-            </div>
-          </footer>
+          <LoginFooter />
+        </div>
+      </>
+    );
+  }
+
+  // REQUIRED_SHARE state: show MFA challenge UI instead of login form
+  if (isRequiredShare) {
+    return (
+      <>
+        <StagingBanner variant="login" />
+        <div className="login-container">
+          <MatrixBackground opacity={0.3} frameInterval={50} />
+          {mfaView === 'waiting' ? (
+            <DeviceWaitingScreen
+              onRecoveryFallback={handleRecoveryFallback}
+              onApprovalComplete={handleApprovalComplete}
+            />
+          ) : (
+            <RecoveryInput
+              onRecoveryComplete={handleRecoveryComplete}
+              onBack={handleBackToWaiting}
+            />
+          )}
+          <LoginFooter />
         </div>
       </>
     );
@@ -152,34 +183,41 @@ export function Login() {
             </div>
           )}
         </div>
-        <footer className="login-footer">
-          <div className="footer-left">
-            <span className="footer-copyright">(c) 2026 CipherBox</span>
-          </div>
-          <div className="footer-center">
-            <a href="#" className="footer-link">
-              [help]
-            </a>
-            <a href="#" className="footer-link">
-              [privacy]
-            </a>
-            <a href="#" className="footer-link">
-              [terms]
-            </a>
-            <a
-              href="https://github.com/fsm1/cipher-box"
-              className="footer-link"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              [github]
-            </a>
-          </div>
-          <div className="footer-right">
-            <StatusIndicator />
-          </div>
-        </footer>
+        <LoginFooter />
       </div>
     </>
+  );
+}
+
+/** Shared footer to avoid duplication across login states. */
+function LoginFooter() {
+  return (
+    <footer className="login-footer">
+      <div className="footer-left">
+        <span className="footer-copyright">(c) 2026 CipherBox</span>
+      </div>
+      <div className="footer-center">
+        <a href="#" className="footer-link">
+          [help]
+        </a>
+        <a href="#" className="footer-link">
+          [privacy]
+        </a>
+        <a href="#" className="footer-link">
+          [terms]
+        </a>
+        <a
+          href="https://github.com/fsm1/cipher-box"
+          className="footer-link"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          [github]
+        </a>
+      </div>
+      <div className="footer-right">
+        <StatusIndicator />
+      </div>
+    </footer>
   );
 }
