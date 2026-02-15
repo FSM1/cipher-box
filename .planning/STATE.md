@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 12.4 (MFA + Cross-Device Approval)
-Plan: 2 of 5 planned
+Plan: 3 of 5 planned
 Status: In progress
-Last activity: 2026-02-15 -- Completed 12.4-02-PLAN.md (MFA Hook + Login Flow)
+Last activity: 2026-02-15 -- Completed 12.4-03-PLAN.md (MFA Enrollment Wizard + Settings Security Tab)
 
-Progress: [################....] 79% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 plan 2/5)
+Progress: [################....] 80% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 plan 3/5)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 91
+- Total plans completed: 92
 - Average duration: 5.0 min
-- Total execution time: 8.1 hours
+- Total execution time: 8.2 hours
 
 **By Phase (M1 summary):**
 
@@ -33,11 +33,11 @@ Progress: [################....] 79% (M1 complete, M2 Phase 12 complete, Phase 1
 | M2 Phase 12.2   | 3/3   | 10 min  | 3.3 min  |
 | M2 Phase 12.3   | 4/4   | 39 min  | 9.8 min  |
 | M2 Phase 12.3.1 | 4/4   | 38 min  | 9.5 min  |
-| M2 Phase 12.4   | 2/5   | 28 min  | 14.0 min |
+| M2 Phase 12.4   | 3/5   | 34 min  | 11.3 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 10m, 18m, 6m, 8m, 20m
+- Last 5 plans: 18m, 6m, 8m, 20m, 6m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -89,6 +89,9 @@ Recent decisions affecting current work:
 | loginWithCoreKit returns typed union (not void)                  | 12.4-02   | 'logged_in' or 'required_share' enables callers to branch without catching errors                               |
 | Placeholder publicKey for REQUIRED_SHARE temp auth               | 12.4-02   | 'pending-core-kit-{userId}' allows bulletin board API access before TSS key available                           |
 | Pending auth state in React useState (not Zustand)               | 12.4-02   | Component-scoped, cleared on unmount or logout; no need for global persistence                                  |
+| FactorInfo extended with additionalMetadata for device matching  | 12.4-03   | Core Kit shareDescriptions parsed to expose deviceId for factor-to-device matching                              |
+| ARIA tablist/tabpanel for Settings tab navigation                | 12.4-03   | Proper accessibility roles for tab switching between Linked Methods and Security                                |
+| Inline confirm pattern for destructive MFA actions               | 12.4-03   | Revoke/regenerate use inline confirm/cancel, not modal dialog, matching terminal aesthetic                      |
 
 ### Pending Todos
 
@@ -138,17 +141,17 @@ Recent decisions affecting current work:
 - Phase 12.1 (AES-CTR Streaming): NEEDS `/gsd:research-phase` -- MediaSource/Service Worker decryption, byte-range IPFS, CTR nonce management
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
 - Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
-- Phase 12.4 (MFA + Cross-Device): COMPLETE research, IN PROGRESS execution -- Plans 01-02 done, Plans 03-05 remaining
+- Phase 12.4 (MFA + Cross-Device): COMPLETE research, IN PROGRESS execution -- Plans 01-03 done, Plans 04-05 remaining
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
 Last session: 2026-02-15
-Stopped at: Completed 12.4-02-PLAN.md (MFA Hook + Login Flow)
+Stopped at: Completed 12.4-03-PLAN.md (MFA Enrollment Wizard + Settings Security Tab)
 Resume file: None
-Next: 12.4-03-PLAN.md (next plan in Phase 12.4)
+Next: 12.4-04-PLAN.md (next plan in Phase 12.4)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-15 after completing Phase 12.4 Plan 02 (MFA Hook + Login Flow)_
+_Last updated: 2026-02-15 after completing Phase 12.4 Plan 03 (MFA Enrollment Wizard + Settings Security Tab)_
