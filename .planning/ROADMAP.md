@@ -196,7 +196,7 @@ Plans:
 **Goal**: Users can enroll in MFA with device shares and recovery phrases, and approve new devices from existing authenticated devices
 **Depends on**: Phase 12.3.1 (identity cleanup complete, deterministic IPNS for recovery)
 **Requirements**: MFA-01, MFA-02, MFA-03, MFA-04
-**Research flag**: NEEDS `/gsd:research-phase` -- Core Kit enableMFA() flow, createFactor/inputFactorKey for cross-device, bulletin board API design, ECIES ephemeral key exchange
+**Research flag**: COMPLETE -- Core Kit enableMFA() flow, factor management, bulletin board API, ECIES ephemeral key exchange researched
 **Success Criteria** (what must be TRUE):
 
 1. User can enable MFA from settings and is guided through factor enrollment (device share + recovery phrase)
@@ -205,9 +205,15 @@ Plans:
 4. User's derived keypair (publicKey) remains identical after MFA enrollment — vault data stays accessible
 5. MFA factors are manageable from settings (view, add, revoke)
 
+**Plans:** 5 plans
+
 Plans:
 
-- [ ] TBD (run `/gsd:plan-phase 12.4` to break down)
+- [ ] 12.4-01-PLAN.md — Backend bulletin board API (DeviceApproval entity, service, controller, DTOs)
+- [ ] 12.4-02-PLAN.md — MFA hooks + store + REQUIRED_SHARE login flow branching
+- [ ] 12.4-03-PLAN.md — MFA enrollment wizard + Settings Security tab UI
+- [ ] 12.4-04-PLAN.md — Cross-device approval flow (waiting screen, approval modal, recovery input, enrollment prompt)
+- [ ] 12.4-05-PLAN.md — API client regen + integration verification + cleanup
 
 ### Phase 13: File Versioning
 
@@ -314,6 +320,7 @@ Parallel phases:
 | 12.2 Device Registry       | M2        | 3/3            | Complete    | 2026-02-13 |
 | 12.3 SIWE + Identity       | M2        | 4/4            | Complete    | 2026-02-14 |
 | 12.3.1 Identity Cleanup    | M2        | 4/4            | Complete    | 2026-02-14 |
+| 12.4 MFA + Cross-Device    | M2        | 0/5            | Planning    | -          |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
