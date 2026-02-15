@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 12.3.1 complete (Pre-Wipe Identity Cleanup)
+**Current focus:** Milestone 2 -- Phase 12.4 in progress (MFA + Cross-Device Approval)
 
 ## Current Position
 
-Phase: 12.3.1 (Pre-Wipe Identity Cleanup)
-Plan: 4 of 4 planned
-Status: Phase complete
-Last activity: 2026-02-14 -- Completed 12.3.1-04-PLAN.md (Downstream rootIpnsPublicKey Cleanup)
+Phase: 12.4 (MFA + Cross-Device Approval)
+Plan: 1 of 5 planned
+Status: In progress
+Last activity: 2026-02-15 -- Completed 12.4-01-PLAN.md (Bulletin Board API)
 
-Progress: [###############.....] 73% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete)
+Progress: [################....] 78% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 plan 1/5)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 89
+- Total plans completed: 90
 - Average duration: 4.9 min
-- Total execution time: 7.7 hours
+- Total execution time: 7.8 hours
 
 **By Phase (M1 summary):**
 
@@ -33,10 +33,11 @@ Progress: [###############.....] 73% (M1 complete, M2 Phase 12 complete, Phase 1
 | M2 Phase 12.2   | 3/3   | 10 min  | 3.3 min  |
 | M2 Phase 12.3   | 4/4   | 39 min  | 9.8 min  |
 | M2 Phase 12.3.1 | 4/4   | 38 min  | 9.5 min  |
+| M2 Phase 12.4   | 1/5   | 8 min   | 8.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 10m, 4m, 10m, 18m, 6m
+- Last 5 plans: 4m, 10m, 18m, 6m, 8m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -83,6 +84,8 @@ Recent decisions affecting current work:
 | identifier column stores hash for all auth types                 | 12.3.1-02 | identifier=identifierHash for consistency; identifierDisplay holds human-readable value                         |
 | rootIpnsPublicKey removed from vault entity/DTO/API/frontend     | 12.3.1-03 | Derivable from privateKey via HKDF; reduces schema, eliminates inconsistency                                    |
 | Plan 04 work completed by Plan 03 broader scope                  | 12.3.1-04 | Desktop Rust, E2E helpers, controller spec changes committed in Plan 03 execution                               |
+| Auto-expire on read (no cron for 5min TTL)                       | 12.4-01   | Pending requests past TTL marked expired on getStatus; simpler than background cleanup                          |
+| Hard delete on cancel (not status change)                        | 12.4-01   | Cancelled requests have no audit value; 5min TTL keeps table small                                              |
 
 ### Pending Todos
 
@@ -132,17 +135,17 @@ Recent decisions affecting current work:
 - Phase 12.1 (AES-CTR Streaming): NEEDS `/gsd:research-phase` -- MediaSource/Service Worker decryption, byte-range IPFS, CTR nonce management
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
 - Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
-- Phase 12.4 (MFA + Cross-Device): NEEDS `/gsd:research-phase` -- enableMFA() flow, bulletin board API, ECIES ephemeral key exchange
+- Phase 12.4 (MFA + Cross-Device): COMPLETE research, IN PROGRESS execution -- Plan 01 (bulletin board API) done, Plans 02-05 remaining
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
-Last session: 2026-02-14
-Stopped at: Completed 12.3.1-04-PLAN.md (Downstream rootIpnsPublicKey Cleanup) -- Phase 12.3.1 complete
+Last session: 2026-02-15
+Stopped at: Completed 12.4-01-PLAN.md (Bulletin Board API)
 Resume file: None
-Next: Phase 12.4 (MFA + Cross-Device Approval) -- needs research phase first
+Next: 12.4-02-PLAN.md (next plan in Phase 12.4)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-14 after completing Phase 12.3.1 Plan 04 (Downstream rootIpnsPublicKey Cleanup)_
+_Last updated: 2026-02-15 after completing Phase 12.4 Plan 01 (Bulletin Board API)_

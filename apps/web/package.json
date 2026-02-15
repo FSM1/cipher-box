@@ -19,7 +19,9 @@
     "@tanstack/react-query": "^5.62.0",
     "@toruslabs/tss-dkls-lib": "^4.1.0",
     "@web3auth/ethereum-mpc-provider": "^9.7.0",
+    "@tkey/common-types": "^15.1.0",
     "@web3auth/mpc-core-kit": "^3.5.0",
+    "bn.js": "^5.2.1",
     "axios": "^1.13.2",
     "buffer": "^6.0.3",
     "pdfjs-dist": "^5.4.624",
@@ -37,6 +39,7 @@
   "devDependencies": {
     "@rollup/plugin-inject": "^5.0.5",
     "@rollup/plugin-replace": "^6.0.3",
+    "@types/bn.js": "^5.1.6",
     "@types/react": "^18.3.20",
     "@types/react-dom": "^18.3.6",
     "@vitejs/plugin-react": "^4.5.0",
