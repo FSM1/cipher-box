@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsIn } from 'class-validator';
+import { IsString, IsNotEmpty, IsIn, Matches } from 'class-validator';
 
 export type LoginType = 'corekit';
 
@@ -13,11 +13,16 @@ export class LoginDto {
   idToken!: string;
 
   @ApiProperty({
-    description: 'secp256k1 public key exported from Core Kit after loginWithJWT',
-    example: '0x04...',
+    description:
+      'secp256k1 public key exported from Core Kit after loginWithJWT (uncompressed, 130 hex chars)',
+    example: '04abc123...',
   })
   @IsString()
   @IsNotEmpty()
+  @Matches(/^04[0-9a-fA-F]{128}$/, {
+    message:
+      'publicKey must be an uncompressed secp256k1 public key (130 hex chars starting with 04)',
+  })
   publicKey!: string;
 
   @ApiProperty({

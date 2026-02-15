@@ -119,8 +119,17 @@ export class DeviceApprovalService {
       throw new BadRequestException('Approval request has expired');
     }
 
+    // H-02: Prevent self-approval — responding device must differ from requesting device
+    if (dto.respondedByDeviceId === approval.deviceId) {
+      throw new BadRequestException('A device cannot approve its own request');
+    }
+
     if (dto.action === 'approve') {
-      approval.encryptedFactorKey = dto.encryptedFactorKey ?? null;
+      // H-03: Require encryptedFactorKey when approving (defense-in-depth)
+      if (!dto.encryptedFactorKey) {
+        throw new BadRequestException('encryptedFactorKey is required when approving');
+      }
+      approval.encryptedFactorKey = dto.encryptedFactorKey;
     }
 
     approval.status = dto.action === 'approve' ? 'approved' : 'denied';

@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsHexadecimal } from 'class-validator';
+import { IsString, IsNotEmpty, IsHexadecimal, Length, MaxLength } from 'class-validator';
 
 export class CreateApprovalDto {
   @ApiProperty({
@@ -16,6 +16,7 @@ export class CreateApprovalDto {
   })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   deviceName!: string;
 
   @ApiProperty({
@@ -25,5 +26,8 @@ export class CreateApprovalDto {
   @IsString()
   @IsNotEmpty()
   @IsHexadecimal()
+  @Length(130, 130, {
+    message: 'ephemeralPublicKey must be 130 hex chars (uncompressed secp256k1)',
+  })
   ephemeralPublicKey!: string;
 }

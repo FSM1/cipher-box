@@ -4,6 +4,7 @@ import {
   UnauthorizedException,
   BadRequestException,
   ForbiddenException,
+  OnModuleDestroy,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -11,6 +12,7 @@ import { Repository, IsNull, Like, Not } from 'typeorm';
 import { createECDH, createHash, timingSafeEqual } from 'crypto';
 import * as jose from 'jose';
 import * as argon2 from 'argon2';
+import Redis from 'ioredis';
 import { User } from './entities/user.entity';
 import { AuthMethod } from './entities/auth-method.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
@@ -23,8 +25,9 @@ import { RefreshServiceResult, LogoutResponseDto } from './dto/token.dto';
 import { LinkMethodDto, AuthMethodResponseDto } from './dto/link-method.dto';
 
 @Injectable()
-export class AuthService {
+export class AuthService implements OnModuleDestroy {
   private readonly logger = new Logger(AuthService.name);
+  private readonly redis: Redis;
 
   constructor(
     private configService: ConfigService,
@@ -37,7 +40,18 @@ export class AuthService {
     private authMethodRepository: Repository<AuthMethod>,
     @InjectRepository(RefreshToken)
     private refreshTokenRepository: Repository<RefreshToken>
-  ) {}
+  ) {
+    this.redis = new Redis({
+      host: configService.get('REDIS_HOST', 'localhost'),
+      port: configService.get<number>('REDIS_PORT', 6379),
+      password: configService.get('REDIS_PASSWORD', undefined),
+      lazyConnect: true,
+    });
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    await this.redis.quit();
+  }
 
   async login(loginDto: LoginDto): Promise<LoginServiceResult> {
     // 1. Verify CipherBox-issued JWT.
@@ -233,7 +247,8 @@ export class AuthService {
     return {
       accessToken: newTokens.accessToken,
       refreshToken: newTokens.refreshToken,
-      email: emailMethod?.identifierDisplay || emailMethod?.identifier,
+      // H-09: Fall back to undefined instead of leaking raw identifier hash
+      email: emailMethod?.identifierDisplay || undefined,
     };
   }
 
@@ -251,7 +266,8 @@ export class AuthService {
     return methods.map((method) => ({
       id: method.id,
       type: method.type,
-      identifier: method.identifierDisplay || method.identifier,
+      // H-09: Fall back to '[redacted]' instead of leaking raw identifier hash
+      identifier: method.identifierDisplay || '[redacted]',
       lastUsedAt: method.lastUsedAt,
       createdAt: method.createdAt,
     }));
@@ -358,11 +374,18 @@ export class AuthService {
       );
     }
 
-    // 2. Verify SIWE signature
+    // 2. Verify SIWE signature with nonce consumption (C-01: prevent replay)
     const domain = this.configService.get<string>('SIWE_DOMAIN', 'localhost');
     const parsed = parseSiweMessage(linkDto.siweMessage);
     if (!parsed.nonce) {
       throw new BadRequestException('Invalid SIWE message: missing nonce');
+    }
+
+    // Consume nonce from Redis (single-use) — same pattern as identity.controller.ts walletLogin
+    const nonceKey = `siwe:nonce:${parsed.nonce}`;
+    const nonceDeleted = await this.redis.del(nonceKey);
+    if (!nonceDeleted) {
+      throw new BadRequestException('Invalid or expired nonce');
     }
 
     const walletAddress = await this.siweService.verifySiweMessage(

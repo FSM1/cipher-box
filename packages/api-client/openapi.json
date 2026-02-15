@@ -1144,8 +1144,8 @@
           },
           "publicKey": {
             "type": "string",
-            "description": "secp256k1 public key exported from Core Kit after loginWithJWT",
-            "example": "0x04..."
+            "description": "secp256k1 public key exported from Core Kit after loginWithJWT (uncompressed, 130 hex chars)",
+            "example": "04abc123..."
           },
           "loginType": {
             "type": "string",

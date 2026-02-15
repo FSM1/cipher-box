@@ -10,6 +10,7 @@ import {
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
+import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { DeviceApprovalService } from './device-approval.service';
 import { CreateApprovalDto } from './dto/create-approval.dto';
@@ -23,12 +24,13 @@ interface RequestWithUser extends Request {
 
 @ApiTags('device-approval')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ThrottlerGuard)
 @Controller('device-approval')
 export class DeviceApprovalController {
   constructor(private readonly deviceApprovalService: DeviceApprovalService) {}
 
   @Post('request')
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @ApiOperation({
     summary: 'Create device approval request',
     description:

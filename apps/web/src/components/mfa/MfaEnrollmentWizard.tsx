@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useMfa } from '../../hooks/useMfa';
 import { RecoveryPhraseGrid } from './RecoveryPhraseGrid';
 
@@ -44,12 +44,17 @@ export function MfaEnrollmentWizard({ onComplete, onCancel }: MfaEnrollmentWizar
   }, [handleEnableMfa]);
 
   const handleGoToStep3 = useCallback(() => {
+    setMnemonic([]);
     setStep(3);
   }, []);
 
   const handleGoBackToStep1 = useCallback(() => {
+    setMnemonic([]);
     setStep(1);
   }, []);
+
+  // Clear mnemonic from memory on unmount
+  useEffect(() => () => setMnemonic([]), []);
 
   const toggleAcknowledged = useCallback(() => {
     setAcknowledged((prev) => !prev);
