@@ -17,6 +17,8 @@ export type FactorInfo = {
   factorPubHex: string;
   description: string;
   type: string;
+  /** Additional metadata set during createFactor (e.g. deviceId, browserName) */
+  additionalMetadata?: Record<string, string>;
 };
 
 export function useMfa() {
@@ -153,6 +155,7 @@ export function useMfa() {
               factorPubHex,
               description: parsed.module || 'unknown',
               type: parsed.module || 'unknown',
+              additionalMetadata: parsed.additionalMetadata,
             });
           } catch {
             factors.push({
