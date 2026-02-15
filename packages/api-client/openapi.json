@@ -1,0 +1,1786 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/": {
+      "get": {
+        "operationId": "AppController_getRoot",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Returns API version info"
+          }
+        },
+        "summary": "Get API info",
+        "tags": ["Root"]
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "operationId": "AuthController_login",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successfully authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid Web3Auth token"
+          }
+        },
+        "summary": "Authenticate user with Web3Auth ID token",
+        "tags": ["Auth"]
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "operationId": "AuthController_refresh",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DesktopRefreshDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tokens refreshed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired refresh token"
+          }
+        },
+        "summary": "Refresh access token using HTTP-only refresh token cookie",
+        "tags": ["Auth"]
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "AuthController_logout",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Successfully logged out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogoutResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Logout user and invalidate all refresh tokens",
+        "tags": ["Auth"]
+      }
+    },
+    "/auth/methods": {
+      "get": {
+        "operationId": "AuthController_getMethods",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "List of linked auth methods",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuthMethodResponseDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get all linked auth methods for the current user",
+        "tags": ["Auth"]
+      }
+    },
+    "/auth/link": {
+      "post": {
+        "operationId": "AuthController_linkMethod",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LinkMethodDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Auth method linked successfully, returns updated list of methods",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuthMethodResponseDto"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Auth method already linked or publicKey mismatch"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Link a new auth method to the current user account",
+        "tags": ["Auth"]
+      }
+    },
+    "/auth/unlink": {
+      "post": {
+        "operationId": "AuthController_unlinkMethod",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnlinkMethodDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Auth method unlinked successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnlinkMethodResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Cannot unlink last auth method or method not found"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Unlink an auth method from the current user account",
+        "tags": ["Auth"]
+      }
+    },
+    "/auth/test-login": {
+      "post": {
+        "operationId": "AuthController_testLogin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestLoginDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Test login successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestLoginResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid secret"
+          },
+          "403": {
+            "description": "Test login not enabled"
+          }
+        },
+        "summary": "Test-only login bypassing Core Kit (requires TEST_LOGIN_SECRET)",
+        "tags": ["Auth"]
+      }
+    },
+    "/auth/.well-known/jwks.json": {
+      "get": {
+        "operationId": "IdentityController_getJwks",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JWKS containing RS256 public key for JWT verification",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "keys": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  },
+                  "required": ["keys"]
+                }
+              }
+            }
+          }
+        },
+        "summary": "JWKS endpoint for CipherBox identity provider",
+        "tags": ["Identity"]
+      }
+    },
+    "/auth/identity/google": {
+      "post": {
+        "operationId": "IdentityController_googleLogin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoogleLoginDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "CipherBox JWT issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityTokenResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid Google token"
+          }
+        },
+        "summary": "Login with Google OAuth token, returns CipherBox identity JWT",
+        "tags": ["Identity"]
+      }
+    },
+    "/auth/identity/email/send-otp": {
+      "post": {
+        "operationId": "IdentityController_sendOtp",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendOtpDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OTP sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendOtpResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid email or rate limit exceeded"
+          }
+        },
+        "summary": "Send OTP to email address",
+        "tags": ["Identity"]
+      }
+    },
+    "/auth/identity/email/verify-otp": {
+      "post": {
+        "operationId": "IdentityController_verifyOtp",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyOtpDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OTP verified, JWT issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityTokenResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired OTP"
+          }
+        },
+        "summary": "Verify email OTP and return CipherBox identity JWT",
+        "tags": ["Identity"]
+      }
+    },
+    "/auth/identity/wallet/nonce": {
+      "get": {
+        "operationId": "IdentityController_getWalletNonce",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Nonce generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "nonce": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["nonce"]
+                }
+              }
+            }
+          }
+        },
+        "summary": "Generate SIWE nonce for wallet login",
+        "tags": ["Identity"]
+      }
+    },
+    "/auth/identity/wallet": {
+      "post": {
+        "operationId": "IdentityController_walletLogin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WalletVerifyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Wallet verified, JWT issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityTokenResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid nonce or signature"
+          }
+        },
+        "summary": "Verify SIWE wallet signature and return CipherBox identity JWT",
+        "tags": ["Identity"]
+      }
+    },
+    "/ipfs/upload": {
+      "post": {
+        "description": "Pins encrypted file to IPFS, checks storage quota, and records the pin for quota tracking. All in one atomic request.",
+        "operationId": "IpfsController_upload",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Encrypted file blob (max 100MB)"
+                  }
+                },
+                "required": ["file"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "File uploaded, pinned, and recorded successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          },
+          "413": {
+            "description": "Storage quota exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Upload encrypted file to IPFS with quota tracking",
+        "tags": ["IPFS"]
+      }
+    },
+    "/ipfs/unpin": {
+      "post": {
+        "description": "Remove a pinned file from IPFS via Pinata using its CID.",
+        "operationId": "IpfsController_unpin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnpinDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "File unpinned successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnpinResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Unpin file from IPFS",
+        "tags": ["IPFS"]
+      }
+    },
+    "/ipfs/{cid}": {
+      "get": {
+        "description": "Download an encrypted file from IPFS via the configured gateway.",
+        "operationId": "IpfsController_get",
+        "parameters": [
+          {
+            "name": "cid",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File retrieved successfully",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          },
+          "404": {
+            "description": "File not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get file from IPFS",
+        "tags": ["IPFS"]
+      }
+    },
+    "/vault/init": {
+      "post": {
+        "description": "Create a new vault with encrypted keys on first sign-in. Returns 409 Conflict if vault already exists.",
+        "operationId": "VaultController_initializeVault",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InitVaultDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Vault initialized successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          },
+          "409": {
+            "description": "Conflict - Vault already exists for this user"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Initialize user vault",
+        "tags": ["Vault"]
+      }
+    },
+    "/vault/export": {
+      "get": {
+        "description": "Returns the minimal vault data needed for independent recovery: root IPNS name, encrypted root keys, and derivation hints.",
+        "operationId": "VaultController_exportVault",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Vault export data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultExportDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          },
+          "404": {
+            "description": "Not Found - Vault does not exist"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Export vault for independent recovery",
+        "tags": ["Vault"]
+      }
+    },
+    "/vault": {
+      "get": {
+        "description": "Retrieve the vault for the authenticated user.",
+        "operationId": "VaultController_getVault",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Vault retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          },
+          "404": {
+            "description": "Not Found - Vault does not exist"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get user vault",
+        "tags": ["Vault"]
+      }
+    },
+    "/vault/quota": {
+      "get": {
+        "description": "Get current storage usage and limits. Limit is 500 MiB (524,288,000 bytes).",
+        "operationId": "VaultController_getQuota",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Quota retrieved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuotaResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get storage quota",
+        "tags": ["Vault"]
+      }
+    },
+    "/ipns/publish": {
+      "post": {
+        "description": "Relay a pre-signed IPNS record to the IPFS network via delegated routing. The client signs the record locally; backend relays to delegated-ipfs.dev and tracks the folder for TEE republishing.",
+        "operationId": "IpnsController_publishRecord",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishIpnsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "IPNS record published successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishIpnsResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request - Invalid record format or missing required fields"
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          },
+          "502": {
+            "description": "Bad Gateway - Failed to publish to delegated routing"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Publish IPNS record",
+        "tags": ["IPNS"]
+      }
+    },
+    "/ipns/resolve": {
+      "get": {
+        "description": "Resolve an IPNS name to its current CID via delegated routing. Returns the CID and sequence number of the current IPNS record.",
+        "operationId": "IpnsController_resolveRecord",
+        "parameters": [
+          {
+            "name": "ipnsName",
+            "required": true,
+            "in": "query",
+            "description": "IPNS name to resolve. Supports CIDv1 IPNS names starting with \"k51...\" (PeerID-style) or \"bafzaa...\" (IPNS key CID).",
+            "schema": {
+              "example": "k51qzi5uqu5dkkciu33khkzbcmxtyhn2hgdqyp6rv7s5egjlsdj6a2xpz9lxvz",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "IPNS name resolved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveIpnsResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request - Invalid IPNS name format"
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          },
+          "404": {
+            "description": "Not Found - IPNS name not published or not found in routing network"
+          },
+          "502": {
+            "description": "Bad Gateway - Failed to resolve from delegated routing"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Resolve IPNS name",
+        "tags": ["IPNS"]
+      }
+    },
+    "/device-approval/request": {
+      "post": {
+        "description": "New device creates an approval request with an ephemeral public key for ECIES key exchange. Request expires after 5 minutes.",
+        "operationId": "DeviceApprovalController_createRequest",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApprovalDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Approval request created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create device approval request",
+        "tags": ["device-approval"]
+      }
+    },
+    "/device-approval/{requestId}/status": {
+      "get": {
+        "description": "New device polls this endpoint to check if the request has been approved, denied, or expired. Returns the encrypted factor key on approval.",
+        "operationId": "DeviceApprovalController_getStatus",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Approval status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": ["pending", "approved", "denied", "expired"]
+                    },
+                    "encryptedFactorKey": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "ECIES-encrypted factor key (hex)"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Request not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Poll approval request status",
+        "tags": ["device-approval"]
+      }
+    },
+    "/device-approval/pending": {
+      "get": {
+        "description": "Existing device fetches all non-expired pending approval requests for the authenticated user.",
+        "operationId": "DeviceApprovalController_getPending",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "List of pending approval requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "properties": {
+                      "requestId": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "deviceId": {
+                        "type": "string"
+                      },
+                      "deviceName": {
+                        "type": "string"
+                      },
+                      "ephemeralPublicKey": {
+                        "type": "string"
+                      },
+                      "createdAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "expiresAt": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List pending approval requests",
+        "tags": ["device-approval"]
+      }
+    },
+    "/device-approval/{requestId}/respond": {
+      "post": {
+        "description": "Existing device approves or denies an approval request. On approve, includes the ECIES-encrypted factor key.",
+        "operationId": "DeviceApprovalController_respond",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RespondApprovalDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Response recorded"
+          },
+          "400": {
+            "description": "Already responded or expired"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Request not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Respond to approval request",
+        "tags": ["device-approval"]
+      }
+    },
+    "/device-approval/{requestId}": {
+      "delete": {
+        "description": "New device cancels its own pending approval request (cleanup on navigation away or recovery phrase used).",
+        "operationId": "DeviceApprovalController_cancel",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Request cancelled"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Request not found or not pending"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Cancel approval request",
+        "tags": ["device-approval"]
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "HealthController_check",
+        "summary": "Check API and database health",
+        "tags": ["Health"],
+        "responses": {
+          "200": {
+            "description": "Health check passed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "info": {
+                      "type": "object",
+                      "properties": {
+                        "database": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "example": "up"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Health check failed"
+          }
+        }
+      }
+    }
+  },
+  "info": {
+    "title": "CipherBox API",
+    "description": "Zero-knowledge encrypted cloud storage API",
+    "version": "0.1.0",
+    "contact": {}
+  },
+  "tags": [
+    {
+      "name": "Health",
+      "description": "Health check endpoints"
+    },
+    {
+      "name": "Root",
+      "description": "API root endpoints"
+    },
+    {
+      "name": "Auth",
+      "description": "Authentication endpoints"
+    },
+    {
+      "name": "Identity",
+      "description": "CipherBox identity provider endpoints"
+    },
+    {
+      "name": "Vault",
+      "description": "Vault management endpoints"
+    },
+    {
+      "name": "Files",
+      "description": "File operations endpoints"
+    },
+    {
+      "name": "IPFS",
+      "description": "IPFS relay endpoints"
+    },
+    {
+      "name": "IPNS",
+      "description": "IPNS relay endpoints"
+    },
+    {
+      "name": "device-approval",
+      "description": "Cross-device approval endpoints"
+    }
+  ],
+  "servers": [],
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "type": "http"
+      }
+    },
+    "schemas": {
+      "LoginDto": {
+        "type": "object",
+        "properties": {
+          "idToken": {
+            "type": "string",
+            "description": "CipherBox-issued JWT identity token",
+            "example": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+          },
+          "publicKey": {
+            "type": "string",
+            "description": "secp256k1 public key exported from Core Kit after loginWithJWT (uncompressed, 130 hex chars)",
+            "example": "04abc123..."
+          },
+          "loginType": {
+            "type": "string",
+            "description": "Type of login used (always corekit)",
+            "enum": ["corekit"],
+            "example": "corekit"
+          }
+        },
+        "required": ["idToken", "publicKey", "loginType"]
+      },
+      "LoginResponseDto": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "JWT access token for API requests",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+          },
+          "isNewUser": {
+            "type": "boolean",
+            "description": "Whether this is a new user registration",
+            "example": false
+          },
+          "refreshToken": {
+            "type": "string",
+            "description": "Refresh token (only present for desktop clients using X-Client-Type: desktop header)",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+          }
+        },
+        "required": ["accessToken", "isNewUser"]
+      },
+      "DesktopRefreshDto": {
+        "type": "object",
+        "properties": {
+          "refreshToken": {
+            "type": "string",
+            "description": "Refresh token from previous login/refresh (required for desktop clients)",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+          }
+        }
+      },
+      "TokenResponseDto": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "New JWT access token",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+          },
+          "refreshToken": {
+            "type": "string",
+            "description": "New refresh token (only present for desktop clients using X-Client-Type: desktop header)",
+            "example": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+          },
+          "email": {
+            "type": "string",
+            "description": "User email from their most recently used email auth method",
+            "example": "user@example.com"
+          }
+        },
+        "required": ["accessToken"]
+      },
+      "LogoutResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether logout was successful",
+            "example": true
+          }
+        },
+        "required": ["success"]
+      },
+      "AuthMethodResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["google", "apple", "github", "email", "wallet"]
+          },
+          "identifier": {
+            "type": "string",
+            "description": "Email or wallet address"
+          },
+          "lastUsedAt": {
+            "format": "date-time",
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": ["id", "type", "identifier", "lastUsedAt", "createdAt"]
+      },
+      "LinkMethodDto": {
+        "type": "object",
+        "properties": {
+          "idToken": {
+            "type": "string",
+            "description": "CipherBox-issued JWT identity token (required for Google/email, not used for wallet)"
+          },
+          "loginType": {
+            "type": "string",
+            "description": "Auth method type to link",
+            "enum": ["google", "email", "wallet"]
+          },
+          "walletAddress": {
+            "type": "string",
+            "description": "Wallet address (required when loginType is wallet)"
+          },
+          "siweMessage": {
+            "type": "string",
+            "description": "SIWE message (required when loginType is wallet)"
+          },
+          "siweSignature": {
+            "type": "string",
+            "description": "SIWE signature (required when loginType is wallet)"
+          }
+        },
+        "required": ["idToken", "loginType"]
+      },
+      "UnlinkMethodDto": {
+        "type": "object",
+        "properties": {
+          "methodId": {
+            "type": "string"
+          }
+        },
+        "required": ["methodId"]
+      },
+      "UnlinkMethodResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": ["success"]
+      },
+      "TestLoginDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address for the test user"
+          },
+          "secret": {
+            "type": "string",
+            "description": "Secret that must match TEST_LOGIN_SECRET env var"
+          }
+        },
+        "required": ["email", "secret"]
+      },
+      "TestLoginResponseDto": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "JWT access token"
+          },
+          "refreshToken": {
+            "type": "string",
+            "description": "Refresh token"
+          },
+          "isNewUser": {
+            "type": "boolean",
+            "description": "Whether this is a newly created user"
+          },
+          "publicKeyHex": {
+            "type": "string",
+            "description": "Uncompressed secp256k1 public key (hex, 130 chars)"
+          },
+          "privateKeyHex": {
+            "type": "string",
+            "description": "secp256k1 private key (hex, 64 chars)"
+          }
+        },
+        "required": ["accessToken", "refreshToken", "isNewUser", "publicKeyHex", "privateKeyHex"]
+      },
+      "GoogleLoginDto": {
+        "type": "object",
+        "properties": {
+          "idToken": {
+            "type": "string",
+            "description": "Google OAuth ID token (from Google Sign-In)",
+            "example": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+          }
+        },
+        "required": ["idToken"]
+      },
+      "IdentityTokenResponseDto": {
+        "type": "object",
+        "properties": {
+          "idToken": {
+            "type": "string",
+            "description": "CipherBox-signed RS256 JWT for Web3Auth custom verifier (sub=userId)",
+            "example": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+          },
+          "userId": {
+            "type": "string",
+            "description": "CipherBox internal user UUID",
+            "example": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+          },
+          "isNewUser": {
+            "type": "boolean",
+            "description": "Whether this is a newly created user",
+            "example": false
+          },
+          "email": {
+            "type": "string",
+            "description": "Verified email address from the identity provider",
+            "example": "user@example.com"
+          }
+        },
+        "required": ["idToken", "userId", "isNewUser"]
+      },
+      "SendOtpDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address to send OTP to",
+            "example": "user@example.com"
+          }
+        },
+        "required": ["email"]
+      },
+      "SendOtpResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the OTP was sent successfully",
+            "example": true
+          }
+        },
+        "required": ["success"]
+      },
+      "VerifyOtpDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "Email address the OTP was sent to",
+            "example": "user@example.com"
+          },
+          "otp": {
+            "type": "string",
+            "description": "6-digit OTP code",
+            "example": "123456"
+          }
+        },
+        "required": ["email", "otp"]
+      },
+      "WalletVerifyDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "EIP-4361 SIWE message string",
+            "example": "example.com wants you to sign in with your Ethereum account..."
+          },
+          "signature": {
+            "type": "string",
+            "description": "Wallet signature of the SIWE message (hex with 0x prefix)",
+            "example": "0xabc123..."
+          }
+        },
+        "required": ["message", "signature"]
+      },
+      "UploadResponseDto": {
+        "type": "object",
+        "properties": {
+          "cid": {
+            "type": "string",
+            "description": "The IPFS CID of the pinned file",
+            "example": "bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi"
+          },
+          "size": {
+            "type": "number",
+            "description": "The size of the pinned file in bytes",
+            "example": 1024
+          },
+          "recorded": {
+            "type": "boolean",
+            "description": "Whether the pin was recorded for quota tracking",
+            "example": true
+          }
+        },
+        "required": ["cid", "size", "recorded"]
+      },
+      "UnpinDto": {
+        "type": "object",
+        "properties": {
+          "cid": {
+            "type": "string",
+            "description": "The IPFS CID of the file to unpin",
+            "example": "bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi"
+          }
+        },
+        "required": ["cid"]
+      },
+      "UnpinResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the unpin operation was successful",
+            "example": true
+          }
+        },
+        "required": ["success"]
+      },
+      "InitVaultDto": {
+        "type": "object",
+        "properties": {
+          "ownerPublicKey": {
+            "type": "string",
+            "description": "User secp256k1 public key (uncompressed, 65 bytes, hex-encoded)",
+            "example": "04a1b2c3d4e5f6...(130 hex characters for 65 bytes with 0x04 prefix)"
+          },
+          "encryptedRootFolderKey": {
+            "type": "string",
+            "description": "ECIES-wrapped root folder AES-256 key (hex-encoded)",
+            "example": "a1b2c3d4e5f6..."
+          },
+          "encryptedRootIpnsPrivateKey": {
+            "type": "string",
+            "description": "ECIES-wrapped Ed25519 IPNS private key (hex-encoded)",
+            "example": "a1b2c3d4e5f6..."
+          },
+          "rootIpnsName": {
+            "type": "string",
+            "description": "IPNS name (libp2p-key multihash, base58btc or base36)",
+            "example": "k51qzi5uqu5dg..."
+          }
+        },
+        "required": [
+          "ownerPublicKey",
+          "encryptedRootFolderKey",
+          "encryptedRootIpnsPrivateKey",
+          "rootIpnsName"
+        ]
+      },
+      "TeeKeysDto": {
+        "type": "object",
+        "properties": {
+          "currentEpoch": {
+            "type": "number",
+            "description": "Current TEE key epoch number",
+            "example": 1
+          },
+          "currentPublicKey": {
+            "type": "string",
+            "description": "Current epoch TEE secp256k1 public key (uncompressed, 65 bytes, hex-encoded)",
+            "example": "04a1b2c3d4e5f6...(130 hex characters)"
+          },
+          "previousEpoch": {
+            "type": "object",
+            "description": "Previous TEE key epoch number (null if no rotation has occurred)",
+            "example": 0,
+            "nullable": true
+          },
+          "previousPublicKey": {
+            "type": "object",
+            "description": "Previous epoch TEE secp256k1 public key (hex-encoded, null if no rotation has occurred)",
+            "example": null,
+            "nullable": true
+          }
+        },
+        "required": ["currentEpoch", "currentPublicKey", "previousEpoch", "previousPublicKey"]
+      },
+      "VaultResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Vault UUID",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "ownerPublicKey": {
+            "type": "string",
+            "description": "User secp256k1 public key (uncompressed, 65 bytes, hex-encoded)",
+            "example": "04a1b2c3d4e5f6...(130 hex characters for 65 bytes with 0x04 prefix)"
+          },
+          "encryptedRootFolderKey": {
+            "type": "string",
+            "description": "ECIES-wrapped root folder AES-256 key (hex-encoded)",
+            "example": "a1b2c3d4e5f6..."
+          },
+          "encryptedRootIpnsPrivateKey": {
+            "type": "string",
+            "description": "ECIES-wrapped Ed25519 IPNS private key (hex-encoded)",
+            "example": "a1b2c3d4e5f6..."
+          },
+          "rootIpnsName": {
+            "type": "string",
+            "description": "IPNS name for root folder",
+            "example": "k51qzi5uqu5dg..."
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "description": "Vault creation timestamp",
+            "example": "2026-01-20T12:00:00.000Z"
+          },
+          "initializedAt": {
+            "type": "object",
+            "description": "When vault was first used (first file uploaded), null if unused",
+            "example": "2026-01-20T13:00:00.000Z",
+            "nullable": true
+          },
+          "teeKeys": {
+            "description": "TEE public keys for IPNS key encryption (null if TEE not initialized)",
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TeeKeysDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "ownerPublicKey",
+          "encryptedRootFolderKey",
+          "encryptedRootIpnsPrivateKey",
+          "rootIpnsName",
+          "createdAt",
+          "initializedAt"
+        ]
+      },
+      "VaultExportDto": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "description": "Export format identifier",
+            "example": "cipherbox-vault-export"
+          },
+          "version": {
+            "type": "string",
+            "description": "Export format version",
+            "example": "1.0"
+          },
+          "exportedAt": {
+            "type": "string",
+            "description": "ISO 8601 timestamp of when the export was created",
+            "example": "2026-02-11T12:00:00.000Z"
+          },
+          "rootIpnsName": {
+            "type": "string",
+            "description": "IPNS name for the root folder (libp2p-key multihash)",
+            "example": "k51qzi5uqu5dg..."
+          },
+          "encryptedRootFolderKey": {
+            "type": "string",
+            "description": "ECIES-wrapped root folder AES-256 key (hex-encoded)",
+            "example": "a1b2c3d4e5f6..."
+          },
+          "encryptedRootIpnsPrivateKey": {
+            "type": "string",
+            "description": "ECIES-wrapped Ed25519 IPNS private key (hex-encoded)",
+            "example": "a1b2c3d4e5f6..."
+          },
+          "derivationMethod": {
+            "type": "string",
+            "description": "Key derivation method used. Always \"web3auth\" for Core Kit users. Null if user record not found.",
+            "example": "web3auth",
+            "nullable": true
+          }
+        },
+        "required": [
+          "format",
+          "version",
+          "exportedAt",
+          "rootIpnsName",
+          "encryptedRootFolderKey",
+          "encryptedRootIpnsPrivateKey"
+        ]
+      },
+      "QuotaResponseDto": {
+        "type": "object",
+        "properties": {
+          "usedBytes": {
+            "type": "number",
+            "description": "Current storage usage in bytes",
+            "example": 104857600
+          },
+          "limitBytes": {
+            "type": "number",
+            "description": "Maximum storage limit in bytes (500 MiB)",
+            "example": 524288000
+          },
+          "remainingBytes": {
+            "type": "number",
+            "description": "Remaining storage in bytes",
+            "example": 419430400
+          }
+        },
+        "required": ["usedBytes", "limitBytes", "remainingBytes"]
+      },
+      "PublishIpnsDto": {
+        "type": "object",
+        "properties": {
+          "ipnsName": {
+            "type": "string",
+            "description": "IPNS name (k51... CIDv1 format)",
+            "example": "k51qzi5uqu5dkkciu33khkzbcmxtyhn2hgdqyp6rv7s5egjlsdj6a2xpz9lxvz"
+          },
+          "record": {
+            "type": "string",
+            "description": "Base64-encoded marshaled IPNS record",
+            "example": "CiQBqKAFp..."
+          },
+          "metadataCid": {
+            "type": "string",
+            "description": "CID of the encrypted metadata this record points to",
+            "example": "bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4"
+          },
+          "encryptedIpnsPrivateKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES-wrapped Ed25519 private key for TEE republishing (required on first publish)",
+            "example": "04abcd1234..."
+          },
+          "keyEpoch": {
+            "type": "number",
+            "description": "TEE key epoch (required with encryptedIpnsPrivateKey)",
+            "example": 1
+          }
+        },
+        "required": ["ipnsName", "record", "metadataCid"]
+      },
+      "PublishIpnsResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the publish operation succeeded",
+            "example": true
+          },
+          "ipnsName": {
+            "type": "string",
+            "description": "IPNS name that was published",
+            "example": "k51qzi5uqu5dkkciu33khkzbcmxtyhn2hgdqyp6rv7s5egjlsdj6a2xpz9lxvz"
+          },
+          "sequenceNumber": {
+            "type": "string",
+            "description": "Current sequence number (bigint as string)",
+            "example": "1"
+          }
+        },
+        "required": ["success", "ipnsName", "sequenceNumber"]
+      },
+      "ResolveIpnsResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the resolution succeeded",
+            "example": true
+          },
+          "cid": {
+            "type": "string",
+            "description": "CID that the IPNS name currently points to",
+            "example": "bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4"
+          },
+          "sequenceNumber": {
+            "type": "string",
+            "description": "Current sequence number of the IPNS record (bigint as string)",
+            "example": "1"
+          },
+          "signatureV2": {
+            "type": "string",
+            "description": "Base64-encoded Ed25519 signature (64 bytes) from the IPNS record. Only present when resolved from delegated routing (not DB cache)."
+          },
+          "data": {
+            "type": "string",
+            "description": "Base64-encoded CBOR data that was signed. Only present when resolved from delegated routing (not DB cache)."
+          },
+          "pubKey": {
+            "type": "string",
+            "description": "Base64-encoded raw Ed25519 public key (32 bytes). Only present when resolved from delegated routing (not DB cache)."
+          }
+        },
+        "required": ["success", "cid", "sequenceNumber"]
+      },
+      "CreateApprovalDto": {
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "string",
+            "description": "Device ID (SHA-256 hash of device Ed25519 public key)",
+            "example": "a1b2c3d4e5f6..."
+          },
+          "deviceName": {
+            "type": "string",
+            "description": "Human-readable device name (e.g., \"Chrome on macOS\")",
+            "example": "Chrome on macOS"
+          },
+          "ephemeralPublicKey": {
+            "type": "string",
+            "description": "Ephemeral secp256k1 public key in hex (uncompressed) for ECIES key exchange",
+            "example": "04abc123..."
+          }
+        },
+        "required": ["deviceId", "deviceName", "ephemeralPublicKey"]
+      },
+      "RespondApprovalDto": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "Approval action",
+            "enum": ["approve", "deny"],
+            "example": "approve"
+          },
+          "encryptedFactorKey": {
+            "type": "string",
+            "description": "ECIES-encrypted factor key in hex (required when action is approve)",
+            "example": "04abc123..."
+          },
+          "respondedByDeviceId": {
+            "type": "string",
+            "description": "Device ID of the responding (approving/denying) device",
+            "example": "a1b2c3d4e5f6..."
+          }
+        },
+        "required": ["action", "respondedByDeviceId"]
+      }
+    }
+  }
+}

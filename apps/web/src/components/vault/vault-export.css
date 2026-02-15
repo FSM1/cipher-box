@@ -1,0 +1,60 @@
+/**
+ * VaultExport Styles - Terminal Aesthetic
+ *
+ * Export section on Settings page with warning colors.
+ */
+
+.vault-export {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.vault-export__title {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.vault-export__description {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.vault-export__button {
+  align-self: flex-start;
+  padding: var(--spacing-xs) var(--spacing-md);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-black);
+  background-color: var(--color-green-primary);
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+  text-transform: lowercase;
+  letter-spacing: 0.05em;
+  transition: box-shadow 0.2s ease, transform 0.1s ease;
+}
+
+.vault-export__button:hover {
+  box-shadow: var(--glow-green);
+  transform: translateY(-1px);
+}
+
+.vault-export__button:active {
+  transform: translateY(0);
+}
+
+.vault-export__error {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-error);
+  margin: 0;
+}
