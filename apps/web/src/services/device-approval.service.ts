@@ -1,50 +1,42 @@
 /**
  * Device Approval API Client
  *
- * Provides typed methods for the bulletin board API used in cross-device
- * factor transfer. Uses apiClient which automatically attaches the Bearer
- * token from useAuthStore.
+ * Thin wrapper around the generated Orval client for the bulletin board API
+ * used in cross-device factor transfer. Maintains the same external API surface
+ * (deviceApprovalApi object with 5 methods) consumed by useDeviceApproval hook.
  *
- * NOTE: After Plan 05 runs `pnpm api:generate`, these may be replaced by
- * the generated client. For now, manual apiClient calls are used.
+ * Types are re-exported from the generated models for backward compatibility.
  */
 
-import { apiClient } from '../lib/api/client';
+import {
+  deviceApprovalControllerCreateRequest,
+  deviceApprovalControllerGetStatus,
+  deviceApprovalControllerGetPending,
+  deviceApprovalControllerRespond,
+  deviceApprovalControllerCancel,
+} from '../api/device-approval/device-approval';
 
-export type CreateApprovalRequest = {
-  deviceId: string;
-  deviceName: string;
-  ephemeralPublicKey: string;
-};
+import type { CreateApprovalDto, RespondApprovalDto } from '../api/models';
+import type { DeviceApprovalControllerGetStatus200 } from '../api/models/deviceApprovalControllerGetStatus200';
+import type { DeviceApprovalControllerGetPending200Item } from '../api/models/deviceApprovalControllerGetPending200Item';
 
-export type ApprovalStatusResponse = {
-  status: 'pending' | 'approved' | 'denied' | 'expired';
-  encryptedFactorKey?: string;
-};
+// Re-export types with original names for backward compatibility
+export type CreateApprovalRequest = CreateApprovalDto;
 
-export type PendingApproval = {
-  requestId: string;
-  deviceId: string;
-  deviceName: string;
-  ephemeralPublicKey: string;
-  createdAt: string;
-  expiresAt: string;
-};
+export type ApprovalStatusResponse = DeviceApprovalControllerGetStatus200;
 
-export type RespondApprovalRequest = {
-  action: 'approve' | 'deny';
-  encryptedFactorKey?: string;
-  respondedByDeviceId: string;
-};
+export type PendingApproval = DeviceApprovalControllerGetPending200Item;
+
+export type RespondApprovalRequest = RespondApprovalDto;
 
 export const deviceApprovalApi = {
   /**
    * Create a new device approval request on the bulletin board.
    * Called by the new (requesting) device.
    */
-  createRequest: async (dto: CreateApprovalRequest): Promise<{ requestId: string }> => {
-    const response = await apiClient.post<{ requestId: string }>('/device-approval/request', dto);
-    return response.data;
+  createRequest: async (dto: CreateApprovalDto): Promise<{ requestId: string }> => {
+    const result = await deviceApprovalControllerCreateRequest(dto);
+    return { requestId: result.requestId ?? '' };
   },
 
   /**
@@ -52,10 +44,7 @@ export const deviceApprovalApi = {
    * Called by the new device to check if approved/denied/expired.
    */
   getStatus: async (requestId: string): Promise<ApprovalStatusResponse> => {
-    const response = await apiClient.get<ApprovalStatusResponse>(
-      `/device-approval/${requestId}/status`
-    );
-    return response.data;
+    return deviceApprovalControllerGetStatus(requestId);
   },
 
   /**
@@ -63,16 +52,15 @@ export const deviceApprovalApi = {
    * Called by existing (approving) devices.
    */
   getPending: async (): Promise<PendingApproval[]> => {
-    const response = await apiClient.get<PendingApproval[]>('/device-approval/pending');
-    return response.data;
+    return deviceApprovalControllerGetPending();
   },
 
   /**
    * Respond to a pending approval request (approve or deny).
    * Called by the existing device.
    */
-  respond: async (requestId: string, dto: RespondApprovalRequest): Promise<void> => {
-    await apiClient.post(`/device-approval/${requestId}/respond`, dto);
+  respond: async (requestId: string, dto: RespondApprovalDto): Promise<void> => {
+    await deviceApprovalControllerRespond(requestId, dto);
   },
 
   /**
@@ -80,6 +68,6 @@ export const deviceApprovalApi = {
    * Called by the requesting device to clean up.
    */
   cancel: async (requestId: string): Promise<void> => {
-    await apiClient.delete(`/device-approval/${requestId}`);
+    await deviceApprovalControllerCancel(requestId);
   },
 };

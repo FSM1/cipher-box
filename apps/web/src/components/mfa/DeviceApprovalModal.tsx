@@ -65,7 +65,7 @@ export function DeviceApprovalModal() {
     setIsResponding(true);
     setRespondError(null);
     try {
-      await approveRequest(currentRequest.requestId, currentRequest.ephemeralPublicKey);
+      await approveRequest(currentRequest.requestId!, currentRequest.ephemeralPublicKey!);
     } catch (err) {
       setRespondError(err instanceof Error ? err.message : 'Failed to approve');
     } finally {
@@ -78,7 +78,7 @@ export function DeviceApprovalModal() {
     setIsResponding(true);
     setRespondError(null);
     try {
-      await denyRequest(currentRequest.requestId);
+      await denyRequest(currentRequest.requestId!);
     } catch (err) {
       setRespondError(err instanceof Error ? err.message : 'Failed to deny');
     } finally {
@@ -89,8 +89,8 @@ export function DeviceApprovalModal() {
   // Don't render if no pending requests
   if (!currentRequest) return null;
 
-  const expiresAt = new Date(currentRequest.expiresAt).getTime();
-  const createdAt = new Date(currentRequest.createdAt).getTime();
+  const expiresAt = new Date(currentRequest.expiresAt!).getTime();
+  const createdAt = new Date(currentRequest.createdAt!).getTime();
 
   return (
     <div
