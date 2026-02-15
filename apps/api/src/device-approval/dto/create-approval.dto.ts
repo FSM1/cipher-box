@@ -8,6 +8,8 @@ export class CreateApprovalDto {
   })
   @IsString()
   @IsNotEmpty()
+  @IsHexadecimal()
+  @Length(64, 64, { message: 'deviceId must be a 64-char hex SHA-256 hash' })
   deviceId!: string;
 
   @ApiProperty({

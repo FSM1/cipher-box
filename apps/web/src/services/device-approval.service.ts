@@ -36,7 +36,10 @@ export const deviceApprovalApi = {
    */
   createRequest: async (dto: CreateApprovalDto): Promise<{ requestId: string }> => {
     const result = await deviceApprovalControllerCreateRequest(dto);
-    return { requestId: result.requestId ?? '' };
+    if (!result.requestId) {
+      throw new Error('Server did not return a requestId');
+    }
+    return { requestId: result.requestId };
   },
 
   /**

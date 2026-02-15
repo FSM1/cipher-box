@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsIn, ValidateIf, IsHexadecimal } from 'class-validator';
+import { IsString, IsNotEmpty, IsIn, ValidateIf, IsHexadecimal, Length } from 'class-validator';
 
 export class RespondApprovalDto {
   @ApiProperty({
@@ -27,5 +27,7 @@ export class RespondApprovalDto {
   })
   @IsString()
   @IsNotEmpty()
+  @IsHexadecimal()
+  @Length(64, 64, { message: 'respondedByDeviceId must be a 64-char hex SHA-256 hash' })
   respondedByDeviceId!: string;
 }

@@ -118,6 +118,7 @@ export function useDeviceApproval() {
         const encrypted = hexToBytes(encryptedFactorKeyHex);
         const factorKeyBytes = await unwrapKey(encrypted, ephPrivKey);
         const factorKeyHex = bytesToHex(factorKeyBytes);
+        factorKeyBytes.fill(0); // Zero-fill decrypted key material after conversion
 
         // 2. Input the factor key to complete Core Kit login
         await inputFactorKey(factorKeyHex);
@@ -280,12 +281,16 @@ export function useDeviceApproval() {
 
       // 1. Get current factor key
       const factorKeyResult = coreKit.getCurrentFactorKey();
+      if (!factorKeyResult?.factorKey) {
+        throw new Error('No active factor key available to share');
+      }
       const factorKeyHex = factorKeyResult.factorKey.toString('hex').padStart(64, '0');
       const factorKeyBytes = hexToBytes(factorKeyHex);
 
       // 2. ECIES-encrypt with the requester's ephemeral public key
       const ephemeralPubKey = hexToBytes(ephemeralPublicKeyHex);
       const encrypted = await wrapKey(factorKeyBytes, ephemeralPubKey);
+      factorKeyBytes.fill(0); // Zero-fill factor key bytes after wrapping
 
       // 3. Get current device ID for tracking
       const deviceIdentity = await getOrCreateDeviceIdentity();

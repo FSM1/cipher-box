@@ -93,10 +93,9 @@ export function useMfa() {
         const postX = postMfaTssPub.x.toString('hex');
         const postY = postMfaTssPub.y.toString('hex');
         if (preX !== postX || preY !== postY) {
-          console.error('[MFA] CRITICAL: TSS public key changed after enableMFA!', {
-            pre: { x: preX, y: preY },
-            post: { x: postX, y: postY },
-          });
+          throw new Error(
+            'MFA enrollment failed: TSS public key changed. Your keypair identity is no longer stable. Please contact support.'
+          );
         }
       }
 

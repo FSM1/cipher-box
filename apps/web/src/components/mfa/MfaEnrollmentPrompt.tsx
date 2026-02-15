@@ -9,11 +9,17 @@ const STORAGE_KEY_PREFIX = 'cipherbox_mfa_prompt_dismissed_';
 
 /**
  * Get the localStorage key for dismissal persistence.
- * Uses userEmail when available, falls back to 'default'.
+ * Uses a hash of userEmail to avoid persisting PII in localStorage.
  */
-function getDismissalKey(): string {
+async function getDismissalKeyAsync(): Promise<string> {
   const email = useAuthStore.getState().userEmail;
-  return `${STORAGE_KEY_PREFIX}${email || 'default'}`;
+  if (!email) return `${STORAGE_KEY_PREFIX}default`;
+  const encoded = new TextEncoder().encode(email);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', encoded);
+  const hashHex = Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return `${STORAGE_KEY_PREFIX}${hashHex.slice(0, 16)}`;
 }
 
 /**
@@ -49,26 +55,29 @@ export function MfaEnrollmentPrompt() {
     // Check in-memory dismissal
     if (hasSeenPrompt) return;
 
-    // Check localStorage for cross-session dismissal
-    try {
-      if (localStorage.getItem(getDismissalKey()) === 'true') return;
-    } catch {
-      // localStorage unavailable (incognito, etc.)
-    }
-
-    setVisible(true);
+    // Check localStorage for cross-session dismissal (async due to hashing)
+    void getDismissalKeyAsync().then((key) => {
+      try {
+        if (localStorage.getItem(key) === 'true') return;
+      } catch {
+        // localStorage unavailable (incognito, etc.)
+      }
+      setVisible(true);
+    });
   }, [isAuthenticated, checkMfaStatus, hasSeenPrompt]);
 
   const handleDismiss = useCallback(() => {
     setVisible(false);
     dismissPrompt();
 
-    // Persist dismissal in localStorage
-    try {
-      localStorage.setItem(getDismissalKey(), 'true');
-    } catch {
-      // localStorage unavailable
-    }
+    // Persist dismissal in localStorage (async due to hashing)
+    void getDismissalKeyAsync().then((key) => {
+      try {
+        localStorage.setItem(key, 'true');
+      } catch {
+        // localStorage unavailable
+      }
+    });
   }, [dismissPrompt]);
 
   const handleSetupMfa = useCallback(() => {

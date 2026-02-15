@@ -40,8 +40,10 @@ export function MfaEnrollmentWizard({ onComplete, onCancel }: MfaEnrollmentWizar
 
   const handleGoToStep2 = useCallback(() => {
     setStep(2);
-    handleEnableMfa();
-  }, [handleEnableMfa]);
+    if (mnemonic.length === 0) {
+      handleEnableMfa();
+    }
+  }, [handleEnableMfa, mnemonic.length]);
 
   const handleGoToStep3 = useCallback(() => {
     setMnemonic([]);
@@ -49,7 +51,8 @@ export function MfaEnrollmentWizard({ onComplete, onCancel }: MfaEnrollmentWizar
   }, []);
 
   const handleGoBackToStep1 = useCallback(() => {
-    setMnemonic([]);
+    // Don't clear mnemonic -- if user goes back to step 1 and forward again,
+    // we skip re-calling enableMfa() to avoid generating a different phrase.
     setStep(1);
   }, []);
 

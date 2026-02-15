@@ -12,7 +12,7 @@ files:
 
 Security review (REVIEW-2026-02-15-phase-12.2-12.4.md) identified 3 higher-effort issues for medium-term fix:
 
-- **H-08**: Device Ed25519 private key stored as plaintext number array in IndexedDB. XSS can exfiltrate it, enabling device impersonation in registry and unauthorized device approval.
+- **H-08**: Device Ed25519 private key stored as plaintext in IndexedDB (`apps/web/src/lib/device/identity.ts`). The algorithm choice (Ed25519) is correct for per-device identity; the vulnerability is XSS exfiltration of the raw key material. Fix: wrap the private key with a session-derived symmetric key before writing to IndexedDB, or use non-extractable WebCrypto CryptoKey objects.
 - **M-07**: Temporary REQUIRED_SHARE JWT (placeholder `pending-core-kit-{userId}` login) gets full-privilege JWT. Should be scoped to device-approval endpoints only.
 - **M-11**: All Rust auth structs derive `Debug`. Any `{:?}` format outputs full tokens to logs. Future log::debug! calls would leak secrets.
 

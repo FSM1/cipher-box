@@ -103,11 +103,16 @@ export function Login() {
   const handleRecoveryComplete = useCallback(async () => {
     // Recovery succeeded: Core Kit is now LOGGED_IN.
     // completeRequiredShare() will do backend auth + vault load + navigate.
-    await completeRequiredShare();
+    try {
+      await completeRequiredShare();
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : 'Failed to complete login after recovery');
+    }
   }, [completeRequiredShare]);
 
   const handleApprovalComplete = useCallback(() => {
     // Approval flow already called completeRequiredShare() inside the hook.
+    // If it failed, the hook sets approvalError which DeviceWaitingScreen renders.
     // Nothing extra needed here -- navigation happens in completeRequiredShare.
   }, []);
 

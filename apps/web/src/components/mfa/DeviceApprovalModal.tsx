@@ -60,6 +60,11 @@ export function DeviceApprovalModal() {
     [pendingRequests]
   );
 
+  // Clear error state when the displayed request changes
+  useEffect(() => {
+    setRespondError(null);
+  }, [currentRequest?.requestId]);
+
   const handleApprove = useCallback(async () => {
     if (!currentRequest) return;
     setIsResponding(true);

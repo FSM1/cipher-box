@@ -1,6 +1,7 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, Index } from 'typeorm';
 
 @Entity('device_approvals')
+@Index('idx_device_approvals_user_status', ['userId', 'status'])
 export class DeviceApproval {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
