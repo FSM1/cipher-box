@@ -1,5 +1,1 @@
-Done. Moved todo #5 ("Extend E2E tests to cover wallet and MFA flows") to done — it was completed in Phase 12.5 Plan 02 with the wallet-mock E2E tests. STATE.md updated to 8 pending todos.
-
-Also cleaned up a stale entry (`2026-02-13-deterministic-vault-ipns-derivation.md`) that was listed in STATE.md but no longer existed in pending.
-
-Want to continue reviewing todos, or move on to something else?
+Done. Down to 7 pending todos. Want to review more, or shall I push this branch and move on?

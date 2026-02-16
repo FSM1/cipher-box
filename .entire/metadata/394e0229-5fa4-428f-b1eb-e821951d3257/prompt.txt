@@ -1,1 +1,1 @@
-ok I think that todo #5 was completed in the last PR
+I also think that `Fix flaky post-reload e2e tests (3.8, 3.10)` is also no longer applicable as the e2e tests are passing.
