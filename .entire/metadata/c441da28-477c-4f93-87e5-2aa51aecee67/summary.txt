@@ -1,1 +1,1 @@
-Done. PR #130 updated with the gitignore change. Clean working tree now.
+Done. Screenshots deleted, gitignore narrowed to only `tc*.png` and `after-*.png` patterns so the logo stays tracked.
