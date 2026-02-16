@@ -1,7 +1,7 @@
 # Debug Session: CoreKit Auth Flow UAT
 
 **Created:** 2026-02-16
-**Status:** IN PROGRESS — BLOCKED on ISSUE-001
+**Status:** IN PROGRESS — ISSUE-001 RESOLVED, resuming UAT
 **Scope:** Full E2E auth flow verification after CoreKit refactor (Phases 12-12.4)
 
 ## Test Results
@@ -47,48 +47,25 @@
 
 ## Issues Found
 
-### ISSUE-001: CoreKit `loginWithJWT` freezes/crashes browser tab (BLOCKER)
+### ISSUE-001: Browser tab crash during login — RESOLVED
 
-**Severity:** Critical — blocks all fresh login flows
+**Severity:** Critical — blocked all fresh login flows
 **Reproducibility:** 3/3 attempts
 **Branch:** `fix/auth-publickey-format`
+**Resolution:** Fixed in `useDeviceApproval.ts`
 
-**Symptoms:**
-- After successful CipherBox JWT issuance (OTP verified, `IdentityController` logs `Email OTP login`), calling `coreKit.loginWithJWT()` causes the browser tab to become completely unresponsive
-- Playwright screenshots, snapshots, and evaluate calls all timeout (5s)
-- After ~30s the Chrome renderer process crashes entirely ("Target page, context or browser has been closed")
-- The page shows "initializing..." with no further updates
+**Root cause:** NOT CoreKit `loginWithJWT` — it was a dependency oscillation bug in `useDeviceApproval.ts`.
 
-**Backend side is fine:**
-- `/auth/identity/email/send-otp` -> 200
-- `/auth/identity/email/verify-otp` -> 200 (when using correct dev OTP from API logs)
-- `IdentityController` logs successful JWT issuance
-- JWKS endpoint (`/auth/.well-known/jwks.json`) is reachable through ngrok and returns valid RSA public key
+`pollPendingRequests` used `isPollingPending` (React state) in its `useCallback` deps. The `DeviceApprovalModal` useEffect depended on `pollPendingRequests` and its cleanup called `stopApproverPolling()` which reset `isPollingPending` to false. This created an infinite render loop:
+1. Effect fires -> `pollPendingRequests()` -> sets `isPollingPending=true` -> re-render
+2. `pollPendingRequests` gets new identity (dep changed) -> effect cleanup fires -> `stopApproverPolling()` sets `isPollingPending=false` -> re-render
+3. Repeat forever — each cycle fires an immediate HTTP request to `/device-approval/pending`
 
-**What works:**
-- Session restoration from a pre-existing CoreKit localStorage session (via `/auth/refresh`)
-- This means CoreKit is initialized correctly and the SDK loads fine
-- The issue is specifically with fresh `loginWithJWT` (TSS DKG ceremony)
+Result: 12,962 failed requests -> `ERR_INSUFFICIENT_RESOURCES` -> browser tab crash.
 
-**Likely cause:**
-- The TSS DKG (Distributed Key Generation) ceremony triggered by `loginWithJWT` for a first-time login is either:
-  1. Crashing the WASM-based `@toruslabs/tss-dkls-lib` computation
-  2. Failing silently during JWT verification against JWKS via ngrok (though JWKS is reachable)
-  3. Hitting a timeout/error in the Web3Auth TSS network that causes an unrecoverable state
+**Fix:** Converted `isPollingPending` from `useState` to `useRef`. Refs don't trigger re-renders or change callback identities, breaking the oscillation.
 
-**Environment:**
-- ngrok URL: `https://1c18-2003-fb-ef11-51b8-44dc-5045-9733-7e48.ngrok-free.app`
-- API: localhost:3000 (ephemeral RS256 keypair — regenerated on each restart)
-- Frontend: localhost:5176
-- Web3Auth network: DEVNET
-- Verifier: `cipherbox-identity`
-
-**Next steps to investigate:**
-1. Check if this is reproducible in a real browser (not Playwright-controlled)
-2. Open Chrome DevTools -> Network tab manually to see if `loginWithJWT` is making/failing network requests
-3. Check the Web3Auth dashboard verifier configuration — especially the JWKS URL
-4. Try with a stable IDENTITY_JWT_PRIVATE_KEY (not ephemeral) to rule out key rotation issues
-5. Check @web3auth/mpc-core-kit SDK version for known issues
+**Lesson:** When a tab freezes "after X", check what ELSE activates when X runs. The DeviceApprovalModal polling started because auth state changed during login, not because of anything in CoreKit itself.
 
 ### ISSUE-002: Dev OTP mismatch with E2E test credentials
 
