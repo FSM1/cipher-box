@@ -837,6 +837,12 @@
   cursor: not-allowed;
 }
 
+.linked-methods-unlink-hint {
+  font-size: 10px;
+  color: var(--color-text-dim);
+  white-space: nowrap;
+}
+
 /* Available methods to link */
 .linked-methods-available {
   margin-bottom: var(--spacing-md);
