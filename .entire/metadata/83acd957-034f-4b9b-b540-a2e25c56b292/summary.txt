@@ -1,4 +1,4 @@
-Phase 12.5 complete. Now the next step per the execution order in ROADMAP.md is Phase 12.1 (AES-CTR Streaming Encryption), which needs research first.
+All commits in clean order. The verifier already created the phase completion commit (`0406270d3`). Phase 12.5 is fully complete.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
  GSD ► PHASE 12.5 COMPLETE ✓
@@ -8,11 +8,6 @@ Phase 12.5 complete. Now the next step per the execution order in ROADMAP.md is 
 
 3 plans executed
 Goal verified ✓ (6/6 must-haves)
-
-**What was built:**
-- SecurityTab wired into SettingsPage with ARIA tab navigation (ISSUE-004 fixed)
-- 6 wallet E2E tests with `@johanneskares/wallet-mock` EIP-6963 mock provider
-- Complete UAT: 16 PASS / 19 SKIP / 1 NOTE across 36 test cases, all 4 issues RESOLVED
 
 ───────────────────────────────────────────────────────────────
 
@@ -27,6 +22,7 @@ Goal verified ✓ (6/6 must-haves)
 ───────────────────────────────────────────────────────────────
 
 **Also available:**
+
 - `/gsd:plan-phase 12.1` — skip discussion, plan directly
 - `/gsd:verify-work 12.5` — manual acceptance testing before continuing
 
