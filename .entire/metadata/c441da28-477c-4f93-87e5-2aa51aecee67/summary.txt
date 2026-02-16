@@ -1,1 +1,1 @@
-Done. Screenshots deleted, gitignore narrowed to only `tc*.png` and `after-*.png` patterns so the logo stays tracked.
+Unit test fix pushed. The E2E failure ("Create workspace folder at root" timeout) is the pre-existing flaky test tracked in todo `2026-02-10-fix-flaky-post-reload-e2e-tests.md` — not caused by this PR's changes. CI should go green on the unit test job now; the E2E flake is a known issue.

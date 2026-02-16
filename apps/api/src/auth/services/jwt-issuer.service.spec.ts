@@ -39,16 +39,15 @@ describe('JwtIssuerService', () => {
     });
 
     it('should load keypair from env when IDENTITY_JWT_PRIVATE_KEY is set', async () => {
-      configService.get.mockReturnValue(
-        '-----BEGIN PRIVATE KEY-----\nmock\n-----END PRIVATE KEY-----'
-      );
+      const rawPem = '-----BEGIN PRIVATE KEY-----\nmock\n-----END PRIVATE KEY-----';
+      const base64Pem = Buffer.from(rawPem).toString('base64');
+      configService.get.mockReturnValue(base64Pem);
 
       await service.onModuleInit();
 
-      expect(jose.importPKCS8).toHaveBeenCalledWith(
-        '-----BEGIN PRIVATE KEY-----\nmock\n-----END PRIVATE KEY-----',
-        'RS256'
-      );
+      expect(jose.importPKCS8).toHaveBeenCalledWith(rawPem, 'RS256', {
+        extractable: true,
+      });
       expect(jose.exportJWK).toHaveBeenCalledWith('mock-private-key');
     });
   });

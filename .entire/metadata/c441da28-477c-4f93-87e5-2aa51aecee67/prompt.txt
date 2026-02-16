@@ -1,1 +1,1 @@
-yes that logo png should remain. also you can just delete all the test screenshot png files.
+ci is failing on the PR
