@@ -5,7 +5,7 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 12.5 in progress (MFA Polishing, UAT & E2E)
+**Current focus:** Milestone 2 -- Phase 12.5 complete, next: Phase 12.1 (AES-CTR Streaming)
 
 ## Current Position
 
