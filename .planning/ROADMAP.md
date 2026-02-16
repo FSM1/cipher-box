@@ -218,17 +218,18 @@ Plans:
 
 ### Phase 12.5: MFA Polishing, UAT & E2E Testing (INSERTED)
 
-**Goal**: Polish MFA and auth flows discovered during UAT, add comprehensive E2E test coverage for all authentication methods including wallet login with injected EIP-1193/6963 provider in Playwright
+**Goal**: Fix bugs from CoreKit auth UAT, wire missing SecurityTab UI, add wallet E2E tests with `@johanneskares/wallet-mock` (EIP-6963 mock provider), and complete UAT for all auth + MFA flows
 **Depends on**: Phase 12.4 (MFA + Cross-Device Approval complete)
 **Requirements**: Quality gate before proceeding to new features
-**Research flag**: Skip — builds on existing E2E infrastructure and UAT findings
+**Research flag**: Skip — builds on existing E2E infrastructure and UAT findings from `.planning/debug/corekit-auth-uat.md`
 **Success Criteria** (what must be TRUE):
 
-1. All auth flows (email, Google, wallet SIWE) pass E2E tests end-to-end including login, session persistence, and logout
-2. MFA enrollment, device approval, and recovery phrase restore work correctly in UAT
-3. Wallet auth E2E tests use injected EIP-1193/6963 mock provider in Playwright (no real wallet extension required)
-4. All bugs discovered during CoreKit auth UAT are fixed and verified
-5. Auth-related E2E test suite runs reliably in CI without flakiness
+1. ISSUE-004 fixed: SecurityTab wired into SettingsPage with tab navigation (unblocks MFA enrollment/device management UI)
+2. Wallet E2E tests pass using `@johanneskares/wallet-mock` EIP-6963 mock provider — no real wallet extension required
+3. Wallet UAT complete: TC09 (happy path), TC10 (cancel), TC11 (no wallet), TC12 (reject signature) all PASS
+4. MFA UAT complete: TC15-23 (MFA login flows) and TC25-31 (enrollment, devices, recovery) all PASS or documented
+5. All bugs discovered during UAT are fixed and verified
+6. Auth-related E2E test suite runs reliably in CI without flakiness
 
 **Plans:** TBD
 

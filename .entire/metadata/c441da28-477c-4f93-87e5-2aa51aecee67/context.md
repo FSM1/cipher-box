@@ -2,59 +2,43 @@
 
 **Session ID:** c441da28-477c-4f93-87e5-2aa51aecee67
 
-**Commit Message:** MFA polishing, UAT, e2e testing
+**Commit Message:** Ahhh whoops, must have gotten jumbled in the copy pasting - I was saying
 
 ## Prompt
 
-MFA polishing, UAT, e2e testing
+ahhh whoops, must have gotten jumbled in the copy pasting - I was saying:
+
+use this knowledge to create e2e tests for the wallet flows.
+
+then make sure all of this is working by compeleting the wallet uat .
+
+this should all be part of phase 12.5. 
+
+
+
+PS. regarding the approaches proposed, I think I am starting to lean towards the using the wallet-mock package rather than rolling our own. this is not a financial app, and all we really use is signing a SIWE message.
 
 ## Summary
 
-Research complete. Here's the synthesis:
+Phase 12.5 scope updated. Here's the refined plan:
 
-## Wallet Login Flow (CipherBox)
+**Phase 12.5: MFA Polishing, UAT & E2E Testing**
 
-The flow uses **2 RPC methods** via wagmi:
+| Work Item | Unblocks |
+|---|---|
+| Fix ISSUE-004: Wire SecurityTab into SettingsPage | MFA UAT (TC25-31) |
+| Add `@johanneskares/wallet-mock` + wallet E2E tests | Wallet UAT (TC09-12) |
+| Complete wallet UAT (TC09-12) | -- |
+| Complete MFA UAT (TC15-31) + fix bugs found | -- |
+| Ensure E2E suite passes in CI | -- |
 
-| Step | wagmi API | RPC Method | Purpose |
-|------|-----------|------------|---------|
-| 1 | `connectAsync({ connector })` | `eth_requestAccounts` | Get wallet address |
-| 2 | `signMessageAsync({ message })` | `personal_sign` | Sign SIWE message |
+---
 
-Key files: `WalletLoginButton.tsx` (UI + SIWE), `siwe.service.ts` (backend verification with viem's `verifyMessage` — real ECDSA verify, no canned responses allowed).
+**Next step:** `/gsd:plan-phase 12.5` to break this down into executable plans.
 
-wagmi's `injected()` connector discovers wallets via **EIP-6963** (`eip6963:announceProvider` event), so the mock must announce itself that way — just setting `window.ethereum` won't make it appear in the connector list.
-
-## Mock Strategy
-
-Two viable approaches:
-
-| | `@johanneskares/wallet-mock` | Custom MockWalletProvider |
-|---|---|---|
-| EIP-6963 | Yes | Yes |
-| Real ECDSA signing | Yes (viem accounts) | Yes (viem accounts) |
-| Spy/assertions | No built-in | Yes — records all RPC calls |
-| Dependencies | External npm package | None (viem already in project) |
-| Maintenance | Library handles edge cases | We own it |
-
-**Recommendation: Custom `MockWalletProvider`** — because you specifically want spy/assertion capabilities. The approach:
-
-1. **`page.exposeFunction('__mockWalletRequest', handler)`** — bridges browser → Node.js, every call recorded as spy data
-2. **`page.addInitScript()`** — injects EIP-1193 provider + fires EIP-6963 `announceProvider` event before any page scripts run
-3. **`privateKeyToAccount()`** from viem — produces real signatures that pass backend `verifyMessage()` verification
-4. Test fixture pattern — `MockWalletProvider` class with `.install()`, `.calls`, `.assertCalled()`, `.getCallsFor()`
-
-Your message got cut off at "once that is correctly figured out, you should use this arcane knowledge" — what's the rest? Should I proceed with implementing this mock wallet infrastructure as part of Phase 12.5?
+`/clear` first for a fresh context window.
 
 ## Key Actions
 
-- - **Bash**: Find all Phase 12.x headings in roadmap
-- - **Bash**: Create phase 12.5 directory
 - - **Read**: /Users/michael/Code/cipher-box/.planning/ROADMAP.md
 - - **Edit**: /Users/michael/Code/cipher-box/.planning/ROADMAP.md
-- - **Edit**: /Users/michael/Code/cipher-box/.planning/ROADMAP.md
-- - **Edit**: /Users/michael/Code/cipher-box/.planning/ROADMAP.md
-- - **Edit**: /Users/michael/Code/cipher-box/.planning/ROADMAP.md
-- - **Edit**: /Users/michael/Code/cipher-box/.planning/STATE.md
-- - **Read**: /Users/michael/Code/cipher-box/.planning/debug/corekit-auth-uat.md
-- - **Task**: Explore wallet login flow
