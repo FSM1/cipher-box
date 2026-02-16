@@ -1,1 +1,8 @@
-Learnings logged. Ready to continue the UAT — want me to spin up the dev servers and re-attempt TC02 (email login happy path)?
+API is up with the persistent key. Now you can:
+
+1. **Restart ngrok** to get a new URL
+2. **Update the Web3Auth dashboard** `cipherbox-identity` verifier with the new JWKS URL: `<new-ngrok-url>/auth/.well-known/jwks.json`
+
+Once you've updated the dashboard, let me know the new ngrok URL and we'll retry TC02.
+
+Regarding the staging secret — noted. The `IDENTITY_JWT_PRIVATE_KEY` needs to be added as a GitHub secret in the `staging` environment before the next staging deploy. We should generate a separate key for staging (not reuse the dev key).

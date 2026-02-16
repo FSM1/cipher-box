@@ -2,18 +2,238 @@
 
 **Session ID:** fcdd6c6f-e3f3-4f79-9cc3-98345b993339
 
-**Commit Message:** Ok, so I think we first need to log a @.learnings/README.md entry, then
+**Commit Message:** This session is being continued from a previous conversation that ran ou
 
 ## Prompt
 
-ok, so I think we first need to log a @.learnings/README.md entry, then we can go on with the rest of the uat, hopefully a bit more smoothly.
+can we just try from a fresh browser with a cleared session to make sure that #2 is actually working end 2 end.
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **Initial context**: The user is debugging a login flow issue described in `.planning/debug/corekit-auth-uat.md`. The debug session documents ISSUE-001 where CoreKit `loginWithJWT` appears to freeze/crash the browser tab during fresh login attempts. The branch is `fix/auth-publickey-format`.
+
+2. **User's first message**: They shared a screenshot showing Chrome DevTools console with ~12,962 failed GET requests to `http://localhost:3000/device-approval/pending` with `net::ERR_INSUFFICIENT_RESOURCES`, all from `custom-instance.ts:24`.
+
+3. **My investigation**: I searched for the polling code and found the root cause in `apps/web/src/hooks/useDeviceApproval.ts` — a dependency oscillation bug:
+   - `pollPendingRequests` used `isPollingPending` (React state) in its `useCallback` deps
+   - `DeviceApprovalModal`'s useEffect depended on `pollPendingRequests` and its cleanup called `stopApproverPolling()` which reset `isPollingPending` to false
+   - This created an infinite render loop, each cycle firing an HTTP request
+
+4. **The fix**: Converted `isPollingPending` from `useState` to `useRef` in `useDeviceApproval.ts` — 4 edits:
+   - Changed `const [isPollingPending, setIsPollingPending] = useState(false)` to `const isPollingPendingRef = useRef(false)`
+   - Updated `stopApproverPolling` to use `isPollingPendingRef.current = false`
+   - Updated `pollPendingRequests` to use `isPollingPendingRef.current` and empty deps `[]`
+   - Updated visibility effect to use `isPollingPendingRef.current`
+   - Updated return value from `isPollingPending` to `isPollingPendingRef.current`
+
+5. **Type check passed**: `npx tsc --noEmit` showed no errors.
+
+6. **User asked to log a learnings entry**: Created `.learnings/2026-02-16-useCallback-state-dependency-oscillation.md`
+
+7. **Updated debug doc**: Changed ISSUE-001 status to RESOLVED with root cause explanation.
+
+8. **UAT TC02 - Attempt 1**: 
+   - Logged out existing session, cleared localStorage/sessionStorage, reloaded
+   - Entered email, got OTP from API logs, verified
+   - `loginWithJWT` completed in ~2.9s — NO CRASH
+   - Navigated to `#/files`, user shown as logged in
+   - But vault sync showed "SYNC FAILED — retrying..." with IPNS resolve 404s
+
+9. **User feedback**: "I would not say it is fully confirmed as fixed. The file system is still in some weird state, with lots of ipns resolve failures." They shared another screenshot showing repeated IPNS resolve 404s.
+
+10. **User clarified**: "they are not rapid, that was logged over a while" — the 404s are the normal 30s polling, not a new tight loop.
+
+11. **API log investigation**: Found the real issue:
+    - `Failed to parse IPNS record: Error: Unsupported wire type 4` — delegated-ipfs.dev returning garbled records
+    - Falls back to DB cache, but no cache for this new vault
+    - `/ipfs/upload` returning 500 — initial metadata upload to IPFS failing
+    - IPFS_PROVIDER=local, IPFS_LOCAL_API_URL=http://localhost:5001
+
+12. **User asked for fresh browser test**: "can we just try from a fresh browser with a cleared session to make sure that #2 is actually working end 2 end."
+
+13. **TC02 - Attempt 2 (fresh browser)**:
+    - Closed browser, opened fresh
+    - Had to clear IndexedDB too (CoreKit persists there, not just localStorage)
+    - Full clean login: email → OTP → verify → loginWithJWT completed in ~4.2s → navigated to #/files
+    - Same post-login issues: IPNS 404s, /ipfs/upload 500, sync failed
+
+14. **User asked about mock IPFS**: "should we not be running these tests with the mock ipfs delegate router, so that this does not hit the actual dht?"
+
+15. **User shared another screenshot**: Showing the 4 errors: 2 IPNS resolve 404s, 1 /ipfs/upload 500, 1 DeviceRegistry sync failure.
+
+16. **Current state**: The login crash fix is confirmed working (2 clean attempts, no crash), but the end-to-end experience is broken due to:
+    - Local IPFS node (localhost:5001) not responding → /ipfs/upload 500
+    - Delegated IPFS routing returning unparseable records → IPNS resolve fails
+    - No DB cache for fresh vault → 404s
+    - The user wants to know about using a mock IPFS setup
+
+Key files examined:
+- `apps/web/src/hooks/useDeviceApproval.ts` — THE FIX (dependency oscillation)
+- `apps/web/src/components/mfa/DeviceApprovalModal.tsx` — consumer with the oscillating effect
+- `apps/web/src/api/custom-instance.ts` — fetch wrapper (source of the errors in console)
+- `apps/web/src/hooks/useAuth.ts` — auth flow, session restoration
+- `apps/web/src/services/ipns.service.ts` — IPNS resolution
+- `apps/web/src/hooks/useSyncPolling.ts` — 30s sync polling
+- `apps/web/src/components/file-browser/FileBrowser.tsx` — handleSync callback
+- `apps/web/src/hooks/useFolderNavigation.ts` — folder navigation
+- `apps/web/src/hooks/useInterval.ts` — interval hook (confirmed stable)
+- `apps/web/src/api/device-approval/device-approval.ts` — generated API client
+- `apps/web/src/components/layout/AppShell.tsx` — where DeviceApprovalModal is mounted
+- `.planning/debug/corekit-auth-uat.md` — debug session doc (updated)
+- `.learnings/2026-02-16-useCallback-state-dependency-oscillation.md` — new learnings entry
+- `apps/api/.env` — IPFS config (IPFS_PROVIDER=local, IPFS_LOCAL_API_URL=http://localhost:5001)
+
+Dev environment:
+- API: localhost:3000 (running as background task bdedaec, PID 84788)
+- Frontend: localhost:5176
+- IPFS: localhost:5001 (local, but apparently not responding properly)
+- ngrok: active for JWKS endpoint
+
+Summary:
+1. Primary Request and Intent:
+   The user is conducting a UAT (User Acceptance Testing) debug session for the CoreKit auth flow after a major refactor (Phases 12-12.4). The initial blocker was ISSUE-001: browser tab crashing/freezing during fresh `loginWithJWT` calls. The user shared a Chrome DevTools screenshot showing 12,962 failed GET requests to `/device-approval/pending` with `ERR_INSUFFICIENT_RESOURCES`. The goal is to fix the crash, verify the login flow works end-to-end, and continue the full UAT test matrix (36 test cases documented in `.planning/debug/corekit-auth-uat.md`). The user also wants to ensure post-login vault sync works properly and questioned whether a mock IPFS delegate router should be used instead of hitting the real DHT.
+
+2. Key Technical Concepts:
+   - **React useCallback dependency oscillation**: State variables in `useCallback` deps that are also reset in effect cleanup create infinite render loops
+   - **useRef vs useState for non-rendering guards**: Refs don't trigger re-renders or change callback identities
+   - **Web3Auth MPC Core Kit**: `loginWithJWT` triggers TSS DKG ceremony; sessions persist in IndexedDB (not just localStorage)
+   - **IPNS delegated routing**: Backend relays to delegated-ipfs.dev, which is returning garbled records ("Unsupported wire type 4")
+   - **DB cache fallback**: When delegated routing fails, API falls back to DB-cached CID; for new vaults there's nothing cached
+   - **`ERR_INSUFFICIENT_RESOURCES`**: Chrome error when network socket pool is exhausted — indicates tight-loop request firing, not normal polling
+   - **CipherBox auth flow**: Email+OTP → CipherBox JWT → CoreKit `loginWithJWT` → backend `/auth/login` (corekit type) → vault init/load
+   - **IPFS local provider**: `IPFS_PROVIDER=local` with `IPFS_LOCAL_API_URL=http://localhost:5001`
+
+3. Files and Code Sections:
+
+   - **`apps/web/src/hooks/useDeviceApproval.ts`** — THE FIX. Contains the dependency oscillation bug that caused 12,962 rapid-fire requests and browser crash.
+     - Changed `isPollingPending` from `useState` to `useRef` to break the render cycle:
+     ```typescript
+     // BEFORE (bug):
+     const [isPollingPending, setIsPollingPending] = useState(false);
+     
+     // AFTER (fix):
+     const isPollingPendingRef = useRef(false);
+     ```
+     - Updated `stopApproverPolling`:
+     ```typescript
+     const stopApproverPolling = useCallback(() => {
+       if (approverPollRef.current) {
+         clearInterval(approverPollRef.current);
+         approverPollRef.current = null;
+       }
+       isPollingPendingRef.current = false;  // was setIsPollingPending(false)
+     }, []);
+     ```
+     - Updated `pollPendingRequests` — empty deps now:
+     ```typescript
+     const pollPendingRequests = useCallback(() => {
+       if (isPollingPendingRef.current) return;  // was isPollingPending
+       isPollingPendingRef.current = true;        // was setIsPollingPending(true)
+       // ... rest unchanged
+     }, []);  // was [isPollingPending]
+     ```
+     - Updated visibility effect dep from `[isVisible, isPollingPending]` to `[isVisible]`
+     - Updated return: `isPolling: isPollingPendingRef.current` (was `isPollingPending`)
+
+   - **`apps/web/src/components/mfa/DeviceApprovalModal.tsx`** — The consumer component. Mounts in AppShell. Its useEffect (lines 36-55) depends on `pollPendingRequests` and calls `stopApproverPolling()` in cleanup, which was the other half of the oscillation. No changes needed here.
+
+   - **`apps/web/src/api/custom-instance.ts`** — Fetch wrapper. Line 24 (`const response = await fetch(...)`) was the source location shown in all 12,962 console errors. No changes needed.
+
+   - **`apps/web/src/hooks/useAuth.ts`** — Auth flow orchestration. `loginWithEmail` (line 301) calls `coreKitLoginEmail` then `completeBackendAuth`. For new users, `initializeOrLoadVault` (line 73) creates vault when GET /vault returns 404. Sets `isNewVault: true` via `setVaultKeys`. Session restoration effect at line 450.
+
+   - **`apps/web/src/services/ipns.service.ts`** — IPNS resolution. `resolveIpnsRecord` returns `null` on 404 (line 131), throws on other errors. This is what the sync polling calls every 30s.
+
+   - **`apps/web/src/hooks/useSyncPolling.ts`** — 30s interval sync orchestration. Has concurrency guard (`isSyncingRef`), visibility-based pause/resume. For new vaults, `isNewVault` effect should call `completeInitialSync()` to skip polling.
+
+   - **`apps/web/src/components/file-browser/FileBrowser.tsx`** — `handleSync` callback (line 251) calls `resolveIpnsRecord(rootIpnsName)`. When it returns null and `initialSyncComplete` is false, throws 'IPNS not resolved yet'. This drives the "SYNC FAILED — retrying..." UI.
+
+   - **`apps/web/src/hooks/useInterval.ts`** — Stable interval hook using ref-based callback. Only restarts when `delay` changes. Confirmed not part of the problem.
+
+   - **`apps/web/src/components/layout/AppShell.tsx`** — Mounts `<DeviceApprovalModal />` on lines 41 and 55 (staging and non-staging variants).
+
+   - **`.planning/debug/corekit-auth-uat.md`** — Debug session doc. Updated status to "IN PROGRESS — ISSUE-001 RESOLVED, resuming UAT". ISSUE-001 rewritten with root cause (dependency oscillation, not CoreKit WASM crash).
+
+   - **`.learnings/2026-02-16-useCallback-state-dependency-oscillation.md`** — New learnings entry created documenting the bug pattern, misleading symptoms, and fix.
+
+   - **`apps/api/.env`** — IPFS config: `IPFS_PROVIDER=local`, `IPFS_LOCAL_API_URL=http://localhost:5001`, `IPFS_LOCAL_GATEWAY_URL=http://localhost:8080`. Pinata JWT also configured.
+
+4. Errors and fixes:
+   - **ISSUE-001: Browser tab crash during login (12,962 ERR_INSUFFICIENT_RESOURCES)**:
+     - Root cause: `isPollingPending` as React state in `useDeviceApproval.ts` created dependency oscillation between `pollPendingRequests` useCallback and DeviceApprovalModal's useEffect cleanup
+     - Fix: Converted `isPollingPending` from `useState` to `useRef`
+     - Type-checked successfully with `npx tsc --noEmit`
+     - User feedback: Login crash is fixed (confirmed 2/2 attempts), but user correctly noted post-login state is still broken
+   
+   - **Post-login vault sync failures (ongoing, NOT fixed)**:
+     - `/ipfs/upload` returns 500 — local IPFS node (localhost:5001) likely not running/accessible
+     - IPNS delegated routing returns "Unsupported wire type 4" — garbled records from delegated-ipfs.dev
+     - DB cache fallback returns 404 for new vaults — no cached data exists
+     - Result: "SYNC FAILED — retrying..." shown in UI, vault never loads
+     - User questioned: "should we not be running these tests with the mock ipfs delegate router?"
+
+   - **CoreKit session persistence in IndexedDB**: Initial attempts to clear session only cleared localStorage/sessionStorage. Had to also clear IndexedDB (`indexedDB.databases()` + `deleteDatabase`) to get a truly fresh state. Found one DB: `cipherbox-device`.
+
+5. Problem Solving:
+   - **Solved**: The browser crash during login was caused by a dependency oscillation in `useDeviceApproval.ts`, not by CoreKit's WASM/TSS computation as originally suspected in ISSUE-001. The fix (useState → useRef) eliminates the infinite render loop.
+   - **Ongoing**: Post-login vault sync doesn't work because: (a) local IPFS upload returns 500, (b) IPNS delegated routing returns unparseable records. The user suggested using a mock IPFS delegate router. The API env shows `IPFS_PROVIDER=local` pointing to localhost:5001.
+   - **Ongoing**: Whether `isNewVault: true` properly prevents sync polling for freshly created vaults — the "SYNC FAILED" UI suggests it may not be working correctly, but this could also be because the initial vault metadata upload itself fails (500 from /ipfs/upload).
+
+6. All user messages:
+   - "I was debugging issues with the login flow and something completely hanging the browser during login. this is part of the debugging session described here: @.planning/debug/corekit-auth-uat.md" [with screenshot showing 12,962 ERR_INSUFFICIENT_RESOURCES errors on /device-approval/pending]
+   - "do you still have access to the image i submitted in the first request?"
+   - "ok, so I think we first need to log a @.learnings/README.md entry, then we can go on with the rest of the uat, hopefully a bit more smoothly."
+   - "I would not say it is fully confirmed as fixed to be honest. The file system is still in some weird state, with lots of ipns resolve failures." [with screenshot of repeated IPNS 404s]
+   - "they are not rapid, that was logged over a while"
+   - "can we just try from a fresh browser with a cleared session to make sure that #2 is actually working end 2 end."
+   - "also, should we not be running these tests with the mock ipfs delegate router, so that this does not hit the actual dht?"
+   - "seeing `sync failed - retrying`" [with screenshot showing 2 IPNS 404s, 1 /ipfs/upload 500, 1 DeviceRegistry sync error]
+
+7. Pending Tasks:
+   - Investigate/fix the `/ipfs/upload` 500 error — likely the local IPFS node at localhost:5001 is not running
+   - Address the user's question about using a mock IPFS delegate router for testing
+   - Complete TC02 verification end-to-end (login + vault sync working)
+   - Continue UAT for remaining test cases (TC03-TC36) once the infrastructure issues are resolved
+   - The `useDeviceApproval.ts` fix needs to be committed (currently only local edits)
+
+8. Current Work:
+   We were in the middle of a fresh-browser TC02 (email login happy path) attempt. The login flow itself completed successfully — `loginWithJWT` finished in ~4.2s, navigated to `#/files`, user displayed as `test_account_4718@example.com`. However, the post-login state shows "SYNC FAILED — retrying..." with these errors:
+   - 2x IPNS resolve 404 (for vault and device registry IPNS names)
+   - 1x `/ipfs/upload` 500 (Internal Server Error)
+   - 1x `[DeviceRegistry] Failed to sync registry: AxiosError`
+   
+   The user shared a screenshot of these 4 errors and asked about using a mock IPFS delegate router. I had just checked the API `.env` and found `IPFS_PROVIDER=local` with `IPFS_LOCAL_API_URL=http://localhost:5001`.
+
+9. Optional Next Step:
+   Investigate whether the local IPFS node (localhost:5001) is actually running, since `IPFS_PROVIDER=local` is configured but `/ipfs/upload` returns 500. Check if there's a mock IPFS setup available in the codebase. The user explicitly asked: "should we not be running these tests with the mock ipfs delegate router, so that this does not hit the actual dht?" — this needs to be addressed before continuing the UAT.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.claude/projects/-Users-michael-Code-cipher-box/fcdd6c6f-e3f3-4f79-9cc3-98345b993339.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
 
 ## Summary
 
-Learnings logged. Ready to continue the UAT — want me to spin up the dev servers and re-attempt TC02 (email login happy path)?
+API is up with the persistent key. Now you can:
+
+1. **Restart ngrok** to get a new URL
+2. **Update the Web3Auth dashboard** `cipherbox-identity` verifier with the new JWKS URL: `<new-ngrok-url>/auth/.well-known/jwks.json`
+
+Once you've updated the dashboard, let me know the new ngrok URL and we'll retry TC02.
+
+Regarding the staging secret — noted. The `IDENTITY_JWT_PRIVATE_KEY` needs to be added as a GitHub secret in the `staging` environment before the next staging deploy. We should generate a separate key for staging (not reuse the dev key).
 
 ## Key Actions
 
-- - **Write**: /Users/michael/Code/cipher-box/.learnings/2026-02-16-useCallback-state-dependency-oscillation.md
-- - **Edit**: /Users/michael/Code/cipher-box/.planning/debug/corekit-auth-uat.md
-- - **Edit**: /Users/michael/Code/cipher-box/.planning/debug/corekit-auth-uat.md
+- - **mcp__playwright__browser_close**: 
+- - **mcp__playwright__browser_navigate**: 
+- - **mcp__playwright__browser_evaluate**: 
+- - **mcp__playwright__browser_evaluate**: 
+- - **mcp__playwright__browser_evaluate**: 
+- - **mcp__playwright__browser_navigate**: 
+- - **mcp__playwright__browser_wait_for**: 
+- - **mcp__playwright__browser_type**: 
+- - **mcp__playwright__browser_click**: 
+- - **Bash**: Get latest dev OTP from API logs
