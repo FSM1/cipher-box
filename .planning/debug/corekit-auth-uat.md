@@ -9,7 +9,7 @@
 | TC | Description | Status | Notes |
 |----|-------------|--------|-------|
 | 01 | Login page initial render | PASS | All elements render: heading, Google (disabled/not configured), email input + SEND OTP, wallet button, footer, [CONNECTED] status |
-| 02 | Email login - happy path | BLOCKED | See ISSUE-001. OTP verification + CipherBox JWT issuance works, but CoreKit `loginWithJWT` freezes/crashes the browser tab |
+| 02 | Email login - happy path | PASS | ISSUE-001 fixed (useRef), ISSUE-003 fixed (persistent JWKS key), env fixed (Kubo→192.168.133.114, mock IPNS router). Fresh user: OTP→verify→loginWithJWT(3.6s)→commit→#/files with empty vault |
 | 03 | Email login - invalid OTP | - | |
 | 04 | Email login - back navigation | - | |
 | 05 | Email login - OTP resend | - | |

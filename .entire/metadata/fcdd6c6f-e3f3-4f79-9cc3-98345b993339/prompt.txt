@@ -1,1 +1,1 @@
-ok jwks is updated on w3auth side, can we log any applicable @.learnings/README.md while we wait for that change to propogate.
+GO GO GO

@@ -2,16 +2,36 @@
 
 **Session ID:** fcdd6c6f-e3f3-4f79-9cc3-98345b993339
 
-**Commit Message:** Ok jwks is updated on w3auth side, can we log any applicable @.learnings
+**Commit Message:** GO GO GO
 
 ## Prompt
 
-ok jwks is updated on w3auth side, can we log any applicable @.learnings/README.md while we wait for that change to propogate.
+GO GO GO
 
 ## Summary
 
-Done. Covers the JWKS caching pitfall, the `jose.importPKCS8` extractable gotcha, the base64 PEM encoding, the IPFS host mismatch, and the mock IPNS routing service. Let me know when you're ready to retry TC02.
+**Logout → re-login: PASS!**
+
+- `loginWithJWT` completed in 2s
+- Navigated to `#/files`
+- **"Synced"** status (green)
+- **`test-folder` visible** — vault data persisted across logout/login cycle
+- Storage: `2 KB / 500.0 MB`
+- No crash, no infinite loop, no IPFS errors
+
+Full end-to-end cycle confirmed: **Login → Create folder → Logout → Login → Vault synced with folder intact.**
+
+TC02 (email login happy path) and TC13 (session restoration) are both verified. TC32 (logout) also confirmed working across multiple cycles.
 
 ## Key Actions
 
-- - **Write**: /Users/michael/Code/cipher-box/.learnings/2026-02-16-ephemeral-jwks-web3auth-caching.md
+- - **mcp__playwright__browser_evaluate**: 
+- - **mcp__playwright__browser_navigate**: 
+- - **mcp__playwright__browser_evaluate**: 
+- - **mcp__playwright__browser_navigate**: 
+- - **mcp__playwright__browser_wait_for**: 
+- - **mcp__playwright__browser_click**: 
+- - **mcp__playwright__browser_type**: 
+- - **mcp__playwright__browser_click**: 
+- - **Bash**: Get dev OTP
+- - **mcp__playwright__browser_type**: 

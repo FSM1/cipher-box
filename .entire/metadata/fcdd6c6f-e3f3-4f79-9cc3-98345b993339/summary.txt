@@ -1,1 +1,12 @@
-Done. Covers the JWKS caching pitfall, the `jose.importPKCS8` extractable gotcha, the base64 PEM encoding, the IPFS host mismatch, and the mock IPNS routing service. Let me know when you're ready to retry TC02.
+**Logout → re-login: PASS!**
+
+- `loginWithJWT` completed in 2s
+- Navigated to `#/files`
+- **"Synced"** status (green)
+- **`test-folder` visible** — vault data persisted across logout/login cycle
+- Storage: `2 KB / 500.0 MB`
+- No crash, no infinite loop, no IPFS errors
+
+Full end-to-end cycle confirmed: **Login → Create folder → Logout → Login → Vault synced with folder intact.**
+
+TC02 (email login happy path) and TC13 (session restoration) are both verified. TC32 (logout) also confirmed working across multiple cycles.
