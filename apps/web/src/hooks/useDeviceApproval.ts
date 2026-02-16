@@ -60,7 +60,7 @@ export function useDeviceApproval() {
 
   // --- Existing device (approver) state ---
   const [pendingRequests, setPendingRequests] = useState<PendingApproval[]>([]);
-  const [isPollingPending, setIsPollingPending] = useState(false);
+  const isPollingPendingRef = useRef(false);
   const approverPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   /**
@@ -91,7 +91,7 @@ export function useDeviceApproval() {
       clearInterval(approverPollRef.current);
       approverPollRef.current = null;
     }
-    setIsPollingPending(false);
+    isPollingPendingRef.current = false;
   }, []);
 
   // =========================================================================
@@ -257,8 +257,8 @@ export function useDeviceApproval() {
    * Start polling for pending approval requests (existing device side).
    */
   const pollPendingRequests = useCallback(() => {
-    if (isPollingPending) return;
-    setIsPollingPending(true);
+    if (isPollingPendingRef.current) return;
+    isPollingPendingRef.current = true;
 
     const poll = async () => {
       try {
@@ -273,7 +273,7 @@ export function useDeviceApproval() {
     approverPollRef.current = setInterval(poll, 5000);
     // Fire immediately
     void poll();
-  }, [isPollingPending]);
+  }, []);
 
   /**
    * Approve a pending request: ECIES-encrypt current factor key with
@@ -334,7 +334,7 @@ export function useDeviceApproval() {
 
   // Pause/resume approver polling based on tab visibility
   useEffect(() => {
-    if (!isPollingPending) return;
+    if (!isPollingPendingRef.current) return;
 
     if (isVisible) {
       // Resume polling when tab becomes visible
@@ -357,7 +357,7 @@ export function useDeviceApproval() {
         approverPollRef.current = null;
       }
     }
-  }, [isVisible, isPollingPending]);
+  }, [isVisible]);
 
   // =========================================================================
   // CLEANUP ON UNMOUNT
@@ -384,6 +384,6 @@ export function useDeviceApproval() {
     approveRequest,
     denyRequest,
     pendingRequests,
-    isPolling: isPollingPending,
+    isPolling: isPollingPendingRef.current,
   };
 }

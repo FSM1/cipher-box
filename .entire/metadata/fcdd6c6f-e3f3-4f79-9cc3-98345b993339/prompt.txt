@@ -1,0 +1,1 @@
+I was debugging issues with the login flow and something completely hanging the browser during login . this is part of the debugging session described here: @.planning/debug/corekit-auth-uat.md
