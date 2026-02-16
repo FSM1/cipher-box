@@ -33,6 +33,10 @@ coverage/
 # Playwright screenshots
 .playwright-mcp/*.png
 
+# UAT screenshots
+/tc*.png
+/after-*.png
+
 # Temporary files
 temp/*
 tests/e2e/test-results/*
