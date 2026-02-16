@@ -208,7 +208,7 @@ importers:
         version: 2.3.5
       '@web3auth/modal':
         specifier: ^10.13.1
-        version: 10.13.1(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))(bufferutil@4.1.0)(ioredis@5.9.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
+        version: 10.13.1(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))(bufferutil@4.1.0)(ioredis@5.9.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
       buffer:
         specifier: ^6.0.3
         version: 6.0.3
@@ -290,7 +290,7 @@ importers:
         version: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
       wagmi:
         specifier: ^3.3.4
-        version: 3.3.4(@tanstack/query-core@5.90.19)(@tanstack/react-query@5.90.19(react@18.3.1))(@types/react@18.3.27)(immer@9.0.21)(ox@0.11.3(typescript@5.9.3))(react@18.3.1)(typescript@5.9.3)(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
+        version: 3.3.4(@tanstack/query-core@5.90.19)(@tanstack/react-query@5.90.19(react@18.3.1))(@types/react@18.3.27)(immer@9.0.21)(ox@0.12.1(typescript@5.9.3))(react@18.3.1)(typescript@5.9.3)(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
       zustand:
         specifier: ^5.0.10
         version: 5.0.10(@types/react@18.3.27)(immer@9.0.21)(react@18.3.1)(use-sync-external-store@1.4.0(react@18.3.1))
@@ -400,7 +400,7 @@ importers:
         version: 9.9.0
       '@johanneskares/wallet-mock':
         specifier: ^1.4.1
-        version: 1.4.1(@playwright/test@1.57.0)(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
+        version: 1.4.1(@playwright/test@1.57.0)(viem@2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
       '@noble/ed25519':
         specifier: ^2.2.3
         version: 2.3.0
@@ -417,8 +417,8 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
       viem:
-        specifier: ^2.44.4
-        version: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+        specifier: ^2.46.1
+        version: 2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
 
 packages:
   '@adraffy/ens-normalize@1.10.1':
@@ -10689,6 +10689,17 @@ packages:
       typescript:
         optional: true
 
+  ox@0.12.1:
+    resolution:
+      {
+        integrity: sha512-uU0llpthaaw4UJoXlseCyBHmQ3bLrQmz9rRLIAUHqv46uHuae9SE+ukYBRIPVCnlEnHKuWjDUcDFHWx9gbGNoA==,
+      }
+    peerDependencies:
+      typescript: '>=5.4.0'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+
   ox@0.9.3:
     resolution:
       {
@@ -13302,6 +13313,17 @@ packages:
       typescript:
         optional: true
 
+  viem@2.46.1:
+    resolution:
+      {
+        integrity: sha512-c5YPQR/VueqoPG09Tp1JBw2iItKVRGVI0YkWekquRDZw0ciNBhO3muu2QjO9xFelOXh18q3d/kLbW83B2Oxf0g==,
+      }
+    peerDependencies:
+      typescript: '>=5.0.4'
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+
   vite-node@3.2.4:
     resolution:
       {
@@ -14914,10 +14936,10 @@ snapshots:
       '@types/yargs': 17.0.35
       chalk: 4.1.2
 
-  '@johanneskares/wallet-mock@1.4.1(@playwright/test@1.57.0)(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))':
+  '@johanneskares/wallet-mock@1.4.1(@playwright/test@1.57.0)(viem@2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))':
     dependencies:
       '@playwright/test': 1.57.0
-      viem: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      viem: 2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
 
   '@jridgewell/gen-mapping@0.3.13':
     dependencies:
@@ -15129,14 +15151,14 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@metamask/smart-accounts-kit@0.3.0(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))':
+  '@metamask/smart-accounts-kit@0.3.0(viem@2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))':
     dependencies:
       '@metamask/7715-permission-types': 0.4.0
       '@metamask/delegation-abis': 0.11.0
       '@metamask/delegation-core': 0.3.0
       '@metamask/delegation-deployments': 0.15.0
       buffer: 6.0.3
-      viem: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      viem: 2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
       webauthn-p256: 0.0.10
     transitivePeerDependencies:
       - supports-color
@@ -16472,13 +16494,13 @@ snapshots:
       - eslint-import-resolver-webpack
       - supports-color
 
-  '@toruslabs/ethereum-controllers@8.15.0(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(bufferutil@4.1.0)(color@5.0.3)(utf-8-validate@5.0.10)(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))':
+  '@toruslabs/ethereum-controllers@8.15.0(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(bufferutil@4.1.0)(color@5.0.3)(utf-8-validate@5.0.10)(viem@2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))':
     dependencies:
       '@babel/runtime': 7.28.6
       '@ethereumjs/common': 10.1.0
       '@ethereumjs/tx': 10.1.0
       '@ethereumjs/util': 10.1.0
-      '@metamask/smart-accounts-kit': 0.3.0(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
+      '@metamask/smart-accounts-kit': 0.3.0(viem@2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
       '@toruslabs/base-controllers': 8.15.0(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(bufferutil@4.1.0)(color@5.0.3)(utf-8-validate@5.0.10)
       '@toruslabs/http-helpers': 8.1.1(@babel/runtime@7.28.6)(@sentry/core@9.47.1)
       '@web3auth/auth': 10.8.0(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(bufferutil@4.1.0)(color@5.0.3)(utf-8-validate@5.0.10)
@@ -16492,8 +16514,8 @@ snapshots:
       fast-safe-stringify: 2.1.1
       jsonschema: 1.5.0
       loglevel: 1.9.2
-      permissionless: 0.3.2(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
-      viem: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      permissionless: 0.3.2(viem@2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
+      viem: 2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
     transitivePeerDependencies:
       - '@sentry/core'
       - bufferutil
@@ -17210,14 +17232,14 @@ snapshots:
       loupe: 3.2.1
       tinyrainbow: 2.0.0
 
-  '@wagmi/connectors@7.1.3(@wagmi/core@3.2.3(@tanstack/query-core@5.90.19)(@types/react@18.3.27)(immer@9.0.21)(ox@0.11.3(typescript@5.9.3))(react@18.3.1)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@18.3.1))(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)))(typescript@5.9.3)(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))':
+  '@wagmi/connectors@7.1.3(@wagmi/core@3.2.3(@tanstack/query-core@5.90.19)(@types/react@18.3.27)(immer@9.0.21)(ox@0.12.1(typescript@5.9.3))(react@18.3.1)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@18.3.1))(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)))(typescript@5.9.3)(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))':
     dependencies:
-      '@wagmi/core': 3.2.3(@tanstack/query-core@5.90.19)(@types/react@18.3.27)(immer@9.0.21)(ox@0.11.3(typescript@5.9.3))(react@18.3.1)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@18.3.1))(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
+      '@wagmi/core': 3.2.3(@tanstack/query-core@5.90.19)(@types/react@18.3.27)(immer@9.0.21)(ox@0.12.1(typescript@5.9.3))(react@18.3.1)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@18.3.1))(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
       viem: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
     optionalDependencies:
       typescript: 5.9.3
 
-  '@wagmi/core@3.2.3(@tanstack/query-core@5.90.19)(@types/react@18.3.27)(immer@9.0.21)(ox@0.11.3(typescript@5.9.3))(react@18.3.1)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@18.3.1))(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))':
+  '@wagmi/core@3.2.3(@tanstack/query-core@5.90.19)(@types/react@18.3.27)(immer@9.0.21)(ox@0.12.1(typescript@5.9.3))(react@18.3.1)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@18.3.1))(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))':
     dependencies:
       eventemitter3: 5.0.1
       mipd: 0.0.7(typescript@5.9.3)
@@ -17225,7 +17247,7 @@ snapshots:
       zustand: 5.0.0(@types/react@18.3.27)(immer@9.0.21)(react@18.3.1)(use-sync-external-store@1.4.0(react@18.3.1))
     optionalDependencies:
       '@tanstack/query-core': 5.90.19
-      ox: 0.11.3(typescript@5.9.3)
+      ox: 0.12.1(typescript@5.9.3)
       typescript: 5.9.3
     transitivePeerDependencies:
       - '@types/react'
@@ -17609,7 +17631,7 @@ snapshots:
       '@web3auth/base-provider': 9.7.0(@babel/runtime@7.28.6)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
       '@web3auth/ethereum-provider': 9.7.0(@babel/runtime@7.28.6)(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
       ethers: 6.16.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
-      viem: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      viem: 2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
     transitivePeerDependencies:
       - '@sentry/types'
       - bufferutil
@@ -17633,7 +17655,7 @@ snapshots:
       bn.js: 5.2.2
       ethers: 6.16.0(bufferutil@4.1.0)(utf-8-validate@5.0.10)
       jsonschema: 1.5.0
-      viem: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      viem: 2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
     transitivePeerDependencies:
       - '@sentry/types'
       - bufferutil
@@ -17642,7 +17664,7 @@ snapshots:
       - utf-8-validate
       - zod
 
-  '@web3auth/modal@10.13.1(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))(bufferutil@4.1.0)(ioredis@5.9.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))':
+  '@web3auth/modal@10.13.1(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(@solana/web3.js@1.98.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))(bufferutil@4.1.0)(ioredis@5.9.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))':
     dependencies:
       '@babel/runtime': 7.28.6
       '@hcaptcha/react-hcaptcha': 2.0.2
@@ -17650,7 +17672,7 @@ snapshots:
       '@toruslabs/base-controllers': 8.15.0(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(bufferutil@4.1.0)(color@5.0.3)(utf-8-validate@5.0.10)
       '@toruslabs/http-helpers': 8.1.1(@babel/runtime@7.28.6)(@sentry/core@9.47.1)
       '@web3auth/auth': 10.8.0(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(bufferutil@4.1.0)(color@5.0.3)(utf-8-validate@5.0.10)
-      '@web3auth/no-modal': 10.13.0(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(bufferutil@4.1.0)(color@5.0.3)(ioredis@5.9.2)(react@18.3.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
+      '@web3auth/no-modal': 10.13.0(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(bufferutil@4.1.0)(color@5.0.3)(ioredis@5.9.2)(react@18.3.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
       bowser: 2.13.1
       classnames: 2.5.1
       clsx: 2.1.1
@@ -17664,7 +17686,7 @@ snapshots:
       react-qrcode-logo: 4.0.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       tailwind-merge: 3.4.0
     optionalDependencies:
-      viem: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      viem: 2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
     transitivePeerDependencies:
       - '@azure/app-configuration'
       - '@azure/cosmos'
@@ -17733,7 +17755,7 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@web3auth/no-modal@10.13.0(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(bufferutil@4.1.0)(color@5.0.3)(ioredis@5.9.2)(react@18.3.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))':
+  '@web3auth/no-modal@10.13.0(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(bufferutil@4.1.0)(color@5.0.3)(ioredis@5.9.2)(react@18.3.1)(typescript@5.9.3)(utf-8-validate@5.0.10)(viem@2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))':
     dependencies:
       '@babel/runtime': 7.28.6
       '@ethereumjs/util': 10.1.0
@@ -17745,7 +17767,7 @@ snapshots:
       '@toruslabs/bs58': 1.0.0(@babel/runtime@7.28.6)
       '@toruslabs/constants': 15.0.0(@babel/runtime@7.28.6)
       '@toruslabs/eccrypto': 6.2.0
-      '@toruslabs/ethereum-controllers': 8.15.0(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(bufferutil@4.1.0)(color@5.0.3)(utf-8-validate@5.0.10)(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
+      '@toruslabs/ethereum-controllers': 8.15.0(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(bufferutil@4.1.0)(color@5.0.3)(utf-8-validate@5.0.10)(viem@2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
       '@toruslabs/http-helpers': 8.1.1(@babel/runtime@7.28.6)(@sentry/core@9.47.1)
       '@toruslabs/loglevel-sentry': 8.1.0(@babel/runtime@7.28.6)
       '@toruslabs/secure-pub-sub': 3.0.2(@babel/runtime@7.28.6)(@sentry/core@9.47.1)(bufferutil@4.1.0)(utf-8-validate@5.0.10)
@@ -17769,13 +17791,13 @@ snapshots:
       jwt-decode: 4.0.0
       loglevel: 1.9.2
       mipd: 0.0.7(typescript@5.9.3)
-      permissionless: 0.3.2(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
+      permissionless: 0.3.2(viem@2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
       ripple-keypairs: 1.3.1
       ts-custom-error: 3.3.1
       xrpl: 2.14.3(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     optionalDependencies:
       react: 18.3.1
-      viem: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      viem: 2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
     transitivePeerDependencies:
       - '@azure/app-configuration'
       - '@azure/cosmos'
@@ -21585,6 +21607,21 @@ snapshots:
     transitivePeerDependencies:
       - zod
 
+  ox@0.12.1(typescript@5.9.3):
+    dependencies:
+      '@adraffy/ens-normalize': 1.11.1
+      '@noble/ciphers': 1.3.0
+      '@noble/curves': 1.9.1
+      '@noble/hashes': 1.8.0
+      '@scure/bip32': 1.7.0
+      '@scure/bip39': 1.6.0
+      abitype: 1.2.3(typescript@5.9.3)
+      eventemitter3: 5.0.1
+    optionalDependencies:
+      typescript: 5.9.3
+    transitivePeerDependencies:
+      - zod
+
   ox@0.9.3(typescript@5.9.3):
     dependencies:
       '@adraffy/ens-normalize': 1.11.1
@@ -21719,9 +21756,9 @@ snapshots:
       '@napi-rs/canvas': 0.1.91
       node-readable-to-web-readable-stream: 0.4.2
 
-  permissionless@0.3.2(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)):
+  permissionless@0.3.2(viem@2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)):
     dependencies:
-      viem: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      viem: 2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
 
   pg-cloudflare@1.3.0:
     optional: true
@@ -23165,6 +23202,23 @@ snapshots:
       - utf-8-validate
       - zod
 
+  viem@2.46.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10):
+    dependencies:
+      '@noble/curves': 1.9.1
+      '@noble/hashes': 1.8.0
+      '@scure/bip32': 1.7.0
+      '@scure/bip39': 1.6.0
+      abitype: 1.2.3(typescript@5.9.3)
+      isows: 1.0.7(ws@8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10))
+      ox: 0.12.1(typescript@5.9.3)
+      ws: 8.18.3(bufferutil@4.1.0)(utf-8-validate@5.0.10)
+    optionalDependencies:
+      typescript: 5.9.3
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
+      - zod
+
   vite-node@3.2.4(@types/node@22.19.7)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2):
     dependencies:
       cac: 6.7.14
@@ -23272,11 +23326,11 @@ snapshots:
 
   void-elements@3.1.0: {}
 
-  wagmi@3.3.4(@tanstack/query-core@5.90.19)(@tanstack/react-query@5.90.19(react@18.3.1))(@types/react@18.3.27)(immer@9.0.21)(ox@0.11.3(typescript@5.9.3))(react@18.3.1)(typescript@5.9.3)(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)):
+  wagmi@3.3.4(@tanstack/query-core@5.90.19)(@tanstack/react-query@5.90.19(react@18.3.1))(@types/react@18.3.27)(immer@9.0.21)(ox@0.12.1(typescript@5.9.3))(react@18.3.1)(typescript@5.9.3)(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)):
     dependencies:
       '@tanstack/react-query': 5.90.19(react@18.3.1)
-      '@wagmi/connectors': 7.1.3(@wagmi/core@3.2.3(@tanstack/query-core@5.90.19)(@types/react@18.3.27)(immer@9.0.21)(ox@0.11.3(typescript@5.9.3))(react@18.3.1)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@18.3.1))(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)))(typescript@5.9.3)(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
-      '@wagmi/core': 3.2.3(@tanstack/query-core@5.90.19)(@types/react@18.3.27)(immer@9.0.21)(ox@0.11.3(typescript@5.9.3))(react@18.3.1)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@18.3.1))(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
+      '@wagmi/connectors': 7.1.3(@wagmi/core@3.2.3(@tanstack/query-core@5.90.19)(@types/react@18.3.27)(immer@9.0.21)(ox@0.12.1(typescript@5.9.3))(react@18.3.1)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@18.3.1))(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)))(typescript@5.9.3)(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
+      '@wagmi/core': 3.2.3(@tanstack/query-core@5.90.19)(@types/react@18.3.27)(immer@9.0.21)(ox@0.12.1(typescript@5.9.3))(react@18.3.1)(typescript@5.9.3)(use-sync-external-store@1.4.0(react@18.3.1))(viem@2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10))
       react: 18.3.1
       use-sync-external-store: 1.4.0(react@18.3.1)
       viem: 2.44.4(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@5.0.10)

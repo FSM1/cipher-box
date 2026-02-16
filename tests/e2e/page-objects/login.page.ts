@@ -148,6 +148,7 @@ export class LoginPage extends BasePage {
    * Click the cancel button in the connector list
    */
   async cancelWalletLogin(): Promise<void> {
+    await this.walletConnectorCancel.waitFor({ state: 'visible', timeout: 5000 });
     await this.walletConnectorCancel.click();
   }
 
