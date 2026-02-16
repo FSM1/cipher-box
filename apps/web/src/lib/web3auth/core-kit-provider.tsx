@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, useMemo, type ReactNode } from 'react';
 import { getCoreKit, initCoreKit, COREKIT_STATUS } from './core-kit';
 import type { Web3AuthMPCCoreKit } from './core-kit';
 
@@ -58,16 +58,19 @@ export function CoreKitProvider({ children }: { children: ReactNode }) {
     setStatus(ck.status);
   }, []);
 
-  const value: CoreKitContextValue = {
-    coreKit,
-    status,
-    isInitialized: status !== COREKIT_STATUS.NOT_INITIALIZED,
-    isLoggedIn: status === COREKIT_STATUS.LOGGED_IN,
-    isRequiredShare: status === COREKIT_STATUS.REQUIRED_SHARE,
-    error,
-    reinitialize: initialize,
-    syncStatus,
-  };
+  const value: CoreKitContextValue = useMemo(
+    () => ({
+      coreKit,
+      status,
+      isInitialized: status !== COREKIT_STATUS.NOT_INITIALIZED,
+      isLoggedIn: status === COREKIT_STATUS.LOGGED_IN,
+      isRequiredShare: status === COREKIT_STATUS.REQUIRED_SHARE,
+      error,
+      reinitialize: initialize,
+      syncStatus,
+    }),
+    [coreKit, status, error, initialize, syncStatus]
+  );
 
   return <CoreKitContext.Provider value={value}>{children}</CoreKitContext.Provider>;
 }
