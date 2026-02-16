@@ -1,22 +1,5 @@
-Phase 12.6 added to the roadmap. Here's the summary:
+Done. On branch `feat/phase-12.6-per-file-ipns-metadata` with the roadmap changes committed cleanly off latest main.
 
-**Phase 12.6: Per-File IPNS Metadata Split** (INSERTED)
-- Directory: `.planning/phases/12.6-per-file-ipns-metadata-split/`
-- Status: Not planned yet
-- Execution order: 12 → 12.5 → **12.6** → 12.1 → 13 → ...
+Execution order is now: `12 → 12.5 → 12.6 → 12.1 → 13 → ...`
 
-Roadmap and STATE.md updated. The todo for this can also be moved to done since it's now a full phase.
-
----
-
-**Next Up**
-
-**Phase 12.6: Per-File IPNS Metadata Split**
-
-`/gsd:research-phase 12.6` → then `/gsd:plan-phase 12.6`
-
-`/clear` first for a fresh context window
-
----
-
-Want me to commit these roadmap changes first?
+Next step when you're ready: `/gsd:research-phase 12.6` (in a fresh `/clear` context).
