@@ -257,14 +257,15 @@ Plans:
 7. Desktop FUSE client reads per-file IPNS metadata correctly
 8. Vault export includes per-file metadata in portable format
 
-**Plans:** 4 plans
+**Plans:** 5 plans
 
 Plans:
 
 - [ ] 12.6-01-PLAN.md — Crypto primitives: file IPNS HKDF derivation, FileMetadata/FilePointer types, encrypt/decrypt, v2 folder schema
 - [ ] 12.6-02-PLAN.md — Backend: batch publish endpoint, FolderIpns record_type column, republish scalability, API client regen
-- [ ] 12.6-03-PLAN.md — Frontend: file-metadata service, v2 folder.service.ts rewrite, upload/download/delete flow updates
-- [ ] 12.6-04-PLAN.md — Recovery tool v2 support, vault export docs update, full build verification
+- [ ] 12.6-03-PLAN.md — Frontend services: file-metadata service, v2 folder.service.ts rewrite, download/delete flow updates, store types
+- [ ] 12.6-04-PLAN.md — Frontend hooks + components: useFolder/useFilePreview/useDropUpload v2, FileBrowser/TextEditor/DetailsDialog updates
+- [ ] 12.6-05-PLAN.md — Recovery tool v2 support, vault export docs update, full build verification
 
 ### Phase 13: File Versioning
 
@@ -373,7 +374,7 @@ Parallel phases:
 | 12.3.1 Identity Cleanup    | M2        | 4/4            | Complete    | 2026-02-14 |
 | 12.4 MFA + Cross-Device    | M2        | 5/5            | Complete    | 2026-02-15 |
 | 12.5 MFA Polish/UAT/E2E    | M2        | 3/3            | Complete    | 2026-02-16 |
-| 12.6 Per-File IPNS Meta    | M2        | 0/4            | Not started | -          |
+| 12.6 Per-File IPNS Meta    | M2        | 0/5            | Not started | -          |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
