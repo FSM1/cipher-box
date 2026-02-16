@@ -5,7 +5,7 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 12.5 complete, next: Phase 12.1 (AES-CTR Streaming)
+**Current focus:** Milestone 2 -- Phase 12.5 complete, next: Phase 12.6 (Per-File IPNS Metadata Split)
 
 ## Current Position
 
@@ -126,6 +126,7 @@ Recent decisions affecting current work:
 - Phase 12.4 inserted: MFA + Cross-Device Approval — the actual MFA enrollment and device approval features
 - Phase 12.3.1 inserted after Phase 12.3: Pre-Wipe Identity Cleanup — deterministic IPNS derivation, SHA-256 hashed identifiers for all auth methods, remove cross-method email auto-linking. Done before DB wipe to avoid migration code.
 - Phase 12.5 inserted after Phase 12.4: MFA Polishing, UAT & E2E Testing — polish auth flows, add wallet E2E with mock EIP-1193/6963 provider, fix bugs from CoreKit auth UAT
+- Phase 12.6 inserted after Phase 12.5: Per-File IPNS Metadata Split — split file metadata into per-file IPNS records before vault wipe (clean break, no dual-schema). Phase 12.1 (AES-CTR) moved to after 12.6.
 
 ### Blockers/Concerns
 
@@ -158,6 +159,7 @@ Recent decisions affecting current work:
 - Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
 - Phase 12.4 (MFA + Cross-Device): COMPLETE -- all 5 plans done (bulletin board API, MFA hooks, enrollment wizard, cross-device approval, integration verification)
 - Phase 12.5 (MFA Polishing, UAT & E2E): COMPLETE -- all 3 plans done (SecurityTab wiring, wallet E2E tests, UAT final verification)
+- Phase 12.6 (Per-File IPNS Metadata): NEEDS `/gsd:research-phase` -- TEE republish scalability, batch publish strategy, HKDF file keypair derivation, FUSE client impact
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
@@ -165,7 +167,7 @@ Recent decisions affecting current work:
 Last session: 2026-02-16
 Stopped at: Completed quick-016 (Refine wallet and MFA UI elements)
 Resume file: None
-Next: Phase 12.1 (AES-CTR Streaming Encryption) -- needs research phase first
+Next: Phase 12.6 (Per-File IPNS Metadata Split) -- needs research phase first
 
 ---
 

@@ -1,1 +1,22 @@
-Done. Down to 7 pending todos. Want to review more, or shall I push this branch and move on?
+Phase 12.6 added to the roadmap. Here's the summary:
+
+**Phase 12.6: Per-File IPNS Metadata Split** (INSERTED)
+- Directory: `.planning/phases/12.6-per-file-ipns-metadata-split/`
+- Status: Not planned yet
+- Execution order: 12 → 12.5 → **12.6** → 12.1 → 13 → ...
+
+Roadmap and STATE.md updated. The todo for this can also be moved to done since it's now a full phase.
+
+---
+
+**Next Up**
+
+**Phase 12.6: Per-File IPNS Metadata Split**
+
+`/gsd:research-phase 12.6` → then `/gsd:plan-phase 12.6`
+
+`/clear` first for a fresh context window
+
+---
+
+Want me to commit these roadmap changes first?
