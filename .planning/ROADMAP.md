@@ -231,7 +231,13 @@ Plans:
 5. All bugs discovered during UAT are fixed and verified
 6. Auth-related E2E test suite runs reliably in CI without flakiness
 
-**Plans:** TBD
+**Plans:** 3 plans
+
+Plans:
+
+- [ ] 12.5-01-PLAN.md — Fix ISSUE-004: Wire SecurityTab into SettingsPage with ARIA tab navigation
+- [ ] 12.5-02-PLAN.md — Install wallet-mock, add wallet E2E tests (TC09-TC12)
+- [ ] 12.5-03-PLAN.md — Run wallet E2E tests, human-verify SecurityTab + MFA, update UAT document
 
 ### Phase 13: File Versioning
 
@@ -339,7 +345,7 @@ Parallel phases:
 | 12.3 SIWE + Identity       | M2        | 4/4            | Complete    | 2026-02-14 |
 | 12.3.1 Identity Cleanup    | M2        | 4/4            | Complete    | 2026-02-14 |
 | 12.4 MFA + Cross-Device    | M2        | 5/5            | Complete    | 2026-02-15 |
-| 12.5 MFA Polish/UAT/E2E   | M2        | 0/TBD          | Not started | -          |
+| 12.5 MFA Polish/UAT/E2E    | M2        | 0/3            | Not started | -          |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
