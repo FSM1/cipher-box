@@ -1,0 +1,1 @@
+ok can you start the dev server - redis and postgres are running on 192.168.133.114. also going to need ngrok set up to ensure that Web3Auth can communicate with the API to verify tokens.

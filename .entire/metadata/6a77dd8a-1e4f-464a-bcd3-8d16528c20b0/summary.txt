@@ -1,0 +1,11 @@
+Everything's up. Here's the summary:
+
+| Service | URL |
+|---------|-----|
+| **Web frontend** | `http://localhost:5173` |
+| **API** | `http://localhost:3000` (health: ok, DB: up) |
+| **ngrok tunnel** | `https://1c18-2003-fb-ef11-51b8-44dc-5045-9733-7e48.ngrok-free.app` → `localhost:3000` |
+
+I had to fix a TypeORM entity bug — `DeviceApproval.respondedBy` was missing an explicit `type: 'varchar'`, causing TypeORM to infer `Object` from the `string | null` union type and reject it for Postgres. One-line fix in `apps/api/src/device-approval/device-approval.entity.ts:33`.
+
+You'll want to use the ngrok URL as the `VITE_API_URL` in the web app if you need the browser auth flow to go through ngrok, or configure it as the verifier URL in your Web3Auth dashboard. Let me know if you need me to update any config.
