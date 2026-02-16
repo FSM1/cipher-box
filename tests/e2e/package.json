@@ -12,10 +12,12 @@
   "devDependencies": {
     "@cipherbox/crypto": "workspace:*",
     "@faker-js/faker": "^9.0.0",
+    "@johanneskares/wallet-mock": "^1.4.1",
     "@noble/ed25519": "^2.2.3",
     "@playwright/test": "^1.48.0",
     "@types/node": "^22.19.7",
     "dotenv": "^16.4.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "viem": "^2.44.4"
   }
 }
