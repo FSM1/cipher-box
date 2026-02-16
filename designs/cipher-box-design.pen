@@ -31569,7 +31569,7 @@
                   "stroke": {
                     "align": "inside",
                     "thickness": 1,
-                    "fill": "#003322"
+                    "fill": "#00D084"
                   },
                   "gap": 10,
                   "padding": [
@@ -31662,7 +31662,7 @@
                       "fill": "#00D08808",
                       "gap": 10,
                       "padding": [
-                        10,
+                        8,
                         12
                       ],
                       "alignItems": "center",
@@ -33751,13 +33751,13 @@
           "name": "mfaBannerSubtle",
           "width": 1440,
           "height": 44,
-          "fill": "#00D08808",
+          "fill": "#F59E0B14",
           "stroke": {
             "align": "inside",
             "thickness": {
               "bottom": 1
             },
-            "fill": "#003322"
+            "fill": "#F59E0B40"
           },
           "gap": 12,
           "padding": [
@@ -34034,7 +34034,7 @@
           "name": "mfaBanner",
           "width": "fill_container",
           "height": 44,
-          "fill": "#F59E0B0A",
+          "fill": "#F59E0B14",
           "stroke": {
             "align": "inside",
             "thickness": {
@@ -34093,7 +34093,7 @@
               "type": "frame",
               "id": "MKlBt",
               "name": "bBtn",
-              "fill": "#F59E0B",
+              "fill": "#00D084",
               "padding": [
                 6,
                 16
