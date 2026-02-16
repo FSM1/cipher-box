@@ -1,7 +1,7 @@
 <task-notification>
-<task-id>bdedaec</task-id>
-<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/bdedaec.output</output-file>
+<task-id>b263065</task-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/b263065.output</output-file>
 <status>failed</status>
-<summary>Background command "Start API on port 3000" failed with exit code 143</summary>
+<summary>Background command "Start web on port 5173" failed with exit code 144</summary>
 </task-notification>
-Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/bdedaec.output
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/b263065.output

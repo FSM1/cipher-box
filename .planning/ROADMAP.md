@@ -345,7 +345,7 @@ Parallel phases:
 | 12.3 SIWE + Identity       | M2        | 4/4            | Complete    | 2026-02-14 |
 | 12.3.1 Identity Cleanup    | M2        | 4/4            | Complete    | 2026-02-14 |
 | 12.4 MFA + Cross-Device    | M2        | 5/5            | Complete    | 2026-02-15 |
-| 12.5 MFA Polish/UAT/E2E    | M2        | 0/3            | Not started | -          |
+| 12.5 MFA Polish/UAT/E2E    | M2        | 3/3            | Complete    | 2026-02-16 |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
