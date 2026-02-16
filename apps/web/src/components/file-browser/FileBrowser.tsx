@@ -826,9 +826,10 @@ export function FileBrowser() {
     async (name: string) => {
       try {
         await createFolder(name, currentFolderId === 'root' ? null : currentFolderId);
-        setCreateFolderDialogOpen(false);
       } catch (err) {
         console.error('Create folder failed:', err);
+      } finally {
+        setCreateFolderDialogOpen(false);
       }
     },
     [createFolder, currentFolderId]

@@ -1,7 +1,7 @@
 # CipherBox Design System
 
 **Source:** `designs/cipher-box-design.pen`
-**Last Updated:** 2026-02-15
+**Last Updated:** 2026-02-16
 **Status:** Active design system reference
 
 This document serves as the persistent design context for UI mockup generation. Load this file before any Pencil MCP interaction to ensure consistent outputs.
@@ -10,13 +10,19 @@ This document serves as the persistent design context for UI mockup generation. 
 
 ### Colors
 
-| Hex Code  | Opacity | Usage                    | CSS Variable           |
-| --------- | ------- | ------------------------ | ---------------------- |
-| `#000000` | 100%    | Background, surfaces     | `--color-background`   |
-| `#00D084` | 100%    | Primary accent, borders  | `--color-primary`      |
-| `#00D084` | 40%     | Glow effects             | `--color-glow`         |
-| `#006644` | 100%    | Secondary text, muted    | `--color-text-muted`   |
-| `#003322` | 100%    | Row separators, dividers | `--color-border-muted` |
+| Hex Code  | Opacity | Usage                      | CSS Variable           |
+| --------- | ------- | -------------------------- | ---------------------- |
+| `#000000` | 100%    | Background, surfaces       | `--color-background`   |
+| `#00D084` | 100%    | Primary accent, borders    | `--color-primary`      |
+| `#00D084` | 40%     | Glow effects               | `--color-glow`         |
+| `#006644` | 100%    | Secondary text, muted      | `--color-text-muted`   |
+| `#003322` | 100%    | Row separators, dividers   | `--color-border-muted` |
+| `#F59E0B` | 100%    | Warning accent, MFA banner | `--color-warning`      |
+| `#F59E0B` | 8%      | Warning background tint    | —                      |
+| `#F59E0B` | 25%     | Warning border             | —                      |
+| `#EF4444` | 100%    | Error, danger actions      | `--color-error`        |
+| `#4a5a4e` | 100%    | Dim text, dismiss buttons  | `--color-text-dim`     |
+| `#8b9a8f` | 100%    | Muted labels               | `--color-text-muted`   |
 
 ### Typography
 
@@ -158,6 +164,57 @@ frame (root - 1440x900)
 | Fill     | `#00D084`             |
 | Glow     | 10px blur `#00D08466` |
 
+### Button - Wallet (Outline)
+
+| Property   | Value                      |
+| ---------- | -------------------------- |
+| Background | transparent                |
+| Border     | 1px `#00D084`              |
+| Text color | `#00D084`                  |
+| Padding    | 12px 24px                  |
+| Font       | JetBrains Mono 11px        |
+| Weight     | 600                        |
+| Hover      | bg `#00D08419`, green glow |
+| Icon       | lucide `wallet` 16px       |
+
+### MFA Enrollment Banner
+
+| Property        | Value                            |
+| --------------- | -------------------------------- |
+| Background      | `#F59E0B14` (amber 8%)           |
+| Border (bottom) | 1px `#F59E0B40` (amber 25%)      |
+| Height          | 44px                             |
+| Padding         | 10px 16px                        |
+| Gap             | 12px                             |
+| Icon            | lucide `shield-alert` 16px amber |
+| Bold text       | `#F59E0B` (amber)                |
+| Body text       | `#006644`                        |
+| CTA button      | `#00D084` fill, `#000000` text   |
+| Dismiss         | `[x]` in `#4a5a4e`               |
+
+### Wallet Connector Picker
+
+| Property         | Value                             |
+| ---------------- | --------------------------------- |
+| Border           | 1px `#003322`                     |
+| Header           | "// select wallet" `#006644` 10px |
+| Option padding   | 8px 12px                          |
+| Option font      | JetBrains Mono 11px               |
+| Option border    | 1px `#003322`                     |
+| Option hover     | border `#00D084`, text `#00D084`  |
+| Cancel           | "// cancel" `#4a5a4e` 10px        |
+| Active highlight | bg `#00D08808`                    |
+
+### Linked Method Item
+
+| Property      | Value                                    |
+| ------------- | ---------------------------------------- |
+| Icon badge    | 24x24, `#00D084` text, `#003322` border  |
+| Method icons  | G (Google), @ (Email), W (Wallet)        |
+| Status badge  | "linked" `#00D084` 10px                  |
+| Unlink button | `[unlink]` 10px, disabled at 0.4 opacity |
+| Last method   | "// last method" `#4a5a4e` 10px          |
+
 ### Modal Pattern
 
 | Property       | Value                                     |
@@ -223,16 +280,20 @@ frame (root - 1440x900)
 
 Record design decisions made during discuss-phase sessions.
 
-| Date       | Phase | Decision                                                           | Rationale                                                   |
-| ---------- | ----- | ------------------------------------------------------------------ | ----------------------------------------------------------- |
-| 2026-01-30 | -     | Initial design system extracted from .pen                          | Baseline for consistency                                    |
-| 2026-02-15 | 12.4  | Wizard uses 3-step flow: Setup > Recovery > Confirm                | Balances information density with progressive disclosure    |
-| 2026-02-15 | 12.4  | Recovery phrase shown as 4x3 word grid with numbered cells         | Clear, scannable layout for 12-word phrase                  |
-| 2026-02-15 | 12.4  | Device approval modal uses primary border + glow effect            | Draws urgent attention vs standard modals with muted border |
-| 2026-02-15 | 12.4  | Danger button pattern added (red fill, white text)                 | Needed for DENY action in approval flow                     |
-| 2026-02-15 | 12.4  | Settings Security page uses dedicated sub-nav item                 | Security section separate from general settings             |
-| 2026-02-15 | 12.4  | New device waiting state uses full-page centered card (no sidebar) | Pre-auth state, user doesn't have vault access yet          |
-| 2026-02-15 | 12.4  | Checkbox acknowledgment for recovery phrase confirmation           | User explicitly confirms they saved the phrase              |
+| Date       | Phase | Decision                                                           | Rationale                                                                      |
+| ---------- | ----- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| 2026-01-30 | -     | Initial design system extracted from .pen                          | Baseline for consistency                                                       |
+| 2026-02-15 | 12.4  | Wizard uses 3-step flow: Setup > Recovery > Confirm                | Balances information density with progressive disclosure                       |
+| 2026-02-15 | 12.4  | Recovery phrase shown as 4x3 word grid with numbered cells         | Clear, scannable layout for 12-word phrase                                     |
+| 2026-02-15 | 12.4  | Device approval modal uses primary border + glow effect            | Draws urgent attention vs standard modals with muted border                    |
+| 2026-02-15 | 12.4  | Danger button pattern added (red fill, white text)                 | Needed for DENY action in approval flow                                        |
+| 2026-02-15 | 12.4  | Settings Security page uses dedicated sub-nav item                 | Security section separate from general settings                                |
+| 2026-02-15 | 12.4  | New device waiting state uses full-page centered card (no sidebar) | Pre-auth state, user doesn't have vault access yet                             |
+| 2026-02-15 | 12.4  | Checkbox acknowledgment for recovery phrase confirmation           | User explicitly confirms they saved the phrase                                 |
+| 2026-02-16 | 12.5  | MFA banner uses amber accent (`#F59E0B`), not green                | Amber draws attention/urgency vs terminal green; differentiates from normal UI |
+| 2026-02-16 | 12.5  | Wallet icon is "W" text, not Greek Xi (Ξ)                          | Universally legible; matches G (Google) and @ (Email) pattern                  |
+| 2026-02-16 | 12.5  | Wallet button uses primary green border (outline style)            | Matches secondary button pattern; consistent with Google/Email buttons         |
+| 2026-02-16 | 12.5  | Disabled unlink shows "// last method" hint text                   | Terminal-style comment explains why action is unavailable                      |
 
 ---
 
@@ -252,6 +313,9 @@ const tokens = {
     glow: '#00D08466',
     textMuted: '#006644',
     borderMuted: '#003322',
+    warning: '#F59E0B',
+    error: '#EF4444',
+    textDim: '#4a5a4e',
   },
   typography: {
     fontFamily: 'JetBrains Mono',

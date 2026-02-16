@@ -240,7 +240,7 @@ async function injectTestAuthState(page: Page): Promise<void> {
       isAuthenticated: true,
       lastAuthMethod: 'email_passwordless',
       userEmail: data.email,
-      derivedKeypair: {
+      vaultKeypair: {
         publicKey: new Uint8Array(data.publicKeyArr),
         privateKey: new Uint8Array(data.privateKeyArr),
       },

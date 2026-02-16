@@ -53,7 +53,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 12.3: SIWE + Unified Identity** - Wallet login via SIWE, multi-auth linking, ADR-001 cleanup (INSERTED)
 - [x] **Phase 12.3.1: Pre-Wipe Identity Cleanup** - Deterministic IPNS derivation, hashed identifiers, remove auto-linking (INSERTED)
 - [x] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
-- [ ] **Phase 12.5: MFA Polishing, UAT & E2E Testing** - Polish auth flows, wallet E2E with mock provider, fix UAT bugs (INSERTED)
+- [x] **Phase 12.5: MFA Polishing, UAT & E2E Testing** - Polish auth flows, wallet E2E with mock provider, fix UAT bugs (INSERTED)
 - [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
 - [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
@@ -231,7 +231,13 @@ Plans:
 5. All bugs discovered during UAT are fixed and verified
 6. Auth-related E2E test suite runs reliably in CI without flakiness
 
-**Plans:** TBD
+**Plans:** 3 plans
+
+Plans:
+
+- [x] 12.5-01-PLAN.md — Fix ISSUE-004: Wire SecurityTab into SettingsPage with ARIA tab navigation
+- [x] 12.5-02-PLAN.md — Install wallet-mock, add wallet E2E tests (TC09-TC12)
+- [x] 12.5-03-PLAN.md — Run wallet E2E tests, human-verify SecurityTab + MFA, update UAT document
 
 ### Phase 13: File Versioning
 
@@ -339,7 +345,7 @@ Parallel phases:
 | 12.3 SIWE + Identity       | M2        | 4/4            | Complete    | 2026-02-14 |
 | 12.3.1 Identity Cleanup    | M2        | 4/4            | Complete    | 2026-02-14 |
 | 12.4 MFA + Cross-Device    | M2        | 5/5            | Complete    | 2026-02-15 |
-| 12.5 MFA Polish/UAT/E2E    | M2        | 0/TBD          | Not started | -          |
+| 12.5 MFA Polish/UAT/E2E    | M2        | 3/3            | Complete    | 2026-02-16 |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |

@@ -17,7 +17,7 @@ const METHOD_LABELS: Record<string, string> = {
 const METHOD_ICONS: Record<string, string> = {
   google: 'G',
   email: '@',
-  wallet: '\u039E', // Greek Xi for ETH
+  wallet: 'W',
 };
 
 /**
@@ -248,6 +248,9 @@ export function LinkedMethods() {
               >
                 {unlinkingId === method.id ? 'unlinking...' : '[unlink]'}
               </button>
+              {isLastMethod && (
+                <span className="linked-methods-unlink-hint">{'// last method'}</span>
+              )}
             </div>
           </li>
         ))}
