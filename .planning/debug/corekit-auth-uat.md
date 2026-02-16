@@ -153,3 +153,69 @@ Result: 12,962 failed requests -> `ERR_INSUFFICIENT_RESOURCES` -> browser tab cr
 - Verified OTP -> `loginWithJWT` started -> tab crashed at ~30s
 - **ISSUE-001 confirmed 3/3 attempts**
 - UAT blocked pending resolution
+
+### 2026-02-16 17:30 — ISSUE-001 Root Cause & Fix
+
+- Identified root cause: `useDeviceApproval.ts` dependency oscillation (see ISSUE-001 details above)
+- Fixed by converting `isPollingPending` from `useState` to `useRef`
+- Also fixed ISSUE-003: persistent JWKS key via base64-encoded PEM in `.env`
+- Also refactored `hooks.ts`: extracted `doLoginWithCoreKit`, wrapped methods in `useCallback`, added `syncStatus` to CoreKitProvider
+
+### 2026-02-16 18:00 — ISSUE-003 Fix & ngrok Rotation
+
+- Generated persistent RSA keypair, base64-encoded PEM in `IDENTITY_JWT_PRIVATE_KEY`
+- Fixed `jose.importPKCS8()`: needs `Buffer.from(pemKey, 'base64')` and `{ extractable: true }`
+- Restarted ngrok (new URL: `https://6e86-...ngrok-free.app`) to bypass Web3Auth JWKS cache
+- Updated JWKS URL on Web3Auth dashboard
+
+### 2026-02-16 18:30 — TC02 First Successful Login
+
+- Fresh DB (`DROP SCHEMA public CASCADE; CREATE SCHEMA public`)
+- Mock IPNS router running on port 3001
+- Email login: OTP verified, `loginWithJWT` 3.6s, `commitChanges` 280ms, vault init, empty directory
+- Created `uat-test-folder` to trigger IPNS publish (3 records)
+- Logout -> re-login: IPNS resolved, folder visible, "Synced"
+- **TC02: PASS** (full fresh-user → logout → re-login cycle)
+
+### 2026-02-16 18:46 — Full Fresh Cycle (post-commit)
+
+- Committed fix on `fix/auth-publickey-format` branch
+- Reset DB, cleared browser storage + IndexedDB, reset mock IPNS router
+- **Fresh user login:** OTP `263899`, loginWithJWT 3.2s, empty vault displayed
+- **Create folder:** `uat-test-folder`, 3 IPNS records published, "Synced"
+- **Logout:** clean return to login page
+- **Re-login:** OTP `291949`, loginWithJWT 1.6s (cached), IPNS resolved, folder visible, "Synced", `2 KB / 500.0 MB`
+- **Full cycle confirmed PASS**
+
+### 2026-02-16 18:55 — TC03-TC06 Email Edge Cases
+
+- **TC03 (invalid OTP):** Entered `999999`, got 401, alert shown, returned to email input. PASS
+- **TC04 (back navigation):** Back arrow from OTP screen returns to email with email pre-filled. PASS
+- **TC05 (OTP resend):** Timer countdown works (90s not 60s), button enables, click triggers resend. Hit rate limit (400) after multiple UAT OTP sends — error shown gracefully. PASS
+- **TC06 (rate limiting):** Backend returns 400 "Too many OTP requests". Frontend shows error alert. Redis `otp-attempts:*` key confirmed. PASS
+- Flushed Redis rate limit key to continue testing
+
+### 2026-02-16 19:01 — TC13, TC14, TC36 Session & Redirect
+
+- **TC13 (session restoration):** Page refresh restores CoreKit session from IndexedDB, `/auth/refresh` 200, vault loads with folder visible, 0 errors. PASS
+- **TC14 (already authenticated redirect):** Navigate to `/#/` while logged in — immediately redirected to `#/files`. PASS
+- **TC36 (new user vault init):** Covered by TC02 fresh cycle — empty vault with "EMPTY DIRECTORY", 0 B usage. PASS
+
+### 2026-02-16 19:03 — ISSUE-004 Discovery (Settings/Security Tab)
+
+- Navigated to Settings page — only shows "// linked auth methods" and "[VAULT EXPORT]"
+- No SECURITY tab visible despite `Settings.tsx` having tab UI
+- Root cause: `SettingsPage.tsx` (actually routed) doesn't include `SecurityTab`; `Settings.tsx` (has tabs) is orphaned
+- **ISSUE-004: SecurityTab not wired into SettingsPage** — blocks TC25-31 (MFA enrollment, devices, recovery)
+- MfaEnrollmentPrompt exists in AppShell but only fires once per session (checkedRef)
+
+### UAT Summary
+
+| Category | Count | Details |
+|----------|-------|---------|
+| PASS | 10 | TC01, TC02, TC03, TC04, TC05, TC06, TC13, TC14, TC32, TC36 |
+| SKIP | 12 | TC07-12 (Google/Wallet not available), TC15-23 (MFA needs enrollment), TC33-35 (multi-device/destructive) |
+| BLOCK | 7 | TC25-31 (ISSUE-004: SecurityTab not in SettingsPage) |
+| NOTE | 1 | TC24 (MFA prompt component exists, fires once per session) |
+
+**Issues:** ISSUE-001 RESOLVED, ISSUE-002 documented, ISSUE-003 RESOLVED, ISSUE-004 OPEN

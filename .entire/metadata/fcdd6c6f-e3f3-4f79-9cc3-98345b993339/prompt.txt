@@ -1,1 +1,1 @@
-let commit this so far, and continue with the uat.
+ok, can you update the uat debugging doc with all of these details?
