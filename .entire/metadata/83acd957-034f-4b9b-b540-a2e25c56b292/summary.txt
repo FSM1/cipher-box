@@ -1,0 +1,28 @@
+Everything looks solid. Here's the UAT summary from this Playwright session:
+
+## UAT Results Summary
+
+| Test | Description | Status |
+|------|-------------|--------|
+| **ISSUE-004** | SecurityTab wired into SettingsPage | **PASS** |
+| **Tab Nav** | LINKED METHODS <-> SECURITY switching | **PASS** |
+| **Tab ARIA** | tablist/tab/tabpanel roles, selected state | **PASS** |
+| **VaultExport** | Visible below tabs on both tab views | **PASS** |
+| **Email Login** | Send OTP -> verify -> Core Kit init -> files | **PASS** |
+| **TC09** | Wallet button visible, shows connector list | **PASS** |
+| **TC10** | Cancel wallet returns to initial state | **PASS** |
+| **TC11** | No real wallet — Injected connector only | **PASS** (env-dependent) |
+| **TC27** | MFA enabled state shows badge + factor count | **PASS** |
+| **TC28** | Authorized devices section renders | **PASS** |
+| **TC29** | Recovery phrase section renders | **PASS** |
+| **Logout** | Clears session, returns to login | **PASS** |
+
+**Not testable in this session** (require multi-device or fresh account):
+- TC15-23: MFA login flows (need a second device or new account without existing device share)
+- TC25-26: MFA enrollment wizard (user already has MFA enabled)
+- TC12: Wallet reject signature (needs real mock wallet injection, covered by E2E tests)
+- TC30-31: Factor revocation/regeneration (destructive, skip for UAT safety)
+
+The wallet E2E test suite (6 tests) already covers TC09-TC12 programmatically with the mock provider.
+
+Everything I could verify interactively passed. Ready to continue — should I mark the checkpoint as "approved" and let the continuation agent finish Plan 03 (update the UAT document)?
