@@ -1,17 +1,1 @@
-Phase 12.5 scope updated. Here's the refined plan:
-
-**Phase 12.5: MFA Polishing, UAT & E2E Testing**
-
-| Work Item | Unblocks |
-|---|---|
-| Fix ISSUE-004: Wire SecurityTab into SettingsPage | MFA UAT (TC25-31) |
-| Add `@johanneskares/wallet-mock` + wallet E2E tests | Wallet UAT (TC09-12) |
-| Complete wallet UAT (TC09-12) | -- |
-| Complete MFA UAT (TC15-31) + fix bugs found | -- |
-| Ensure E2E suite passes in CI | -- |
-
----
-
-**Next step:** `/gsd:plan-phase 12.5` to break this down into executable plans.
-
-`/clear` first for a fresh context window.
+Done. PR #130 updated with the gitignore change. Clean working tree now.

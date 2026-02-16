@@ -1,11 +1,1 @@
-ahhh whoops, must have gotten jumbled in the copy pasting - I was saying:
-
-use this knowledge to create e2e tests for the wallet flows.
-
-then make sure all of this is working by compeleting the wallet uat .
-
-this should all be part of phase 12.5. 
-
-
-
-PS. regarding the approaches proposed, I think I am starting to lean towards the using the wallet-mock package rather than rolling our own. this is not a financial app, and all we really use is signing a SIWE message.
+yeah please gitignore that folder
