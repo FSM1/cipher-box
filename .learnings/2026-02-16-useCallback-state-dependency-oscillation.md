@@ -9,12 +9,14 @@
 ## What I Learned
 
 - **State in `useCallback` deps + effect cleanup that resets that state = infinite render loop.** The pattern:
-  ```
+
+  ```typescript
   const [flag, setFlag] = useState(false);
   const fn = useCallback(() => { setFlag(true); ... }, [flag]);  // identity changes when flag changes
   // In consumer:
   useEffect(() => { fn(); return () => { setFlag(false); }; }, [fn]);  // cleanup resets flag
   ```
+
   This oscillates: effect fires -> flag=true -> fn new identity -> cleanup resets flag=false -> fn new identity -> effect fires -> repeat forever.
 
 - **The symptom was misleading.** It looked like CoreKit `loginWithJWT` was crashing the browser (WASM/TSS), but it was actually a runaway polling loop in a completely unrelated component (`DeviceApprovalModal`) starving the browser of network resources. The tab freeze happened to coincide with login because that's when auth state changes triggered the modal's polling effect.

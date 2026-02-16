@@ -1,12 +1,10 @@
-**Logout → re-login: PASS!**
+Here's the UAT summary so far:
 
-- `loginWithJWT` completed in 2s
-- Navigated to `#/files`
-- **"Synced"** status (green)
-- **`test-folder` visible** — vault data persisted across logout/login cycle
-- Storage: `2 KB / 500.0 MB`
-- No crash, no infinite loop, no IPFS errors
+**Passed (10):** TC01, TC02, TC03, TC04, TC05, TC06, TC13, TC14, TC32, TC36
+**Skipped (12):** TC07-12 (Google/Wallet — not available in dev), TC15-23 (MFA requires enrollment first), TC33-35 (multi-device/destructive)
+**Blocked (7):** TC25-31 (ISSUE-004: SecurityTab not wired into SettingsPage)
+**Noted (1):** TC24 (MFA prompt fires once per session, confirmed component exists)
 
-Full end-to-end cycle confirmed: **Login → Create folder → Logout → Login → Vault synced with folder intact.**
+**Key finding: ISSUE-004** — The Security tab with MFA enrollment, device management, and recovery phrase features exists in code (`SecurityTab`, `MfaEnrollmentWizard`, `RecoveryPhraseSection`) but is not accessible from the UI because `SettingsPage.tsx` doesn't include it.
 
-TC02 (email login happy path) and TC13 (session restoration) are both verified. TC32 (logout) also confirmed working across multiple cycles.
+The core email auth flow (login, invalid OTP, back nav, resend, rate limiting, session restore, redirect, logout, new user init) is fully passing. Want me to fix ISSUE-004 to unblock the MFA tests?
