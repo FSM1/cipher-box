@@ -1,0 +1,35 @@
+Research complete. Here's the synthesis:
+
+## Wallet Login Flow (CipherBox)
+
+The flow uses **2 RPC methods** via wagmi:
+
+| Step | wagmi API | RPC Method | Purpose |
+|------|-----------|------------|---------|
+| 1 | `connectAsync({ connector })` | `eth_requestAccounts` | Get wallet address |
+| 2 | `signMessageAsync({ message })` | `personal_sign` | Sign SIWE message |
+
+Key files: `WalletLoginButton.tsx` (UI + SIWE), `siwe.service.ts` (backend verification with viem's `verifyMessage` — real ECDSA verify, no canned responses allowed).
+
+wagmi's `injected()` connector discovers wallets via **EIP-6963** (`eip6963:announceProvider` event), so the mock must announce itself that way — just setting `window.ethereum` won't make it appear in the connector list.
+
+## Mock Strategy
+
+Two viable approaches:
+
+| | `@johanneskares/wallet-mock` | Custom MockWalletProvider |
+|---|---|---|
+| EIP-6963 | Yes | Yes |
+| Real ECDSA signing | Yes (viem accounts) | Yes (viem accounts) |
+| Spy/assertions | No built-in | Yes — records all RPC calls |
+| Dependencies | External npm package | None (viem already in project) |
+| Maintenance | Library handles edge cases | We own it |
+
+**Recommendation: Custom `MockWalletProvider`** — because you specifically want spy/assertion capabilities. The approach:
+
+1. **`page.exposeFunction('__mockWalletRequest', handler)`** — bridges browser → Node.js, every call recorded as spy data
+2. **`page.addInitScript()`** — injects EIP-1193 provider + fires EIP-6963 `announceProvider` event before any page scripts run
+3. **`privateKeyToAccount()`** from viem — produces real signatures that pass backend `verifyMessage()` verification
+4. Test fixture pattern — `MockWalletProvider` class with `.install()`, `.calls`, `.assertCalled()`, `.getCallsFor()`
+
+Your message got cut off at "once that is correctly figured out, you should use this arcane knowledge" — what's the rest? Should I proceed with implementing this mock wallet infrastructure as part of Phase 12.5?
