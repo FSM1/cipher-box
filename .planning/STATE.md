@@ -122,6 +122,7 @@ Recent decisions affecting current work:
 - Phase 12.3 inserted: SIWE + Unified Identity — wallet login unification, multi-auth linking
 - Phase 12.4 inserted: MFA + Cross-Device Approval — the actual MFA enrollment and device approval features
 - Phase 12.3.1 inserted after Phase 12.3: Pre-Wipe Identity Cleanup — deterministic IPNS derivation, SHA-256 hashed identifiers for all auth methods, remove cross-method email auto-linking. Done before DB wipe to avoid migration code.
+- Phase 12.5 inserted after Phase 12.4: MFA Polishing, UAT & E2E Testing — polish auth flows, add wallet E2E with mock EIP-1193/6963 provider, fix bugs from CoreKit auth UAT
 
 ### Blockers/Concerns
 
