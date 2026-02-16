@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useState, useCallback, type ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  useCallback,
+  useMemo,
+  type ReactNode,
+} from 'react';
 import { getCoreKit, initCoreKit, COREKIT_STATUS } from './core-kit';
 import type { Web3AuthMPCCoreKit } from './core-kit';
 
@@ -17,6 +25,8 @@ interface CoreKitContextValue {
   error: Error | null;
   /** Re-run initialization (e.g., retry after error) */
   reinitialize: () => Promise<void>;
+  /** Sync React state with CoreKit's internal status after login/logout/MFA */
+  syncStatus: () => void;
 }
 
 const CoreKitContext = createContext<CoreKitContextValue | null>(null);
@@ -50,15 +60,25 @@ export function CoreKitProvider({ children }: { children: ReactNode }) {
     initialize();
   }, [initialize]);
 
-  const value: CoreKitContextValue = {
-    coreKit,
-    status,
-    isInitialized: status !== COREKIT_STATUS.NOT_INITIALIZED,
-    isLoggedIn: status === COREKIT_STATUS.LOGGED_IN,
-    isRequiredShare: status === COREKIT_STATUS.REQUIRED_SHARE,
-    error,
-    reinitialize: initialize,
-  };
+  /** Sync React state with CoreKit's internal status. Call after login/logout/MFA. */
+  const syncStatus = useCallback(() => {
+    const ck = getCoreKit();
+    setStatus(ck.status);
+  }, []);
+
+  const value: CoreKitContextValue = useMemo(
+    () => ({
+      coreKit,
+      status,
+      isInitialized: status !== COREKIT_STATUS.NOT_INITIALIZED,
+      isLoggedIn: status === COREKIT_STATUS.LOGGED_IN,
+      isRequiredShare: status === COREKIT_STATUS.REQUIRED_SHARE,
+      error,
+      reinitialize: initialize,
+      syncStatus,
+    }),
+    [coreKit, status, error, initialize, syncStatus]
+  );
 
   return <CoreKitContext.Provider value={value}>{children}</CoreKitContext.Provider>;
 }

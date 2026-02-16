@@ -1,4 +1,31 @@
 import './polyfills';
+
+// DEBUG: Error capture for UAT - captures first 20 errors to window.__errorLog
+if (import.meta.env.DEV) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as any;
+  w.__errorLog = [];
+  w.__errorCount = 0;
+  const origError = console.error;
+  console.error = function (...args: unknown[]) {
+    w.__errorCount++;
+    if (w.__errorLog.length < 20) {
+      w.__errorLog.push({
+        type: 'console.error',
+        count: w.__errorCount,
+        msg: args
+          .map((a) => (typeof a === 'string' ? a.substring(0, 300) : String(a).substring(0, 300)))
+          .join(' '),
+        time: Date.now(),
+      });
+    }
+    // After 100 errors, stop logging to prevent browser crash
+    if (w.__errorCount <= 100) {
+      origError.apply(console, args);
+    }
+  };
+}
+
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';

@@ -19,7 +19,9 @@ export class JwtIssuerService implements OnModuleInit {
 
     if (pemKey) {
       this.logger.log('Loading RS256 identity keypair from IDENTITY_JWT_PRIVATE_KEY env var');
-      this.privateKey = await jose.importPKCS8(pemKey, 'RS256');
+      // Env var is base64-encoded PEM (multiline PEM doesn't work in .env files)
+      const pem = Buffer.from(pemKey, 'base64').toString('utf8');
+      this.privateKey = await jose.importPKCS8(pem, 'RS256', { extractable: true });
       // Derive public JWK from private key (strip private fields)
       const privateJwk = await jose.exportJWK(this.privateKey);
       const publicJwkData = Object.fromEntries(

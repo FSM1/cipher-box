@@ -30,6 +30,6 @@ export class DeviceApproval {
   @Column({ name: 'expires_at', type: 'timestamp' })
   expiresAt!: Date;
 
-  @Column({ name: 'responded_by', nullable: true })
+  @Column({ name: 'responded_by', type: 'varchar', nullable: true })
   respondedBy!: string | null;
 }

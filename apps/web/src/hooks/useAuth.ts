@@ -50,6 +50,11 @@ export function useAuth() {
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const restoringRef = useRef(false);
 
+  // Stable refs for functions used in the session restoration effect.
+  // This prevents the effect from re-firing when function references change.
+  const initializeOrLoadVaultRef = useRef<(() => Promise<void>) | null>(null);
+  const coreKitLogoutRef = useRef<(() => Promise<void>) | null>(null);
+
   // Pending auth state for REQUIRED_SHARE flow
   // Stored so completeRequiredShare() can resume after factor input
   const [pendingCipherboxJwt, setPendingCipherboxJwt] = useState<string | null>(null);
@@ -434,6 +439,11 @@ export function useAuth() {
     }
   }, [accessToken, coreKitLogout, clearAuthState, navigate, isLoggingOut]);
 
+  // Keep function refs up-to-date for use in session restoration effect.
+  // Using refs prevents the effect from re-firing when function identities change.
+  initializeOrLoadVaultRef.current = initializeOrLoadVault;
+  coreKitLogoutRef.current = coreKitLogout;
+
   // Session restoration: if Core Kit restores a session from localStorage
   // on init, we have LOGGED_IN status without going through login flow.
   // Complete backend auth + vault loading.
@@ -455,13 +465,13 @@ export function useAuth() {
           }
 
           // Load vault keys from Core Kit keypair
-          await initializeOrLoadVault();
+          await initializeOrLoadVaultRef.current?.();
         } catch {
           // No valid backend session -- user needs to re-login
           // Core Kit session exists but backend cookie expired
           // Clear Core Kit session to avoid inconsistent state
           try {
-            await coreKitLogout();
+            await coreKitLogoutRef.current?.();
           } catch {
             // Ignore logout errors during cleanup
           }
@@ -472,15 +482,7 @@ export function useAuth() {
       }
     };
     restoreSession();
-  }, [
-    coreKitLoggedIn,
-    isAuthenticated,
-    isLoggingIn,
-    setAccessToken,
-    setUserEmail,
-    initializeOrLoadVault,
-    coreKitLogout,
-  ]);
+  }, [coreKitLoggedIn, isAuthenticated, isLoggingIn, setAccessToken, setUserEmail]);
 
   return {
     isLoading,
