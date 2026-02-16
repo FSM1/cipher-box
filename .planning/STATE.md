@@ -5,22 +5,22 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 12.4 complete (MFA + Cross-Device Approval)
+**Current focus:** Milestone 2 -- Phase 12.5 in progress (MFA Polishing, UAT & E2E)
 
 ## Current Position
 
-Phase: 12.4 (MFA + Cross-Device Approval)
-Plan: 5 of 5 planned
-Status: Phase complete
-Last activity: 2026-02-15 -- Completed 12.4-05-PLAN.md (API Client Regeneration + Integration Verification + Keypair Stability Check)
+Phase: 12.5 (MFA Polishing, UAT & E2E)
+Plan: 1 of 3 planned
+Status: In progress
+Last activity: 2026-02-16 -- Completed 12.5-01-PLAN.md (Wire SecurityTab into SettingsPage)
 
-Progress: [#################...] 85% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete)
+Progress: [#################...] 86% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5: 1/3)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 94
+- Total plans completed: 95
 - Average duration: 5.0 min
 - Total execution time: 8.5 hours
 
@@ -34,10 +34,11 @@ Progress: [#################...] 85% (M1 complete, M2 Phase 12 complete, Phase 1
 | M2 Phase 12.3   | 4/4   | 39 min  | 9.8 min  |
 | M2 Phase 12.3.1 | 4/4   | 38 min  | 9.5 min  |
 | M2 Phase 12.4   | 5/5   | 47 min  | 9.4 min  |
+| M2 Phase 12.5   | 1/3   | 2 min   | 2.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 8m, 20m, 6m, 9m, 4m
+- Last 5 plans: 20m, 6m, 9m, 4m, 2m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -98,6 +99,8 @@ Recent decisions affecting current work:
 | LoginFooter extracted to avoid duplication in Login.tsx          | 12.4-04   | Three render paths (normal, waiting, recovery) share the same footer component                                   |
 | Generated client wrapper pattern for device-approval service     | 12.4-05   | deviceApprovalApi wraps Orval-generated functions for backward-compatible import surface                         |
 | tssPubKey defensive check as permanent enableMfa() guard         | 12.4-05   | Logs CRITICAL if keypair changes after MFA enrollment; does not throw (enrollment already succeeded)             |
+| VaultExport below tabs, not as a third tab                       | 12.5-01   | VaultExport is a utility action always visible, not a settings category                                          |
+| Merge Settings.tsx into SettingsPage (not re-route)              | 12.5-01   | SettingsPage is canonical routed component with AppShell; merging preserves existing routing and layout          |
 
 ### Pending Todos
 
@@ -153,16 +156,17 @@ Recent decisions affecting current work:
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
 - Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
 - Phase 12.4 (MFA + Cross-Device): COMPLETE -- all 5 plans done (bulletin board API, MFA hooks, enrollment wizard, cross-device approval, integration verification)
+- Phase 12.5 (MFA Polishing, UAT & E2E): IN PROGRESS -- plan 01 done (SecurityTab wired into SettingsPage), 2 plans remaining
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
-Last session: 2026-02-15
-Stopped at: Phase 12.4 complete — all 5 plans executed, goal verified (5/5 must-haves passed)
+Last session: 2026-02-16
+Stopped at: Completed 12.5-01-PLAN.md (Wire SecurityTab into SettingsPage)
 Resume file: None
-Next: Phase 12.1 (AES-CTR Streaming Encryption) — needs research phase first
+Next: 12.5-02-PLAN.md (next plan in Phase 12.5)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-15 after completing Phase 12.4 (MFA + Cross-Device Approval)_
+_Last updated: 2026-02-16 after completing Phase 12.5 Plan 01 (Wire SecurityTab into SettingsPage)_
