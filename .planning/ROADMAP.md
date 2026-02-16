@@ -53,6 +53,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 12.3: SIWE + Unified Identity** - Wallet login via SIWE, multi-auth linking, ADR-001 cleanup (INSERTED)
 - [x] **Phase 12.3.1: Pre-Wipe Identity Cleanup** - Deterministic IPNS derivation, hashed identifiers, remove auto-linking (INSERTED)
 - [x] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
+- [ ] **Phase 12.5: MFA Polishing, UAT & E2E Testing** - Polish auth flows, wallet E2E with mock provider, fix UAT bugs (INSERTED)
 - [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
 - [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
@@ -215,6 +216,23 @@ Plans:
 - [x] 12.4-04-PLAN.md — Cross-device approval flow (waiting screen, approval modal, recovery input, enrollment prompt)
 - [x] 12.4-05-PLAN.md — API client regen + integration verification + cleanup
 
+### Phase 12.5: MFA Polishing, UAT & E2E Testing (INSERTED)
+
+**Goal**: Fix bugs from CoreKit auth UAT, wire missing SecurityTab UI, add wallet E2E tests with `@johanneskares/wallet-mock` (EIP-6963 mock provider), and complete UAT for all auth + MFA flows
+**Depends on**: Phase 12.4 (MFA + Cross-Device Approval complete)
+**Requirements**: Quality gate before proceeding to new features
+**Research flag**: Skip — builds on existing E2E infrastructure and UAT findings from `.planning/debug/corekit-auth-uat.md`
+**Success Criteria** (what must be TRUE):
+
+1. ISSUE-004 fixed: SecurityTab wired into SettingsPage with tab navigation (unblocks MFA enrollment/device management UI)
+2. Wallet E2E tests pass using `@johanneskares/wallet-mock` EIP-6963 mock provider — no real wallet extension required
+3. Wallet UAT complete: TC09 (happy path), TC10 (cancel), TC11 (no wallet), TC12 (reject signature) all PASS
+4. MFA UAT complete: TC15-23 (MFA login flows) and TC25-31 (enrollment, devices, recovery) all PASS or documented
+5. All bugs discovered during UAT are fixed and verified
+6. Auth-related E2E test suite runs reliably in CI without flakiness
+
+**Plans:** TBD
+
 ### Phase 13: File Versioning
 
 **Goal**: Users can access and restore previous versions of their files
@@ -289,7 +307,7 @@ Plans:
 
 **Execution Order:**
 
-Sequential order: 12 -> 12.1 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
+Sequential order: 12 -> 12.5 -> 12.1 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
 
 Parallel phases:
 
@@ -321,6 +339,7 @@ Parallel phases:
 | 12.3 SIWE + Identity       | M2        | 4/4            | Complete    | 2026-02-14 |
 | 12.3.1 Identity Cleanup    | M2        | 4/4            | Complete    | 2026-02-14 |
 | 12.4 MFA + Cross-Device    | M2        | 5/5            | Complete    | 2026-02-15 |
+| 12.5 MFA Polish/UAT/E2E    | M2        | 0/TBD          | Not started | -          |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
