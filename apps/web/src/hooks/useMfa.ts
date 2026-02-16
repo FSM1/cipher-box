@@ -22,7 +22,7 @@ export type FactorInfo = {
 };
 
 export function useMfa() {
-  const { coreKit } = useCoreKit();
+  const { coreKit, syncStatus } = useCoreKit();
 
   const isMfaEnabled = useMfaStore((s) => s.isMfaEnabled);
   const isEnrolling = useMfaStore((s) => s.isEnrolling);
@@ -122,8 +122,9 @@ export function useMfa() {
       if (!coreKit) throw new Error('Core Kit not initialized');
       const factorKey = new BN(factorKeyHex, 'hex');
       await coreKit.inputFactorKey(factorKey);
+      syncStatus();
     },
-    [coreKit]
+    [coreKit, syncStatus]
   );
 
   /**

@@ -17,6 +17,8 @@ interface CoreKitContextValue {
   error: Error | null;
   /** Re-run initialization (e.g., retry after error) */
   reinitialize: () => Promise<void>;
+  /** Sync React state with CoreKit's internal status after login/logout/MFA */
+  syncStatus: () => void;
 }
 
 const CoreKitContext = createContext<CoreKitContextValue | null>(null);
@@ -50,6 +52,12 @@ export function CoreKitProvider({ children }: { children: ReactNode }) {
     initialize();
   }, [initialize]);
 
+  /** Sync React state with CoreKit's internal status. Call after login/logout/MFA. */
+  const syncStatus = useCallback(() => {
+    const ck = getCoreKit();
+    setStatus(ck.status);
+  }, []);
+
   const value: CoreKitContextValue = {
     coreKit,
     status,
@@ -58,6 +66,7 @@ export function CoreKitProvider({ children }: { children: ReactNode }) {
     isRequiredShare: status === COREKIT_STATUS.REQUIRED_SHARE,
     error,
     reinitialize: initialize,
+    syncStatus,
   };
 
   return <CoreKitContext.Provider value={value}>{children}</CoreKitContext.Provider>;

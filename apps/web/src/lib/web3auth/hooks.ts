@@ -7,7 +7,7 @@ import { authApi } from '../api/auth';
 export type CoreKitLoginResult = 'logged_in' | 'required_share';
 
 export function useCoreKitAuth() {
-  const { coreKit, status, isLoggedIn, isInitialized, isRequiredShare } = useCoreKit();
+  const { coreKit, status, isLoggedIn, isInitialized, isRequiredShare, syncStatus } = useCoreKit();
 
   /**
    * Shared Core Kit login logic: takes a CipherBox JWT and userId,
@@ -31,17 +31,33 @@ export function useCoreKitAuth() {
     };
 
     console.log('[CoreKit] loginWithJWT starting...', { verifier: loginParams.verifier, verifierId: userId });
+    console.time('[CoreKit] loginWithJWT');
     try {
       await coreKit.loginWithJWT(loginParams);
+      console.timeEnd('[CoreKit] loginWithJWT');
       console.log('[CoreKit] loginWithJWT completed, status:', coreKit.status);
     } catch (err) {
+      console.timeEnd('[CoreKit] loginWithJWT');
       console.error('[CoreKit] loginWithJWT FAILED:', err);
       throw err;
     }
 
     // Handle status
     if (coreKit.status === COREKIT_STATUS.LOGGED_IN) {
-      await coreKit.commitChanges();
+      console.log('[CoreKit] commitChanges starting...');
+      console.time('[CoreKit] commitChanges');
+      try {
+        await coreKit.commitChanges();
+        console.timeEnd('[CoreKit] commitChanges');
+        console.log('[CoreKit] commitChanges done');
+      } catch (err) {
+        console.timeEnd('[CoreKit] commitChanges');
+        console.error('[CoreKit] commitChanges FAILED:', err);
+        // Continue anyway - the login itself succeeded
+      }
+      console.log('[CoreKit] calling syncStatus...');
+      syncStatus();
+      console.log('[CoreKit] syncStatus called, returning logged_in');
       return 'logged_in';
     }
 
@@ -49,6 +65,7 @@ export function useCoreKitAuth() {
     // Return without throwing -- the caller (useAuth) will handle this
     // by obtaining a temporary backend token and showing recovery/approval UI.
     if (coreKit.status === COREKIT_STATUS.REQUIRED_SHARE) {
+      syncStatus();
       return 'required_share';
     }
 
@@ -120,12 +137,18 @@ export function useCoreKitAuth() {
     if (!coreKit || coreKit.status !== COREKIT_STATUS.LOGGED_IN) return null;
 
     try {
+      console.log('[CoreKit] _UNSAFE_exportTssKey starting...');
+      console.time('[CoreKit] exportTssKey');
       const privateKeyHex = await coreKit._UNSAFE_exportTssKey();
+      console.timeEnd('[CoreKit] exportTssKey');
+      console.log('[CoreKit] exportTssKey done, hex length:', privateKeyHex.length);
       const privKeyHex = privateKeyHex.startsWith('0x') ? privateKeyHex.slice(2) : privateKeyHex;
       const privateKey = hexToBytes(privKeyHex);
       const publicKey = secp256k1.getPublicKey(privateKey, false); // uncompressed (65 bytes)
+      console.log('[CoreKit] keypair derived, pubkey hex length:', publicKey.length * 2);
       return { publicKey, privateKey };
     } catch (err) {
+      console.timeEnd('[CoreKit] exportTssKey');
       console.error('[CoreKit] Failed to export TSS key:', err);
       return null;
     }
@@ -151,6 +174,8 @@ export function useCoreKitAuth() {
       }
     } catch (err) {
       console.error('[CoreKit] Logout error:', err);
+    } finally {
+      syncStatus();
     }
   }
 
