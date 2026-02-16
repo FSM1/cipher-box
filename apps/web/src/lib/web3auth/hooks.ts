@@ -30,7 +30,14 @@ export function useCoreKitAuth() {
       idToken: cipherboxJwt,
     };
 
-    await coreKit.loginWithJWT(loginParams);
+    console.log('[CoreKit] loginWithJWT starting...', { verifier: loginParams.verifier, verifierId: userId });
+    try {
+      await coreKit.loginWithJWT(loginParams);
+      console.log('[CoreKit] loginWithJWT completed, status:', coreKit.status);
+    } catch (err) {
+      console.error('[CoreKit] loginWithJWT FAILED:', err);
+      throw err;
+    }
 
     // Handle status
     if (coreKit.status === COREKIT_STATUS.LOGGED_IN) {
@@ -125,13 +132,12 @@ export function useCoreKitAuth() {
   }
 
   /**
-   * Get compressed public key hex for backend auth.
+   * Get uncompressed public key hex for backend auth.
    */
   async function getPublicKeyHex(): Promise<string | null> {
     const keypair = await getVaultKeypair();
     if (!keypair) return null;
-    const compressed = secp256k1.getPublicKey(keypair.privateKey, true);
-    return bytesToHex(compressed);
+    return bytesToHex(keypair.publicKey);
   }
 
   /**

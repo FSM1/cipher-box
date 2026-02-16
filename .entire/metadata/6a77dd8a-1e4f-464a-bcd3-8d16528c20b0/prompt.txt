@@ -1,1 +1,4 @@
-ok can you start the dev server - redis and postgres are running on 192.168.133.114. also going to need ngrok set up to ensure that Web3Auth can communicate with the API to verify tokens.
+1 - yes the url is complete `https://1c18-2003-fb-ef11-51b8-44dc-5045-9733-7e48.ngrok-free.app/auth/.well-known/jwks.json`
+2 - yes the `update connection` button was already clicked and a toast confirming successful submission was displayed. A lot more time than 5 minutes has passed since this was updated, so it can't be an update propogation issue.
+
+The verifier was definitely working previously as I had done some high-level testing during the development of phase 12.
