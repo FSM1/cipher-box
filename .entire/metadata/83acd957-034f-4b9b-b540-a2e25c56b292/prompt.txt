@@ -1,1 +1,1 @@
-ok can we plan the implementation of all the updates made to the pencil file?
+ok I have now successfully killed all the running api and ui instances. you need to restart both of these and then proceed with the qa. the ngrok instance is already up and running

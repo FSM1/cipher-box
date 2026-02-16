@@ -11,22 +11,22 @@ autonomous: true
 
 must_haves:
   truths:
-    - "WalletLoginButton renders with full terminal styling matching Google/Email buttons"
-    - "MFA enrollment banner has amber accent color visible against dark background"
-    - "SecurityTab enable-mfa button uses readable font size (sm, not xs)"
-    - "LinkedMethods wallet icon is recognizable text, not cryptic Greek letter"
-    - "Unlink disabled state shows visible explanation text, not just tooltip"
+    - 'WalletLoginButton renders with full terminal styling matching Google/Email buttons'
+    - 'MFA enrollment banner has amber accent color visible against dark background'
+    - 'SecurityTab enable-mfa button uses readable font size (sm, not xs)'
+    - 'LinkedMethods wallet icon is recognizable text, not cryptic Greek letter'
+    - 'Unlink disabled state shows visible explanation text, not just tooltip'
   artifacts:
-    - path: "apps/web/src/App.css"
-      provides: "Wallet login CSS classes, MFA banner amber styling, security button size fix"
-      contains: ".wallet-login-btn"
-    - path: "apps/web/src/components/auth/LinkedMethods.tsx"
-      provides: "Improved wallet icon and unlink disabled hint"
+    - path: 'apps/web/src/App.css'
+      provides: 'Wallet login CSS classes, MFA banner amber styling, security button size fix'
+      contains: '.wallet-login-btn'
+    - path: 'apps/web/src/components/auth/LinkedMethods.tsx'
+      provides: 'Improved wallet icon and unlink disabled hint'
   key_links:
-    - from: "apps/web/src/components/auth/WalletLoginButton.tsx"
-      to: "apps/web/src/App.css"
-      via: "CSS class names"
-      pattern: "wallet-login-btn|wallet-connector"
+    - from: 'apps/web/src/components/auth/WalletLoginButton.tsx'
+      to: 'apps/web/src/App.css'
+      via: 'CSS class names'
+      pattern: 'wallet-login-btn|wallet-connector'
 ---
 
 <objective>
@@ -64,7 +64,8 @@ Add ALL missing wallet login CSS classes to App.css. Insert a new section after 
 Email Login Form section (after line ~356, before the Login Error section at line ~358).
 
 Add a section header:
-```
+
+```css
 /* ==========================================================================
    Wallet Login Button
    ========================================================================== */
@@ -156,26 +157,28 @@ Add these CSS rules matching the terminal aesthetic and following the same patte
     - `padding: var(--spacing-xs) 0`
 
 THEN fix MFA banner styling. Find the `.mfa-prompt` rule (around line 1921) and change:
+
 - `background-color` from `rgb(0 208 132 / 5%)` to `rgb(245 158 11 / 8%)` (amber tint)
 - `border-bottom` from `1px solid var(--color-border-dim)` to `1px solid rgb(245 158 11 / 25%)`
 
 Find `.mfa-prompt-text strong` and change color from `var(--color-green-primary)` to `var(--color-warning)` (#F59E0B amber).
 
 THEN fix SecurityTab enable button size. Find `.security-tab-enable-btn` (around line 1225) and change:
+
 - `font-size` from `var(--font-size-xs)` to `var(--font-size-sm)` (10px -> 11px)
 - Add `padding: var(--spacing-xs) var(--spacing-lg)` (increase horizontal padding to match login buttons)
   </action>
   <verify>
-Run `grep -c 'wallet-login-btn\|wallet-connector\|wallet-login-wrapper\|wallet-login-status\|wallet-no-providers' apps/web/src/App.css` and confirm count >= 15 (all class selectors present).
-Run `grep 'rgb(245 158 11' apps/web/src/App.css` and confirm MFA amber tint appears.
-Run `grep -A1 'security-tab-enable-btn {' apps/web/src/App.css` and confirm font-size is `var(--font-size-sm)`.
+  Run `grep -c 'wallet-login-btn\|wallet-connector\|wallet-login-wrapper\|wallet-login-status\|wallet-no-providers' apps/web/src/App.css` and confirm count >= 15 (all class selectors present).
+  Run `grep 'rgb(245 158 11' apps/web/src/App.css` and confirm MFA amber tint appears.
+  Run `grep -A1 'security-tab-enable-btn {' apps/web/src/App.css` and confirm font-size is `var(--font-size-sm)`.
   </verify>
   <done>
-All 19 wallet CSS classes exist in App.css.
-MFA banner uses amber background tint and amber bold text.
-Security enable button uses font-size-sm (11px) with adequate padding.
+  All 19 wallet CSS classes exist in App.css.
+  MFA banner uses amber background tint and amber bold text.
+  Security enable button uses font-size-sm (11px) with adequate padding.
   </done>
-</task>
+  </task>
 
 <task type="auto">
   <name>Task 2: Fix wallet icon and unlink disabled state in LinkedMethods</name>
@@ -184,28 +187,29 @@ Security enable button uses font-size-sm (11px) with adequate padding.
 In LinkedMethods.tsx, make two changes:
 
 1. Change the wallet icon in `METHOD_ICONS` (line ~21) from Greek Xi `'\u039E'` to a
-recognizable wallet representation. Use the Unicode purse/wallet character or, for maximum
-compatibility with monospace fonts, use the text string `'W'` (capital W is universally
-legible as "Wallet" in this context where Google is "G" and Email is "@"). Change:
+   recognizable wallet representation. Use the Unicode purse/wallet character or, for maximum
+   compatibility with monospace fonts, use the text string `'W'` (capital W is universally
+   legible as "Wallet" in this context where Google is "G" and Email is "@"). Change:
+
 ```ts
 wallet: '\u039E', // Greek Xi for ETH
 ```
+
 to:
+
 ```ts
 wallet: 'W',
 ```
 
 2. Add a visible "last method" hint below the unlink button when `isLastMethod` is true.
-Find the unlink button section (around line 233-253) inside the `.linked-methods-item-actions`
-div. After the closing `</button>` of the unlink button (line ~249), add a conditional span
-that shows when `isLastMethod`:
+   Find the unlink button section (around line 233-253) inside the `.linked-methods-item-actions`
+   div. After the closing `</button>` of the unlink button (line ~249), add a conditional span
+   that shows when `isLastMethod`:
 
 ```tsx
-{isLastMethod && (
-  <span className="linked-methods-unlink-hint">
-    {'// last method'}
-  </span>
-)}
+{
+  isLastMethod && <span className="linked-methods-unlink-hint">{'// last method'}</span>;
+}
 ```
 
 Then add CSS for `.linked-methods-unlink-hint` in App.css (in the linked-methods section,
@@ -218,6 +222,7 @@ after `.linked-methods-unlink-btn:disabled` around line ~707):
   white-space: nowrap;
 }
 ```
+
   </action>
   <verify>
 Run `grep "wallet: 'W'" apps/web/src/components/auth/LinkedMethods.tsx` to confirm wallet icon changed.

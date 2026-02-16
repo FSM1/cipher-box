@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 12.4 complete (MFA + Cross-Device Approval)
+**Current focus:** Milestone 2 -- Phase 12.5 complete, next: Phase 12.1 (AES-CTR Streaming)
 
 ## Current Position
 
-Phase: 12.4 (MFA + Cross-Device Approval)
-Plan: 5 of 5 planned
+Phase: 12.5 (MFA Polishing, UAT & E2E) -- COMPLETE
+Plan: 3 of 3 planned
 Status: Phase complete
-Last activity: 2026-02-15 -- Completed 12.4-05-PLAN.md (API Client Regeneration + Integration Verification + Keypair Stability Check)
+Last activity: 2026-02-16 -- Completed quick task 016: Refine wallet and MFA UI elements
 
-Progress: [#################...] 85% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete)
+Progress: [####################] 89% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 94
+- Total plans completed: 97
 - Average duration: 5.0 min
-- Total execution time: 8.5 hours
+- Total execution time: 8.6 hours
 
 **By Phase (M1 summary):**
 
@@ -34,10 +34,11 @@ Progress: [#################...] 85% (M1 complete, M2 Phase 12 complete, Phase 1
 | M2 Phase 12.3   | 4/4   | 39 min  | 9.8 min  |
 | M2 Phase 12.3.1 | 4/4   | 38 min  | 9.5 min  |
 | M2 Phase 12.4   | 5/5   | 47 min  | 9.4 min  |
+| M2 Phase 12.5   | 3/3   | 9 min   | 3.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 8m, 20m, 6m, 9m, 4m
+- Last 5 plans: 9m, 4m, 2m, 3m, 4m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -98,6 +99,11 @@ Recent decisions affecting current work:
 | LoginFooter extracted to avoid duplication in Login.tsx          | 12.4-04   | Three render paths (normal, waiting, recovery) share the same footer component                                   |
 | Generated client wrapper pattern for device-approval service     | 12.4-05   | deviceApprovalApi wraps Orval-generated functions for backward-compatible import surface                         |
 | tssPubKey defensive check as permanent enableMfa() guard         | 12.4-05   | Logs CRITICAL if keypair changes after MFA enrollment; does not throw (enrollment already succeeded)             |
+| VaultExport below tabs, not as a third tab                       | 12.5-01   | VaultExport is a utility action always visible, not a settings category                                          |
+| Merge Settings.tsx into SettingsPage (not re-route)              | 12.5-01   | SettingsPage is canonical routed component with AppShell; merging preserves existing routing and layout          |
+| Hardhat account #0 for wallet E2E test key                       | 12.5-02   | Well-known deterministic key; reproducible tests without real wallet funds                                       |
+| Wallet E2E tests validate UI flow independently of Core Kit      | 12.5-02   | TC09 accepts both redirect-to-files and error as valid; tests frontend wallet interaction                        |
+| UAT quality gate: 16 PASS / 19 SKIP / 1 NOTE (all documented)    | 12.5-03   | Destructive and multi-device tests skipped with reasons; all 4 issues resolved; gate passed for Phase 12.1       |
 
 ### Pending Todos
 
@@ -141,6 +147,7 @@ Recent decisions affecting current work:
 | 013 | Move multi-select bar bottom              | 2026-02-13 | 956c527 | [013-move-multi-select-bar-bottom](./quick/013-move-multi-select-bar-bottom/)                               |
 | 014 | Fix multiselect button visibility         | 2026-02-13 | 33a56c8 | [014-fix-multiselect-button-visibility](./quick/014-fix-multiselect-button-visibility/)                     |
 | 015 | SendGrid email OTP + Google OAuth staging | 2026-02-13 | 2589aa0 | [015-sendgrid-email-otp-and-google-oauth-staging](./quick/015-sendgrid-email-otp-and-google-oauth-staging/) |
+| 016 | Refine wallet and MFA UI elements         | 2026-02-16 | d004eb0 | [016-refine-wallet-and-mfa-ui-elements](./quick/016-refine-wallet-and-mfa-ui-elements/)                     |
 
 ### Research Flags
 
@@ -153,16 +160,17 @@ Recent decisions affecting current work:
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
 - Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
 - Phase 12.4 (MFA + Cross-Device): COMPLETE -- all 5 plans done (bulletin board API, MFA hooks, enrollment wizard, cross-device approval, integration verification)
+- Phase 12.5 (MFA Polishing, UAT & E2E): COMPLETE -- all 3 plans done (SecurityTab wiring, wallet E2E tests, UAT final verification)
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
-Last session: 2026-02-15
-Stopped at: Phase 12.4 complete — all 5 plans executed, goal verified (5/5 must-haves passed)
+Last session: 2026-02-16
+Stopped at: Completed quick-016 (Refine wallet and MFA UI elements)
 Resume file: None
-Next: Phase 12.1 (AES-CTR Streaming Encryption) — needs research phase first
+Next: Phase 12.1 (AES-CTR Streaming Encryption) -- needs research phase first
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-15 after completing Phase 12.4 (MFA + Cross-Device Approval)_
+_Last updated: 2026-02-16 after completing Phase 12.5 Plan 03 (UAT Verification & Final Status) -- Phase 12.5 complete_
