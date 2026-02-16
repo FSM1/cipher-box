@@ -172,8 +172,20 @@ async function doLoginWithCoreKit(
     } catch (err) {
       console.timeEnd('[CoreKit] commitChanges');
       console.error('[CoreKit] commitChanges FAILED:', err);
-      // Continue anyway - the login itself succeeded
     }
+
+    // DEBUG: Test exportTssKey in isolation BEFORE triggering React updates
+    console.log('[CoreKit] DEBUG: testing exportTssKey in isolation...');
+    console.time('[CoreKit] exportTssKey-test');
+    try {
+      const testKey = await coreKit._UNSAFE_exportTssKey();
+      console.timeEnd('[CoreKit] exportTssKey-test');
+      console.log('[CoreKit] exportTssKey-test succeeded, length:', testKey.length);
+    } catch (err) {
+      console.timeEnd('[CoreKit] exportTssKey-test');
+      console.error('[CoreKit] exportTssKey-test FAILED:', err);
+    }
+
     console.log('[CoreKit] calling syncStatus...');
     syncStatus();
     console.log('[CoreKit] syncStatus called, returning logged_in');
