@@ -356,6 +356,136 @@
 }
 
 /* ==========================================================================
+   Wallet Login Button
+   ========================================================================== */
+
+.wallet-login-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.wallet-login-btn {
+  padding: var(--spacing-sm) var(--spacing-lg);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  background-color: transparent;
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-green-primary);
+  border-radius: 0;
+  cursor: pointer;
+  transition: box-shadow 0.2s ease, background-color 0.2s ease, transform 0.1s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.wallet-login-btn:hover:not(:disabled) {
+  background-color: rgb(0 208 132 / 10%);
+  box-shadow: var(--glow-green);
+  transform: translateY(-1px);
+}
+
+.wallet-login-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.wallet-login-btn:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: 2px;
+}
+
+.wallet-login-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.wallet-login-btn--loading {
+  color: var(--color-text-secondary);
+  border-color: var(--color-text-secondary);
+}
+
+.wallet-connector-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-sm);
+  border: 1px solid var(--color-border-dim);
+  font-family: var(--font-family-mono);
+}
+
+.wallet-connector-header {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-bottom: var(--spacing-xs);
+}
+
+.wallet-connector-option {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background: none;
+  border: 1px solid var(--color-border-dim);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+
+.wallet-connector-option:hover:not(:disabled) {
+  border-color: var(--color-green-primary);
+  color: var(--color-green-primary);
+}
+
+.wallet-connector-option:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
+.wallet-connector-option:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.wallet-connector-cancel {
+  padding: var(--spacing-xs) 0;
+  background: none;
+  border: none;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-dim);
+  cursor: pointer;
+  text-align: center;
+  margin-top: var(--spacing-xs);
+}
+
+.wallet-connector-cancel:hover:not(:disabled) {
+  color: var(--color-text-secondary);
+}
+
+.wallet-connector-cancel:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
+.wallet-connector-cancel:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.wallet-login-status {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  padding: var(--spacing-xs) 0;
+}
+
+.wallet-no-providers {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-dim);
+  padding: var(--spacing-xs) 0;
+}
+
+/* ==========================================================================
    Login Error Message
    ========================================================================== */
 
@@ -1227,9 +1357,9 @@
   color: var(--color-black);
   border: 1px solid var(--color-green-primary);
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-sm);
   font-weight: var(--font-weight-semibold);
-  padding: var(--spacing-xs) var(--spacing-md);
+  padding: var(--spacing-xs) var(--spacing-lg);
   cursor: pointer;
   transition: background-color 0.2s ease;
 }
@@ -1923,8 +2053,8 @@
   align-items: center;
   gap: var(--spacing-sm);
   padding: var(--spacing-xs) var(--spacing-md);
-  background-color: rgb(0 208 132 / 5%);
-  border-bottom: 1px solid var(--color-border-dim);
+  background-color: rgb(245 158 11 / 8%);
+  border-bottom: 1px solid rgb(245 158 11 / 25%);
   font-family: var(--font-family-mono);
 }
 
@@ -1935,7 +2065,7 @@
 }
 
 .mfa-prompt-text strong {
-  color: var(--color-green-primary);
+  color: var(--color-warning);
 }
 
 .mfa-prompt-btn {
