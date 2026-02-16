@@ -53,7 +53,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 12.3: SIWE + Unified Identity** - Wallet login via SIWE, multi-auth linking, ADR-001 cleanup (INSERTED)
 - [x] **Phase 12.3.1: Pre-Wipe Identity Cleanup** - Deterministic IPNS derivation, hashed identifiers, remove auto-linking (INSERTED)
 - [x] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
-- [ ] **Phase 12.5: MFA Polishing, UAT & E2E Testing** - Polish auth flows, wallet E2E with mock provider, fix UAT bugs (INSERTED)
+- [x] **Phase 12.5: MFA Polishing, UAT & E2E Testing** - Polish auth flows, wallet E2E with mock provider, fix UAT bugs (INSERTED)
 - [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
 - [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
@@ -235,9 +235,9 @@ Plans:
 
 Plans:
 
-- [ ] 12.5-01-PLAN.md — Fix ISSUE-004: Wire SecurityTab into SettingsPage with ARIA tab navigation
-- [ ] 12.5-02-PLAN.md — Install wallet-mock, add wallet E2E tests (TC09-TC12)
-- [ ] 12.5-03-PLAN.md — Run wallet E2E tests, human-verify SecurityTab + MFA, update UAT document
+- [x] 12.5-01-PLAN.md — Fix ISSUE-004: Wire SecurityTab into SettingsPage with ARIA tab navigation
+- [x] 12.5-02-PLAN.md — Install wallet-mock, add wallet E2E tests (TC09-TC12)
+- [x] 12.5-03-PLAN.md — Run wallet E2E tests, human-verify SecurityTab + MFA, update UAT document
 
 ### Phase 13: File Versioning
 
