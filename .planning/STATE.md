@@ -10,17 +10,17 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 12.5 (MFA Polishing, UAT & E2E)
-Plan: 1 of 3 planned
+Plan: 2 of 3 planned
 Status: In progress
-Last activity: 2026-02-16 -- Completed 12.5-01-PLAN.md (Wire SecurityTab into SettingsPage)
+Last activity: 2026-02-16 -- Completed 12.5-02-PLAN.md (Wallet E2E Tests TC09-TC12)
 
-Progress: [#################...] 86% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5: 1/3)
+Progress: [##################..] 87% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5: 2/3)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 95
+- Total plans completed: 96
 - Average duration: 5.0 min
 - Total execution time: 8.5 hours
 
@@ -34,11 +34,11 @@ Progress: [#################...] 86% (M1 complete, M2 Phase 12 complete, Phase 1
 | M2 Phase 12.3   | 4/4   | 39 min  | 9.8 min  |
 | M2 Phase 12.3.1 | 4/4   | 38 min  | 9.5 min  |
 | M2 Phase 12.4   | 5/5   | 47 min  | 9.4 min  |
-| M2 Phase 12.5   | 1/3   | 2 min   | 2.0 min  |
+| M2 Phase 12.5   | 2/3   | 5 min   | 2.5 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 20m, 6m, 9m, 4m, 2m
+- Last 5 plans: 6m, 9m, 4m, 2m, 3m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -101,6 +101,8 @@ Recent decisions affecting current work:
 | tssPubKey defensive check as permanent enableMfa() guard         | 12.4-05   | Logs CRITICAL if keypair changes after MFA enrollment; does not throw (enrollment already succeeded)             |
 | VaultExport below tabs, not as a third tab                       | 12.5-01   | VaultExport is a utility action always visible, not a settings category                                          |
 | Merge Settings.tsx into SettingsPage (not re-route)              | 12.5-01   | SettingsPage is canonical routed component with AppShell; merging preserves existing routing and layout          |
+| Hardhat account #0 for wallet E2E test key                       | 12.5-02   | Well-known deterministic key; reproducible tests without real wallet funds                                       |
+| Wallet E2E tests validate UI flow independently of Core Kit      | 12.5-02   | TC09 accepts both redirect-to-files and error as valid; tests frontend wallet interaction                        |
 
 ### Pending Todos
 
@@ -156,17 +158,17 @@ Recent decisions affecting current work:
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
 - Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
 - Phase 12.4 (MFA + Cross-Device): COMPLETE -- all 5 plans done (bulletin board API, MFA hooks, enrollment wizard, cross-device approval, integration verification)
-- Phase 12.5 (MFA Polishing, UAT & E2E): IN PROGRESS -- plan 01 done (SecurityTab wired into SettingsPage), 2 plans remaining
+- Phase 12.5 (MFA Polishing, UAT & E2E): IN PROGRESS -- plans 01-02 done (SecurityTab, wallet E2E tests), 1 plan remaining
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 12.5-01-PLAN.md (Wire SecurityTab into SettingsPage)
+Stopped at: Completed 12.5-02-PLAN.md (Wallet E2E Tests TC09-TC12)
 Resume file: None
-Next: 12.5-02-PLAN.md (next plan in Phase 12.5)
+Next: 12.5-03-PLAN.md (next plan in Phase 12.5)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-16 after completing Phase 12.5 Plan 01 (Wire SecurityTab into SettingsPage)_
+_Last updated: 2026-02-16 after completing Phase 12.5 Plan 02 (Wallet E2E Tests TC09-TC12)_
