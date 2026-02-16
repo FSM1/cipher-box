@@ -34,7 +34,8 @@ coverage/
 .playwright-mcp/*.png
 
 # UAT screenshots
-/*.png
+/tc*.png
+/after-*.png
 
 # Temporary files
 temp/*
