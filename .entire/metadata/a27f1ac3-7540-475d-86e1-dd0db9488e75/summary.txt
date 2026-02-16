@@ -1,0 +1,33 @@
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► PHASE 12.6 PLANNED ✓
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Phase 12.6: Per-File IPNS Metadata Split** — 5 plan(s) in 4 wave(s)
+
+| Wave | Plans | What it builds |
+|------|-------|----------------|
+| 1    | 01, 02 | Crypto primitives (HKDF file IPNS, FileMetadata types, v2 folder schema) + Backend API (batch publish endpoint, TEE republish scalability) |
+| 2    | 03     | Frontend service layer rewrite (file-metadata.service, folder.service, download/delete services) |
+| 3    | 04     | Hook and component updates (useFolder, useFilePreview, FileBrowser, TextEditorDialog, etc.) |
+| 4    | 05     | Recovery tool v2 support + vault export docs + full build verification |
+
+Research: Completed
+Verification: Passed (1 blocker found and fixed in revision loop)
+
+───────────────────────────────────────────────────────────────
+
+## ▶ Next Up
+
+**Execute Phase 12.6** — run all 5 plans
+
+`/gsd:execute-phase 12.6`
+
+<sub>`/clear` first → fresh context window</sub>
+
+───────────────────────────────────────────────────────────────
+
+**Also available:**
+- `cat .planning/phases/12.6-per-file-ipns-metadata-split/*-PLAN.md` — review plans
+- `/gsd:plan-phase 12.6 --research` — re-research first
+
+───────────────────────────────────────────────────────────────
