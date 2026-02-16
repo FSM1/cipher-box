@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 Phase: 12.5 (MFA Polishing, UAT & E2E) -- COMPLETE
 Plan: 3 of 3 planned
 Status: Phase complete
-Last activity: 2026-02-16 -- Completed 12.5-03-PLAN.md (UAT Verification & Final Status)
+Last activity: 2026-02-16 -- Completed quick task 016: Refine wallet and MFA UI elements
 
 Progress: [####################] 89% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete)
 
