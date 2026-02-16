@@ -147,6 +147,7 @@ Recent decisions affecting current work:
 | 013 | Move multi-select bar bottom              | 2026-02-13 | 956c527 | [013-move-multi-select-bar-bottom](./quick/013-move-multi-select-bar-bottom/)                               |
 | 014 | Fix multiselect button visibility         | 2026-02-13 | 33a56c8 | [014-fix-multiselect-button-visibility](./quick/014-fix-multiselect-button-visibility/)                     |
 | 015 | SendGrid email OTP + Google OAuth staging | 2026-02-13 | 2589aa0 | [015-sendgrid-email-otp-and-google-oauth-staging](./quick/015-sendgrid-email-otp-and-google-oauth-staging/) |
+| 016 | Refine wallet and MFA UI elements         | 2026-02-16 | d004eb0 | [016-refine-wallet-and-mfa-ui-elements](./quick/016-refine-wallet-and-mfa-ui-elements/)                     |
 
 ### Research Flags
 
@@ -165,7 +166,7 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-16
-Stopped at: Completed 12.5-03-PLAN.md (UAT Verification & Final Status) -- Phase 12.5 complete
+Stopped at: Completed quick-016 (Refine wallet and MFA UI elements)
 Resume file: None
 Next: Phase 12.1 (AES-CTR Streaming Encryption) -- needs research phase first
 
