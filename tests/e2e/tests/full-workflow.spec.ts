@@ -423,37 +423,26 @@ test.describe.serial('Full Workflow', () => {
     const badgeText = await detailsDialog.getTypeBadgeText();
     expect(badgeText).toBe('[FILE]');
 
-    // Verify expected labels are present
+    // Verify expected labels are present (v2: slim FilePointer, no inline file data)
     const labels = await detailsDialog.getVisibleLabels();
     expect(labels).toContain('Name');
     expect(labels).toContain('Type');
-    expect(labels).toContain('Size');
-    expect(labels).toContain('Content CID');
-    expect(labels).toContain('Encryption Mode');
-    expect(labels).toContain('File IV');
-    expect(labels).toContain('Wrapped File Key');
+    expect(labels).toContain('File Metadata IPNS');
+    expect(labels).toContain('Metadata CID');
     expect(labels).toContain('Created');
     expect(labels).toContain('Modified');
 
     // Verify section headers
     const headers = await detailsDialog.getVisibleSectionHeaders();
-    expect(headers).toContain('// encryption');
+    expect(headers).toContain('// ipns');
     expect(headers).toContain('// timestamps');
 
     // Verify name value matches the file
     const nameValue = await detailsDialog.getValueText('Name');
     expect(nameValue).toBe(fileName);
 
-    // Verify encryption mode shows AES-256-GCM
-    const encMode = await detailsDialog.getValueText('Encryption Mode');
-    expect(encMode).toContain('AES-256-GCM');
-
-    // Verify copyable fields have copy buttons
-    expect(await detailsDialog.hasCopyButton('Content CID')).toBe(true);
-    expect(await detailsDialog.hasCopyButton('File IV')).toBe(true);
-
-    // Verify wrapped key is redacted
-    expect(await detailsDialog.isValueRedacted('Wrapped File Key')).toBe(true);
+    // Verify copyable IPNS field has copy button
+    expect(await detailsDialog.hasCopyButton('File Metadata IPNS')).toBe(true);
 
     // Close the dialog
     await detailsDialog.close();
