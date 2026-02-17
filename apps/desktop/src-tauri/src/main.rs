@@ -5,6 +5,7 @@ mod api;
 mod commands;
 mod crypto;
 mod fuse;
+mod registry;
 mod state;
 mod sync;
 mod tray;
@@ -12,15 +13,48 @@ mod tray;
 use tauri::WindowEvent;
 use state::AppState;
 
+/// CLI arguments for debug builds only.
+/// Allows bypassing Web3Auth login with a hex-encoded secp256k1 private key.
+#[cfg(debug_assertions)]
+mod cli {
+    use clap::Parser;
+
+    #[derive(Parser, Debug)]
+    #[command(name = "cipherbox-desktop")]
+    pub struct Args {
+        /// Hex-encoded secp256k1 private key for headless auth (debug only)
+        #[arg(long)]
+        pub dev_key: Option<String>,
+    }
+}
+
 fn main() {
+    // Load .env from the desktop app root (parent of src-tauri)
+    // This shares VITE_* vars between the webview and the Rust backend
+    let _ = dotenvy::from_filename("../.env");
+
     env_logger::init();
     log::info!("CipherBox Desktop starting...");
 
-    // API base URL: use env var or default to localhost for development
-    let api_base_url =
-        std::env::var("CIPHERBOX_API_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
+    // Parse CLI args (debug builds only: --dev-key <hex>)
+    #[cfg(debug_assertions)]
+    let dev_key: Option<String> = {
+        use clap::Parser;
+        let args = cli::Args::parse();
+        if args.dev_key.is_some() {
+            log::info!("--dev-key provided: headless auth mode enabled");
+        }
+        args.dev_key
+    };
+    #[cfg(not(debug_assertions))]
+    let dev_key: Option<String> = None;
 
-    let app_state = AppState::new(&api_base_url);
+    // API base URL: CIPHERBOX_API_URL > VITE_API_URL > localhost default
+    let api_base_url = std::env::var("CIPHERBOX_API_URL")
+        .or_else(|_| std::env::var("VITE_API_URL"))
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+
+    let app_state = AppState::new(&api_base_url, dev_key);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
@@ -66,6 +100,7 @@ fn main() {
             commands::try_silent_refresh,
             commands::logout,
             commands::start_sync_daemon,
+            commands::get_dev_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CipherBox Desktop");

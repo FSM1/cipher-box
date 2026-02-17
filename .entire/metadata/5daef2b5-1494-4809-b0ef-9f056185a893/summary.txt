@@ -1,1 +1,1 @@
-HMR should pick that up. Try the Google login again — the error message should now show the actual error text instead of the generic fallback. What does it say?
+App is running. The Rust backend will now read `VITE_API_URL=https://api-staging.cipherbox.cc` from `.env` via dotenvy. Try Google login again — the `/auth/login` call should now hit staging instead of localhost.

@@ -1,1 +1,1 @@
-`Google login failed` message in login webview
+Login request failed: error sending request for url (http://localhost:3000/auth/login) - its still trying to hit the local api
