@@ -24,7 +24,7 @@ export class DeviceApproval {
   @Column({ name: 'encrypted_factor_key', type: 'text', nullable: true })
   encryptedFactorKey!: string | null;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 
   @Column({ name: 'expires_at', type: 'timestamp' })
