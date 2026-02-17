@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/FSM1/cipher-box/compare/v0.9.0...v0.9.1) (2026-02-17)
+
+
+### Bug Fixes
+
+* **auth:** google OAuth brave fallback, wallet SIWE, sync & UX fixes ([#137](https://github.com/FSM1/cipher-box/issues/137)) ([6e3bbde](https://github.com/FSM1/cipher-box/commit/6e3bbde322d91ae100445a8f94a366eb7841dfe4))
+
 ## [0.9.0](https://github.com/FSM1/cipher-box/compare/v0.8.0...v0.9.0) (2026-02-17)
 
 
