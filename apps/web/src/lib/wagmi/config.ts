@@ -18,8 +18,4 @@ export const wagmiConfig = createConfig({
   transports: {
     [mainnet.id]: http(),
   },
-  // CipherBox only uses wagmi transiently for SIWE signing — we disconnect
-  // immediately after. Disable reconnect-on-mount to prevent stale connector
-  // errors (especially in Brave which has a built-in wallet).
-  reconnectOnMount: false,
 });

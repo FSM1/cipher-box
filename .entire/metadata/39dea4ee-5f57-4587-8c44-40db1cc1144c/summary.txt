@@ -1,1 +1,6 @@
-The dropdown is positioned with `top: calc(100% + 4px)` (same visual gap as before), and the `::before` pseudo-element spans the 4px gap invisibly, keeping the mouse within `.user-menu` during the transition. Want to test it before I commit?
+Pushed. Fixed both PR review comments:
+
+1. **`reconnectOnMount`** — moved from `createConfig()` (invalid in wagmi v3) to `WagmiProvider` prop in `provider.tsx`
+2. **`createdAt` → `created_at`** — renamed column in migration and added `{ name: 'created_at' }` to entity's `@CreateDateColumn`
+
+The other nitpick (FK constraint on `user_id`) is optional — device approvals are short-lived (5min expiry) and the table is cleaned up automatically. The wallet link endpoint returning unused `idToken` is also a nitpick. Both are fine to leave as-is. CI should pass now that the typecheck error is fixed.

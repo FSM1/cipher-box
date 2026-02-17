@@ -1,1 +1,1 @@
-there is some weird effect on the logout menu - it often closes between mouse-over on the trigger and the cursor being on the menu item.
+theres some comments that need to be addressed on that pr. please fix them. also check the ci and e2e test failures

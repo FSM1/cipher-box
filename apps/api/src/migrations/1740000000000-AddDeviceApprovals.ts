@@ -19,7 +19,7 @@ export class AddDeviceApprovals1740000000000 implements MigrationInterface {
         "ephemeral_public_key"  text NOT NULL,
         "status"                varchar NOT NULL DEFAULT 'pending',
         "encrypted_factor_key"  text,
-        "createdAt"             TIMESTAMP NOT NULL DEFAULT now(),
+        "created_at"            TIMESTAMP NOT NULL DEFAULT now(),
         "expires_at"            TIMESTAMP NOT NULL,
         "responded_by"          varchar,
         CONSTRAINT "PK_device_approvals" PRIMARY KEY ("id")
