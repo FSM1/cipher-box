@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 12.1 (AES-CTR Streaming Encryption) -- In progress
-Plan: 1 of TBD planned
+Plan: 2 of TBD planned
 Status: In progress
-Last activity: 2026-02-17 -- Completed 12.1-01-PLAN.md (AES-CTR Crypto Primitives)
+Last activity: 2026-02-17 -- Completed 12.1-02-PLAN.md (Streaming Upload Pipeline)
 
-Progress: [####################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 plan 01 complete)
+Progress: [####################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 plans 01-02 complete)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 103
+- Total plans completed: 104
 - Average duration: 5.3 min
-- Total execution time: 9.18 hours
+- Total execution time: 9.26 hours
 
 **By Phase (M1 summary):**
 
@@ -36,11 +36,11 @@ Progress: [####################] (M1 complete, M2 Phase 12 complete, Phase 12.2 
 | M2 Phase 12.4   | 5/5   | 47 min  | 9.4 min  |
 | M2 Phase 12.5   | 3/3   | 9 min   | 3.0 min  |
 | M2 Phase 12.6   | 5/5   | 29 min  | 5.8 min  |
-| M2 Phase 12.1   | 1/?   | 4 min   | 4.0 min  |
+| M2 Phase 12.1   | 2/?   | 9 min   | 4.5 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 5m, 7m, 3m, 10m, 4m
+- Last 5 plans: 7m, 3m, 10m, 4m, 5m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -167,7 +167,7 @@ Recent decisions affecting current work:
 - Phase 15 (Link Sharing): NEEDS `/gsd:research-phase` -- unauthenticated web viewer security
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
-- Phase 12.1 (AES-CTR Streaming): IN PROGRESS -- Plan 01 complete (crypto primitives), research done
+- Phase 12.1 (AES-CTR Streaming): IN PROGRESS -- Plans 01-02 complete (crypto primitives, streaming upload pipeline), research done
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
 - Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
 - Phase 12.4 (MFA + Cross-Device): COMPLETE -- all 5 plans done (bulletin board API, MFA hooks, enrollment wizard, cross-device approval, integration verification)
@@ -178,11 +178,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 12.1-01-PLAN.md (AES-CTR Crypto Primitives)
+Stopped at: Completed 12.1-02-PLAN.md (Streaming Upload Pipeline)
 Resume file: None
-Next: Phase 12.1 Plan 02 (streaming upload pipeline or Service Worker)
+Next: Phase 12.1 Plan 03 (Service Worker decryption or media playback)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-17 after completing Phase 12.1 Plan 01 (AES-CTR Crypto Primitives) -- Phase 12.1 in progress_
+_Last updated: 2026-02-17 after completing Phase 12.1 Plan 02 (Streaming Upload Pipeline) -- Phase 12.1 in progress_
