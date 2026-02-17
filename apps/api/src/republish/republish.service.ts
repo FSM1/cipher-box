@@ -7,8 +7,8 @@ import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
 import { TeeService, RepublishEntry, RepublishResult } from '../tee/tee.service';
 import { TeeKeyStateService } from '../tee/tee-key-state.service';
 
-/** Max entries per TEE request (per RESEARCH.md pitfall 4) */
-const BATCH_SIZE = 50;
+/** Max entries per TEE request -- increased for per-file IPNS scalability (file records are smaller payloads) */
+const BATCH_SIZE = 100;
 
 /** After this many consecutive failures, mark entry as 'stale' */
 const MAX_CONSECUTIVE_FAILURES = 10;
@@ -55,7 +55,7 @@ export class RepublishService {
         nextRepublishAt: LessThanOrEqual(new Date()),
       },
       order: { nextRepublishAt: 'ASC' },
-      take: 500,
+      take: 2000,
     });
   }
 
@@ -76,6 +76,13 @@ export class RepublishService {
     }
 
     this.logger.log(`Processing ${dueEntries.length} due republish entries`);
+
+    // Soft capacity warning for large vaults with many per-file IPNS records
+    if (dueEntries.length > 1000) {
+      this.logger.warn(
+        `High IPNS record count: ${dueEntries.length} entries due for republishing - approaching capacity limits`
+      );
+    }
 
     // Fetch current TEE epoch state for the batch
     const teeState = await this.teeKeyStateService.getCurrentState();
@@ -292,6 +299,21 @@ export class RepublishService {
   }
 
   /**
+   * Unenroll an IPNS record from TEE republishing.
+   * Called when files are deleted to prevent orphaned TEE enrollments.
+   */
+  async unenrollIpns(userId: string, ipnsName: string): Promise<void> {
+    const result = await this.scheduleRepository.delete({ userId, ipnsName });
+    if (result.affected && result.affected > 0) {
+      this.logger.log(`Unenrolled ${ipnsName} from TEE republishing for user ${userId}`);
+    } else {
+      this.logger.debug(
+        `No republish enrollment found for ${ipnsName} (user ${userId}) - nothing to unenroll`
+      );
+    }
+  }
+
+  /**
    * Get aggregate health stats for admin endpoint.
    */
   async getHealthStats(): Promise<{
@@ -392,6 +414,7 @@ export class RepublishService {
 
   /**
    * Sync the FolderIpns sequence number after successful republish.
+   * Handles both folder and per-file IPNS records (keyed by userId + ipnsName).
    */
   private async syncFolderIpnsSequence(
     userId: string,

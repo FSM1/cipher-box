@@ -22,6 +22,8 @@ import type {
 } from '@tanstack/react-query';
 
 import type {
+  BatchPublishIpnsDto,
+  BatchPublishIpnsResponseDto,
   IpnsControllerResolveRecordParams,
   PublishIpnsDto,
   PublishIpnsResponseDto,
@@ -108,6 +110,87 @@ export const useIpnsControllerPublishRecord = <TError = void, TContext = unknown
   TContext
 > => {
   const mutationOptions = getIpnsControllerPublishRecordMutationOptions(options);
+
+  return useMutation(mutationOptions, queryClient);
+};
+/**
+ * Publish multiple IPNS records (folder and/or file) in a single API call. Supports up to 200 records per batch with concurrency-limited processing. Partial success is allowed: individual record failures do not fail the batch.
+ * @summary Batch publish IPNS records
+ */
+export const ipnsControllerPublishBatch = (
+  batchPublishIpnsDto: BatchPublishIpnsDto,
+  signal?: AbortSignal
+) => {
+  return customInstance<BatchPublishIpnsResponseDto>({
+    url: `/ipns/publish-batch`,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    data: batchPublishIpnsDto,
+    signal,
+  });
+};
+
+export const getIpnsControllerPublishBatchMutationOptions = <
+  TError = void,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof ipnsControllerPublishBatch>>,
+    TError,
+    { data: BatchPublishIpnsDto },
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof ipnsControllerPublishBatch>>,
+  TError,
+  { data: BatchPublishIpnsDto },
+  TContext
+> => {
+  const mutationKey = ['ipnsControllerPublishBatch'];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof ipnsControllerPublishBatch>>,
+    { data: BatchPublishIpnsDto }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return ipnsControllerPublishBatch(data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type IpnsControllerPublishBatchMutationResult = NonNullable<
+  Awaited<ReturnType<typeof ipnsControllerPublishBatch>>
+>;
+export type IpnsControllerPublishBatchMutationBody = BatchPublishIpnsDto;
+export type IpnsControllerPublishBatchMutationError = void;
+
+/**
+ * @summary Batch publish IPNS records
+ */
+export const useIpnsControllerPublishBatch = <TError = void, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof ipnsControllerPublishBatch>>,
+      TError,
+      { data: BatchPublishIpnsDto },
+      TContext
+    >;
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof ipnsControllerPublishBatch>>,
+  TError,
+  { data: BatchPublishIpnsDto },
+  TContext
+> => {
+  const mutationOptions = getIpnsControllerPublishBatchMutationOptions(options);
 
   return useMutation(mutationOptions, queryClient);
 };

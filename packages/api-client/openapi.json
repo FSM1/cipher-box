@@ -758,6 +758,51 @@
         "tags": ["IPNS"]
       }
     },
+    "/ipns/publish-batch": {
+      "post": {
+        "description": "Publish multiple IPNS records (folder and/or file) in a single API call. Supports up to 200 records per batch with concurrency-limited processing. Partial success is allowed: individual record failures do not fail the batch.",
+        "operationId": "IpnsController_publishBatch",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchPublishIpnsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Batch publish results with per-record outcomes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchPublishIpnsResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request - Invalid record format or batch exceeds 200 entries"
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          },
+          "502": {
+            "description": "Bad Gateway - Delegated routing failures (partial results may be returned)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Batch publish IPNS records",
+        "tags": ["IPNS"]
+      }
+    },
     "/ipns/resolve": {
       "get": {
         "description": "Resolve an IPNS name to its current CID via delegated routing. Returns the CID and sequence number of the current IPNS record.",
@@ -1704,6 +1749,80 @@
           }
         },
         "required": ["success", "ipnsName", "sequenceNumber"]
+      },
+      "PublishIpnsEntryDto": {
+        "type": "object",
+        "properties": {
+          "ipnsName": {
+            "type": "string",
+            "description": "IPNS name (k51... CIDv1 format)",
+            "example": "k51qzi5uqu5dkkciu33khkzbcmxtyhn2hgdqyp6rv7s5egjlsdj6a2xpz9lxvz"
+          },
+          "record": {
+            "type": "string",
+            "description": "Base64-encoded marshaled IPNS record",
+            "example": "CiQBqKAFp..."
+          },
+          "metadataCid": {
+            "type": "string",
+            "description": "CID of the encrypted metadata this record points to",
+            "example": "bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4"
+          },
+          "encryptedIpnsPrivateKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES-wrapped Ed25519 private key for TEE republishing",
+            "example": "04abcd1234..."
+          },
+          "keyEpoch": {
+            "type": "number",
+            "description": "TEE key epoch (required with encryptedIpnsPrivateKey)",
+            "example": 1
+          },
+          "recordType": {
+            "type": "string",
+            "description": "Record type: 'folder' for folder metadata, 'file' for per-file metadata",
+            "enum": ["folder", "file"],
+            "default": "folder",
+            "example": "file"
+          }
+        },
+        "required": ["ipnsName", "record", "metadataCid"]
+      },
+      "BatchPublishIpnsDto": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "description": "Array of IPNS records to publish (max 200)",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishIpnsEntryDto"
+            }
+          }
+        },
+        "required": ["records"]
+      },
+      "BatchPublishIpnsResponseDto": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "description": "Per-record publish results",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublishIpnsResponseDto"
+            }
+          },
+          "totalSucceeded": {
+            "type": "number",
+            "description": "Number of records that succeeded",
+            "example": 5
+          },
+          "totalFailed": {
+            "type": "number",
+            "description": "Number of records that failed",
+            "example": 0
+          }
+        },
+        "required": ["results", "totalSucceeded", "totalFailed"]
       },
       "ResolveIpnsResponseDto": {
         "type": "object",
