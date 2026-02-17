@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { FileEntry } from '@cipherbox/crypto';
+import type { FilePointer } from '@cipherbox/crypto';
 import { useAuthStore } from '../stores/auth.store';
-import { downloadFile, triggerBrowserDownload } from '../services/download.service';
+import { downloadFileFromIpns, triggerBrowserDownload } from '../services/download.service';
 
 type UseFilePreviewOptions = {
   open: boolean;
-  item: FileEntry | null;
+  item: FilePointer | null;
   mimeType: string;
+  /** Parent folder's decrypted AES-256 key (needed to decrypt file metadata) */
+  folderKey: Uint8Array | null;
 };
 
 type UseFilePreviewReturn = {
@@ -18,9 +20,9 @@ type UseFilePreviewReturn = {
 };
 
 /**
- * Shared hook for file preview dialogs.
+ * Shared hook for file preview dialogs (v2 IPNS-based).
  *
- * Encapsulates the download-decrypt-blob-URL lifecycle used by
+ * Encapsulates the IPNS-resolve-download-decrypt-blob-URL lifecycle used by
  * PDF, audio, video, and image preview dialogs. Creates an object
  * URL from the decrypted file content and revokes it on close.
  */
@@ -28,6 +30,7 @@ export function useFilePreview({
   open,
   item,
   mimeType,
+  folderKey,
 }: UseFilePreviewOptions): UseFilePreviewReturn {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,6 +50,11 @@ export function useFilePreview({
       return;
     }
 
+    if (!folderKey) {
+      setError('Folder key not available');
+      return;
+    }
+
     let cancelled = false;
     let url: string | null = null;
     setLoading(true);
@@ -60,15 +68,12 @@ export function useFilePreview({
           throw new Error('No keypair available - please log in again');
         }
 
-        const plaintext = await downloadFile(
-          {
-            cid: item.cid,
-            iv: item.fileIv,
-            wrappedKey: item.fileKeyEncrypted,
-            originalName: item.name,
-          },
-          auth.vaultKeypair.privateKey
-        );
+        const plaintext = await downloadFileFromIpns({
+          fileMetaIpnsName: item.fileMetaIpnsName,
+          folderKey: folderKey!,
+          privateKey: auth.vaultKeypair.privateKey,
+          fileName: item.name,
+        });
 
         if (cancelled) return;
 
@@ -91,7 +96,7 @@ export function useFilePreview({
         URL.revokeObjectURL(url);
       }
     };
-  }, [open, item]);
+  }, [open, item, folderKey, mimeType]);
 
   const handleDownload = useCallback(() => {
     if (!decryptedData || !item) return;
