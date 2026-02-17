@@ -25,6 +25,15 @@ import { useAuthStore } from '../stores/auth.store';
 /** IPNS record lifetime: 24 hours in milliseconds */
 const IPNS_LIFETIME_MS = 24 * 60 * 60 * 1000;
 
+/** Safe base64 encoding that avoids call stack overflow from spread operator */
+function uint8ToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
 /** Record payload ready for batch publish */
 export type FileIpnsRecordPayload = {
   ipnsName: string;
@@ -100,7 +109,7 @@ export async function createFileMetadata(params: {
 
   // 6. Marshal and base64 encode the record
   const recordBytes = marshalIpnsRecord(record);
-  const recordBase64 = btoa(String.fromCharCode(...recordBytes));
+  const recordBase64 = uint8ToBase64(recordBytes);
 
   // 7. TEE enrollment: encrypt IPNS private key with TEE public key
   let encryptedIpnsPrivateKey: string | undefined;
@@ -195,7 +204,12 @@ export async function updateFileMetadata(params: {
 
   // 3. Resolve current IPNS to get sequence number
   const resolved = await resolveIpnsRecord(ipnsKeypair.ipnsName);
-  const currentSeq = resolved?.sequenceNumber ?? 0n;
+  if (!resolved) {
+    throw new Error(
+      `Cannot update file metadata: existing IPNS record not found for ${ipnsKeypair.ipnsName}`
+    );
+  }
+  const currentSeq = resolved.sequenceNumber;
   const newSeq = currentSeq + 1n;
 
   // 4. Encrypt updated metadata with folderKey
@@ -214,7 +228,7 @@ export async function updateFileMetadata(params: {
   );
 
   const recordBytes = marshalIpnsRecord(record);
-  const recordBase64 = btoa(String.fromCharCode(...recordBytes));
+  const recordBase64 = uint8ToBase64(recordBytes);
 
   return {
     ipnsRecord: {

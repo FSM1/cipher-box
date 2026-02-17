@@ -153,6 +153,11 @@ export async function decryptFileMetadata(
 
   // Parse JSON back to metadata object
   // [SECURITY: MEDIUM-07] Validate the decrypted data before returning
-  const parsed = JSON.parse(new TextDecoder().decode(plaintext));
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder().decode(plaintext));
+  } catch {
+    throw new CryptoError('Invalid file metadata format: not valid JSON', 'DECRYPTION_FAILED');
+  }
   return validateFileMetadata(parsed);
 }

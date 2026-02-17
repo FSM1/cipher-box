@@ -127,13 +127,14 @@ export class IpnsService {
         })
       );
 
-      for (const result of settled) {
+      for (let j = 0; j < settled.length; j++) {
+        const result = settled[j];
         if (result.status === 'fulfilled') {
           results.push(result.value);
           totalSucceeded++;
         } else {
           const reason = result.reason;
-          const ipnsName = batch[settled.indexOf(result)]?.ipnsName ?? 'unknown';
+          const ipnsName = batch[j]?.ipnsName ?? 'unknown';
           this.logger.warn(
             `Batch publish failed for ${ipnsName}: ${reason instanceof Error ? reason.message : String(reason)}`
           );

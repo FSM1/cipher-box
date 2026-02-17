@@ -96,7 +96,7 @@ export function useFilePreview({
         URL.revokeObjectURL(url);
       }
     };
-  }, [open, item, folderKey]);
+  }, [open, item, folderKey, mimeType]);
 
   const handleDownload = useCallback(() => {
     if (!decryptedData || !item) return;

@@ -36,6 +36,15 @@ import type { FileIpnsRecordPayload } from './file-metadata.service';
 /** Maximum folder nesting depth per FOLD-03 */
 const MAX_FOLDER_DEPTH = 20;
 
+/** Safe base64 encoding that avoids call stack overflow from spread operator */
+function uint8ToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
 /**
  * Calculate the depth of a folder from root.
  * Root folder has depth 0, immediate children have depth 1, etc.
@@ -67,7 +76,7 @@ export function getDepth(folderId: string | null, folders: Record<string, Folder
  *
  * Resolves the folder's IPNS name to get the current metadata CID,
  * fetches and decrypts the metadata, and returns a complete FolderNode.
- * Supports both v1 and v2 metadata formats (v2 children are FolderChildV2[]).
+ * Returns v2 metadata with FolderChildV2[] children (v1 data requires DB wipe).
  *
  * IMPORTANT: Does NOT eagerly resolve per-file IPNS records during folder load.
  * File metadata is lazy-loaded on download/preview (Pitfall 1 from research).
@@ -114,15 +123,14 @@ export async function loadFolder(
   const metadata = await fetchAndDecryptMetadata(resolved.cid, folderKey);
 
   // 4. Return complete FolderNode with decrypted children
-  // Both v1 and v2 children are stored as FolderChildV2[] in the store.
-  // v1 FileEntry objects won't exist after the clean break (DB wipe).
   // v2 FilePointer objects have fileMetaIpnsName instead of inline file data.
+  // v1 data cannot exist at runtime (clean break / DB wipe required for v2 migration).
   return {
     id: folderId ?? 'root',
     name,
     ipnsName,
     parentId,
-    children: metadata.children as FolderChildV2[],
+    children: (metadata.children ?? []) as FolderChildV2[],
     isLoaded: true,
     isLoading: false,
     sequenceNumber: resolved.sequenceNumber,
@@ -308,7 +316,7 @@ async function buildFolderIpnsRecord(params: {
     24 * 60 * 60 * 1000
   );
   const recordBytes = marshalIpnsRecord(record);
-  const recordBase64 = btoa(String.fromCharCode(...recordBytes));
+  const recordBase64 = uint8ToBase64(recordBytes);
 
   return {
     cid,
@@ -541,10 +549,17 @@ export async function addFileToFolder(params: {
   });
 
   // 5. Batch publish: file IPNS record + folder IPNS record
-  await batchPublishIpnsRecords([
+  const publishResult = await batchPublishIpnsRecords([
     { ...params.fileIpnsRecord, recordType: 'file' },
     folderResult.record,
   ]);
+
+  if (publishResult.totalFailed > 0) {
+    console.error(
+      `Batch publish partial failure: ${publishResult.totalFailed}/${publishResult.totalFailed + publishResult.totalSucceeded} records failed`
+    );
+    throw new Error('Failed to publish one or more IPNS records');
+  }
 
   return { filePointer, newSequenceNumber: folderResult.newSequenceNumber };
 }
@@ -610,7 +625,14 @@ export async function addFilesToFolder(params: {
     ...params.files.map((f) => ({ ...f.fileIpnsRecord, recordType: 'file' as const })),
     folderResult.record,
   ];
-  await batchPublishIpnsRecords(allRecords);
+  const publishResult = await batchPublishIpnsRecords(allRecords);
+
+  if (publishResult.totalFailed > 0) {
+    console.error(
+      `Batch publish partial failure: ${publishResult.totalFailed}/${publishResult.totalFailed + publishResult.totalSucceeded} records failed`
+    );
+    throw new Error('Failed to publish one or more IPNS records');
+  }
 
   return { filePointers, newSequenceNumber: folderResult.newSequenceNumber };
 }
@@ -643,7 +665,13 @@ export async function replaceFileInFolder(params: {
 
   // 2. Publish ONLY the file IPNS record (folder metadata untouched!)
   // This is the key optimization: content update does NOT modify folder metadata.
-  await batchPublishIpnsRecords([{ ...params.fileIpnsRecord, recordType: 'file' }]);
+  const publishResult = await batchPublishIpnsRecords([
+    { ...params.fileIpnsRecord, recordType: 'file' },
+  ]);
+
+  if (publishResult.totalFailed > 0) {
+    throw new Error('Failed to publish file IPNS record');
+  }
 }
 
 /**

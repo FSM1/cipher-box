@@ -52,7 +52,7 @@ export async function deriveFileIpnsKeypair(
   if (!fileId || fileId.length < 10) {
     throw new CryptoError(
       'Invalid fileId: must be a non-empty string of at least 10 characters',
-      'ENCRYPTION_FAILED'
+      'INVALID_INPUT'
     );
   }
 

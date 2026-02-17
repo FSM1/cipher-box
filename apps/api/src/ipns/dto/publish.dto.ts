@@ -8,6 +8,7 @@ import {
   IsArray,
   IsIn,
   ArrayMaxSize,
+  ArrayMinSize,
   ValidateNested,
   Matches,
   MaxLength,
@@ -194,6 +195,7 @@ export class BatchPublishIpnsDto {
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => PublishIpnsEntryDto)
+  @ArrayMinSize(1)
   @ArrayMaxSize(200)
   records!: PublishIpnsEntryDto[];
 }
