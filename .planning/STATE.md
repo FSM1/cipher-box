@@ -20,9 +20,9 @@ Progress: [####################-] (M1 complete, M2 Phase 12 complete, Phase 12.2
 
 **Velocity:**
 
-- Total plans completed: 109
+- Total plans completed: 110
 - Average duration: 5.3 min
-- Total execution time: 9.93 hours
+- Total execution time: 10.06 hours
 
 **By Phase (M1 summary):**
 
@@ -128,6 +128,9 @@ Recent decisions affecting current work:
 | FileMetadata encryptionMode serde default "GCM"                  | 11.1-01   | Matches TypeScript optional field behavior for backward compat                                                   |
 | sanitize_error uses char-walking (not regex crate)               | 11.1-02   | Avoids adding regex dependency for simple path/token replacement                                                 |
 | dev_key field always present in AppState (not cfg-gated)         | 11.1-02   | Simplifies struct; only CLI parsing is cfg(debug_assertions) gated                                               |
+| Keep v1 write-back format for build_folder_metadata              | 11.1-03   | Desktop doesn't create per-file IPNS records; web app handles both formats                                       |
+| Synthetic v1 cache entries for v2 folders (version='v2')         | 11.1-03   | Preserves MetadataCache staleness-check API without storing AnyFolderMetadata                                    |
+| Eager FilePointer resolution before NFS mount                    | 11.1-03   | NFS caches READDIR aggressively; first response must be complete and correct                                     |
 | AnyFolderMetadata Clone/Debug + to_v1() for FUSE compat          | 11.1-04   | Converts v2 FilePointers to placeholder FileEntries for backward-compatible FUSE layer                           |
 | Dev-key auth via test-login endpoint for CI/debug                | 11.1-04   | Debug builds use POST /auth/test-login to get JWT, bypassing Core Kit entirely                                   |
 
