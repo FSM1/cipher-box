@@ -2,22 +2,22 @@
 
 **Session ID:** 39dea4ee-5f57-4587-8c44-40db1cc1144c
 
-**Commit Message:** This was a new account from an eth wallet on first login, but I am not s
+**Commit Message:** There is some weird effect on the logout menu - it often closes between
 
 ## Prompt
 
-This was a new account from an eth wallet on first login, but I am not sure whether the vault actually loaded when I first logged in. I then logged out to test whether the double signing was a repeatable thing, and then noticed the vault syncing failed.
+there is some weird effect on the logout menu - it often closes between mouse-over on the trigger and the cursor being on the menu item.
 
 ## Summary
 
-Good — that confirms the diagnosis. The sync error only happened because there was no IPNS record yet. Once you uploaded (which publishes an IPNS record), subsequent syncs resolve fine.
-
-The fix I just made handles this properly: when `resolveIpnsRecord` returns `null` (record doesn't exist), we return normally instead of throwing, so `useSyncPolling` marks initial sync complete and shows the empty file browser. This covers the re-login-to-empty-vault case.
-
-Want me to commit this with the other fixes and push?
+The dropdown is positioned with `top: calc(100% + 4px)` (same visual gap as before), and the `::before` pseudo-element spans the 4px gap invisibly, keeping the mouse within `.user-menu` during the transition. Want to test it before I commit?
 
 ## Key Actions
 
-- - **Read**: /Users/michael/Code/cipher-box/apps/web/src/components/file-browser/FileBrowser.tsx
-- - **Edit**: /Users/michael/Code/cipher-box/apps/web/src/components/file-browser/FileBrowser.tsx
-- - **Bash**: Lint check FileBrowser
+- - **Grep**: logout|user-menu|UserMenu|account-menu|ProfileMenu
+- - **Read**: /Users/michael/Code/cipher-box/apps/web/src/components/layout/UserMenu.tsx
+- - **Grep**: user-menu
+- - **Grep**: user-menu
+- - **Read**: /Users/michael/Code/cipher-box/apps/web/src/styles/layout.css
+- - **Edit**: /Users/michael/Code/cipher-box/apps/web/src/styles/layout.css
+- - **Edit**: /Users/michael/Code/cipher-box/apps/web/src/styles/layout.css

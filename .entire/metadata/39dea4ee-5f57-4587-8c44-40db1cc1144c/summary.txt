@@ -1,5 +1,1 @@
-Good — that confirms the diagnosis. The sync error only happened because there was no IPNS record yet. Once you uploaded (which publishes an IPNS record), subsequent syncs resolve fine.
-
-The fix I just made handles this properly: when `resolveIpnsRecord` returns `null` (record doesn't exist), we return normally instead of throwing, so `useSyncPolling` marks initial sync complete and shows the empty file browser. This covers the re-login-to-empty-vault case.
-
-Want me to commit this with the other fixes and push?
+The dropdown is positioned with `top: calc(100% + 4px)` (same visual gap as before), and the `::before` pseudo-element spans the 4px gap invisibly, keeping the mouse within `.user-menu` during the transition. Want to test it before I commit?

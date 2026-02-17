@@ -1,1 +1,1 @@
-This was a new account from an eth wallet on first login, but I am not sure whether the vault actually loaded when I first logged in. I then logged out to test whether the double signing was a repeatable thing, and then noticed the vault syncing failed.
+there is some weird effect on the logout menu - it often closes between mouse-over on the trigger and the cursor being on the menu item.
