@@ -11,7 +11,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { FolderIpns } from './entities/folder-ipns.entity';
-import { PublishIpnsDto, PublishIpnsResponseDto } from './dto';
+import {
+  PublishIpnsDto,
+  PublishIpnsResponseDto,
+  BatchPublishIpnsDto,
+  BatchPublishIpnsResponseDto,
+} from './dto';
 import { RepublishService } from '../republish/republish.service';
 import { parseIpnsRecord } from './ipns-record-parser';
 
@@ -70,6 +75,80 @@ export class IpnsService {
       ipnsName: dto.ipnsName,
       sequenceNumber: folder.sequenceNumber,
     };
+  }
+
+  /**
+   * Batch publish multiple IPNS records with concurrency-limited processing.
+   * Supports partial success: individual record failures do not fail the batch.
+   * Processes up to 10 records concurrently.
+   */
+  async publishBatch(
+    userId: string,
+    dto: BatchPublishIpnsDto
+  ): Promise<BatchPublishIpnsResponseDto> {
+    const results: PublishIpnsResponseDto[] = [];
+    let totalSucceeded = 0;
+    let totalFailed = 0;
+
+    const CONCURRENCY = 10;
+
+    // Process records in batches of CONCURRENCY
+    for (let i = 0; i < dto.records.length; i += CONCURRENCY) {
+      const batch = dto.records.slice(i, i + CONCURRENCY);
+
+      const settled = await Promise.allSettled(
+        batch.map(async (entry) => {
+          // Validate base64 record
+          let recordBytes: Uint8Array;
+          try {
+            recordBytes = Uint8Array.from(atob(entry.record), (c) => c.charCodeAt(0));
+          } catch {
+            throw new BadRequestException(`Invalid base64-encoded record for ${entry.ipnsName}`);
+          }
+
+          // Publish to delegated routing
+          await this.publishToDelegatedRouting(entry.ipnsName, recordBytes);
+
+          // Upsert FolderIpns entry with recordType
+          const folder = await this.upsertFolderIpns(
+            userId,
+            entry.ipnsName,
+            entry.metadataCid,
+            entry.encryptedIpnsPrivateKey,
+            entry.keyEpoch,
+            entry.recordType ?? 'folder'
+          );
+
+          return {
+            success: true,
+            ipnsName: entry.ipnsName,
+            sequenceNumber: folder.sequenceNumber,
+          } as PublishIpnsResponseDto;
+        })
+      );
+
+      for (let j = 0; j < settled.length; j++) {
+        const result = settled[j];
+        if (result.status === 'fulfilled') {
+          results.push(result.value);
+          totalSucceeded++;
+        } else {
+          const reason = result.reason;
+          const ipnsName = batch[j]?.ipnsName ?? 'unknown';
+          this.logger.warn(
+            `Batch publish failed for ${ipnsName}: ${reason instanceof Error ? reason.message : String(reason)}`
+          );
+          results.push({
+            success: false,
+            ipnsName,
+            sequenceNumber: '0',
+          });
+          totalFailed++;
+        }
+      }
+    }
+
+    return { results, totalSucceeded, totalFailed };
   }
 
   /**
@@ -154,14 +233,16 @@ export class IpnsService {
   }
 
   /**
-   * Create or update a folder IPNS entry
+   * Create or update a folder/file IPNS entry.
+   * Handles both folder metadata and per-file metadata IPNS records.
    */
   private async upsertFolderIpns(
     userId: string,
     ipnsName: string,
     metadataCid: string,
     encryptedIpnsPrivateKey?: string,
-    keyEpoch?: number
+    keyEpoch?: number,
+    recordType: 'folder' | 'file' = 'folder'
   ): Promise<FolderIpns> {
     const existing = await this.getFolderIpns(userId, ipnsName);
 
@@ -169,6 +250,7 @@ export class IpnsService {
       // Update existing entry
       existing.latestCid = metadataCid;
       existing.sequenceNumber = (BigInt(existing.sequenceNumber) + 1n).toString();
+      existing.recordType = recordType;
       existing.updatedAt = new Date();
 
       // Only update encrypted key if provided (e.g., on key rotation)
@@ -191,7 +273,9 @@ export class IpnsService {
             saved.sequenceNumber
           )
           .catch((err) =>
-            this.logger.warn(`Failed to enroll folder ${ipnsName} for republishing: ${err.message}`)
+            this.logger.warn(
+              `Failed to enroll ${recordType} ${ipnsName} for republishing: ${err.message}`
+            )
           );
       }
 
@@ -209,6 +293,7 @@ export class IpnsService {
         : null,
       keyEpoch: keyEpoch ?? null,
       isRoot: false, // Root folder is tracked in Vault entity
+      recordType,
     });
 
     const saved = await this.folderIpnsRepository.save(folder);
@@ -225,7 +310,9 @@ export class IpnsService {
           saved.sequenceNumber
         )
         .catch((err) =>
-          this.logger.warn(`Failed to enroll folder ${ipnsName} for republishing: ${err.message}`)
+          this.logger.warn(
+            `Failed to enroll ${recordType} ${ipnsName} for republishing: ${err.message}`
+          )
         );
     }
 

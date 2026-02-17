@@ -1,15 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { FileEntry } from '@cipherbox/crypto';
+import type { FilePointer } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useAuthStore } from '../../stores/auth.store';
-import { downloadFile } from '../../services/download.service';
+import { downloadFileFromIpns } from '../../services/download.service';
 import { triggerBrowserDownload } from '../../services/download.service';
 import '../../styles/image-preview-dialog.css';
 
 type ImagePreviewDialogProps = {
   open: boolean;
   onClose: () => void;
-  item: FileEntry | null;
+  item: FilePointer | null;
+  /** Parent folder's decrypted AES-256 key (needed to decrypt file metadata) */
+  folderKey: Uint8Array | null;
 };
 
 /** Map common image extensions to MIME types. */
@@ -39,7 +41,7 @@ function getMimeType(filename: string): string {
  * Downloads the encrypted file from IPFS, decrypts it, and displays
  * the image using an object URL. Includes a download button.
  */
-export function ImagePreviewDialog({ open, onClose, item }: ImagePreviewDialogProps) {
+export function ImagePreviewDialog({ open, onClose, item, folderKey }: ImagePreviewDialogProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
@@ -59,6 +61,11 @@ export function ImagePreviewDialog({ open, onClose, item }: ImagePreviewDialogPr
       return;
     }
 
+    if (!folderKey) {
+      setError('Folder key not available');
+      return;
+    }
+
     let cancelled = false;
     let url: string | null = null;
     setLoading(true);
@@ -71,15 +78,12 @@ export function ImagePreviewDialog({ open, onClose, item }: ImagePreviewDialogPr
           throw new Error('No keypair available - please log in again');
         }
 
-        const plaintext = await downloadFile(
-          {
-            cid: item.cid,
-            iv: item.fileIv,
-            wrappedKey: item.fileKeyEncrypted,
-            originalName: item.name,
-          },
-          auth.vaultKeypair.privateKey
-        );
+        const plaintext = await downloadFileFromIpns({
+          fileMetaIpnsName: item.fileMetaIpnsName,
+          folderKey: folderKey!,
+          privateKey: auth.vaultKeypair.privateKey,
+          fileName: item.name,
+        });
 
         if (cancelled) return;
 
@@ -103,7 +107,7 @@ export function ImagePreviewDialog({ open, onClose, item }: ImagePreviewDialogPr
         URL.revokeObjectURL(url);
       }
     };
-  }, [open, item]);
+  }, [open, item, folderKey]);
 
   const handleDownload = useCallback(() => {
     if (!decryptedData || !item) return;

@@ -7,7 +7,7 @@ import {
   type DragEvent,
   type MouseEvent,
 } from 'react';
-import type { FolderChild, FileEntry } from '@cipherbox/crypto';
+import type { FolderChildV2, FilePointer } from '@cipherbox/crypto';
 import { useFolderNavigation } from '../../hooks/useFolderNavigation';
 import { useFolder } from '../../hooks/useFolder';
 import { useFileDownload } from '../../hooks/useFileDownload';
@@ -41,9 +41,9 @@ import { OfflineBanner } from './OfflineBanner';
 import { SelectionActionBar } from './SelectionActionBar';
 
 /**
- * Type guard for file entries.
+ * Type guard for file pointers (v2).
  */
-function isFileEntry(item: FolderChild): item is FileEntry {
+function isFilePointer(item: FolderChildV2): item is FilePointer {
   return item.type === 'file';
 }
 
@@ -185,7 +185,7 @@ function isPreviewableFile(name: string): boolean {
  */
 type DialogState = {
   open: boolean;
-  item: FolderChild | null;
+  item: FolderChildV2 | null;
 };
 
 /**
@@ -234,7 +234,7 @@ export function FileBrowser() {
   } = useFolder();
 
   // File download
-  const { download, isDownloading } = useFileDownload();
+  const { downloadFromIpns, isDownloading } = useFileDownload();
 
   // External file drop upload
   const { handleFileDrop } = useDropUpload();
@@ -282,7 +282,7 @@ export function FileBrowser() {
 
       // Update folder store with new children
       // Per CONTEXT.md: last write wins, instant refresh (no toast/prompt)
-      useFolderStore.getState().updateFolderChildren('root', metadata.children);
+      useFolderStore.getState().updateFolderChildren('root', metadata.children as FolderChildV2[]);
       useFolderStore.getState().updateFolderSequence('root', resolved.sequenceNumber);
     } catch (err) {
       console.error('Sync refresh failed:', err);
@@ -534,7 +534,7 @@ export function FileBrowser() {
   // Context menu handler - show context menu
   // If right-clicked item is not in selection, select only that item
   const handleContextMenu = useCallback(
-    (event: MouseEvent, item: FolderChild) => {
+    (event: MouseEvent, item: FolderChildV2) => {
       if (!selectedIds.has(item.id)) {
         setSelectedIds(new Set([item.id]));
         lastSelectedIdRef.current = item.id;
@@ -545,7 +545,7 @@ export function FileBrowser() {
   );
 
   // Drag start handler
-  const handleDragStart = useCallback((_event: DragEvent, _item: FolderChild) => {
+  const handleDragStart = useCallback((_event: DragEvent, _item: FolderChildV2) => {
     // Drag data is set by FileListItem component
   }, []);
 
@@ -570,23 +570,24 @@ export function FileBrowser() {
     [moveItem, moveItems, clearSelection]
   );
 
-  // Download action handler
+  // Download action handler (v2: resolves file IPNS for CID/key)
   const handleDownload = useCallback(async () => {
     const item = contextMenu.item;
-    if (!item || !isFileEntry(item)) return;
+    if (!item || !isFilePointer(item)) return;
+
+    const folderKey = currentFolder?.folderKey;
+    if (!folderKey) return;
 
     try {
-      // Map FileEntry fields to FileMetadata for download service
-      await download({
-        cid: item.cid,
-        iv: item.fileIv,
-        wrappedKey: item.fileKeyEncrypted,
-        originalName: item.name,
+      await downloadFromIpns({
+        fileMetaIpnsName: item.fileMetaIpnsName,
+        folderKey,
+        fileName: item.name,
       });
     } catch (err) {
       console.error('Download failed:', err);
     }
-  }, [contextMenu.item, download]);
+  }, [contextMenu.item, downloadFromIpns, currentFolder?.folderKey]);
 
   // Open rename dialog
   const handleRenameClick = useCallback(() => {
@@ -626,7 +627,7 @@ export function FileBrowser() {
   // Open preview dialog (routes to correct dialog based on file type)
   const handlePreviewClick = useCallback(() => {
     const item = contextMenu.item;
-    if (!item || !isFileEntry(item)) return;
+    if (!item || !isFilePointer(item)) return;
     const name = item.name;
     if (isImageFile(name)) {
       setImagePreviewDialog({ open: true, item });
@@ -644,13 +645,13 @@ export function FileBrowser() {
   // Batch delete state: stores multiple items for batch confirmation
   const [batchDeleteDialog, setBatchDeleteDialog] = useState<{
     open: boolean;
-    items: FolderChild[];
+    items: FolderChildV2[];
   }>({ open: false, items: [] });
 
   // Batch move state: stores items for batch move dialog
   const [batchMoveDialog, setBatchMoveDialog] = useState<{
     open: boolean;
-    items: FolderChild[];
+    items: FolderChildV2[];
   }>({ open: false, items: [] });
 
   // Open batch delete confirmation
@@ -665,24 +666,26 @@ export function FileBrowser() {
     setBatchMoveDialog({ open: true, items: [...selectedItems] });
   }, [selectedItems]);
 
-  // Batch download: download all selected files sequentially
+  // Batch download: download all selected files sequentially (v2: IPNS-based)
   const handleBatchDownload = useCallback(async () => {
-    const files = selectedItems.filter(isFileEntry);
+    const files = selectedItems.filter(isFilePointer);
     if (files.length === 0) return;
+
+    const folderKey = currentFolder?.folderKey;
+    if (!folderKey) return;
 
     for (const file of files) {
       try {
-        await download({
-          cid: file.cid,
-          iv: file.fileIv,
-          wrappedKey: file.fileKeyEncrypted,
-          originalName: file.name,
+        await downloadFromIpns({
+          fileMetaIpnsName: file.fileMetaIpnsName,
+          folderKey,
+          fileName: file.name,
         });
       } catch (err) {
         console.error(`Download failed for ${file.name}:`, err);
       }
     }
-  }, [selectedItems, download]);
+  }, [selectedItems, downloadFromIpns, currentFolder?.folderKey]);
 
   // Confirm batch delete - single IPNS publish for entire batch
   const handleBatchDeleteConfirm = useCallback(async () => {
@@ -951,14 +954,14 @@ export function FileBrowser() {
           item={contextMenu.item}
           selectedCount={selectedIds.size}
           onClose={contextMenu.hide}
-          onDownload={isFileEntry(contextMenu.item) ? handleDownload : undefined}
+          onDownload={isFilePointer(contextMenu.item) ? handleDownload : undefined}
           onEdit={
-            isFileEntry(contextMenu.item) && isTextFile(contextMenu.item.name)
+            isFilePointer(contextMenu.item) && isTextFile(contextMenu.item.name)
               ? handleEditClick
               : undefined
           }
           onPreview={
-            isFileEntry(contextMenu.item) && isPreviewableFile(contextMenu.item.name)
+            isFilePointer(contextMenu.item) && isPreviewableFile(contextMenu.item.name)
               ? handlePreviewClick
               : undefined
           }
@@ -967,7 +970,7 @@ export function FileBrowser() {
           onDelete={handleDeleteClick}
           onDetails={handleDetailsClick}
           onBatchDownload={
-            selectedIds.size > 1 && selectedItems.some(isFileEntry)
+            selectedIds.size > 1 && selectedItems.some(isFilePointer)
               ? handleBatchDownload
               : undefined
           }
@@ -1021,15 +1024,15 @@ export function FileBrowser() {
         open={detailsDialog.open}
         onClose={closeDetailsDialog}
         item={detailsDialog.item}
-        parentFolderId={currentFolderId}
       />
 
       {/* Text editor dialog */}
       <TextEditorDialog
         open={editorDialog.open}
         onClose={closeEditorDialog}
-        item={editorDialog.item && isFileEntry(editorDialog.item) ? editorDialog.item : null}
+        item={editorDialog.item && isFilePointer(editorDialog.item) ? editorDialog.item : null}
         parentFolderId={currentFolderId}
+        folderKey={currentFolder?.folderKey ?? null}
       />
 
       {/* Image preview dialog */}
@@ -1037,10 +1040,11 @@ export function FileBrowser() {
         open={imagePreviewDialog.open}
         onClose={closeImagePreviewDialog}
         item={
-          imagePreviewDialog.item && isFileEntry(imagePreviewDialog.item)
+          imagePreviewDialog.item && isFilePointer(imagePreviewDialog.item)
             ? imagePreviewDialog.item
             : null
         }
+        folderKey={currentFolder?.folderKey ?? null}
       />
 
       {/* PDF preview dialog */}
@@ -1048,8 +1052,11 @@ export function FileBrowser() {
         open={pdfPreviewDialog.open}
         onClose={closePdfPreviewDialog}
         item={
-          pdfPreviewDialog.item && isFileEntry(pdfPreviewDialog.item) ? pdfPreviewDialog.item : null
+          pdfPreviewDialog.item && isFilePointer(pdfPreviewDialog.item)
+            ? pdfPreviewDialog.item
+            : null
         }
+        folderKey={currentFolder?.folderKey ?? null}
       />
 
       {/* Audio player dialog */}
@@ -1057,10 +1064,11 @@ export function FileBrowser() {
         open={audioPlayerDialog.open}
         onClose={closeAudioPlayerDialog}
         item={
-          audioPlayerDialog.item && isFileEntry(audioPlayerDialog.item)
+          audioPlayerDialog.item && isFilePointer(audioPlayerDialog.item)
             ? audioPlayerDialog.item
             : null
         }
+        folderKey={currentFolder?.folderKey ?? null}
       />
 
       {/* Video player dialog */}
@@ -1068,10 +1076,11 @@ export function FileBrowser() {
         open={videoPlayerDialog.open}
         onClose={closeVideoPlayerDialog}
         item={
-          videoPlayerDialog.item && isFileEntry(videoPlayerDialog.item)
+          videoPlayerDialog.item && isFilePointer(videoPlayerDialog.item)
             ? videoPlayerDialog.item
             : null
         }
+        folderKey={currentFolder?.folderKey ?? null}
       />
 
       {/* Batch delete confirmation dialog */}

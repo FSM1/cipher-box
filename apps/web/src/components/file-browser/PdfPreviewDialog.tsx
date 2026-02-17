@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { FileEntry } from '@cipherbox/crypto';
+import type { FilePointer } from '@cipherbox/crypto';
 import * as pdfjsLib from 'pdfjs-dist';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { Modal } from '../ui/Modal';
@@ -15,7 +15,9 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
 type PdfPreviewDialogProps = {
   open: boolean;
   onClose: () => void;
-  item: FileEntry | null;
+  item: FilePointer | null;
+  /** Parent folder's decrypted AES-256 key (needed to decrypt file metadata) */
+  folderKey: Uint8Array | null;
 };
 
 const MIN_ZOOM = 0.25;
@@ -28,11 +30,12 @@ const ZOOM_STEP = 0.25;
  * Downloads the encrypted file from IPFS, decrypts it, and renders
  * all pages using pdfjs-dist canvases. Supports zoom and page navigation.
  */
-export function PdfPreviewDialog({ open, onClose, item }: PdfPreviewDialogProps) {
+export function PdfPreviewDialog({ open, onClose, item, folderKey }: PdfPreviewDialogProps) {
   const { loading, error, objectUrl, handleDownload } = useFilePreview({
     open,
     item,
     mimeType: 'application/pdf',
+    folderKey,
   });
 
   const [zoom, setZoom] = useState(1.0);

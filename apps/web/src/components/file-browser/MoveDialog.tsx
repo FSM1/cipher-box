@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, type KeyboardEvent } from 'react';
-import type { FolderChild } from '@cipherbox/crypto';
+import type { FolderChildV2 } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useFolderStore, type FolderNode } from '../../stores/folder.store';
 import { getDepth, isDescendantOf } from '../../services/folder.service';
@@ -16,9 +16,9 @@ type MoveDialogProps = {
   /** Callback when move is confirmed with destination folder ID */
   onConfirm: (destinationFolderId: string) => void;
   /** The item being moved (single-item mode) */
-  item: FolderChild | null;
+  item: FolderChildV2 | null;
   /** Multiple items being moved (batch mode — takes precedence over item) */
-  items?: FolderChild[];
+  items?: FolderChildV2[];
   /** Current parent folder ID of the item(s) */
   currentFolderId: string;
   /** Loading state - disables buttons */
@@ -40,7 +40,7 @@ type FolderListItem = {
  */
 function buildFolderList(
   folders: Record<string, FolderNode>,
-  items: FolderChild[],
+  items: FolderChildV2[],
   currentFolderId: string
 ): FolderListItem[] {
   const result: FolderListItem[] = [];
@@ -123,7 +123,7 @@ function buildFolderList(
  */
 function checkNameCollisions(
   destFolder: FolderNode | undefined,
-  items: FolderChild[]
+  items: FolderChildV2[]
 ): string | null {
   if (!destFolder) return null;
   const itemIds = new Set(items.map((i) => i.id));
@@ -145,7 +145,7 @@ function checkNameCollisions(
  * @example
  * ```tsx
  * function FileBrowser() {
- *   const [moveItem, setMoveItem] = useState<FolderChild | null>(null);
+ *   const [moveItem, setMoveItem] = useState<FolderChildV2 | null>(null);
  *
  *   return (
  *     <MoveDialog

@@ -1,7 +1,7 @@
 # CipherBox Vault Export Format Specification
 
 **Version:** 1.0
-**Last Updated:** 2026-02-11
+**Last Updated:** 2026-02-17
 **Status:** Stable
 
 ## Table of Contents
@@ -265,10 +265,10 @@ After decrypting the `data` field with the folder's AES-256 key and the `iv`, th
 }
 ```
 
-| Field      | Type   | Description                                  |
-| ---------- | ------ | -------------------------------------------- |
-| `version`  | string | Schema version, always `"v1"` for format 1.0 |
-| `children` | array  | Array of folder and file child entries       |
+| Field      | Type   | Description                                                                  |
+| ---------- | ------ | ---------------------------------------------------------------------------- |
+| `version`  | string | Schema version: `"v1"` (inline file data) or `"v2"` (per-file IPNS pointers) |
+| `children` | array  | Array of folder and file child entries                                       |
 
 ### Folder Child Entry
 
@@ -325,6 +325,114 @@ After decrypting the `data` field with the folder's AES-256 key and the `iv`, th
 | `size`             | number | -        | Original unencrypted file size in bytes                              |
 | `createdAt`        | number | -        | Unix timestamp in milliseconds                                       |
 | `modifiedAt`       | number | -        | Unix timestamp in milliseconds                                       |
+
+### v2 Folder Metadata Schema
+
+Version `"v2"` folder metadata uses per-file IPNS records instead of embedding file data inline. The folder metadata contains slim `FilePointer` references that point to each file's own IPNS record.
+
+```json
+{
+  "version": "v2",
+  "children": [
+    {
+      "type": "folder",
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "name": "Documents",
+      "ipnsName": "k51qzi5uqu5dg...",
+      "ipnsPrivateKeyEncrypted": "04abcdef...hex...",
+      "folderKeyEncrypted": "04abcdef...hex...",
+      "createdAt": 1705268100000,
+      "modifiedAt": 1705268100000
+    },
+    {
+      "type": "file",
+      "id": "550e8400-e29b-41d4-a716-446655440001",
+      "name": "photo.jpg",
+      "fileMetaIpnsName": "k51qzi5uqu5dj...",
+      "createdAt": 1705268100000,
+      "modifiedAt": 1705268100000
+    }
+  ]
+}
+```
+
+**Folder entries** (`FolderEntry`) are identical between v1 and v2.
+
+**File entries** in v2 use the `FilePointer` format:
+
+| Field              | Type   | Encoding | Description                                                    |
+| ------------------ | ------ | -------- | -------------------------------------------------------------- |
+| `type`             | string | -        | Always `"file"`                                                |
+| `id`               | string | UUID     | Unique file identifier (used in HKDF derivation)               |
+| `name`             | string | -        | File name (plaintext, since entire metadata blob is encrypted) |
+| `fileMetaIpnsName` | string | base36   | IPNS name of the file's own metadata record                    |
+| `createdAt`        | number | -        | Unix timestamp in milliseconds                                 |
+| `modifiedAt`       | number | -        | Unix timestamp in milliseconds                                 |
+
+Note: v2 `FilePointer` does **not** contain `cid`, `fileKeyEncrypted`, `fileIv`, `encryptionMode`, or `size`. These are stored in the per-file metadata record.
+
+### Per-File Metadata Schema (FileMetadata)
+
+Each file's metadata is stored as its own IPNS record, encrypted with the parent folder's `folderKey` (AES-256-GCM, same encryption as folder metadata). The encrypted envelope uses the same format as folder metadata: `{ "iv": "hex", "data": "base64" }`.
+
+After decryption, the plaintext is a UTF-8 JSON string:
+
+```json
+{
+  "version": "v1",
+  "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+  "fileKeyEncrypted": "04abcdef...hex...",
+  "fileIv": "aabbccdd11223344eeff5566",
+  "size": 2048576,
+  "mimeType": "image/jpeg",
+  "encryptionMode": "GCM",
+  "createdAt": 1705268100000,
+  "modifiedAt": 1705268100000
+}
+```
+
+| Field              | Type   | Encoding | Description                                                          |
+| ------------------ | ------ | -------- | -------------------------------------------------------------------- |
+| `version`          | string | -        | Always `"v1"` for the file metadata schema                           |
+| `cid`              | string | CIDv1    | IPFS content identifier of the encrypted file                        |
+| `fileKeyEncrypted` | string | hex      | ECIES-encrypted 32-byte AES-256 file key (129 bytes / 258 hex chars) |
+| `fileIv`           | string | hex      | 12-byte IV used for file encryption (24 hex characters)              |
+| `size`             | number | -        | Original unencrypted file size in bytes                              |
+| `mimeType`         | string | -        | MIME type of the original file (e.g., `"image/jpeg"`)                |
+| `encryptionMode`   | string | -        | `"GCM"` (default) or `"CTR"` for streaming encryption                |
+| `createdAt`        | number | -        | Unix timestamp in milliseconds                                       |
+| `modifiedAt`       | number | -        | Unix timestamp in milliseconds                                       |
+
+**Encryption:** The `FileMetadata` JSON is encrypted with the parent folder's `folderKey` using AES-256-GCM, exactly like folder metadata. This means anyone who can read the folder can also read the file metadata (and thus decrypt the file).
+
+**IPNS addressing:** Each file has its own IPNS record derived deterministically from the user's secp256k1 `privateKey` and the file's `id` using HKDF.
+
+### HKDF File IPNS Key Derivation
+
+The per-file IPNS keypair is derived deterministically, enabling recovery from the user's private key and the file's UUID alone.
+
+```text
+Derivation path:
+  secp256k1 privateKey (32 bytes)
+    -> HKDF-SHA256(salt, info)
+    -> 32-byte Ed25519 seed
+    -> Ed25519 keypair
+    -> IPNS name (k51...)
+```
+
+| Parameter     | Value                                                       |
+| ------------- | ----------------------------------------------------------- |
+| Algorithm     | HKDF-SHA256 (Web Crypto API)                                |
+| Input key     | User's 32-byte secp256k1 private key                        |
+| Salt          | `CipherBox-v1` (UTF-8 encoded, 12 bytes)                    |
+| Info          | `cipherbox-file-ipns-v1:<fileId>` (UTF-8 encoded)           |
+| Output length | 32 bytes (Ed25519 seed)                                     |
+| Ed25519       | Seed -> public key via `@noble/ed25519` `getPublicKeyAsync` |
+| IPNS name     | CIDv1 with libp2p-key codec (0x72) + identity multihash     |
+
+**Domain separation:** The `fileId` (UUID from the `FilePointer`) in the HKDF info string ensures each file gets a unique IPNS keypair. This uses the same salt (`CipherBox-v1`) as vault and device registry IPNS derivation, with a different info prefix (`cipherbox-file-ipns-v1:` vs `cipherbox-vault-ipns-v1` and `cipherbox-device-registry-ipns-v1`).
+
+**IPNS record lifecycle:** File IPNS records have a 24-hour TTL and are republished by the TEE every 6 hours. If the TEE has been down and records have expired, the file content is still on IPFS but the CID is not discoverable via IPNS.
 
 ---
 
@@ -412,7 +520,8 @@ plaintext = aes_256_gcm_decrypt(root_folder_key, iv, ciphertext)
 
 // Parse decrypted metadata
 metadata = parse_json(plaintext)
-// metadata = { "version": "v1", "children": [...] }
+// metadata = { "version": "v1" | "v2", "children": [...] }
+// Check metadata.version to determine child processing strategy
 ```
 
 ### Step 6: Recursively Process Children
@@ -437,9 +546,10 @@ subfolder_cid = resolve_ipns(child.ipnsName)
 // 5. Recursively process subfolder's children (this step)
 ```
 
-**If child is a file:**
+**If child is a file (v1 -- inline file data):**
 
 ```text
+// v1 folder metadata: file data embedded directly in the child entry
 // 1. ECIES-decrypt the file key
 file_key = ecies_decrypt(private_key, hex_to_bytes(child.fileKeyEncrypted))
 // file_key is 32 bytes
@@ -454,6 +564,35 @@ decrypted_file = aes_256_gcm_decrypt(file_key, iv, encrypted_file)
 // 4. Save decrypted_file with name child.name
 //    Preserve folder path from recursive traversal
 ```
+
+**If child is a file (v2 -- FilePointer with per-file IPNS):**
+
+```text
+// v2 folder metadata: child has fileMetaIpnsName instead of inline cid/key/iv
+// 1. Resolve file IPNS name -> file metadata CID
+file_meta_cid = resolve_ipns(child.fileMetaIpnsName)
+
+// 2. Fetch and decrypt file metadata (same format as folder metadata)
+encrypted_file_meta = fetch_from_ipfs(file_meta_cid)
+file_meta = aes_256_gcm_decrypt(folder_key, encrypted_file_meta)
+// file_meta = { "version": "v1", "cid": "...", "fileKeyEncrypted": "...",
+//               "fileIv": "...", "size": N, "mimeType": "...", ... }
+
+// 3. ECIES-decrypt the file key from file metadata
+file_key = ecies_decrypt(private_key, hex_to_bytes(file_meta.fileKeyEncrypted))
+
+// 4. Fetch encrypted file from IPFS
+encrypted_file = fetch_from_ipfs(file_meta.cid)
+
+// 5. Decrypt file content
+iv = hex_to_bytes(file_meta.fileIv)
+decrypted_file = aes_256_gcm_decrypt(file_key, iv, encrypted_file)
+
+// 6. Save decrypted_file with name child.name
+//    If IPNS resolution fails (expired record), log warning and continue
+```
+
+**Note:** In v2, if the file IPNS record has expired (e.g., TEE was down for >24 hours), the file content CID is not discoverable. The file is still on IPFS but cannot be located without the CID from another source. Recovery tools should warn about these failures but continue recovering other files.
 
 ### Step 7: Assemble Output
 
@@ -479,6 +618,7 @@ function recover_folder(ipns_name, folder_key, private_key, path, files):
     cid = resolve_ipns(ipns_name)
     encrypted_meta = fetch_from_ipfs(cid)
     metadata = decrypt_folder_metadata(encrypted_meta, folder_key)
+    is_v2 = (metadata.version == "v2")
 
     for child in metadata.children:
         if child.type == "folder":
@@ -486,7 +626,24 @@ function recover_folder(ipns_name, folder_key, private_key, path, files):
             sub_path = path + "/" + child.name if path else child.name
             recover_folder(child.ipnsName, sub_key, private_key, sub_path, files)
 
+        else if child.type == "file" and is_v2 and child.fileMetaIpnsName:
+            // v2 FilePointer: resolve per-file IPNS record
+            try:
+                file_meta_cid = resolve_ipns(child.fileMetaIpnsName)
+                enc_file_meta = fetch_from_ipfs(file_meta_cid)
+                file_meta = decrypt_file_metadata(enc_file_meta, folder_key)
+                file_key = ecies_decrypt(private_key, hex_to_bytes(file_meta.fileKeyEncrypted))
+                encrypted_file = fetch_from_ipfs(file_meta.cid)
+                iv = hex_to_bytes(file_meta.fileIv)
+                decrypted = aes_256_gcm_decrypt(file_key, iv, encrypted_file)
+                file_path = path + "/" + child.name if path else child.name
+                files.append({ path: file_path, data: decrypted })
+            catch ipns_error:
+                warn("File IPNS expired: " + child.name)
+                continue  // don't block other files
+
         else if child.type == "file":
+            // v1 inline file entry
             file_key = ecies_decrypt(private_key, hex_to_bytes(child.fileKeyEncrypted))
             encrypted_file = fetch_from_ipfs(child.cid)
             iv = hex_to_bytes(child.fileIv)
@@ -603,14 +760,16 @@ The vault export download should occur over HTTPS. The recovery tool itself can 
 
 ### 9.1 Format Versioning
 
-The `version` field in the export JSON indicates the format version. Version `"1.0"` corresponds to:
+The `version` field in the export JSON indicates the export format version. Version `"1.0"` corresponds to:
 
 - eciesjs v0.4.16 ECIES binary format
 - AES-256-GCM with 12-byte IV for folder metadata and file content
 - Ed25519 IPNS keys in 64-byte libp2p format
-- Folder metadata schema version `"v1"`
+- Folder metadata schema version `"v1"` or `"v2"`
 
-If the ECIES binary format changes (e.g., eciesjs library upgrade changes nonce size or byte layout), the version field would increment. Recovery tools should check the version field and reject unsupported versions with a clear error message.
+The vault export JSON structure itself does **not** change between v1 and v2 folder metadata (still export version `"1.0"`). The recovery procedure detects v2 vaults by checking `FolderMetadata.version === 'v2'` after decrypting each folder's metadata.
+
+If the ECIES binary format changes (e.g., eciesjs library upgrade changes nonce size or byte layout), the export version field would increment. Recovery tools should check the version field and reject unsupported versions with a clear error message.
 
 ### 9.2 ECIES Library Compatibility
 

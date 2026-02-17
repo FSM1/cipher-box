@@ -54,6 +54,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 12.3.1: Pre-Wipe Identity Cleanup** - Deterministic IPNS derivation, hashed identifiers, remove auto-linking (INSERTED)
 - [x] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
 - [x] **Phase 12.5: MFA Polishing, UAT & E2E Testing** - Polish auth flows, wallet E2E with mock provider, fix UAT bugs (INSERTED)
+- [ ] **Phase 12.6: Per-File IPNS Metadata Split** - Split file metadata into per-file IPNS records, decouple content updates from folder publishes (INSERTED)
 - [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
 - [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
@@ -239,6 +240,33 @@ Plans:
 - [x] 12.5-02-PLAN.md — Install wallet-mock, add wallet E2E tests (TC09-TC12)
 - [x] 12.5-03-PLAN.md — Run wallet E2E tests, human-verify SecurityTab + MFA, update UAT document
 
+### Phase 12.6: Per-File IPNS Metadata Split (INSERTED)
+
+**Goal**: Split file metadata into separate per-file IPNS-addressed objects so content updates don't require folder republishes, and per-file sharing becomes possible
+**Depends on**: Phase 12.5 (MFA polish complete, clean-break window before vault wipe)
+**Requirements**: Foundation for SHARE-01 (per-file sharing), VER-01 (version history in file metadata), performance improvement for content updates
+**Research flag**: COMPLETE -- TEE republish scalability benchmarked, HKDF file keypair derivation designed, batch publish strategy defined, FUSE client impact deferred
+**Success Criteria** (what must be TRUE):
+
+1. File metadata (CID, fileKeyEncrypted, fileIv, size, mimeType) lives in its own IPNS record, derived via HKDF from user privateKey + fileId
+2. Folder metadata contains only file name fields + fileMetaIpnsName pointer — no embedded CIDs or file keys
+3. Content update (re-upload) publishes only the file's IPNS record, not the parent folder's
+4. File rename publishes only the folder IPNS record, not the file's
+5. Batch operations (multi-file upload) publish all file IPNS records in a single API call (preserving Phase 7.1 atomicity)
+6. TEE republisher handles per-file IPNS records with acceptable scalability (defined during research)
+7. Desktop FUSE client reads per-file IPNS metadata correctly
+8. Vault export includes per-file metadata in portable format
+
+**Plans:** 5 plans
+
+Plans:
+
+- [ ] 12.6-01-PLAN.md — Crypto primitives: file IPNS HKDF derivation, FileMetadata/FilePointer types, encrypt/decrypt, v2 folder schema
+- [ ] 12.6-02-PLAN.md — Backend: batch publish endpoint, FolderIpns record_type column, republish scalability, API client regen
+- [ ] 12.6-03-PLAN.md — Frontend services: file-metadata service, v2 folder.service.ts rewrite, download/delete flow updates, store types
+- [ ] 12.6-04-PLAN.md — Frontend hooks + components: useFolder/useFilePreview/useDropUpload v2, FileBrowser/TextEditor/DetailsDialog updates
+- [ ] 12.6-05-PLAN.md — Recovery tool v2 support, vault export docs update, full build verification
+
 ### Phase 13: File Versioning
 
 **Goal**: Users can access and restore previous versions of their files
@@ -313,7 +341,7 @@ Plans:
 
 **Execution Order:**
 
-Sequential order: 12 -> 12.5 -> 12.1 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
+Sequential order: 12 -> 12.5 -> 12.6 -> 12.1 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
 
 Parallel phases:
 
@@ -346,6 +374,7 @@ Parallel phases:
 | 12.3.1 Identity Cleanup    | M2        | 4/4            | Complete    | 2026-02-14 |
 | 12.4 MFA + Cross-Device    | M2        | 5/5            | Complete    | 2026-02-15 |
 | 12.5 MFA Polish/UAT/E2E    | M2        | 3/3            | Complete    | 2026-02-16 |
+| 12.6 Per-File IPNS Meta    | M2        | 0/5            | Not started | -          |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
@@ -364,5 +393,5 @@ Milestone 1 shipped: 2026-02-11
 Milestone 2 roadmap created: 2026-02-11
 Milestone 3 roadmap created: 2026-02-11
 Total M1 phases: 17 | Total M1 plans: 72 | Depth: Comprehensive
-Total M2 phases: 8 | Total M2 plans: TBD | Depth: Comprehensive
+Total M2 phases: 9 | Total M2 plans: TBD | Depth: Comprehensive
 Total M3 phases: 4 | Total M3 plans: TBD | Depth: Comprehensive

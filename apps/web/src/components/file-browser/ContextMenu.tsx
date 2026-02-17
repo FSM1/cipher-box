@@ -7,7 +7,7 @@ import {
   autoUpdate,
   type VirtualElement,
 } from '@floating-ui/react';
-import type { FolderChild } from '@cipherbox/crypto';
+import type { FolderChildV2 } from '@cipherbox/crypto';
 import { Portal } from '../ui/Portal';
 import '../../styles/context-menu.css';
 
@@ -17,7 +17,7 @@ type ContextMenuProps = {
   /** Y position (client coordinates) */
   y: number;
   /** The file or folder item */
-  item: FolderChild;
+  item: FolderChildV2;
   /** Number of selected items (for multi-selection context) */
   selectedCount: number;
   /** Callback to close the menu */

@@ -78,6 +78,9 @@ export function useDropUpload() {
 
         useUploadStore.getState().setRegistering();
 
+        // Build file index for mimeType lookup
+        const filesByName = new Map(files.map((f) => [f.name, f]));
+
         await addFiles(
           folderId,
           uploadedFiles.map((uploaded) => ({
@@ -86,6 +89,7 @@ export function useDropUpload() {
             iv: uploaded.iv,
             originalName: uploaded.originalName,
             originalSize: uploaded.originalSize,
+            mimeType: filesByName.get(uploaded.originalName)?.type || 'application/octet-stream',
           }))
         );
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { FileEntry } from '@cipherbox/crypto';
+import type { FilePointer } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useFilePreview } from '../../hooks/useFilePreview';
 import '../../styles/audio-player-dialog.css';
@@ -7,7 +7,9 @@ import '../../styles/audio-player-dialog.css';
 type AudioPlayerDialogProps = {
   open: boolean;
   onClose: () => void;
-  item: FileEntry | null;
+  item: FilePointer | null;
+  /** Parent folder's decrypted AES-256 key (needed to decrypt file metadata) */
+  folderKey: Uint8Array | null;
 };
 
 /** Map common audio extensions to MIME types. */
@@ -39,12 +41,13 @@ function formatTime(seconds: number): string {
  * Uses Web Audio API AnalyserNode for frequency spectrum visualization.
  * No native browser audio controls -- fully custom transport UI.
  */
-export function AudioPlayerDialog({ open, onClose, item }: AudioPlayerDialogProps) {
+export function AudioPlayerDialog({ open, onClose, item, folderKey }: AudioPlayerDialogProps) {
   const mimeType = item ? getAudioMime(item.name) : 'audio/mpeg';
   const { loading, error, objectUrl, handleDownload } = useFilePreview({
     open,
     item,
     mimeType,
+    folderKey,
   });
 
   // Audio state

@@ -12,7 +12,12 @@ import {
   IPNS_SIGNATURE_PREFIX,
   concatBytes,
 } from '@cipherbox/crypto';
-import { ipnsControllerPublishRecord, ipnsControllerResolveRecord } from '../api/ipns/ipns';
+import {
+  ipnsControllerPublishRecord,
+  ipnsControllerPublishBatch,
+  ipnsControllerResolveRecord,
+} from '../api/ipns/ipns';
+import type { PublishIpnsEntryDtoRecordType } from '../api/models/publishIpnsEntryDtoRecordType';
 
 /**
  * Create an IPNS record locally and publish via backend.
@@ -62,6 +67,43 @@ export async function createAndPublishIpnsRecord(params: {
   return {
     success: response.success,
     sequenceNumber: BigInt(response.sequenceNumber),
+  };
+}
+
+/**
+ * Batch publish multiple IPNS records in a single API call.
+ *
+ * Sends all records (folder and/or file) to the batch endpoint,
+ * which processes them with concurrency-limited parallelism.
+ * Partial success is allowed: individual failures do not fail the batch.
+ *
+ * @param records - Array of IPNS record payloads to publish
+ * @returns Success and failure counts
+ */
+export async function batchPublishIpnsRecords(
+  records: Array<{
+    ipnsName: string;
+    recordBase64: string;
+    metadataCid: string;
+    encryptedIpnsPrivateKey?: string;
+    keyEpoch?: number;
+    recordType?: 'folder' | 'file';
+  }>
+): Promise<{ totalSucceeded: number; totalFailed: number }> {
+  const response = await ipnsControllerPublishBatch({
+    records: records.map((r) => ({
+      ipnsName: r.ipnsName,
+      record: r.recordBase64,
+      metadataCid: r.metadataCid,
+      encryptedIpnsPrivateKey: r.encryptedIpnsPrivateKey,
+      keyEpoch: r.keyEpoch,
+      recordType: r.recordType as PublishIpnsEntryDtoRecordType | undefined,
+    })),
+  });
+
+  return {
+    totalSucceeded: response.totalSucceeded,
+    totalFailed: response.totalFailed,
   };
 }
 

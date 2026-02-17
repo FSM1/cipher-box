@@ -8,6 +8,8 @@
 
 export * from './authMethodResponseDto';
 export * from './authMethodResponseDtoType';
+export * from './batchPublishIpnsDto';
+export * from './batchPublishIpnsResponseDto';
 export * from './createApprovalDto';
 export * from './derivationInfoDto';
 export * from './derivationInfoDtoDerivationVersion';
@@ -35,6 +37,8 @@ export * from './loginDtoLoginType';
 export * from './loginResponseDto';
 export * from './logoutResponseDto';
 export * from './publishIpnsDto';
+export * from './publishIpnsEntryDto';
+export * from './publishIpnsEntryDtoRecordType';
 export * from './publishIpnsResponseDto';
 export * from './quotaResponseDto';
 export * from './refreshDto';

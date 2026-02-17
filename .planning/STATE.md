@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 12.5 complete, next: Phase 12.1 (AES-CTR Streaming)
+**Current focus:** Milestone 2 -- Phase 12.6 complete (Per-File IPNS Metadata Split)
 
 ## Current Position
 
-Phase: 12.5 (MFA Polishing, UAT & E2E) -- COMPLETE
-Plan: 3 of 3 planned
+Phase: 12.6 (Per-File IPNS Metadata Split) -- COMPLETE
+Plan: 5 of 5 planned
 Status: Phase complete
-Last activity: 2026-02-16 -- Completed quick task 016: Refine wallet and MFA UI elements
+Last activity: 2026-02-17 -- Completed 12.6-05-PLAN.md (Recovery Tool v2, Docs, Build Verification)
 
-Progress: [####################] 89% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete)
+Progress: [####################] 100% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 97
-- Average duration: 5.0 min
-- Total execution time: 8.6 hours
+- Total plans completed: 102
+- Average duration: 5.3 min
+- Total execution time: 9.12 hours
 
 **By Phase (M1 summary):**
 
@@ -35,10 +35,11 @@ Progress: [####################] 89% (M1 complete, M2 Phase 12 complete, Phase 1
 | M2 Phase 12.3.1 | 4/4   | 38 min  | 9.5 min  |
 | M2 Phase 12.4   | 5/5   | 47 min  | 9.4 min  |
 | M2 Phase 12.5   | 3/3   | 9 min   | 3.0 min  |
+| M2 Phase 12.6   | 5/5   | 29 min  | 5.8 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 9m, 4m, 2m, 3m, 4m
+- Last 5 plans: 4m, 5m, 7m, 3m, 10m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -104,6 +105,17 @@ Recent decisions affecting current work:
 | Hardhat account #0 for wallet E2E test key                       | 12.5-02   | Well-known deterministic key; reproducible tests without real wallet funds                                       |
 | Wallet E2E tests validate UI flow independently of Core Kit      | 12.5-02   | TC09 accepts both redirect-to-files and error as valid; tests frontend wallet interaction                        |
 | UAT quality gate: 16 PASS / 19 SKIP / 1 NOTE (all documented)    | 12.5-03   | Destructive and multi-device tests skipped with reasons; all 4 issues resolved; gate passed for Phase 12.1       |
+| File metadata encrypted with parent folderKey (not file's key)   | 12.6-01   | Consistent with folder metadata access control pattern; parent key controls child access                         |
+| encryptionMode optional with GCM default in validator            | 12.6-01   | Phase 12.1 AES-CTR files set 'CTR' explicitly; omission defaults to 'GCM' for backward compat                    |
+| fileId minimum 10 chars validation                               | 12.6-01   | Ensures UUID-length identifiers; prevents accidental short strings in HKDF info                                  |
+| Partial success for batch publish (per-record results)           | 12.6-02   | Failed records logged and counted, not re-thrown; batch returns totalSucceeded/totalFailed                       |
+| Concurrency=10 for batch delegated routing calls                 | 12.6-02   | Promise.allSettled in groups of 10 to avoid overwhelming delegated-ipfs.dev                                      |
+| Orphaned TEE enrollment on file delete left to expire            | 12.6-03   | No unenrollIpns REST API yet; 24h IPNS lifetime, Phase 14 adds explicit cleanup                                  |
+| deleteFolder returns fileMetaIpnsName list (not CIDs) for v2     | 12.6-03   | v2 FilePointers have no inline CID; caller resolves IPNS to get CID for unpinning                                |
+| replaceFileInFolder publishes only file IPNS (folder untouched)  | 12.6-03   | Primary optimization of per-file IPNS: content update skips folder metadata entirely                             |
+| DetailsDialog parentFolderId prop removed                        | 12.6-04   | IPNS resolution uses item's own IPNS name directly; parent folder lookup no longer needed                        |
+| Inline base36 + protobuf for IPNS name in recovery.html          | 12.6-05   | No libp2p CDN dependency needed; self-contained BigInt-based implementation                                      |
+| IPNS failures non-blocking in recovery tool                      | 12.6-05   | Warn and continue; collect failures, report at end with IPNS names for manual recovery                           |
 
 ### Pending Todos
 
@@ -126,6 +138,7 @@ Recent decisions affecting current work:
 - Phase 12.4 inserted: MFA + Cross-Device Approval — the actual MFA enrollment and device approval features
 - Phase 12.3.1 inserted after Phase 12.3: Pre-Wipe Identity Cleanup — deterministic IPNS derivation, SHA-256 hashed identifiers for all auth methods, remove cross-method email auto-linking. Done before DB wipe to avoid migration code.
 - Phase 12.5 inserted after Phase 12.4: MFA Polishing, UAT & E2E Testing — polish auth flows, add wallet E2E with mock EIP-1193/6963 provider, fix bugs from CoreKit auth UAT
+- Phase 12.6 inserted after Phase 12.5: Per-File IPNS Metadata Split — split file metadata into per-file IPNS records before vault wipe (clean break, no dual-schema). Phase 12.1 (AES-CTR) moved to after 12.6.
 
 ### Blockers/Concerns
 
@@ -158,16 +171,17 @@ Recent decisions affecting current work:
 - Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
 - Phase 12.4 (MFA + Cross-Device): COMPLETE -- all 5 plans done (bulletin board API, MFA hooks, enrollment wizard, cross-device approval, integration verification)
 - Phase 12.5 (MFA Polishing, UAT & E2E): COMPLETE -- all 3 plans done (SecurityTab wiring, wallet E2E tests, UAT final verification)
+- Phase 12.6 (Per-File IPNS Metadata): COMPLETE -- all 5 plans done (crypto primitives, batch publish backend, frontend service layer, hooks & components, recovery tool + docs)
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
-Last session: 2026-02-16
-Stopped at: Completed quick-016 (Refine wallet and MFA UI elements)
+Last session: 2026-02-17
+Stopped at: Completed 12.6-05-PLAN.md (Recovery Tool v2, Docs, Build Verification)
 Resume file: None
-Next: Phase 12.1 (AES-CTR Streaming Encryption) -- needs research phase first
+Next: Phase 12.1 (AES-256-CTR Streaming Encryption) or next milestone phase
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-16 after completing Phase 12.5 Plan 03 (UAT Verification & Final Status) -- Phase 12.5 complete_
+_Last updated: 2026-02-17 after completing Phase 12.6 Plan 05 (Recovery Tool v2, Docs, Build Verification) -- Phase 12.6 complete_

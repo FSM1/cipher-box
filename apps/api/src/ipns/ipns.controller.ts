@@ -15,6 +15,8 @@ import { IpnsService } from './ipns.service';
 import {
   PublishIpnsDto,
   PublishIpnsResponseDto,
+  BatchPublishIpnsDto,
+  BatchPublishIpnsResponseDto,
   ResolveIpnsQueryDto,
   ResolveIpnsResponseDto,
 } from './dto';
@@ -65,6 +67,40 @@ export class IpnsController {
     @Body() dto: PublishIpnsDto
   ): Promise<PublishIpnsResponseDto> {
     return this.ipnsService.publishRecord(req.user.id, dto);
+  }
+
+  // [SECURITY: HIGH-04] Rate limit batch publish - lower limit since each batch can have up to 200 records
+  @Throttle({ default: { limit: 5, ttl: 60000 } }) // 5 batch publishes per minute per user
+  @Post('publish-batch')
+  @ApiOperation({
+    summary: 'Batch publish IPNS records',
+    description:
+      'Publish multiple IPNS records (folder and/or file) in a single API call. ' +
+      'Supports up to 200 records per batch with concurrency-limited processing. ' +
+      'Partial success is allowed: individual record failures do not fail the batch.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Batch publish results with per-record outcomes',
+    type: BatchPublishIpnsResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Bad Request - Invalid record format or batch exceeds 200 entries',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized - JWT token required',
+  })
+  @ApiResponse({
+    status: 502,
+    description: 'Bad Gateway - Delegated routing failures (partial results may be returned)',
+  })
+  async publishBatch(
+    @Request() req: RequestWithUser,
+    @Body() dto: BatchPublishIpnsDto
+  ): Promise<BatchPublishIpnsResponseDto> {
+    return this.ipnsService.publishBatch(req.user.id, dto);
   }
 
   // [SECURITY: HIGH-04] Rate limit IPNS resolve - higher limit than publish since read-only
