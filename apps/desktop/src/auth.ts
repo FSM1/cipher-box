@@ -1,211 +1,313 @@
 /**
- * CipherBox Desktop - Webview Auth Module
+ * CipherBox Desktop - Webview Auth Module (Core Kit)
  *
- * Initializes Web3Auth inside the Tauri webview and provides login/logout
- * functions. After Web3Auth authentication, credentials are passed to the
+ * Authenticates via CipherBox identity provider (Google OAuth, Email OTP),
+ * then calls Core Kit loginWithJWT to derive the TSS key. After Core Kit
+ * authentication, the CipherBox JWT and private key are passed to the
  * Rust backend via Tauri IPC commands (secure in-process channel).
  *
  * The private key never leaves the process -- it stays within the webview
  * and is passed to Rust via invoke(), not URL parameters or deep links.
+ *
+ * Auth flow:
+ *   1. User authenticates via CipherBox backend (Google/Email)
+ *   2. Backend issues a CipherBox JWT (RS256, iss=cipherbox, aud=web3auth)
+ *   3. Frontend calls Core Kit loginWithJWT with the CipherBox JWT
+ *   4. Core Kit derives TSS key -> _UNSAFE_exportTssKey -> private key hex
+ *   5. Private key + CipherBox JWT passed to Rust via invoke('handle_auth_complete')
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import {
-  Web3Auth,
-  WEB3AUTH_NETWORK,
-  WALLET_CONNECTORS,
-  type Web3AuthOptions,
-} from '@web3auth/modal';
+import { Web3AuthMPCCoreKit, WEB3AUTH_NETWORK, COREKIT_STATUS } from '@web3auth/mpc-core-kit';
+import { tssLib } from '@toruslabs/tss-dkls-lib';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let web3auth: any = null;
-
-// Web3Auth configuration matching the web app (apps/web/src/lib/web3auth/config.ts)
+// CipherBox API base URL (same as Rust backend uses)
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 const WEB3AUTH_CLIENT_ID = import.meta.env.VITE_WEB3AUTH_CLIENT_ID || '';
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || '';
 
-// Custom OAuth connection IDs (configured in Web3Auth dashboard)
-const AUTH_CONNECTION_IDS = {
-  GOOGLE: 'cipherbox-google-oauth-2',
-  EMAIL: 'cb-email-testnet',
-  GROUP: 'cipherbox-grouped-connection',
-} as const;
+const environment = import.meta.env.VITE_ENVIRONMENT || 'local';
 
-/**
- * Initialize the Web3Auth SDK.
- *
- * Must be called once before login(). Sets up the Web3Auth modal
- * with the same configuration as the web app.
- */
-export async function initWeb3Auth(): Promise<void> {
-  if (web3auth) return; // Already initialized
+const NETWORK_MAP: Record<string, (typeof WEB3AUTH_NETWORK)[keyof typeof WEB3AUTH_NETWORK]> = {
+  local: WEB3AUTH_NETWORK.DEVNET,
+  ci: WEB3AUTH_NETWORK.DEVNET,
+  staging: WEB3AUTH_NETWORK.DEVNET,
+  production: WEB3AUTH_NETWORK.MAINNET,
+};
 
-  try {
-    const options: Web3AuthOptions = {
-      clientId: WEB3AUTH_CLIENT_ID,
-      web3AuthNetwork: WEB3AUTH_NETWORK.SAPPHIRE_DEVNET,
-      uiConfig: {
-        mode: 'dark',
-      },
-      modalConfig: {
-        connectors: {
-          [WALLET_CONNECTORS.AUTH]: {
-            label: 'auth',
-            loginMethods: {
-              google: {
-                name: 'Google',
-                showOnModal: true,
-                authConnectionId: AUTH_CONNECTION_IDS.GOOGLE,
-                groupedAuthConnectionId: AUTH_CONNECTION_IDS.GROUP,
-              },
-              email_passwordless: {
-                name: 'Email',
-                showOnModal: true,
-                authConnectionId: AUTH_CONNECTION_IDS.EMAIL,
-                groupedAuthConnectionId: AUTH_CONNECTION_IDS.GROUP,
-              },
-            },
-            showOnModal: true,
-          },
-          [WALLET_CONNECTORS.WALLET_CONNECT_V2]: {
-            label: 'WalletConnect',
-            showOnModal: true,
-          },
-          [WALLET_CONNECTORS.METAMASK]: {
-            label: 'MetaMask',
-            showOnModal: true,
-          },
-        },
-      },
+/** Minimal type declarations for Google Identity Services (GIS) library */
+declare const google: {
+  accounts: {
+    id: {
+      initialize: (config: {
+        client_id: string;
+        callback: (response: { credential: string }) => void;
+        auto_select: boolean;
+      }) => void;
+      prompt: (
+        momentListener?: (notification: {
+          isNotDisplayed: () => boolean;
+          isSkippedMoment: () => boolean;
+        }) => void
+      ) => void;
     };
+  };
+};
 
-    web3auth = new Web3Auth(options);
-    await web3auth.init();
-    console.log('Web3Auth initialized, status:', web3auth.status, 'connected:', web3auth.connected);
+let coreKit: Web3AuthMPCCoreKit | null = null;
 
-    // If Web3Auth auto-connected from cached session, clear it so the user
-    // gets a fresh login flow. The cached Web3Auth session may not match the
-    // Rust-side state (no keys in memory on cold start).
-    // Use clearCache() instead of logout({ cleanup: true }) to avoid tearing
-    // down connectors — the SDK stays initialized and ready for connect().
-    if (web3auth.connected) {
-      console.log('Clearing stale Web3Auth cached session');
-      web3auth.clearCache();
-    }
-  } catch (err) {
-    console.error('Failed to initialize Web3Auth:', err);
-    throw err;
-  }
-}
+export type LoginResult = { status: 'logged_in' } | { status: 'required_share' };
 
 /**
- * Trigger Web3Auth login flow.
- *
- * Opens the Web3Auth modal inside the Tauri webview. After successful
- * authentication:
- * 1. Extracts the idToken from Web3Auth
- * 2. Extracts the private key from the Web3Auth provider
- * 3. Passes both to the Rust backend via Tauri IPC (handle_auth_complete)
- *
- * The Rust side then:
- * - Sends idToken to the CipherBox backend for access/refresh tokens
- * - Stores refresh token in macOS Keychain
- * - Decrypts vault keys (including root IPNS keypair)
+ * Initialize Core Kit singleton.
+ * Must be called once before any login flow.
+ * Matches the web app configuration exactly (same verifier, same network).
  */
-export async function login(): Promise<void> {
-  if (!web3auth) {
-    throw new Error('Web3Auth not initialized. Call initWeb3Auth() first.');
-  }
+export async function initCoreKit(): Promise<void> {
+  if (coreKit) return;
 
-  // If Web3Auth is still connected from a previous session (e.g. tray logout
-  // cleared Rust state but not the webview SDK), disconnect first so the user
-  // gets a fresh login flow. Use logout() without cleanup flag to keep
-  // connectors initialized.
-  if (web3auth.connected) {
-    console.log('Web3Auth still connected, disconnecting for fresh login');
-    try {
-      await web3auth.logout();
-    } catch {
-      web3auth.clearCache();
-    }
-  }
-
-  // Open Web3Auth modal -- user picks login method
-  console.log('Opening Web3Auth modal, current status:', web3auth.status);
-  const provider = await web3auth.connect();
-  if (!provider) {
-    throw new Error('Web3Auth connection failed: no provider returned');
-  }
-  console.log('Web3Auth connected, extracting credentials...');
-
-  // Extract idToken (v10 API: getIdentityToken() returns { idToken })
-  const tokenInfo = await web3auth.getIdentityToken();
-  console.log('Got identity token:', tokenInfo?.idToken ? 'yes' : 'no');
-  if (!tokenInfo?.idToken) {
-    throw new Error('Failed to get idToken from Web3Auth');
-  }
-  const idToken: string = tokenInfo.idToken;
-
-  // Extract private key from provider
-  // Web3Auth social logins expose the private key via RPC
-  let privateKey: string | null = null;
-  try {
-    privateKey = await provider.request<unknown, string>({ method: 'private_key' });
-  } catch (e1) {
-    console.warn('private_key method failed:', e1);
-    // Fallback for some provider versions
-    try {
-      privateKey = await provider.request<unknown, string>({ method: 'eth_private_key' });
-    } catch (e2) {
-      console.error('eth_private_key method also failed:', e2);
-      throw new Error('Failed to extract private key from Web3Auth provider');
-    }
-  }
-
-  if (!privateKey) {
-    throw new Error('No private key returned from Web3Auth provider');
-  }
-  console.log('Private key extracted');
-
-  // Remove 0x prefix if present for consistent hex format
-  const privateKeyHex = privateKey.startsWith('0x') ? privateKey.slice(2) : privateKey;
-
-  // Pass credentials to Rust backend via Tauri IPC
-  // This is a secure in-process channel -- no URL parameters or external communication
-  console.log('Invoking handle_auth_complete on Rust side...');
-  await invoke('handle_auth_complete', {
-    idToken,
-    privateKey: privateKeyHex,
+  coreKit = new Web3AuthMPCCoreKit({
+    web3AuthClientId: WEB3AUTH_CLIENT_ID,
+    web3AuthNetwork: NETWORK_MAP[environment] || WEB3AUTH_NETWORK.DEVNET,
+    storage: window.localStorage,
+    manualSync: true,
+    tssLib,
   });
 
-  console.log('Authentication complete -- credentials passed to Rust backend');
+  await coreKit.init();
+  console.log('[CoreKit] Initialized, status:', coreKit.status);
 }
 
 /**
- * Logout from Web3Auth and clear Rust-side state.
+ * Get the current Core Kit status string.
+ */
+export function getCoreKitStatus(): string {
+  return coreKit?.status || 'NOT_INITIALIZED';
+}
+
+/**
+ * Login with Google via CipherBox identity provider.
+ *
+ * Flow:
+ * 1. Load Google Identity Services (GIS) script in webview
+ * 2. Get Google credential (JWT) via GIS prompt
+ * 3. Send Google credential to CipherBox backend -> CipherBox JWT
+ * 4. Core Kit loginWithJWT with CipherBox JWT
+ * 5. Export TSS key and pass to Rust backend
+ */
+export async function loginWithGoogle(): Promise<LoginResult> {
+  if (!coreKit) throw new Error('Core Kit not initialized');
+
+  // 1. Get Google credential via Google Identity Services
+  const googleIdToken = await getGoogleCredential();
+
+  // 2. Send Google credential to CipherBox backend identity endpoint
+  const resp = await fetch(`${API_BASE}/auth/identity/google`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idToken: googleIdToken }),
+  });
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => '');
+    throw new Error(`Google auth failed (${resp.status}): ${body}`);
+  }
+  const { idToken: cipherboxJwt, userId } = await resp.json();
+
+  // 3. Core Kit login + key export
+  return await loginWithCoreKit(cipherboxJwt, userId);
+}
+
+/**
+ * Request an email OTP from the CipherBox backend.
+ * Returns immediately after the OTP is sent -- the user must check their email.
+ */
+export async function requestEmailOtp(email: string): Promise<void> {
+  const resp = await fetch(`${API_BASE}/auth/identity/email/send-otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: email.toLowerCase().trim() }),
+  });
+  if (!resp.ok) {
+    if (resp.status === 429) {
+      throw new Error('Too many attempts. Please wait before trying again.');
+    }
+    throw new Error('Failed to send verification code');
+  }
+}
+
+/**
+ * Verify an email OTP and complete login via Core Kit.
+ *
+ * Flow:
+ * 1. Send email + OTP to CipherBox backend -> CipherBox JWT
+ * 2. Core Kit loginWithJWT with CipherBox JWT
+ * 3. Export TSS key and pass to Rust backend
+ */
+export async function loginWithEmailOtp(email: string, otp: string): Promise<LoginResult> {
+  if (!coreKit) throw new Error('Core Kit not initialized');
+
+  // 1. Verify OTP with CipherBox backend
+  const resp = await fetch(`${API_BASE}/auth/identity/email/verify-otp`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: email.toLowerCase().trim(), otp }),
+  });
+  if (!resp.ok) {
+    if (resp.status === 401) {
+      throw new Error('Invalid code. Please check and try again.');
+    }
+    throw new Error('OTP verification failed');
+  }
+  const { idToken: cipherboxJwt, userId } = await resp.json();
+
+  // 2. Core Kit login + key export
+  return await loginWithCoreKit(cipherboxJwt, userId);
+}
+
+/**
+ * Core Kit loginWithJWT + TSS key export + Rust handoff.
+ *
+ * Uses the exact same verifier name ('cipherbox-identity') and parameters
+ * as the web app to ensure the same TSS key is derived for the same user.
+ */
+async function loginWithCoreKit(cipherboxJwt: string, userId: string): Promise<LoginResult> {
+  if (!coreKit) throw new Error('Core Kit not initialized');
+
+  // loginWithJWT with CipherBox identity verifier (matches web app exactly)
+  console.log('[CoreKit] loginWithJWT starting...', {
+    verifier: 'cipherbox-identity',
+    verifierId: userId,
+  });
+  await coreKit.loginWithJWT({
+    verifier: 'cipherbox-identity',
+    verifierId: userId,
+    idToken: cipherboxJwt,
+  });
+  console.log('[CoreKit] loginWithJWT completed, status:', coreKit.status);
+
+  // Handle REQUIRED_SHARE status (MFA enabled, device factor missing)
+  if (coreKit.status === COREKIT_STATUS.REQUIRED_SHARE) {
+    console.log('[CoreKit] REQUIRED_SHARE -- MFA challenge needed');
+    return { status: 'required_share' };
+  }
+
+  if (coreKit.status !== COREKIT_STATUS.LOGGED_IN) {
+    throw new Error(`Unexpected Core Kit status: ${coreKit.status}`);
+  }
+
+  // Commit changes (persist device factor to Web3Auth network)
+  try {
+    await coreKit.commitChanges();
+    console.log('[CoreKit] commitChanges done');
+  } catch (err) {
+    console.error('[CoreKit] commitChanges failed:', err);
+  }
+
+  // Export TSS private key
+  console.log('[CoreKit] Exporting TSS key...');
+  const privateKeyHex = await coreKit._UNSAFE_exportTssKey();
+  const privKeyHex = privateKeyHex.startsWith('0x') ? privateKeyHex.slice(2) : privateKeyHex;
+  console.log('[CoreKit] TSS key exported');
+
+  // Pass credentials to Rust backend via Tauri IPC
+  // The CipherBox JWT is sent as idToken -- backend verifies it with loginType 'corekit'
+  await invoke('handle_auth_complete', {
+    idToken: cipherboxJwt,
+    privateKey: privKeyHex,
+  });
+  console.log('[CoreKit] Credentials passed to Rust backend');
+
+  return { status: 'logged_in' };
+}
+
+/**
+ * Logout from Core Kit and clear Rust-side state.
  *
  * Calls the Rust logout command first (clears Keychain, zeros keys),
- * then disconnects from Web3Auth.
+ * then disconnects from Core Kit.
  */
 export async function logout(): Promise<void> {
   // Clear Rust-side state (Keychain, memory keys)
   await invoke('logout');
 
-  // Disconnect from Web3Auth
-  if (web3auth?.connected) {
+  // Disconnect from Core Kit
+  if (coreKit && coreKit.status === COREKIT_STATUS.LOGGED_IN) {
     try {
-      await web3auth.logout();
+      await coreKit.logout();
     } catch (err) {
-      // Best-effort -- don't fail logout if Web3Auth cleanup fails
-      console.warn('Web3Auth logout error (continuing):', err);
+      // Best-effort -- don't fail logout if Core Kit cleanup fails
+      console.warn('[CoreKit] Logout error (continuing):', err);
     }
   }
 
-  console.log('Logout complete');
+  console.log('[CoreKit] Logout complete');
 }
 
 /**
- * Check if Web3Auth is currently connected.
+ * Load Google Identity Services (GIS) script dynamically and get a credential.
+ *
+ * Returns the Google JWT (credential) from the GIS prompt/popup flow.
+ * Same pattern as web app's GoogleLoginButton component.
  */
-export function isConnected(): boolean {
-  return web3auth?.connected ?? false;
+function getGoogleCredential(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!GOOGLE_CLIENT_ID) {
+      reject(new Error('Google Client ID not configured (VITE_GOOGLE_CLIENT_ID)'));
+      return;
+    }
+
+    // Safety timeout: if Google prompt doesn't resolve within 60s
+    const timeoutId = setTimeout(() => {
+      reject(new Error('Google authentication timed out'));
+    }, 60000);
+
+    const handleCredential = (response: { credential: string }) => {
+      clearTimeout(timeoutId);
+      resolve(response.credential);
+    };
+
+    // Check if GIS script is already loaded
+    if (typeof google !== 'undefined' && google?.accounts?.id) {
+      google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: handleCredential,
+        auto_select: false,
+      });
+      google.accounts.id.prompt((notification) => {
+        if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+          clearTimeout(timeoutId);
+          reject(new Error('Google popup was blocked. Please allow popups for this app.'));
+        }
+      });
+      return;
+    }
+
+    // Load GIS script dynamically
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.onload = () => {
+      try {
+        google.accounts.id.initialize({
+          client_id: GOOGLE_CLIENT_ID,
+          callback: handleCredential,
+          auto_select: false,
+        });
+        google.accounts.id.prompt((notification) => {
+          if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+            clearTimeout(timeoutId);
+            reject(new Error('Google popup was blocked. Please allow popups for this app.'));
+          }
+        });
+      } catch {
+        clearTimeout(timeoutId);
+        reject(new Error('Failed to initialize Google authentication'));
+      }
+    };
+    script.onerror = () => {
+      clearTimeout(timeoutId);
+      reject(new Error('Failed to load Google authentication'));
+    };
+    document.body.appendChild(script);
+  });
 }
