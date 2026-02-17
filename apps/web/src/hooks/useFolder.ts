@@ -5,8 +5,13 @@ import { useAuthStore } from '../stores/auth.store';
 import { unpinFromIpfs } from '../lib/api/ipfs';
 import { useQuotaStore } from '../stores/quota.store';
 import * as folderService from '../services/folder.service';
+import {
+  createFileMetadata,
+  resolveFileMetadata,
+  updateFileMetadata,
+} from '../services/file-metadata.service';
 import type { FolderNode } from '../stores/folder.store';
-import type { FolderEntry, FileEntry } from '@cipherbox/crypto';
+import type { FolderEntry, FilePointer, FolderChildV2 } from '@cipherbox/crypto';
 
 /** Maximum folder nesting depth per FOLD-03 */
 const MAX_FOLDER_DEPTH = 20;
@@ -492,7 +497,6 @@ export function useFolder() {
           await folderService.deleteFileFromFolder({
             fileId: itemId,
             parentFolderState: parentFolder,
-            unpinCid: unpinFromIpfs,
           });
         }
 
@@ -535,32 +539,26 @@ export function useFolder() {
         if (!parentFolder) throw new Error('Parent folder not found');
 
         const itemIds = new Set(items.map((i) => i.id));
-        const cidsToUnpin: string[] = [];
 
-        // Collect CIDs to unpin and nested folder IDs to remove from store
+        // Collect nested folder IDs to remove from store
+        // In v2, file children are FilePointers (no inline CID). File IPNS/TEE
+        // enrollments will expire naturally (24h IPNS lifetime). Phase 14 adds cleanup.
         const folderIdsToRemove: string[] = [];
 
-        const collectCidsAndFolders = (folderId: string) => {
+        const collectFolderIds = (folderId: string) => {
           folderIdsToRemove.push(folderId);
           const folder = folders[folderId];
           if (!folder) return;
           for (const child of folder.children) {
-            if (child.type === 'file' && 'cid' in child) {
-              cidsToUnpin.push(child.cid);
-            } else if (child.type === 'folder') {
-              collectCidsAndFolders(child.id);
+            if (child.type === 'folder') {
+              collectFolderIds(child.id);
             }
           }
         };
 
         for (const item of items) {
-          if (item.type === 'file') {
-            const file = parentFolder.children.find((c) => c.id === item.id && c.type === 'file');
-            if (file && 'cid' in file) {
-              cidsToUnpin.push(file.cid);
-            }
-          } else {
-            collectCidsAndFolders(item.id);
+          if (item.type === 'folder') {
+            collectFolderIds(item.id);
           }
         }
 
@@ -584,9 +582,6 @@ export function useFolder() {
           store.removeFolder(folderId);
         }
 
-        // Fire-and-forget unpin all CIDs
-        Promise.all(cidsToUnpin.map((cid) => unpinFromIpfs(cid).catch(() => {})));
-
         setState({ isLoading: false, error: null });
       } catch (err) {
         const error = err instanceof Error ? err.message : 'Failed to delete items';
@@ -598,11 +593,13 @@ export function useFolder() {
   );
 
   /**
-   * Add a file to a folder after upload.
+   * Add a file to a folder after upload (v2).
+   *
+   * Creates per-file IPNS metadata, then registers FilePointer in folder.
    *
    * @param parentId - Parent folder ID ('root' or folder UUID)
    * @param fileData - Uploaded file data from upload service
-   * @returns Created file entry
+   * @returns Created file pointer
    */
   const handleAddFile = useCallback(
     async (
@@ -613,12 +610,18 @@ export function useFolder() {
         iv: string;
         originalName: string;
         originalSize: number;
+        mimeType?: string;
       }
-    ): Promise<FileEntry> => {
+    ): Promise<FilePointer> => {
       setState({ isLoading: true, error: null });
       try {
         const folders = useFolderStore.getState().folders;
         const vault = useVaultStore.getState();
+        const auth = useAuthStore.getState();
+
+        if (!auth.vaultKeypair) {
+          throw new Error('No ECIES keypair available - please log in again');
+        }
 
         // Get parent folder state
         const parentFolder =
@@ -628,24 +631,35 @@ export function useFolder() {
           throw new Error('Parent folder not found or vault not initialized');
         }
 
-        // Add file to folder
-        const { fileEntry, newSequenceNumber } = await folderService.addFileToFolder({
-          parentFolderState: parentFolder,
+        // 1. Generate fileId and create per-file IPNS metadata
+        const fileId = crypto.randomUUID();
+        const { ipnsRecord } = await createFileMetadata({
+          fileId,
           cid: fileData.cid,
           fileKeyEncrypted: fileData.wrappedKey,
           fileIv: fileData.iv,
-          name: fileData.originalName,
           size: fileData.originalSize,
+          mimeType: fileData.mimeType ?? 'application/octet-stream',
+          folderKey: parentFolder.folderKey,
+          userPrivateKey: auth.vaultKeypair.privateKey,
         });
 
-        // Update local state with new child and sequence number
-        const updatedChildren = [...parentFolder.children, fileEntry];
+        // 2. Register FilePointer in folder (batch publishes file + folder IPNS)
+        const { filePointer, newSequenceNumber } = await folderService.addFileToFolder({
+          parentFolderState: parentFolder,
+          fileId,
+          name: fileData.originalName,
+          fileIpnsRecord: ipnsRecord,
+        });
+
+        // 3. Update local state with new child and sequence number
+        const updatedChildren: FolderChildV2[] = [...parentFolder.children, filePointer];
         const store = useFolderStore.getState();
         store.updateFolderChildren(parentId, updatedChildren);
         store.updateFolderSequence(parentId, newSequenceNumber);
 
         setState({ isLoading: false, error: null });
-        return fileEntry;
+        return filePointer;
       } catch (err) {
         const error = err instanceof Error ? err.message : 'Failed to add file';
         setState({ isLoading: false, error });
@@ -656,13 +670,14 @@ export function useFolder() {
   );
 
   /**
-   * Add multiple files to a folder after upload (batch).
+   * Add multiple files to a folder after upload (v2 batch).
    *
-   * Registers all files in a single folder metadata update with one IPNS publish.
+   * Creates per-file IPNS metadata for each file, then registers all
+   * FilePointers via a single batch IPNS publish.
    *
    * @param parentId - Parent folder ID ('root' or folder UUID)
    * @param filesData - Array of uploaded file data from upload service
-   * @returns Created file entries
+   * @returns Created file pointers
    */
   const handleAddFiles = useCallback(
     async (
@@ -673,12 +688,18 @@ export function useFolder() {
         iv: string;
         originalName: string;
         originalSize: number;
+        mimeType?: string;
       }>
-    ): Promise<FileEntry[]> => {
+    ): Promise<FilePointer[]> => {
       setState({ isLoading: true, error: null });
       try {
         const folders = useFolderStore.getState().folders;
         const vault = useVaultStore.getState();
+        const auth = useAuthStore.getState();
+
+        if (!auth.vaultKeypair) {
+          throw new Error('No ECIES keypair available - please log in again');
+        }
 
         // Get parent folder state
         const parentFolder =
@@ -688,25 +709,37 @@ export function useFolder() {
           throw new Error('Parent folder not found or vault not initialized');
         }
 
-        // Batch add files to folder (single IPNS publish)
-        const { fileEntries, newSequenceNumber } = await folderService.addFilesToFolder({
+        // 1. Create per-file IPNS metadata for each file
+        const filesWithRecords = await Promise.all(
+          filesData.map(async (f) => {
+            const fileId = crypto.randomUUID();
+            const { ipnsRecord } = await createFileMetadata({
+              fileId,
+              cid: f.cid,
+              fileKeyEncrypted: f.wrappedKey,
+              fileIv: f.iv,
+              size: f.originalSize,
+              mimeType: f.mimeType ?? 'application/octet-stream',
+              folderKey: parentFolder.folderKey,
+              userPrivateKey: auth.vaultKeypair!.privateKey,
+            });
+            return { fileId, name: f.originalName, fileIpnsRecord: ipnsRecord };
+          })
+        );
+
+        // 2. Register FilePointers in folder (batch publishes all IPNS records)
+        const { filePointers, newSequenceNumber } = await folderService.addFilesToFolder({
           parentFolderState: parentFolder,
-          files: filesData.map((f) => ({
-            cid: f.cid,
-            fileKeyEncrypted: f.wrappedKey,
-            fileIv: f.iv,
-            name: f.originalName,
-            size: f.originalSize,
-          })),
+          files: filesWithRecords,
         });
 
-        // Update local state with new children and sequence number
+        // 3. Update local state with new children and sequence number
         const store = useFolderStore.getState();
-        store.updateFolderChildren(parentId, [...parentFolder.children, ...fileEntries]);
+        store.updateFolderChildren(parentId, [...parentFolder.children, ...filePointers]);
         store.updateFolderSequence(parentId, newSequenceNumber);
 
         setState({ isLoading: false, error: null });
-        return fileEntries;
+        return filePointers;
       } catch (err) {
         const error = err instanceof Error ? err.message : 'Failed to add files';
         setState({ isLoading: false, error });
@@ -717,7 +750,7 @@ export function useFolder() {
   );
 
   /**
-   * Update a file's content in-place (re-encrypt and replace CID).
+   * Update a file's content in-place (v2: re-encrypt, update file IPNS, folder untouched).
    *
    * @param parentId - Parent folder ID ('root' or folder UUID)
    * @param fileData - New file data after re-encryption
@@ -738,6 +771,11 @@ export function useFolder() {
       try {
         const folders = useFolderStore.getState().folders;
         const vault = useVaultStore.getState();
+        const auth = useAuthStore.getState();
+
+        if (!auth.vaultKeypair) {
+          throw new Error('No ECIES keypair available - please log in again');
+        }
 
         // Get parent folder state
         const parentFolder =
@@ -747,36 +785,57 @@ export function useFolder() {
           throw new Error('Parent folder not found or vault not initialized');
         }
 
-        // Replace file in folder metadata
-        const { newSequenceNumber, oldCid } = await folderService.replaceFileInFolder({
+        // 1. Find the FilePointer in parent's children
+        const filePointer = parentFolder.children.find(
+          (c) => c.type === 'file' && c.id === fileData.fileId
+        ) as FilePointer | undefined;
+
+        if (!filePointer) {
+          throw new Error('File not found in folder');
+        }
+
+        // 2. Resolve current file metadata from IPNS
+        const currentMetadata = await resolveFileMetadata(
+          filePointer.fileMetaIpnsName,
+          parentFolder.folderKey
+        );
+
+        // 3. Get old CID for unpinning before we overwrite
+        const oldCid = currentMetadata.cid;
+
+        // 4. Update file metadata and publish new IPNS record
+        const { ipnsRecord } = await updateFileMetadata({
           fileId: fileData.fileId,
-          newCid: fileData.newCid,
-          newFileKeyEncrypted: fileData.newFileKeyEncrypted,
-          newFileIv: fileData.newFileIv,
-          newSize: fileData.newSize,
+          folderKey: parentFolder.folderKey,
+          userPrivateKey: auth.vaultKeypair.privateKey,
+          currentMetadata,
+          updates: {
+            cid: fileData.newCid,
+            fileKeyEncrypted: fileData.newFileKeyEncrypted,
+            fileIv: fileData.newFileIv,
+            size: fileData.newSize,
+          },
+        });
+
+        // 5. Publish only the file IPNS record (folder metadata untouched!)
+        await folderService.replaceFileInFolder({
+          fileId: fileData.fileId,
+          fileIpnsRecord: ipnsRecord,
           parentFolderState: parentFolder,
         });
 
-        // Update local state with modified children
+        // 6. Update local state -- only touch modifiedAt on the FilePointer
         const updatedChildren = parentFolder.children.map((child) => {
           if (child.type === 'file' && child.id === fileData.fileId) {
-            return {
-              ...child,
-              cid: fileData.newCid,
-              fileKeyEncrypted: fileData.newFileKeyEncrypted,
-              fileIv: fileData.newFileIv,
-              size: fileData.newSize,
-              modifiedAt: Date.now(),
-            };
+            return { ...child, modifiedAt: Date.now() };
           }
           return child;
         });
 
         const store = useFolderStore.getState();
         store.updateFolderChildren(parentId, updatedChildren);
-        store.updateFolderSequence(parentId, newSequenceNumber);
 
-        // Unpin old CID fire-and-forget
+        // 7. Unpin old CID fire-and-forget
         unpinFromIpfs(oldCid).catch(() => {});
 
         // Refresh quota
