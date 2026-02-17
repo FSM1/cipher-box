@@ -48,7 +48,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 
 - [ ] **Phase 11: Cross-Platform Desktop** - Linux and Windows desktop apps (Tauri, platform-specific FUSE/virtual drive) -- can run in parallel
 - [x] **Phase 12: Core Kit Identity Provider Foundation** - Replace PnP Modal SDK with MPC Core Kit, CipherBox as identity provider
-- [ ] **Phase 12.1: AES-CTR Streaming Encryption** - AES-256-CTR for media files with byte-range decryption and in-browser playback (INSERTED)
+- [x] **Phase 12.1: AES-CTR Streaming Encryption** - AES-256-CTR for media files with byte-range decryption and in-browser playback (INSERTED)
 - [x] **Phase 12.2: Encrypted Device Registry** - Encrypted device metadata on IPFS for cross-device infrastructure (INSERTED)
 - [x] **Phase 12.3: SIWE + Unified Identity** - Wallet login via SIWE, multi-auth linking, ADR-001 cleanup (INSERTED)
 - [x] **Phase 12.3.1: Pre-Wipe Identity Cleanup** - Deterministic IPNS derivation, hashed identifiers, remove auto-linking (INSERTED)
@@ -130,10 +130,10 @@ Plans:
 
 Plans:
 
-- [ ] 12.1-01-PLAN.md — CTR crypto primitives: encryptAesCtr, decryptAesCtr, decryptAesCtrRange, generateCtrIv, constants, tests
-- [ ] 12.1-02-PLAN.md — Streaming upload: mode selection (MIME + size), CTR streaming encrypt via TransformStream, mode-aware pipeline
-- [ ] 12.1-03-PLAN.md — Service Worker: decrypt proxy (fetch intercept, CTR range decrypt, auth token, caching), registration, Vite build
-- [ ] 12.1-04-PLAN.md — Integration: mode-aware download, useStreamingPreview hook, VideoPlayerDialog + AudioPlayerDialog with decrypt progress
+- [x] 12.1-01-PLAN.md — CTR crypto primitives: encryptAesCtr, decryptAesCtr, decryptAesCtrRange, generateCtrIv, constants, tests
+- [x] 12.1-02-PLAN.md — Streaming upload: mode selection (MIME + size), CTR streaming encrypt via TransformStream, mode-aware pipeline
+- [x] 12.1-03-PLAN.md — Service Worker: decrypt proxy (fetch intercept, CTR range decrypt, auth token, caching), registration, Vite build
+- [x] 12.1-04-PLAN.md — Integration: mode-aware download, useStreamingPreview hook, VideoPlayerDialog + AudioPlayerDialog with decrypt progress
 
 ### Phase 12.2: Encrypted Device Registry (INSERTED)
 
@@ -376,7 +376,7 @@ Parallel phases:
 | 9.1 Env/DevOps/Staging     | M1        | 6/6            | Complete    | 2026-02-09 |
 | 10. Data Portability       | M1        | 3/3            | Complete    | 2026-02-11 |
 | 12. Core Kit Identity      | M2        | 5/5            | Complete    | 2026-02-13 |
-| 12.1 AES-CTR Streaming     | M2        | 0/4            | Not started | -          |
+| 12.1 AES-CTR Streaming     | M2        | 4/4            | Complete    | 2026-02-17 |
 | 12.2 Device Registry       | M2        | 3/3            | Complete    | 2026-02-13 |
 | 12.3 SIWE + Identity       | M2        | 4/4            | Complete    | 2026-02-14 |
 | 12.3.1 Identity Cleanup    | M2        | 4/4            | Complete    | 2026-02-14 |
