@@ -18,7 +18,6 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   initCoreKit,
   loginWithGoogle,
-  loginWithWallet,
   requestEmailOtp,
   loginWithEmailOtp,
   logout,
@@ -118,15 +117,9 @@ function renderLoginForm(appDiv: HTMLElement): void {
       <div style="font-size: 1.25rem; margin-bottom: 0.25rem; letter-spacing: 0.1em;"><span style="color: #006644;">&gt; </span><span style="color: #00D084;">CIPHERBOX</span></div>
       <div style="font-size: 0.75rem; color: #006644; margin-bottom: 1.5rem;">zero-knowledge encrypted storage</div>
 
-      <div id="google-section" style="margin-bottom: 0.5rem;">
+      <div id="google-section" style="margin-bottom: 1rem;">
         <button id="google-btn" style="${btnStyle}">
           [ sign in with Google ]
-        </button>
-      </div>
-
-      <div id="wallet-section" style="margin-bottom: 1rem;">
-        <button id="wallet-btn" style="${btnStyle}">
-          [ connect wallet ]
         </button>
       </div>
 
@@ -156,7 +149,7 @@ function renderLoginForm(appDiv: HTMLElement): void {
   `;
 
   // Hover effects
-  for (const btnId of ['google-btn', 'wallet-btn', 'email-btn', 'otp-btn']) {
+  for (const btnId of ['google-btn', 'email-btn', 'otp-btn']) {
     const btn = document.getElementById(btnId);
     if (btn) {
       btn.addEventListener('mouseenter', () => {
@@ -198,24 +191,6 @@ function renderLoginForm(appDiv: HTMLElement): void {
       handleAuthSuccess(appDiv);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : 'Google login failed', '#ef4444');
-      disableButtons(false);
-    }
-  });
-
-  // Wire Wallet button
-  const walletBtn = document.getElementById('wallet-btn');
-  walletBtn?.addEventListener('click', async () => {
-    setStatus('Connecting wallet...', '#006644');
-    disableButtons(true);
-    try {
-      const result = await loginWithWallet();
-      if (result.status === 'required_share') {
-        renderRequiredShareUI(appDiv);
-        return;
-      }
-      handleAuthSuccess(appDiv);
-    } catch (err) {
-      setStatus(err instanceof Error ? err.message : 'Wallet login failed', '#ef4444');
       disableButtons(false);
     }
   });
@@ -594,7 +569,7 @@ function setStatus(message: string, color: string): void {
 }
 
 function disableButtons(disabled: boolean): void {
-  for (const id of ['google-btn', 'wallet-btn', 'email-btn', 'otp-btn']) {
+  for (const id of ['google-btn', 'email-btn', 'otp-btn']) {
     const btn = document.getElementById(id) as HTMLButtonElement | null;
     if (btn) {
       btn.disabled = disabled;

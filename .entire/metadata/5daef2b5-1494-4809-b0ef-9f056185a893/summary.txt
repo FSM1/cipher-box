@@ -1,1 +1,6 @@
-App is running with no errors. Do you see the `>_` tray icon now, or is it still missing?
+Good. The wallet button stays removed (no `window.ethereum` in Tauri webview), but Google is back. The Tauri app should auto-reload with the changes. 
+
+Summary of what's done:
+- **Google button**: Kept (removed wallet only — no wallet extensions in Tauri webview)
+- **CORS fix**: Added `http://localhost:1420` to staging CORS config and restarted the API container
+- Email login should now work — try submitting an email again
