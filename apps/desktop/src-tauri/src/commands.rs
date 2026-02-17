@@ -108,6 +108,35 @@ pub async fn handle_auth_complete(
     // 8. Mark as authenticated
     *state.is_authenticated.write().await = true;
 
+    // 8b. Register device in encrypted registry (non-blocking)
+    //     Fire-and-forget: failures are logged but never block login.
+    {
+        let reg_api = state.api.clone();
+        let reg_private_key = private_key_bytes.clone();
+        let reg_public_key = public_key_bytes.clone();
+        let reg_user_id = user_id.clone();
+        tokio::spawn(async move {
+            let pk_arr: [u8; 32] = match reg_private_key.as_slice().try_into() {
+                Ok(arr) => arr,
+                Err(_) => {
+                    log::warn!("Device registry: invalid private key length");
+                    return;
+                }
+            };
+            match crate::registry::register_device(
+                &reg_api,
+                &pk_arr,
+                &reg_public_key,
+                &reg_user_id,
+            )
+            .await
+            {
+                Ok(()) => log::info!("Device registry updated"),
+                Err(e) => log::warn!("Device registry update failed (non-blocking): {}", e),
+            }
+        });
+    }
+
     // 9. Mount FUSE filesystem (or just mark as synced if FUSE not enabled)
     #[cfg(not(feature = "fuse"))]
     {
