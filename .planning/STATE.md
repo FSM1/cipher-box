@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 11.1 (macOS Desktop Catch-Up)
-Plan: 4 of 7 planned
+Plan: 5 of 7 planned
 Status: In progress
-Last activity: 2026-02-17 -- Completed 11.1-04-PLAN.md (Core Kit Auth Migration)
+Last activity: 2026-02-17 -- Completed 11.1-07-PLAN.md (SIWE Wallet Login)
 
-Progress: [####################-] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 4/7)
+Progress: [####################-] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 5/7)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 110
+- Total plans completed: 111
 - Average duration: 5.3 min
-- Total execution time: 10.06 hours
+- Total execution time: 10.09 hours
 
 **By Phase (M1 summary):**
 
@@ -37,11 +37,11 @@ Progress: [####################-] (M1 complete, M2 Phase 12 complete, Phase 12.2
 | M2 Phase 12.5   | 3/3   | 9 min   | 3.0 min  |
 | M2 Phase 12.6   | 5/5   | 29 min  | 5.8 min  |
 | M2 Phase 12.1   | 4/4   | 27 min  | 6.8 min  |
-| M2 Phase 11.1   | 4/7   | 22 min  | 5.5 min  |
+| M2 Phase 11.1   | 5/7   | 24 min  | 4.8 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 12m, 6m, 7m, 7m, 8m
+- Last 5 plans: 6m, 7m, 7m, 8m, 2m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -133,6 +133,7 @@ Recent decisions affecting current work:
 | Eager FilePointer resolution before NFS mount                    | 11.1-03   | NFS caches READDIR aggressively; first response must be complete and correct                                     |
 | AnyFolderMetadata Clone/Debug + to_v1() for FUSE compat          | 11.1-04   | Converts v2 FilePointers to placeholder FileEntries for backward-compatible FUSE layer                           |
 | Dev-key auth via test-login endpoint for CI/debug                | 11.1-04   | Debug builds use POST /auth/test-login to get JWT, bypassing Core Kit entirely                                   |
+| Manual EIP-4361 SIWE message (no viem dependency for desktop)    | 11.1-07   | Raw string construction avoids heavy viem/wagmi deps; backend parseSiweMessage accepts standard format           |
 
 ### Pending Todos
 
@@ -194,11 +195,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 11.1-04-PLAN.md
+Stopped at: Completed 11.1-07-PLAN.md
 Resume file: None
-Next: 11.1-05-PLAN.md (MFA challenge UI)
+Next: 11.1-05-PLAN.md (MFA challenge UI) or 11.1-06-PLAN.md (per-file IPNS)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-17 after completing Phase 11.1 Plan 04 (Core Kit Auth Migration)_
+_Last updated: 2026-02-17 after completing Phase 11.1 Plan 07 (SIWE Wallet Login)_
