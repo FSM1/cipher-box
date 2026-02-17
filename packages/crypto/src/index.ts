@@ -61,6 +61,9 @@ export { deriveKey, deriveContextKey, generateFolderKey, type DeriveKeyParams } 
 // AES-256-GCM symmetric encryption
 export { encryptAesGcm, decryptAesGcm, sealAesGcm, unsealAesGcm } from './aes';
 
+// AES-256-CTR streaming encryption (random-access decryption for media)
+export { encryptAesCtr, decryptAesCtr, decryptAesCtrRange } from './aes';
+
 // ECIES secp256k1 key wrapping
 export { wrapKey, unwrapKey } from './ecies';
 
@@ -131,6 +134,7 @@ export {
   generateRandomBytes,
   generateFileKey,
   generateIv,
+  generateCtrIv,
 } from './utils';
 
 // Types
@@ -145,6 +149,10 @@ export {
   SECP256K1_PRIVATE_KEY_SIZE,
   ECIES_MIN_CIPHERTEXT_SIZE,
   AES_GCM_ALGORITHM,
+  AES_CTR_IV_SIZE,
+  AES_CTR_NONCE_SIZE,
+  AES_CTR_LENGTH,
+  AES_CTR_ALGORITHM,
   ED25519_PUBLIC_KEY_SIZE,
   ED25519_PRIVATE_KEY_SIZE,
   ED25519_SIGNATURE_SIZE,
