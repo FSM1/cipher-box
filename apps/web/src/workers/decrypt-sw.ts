@@ -260,13 +260,56 @@ async function handleDecryptStream(
     }
 
     if (!response.ok) {
+      await postToClients({
+        type: 'fetch-error',
+        fileMetaIpnsName: cacheKey,
+        error: `HTTP ${response.status}`,
+      });
       return new Response('Failed to fetch encrypted content', {
         status: response.status,
       });
     }
 
-    encrypted = new Uint8Array(await response.arrayBuffer());
+    // Stream the response body to track download progress
+    const contentLength = parseInt(response.headers.get('Content-Length') || '0', 10);
+    const total = contentLength || ctx.totalSize;
+
+    if (response.body) {
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let loaded = 0;
+
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        loaded += value.length;
+        await postToClients({
+          type: 'fetch-progress',
+          fileMetaIpnsName: cacheKey,
+          loaded,
+          total,
+        });
+      }
+
+      // Combine chunks into a single Uint8Array
+      const combined = new Uint8Array(loaded);
+      let offset = 0;
+      for (const chunk of chunks) {
+        combined.set(chunk, offset);
+        offset += chunk.length;
+      }
+      encrypted = combined;
+    } else {
+      // Fallback: no streaming body (shouldn't happen, but handle gracefully)
+      encrypted = new Uint8Array(await response.arrayBuffer());
+    }
+
     encryptedCache.set(cacheKey, encrypted);
+    await postToClients({
+      type: 'fetch-complete',
+      fileMetaIpnsName: cacheKey,
+    });
   }
 
   // 2. Parse Range header
