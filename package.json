@@ -10,7 +10,7 @@
     "lint:fix": "eslint . --fix",
     "lint:md": "markdownlint '**/*.md' --ignore node_modules --ignore '**/node_modules/**'",
     "lint:md:fix": "markdownlint '**/*.md' --ignore node_modules --ignore '**/node_modules/**' --fix",
-    "typecheck": "pnpm --filter @cipherbox/crypto exec tsc --noEmit && pnpm --filter @cipherbox/web exec tsc -b",
+    "typecheck": "pnpm --filter @cipherbox/crypto build && pnpm --filter @cipherbox/web exec tsc -b",
     "test": "pnpm --parallel -r run test",
     "test:e2e": "DELEGATED_ROUTING_URL=http://localhost:3001 pnpm --filter @cipherbox/e2e test",
     "test:e2e:headed": "DELEGATED_ROUTING_URL=http://localhost:3001 pnpm --filter @cipherbox/e2e test:headed",
