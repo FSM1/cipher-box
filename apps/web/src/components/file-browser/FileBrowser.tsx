@@ -252,13 +252,15 @@ export function FileBrowser() {
     if (!rootIpnsName) return;
 
     // Resolve root folder IPNS to get remote CID and sequence number
+    // Note: resolveIpnsRecord returns null when the record definitively
+    // doesn't exist (backend 404 / success:false). Transient failures
+    // (network errors, 5xx) throw instead, which useSyncPolling catches.
     const resolved = await resolveIpnsRecord(rootIpnsName);
     if (!resolved) {
-      // If initial sync hasn't completed yet, signal that IPNS isn't available
-      // so useSyncPolling keeps the syncing state visible and retries
-      if (!useSyncStore.getState().initialSyncComplete) {
-        throw new Error('IPNS not resolved yet');
-      }
+      // No IPNS record found. This is expected for vaults that have
+      // never published (empty vault, no uploads yet). Return normally
+      // so useSyncPolling marks initial sync complete and shows the
+      // empty file browser instead of retrying forever.
       return;
     }
 

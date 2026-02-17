@@ -2,33 +2,22 @@
 
 **Session ID:** 39dea4ee-5f57-4587-8c44-40db1cc1144c
 
-**Commit Message:** Ok jsut tested the wallet auth flow, and both times I had to sign messag
+**Commit Message:** This was a new account from an eth wallet on first login, but I am not s
 
 ## Prompt
 
-ok jsut tested the wallet auth flow, and both times I had to sign messages twice, with different nonces. once there was a wagmi error before the wallet selection dialog.
+This was a new account from an eth wallet on first login, but I am not sure whether the vault actually loaded when I first logged in. I then logged out to test whether the double signing was a repeatable thing, and then noticed the vault syncing failed.
 
 ## Summary
 
-Good. Here's the summary of the two fixes:
+Good — that confirms the diagnosis. The sync error only happened because there was no IPNS record yet. Once you uploaded (which publishes an IPNS record), subsequent syncs resolve fine.
 
-**Fix 1 — Double signing race condition** (`WalletLoginButton.tsx`):
-- Removed the direct `handleSiweFlow()` call from `handleConnectorClick`. Now only the `useEffect` triggers SIWE after wagmi updates `isConnected`/`address`. Previously both the effect and the callback called it, racing each other with different nonces.
+The fix I just made handles this properly: when `resolveIpnsRecord` returns `null` (record doesn't exist), we return normally instead of throwing, so `useSyncPolling` marks initial sync complete and shows the empty file browser. This covers the re-login-to-empty-vault case.
 
-**Fix 2 — Wagmi error on mount** (`config.ts`):
-- Added `reconnectOnMount: false` to the wagmi config. Since CipherBox disconnects immediately after SIWE signing, there's no reason for wagmi to try reconnecting to a stale connector on page load — that was causing errors especially in Brave.
-
-Ready to commit and push when you want.
+Want me to commit this with the other fixes and push?
 
 ## Key Actions
 
-- - **Task**: Investigate wallet double-sign bug
-- - **Read**: /Users/michael/Code/cipher-box/apps/web/src/components/auth/WalletLoginButton.tsx
-- - **Grep**: injected|reconnect
-- - **Read**: /Users/michael/Code/cipher-box/apps/web/src/lib/wagmi/config.ts
-- - **Edit**: /Users/michael/Code/cipher-box/apps/web/src/components/auth/WalletLoginButton.tsx
-- - **Edit**: /Users/michael/Code/cipher-box/apps/web/src/lib/wagmi/config.ts
-- - **Read**: /Users/michael/Code/cipher-box/apps/web/src/components/auth/WalletLoginButton.tsx
-- - **Edit**: /Users/michael/Code/cipher-box/apps/web/src/components/auth/WalletLoginButton.tsx
-- - **Bash**: Lint check the modified files
-- - **Bash**: Lint check with npx
+- - **Read**: /Users/michael/Code/cipher-box/apps/web/src/components/file-browser/FileBrowser.tsx
+- - **Edit**: /Users/michael/Code/cipher-box/apps/web/src/components/file-browser/FileBrowser.tsx
+- - **Bash**: Lint check FileBrowser
