@@ -1,1 +1,1 @@
-ok the redirect was fired, google oauth popup is showing `completing signin` in cipherbox colors, but the actual login webview has a `google signin was cancelled` - probably some weird comms error on the postMessage
+`Google login failed` message in login webview

@@ -190,7 +190,9 @@ function renderLoginForm(appDiv: HTMLElement): void {
       }
       handleAuthSuccess(appDiv);
     } catch (err) {
-      setStatus(err instanceof Error ? err.message : 'Google login failed', '#ef4444');
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[Google login error]', err);
+      setStatus(msg || 'Google login failed', '#ef4444');
       disableButtons(false);
     }
   });

@@ -1,1 +1,1 @@
-Vite HMR should pick this up. Try the Google login again — the callback page now writes to localStorage instead of relying on `postMessage`, and the main window polls for the result.
+HMR should pick that up. Try the Google login again — the error message should now show the actual error text instead of the generic fallback. What does it say?

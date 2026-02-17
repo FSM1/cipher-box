@@ -2,18 +2,21 @@
 
 **Session ID:** 5daef2b5-1494-4809-b0ef-9f056185a893
 
-**Commit Message:** Ok the redirect was fired, google oauth popup is showing `completing sig
+**Commit Message:** `Google login failed` message in login webview
 
 ## Prompt
 
-ok the redirect was fired, google oauth popup is showing `completing signin` in cipherbox colors, but the actual login webview has a `google signin was cancelled` - probably some weird comms error on the postMessage
+`Google login failed` message in login webview
 
 ## Summary
 
-Vite HMR should pick this up. Try the Google login again — the callback page now writes to localStorage instead of relying on `postMessage`, and the main window polls for the result.
+HMR should pick that up. Try the Google login again — the error message should now show the actual error text instead of the generic fallback. What does it say?
 
 ## Key Actions
 
-- - **Write**: /Users/michael/Code/cipher-box/apps/desktop/public/google-callback.html
-- - **Read**: /Users/michael/Code/cipher-box/apps/desktop/src/auth.ts
-- - **Edit**: /Users/michael/Code/cipher-box/apps/desktop/src/auth.ts
+- - **Grep**: Google login failed|loginWithGoogle|google.*error|google.*catch
+- - **Bash**: Test Google identity endpoint with dummy token
+- - **Bash**: Check API container status
+- - **Edit**: /Users/michael/Code/cipher-box/apps/desktop/src/main.ts
+- - **Read**: /Users/michael/Code/cipher-box/apps/desktop/src/main.ts
+- - **Edit**: /Users/michael/Code/cipher-box/apps/desktop/src/main.ts
