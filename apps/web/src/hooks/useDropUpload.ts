@@ -90,6 +90,7 @@ export function useDropUpload() {
             originalName: uploaded.originalName,
             originalSize: uploaded.originalSize,
             mimeType: filesByName.get(uploaded.originalName)?.type || 'application/octet-stream',
+            encryptionMode: uploaded.encryptionMode,
           }))
         );
 

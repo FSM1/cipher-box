@@ -611,6 +611,7 @@ export function useFolder() {
         originalName: string;
         originalSize: number;
         mimeType?: string;
+        encryptionMode?: 'GCM' | 'CTR';
       }
     ): Promise<FilePointer> => {
       setState({ isLoading: true, error: null });
@@ -642,6 +643,7 @@ export function useFolder() {
           mimeType: fileData.mimeType ?? 'application/octet-stream',
           folderKey: parentFolder.folderKey,
           userPrivateKey: auth.vaultKeypair.privateKey,
+          encryptionMode: fileData.encryptionMode,
         });
 
         // 2. Register FilePointer in folder (batch publishes file + folder IPNS)
@@ -689,6 +691,7 @@ export function useFolder() {
         originalName: string;
         originalSize: number;
         mimeType?: string;
+        encryptionMode?: 'GCM' | 'CTR';
       }>
     ): Promise<FilePointer[]> => {
       setState({ isLoading: true, error: null });
@@ -722,6 +725,7 @@ export function useFolder() {
               mimeType: f.mimeType ?? 'application/octet-stream',
               folderKey: parentFolder.folderKey,
               userPrivateKey: auth.vaultKeypair!.privateKey,
+              encryptionMode: f.encryptionMode,
             });
             return { fileId, name: f.originalName, fileIpnsRecord: ipnsRecord };
           })

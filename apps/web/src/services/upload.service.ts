@@ -14,6 +14,7 @@ export type UploadedFile = {
   wrappedKey: string;
   originalName: string;
   originalSize: number;
+  encryptionMode: 'GCM' | 'CTR';
 };
 
 /**
@@ -72,6 +73,7 @@ export async function uploadFile(
     wrappedKey: encrypted.wrappedKey,
     originalName: file.name,
     originalSize: encrypted.originalSize,
+    encryptionMode: encrypted.encryptionMode,
   };
 }
 
