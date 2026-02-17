@@ -688,41 +688,41 @@ function getGoogleCredential(): Promise<string> {
 
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
 
+    // Clear any stale result from a previous attempt
+    localStorage.removeItem('google-auth-result');
+
     // Open Google OAuth in a popup — Tauri's on_new_window handler creates the webview
-    const popup = window.open(authUrl, '_blank', 'width=500,height=700');
+    window.open(authUrl, '_blank', 'width=500,height=700');
 
     const cleanup = () => {
-      window.removeEventListener('message', handleMessage);
-      clearInterval(checkClosed);
+      clearInterval(pollStorage);
       clearTimeout(timeout);
     };
 
-    const handleMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-      if (event.data?.type !== 'google-auth-callback') return;
+    // Poll localStorage for the result (postMessage doesn't survive
+    // cross-origin redirects in Tauri's WKWebView)
+    const pollStorage = setInterval(() => {
+      const raw = localStorage.getItem('google-auth-result');
+      if (!raw) return;
 
+      localStorage.removeItem('google-auth-result');
       cleanup();
 
-      if (event.data.idToken) {
-        resolve(event.data.idToken);
-      } else {
-        reject(new Error(event.data.error || 'Google sign-in failed'));
+      try {
+        const result = JSON.parse(raw);
+        if (result.idToken) {
+          resolve(result.idToken);
+        } else {
+          reject(new Error(result.error || 'Google sign-in failed'));
+        }
+      } catch {
+        reject(new Error('Invalid auth callback data'));
       }
-    };
-    window.addEventListener('message', handleMessage);
-
-    // Detect if popup was closed without completing
-    const checkClosed = setInterval(() => {
-      if (popup && popup.closed) {
-        cleanup();
-        reject(new Error('Google sign-in was cancelled'));
-      }
-    }, 1000);
+    }, 200);
 
     // Timeout after 2 minutes
     const timeout = setTimeout(() => {
       cleanup();
-      try { popup?.close(); } catch { /* cross-origin */ }
       reject(new Error('Google authentication timed out'));
     }, 120000);
   });

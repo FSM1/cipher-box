@@ -10,14 +10,11 @@
     var params = new URLSearchParams(hash);
     var idToken = params.get('id_token');
     var error = params.get('error');
-    if (window.opener) {
-      window.opener.postMessage({
-        type: 'google-auth-callback',
-        idToken: idToken,
-        error: error || (!idToken ? 'No ID token received' : null)
-      }, window.location.origin);
-    }
-    setTimeout(function() { window.close(); }, 500);
+    localStorage.setItem('google-auth-result', JSON.stringify({
+      idToken: idToken,
+      error: error || (!idToken ? 'No ID token received' : null)
+    }));
+    setTimeout(function() { window.close(); }, 300);
   </script>
 </body>
 </html>
