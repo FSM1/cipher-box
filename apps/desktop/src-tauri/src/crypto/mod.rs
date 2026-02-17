@@ -4,9 +4,11 @@
 //! All operations produce byte-identical output to the TypeScript implementation.
 
 pub mod aes;
+pub mod aes_ctr;
 pub mod ecies;
 pub mod ed25519;
 pub mod folder;
+pub mod hkdf;
 pub mod ipns;
 pub mod utils;
 

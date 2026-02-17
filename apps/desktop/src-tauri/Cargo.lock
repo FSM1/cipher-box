@@ -596,15 +596,18 @@ dependencies = [
 name = "cipherbox-desktop"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "aes-gcm",
  "base64 0.22.1",
  "ciborium",
+ "ctr",
  "dirs 5.0.1",
  "ecies",
  "ed25519-dalek",
  "env_logger",
  "fuser",
  "hex",
+ "hkdf",
  "keyring",
  "libc",
  "log",
@@ -614,6 +617,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
