@@ -5,7 +5,7 @@
  */
 
 import { CryptoError } from '../types';
-import { AES_KEY_SIZE, AES_IV_SIZE } from '../constants';
+import { AES_KEY_SIZE, AES_IV_SIZE, AES_CTR_IV_SIZE, AES_CTR_NONCE_SIZE } from '../constants';
 
 /**
  * Generate cryptographically secure random bytes.
@@ -48,4 +48,28 @@ export function generateFileKey(): Uint8Array {
  */
 export function generateIv(): Uint8Array {
   return generateRandomBytes(AES_IV_SIZE);
+}
+
+/**
+ * Generate a 16-byte IV for AES-256-CTR encryption.
+ *
+ * The IV is structured as two 8-byte halves:
+ * - Bytes [0..7]:  Cryptographically random nonce (unique per file)
+ * - Bytes [8..15]: Counter starting at 0 (incremented by Web Crypto per block)
+ *
+ * The 8/8 nonce/counter split with 64-bit counter supports files up to
+ * 2^64 * 16 bytes (effectively unlimited). The counter starts at zero so
+ * random-access offset calculation is simply `blockIndex = byteOffset / 16`.
+ *
+ * NEVER reuse a nonce with the same key -- CTR nonce reuse is catastrophic.
+ *
+ * @returns 16-byte IV with random nonce and zero counter
+ */
+export function generateCtrIv(): Uint8Array {
+  const iv = new Uint8Array(AES_CTR_IV_SIZE);
+  // Random nonce in first 8 bytes
+  const nonce = generateRandomBytes(AES_CTR_NONCE_SIZE);
+  iv.set(nonce, 0);
+  // Last 8 bytes remain zero (counter starts at 0)
+  return iv;
 }

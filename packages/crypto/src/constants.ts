@@ -33,3 +33,15 @@ export const ED25519_PRIVATE_KEY_SIZE = 32;
 
 /** Ed25519 signature size in bytes */
 export const ED25519_SIGNATURE_SIZE = 64;
+
+/** AES-CTR full counter block size in bytes (128 bits = 16 bytes) */
+export const AES_CTR_IV_SIZE = 16;
+
+/** AES-CTR random nonce portion size in bytes (64 bits = 8 bytes) */
+export const AES_CTR_NONCE_SIZE = 8;
+
+/** AES-CTR counter bits for Web Crypto AesCtrParams.length (64-bit counter) */
+export const AES_CTR_LENGTH = 64;
+
+/** AES-CTR algorithm name for Web Crypto API */
+export const AES_CTR_ALGORITHM = 'AES-CTR';

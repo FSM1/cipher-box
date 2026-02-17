@@ -6,4 +6,4 @@
 
 export { hexToBytes, bytesToHex, concatBytes } from './encoding';
 export { clearBytes, clearAll } from './memory';
-export { generateRandomBytes, generateFileKey, generateIv } from './random';
+export { generateRandomBytes, generateFileKey, generateIv, generateCtrIv } from './random';
