@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 12.1 (AES-CTR Streaming Encryption) -- In progress
-Plan: 3 of TBD planned
+Plan: 4 of TBD planned
 Status: In progress
-Last activity: 2026-02-17 -- Completed 12.1-03-PLAN.md (Service Worker Decrypt Proxy)
+Last activity: 2026-02-17 -- Completed 12.1-04-PLAN.md (Media Playback Integration)
 
-Progress: [####################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 plans 01-03 complete)
+Progress: [####################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 plans 01-04 complete)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 105
+- Total plans completed: 106
 - Average duration: 5.3 min
-- Total execution time: 9.46 hours
+- Total execution time: 9.56 hours
 
 **By Phase (M1 summary):**
 
@@ -36,11 +36,11 @@ Progress: [####################] (M1 complete, M2 Phase 12 complete, Phase 12.2 
 | M2 Phase 12.4   | 5/5   | 47 min  | 9.4 min  |
 | M2 Phase 12.5   | 3/3   | 9 min   | 3.0 min  |
 | M2 Phase 12.6   | 5/5   | 29 min  | 5.8 min  |
-| M2 Phase 12.1   | 3/?   | 21 min  | 7.0 min  |
+| M2 Phase 12.1   | 4/?   | 27 min  | 6.8 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 3m, 10m, 4m, 5m, 12m
+- Last 5 plans: 10m, 4m, 5m, 12m, 6m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -120,6 +120,9 @@ Recent decisions affecting current work:
 | Post-build script for SW compilation (not Vite plugin)           | 12.1-03   | Vite 7 Environment API breaks Rollup output hooks in standard plugins; build-sw.mjs via Vite lib-mode is simpler |
 | Separate tsconfig.sw.json for WebWorker lib types                | 12.1-03   | SW runs in ServiceWorkerGlobalScope, needs WebWorker lib; excluded from main tsconfig to avoid type conflicts    |
 | Dev mode serves SW as raw TS, production as compiled IIFE        | 12.1-03   | Vite dev server transforms TS on-the-fly; production uses minified 2.8KB IIFE at /decrypt-sw.js                  |
+| Dual-hook pattern for streaming vs blob URL preview              | 12.1-04   | Both useStreamingPreview and useFilePreview called; open flag controls which is active                           |
+| isCtr return from useStreamingPreview for mode detection         | 12.1-04   | Caller knows if file is CTR-encrypted without separate metadata lookup                                           |
+| SW body streaming with getReader() for progress tracking         | 12.1-04   | Changed from arrayBuffer() to chunk-by-chunk reading for postMessage progress                                    |
 
 ### Pending Todos
 
@@ -170,7 +173,7 @@ Recent decisions affecting current work:
 - Phase 15 (Link Sharing): NEEDS `/gsd:research-phase` -- unauthenticated web viewer security
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
-- Phase 12.1 (AES-CTR Streaming): IN PROGRESS -- Plans 01-03 complete (crypto primitives, streaming upload pipeline, service worker decrypt proxy), research done
+- Phase 12.1 (AES-CTR Streaming): IN PROGRESS -- Plans 01-04 complete (crypto primitives, streaming upload pipeline, service worker decrypt proxy, media playback integration), research done
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
 - Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
 - Phase 12.4 (MFA + Cross-Device): COMPLETE -- all 5 plans done (bulletin board API, MFA hooks, enrollment wizard, cross-device approval, integration verification)
@@ -181,11 +184,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 12.1-03-PLAN.md (Service Worker Decrypt Proxy)
+Stopped at: Completed 12.1-04-PLAN.md (Media Playback Integration)
 Resume file: None
-Next: Phase 12.1 Plan 04 (media playback hooks or integration)
+Next: Phase 12.1 Plan 05 (integration testing or phase completion)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-17 after completing Phase 12.1 Plan 03 (Service Worker Decrypt Proxy) -- Phase 12.1 in progress_
+_Last updated: 2026-02-17 after completing Phase 12.1 Plan 04 (Media Playback Integration) -- Phase 12.1 in progress_
