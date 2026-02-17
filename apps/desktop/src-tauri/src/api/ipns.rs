@@ -26,7 +26,7 @@ pub async fn resolve_ipns(
     client: &ApiClient,
     ipns_name: &str,
 ) -> Result<IpnsResolveResponse, String> {
-    let path = format!("/ipns/resolve?ipnsName={}", ipns_name);
+    let path = format!("/ipns/resolve?ipnsName={}", urlencoding::encode(ipns_name));
     let resp = client
         .authenticated_get(&path)
         .await

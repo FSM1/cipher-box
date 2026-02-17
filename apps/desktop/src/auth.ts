@@ -164,7 +164,7 @@ export async function login(): Promise<void> {
   if (!privateKey) {
     throw new Error('No private key returned from Web3Auth provider');
   }
-  console.log('Got private key, length:', privateKey.length);
+  console.log('Private key extracted');
 
   // Remove 0x prefix if present for consistent hex format
   const privateKeyHex = privateKey.startsWith('0x') ? privateKey.slice(2) : privateKey;
