@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.9.0](https://github.com/FSM1/cipher-box/compare/v0.8.0...v0.9.0) (2026-02-17)
+
+
+### Features
+
+* **12.1:** AES-CTR streaming encryption for media files ([#135](https://github.com/FSM1/cipher-box/issues/135)) ([433ae35](https://github.com/FSM1/cipher-box/commit/433ae3550959e7dd75085f5b392091098d4a8a58))
+* **12.2:** Encrypted Device Registry ([#125](https://github.com/FSM1/cipher-box/issues/125)) ([f3e354e](https://github.com/FSM1/cipher-box/commit/f3e354ea14e1341b159438848f10072828ee38d3))
+* **12.3.1:** Pre-wipe identity cleanup ([#127](https://github.com/FSM1/cipher-box/issues/127)) ([6806153](https://github.com/FSM1/cipher-box/commit/6806153251e0b86b2da2901d75cb73e20b3c94f3))
+* **12.4:** MFA + Cross-Device Approval ([#128](https://github.com/FSM1/cipher-box/issues/128)) ([e9de010](https://github.com/FSM1/cipher-box/commit/e9de010759e22b36efd3ea1bb1604105c34fded1))
+* **12.5:** MFA polishing, UAT & E2E testing ([#131](https://github.com/FSM1/cipher-box/issues/131)) ([7bd4067](https://github.com/FSM1/cipher-box/commit/7bd4067b892ff708c39924d511887ece85ddd737))
+* **12.6:** per-file IPNS metadata split ([#133](https://github.com/FSM1/cipher-box/issues/133)) ([dee300a](https://github.com/FSM1/cipher-box/commit/dee300aa3fb68f54225fa6d573e915423fbe5a8c))
+* **12:** Core Kit Identity Provider Foundation ([#123](https://github.com/FSM1/cipher-box/issues/123)) ([a07cb26](https://github.com/FSM1/cipher-box/commit/a07cb266a3b92b0e3b4b2544c1f85e6e33c55df4))
+* **design:** add /design:sync skill for detecting UI drift ([#122](https://github.com/FSM1/cipher-box/issues/122)) ([c75b127](https://github.com/FSM1/cipher-box/commit/c75b127eb8add60befc303260eca20de78f6d3e1))
+* SIWE wallet login + unified identity (Phase 12.3) ([#126](https://github.com/FSM1/cipher-box/issues/126)) ([40e704b](https://github.com/FSM1/cipher-box/commit/40e704bb807bb0bde21a8715647809441297d096))
+* **web:** move multi-select action bar to bottom of file list ([#117](https://github.com/FSM1/cipher-box/issues/117)) ([a888781](https://github.com/FSM1/cipher-box/commit/a8887810c5df5a21f86cbc68651d4849feda5069))
+
+
+### Bug Fixes
+
+* **auth:** resolve tab crash, JWKS persistence, and CoreKit auth UAT ([#130](https://github.com/FSM1/cipher-box/issues/130)) ([33a4667](https://github.com/FSM1/cipher-box/commit/33a466742690efe2d82e66ff6ad24b16971b118b))
+* multi-select action bar button visibility ([#120](https://github.com/FSM1/cipher-box/issues/120)) ([d0d41ed](https://github.com/FSM1/cipher-box/commit/d0d41edea98ce9c9bad27de256fbb499b67fa75f))
+
 ## [0.8.0](https://github.com/FSM1/cipher-box/compare/v0.7.4...v0.8.0) (2026-02-12)
 
 
