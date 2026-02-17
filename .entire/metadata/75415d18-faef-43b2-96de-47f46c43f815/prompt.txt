@@ -1,6 +1,7 @@
-<task-notification>
-<task-id>a15ef9a</task-id>
-<status>failed</status>
-<summary>Agent "Execute plan 12.6-04" failed: classifyHandoffIfNeeded is not defined</summary>
-</task-notification>
-Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/a15ef9a.output
+ok there are a bunch of comments from coderabbit on the pr, probably some test coverage failures, and some failing e2e tests.
+
+also for some reason, it was possible to merge the PR with failing test coverage (or tests, I didnt check).
+
+Could you please check on the branch protection rules, and ensure that all the CI jobs are required, not just the build. I think this needs to be made in to a logical CI pipeline of lint-check -> type-check -> build -> test -> e2e with a failure at any step causing the entire pipeline to fail. 
+
+any step that is not passed should block the pr from being merged.

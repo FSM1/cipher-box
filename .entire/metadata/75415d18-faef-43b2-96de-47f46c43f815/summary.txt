@@ -1,35 +1,20 @@
-Committed and pushed. Now let me present the gap closure route:
+PR created: https://github.com/FSM1/cipher-box/pull/134
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
- GSD ► PHASE 12.6 GAPS FOUND ⚠
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Here's a summary of what was done:
 
-**Phase 12.6: Per-File IPNS Metadata Split**
+**Problems found:**
+1. Only **"Build"** was a required status check — Lint, Test, API Spec, E2E, PR Title were all optional
+2. E2E had `continue-on-error: true` (leftover from Phases 12.3.1/12.4)
+3. No type-checking step existed at all
 
-Score: 7/8 must-haves verified
-Report: .planning/phases/12.6-per-file-ipns-metadata-split/12.6-VERIFICATION.md
+**Fixes applied:**
 
-### What's Missing
+| Change | Details |
+|--------|---------|
+| New `typecheck` job | Runs `tsc --noEmit` on crypto + `tsc -b` on web |
+| CI dependency chain | lint + typecheck (parallel) -> test -> build |
+| E2E blocking | Removed `continue-on-error: true` |
+| Branch protection | Now requires **all 7 checks**: Lint, Typecheck, Verify API Spec & Client, Test, Build, E2E Tests, lint-pr-title |
+| Strict mode | `strict: true` — PR branch must be up-to-date with main |
 
-**Desktop FUSE client v2 support** — The Rust FUSE client in `apps/desktop/src-tauri/` has zero v2/per-file IPNS awareness. No `FilePointer` struct, no `fileMetaIpnsName` handling, no per-file IPNS resolution. Was explicitly deferred in CONTEXT.md but required by success criteria #7.
-
-───────────────────────────────────────────────────────────────
-
-## ▶ Next Up
-
-**Plan gap closure** — create additional plan to add FUSE v2 support
-
-`/gsd:plan-phase 12.6 --gaps`
-
-<sub>`/clear` first → fresh context window</sub>
-
-───────────────────────────────────────────────────────────────
-
-**Also available:**
-
-- `cat .planning/phases/12.6-per-file-ipns-metadata-split/12.6-VERIFICATION.md` — see full report
-- `/gsd:verify-work 12.6` — manual testing before planning
-
-───────────────────────────────────────────────────────────────
-
-PR updated with all commits: https://github.com/FSM1/cipher-box/pull/133
+The branch protection update is already live on GitHub (applied via API), so PR #133 (Phase 12.6) will now also be blocked until all checks pass.
