@@ -1,10 +1,5 @@
-Dropdown stayed open while hovering over [settings] — the `::before` bridge fix is working. All 4 fixes from PR #137 verified on staging:
+Todo saved: `.planning/todos/pending/2026-02-17-remove-corekit-logging.md`
 
-| Fix | Status |
-|-----|--------|
-| Google OAuth (Brave fallback to iframe button) | Working |
-| Empty vault sync (no "sync failed" on fresh account) | Working — shows "Synced" checkmark |
-| User menu hover gap | Working — dropdown stays open moving to items |
-| CoreKit + TSS key export | Working — logs show clean login flow |
-
-Want me to test anything else? I could try creating a folder or uploading a file to verify the full vault write → IPNS publish flow.
+  **Remove CoreKit logging in web app**
+  Area: ui
+  Files: 1 referenced
