@@ -34,15 +34,15 @@ const TRAY_ID: &str = "cipherbox-tray";
 pub fn build_tray(app: &AppHandle) -> Result<(), String> {
     let menu = build_menu(app, &TrayStatus::NotConnected)?;
 
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../../icons/tray-icon@2x.png"))
+        .map_err(|e| format!("Failed to load tray icon: {}", e))?;
+
     let _tray = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .show_menu_on_left_click(true)
         .tooltip("CipherBox")
-        .icon(
-            app.default_window_icon()
-                .cloned()
-                .unwrap_or_else(|| tauri::image::Image::new(&[], 0, 0)),
-        )
+        .icon(tray_icon)
+        .icon_as_template(true)
         .on_menu_event(move |app, event| {
             handle_menu_event(app, event.id().as_ref());
         })

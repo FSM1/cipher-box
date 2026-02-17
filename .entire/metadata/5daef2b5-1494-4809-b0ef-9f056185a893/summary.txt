@@ -1,0 +1,1 @@
+App is running with no errors. Do you see the `>_` tray icon now, or is it still missing?
