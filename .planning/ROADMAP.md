@@ -47,6 +47,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 **Milestone Goal:** Elevate the staging MVP into a production-ready encrypted storage platform with sharing, search, MFA, file versioning, cross-platform desktop, and TEE failover.
 
 - [ ] **Phase 11: Cross-Platform Desktop** - Linux and Windows desktop apps (Tauri, platform-specific FUSE/virtual drive) -- can run in parallel
+- [x] **Phase 11.1: macOS Desktop Catch-Up** - Close all desktop gaps from Phases 12-12.6 before cross-platform expansion (INSERTED)
 - [x] **Phase 12: Core Kit Identity Provider Foundation** - Replace PnP Modal SDK with MPC Core Kit, CipherBox as identity provider
 - [x] **Phase 12.1: AES-CTR Streaming Encryption** - AES-256-CTR for media files with byte-range decryption and in-browser playback (INSERTED)
 - [x] **Phase 12.2: Encrypted Device Registry** - Encrypted device metadata on IPFS for cross-device infrastructure (INSERTED)
@@ -356,43 +357,44 @@ Parallel phases:
 - Phase 11 (Cross-Platform Desktop) can run in parallel with any M2 phase (depends only on Phase 9/M1).
 - Phase 17 (AWS Nitro TEE) can optionally execute in parallel with Phases 14-16 (depends on Phase 12).
 
-| Phase                      | Milestone | Plans Complete | Status      | Completed  |
-| -------------------------- | --------- | -------------- | ----------- | ---------- |
-| 1. Foundation              | M1        | 3/3            | Complete    | 2026-01-20 |
-| 2. Authentication          | M1        | 4/4            | Complete    | 2026-01-20 |
-| 3. Core Encryption         | M1        | 3/3            | Complete    | 2026-01-20 |
-| 4. File Storage            | M1        | 4/4            | Complete    | 2026-01-20 |
-| 4.1 API Service Testing    | M1        | 3/3            | Complete    | 2026-01-21 |
-| 4.2 Local IPFS Testing     | M1        | 2/2            | Complete    | 2026-01-21 |
-| 5. Folder System           | M1        | 4/4            | Complete    | 2026-01-21 |
-| 6. File Browser UI         | M1        | 4/4            | Complete    | 2026-01-22 |
-| 6.1 Webapp Automation      | M1        | 7/7            | Complete    | 2026-01-22 |
-| 6.2 Restyle App            | M1        | 6/6            | Complete    | 2026-01-27 |
-| 6.3 UI Structure           | M1        | 5/5            | Complete    | 2026-01-30 |
-| 7. Multi-Device Sync       | M1        | 4/4            | Complete    | 2026-02-02 |
-| 7.1 Atomic File Upload     | M1        | 2/2            | Complete    | 2026-02-07 |
-| 8. TEE Integration         | M1        | 4/4            | Complete    | 2026-02-07 |
-| 9. Desktop Client          | M1        | 7/7            | Complete    | 2026-02-08 |
-| 9.1 Env/DevOps/Staging     | M1        | 6/6            | Complete    | 2026-02-09 |
-| 10. Data Portability       | M1        | 3/3            | Complete    | 2026-02-11 |
-| 12. Core Kit Identity      | M2        | 5/5            | Complete    | 2026-02-13 |
-| 12.1 AES-CTR Streaming     | M2        | 4/4            | Complete    | 2026-02-17 |
-| 12.2 Device Registry       | M2        | 3/3            | Complete    | 2026-02-13 |
-| 12.3 SIWE + Identity       | M2        | 4/4            | Complete    | 2026-02-14 |
-| 12.3.1 Identity Cleanup    | M2        | 4/4            | Complete    | 2026-02-14 |
-| 12.4 MFA + Cross-Device    | M2        | 5/5            | Complete    | 2026-02-15 |
-| 12.5 MFA Polish/UAT/E2E    | M2        | 3/3            | Complete    | 2026-02-16 |
-| 12.6 Per-File IPNS Meta    | M2        | 5/5            | Complete    | 2026-02-17 |
-| 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
-| 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
-| 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
-| 16. Advanced Sync          | M2        | 0/TBD          | Not started | -          |
-| 11. Cross-Platform Desktop | M2        | 0/TBD          | Not started | -          |
-| 17. AWS Nitro TEE          | M2        | 0/TBD          | Not started | -          |
-| 18. Billing Infrastructure | M3        | 0/TBD          | Not started | -          |
-| 19. Team Accounts          | M3        | 0/TBD          | Not started | -          |
-| 20. Document Editors       | M3        | 0/TBD          | Not started | -          |
-| 21. Document Signing       | M3        | 0/TBD          | Not started | -          |
+| Phase                       | Milestone | Plans Complete | Status      | Completed  |
+| --------------------------- | --------- | -------------- | ----------- | ---------- |
+| 1. Foundation               | M1        | 3/3            | Complete    | 2026-01-20 |
+| 2. Authentication           | M1        | 4/4            | Complete    | 2026-01-20 |
+| 3. Core Encryption          | M1        | 3/3            | Complete    | 2026-01-20 |
+| 4. File Storage             | M1        | 4/4            | Complete    | 2026-01-20 |
+| 4.1 API Service Testing     | M1        | 3/3            | Complete    | 2026-01-21 |
+| 4.2 Local IPFS Testing      | M1        | 2/2            | Complete    | 2026-01-21 |
+| 5. Folder System            | M1        | 4/4            | Complete    | 2026-01-21 |
+| 6. File Browser UI          | M1        | 4/4            | Complete    | 2026-01-22 |
+| 6.1 Webapp Automation       | M1        | 7/7            | Complete    | 2026-01-22 |
+| 6.2 Restyle App             | M1        | 6/6            | Complete    | 2026-01-27 |
+| 6.3 UI Structure            | M1        | 5/5            | Complete    | 2026-01-30 |
+| 7. Multi-Device Sync        | M1        | 4/4            | Complete    | 2026-02-02 |
+| 7.1 Atomic File Upload      | M1        | 2/2            | Complete    | 2026-02-07 |
+| 8. TEE Integration          | M1        | 4/4            | Complete    | 2026-02-07 |
+| 9. Desktop Client           | M1        | 7/7            | Complete    | 2026-02-08 |
+| 9.1 Env/DevOps/Staging      | M1        | 6/6            | Complete    | 2026-02-09 |
+| 10. Data Portability        | M1        | 3/3            | Complete    | 2026-02-11 |
+| 12. Core Kit Identity       | M2        | 5/5            | Complete    | 2026-02-13 |
+| 12.1 AES-CTR Streaming      | M2        | 4/4            | Complete    | 2026-02-17 |
+| 12.2 Device Registry        | M2        | 3/3            | Complete    | 2026-02-13 |
+| 12.3 SIWE + Identity        | M2        | 4/4            | Complete    | 2026-02-14 |
+| 12.3.1 Identity Cleanup     | M2        | 4/4            | Complete    | 2026-02-14 |
+| 12.4 MFA + Cross-Device     | M2        | 5/5            | Complete    | 2026-02-15 |
+| 12.5 MFA Polish/UAT/E2E     | M2        | 3/3            | Complete    | 2026-02-16 |
+| 12.6 Per-File IPNS Meta     | M2        | 5/5            | Complete    | 2026-02-17 |
+| 11.1 macOS Desktop Catch-Up | M2        | 7/7            | Complete    | 2026-02-17 |
+| 13. File Versioning         | M2        | 0/TBD          | Not started | -          |
+| 14. User-to-User Sharing    | M2        | 0/TBD          | Not started | -          |
+| 15. Link Sharing + Search   | M2        | 0/TBD          | Not started | -          |
+| 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
+| 11. Cross-Platform Desktop  | M2        | 0/TBD          | Not started | -          |
+| 17. AWS Nitro TEE           | M2        | 0/TBD          | Not started | -          |
+| 18. Billing Infrastructure  | M3        | 0/TBD          | Not started | -          |
+| 19. Team Accounts           | M3        | 0/TBD          | Not started | -          |
+| 20. Document Editors        | M3        | 0/TBD          | Not started | -          |
+| 21. Document Signing        | M3        | 0/TBD          | Not started | -          |
 
 ---
 
