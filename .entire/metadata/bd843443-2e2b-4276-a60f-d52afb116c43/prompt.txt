@@ -1,1 +1,1 @@
-there's still some ci/test and e2e test failures
+now the edit content and save test is failing in e2e
