@@ -1,7 +1,5 @@
-Done. Here's what I set up:
+Now, there's one thing you'll need to do: **add `http://localhost:1420/google-callback.html` as an authorized redirect URI** in the Google Cloud Console for the OAuth client `164556913424-uif44is1apnl7rqc9a2ac7vn8u9dq0ee`. Without this, Google will reject the redirect.
 
-- **`.env`** — All defaults filled in, pointing at staging API
-- **`.env.example`** — Same values, committed to git as a reference
-- **`CLAUDE.md`** — Notes on switching to local API when needed, plus Tauri webview constraints
+The change I made replaces the GIS One Tap approach (which requires an existing Google session in the webview — impossible in Tauri) with a standard OAuth2 implicit flow that opens a proper Google sign-in page in a popup window. After the user signs in, Google redirects to `/google-callback.html` with the ID token in the URL hash, which posts it back to the main window via `postMessage`.
 
-The app will need a restart to pick up the new env vars (it was started with command-line overrides before). Want me to restart it?
+Want me to restart the app so you can test once you've added the redirect URI?

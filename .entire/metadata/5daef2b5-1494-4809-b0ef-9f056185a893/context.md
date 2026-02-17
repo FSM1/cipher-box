@@ -2,31 +2,23 @@
 
 **Session ID:** 5daef2b5-1494-4809-b0ef-9f056185a893
 
-**Commit Message:** I think the desktop env and env.example should be updated with all the d
+**Commit Message:** Ok, next problem is the google popup is being blocked
 
 ## Prompt
 
-I think the desktop env and env.example should be updated with all the default values including pointing at the staging api. you can make a note of this in the `apps/desktop/claude.md`, if some task necessitates developing against the local api in future but most tasks should be able to be completed against the staging api.
+ok, next problem is the google popup is being blocked
 
 ## Summary
 
-Done. Here's what I set up:
+Now, there's one thing you'll need to do: **add `http://localhost:1420/google-callback.html` as an authorized redirect URI** in the Google Cloud Console for the OAuth client `164556913424-uif44is1apnl7rqc9a2ac7vn8u9dq0ee`. Without this, Google will reject the redirect.
 
-- **`.env`** — All defaults filled in, pointing at staging API
-- **`.env.example`** — Same values, committed to git as a reference
-- **`CLAUDE.md`** — Notes on switching to local API when needed, plus Tauri webview constraints
+The change I made replaces the GIS One Tap approach (which requires an existing Google session in the webview — impossible in Tauri) with a standard OAuth2 implicit flow that opens a proper Google sign-in page in a popup window. After the user signs in, Google redirects to `/google-callback.html` with the ID token in the URL hash, which posts it back to the main window via `postMessage`.
 
-The app will need a restart to pick up the new env vars (it was started with command-line overrides before). Want me to restart it?
+Want me to restart the app so you can test once you've added the redirect URI?
 
 ## Key Actions
 
-- - **Glob**: apps/desktop/.env*
-- - **Glob**: apps/desktop/*claude*
-- - **Grep**: import\.meta\.env\.\w+
-- - **Read**: /Users/michael/Code/cipher-box/apps/desktop/.env
-- - **Glob**: apps/web/.env*
-- - **Read**: /Users/michael/Code/cipher-box/apps/web/.env.example
-- - **Read**: /Users/michael/Code/cipher-box/apps/web/.env
-- - **Grep**: \.env
-- - **Write**: /Users/michael/Code/cipher-box/apps/desktop/.env
-- - **Write**: /Users/michael/Code/cipher-box/apps/desktop/.env.example
+- - **Read**: /Users/michael/Code/cipher-box/apps/desktop/src/auth.ts
+- - **Write**: /Users/michael/Code/cipher-box/apps/desktop/public/google-callback.html
+- - **Edit**: /Users/michael/Code/cipher-box/apps/desktop/src/auth.ts
+- - **Edit**: /Users/michael/Code/cipher-box/apps/desktop/src/auth.ts

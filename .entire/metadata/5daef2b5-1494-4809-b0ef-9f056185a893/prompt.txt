@@ -1,1 +1,1 @@
-I think the desktop env and env.example should be updated with all the default values including pointing at the staging api. you can make a note of this in the `apps/desktop/claude.md`, if some task necessitates developing against the local api in future but most tasks should be able to be completed against the staging api.
+ok, next problem is the google popup is being blocked

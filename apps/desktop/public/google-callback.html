@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+  <style>body{background:#000;color:#006644;font-family:'JetBrains Mono',monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}</style>
+</head>
+<body>
+  <p>Completing sign-in...</p>
+  <script>
+    var hash = window.location.hash.substring(1);
+    var params = new URLSearchParams(hash);
+    var idToken = params.get('id_token');
+    var error = params.get('error');
+    if (window.opener) {
+      window.opener.postMessage({
+        type: 'google-auth-callback',
+        idToken: idToken,
+        error: error || (!idToken ? 'No ID token received' : null)
+      }, window.location.origin);
+    }
+    setTimeout(function() { window.close(); }, 500);
+  </script>
+</body>
+</html>
