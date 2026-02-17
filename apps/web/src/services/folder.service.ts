@@ -1,8 +1,11 @@
 /**
- * Folder Service - Folder CRUD operations with encryption
+ * Folder Service - Folder CRUD operations with encryption (v2 metadata)
  *
  * Handles folder creation, loading, and metadata updates with
  * client-side encryption using @cipherbox/crypto.
+ *
+ * v2 metadata: Folders store slim FilePointer references instead of
+ * inline FileEntry objects. File metadata lives in per-file IPNS records.
  */
 
 import {
@@ -14,16 +17,21 @@ import {
   hexToBytes,
   encryptFolderMetadata,
   decryptFolderMetadata,
+  createIpnsRecord,
+  marshalIpnsRecord,
   type FolderMetadata,
+  type FolderMetadataV2,
   type EncryptedFolderMetadata,
   type FolderEntry,
-  type FileEntry,
-  type FolderChild,
+  type FolderChildV2,
+  type FilePointer,
 } from '@cipherbox/crypto';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from './ipns.service';
+import { batchPublishIpnsRecords } from './ipns.service';
 import { useAuthStore } from '../stores/auth.store';
 import type { FolderNode } from '../stores/folder.store';
+import type { FileIpnsRecordPayload } from './file-metadata.service';
 
 /** Maximum folder nesting depth per FOLD-03 */
 const MAX_FOLDER_DEPTH = 20;
@@ -59,6 +67,10 @@ export function getDepth(folderId: string | null, folders: Record<string, Folder
  *
  * Resolves the folder's IPNS name to get the current metadata CID,
  * fetches and decrypts the metadata, and returns a complete FolderNode.
+ * Supports both v1 and v2 metadata formats (v2 children are FolderChildV2[]).
+ *
+ * IMPORTANT: Does NOT eagerly resolve per-file IPNS records during folder load.
+ * File metadata is lazy-loaded on download/preview (Pitfall 1 from research).
  *
  * @param folderId - Folder ID (null for root, or UUID)
  * @param folderKey - Decrypted AES-256 key for this folder
@@ -102,12 +114,15 @@ export async function loadFolder(
   const metadata = await fetchAndDecryptMetadata(resolved.cid, folderKey);
 
   // 4. Return complete FolderNode with decrypted children
+  // Both v1 and v2 children are stored as FolderChildV2[] in the store.
+  // v1 FileEntry objects won't exist after the clean break (DB wipe).
+  // v2 FilePointer objects have fileMetaIpnsName instead of inline file data.
   return {
     id: folderId ?? 'root',
     name,
     ipnsName,
     parentId,
-    children: metadata.children,
+    children: metadata.children as FolderChildV2[],
     isLoaded: true,
     isLoading: false,
     sequenceNumber: resolved.sequenceNumber,
@@ -196,13 +211,13 @@ export async function createFolder(params: {
 }
 
 /**
- * Update folder metadata and publish to IPNS.
+ * Update folder metadata and publish to IPNS (v2 format).
  *
  * Encrypts the metadata with the folder key, uploads to IPFS,
  * and publishes an updated IPNS record pointing to the new CID.
  *
  * @param params.folderId - Folder being updated
- * @param params.children - New children array
+ * @param params.children - New children array (FolderChildV2[])
  * @param params.folderKey - Decrypted AES-256 folder key
  * @param params.ipnsPrivateKey - Decrypted Ed25519 IPNS private key
  * @param params.ipnsName - IPNS name for this folder
@@ -213,7 +228,7 @@ export async function createFolder(params: {
  */
 export async function updateFolderMetadata(params: {
   folderId: string;
-  children: FolderChild[];
+  children: FolderChildV2[];
   folderKey: Uint8Array;
   ipnsPrivateKey: Uint8Array;
   ipnsName: string;
@@ -221,9 +236,9 @@ export async function updateFolderMetadata(params: {
   encryptedIpnsPrivateKey?: string;
   keyEpoch?: number;
 }): Promise<{ cid: string; newSequenceNumber: bigint }> {
-  // 1. Create folder metadata
-  const metadata: FolderMetadata = {
-    version: 'v1',
+  // 1. Create v2 folder metadata
+  const metadata: FolderMetadataV2 = {
+    version: 'v2',
     children: params.children,
   };
 
@@ -248,6 +263,65 @@ export async function updateFolderMetadata(params: {
   });
 
   return { cid, newSequenceNumber: newSeq };
+}
+
+/**
+ * Build a folder IPNS record payload for batch publishing.
+ *
+ * Creates and signs an IPNS record locally without publishing.
+ * Returns the payload that can be included in a batch publish call.
+ *
+ * @returns Folder IPNS record payload for batch publish
+ */
+async function buildFolderIpnsRecord(params: {
+  children: FolderChildV2[];
+  folderKey: Uint8Array;
+  ipnsPrivateKey: Uint8Array;
+  ipnsName: string;
+  sequenceNumber: bigint;
+  encryptedIpnsPrivateKey?: string;
+  keyEpoch?: number;
+}): Promise<{
+  cid: string;
+  record: FileIpnsRecordPayload & { recordType: 'folder' };
+  newSequenceNumber: bigint;
+}> {
+  // 1. Create v2 folder metadata
+  const metadata: FolderMetadataV2 = {
+    version: 'v2',
+    children: params.children,
+  };
+
+  // 2. Encrypt metadata with folder key
+  const encrypted = await encryptFolderMetadata(metadata, params.folderKey);
+
+  // 3. Upload to IPFS
+  const blob = new Blob([JSON.stringify(encrypted)], { type: 'application/json' });
+  const { cid } = await addToIpfs(blob);
+
+  // 4. Create IPNS record
+  const newSeq = params.sequenceNumber + 1n;
+  const record = await createIpnsRecord(
+    params.ipnsPrivateKey,
+    `/ipfs/${cid}`,
+    newSeq,
+    24 * 60 * 60 * 1000
+  );
+  const recordBytes = marshalIpnsRecord(record);
+  const recordBase64 = btoa(String.fromCharCode(...recordBytes));
+
+  return {
+    cid,
+    record: {
+      ipnsName: params.ipnsName,
+      recordBase64,
+      metadataCid: cid,
+      encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
+      keyEpoch: params.keyEpoch,
+      recordType: 'folder',
+    },
+    newSequenceNumber: newSeq,
+  };
 }
 
 /**
@@ -298,9 +372,11 @@ export async function renameFolder(params: {
 /**
  * Delete a folder and all its contents recursively.
  *
- * Collects all file CIDs from the folder and its subfolders,
- * removes the folder from the parent's metadata, publishes the update,
- * and unpins all file CIDs in the background.
+ * For v2 metadata: collects fileMetaIpnsName values from FilePointer children
+ * (not CIDs, since CIDs live in per-file IPNS records, not folder metadata).
+ * Removes the folder from the parent's metadata, publishes the update.
+ * Returns the collected file IPNS names so the caller can resolve them for
+ * CID unpinning and TEE unenrollment.
  *
  * @param params.folderId - ID of folder to delete
  * @param params.parentFolderState - Parent folder containing this folder
@@ -320,22 +396,27 @@ export async function deleteFolder(params: {
 
   if (folderIndex === -1) throw new Error('Folder not found');
 
-  // 2. Recursively collect all CIDs to unpin (files in this folder and subfolders)
-  const cidsToUnpin: string[] = [];
-  const collectCids = (folderId: string) => {
+  // 2. Recursively collect file IPNS names for cleanup
+  // In v2, file children are FilePointers with fileMetaIpnsName (no inline CID).
+  // The caller must resolve each fileMetaIpnsName to get the CID for unpinning.
+  const fileIpnsNames: string[] = [];
+  const collectFileIpnsNames = (folderId: string) => {
     const folder = params.getFolderState(folderId);
     if (!folder) return;
 
     for (const child of folder.children) {
       if (child.type === 'file') {
-        cidsToUnpin.push(child.cid);
+        const filePointer = child as FilePointer;
+        if (filePointer.fileMetaIpnsName) {
+          fileIpnsNames.push(filePointer.fileMetaIpnsName);
+        }
       } else if (child.type === 'folder') {
-        collectCids(child.id);
+        collectFileIpnsNames(child.id);
       }
     }
   };
 
-  collectCids(params.folderId);
+  collectFileIpnsNames(params.folderId);
 
   // 3. Remove folder from parent's children
   children.splice(folderIndex, 1);
@@ -350,41 +431,41 @@ export async function deleteFolder(params: {
     sequenceNumber: params.parentFolderState.sequenceNumber,
   });
 
-  // 5. Unpin all collected CIDs (fire and forget, don't block)
-  Promise.all(cidsToUnpin.map((cid) => params.unpinCid(cid).catch(() => {})));
+  // 5. File CID unpinning and TEE unenrollment deferred to caller
+  // The caller (useFolder hook) resolves fileMetaIpnsName -> CID for unpinning.
+  // TODO: Phase 14 should add batch unenrollment for orphaned file IPNS records.
 
-  // Return CIDs for caller to track/log
-  return cidsToUnpin;
+  return fileIpnsNames;
 }
 
 /**
- * Delete a file from its parent folder.
+ * Delete a file from its parent folder (v2).
  *
- * Removes the file from the parent's metadata, publishes the update,
- * and unpins the file CID in the background.
+ * Removes the FilePointer from the parent's metadata, publishes the update.
+ * Returns the fileMetaIpnsName so the caller can resolve it for CID unpinning
+ * and TEE unenrollment.
  *
- * Note: This handles folder metadata update. Use delete.service.ts deleteFile
- * for direct IPFS unpin with quota update.
+ * Note: This handles folder metadata update. File CID unpinning is handled
+ * by the caller after resolving the file metadata.
  *
  * @param params.fileId - ID of file to delete
  * @param params.parentFolderState - Parent folder containing this file
- * @param params.unpinCid - Optional function to unpin a CID from IPFS
+ * @returns fileMetaIpnsName for caller to handle cleanup
  * @throws Error if file not found
  */
 export async function deleteFileFromFolder(params: {
   fileId: string;
   parentFolderState: FolderNode;
-  unpinCid?: (cid: string) => Promise<void>;
-}): Promise<void> {
+}): Promise<{ fileMetaIpnsName: string | undefined }> {
   // 1. Find file in parent's children
   const children = [...params.parentFolderState.children];
   const fileIndex = children.findIndex((c) => c.type === 'file' && c.id === params.fileId);
 
   if (fileIndex === -1) throw new Error('File not found');
 
-  // 2. Get file CID for unpinning
-  const file = children[fileIndex] as FileEntry;
-  const cidToUnpin = file.cid;
+  // 2. Get fileMetaIpnsName for cleanup
+  const filePointer = children[fileIndex] as FilePointer;
+  const fileMetaIpnsName = filePointer.fileMetaIpnsName;
 
   // 3. Remove file from parent's children
   children.splice(fileIndex, 1);
@@ -399,62 +480,59 @@ export async function deleteFileFromFolder(params: {
     sequenceNumber: params.parentFolderState.sequenceNumber,
   });
 
-  // 5. Unpin file CID (fire and forget, don't block)
-  if (params.unpinCid) {
-    params.unpinCid(cidToUnpin).catch(() => {});
+  // 5. TEE unenrollment: no API endpoint available yet.
+  // TODO: Phase 14 should expose unenrollIpns via REST API.
+  if (fileMetaIpnsName) {
+    console.warn(
+      `File IPNS record ${fileMetaIpnsName} orphaned after deletion. TEE unenrollment deferred to Phase 14.`
+    );
   }
+
+  return { fileMetaIpnsName };
 }
 
 /**
- * Add a file to a folder after successful upload.
+ * Add a file to a folder after successful upload (v2).
  *
- * Creates a FileEntry from the upload result and adds it to the folder's
- * children array, then publishes the updated metadata to IPNS.
+ * Creates a FilePointer from the file's IPNS record and adds it to the folder's
+ * children array. Publishes both the file IPNS record and the updated folder
+ * metadata via a single batch API call.
  *
  * @param params.parentFolderState - Parent folder to add file to
- * @param params.cid - IPFS CID of the encrypted file
- * @param params.fileKeyEncrypted - Hex-encoded ECIES-wrapped file key
- * @param params.fileIv - Hex-encoded IV used for encryption
+ * @param params.fileId - Pre-generated file UUID
  * @param params.name - Original file name
- * @param params.size - Original file size in bytes
- * @returns Created file entry and new sequence number
+ * @param params.fileIpnsRecord - File IPNS record payload from createFileMetadata
+ * @returns Created file pointer and new sequence number
  * @throws Error if name collision exists
  */
 export async function addFileToFolder(params: {
   parentFolderState: FolderNode;
-  cid: string;
-  fileKeyEncrypted: string;
-  fileIv: string;
+  fileId: string;
   name: string;
-  size: number;
-}): Promise<{ fileEntry: FileEntry; newSequenceNumber: bigint }> {
+  fileIpnsRecord: FileIpnsRecordPayload;
+}): Promise<{ filePointer: FilePointer; newSequenceNumber: bigint }> {
   // 1. Check for name collision
   const nameExists = params.parentFolderState.children.some((c) => c.name === params.name);
   if (nameExists) {
     throw new Error('A file with this name already exists');
   }
 
-  // 2. Create file entry
+  // 2. Create FilePointer (slim reference to per-file IPNS record)
   const now = Date.now();
-  const fileEntry: FileEntry = {
+  const filePointer: FilePointer = {
     type: 'file',
-    id: crypto.randomUUID(),
+    id: params.fileId,
     name: params.name,
-    cid: params.cid,
-    fileKeyEncrypted: params.fileKeyEncrypted,
-    fileIv: params.fileIv,
-    encryptionMode: 'GCM',
-    size: params.size,
+    fileMetaIpnsName: params.fileIpnsRecord.ipnsName,
     createdAt: now,
     modifiedAt: now,
   };
 
-  // 3. Add to parent's children
-  const children = [...params.parentFolderState.children, fileEntry];
+  // 3. Add FilePointer to parent's children
+  const children: FolderChildV2[] = [...params.parentFolderState.children, filePointer];
 
-  // 4. Update parent folder metadata and publish IPNS
-  const { newSequenceNumber } = await updateFolderMetadata({
-    folderId: params.parentFolderState.id,
+  // 4. Build folder IPNS record for batch publish
+  const folderResult = await buildFolderIpnsRecord({
     children,
     folderKey: params.parentFolderState.folderKey,
     ipnsPrivateKey: params.parentFolderState.ipnsPrivateKey,
@@ -462,66 +540,64 @@ export async function addFileToFolder(params: {
     sequenceNumber: params.parentFolderState.sequenceNumber,
   });
 
-  return { fileEntry, newSequenceNumber };
+  // 5. Batch publish: file IPNS record + folder IPNS record
+  await batchPublishIpnsRecords([
+    { ...params.fileIpnsRecord, recordType: 'file' },
+    folderResult.record,
+  ]);
+
+  return { filePointer, newSequenceNumber: folderResult.newSequenceNumber };
 }
 
 /**
- * Add multiple files to a folder after successful upload (batch).
+ * Add multiple files to a folder after successful upload (v2 batch).
  *
- * Creates FileEntry objects for all files, checks for name collisions
- * (against existing children AND within the batch), then updates folder
- * metadata and publishes IPNS exactly once for the entire batch.
+ * Creates FilePointer objects for all files, checks for name collisions,
+ * then publishes all N file IPNS records + 1 folder IPNS record via a
+ * single batch API call.
  *
  * @param params.parentFolderState - Parent folder to add files to
- * @param params.files - Array of uploaded file data
- * @returns Created file entries and new sequence number
- * @throws Error if any name collision exists (within folder or within batch)
+ * @param params.files - Array of file data with pre-created IPNS records
+ * @returns Created file pointers and new sequence number
+ * @throws Error if any name collision exists
  */
 export async function addFilesToFolder(params: {
   parentFolderState: FolderNode;
   files: Array<{
-    cid: string;
-    fileKeyEncrypted: string;
-    fileIv: string;
+    fileId: string;
     name: string;
-    size: number;
+    fileIpnsRecord: FileIpnsRecordPayload;
   }>;
-}): Promise<{ fileEntries: FileEntry[]; newSequenceNumber: bigint }> {
+}): Promise<{ filePointers: FilePointer[]; newSequenceNumber: bigint }> {
   // 1. Build a set of existing child names for collision detection
   const existingNames = new Set(params.parentFolderState.children.map((c) => c.name));
 
-  // 2. Create FileEntry for each file, checking collisions
-  const fileEntries: FileEntry[] = [];
+  // 2. Create FilePointer for each file, checking collisions
+  const filePointers: FilePointer[] = [];
   const now = Date.now();
 
   for (const file of params.files) {
-    // Check collision against existing children AND previously added batch files
     if (existingNames.has(file.name)) {
       throw new Error(`A file with name "${file.name}" already exists`);
     }
     existingNames.add(file.name);
 
-    const fileEntry: FileEntry = {
+    const filePointer: FilePointer = {
       type: 'file',
-      id: crypto.randomUUID(),
+      id: file.fileId,
       name: file.name,
-      cid: file.cid,
-      fileKeyEncrypted: file.fileKeyEncrypted,
-      fileIv: file.fileIv,
-      encryptionMode: 'GCM',
-      size: file.size,
+      fileMetaIpnsName: file.fileIpnsRecord.ipnsName,
       createdAt: now,
       modifiedAt: now,
     };
-    fileEntries.push(fileEntry);
+    filePointers.push(filePointer);
   }
 
   // 3. Build updated children array
-  const children = [...params.parentFolderState.children, ...fileEntries];
+  const children: FolderChildV2[] = [...params.parentFolderState.children, ...filePointers];
 
-  // 4. Update folder metadata and publish IPNS (single publish for entire batch)
-  const { newSequenceNumber } = await updateFolderMetadata({
-    folderId: params.parentFolderState.id,
+  // 4. Build folder IPNS record
+  const folderResult = await buildFolderIpnsRecord({
     children,
     folderKey: params.parentFolderState.folderKey,
     ipnsPrivateKey: params.parentFolderState.ipnsPrivateKey,
@@ -529,7 +605,45 @@ export async function addFilesToFolder(params: {
     sequenceNumber: params.parentFolderState.sequenceNumber,
   });
 
-  return { fileEntries, newSequenceNumber };
+  // 5. Batch publish: all N file IPNS records + 1 folder IPNS record (single API call)
+  const allRecords = [
+    ...params.files.map((f) => ({ ...f.fileIpnsRecord, recordType: 'file' as const })),
+    folderResult.record,
+  ];
+  await batchPublishIpnsRecords(allRecords);
+
+  return { filePointers, newSequenceNumber: folderResult.newSequenceNumber };
+}
+
+/**
+ * Replace file content in v2 metadata (content update).
+ *
+ * THIS IS THE PRIMARY BENEFIT OF PER-FILE IPNS: content updates publish
+ * ONLY the file's IPNS record. The folder metadata is NOT touched because
+ * the FilePointer still points to the same fileMetaIpnsName, which now
+ * resolves to the updated content.
+ *
+ * @param params.fileId - ID of file to update
+ * @param params.fileIpnsRecord - Updated file IPNS record from updateFileMetadata
+ * @param params.parentFolderState - Parent folder (used only to find the FilePointer)
+ * @returns Void -- no folder metadata update needed
+ * @throws Error if file not found
+ */
+export async function replaceFileInFolder(params: {
+  fileId: string;
+  fileIpnsRecord: FileIpnsRecordPayload;
+  parentFolderState: FolderNode;
+}): Promise<void> {
+  // 1. Verify file exists in parent's children
+  const fileExists = params.parentFolderState.children.some(
+    (c) => c.type === 'file' && c.id === params.fileId
+  );
+
+  if (!fileExists) throw new Error('File not found');
+
+  // 2. Publish ONLY the file IPNS record (folder metadata untouched!)
+  // This is the key optimization: content update does NOT modify folder metadata.
+  await batchPublishIpnsRecords([{ ...params.fileIpnsRecord, recordType: 'file' }]);
 }
 
 /**
@@ -629,7 +743,7 @@ export async function moveFolder(params: {
   }
 
   // 5. ADD to destination FIRST (add-before-remove pattern)
-  const destChildren = [
+  const destChildren: FolderChildV2[] = [
     ...params.destFolderState.children,
     {
       ...folder,
@@ -662,9 +776,11 @@ export async function moveFolder(params: {
 }
 
 /**
- * Move a file from one folder to another.
+ * Move a file from one folder to another (v2).
  *
  * Uses add-before-remove pattern to prevent data loss on failure.
+ * FilePointer contains fileMetaIpnsName which stays the same across moves --
+ * no file IPNS record changes needed, only folder metadata changes.
  *
  * @param params.fileId - ID of file to move
  * @param params.sourceFolderState - Current parent folder
@@ -676,10 +792,10 @@ export async function moveFile(params: {
   sourceFolderState: FolderNode;
   destFolderState: FolderNode;
 }): Promise<void> {
-  // 1. Find file in source
+  // 1. Find file in source (v2: FilePointer)
   const file = params.sourceFolderState.children.find(
     (c) => c.type === 'file' && c.id === params.fileId
-  ) as FileEntry | undefined;
+  ) as FilePointer | undefined;
 
   if (!file) throw new Error('File not found');
 
@@ -688,7 +804,7 @@ export async function moveFile(params: {
   if (nameExists) throw new Error('An item with this name already exists in destination');
 
   // 3. ADD to destination FIRST
-  const destChildren = [
+  const destChildren: FolderChildV2[] = [
     ...params.destFolderState.children,
     {
       ...file,
@@ -721,10 +837,11 @@ export async function moveFile(params: {
 }
 
 /**
- * Rename a file within its parent folder.
+ * Rename a file within its parent folder (v2).
  *
- * Updates the file entry's name in the parent's metadata and publishes
+ * Updates the FilePointer's name in the parent's metadata and publishes
  * an updated IPNS record for the parent folder.
+ * File rename does NOT touch the file's own IPNS record -- only folder metadata.
  *
  * @param params.fileId - ID of file to rename
  * @param params.newName - New name for the file
@@ -745,7 +862,7 @@ export async function renameFile(params: {
   const nameExists = children.some((c) => c.name === params.newName && c.id !== params.fileId);
   if (nameExists) throw new Error('An item with this name already exists');
 
-  const file = children[fileIndex] as FileEntry;
+  const file = children[fileIndex] as FilePointer;
   children[fileIndex] = {
     ...file,
     name: params.newName,
@@ -763,77 +880,21 @@ export async function renameFile(params: {
 }
 
 /**
- * Replace an existing file entry in a folder with updated content.
- *
- * Updates the file's CID, wrapped key, IV, and size in-place within the
- * parent folder's children array, then publishes updated metadata to IPNS.
- * Returns the old CID so the caller can unpin it.
- *
- * @param params.fileId - ID of file to replace
- * @param params.newCid - New IPFS CID of re-encrypted content
- * @param params.newFileKeyEncrypted - Hex-encoded ECIES-wrapped new file key
- * @param params.newFileIv - Hex-encoded new IV
- * @param params.newSize - New file size in bytes
- * @param params.parentFolderState - Parent folder containing this file
- * @returns New sequence number and old CID for unpinning
- * @throws Error if file not found
- */
-export async function replaceFileInFolder(params: {
-  fileId: string;
-  newCid: string;
-  newFileKeyEncrypted: string;
-  newFileIv: string;
-  newSize: number;
-  parentFolderState: FolderNode;
-}): Promise<{ newSequenceNumber: bigint; oldCid: string }> {
-  // 1. Find file in parent's children
-  const children = [...params.parentFolderState.children];
-  const fileIndex = children.findIndex((c) => c.type === 'file' && c.id === params.fileId);
-
-  if (fileIndex === -1) throw new Error('File not found');
-
-  // 2. Save old CID for unpinning
-  const file = children[fileIndex] as FileEntry;
-  const oldCid = file.cid;
-
-  // 3. Update file entry with new encrypted content
-  children[fileIndex] = {
-    ...file,
-    cid: params.newCid,
-    fileKeyEncrypted: params.newFileKeyEncrypted,
-    fileIv: params.newFileIv,
-    size: params.newSize,
-    modifiedAt: Date.now(),
-  };
-
-  // 4. Update parent folder metadata and publish IPNS
-  const { newSequenceNumber } = await updateFolderMetadata({
-    folderId: params.parentFolderState.id,
-    children,
-    folderKey: params.parentFolderState.folderKey,
-    ipnsPrivateKey: params.parentFolderState.ipnsPrivateKey,
-    ipnsName: params.parentFolderState.ipnsName,
-    sequenceNumber: params.parentFolderState.sequenceNumber,
-  });
-
-  return { newSequenceNumber, oldCid };
-}
-
-/**
  * Fetch and decrypt folder metadata from IPFS.
  *
  * Used for sync operations when remote IPNS resolves to a different CID.
  * Fetches the encrypted metadata blob from IPFS and decrypts it with the folder key.
+ * Returns either v1 or v2 metadata depending on the encrypted content.
  *
  * @param cid - IPFS CID of the encrypted metadata blob
  * @param folderKey - Decrypted AES-256 folder key
- * @returns Decrypted folder metadata (version and children array)
+ * @returns Decrypted folder metadata (v1 or v2)
  * @throws Error if fetch or decryption fails
  */
 export async function fetchAndDecryptMetadata(
   cid: string,
   folderKey: Uint8Array
-): Promise<FolderMetadata> {
+): Promise<FolderMetadata | FolderMetadataV2> {
   // 1. Fetch encrypted metadata blob from IPFS
   const encryptedBytes = await fetchFromIpfs(cid);
 
@@ -841,7 +902,7 @@ export async function fetchAndDecryptMetadata(
   const encryptedJson = new TextDecoder().decode(encryptedBytes);
   const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
 
-  // 3. Decrypt using folder key
+  // 3. Decrypt using folder key (returns v1 or v2 depending on content)
   const metadata = await decryptFolderMetadata(encrypted, folderKey);
 
   return metadata;
