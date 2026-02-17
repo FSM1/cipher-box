@@ -1,2 +1,1 @@
-ok its live - happy for you to smoke test it in a playwright headed instance. we can handle auth together, or you   
-  can just inject a wallet and test things that way.       let me know
+ok we are logged in

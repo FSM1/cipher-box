@@ -2,32 +2,29 @@
 
 **Session ID:** 39dea4ee-5f57-4587-8c44-40db1cc1144c
 
-**Commit Message:** Ok its live - happy for you to smoke test it in a playwright headed inst
+**Commit Message:** Ok we are logged in
 
 ## Prompt
 
-ok its live - happy for you to smoke test it in a playwright headed instance. we can handle auth together, or you   
-  can just inject a wallet and test things that way.       let me know
+ok we are logged in
 
 ## Summary
 
-API health is green — database is up. 
+Dropdown stayed open while hovering over [settings] — the `::before` bridge fix is working. All 4 fixes from PR #137 verified on staging:
 
-Here's what I can test without auth:
-- Login page rendering (done)
-- API connectivity (done)
-- Footer links, staging banner
+| Fix | Status |
+|-----|--------|
+| Google OAuth (Brave fallback to iframe button) | Working |
+| Empty vault sync (no "sync failed" on fresh account) | Working — shows "Synced" checkmark |
+| User menu hover gap | Working — dropdown stays open moving to items |
+| CoreKit + TSS key export | Working — logs show clean login flow |
 
-For post-auth testing (file browser, vault init, sync, user menu hover fix), we need to log in. How do you want to handle it? Options:
-
-1. **You drive auth** — I'll click the buttons, you handle the Google/wallet popup interaction, then I take over once we're in the file browser
-2. **Email OTP** — if the test account (`test_account_4718@example.com` / `851527`) is configured on staging, I can automate the full flow
-
-Which approach?
+Want me to test anything else? I could try creating a folder or uploading a file to verify the full vault write → IPNS publish flow.
 
 ## Key Actions
 
-- - **mcp__playwright__browser_navigate**: 
-- - **mcp__playwright__browser_wait_for**: 
+- - **mcp__playwright__browser_snapshot**: 
 - - **mcp__playwright__browser_take_screenshot**: 
-- - **mcp__playwright__browser_evaluate**: 
+- - **mcp__playwright__browser_hover**: 
+- - **mcp__playwright__browser_hover**: 
+- - **mcp__playwright__browser_snapshot**: 
