@@ -1026,6 +1026,7 @@ export function FileBrowser() {
         open={detailsDialog.open}
         onClose={closeDetailsDialog}
         item={detailsDialog.item}
+        folderKey={currentFolder?.folderKey ?? null}
       />
 
       {/* Text editor dialog */}

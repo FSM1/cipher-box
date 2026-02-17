@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { FolderChildV2, FilePointer, FolderEntry } from '@cipherbox/crypto';
+import type { FolderChildV2, FilePointer, FolderEntry, FileMetadata } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useFolderStore } from '../../stores/folder.store';
 import { resolveIpnsRecord } from '../../services/ipns.service';
+import { resolveFileMetadata } from '../../services/file-metadata.service';
 import { formatDate } from '../../utils/format';
 import '../../styles/details-dialog.css';
 
@@ -10,6 +11,7 @@ type DetailsDialogProps = {
   open: boolean;
   onClose: () => void;
   item: FolderChildV2 | null;
+  folderKey: Uint8Array | null;
 };
 
 /**
@@ -80,11 +82,17 @@ function FileDetails({
   item,
   metadataCid,
   metadataLoading,
+  fileMeta,
+  fileMetaLoading,
 }: {
   item: FilePointer;
   metadataCid: string | null;
   metadataLoading: boolean;
+  fileMeta: FileMetadata | null;
+  fileMetaLoading: boolean;
 }) {
+  const encryptionMode = fileMeta?.encryptionMode ?? 'GCM';
+
   return (
     <div className="details-rows">
       <DetailRow label="Name">
@@ -107,6 +115,37 @@ function FileDetails({
           <span className="details-loading">resolving...</span>
         ) : metadataCid ? (
           <CopyableValue value={metadataCid} />
+        ) : (
+          <span className="details-value details-value--dim">unavailable</span>
+        )}
+      </DetailRow>
+
+      {/* Encryption section */}
+      <div className="details-section-header">{'// encryption'}</div>
+
+      <DetailRow label="Mode">
+        {fileMetaLoading ? (
+          <span className="details-loading">resolving...</span>
+        ) : fileMeta ? (
+          <span className="details-value">
+            AES-256-{encryptionMode}{' '}
+            <span className="details-value--dim">
+              ({encryptionMode === 'CTR' ? 'streaming' : 'authenticated'})
+            </span>
+          </span>
+        ) : (
+          <span className="details-value details-value--dim">unavailable</span>
+        )}
+      </DetailRow>
+
+      <DetailRow label="File Key">
+        {fileMetaLoading ? (
+          <span className="details-loading">resolving...</span>
+        ) : fileMeta ? (
+          <span className="details-value details-value--redacted">
+            {fileMeta.fileKeyEncrypted.slice(0, 16)}...{fileMeta.fileKeyEncrypted.slice(-8)}{' '}
+            (ECIES-wrapped)
+          </span>
         ) : (
           <span className="details-value details-value--dim">unavailable</span>
         )}
@@ -226,9 +265,11 @@ function FolderDetails({
  * Resolves the parent folder's IPNS record on open to get the live
  * metadata CID. Sensitive key material is displayed in redacted form.
  */
-export function DetailsDialog({ open, onClose, item }: DetailsDialogProps) {
+export function DetailsDialog({ open, onClose, item, folderKey }: DetailsDialogProps) {
   const [metadataCid, setMetadataCid] = useState<string | null>(null);
   const [metadataLoading, setMetadataLoading] = useState(false);
+  const [fileMeta, setFileMeta] = useState<FileMetadata | null>(null);
+  const [fileMetaLoading, setFileMetaLoading] = useState(false);
 
   // For folders, also look up the folder node for sequence number and child count
   const folderNode = useFolderStore((state) =>
@@ -276,6 +317,38 @@ export function DetailsDialog({ open, onClose, item }: DetailsDialogProps) {
     };
   }, [open, item]);
 
+  // Resolve per-file metadata (encryption mode, wrapped key, etc.) for files
+  useEffect(() => {
+    if (!open || !item || item.type !== 'file' || !folderKey) {
+      setFileMeta(null);
+      return;
+    }
+
+    let cancelled = false;
+    setFileMetaLoading(true);
+
+    resolveFileMetadata(item.fileMetaIpnsName, folderKey)
+      .then((meta) => {
+        if (!cancelled) {
+          setFileMeta(meta);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setFileMeta(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setFileMetaLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, item, folderKey]);
+
   if (!item) return null;
 
   const title = item.type === 'folder' ? 'Folder Details' : 'File Details';
@@ -283,7 +356,13 @@ export function DetailsDialog({ open, onClose, item }: DetailsDialogProps) {
   return (
     <Modal open={open} onClose={onClose} title={title}>
       {item.type === 'file' ? (
-        <FileDetails item={item} metadataCid={metadataCid} metadataLoading={metadataLoading} />
+        <FileDetails
+          item={item}
+          metadataCid={metadataCid}
+          metadataLoading={metadataLoading}
+          fileMeta={fileMeta}
+          fileMetaLoading={fileMetaLoading}
+        />
       ) : (
         <FolderDetails
           item={item}
