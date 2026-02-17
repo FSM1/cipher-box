@@ -1,5 +1,12 @@
-Todo saved: `.planning/todos/pending/2026-02-17-remove-corekit-logging.md`
+Done. 6 code cleanup todos captured (including the CoreKit logging one from earlier):
 
-  **Remove CoreKit logging in web app**
-  Area: ui
-  Files: 1 referenced
+| # | Todo | Area |
+|---|------|------|
+| 1 | Remove CoreKit logging in web app | ui |
+| 2 | Split FileBrowser.tsx god component | ui |
+| 3 | Deduplicate Audio/Video player dialog logic | ui |
+| 4 | Consolidate API base URL definition | ui |
+| 5 | Split folder.service.ts into focused modules | ui |
+| 6 | Centralize error handling in FileBrowser | ui |
+
+13 total pending todos now. Committed to `main`.

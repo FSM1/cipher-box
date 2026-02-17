@@ -126,7 +126,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-7 pending todo(s):
+13 pending todo(s):
 
 - `2026-02-07-web-worker-large-file-encryption.md` -- Offload large file encryption to Web Worker (area: ui)
 - `2026-02-14-bring-your-own-ipfs-node.md` -- Add bring-your-own IPFS node support (area: api)
@@ -135,6 +135,12 @@ Recent decisions affecting current work:
 - `2026-02-14-fix-orval-generated-client-any-warnings.md` -- Fix no-explicit-any warnings in generated API client (area: tooling)
 - `2026-02-15-security-review-short-term-fixes.md` -- Security review short-term fixes: H-01, H-06, H-07, M-01, M-04, M-06 (area: auth)
 - `2026-02-15-security-review-medium-term-fixes.md` -- Security review medium-term fixes: H-08, M-07, M-11 (area: auth)
+- `2026-02-17-remove-corekit-logging.md` -- Remove CoreKit logging in web app (area: ui)
+- `2026-02-17-split-filebrowser-god-component.md` -- Split FileBrowser.tsx god component (area: ui)
+- `2026-02-17-dedup-audio-video-player-dialogs.md` -- Deduplicate Audio/Video player dialog logic (area: ui)
+- `2026-02-17-consolidate-api-base-url.md` -- Consolidate API base URL definition (area: ui)
+- `2026-02-17-split-folder-service.md` -- Split folder.service.ts into focused modules (area: ui)
+- `2026-02-17-centralize-error-handling.md` -- Centralize error handling in FileBrowser (area: ui)
 
 ### Roadmap Evolution
 
