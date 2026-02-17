@@ -114,18 +114,26 @@ Plans:
 
 ### Phase 12.1: AES-CTR Streaming Encryption (INSERTED)
 
-**Goal**: Media files (video/audio) are encrypted with AES-256-CTR instead of GCM, enabling byte-range decryption for in-browser playback and efficient FUSE reads
-**Depends on**: Phase 12 (MFA must stabilize auth and key derivation first)
+**Goal**: Media files (video/audio) are encrypted with AES-256-CTR instead of GCM, enabling byte-range decryption for in-browser streaming playback via Service Worker transparent decrypt proxy
+**Depends on**: Phase 12.6 (per-file IPNS metadata with encryptionMode field)
 **Requirements**: Spec'd in TECHNICAL_ARCHITECTURE.md (v1.1 roadmap item), DATA_FLOWS.md (CTR upload/download sequences)
-**Research flag**: NEEDS `/gsd:research-phase` -- MediaSource API + Service Worker decryption pipeline, byte-range IPFS fetching, CTR nonce/counter management for random-access reads
+**Research flag**: COMPLETE -- Service Worker decrypt proxy pattern, CTR nonce/counter management, streaming upload pipeline, IPFS byte-range limitations researched
 **Success Criteria** (what must be TRUE):
 
-1. Media files (detected by MIME type) are encrypted with AES-256-CTR; all other files continue using AES-256-GCM
-2. User can play encrypted video/audio in-browser without downloading the entire file first (streaming decryption via MediaSource or Service Worker)
-3. Desktop FUSE client can decrypt CTR-encrypted files with random-access byte-range reads (no full-file download)
-4. Existing GCM-encrypted files remain fully readable -- encryptionMode field in metadata drives mode selection
-5. Upload pipeline streams file data through CTR encryption instead of loading entirely into memory
-   **Plans**: TBD
+1. Media files (detected by MIME type + size threshold) are encrypted with AES-256-CTR; all other files continue using AES-256-GCM
+2. User can play encrypted video/audio in-browser without downloading the entire file first (streaming decryption via Service Worker)
+3. Upload pipeline streams file data through CTR encryption instead of loading entirely into memory
+4. Custom player UI with decrypt progress bar, buffering state, and CipherBox branding
+5. encryptionMode field in metadata drives mode selection (CTR for media, GCM default)
+
+**Plans:** 4 plans
+
+Plans:
+
+- [ ] 12.1-01-PLAN.md — CTR crypto primitives: encryptAesCtr, decryptAesCtr, decryptAesCtrRange, generateCtrIv, constants, tests
+- [ ] 12.1-02-PLAN.md — Streaming upload: mode selection (MIME + size), CTR streaming encrypt via TransformStream, mode-aware pipeline
+- [ ] 12.1-03-PLAN.md — Service Worker: decrypt proxy (fetch intercept, CTR range decrypt, auth token, caching), registration, Vite build
+- [ ] 12.1-04-PLAN.md — Integration: mode-aware download, useStreamingPreview hook, VideoPlayerDialog + AudioPlayerDialog with decrypt progress
 
 ### Phase 12.2: Encrypted Device Registry (INSERTED)
 
@@ -368,13 +376,13 @@ Parallel phases:
 | 9.1 Env/DevOps/Staging     | M1        | 6/6            | Complete    | 2026-02-09 |
 | 10. Data Portability       | M1        | 3/3            | Complete    | 2026-02-11 |
 | 12. Core Kit Identity      | M2        | 5/5            | Complete    | 2026-02-13 |
-| 12.1 AES-CTR Streaming     | M2        | 0/TBD          | Not started | -          |
+| 12.1 AES-CTR Streaming     | M2        | 0/4            | Not started | -          |
 | 12.2 Device Registry       | M2        | 3/3            | Complete    | 2026-02-13 |
 | 12.3 SIWE + Identity       | M2        | 4/4            | Complete    | 2026-02-14 |
 | 12.3.1 Identity Cleanup    | M2        | 4/4            | Complete    | 2026-02-14 |
 | 12.4 MFA + Cross-Device    | M2        | 5/5            | Complete    | 2026-02-15 |
 | 12.5 MFA Polish/UAT/E2E    | M2        | 3/3            | Complete    | 2026-02-16 |
-| 12.6 Per-File IPNS Meta    | M2        | 0/5            | Not started | -          |
+| 12.6 Per-File IPNS Meta    | M2        | 5/5            | Complete    | 2026-02-17 |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
