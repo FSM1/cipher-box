@@ -14,6 +14,12 @@ const sw = self as unknown as ServiceWorkerGlobalScope;
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * Security note: StreamContext holds hex-encoded AES-256 key material in SW memory
+ * for the lifetime of an active stream. Keys are cleared when the stream is
+ * unregistered via the 'unregister-stream' message. The SW is a trusted context
+ * for active playback sessions only.
+ */
 type StreamContext = {
   fileKey: string; // hex-encoded AES-256 key
   iv: string; // hex-encoded 16-byte CTR IV
@@ -55,8 +61,20 @@ type SwMessage =
 /** Active decrypt contexts keyed by fileMetaIpnsName */
 const streamRegistry = new Map<string, StreamContext>();
 
+/** Maximum number of encrypted files to cache in SW memory */
+const MAX_CACHE_ENTRIES = 5;
+
 /** In-memory cache of fetched encrypted files (full file per CID) */
 const encryptedCache = new Map<string, Uint8Array>();
+
+function cacheSet(key: string, data: Uint8Array): void {
+  if (encryptedCache.size >= MAX_CACHE_ENTRIES) {
+    // Evict oldest entry (Map preserves insertion order)
+    const oldest = encryptedCache.keys().next().value;
+    if (oldest !== undefined) encryptedCache.delete(oldest);
+  }
+  encryptedCache.set(key, data);
+}
 
 /** Auth token for API requests */
 let authToken: string | null = null;
@@ -247,10 +265,14 @@ async function handleDecryptStream(
     }
 
     let response: Response;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 60_000);
     try {
-      response = await fetch(fetchUrl, { headers: fetchHeaders });
+      response = await fetch(fetchUrl, { headers: fetchHeaders, signal: controller.signal });
     } catch {
       return new Response('Failed to fetch encrypted content', { status: 502 });
+    } finally {
+      clearTimeout(timeoutId);
     }
 
     if (response.status === 401) {
@@ -305,7 +327,7 @@ async function handleDecryptStream(
       encrypted = new Uint8Array(await response.arrayBuffer());
     }
 
-    encryptedCache.set(cacheKey, encrypted);
+    cacheSet(cacheKey, encrypted);
     await postToClients({
       type: 'fetch-complete',
       fileMetaIpnsName: cacheKey,
@@ -319,12 +341,22 @@ async function handleDecryptStream(
   let isRangeRequest = false;
 
   if (rangeHeader) {
-    const match = rangeHeader.match(/bytes=(\d+)-(\d*)/);
-    if (match) {
-      isRangeRequest = true;
-      start = parseInt(match[1], 10);
-      end = match[2] ? parseInt(match[2], 10) : ctx.totalSize - 1;
+    // Handle suffix range: bytes=-N (last N bytes)
+    const suffixMatch = rangeHeader.match(/bytes=-(\d+)/);
+    const prefixMatch = rangeHeader.match(/bytes=(\d+)-(\d*)/);
 
+    if (suffixMatch) {
+      isRangeRequest = true;
+      const suffixLength = parseInt(suffixMatch[1], 10);
+      start = Math.max(0, ctx.totalSize - suffixLength);
+      end = ctx.totalSize - 1;
+    } else if (prefixMatch) {
+      isRangeRequest = true;
+      start = parseInt(prefixMatch[1], 10);
+      end = prefixMatch[2] ? parseInt(prefixMatch[2], 10) : ctx.totalSize - 1;
+    }
+
+    if (isRangeRequest) {
       // Clamp to valid range
       if (end >= ctx.totalSize) end = ctx.totalSize - 1;
       if (start > end) {

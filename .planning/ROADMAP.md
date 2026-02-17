@@ -54,7 +54,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 12.3.1: Pre-Wipe Identity Cleanup** - Deterministic IPNS derivation, hashed identifiers, remove auto-linking (INSERTED)
 - [x] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
 - [x] **Phase 12.5: MFA Polishing, UAT & E2E Testing** - Polish auth flows, wallet E2E with mock provider, fix UAT bugs (INSERTED)
-- [ ] **Phase 12.6: Per-File IPNS Metadata Split** - Split file metadata into per-file IPNS records, decouple content updates from folder publishes (INSERTED)
+- [x] **Phase 12.6: Per-File IPNS Metadata Split** - Split file metadata into per-file IPNS records, decouple content updates from folder publishes (INSERTED)
 - [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
 - [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
@@ -269,11 +269,11 @@ Plans:
 
 Plans:
 
-- [ ] 12.6-01-PLAN.md — Crypto primitives: file IPNS HKDF derivation, FileMetadata/FilePointer types, encrypt/decrypt, v2 folder schema
-- [ ] 12.6-02-PLAN.md — Backend: batch publish endpoint, FolderIpns record_type column, republish scalability, API client regen
-- [ ] 12.6-03-PLAN.md — Frontend services: file-metadata service, v2 folder.service.ts rewrite, download/delete flow updates, store types
-- [ ] 12.6-04-PLAN.md — Frontend hooks + components: useFolder/useFilePreview/useDropUpload v2, FileBrowser/TextEditor/DetailsDialog updates
-- [ ] 12.6-05-PLAN.md — Recovery tool v2 support, vault export docs update, full build verification
+- [x] 12.6-01-PLAN.md — Crypto primitives: file IPNS HKDF derivation, FileMetadata/FilePointer types, encrypt/decrypt, v2 folder schema
+- [x] 12.6-02-PLAN.md — Backend: batch publish endpoint, FolderIpns record_type column, republish scalability, API client regen
+- [x] 12.6-03-PLAN.md — Frontend services: file-metadata service, v2 folder.service.ts rewrite, download/delete flow updates, store types
+- [x] 12.6-04-PLAN.md — Frontend hooks + components: useFolder/useFilePreview/useDropUpload v2, FileBrowser/TextEditor/DetailsDialog updates
+- [x] 12.6-05-PLAN.md — Recovery tool v2 support, vault export docs update, full build verification
 
 ### Phase 13: File Versioning
 

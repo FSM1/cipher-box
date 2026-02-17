@@ -61,8 +61,9 @@ export function selectEncryptionMode(file: File): 'GCM' | 'CTR' {
  * Encrypt a file using AES-256-CTR in streaming 1MB chunks.
  *
  * The file is read in CHUNK_SIZE slices, each encrypted with a counter
- * derived from its byte offset. This keeps memory bounded to ~2MB
- * (one input chunk + one output chunk) regardless of file size.
+ * derived from its byte offset. Each crypto.subtle.encrypt call processes
+ * at most ~1MB, but all encrypted chunks are accumulated in memory before
+ * being combined into the final ciphertext buffer.
  *
  * CTR ciphertext is the same size as plaintext (no auth tag overhead).
  * Integrity is provided by IPFS content addressing.
@@ -82,7 +83,7 @@ export async function encryptFileCtr(
   // 2. Import CryptoKey once (not per-chunk)
   const cryptoKey = await crypto.subtle.importKey(
     'raw',
-    new Uint8Array(fileKey).buffer as ArrayBuffer,
+    fileKey as BufferSource,
     { name: AES_CTR_ALGORITHM },
     false,
     ['encrypt']

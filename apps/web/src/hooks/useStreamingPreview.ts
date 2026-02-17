@@ -165,6 +165,10 @@ export function useStreamingPreview({
 
     return () => {
       cancelled = true;
+      if (ipnsNameRef.current) {
+        unregisterStream(ipnsNameRef.current);
+        ipnsNameRef.current = null;
+      }
     };
   }, [open, item, folderKey, swReady, mimeType]);
 

@@ -47,9 +47,11 @@ registerDecryptSW().then((reg) => {
   if (accessToken) updateSwToken(accessToken);
 });
 
-// Keep SW auth token in sync whenever it changes
-useAuthStore.subscribe((state) => {
-  if (state.accessToken) updateSwToken(state.accessToken);
+// Keep SW auth token in sync whenever it changes (clear on logout)
+useAuthStore.subscribe((state, prevState) => {
+  if (state.accessToken !== prevState.accessToken) {
+    updateSwToken(state.accessToken ?? '');
+  }
 });
 
 // Expose Zustand stores for E2E test state injection (dev mode only)

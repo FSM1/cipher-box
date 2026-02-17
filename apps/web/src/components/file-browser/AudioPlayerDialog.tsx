@@ -65,8 +65,11 @@ export function AudioPlayerDialog({ open, onClose, item, folderKey }: AudioPlaye
   });
 
   // Blob URL preview (GCM fallback or when SW not ready)
+  // Gate on !streaming.loading to avoid redundant blob fetch while CTR check resolves
   const blobPreview = useFilePreview({
-    open: open && (!isStreamingCandidate || !streaming.isSwReady || !streaming.isCtr),
+    open:
+      open &&
+      (!isStreamingCandidate || !streaming.isSwReady || (!streaming.loading && !streaming.isCtr)),
     item,
     mimeType,
     folderKey,
@@ -315,15 +318,16 @@ export function AudioPlayerDialog({ open, onClose, item, folderKey }: AudioPlaye
     [duration]
   );
 
+  const streamingCleanup = streaming.cleanup;
   const handleClose = useCallback(() => {
     // Stop playback before closing
     if (audioRef.current) {
       audioRef.current.pause();
     }
     setIsPlaying(false);
-    streaming.cleanup();
+    streamingCleanup();
     onClose();
-  }, [onClose, streaming]);
+  }, [onClose, streamingCleanup]);
 
   if (!item) return null;
 
@@ -395,10 +399,13 @@ export function AudioPlayerDialog({ open, onClose, item, folderKey }: AudioPlaye
               onKeyDown={(e) => {
                 const audio = audioRef.current;
                 if (!audio || !duration) return;
-                if (e.key === 'ArrowRight')
+                if (e.key === 'ArrowRight') {
+                  e.preventDefault();
                   audio.currentTime = Math.min(duration, audio.currentTime + 5);
-                else if (e.key === 'ArrowLeft')
+                } else if (e.key === 'ArrowLeft') {
+                  e.preventDefault();
                   audio.currentTime = Math.max(0, audio.currentTime - 5);
+                }
               }}
               role="slider"
               aria-label="Audio progress"

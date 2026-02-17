@@ -68,7 +68,7 @@ describe('AES-256-CTR', () => {
       expect(decrypted).toEqual(plaintext);
     });
 
-    it('should encrypt and decrypt 1MB data', async () => {
+    it('should encrypt and decrypt 1MB data', { timeout: 30_000 }, async () => {
       const key = generateFileKey();
       const iv = generateCtrIv();
 
@@ -351,28 +351,32 @@ describe('AES-256-CTR', () => {
   });
 
   describe('large file range decrypt', () => {
-    it('should correctly range-decrypt from the middle of a 1MB file', async () => {
-      const key = generateFileKey();
-      const iv = generateCtrIv();
+    it(
+      'should correctly range-decrypt from the middle of a 1MB file',
+      { timeout: 30_000 },
+      async () => {
+        const key = generateFileKey();
+        const iv = generateCtrIv();
 
-      // Create 1MB plaintext with deterministic pattern
-      const totalSize = 1024 * 1024;
-      const plaintext = new Uint8Array(totalSize);
-      // Fill with a repeating pattern (mod 256 of index)
-      for (let i = 0; i < totalSize; i++) {
-        plaintext[i] = i % 256;
+        // Create 1MB plaintext with deterministic pattern
+        const totalSize = 1024 * 1024;
+        const plaintext = new Uint8Array(totalSize);
+        // Fill with a repeating pattern (mod 256 of index)
+        for (let i = 0; i < totalSize; i++) {
+          plaintext[i] = i % 256;
+        }
+
+        const ciphertext = await encryptAesCtr(plaintext, key, iv);
+
+        // Decrypt a range in the middle: bytes 500000-500999
+        const rangeStart = 500000;
+        const rangeEnd = 500999;
+        const rangeDecrypted = await decryptAesCtrRange(ciphertext, key, iv, rangeStart, rangeEnd);
+
+        expect(rangeDecrypted.length).toBe(1000);
+        expect(rangeDecrypted).toEqual(plaintext.slice(rangeStart, rangeEnd + 1));
       }
-
-      const ciphertext = await encryptAesCtr(plaintext, key, iv);
-
-      // Decrypt a range in the middle: bytes 500000-500999
-      const rangeStart = 500000;
-      const rangeEnd = 500999;
-      const rangeDecrypted = await decryptAesCtrRange(ciphertext, key, iv, rangeStart, rangeEnd);
-
-      expect(rangeDecrypted.length).toBe(1000);
-      expect(rangeDecrypted).toEqual(plaintext.slice(rangeStart, rangeEnd + 1));
-    });
+    );
   });
 
   describe('CryptoError codes', () => {

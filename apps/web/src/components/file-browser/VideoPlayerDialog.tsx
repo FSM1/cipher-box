@@ -60,8 +60,11 @@ export function VideoPlayerDialog({ open, onClose, item, folderKey }: VideoPlaye
   });
 
   // Blob URL preview (GCM fallback or when SW not ready)
+  // Gate on !streaming.loading to avoid redundant blob fetch while CTR check resolves
   const blobPreview = useFilePreview({
-    open: open && (!isStreamingCandidate || !streaming.isSwReady || !streaming.isCtr),
+    open:
+      open &&
+      (!isStreamingCandidate || !streaming.isSwReady || (!streaming.loading && !streaming.isCtr)),
     item,
     mimeType,
     folderKey,
@@ -279,14 +282,15 @@ export function VideoPlayerDialog({ open, onClose, item, folderKey }: VideoPlaye
     }
   }, []);
 
+  const streamingCleanup = streaming.cleanup;
   const handleClose = useCallback(() => {
     if (videoRef.current) {
       videoRef.current.pause();
     }
     setIsPlaying(false);
-    streaming.cleanup();
+    streamingCleanup();
     onClose();
-  }, [onClose, streaming]);
+  }, [onClose, streamingCleanup]);
 
   if (!item) return null;
 
