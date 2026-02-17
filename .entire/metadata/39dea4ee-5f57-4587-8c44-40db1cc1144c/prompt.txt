@@ -1,1 +1,2 @@
-theres some comments that need to be addressed on that pr. please fix them. also check the ci and e2e test failures
+ok its live - happy for you to smoke test it in a playwright headed instance. we can handle auth together, or you   
+  can just inject a wallet and test things that way.       let me know
