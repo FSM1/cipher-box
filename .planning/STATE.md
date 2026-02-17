@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 12.6 (Per-File IPNS Metadata Split) -- IN PROGRESS
-Plan: 2 of 5 planned
+Plan: 3 of 5 planned
 Status: In progress
-Last activity: 2026-02-17 -- Completed 12.6-02-PLAN.md (Batch Publish Backend)
+Last activity: 2026-02-17 -- Completed 12.6-03-PLAN.md (Frontend Service Layer Integration)
 
-Progress: [####################] 90% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6: 2/5)
+Progress: [####################] 90% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6: 3/5)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 99
+- Total plans completed: 100
 - Average duration: 5.3 min
-- Total execution time: 8.8 hours
+- Total execution time: 8.9 hours
 
 **By Phase (M1 summary):**
 
@@ -35,11 +35,11 @@ Progress: [####################] 90% (M1 complete, M2 Phase 12 complete, Phase 1
 | M2 Phase 12.3.1 | 4/4   | 38 min  | 9.5 min  |
 | M2 Phase 12.4   | 5/5   | 47 min  | 9.4 min  |
 | M2 Phase 12.5   | 3/3   | 9 min   | 3.0 min  |
-| M2 Phase 12.6   | 2/5   | 9 min   | 4.5 min  |
+| M2 Phase 12.6   | 3/5   | 16 min  | 5.3 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 2m, 3m, 4m, 4m, 5m
+- Last 5 plans: 3m, 4m, 4m, 5m, 7m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -110,6 +110,9 @@ Recent decisions affecting current work:
 | fileId minimum 10 chars validation                               | 12.6-01   | Ensures UUID-length identifiers; prevents accidental short strings in HKDF info                                  |
 | Partial success for batch publish (per-record results)           | 12.6-02   | Failed records logged and counted, not re-thrown; batch returns totalSucceeded/totalFailed                       |
 | Concurrency=10 for batch delegated routing calls                 | 12.6-02   | Promise.allSettled in groups of 10 to avoid overwhelming delegated-ipfs.dev                                      |
+| Orphaned TEE enrollment on file delete left to expire            | 12.6-03   | No unenrollIpns REST API yet; 24h IPNS lifetime, Phase 14 adds explicit cleanup                                  |
+| deleteFolder returns fileMetaIpnsName list (not CIDs) for v2     | 12.6-03   | v2 FilePointers have no inline CID; caller resolves IPNS to get CID for unpinning                                |
+| replaceFileInFolder publishes only file IPNS (folder untouched)  | 12.6-03   | Primary optimization of per-file IPNS: content update skips folder metadata entirely                             |
 
 ### Pending Todos
 
@@ -165,17 +168,17 @@ Recent decisions affecting current work:
 - Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
 - Phase 12.4 (MFA + Cross-Device): COMPLETE -- all 5 plans done (bulletin board API, MFA hooks, enrollment wizard, cross-device approval, integration verification)
 - Phase 12.5 (MFA Polishing, UAT & E2E): COMPLETE -- all 3 plans done (SecurityTab wiring, wallet E2E tests, UAT final verification)
-- Phase 12.6 (Per-File IPNS Metadata): IN PROGRESS -- research done, plans 1-2/5 complete (crypto primitives, batch publish backend)
+- Phase 12.6 (Per-File IPNS Metadata): IN PROGRESS -- research done, plans 1-3/5 complete (crypto primitives, batch publish backend, frontend service layer)
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 12.6-02-PLAN.md (Batch Publish Backend)
+Stopped at: Completed 12.6-03-PLAN.md (Frontend Service Layer Integration)
 Resume file: None
-Next: Phase 12.6 Plan 03 (Frontend Integration)
+Next: Phase 12.6 Plan 04 (Hooks & Components Update)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-17 after completing Phase 12.6 Plan 02 (Batch Publish Backend) -- Phase 12.6 in progress_
+_Last updated: 2026-02-17 after completing Phase 12.6 Plan 03 (Frontend Service Layer Integration) -- Phase 12.6 in progress_
