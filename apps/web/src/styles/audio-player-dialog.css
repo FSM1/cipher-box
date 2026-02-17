@@ -237,6 +237,45 @@
 }
 
 /* ==========================================================================
+   Decrypt Progress (streaming CTR)
+   ========================================================================== */
+
+.audio-decrypt-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.audio-decrypt-label {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.audio-decrypt-progress-track {
+  width: 200px;
+  height: 4px;
+  background: var(--color-green-darker);
+  position: relative;
+}
+
+.audio-decrypt-progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: var(--color-green-primary);
+  transition: width 0.3s ease;
+}
+
+.audio-decrypt-percent {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-green-primary);
+}
+
+/* ==========================================================================
    Error Message
    ========================================================================== */
 

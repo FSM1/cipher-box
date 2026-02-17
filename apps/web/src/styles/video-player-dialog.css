@@ -279,17 +279,69 @@
 }
 
 /* ==========================================================================
+   Encrypted Streaming Badge
+   ========================================================================== */
+
+.video-cipher-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-family: var(--font-family-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--color-green-primary);
+  background: rgb(0 0 0 / 60%);
+  padding: 2px 6px;
+  pointer-events: none;
+  border: 1px solid rgb(0 208 132 / 30%);
+}
+
+/* ==========================================================================
    Loading State
    ========================================================================== */
 
 .video-preview-loading {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: var(--spacing-sm);
   min-height: 300px;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+}
+
+/* ==========================================================================
+   Decrypt Progress (streaming CTR)
+   ========================================================================== */
+
+.video-decrypt-label {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.video-decrypt-progress-track {
+  width: 200px;
+  height: 4px;
+  background: var(--color-green-darker);
+  position: relative;
+}
+
+.video-decrypt-progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: var(--color-green-primary);
+  transition: width 0.3s ease;
+}
+
+.video-decrypt-percent {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-green-primary);
 }
 
 /* ==========================================================================

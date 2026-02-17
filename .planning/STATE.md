@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 12.6 complete (Per-File IPNS Metadata Split)
+**Current focus:** Milestone 2 -- Phase 12.1 complete (AES-CTR Streaming Encryption)
 
 ## Current Position
 
-Phase: 12.6 (Per-File IPNS Metadata Split) -- COMPLETE
-Plan: 5 of 5 planned
+Phase: 12.1 (AES-CTR Streaming Encryption) -- COMPLETE
+Plan: 4 of 4 planned
 Status: Phase complete
-Last activity: 2026-02-17 -- Completed 12.6-05-PLAN.md (Recovery Tool v2, Docs, Build Verification)
+Last activity: 2026-02-17 -- Phase 12.1 complete (all 4 plans executed, verified 5/5 must-haves)
 
-Progress: [####################] 100% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete)
+Progress: [####################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 102
+- Total plans completed: 106
 - Average duration: 5.3 min
-- Total execution time: 9.12 hours
+- Total execution time: 9.56 hours
 
 **By Phase (M1 summary):**
 
@@ -36,10 +36,11 @@ Progress: [####################] 100% (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 12.4   | 5/5   | 47 min  | 9.4 min  |
 | M2 Phase 12.5   | 3/3   | 9 min   | 3.0 min  |
 | M2 Phase 12.6   | 5/5   | 29 min  | 5.8 min  |
+| M2 Phase 12.1   | 4/4   | 27 min  | 6.8 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 5m, 7m, 3m, 10m
+- Last 5 plans: 10m, 4m, 5m, 12m, 6m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -116,6 +117,12 @@ Recent decisions affecting current work:
 | DetailsDialog parentFolderId prop removed                        | 12.6-04   | IPNS resolution uses item's own IPNS name directly; parent folder lookup no longer needed                        |
 | Inline base36 + protobuf for IPNS name in recovery.html          | 12.6-05   | No libp2p CDN dependency needed; self-contained BigInt-based implementation                                      |
 | IPNS failures non-blocking in recovery tool                      | 12.6-05   | Warn and continue; collect failures, report at end with IPNS names for manual recovery                           |
+| Post-build script for SW compilation (not Vite plugin)           | 12.1-03   | Vite 7 Environment API breaks Rollup output hooks in standard plugins; build-sw.mjs via Vite lib-mode is simpler |
+| Separate tsconfig.sw.json for WebWorker lib types                | 12.1-03   | SW runs in ServiceWorkerGlobalScope, needs WebWorker lib; excluded from main tsconfig to avoid type conflicts    |
+| Dev mode serves SW as raw TS, production as compiled IIFE        | 12.1-03   | Vite dev server transforms TS on-the-fly; production uses minified 2.8KB IIFE at /decrypt-sw.js                  |
+| Dual-hook pattern for streaming vs blob URL preview              | 12.1-04   | Both useStreamingPreview and useFilePreview called; open flag controls which is active                           |
+| isCtr return from useStreamingPreview for mode detection         | 12.1-04   | Caller knows if file is CTR-encrypted without separate metadata lookup                                           |
+| SW body streaming with getReader() for progress tracking         | 12.1-04   | Changed from arrayBuffer() to chunk-by-chunk reading for postMessage progress                                    |
 
 ### Pending Todos
 
@@ -166,7 +173,7 @@ Recent decisions affecting current work:
 - Phase 15 (Link Sharing): NEEDS `/gsd:research-phase` -- unauthenticated web viewer security
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
-- Phase 12.1 (AES-CTR Streaming): NEEDS `/gsd:research-phase` -- MediaSource/Service Worker decryption, byte-range IPFS, CTR nonce management
+- Phase 12.1 (AES-CTR Streaming): COMPLETE -- all 4 plans done (CTR crypto primitives, streaming upload pipeline, service worker decrypt proxy, media playback integration)
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
 - Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
 - Phase 12.4 (MFA + Cross-Device): COMPLETE -- all 5 plans done (bulletin board API, MFA hooks, enrollment wizard, cross-device approval, integration verification)
@@ -177,11 +184,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 12.6-05-PLAN.md (Recovery Tool v2, Docs, Build Verification)
+Stopped at: Phase 12.1 complete
 Resume file: None
-Next: Phase 12.1 (AES-256-CTR Streaming Encryption) or next milestone phase
+Next: Phase 13 (File Versioning) or next milestone phase
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-17 after completing Phase 12.6 Plan 05 (Recovery Tool v2, Docs, Build Verification) -- Phase 12.6 complete_
+_Last updated: 2026-02-17 after completing Phase 12.1 (AES-CTR Streaming Encryption) -- Phase 12.1 complete_

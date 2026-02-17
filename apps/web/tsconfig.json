@@ -11,5 +11,6 @@
     "declarationMap": false
   },
   "include": ["src"],
+  "exclude": ["src/workers/decrypt-sw.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

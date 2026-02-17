@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import type { FilePointer } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useFilePreview } from '../../hooks/useFilePreview';
+import { useStreamingPreview } from '../../hooks/useStreamingPreview';
 import '../../styles/video-player-dialog.css';
 
 type VideoPlayerDialogProps = {
@@ -19,6 +20,9 @@ const VIDEO_MIME: Record<string, string> = {
   '.mov': 'video/mp4',
   '.mkv': 'video/x-matroska',
 };
+
+/** MIME types eligible for CTR streaming playback. */
+const STREAMING_VIDEO_MIMES = new Set(['video/mp4', 'video/webm']);
 
 function getVideoMime(filename: string): string {
   const lower = filename.toLowerCase();
@@ -39,17 +43,40 @@ const SPEED_OPTIONS = [1, 1.5, 2, 0.5] as const;
 /**
  * Modal dialog for playing video files with custom overlay controls.
  *
+ * Supports both CTR streaming (via Service Worker) and GCM blob URL playback.
  * No native browser video controls -- fully custom UI with play/pause,
  * seek, volume, speed, and fullscreen. Controls auto-hide during playback.
  */
 export function VideoPlayerDialog({ open, onClose, item, folderKey }: VideoPlayerDialogProps) {
   const mimeType = item ? getVideoMime(item.name) : 'video/mp4';
-  const { loading, error, objectUrl, handleDownload } = useFilePreview({
-    open,
+  const isStreamingCandidate = item ? STREAMING_VIDEO_MIMES.has(getVideoMime(item.name)) : false;
+
+  // Streaming preview (CTR via Service Worker)
+  const streaming = useStreamingPreview({
+    open: open && isStreamingCandidate,
     item,
     mimeType,
     folderKey,
   });
+
+  // Blob URL preview (GCM fallback or when SW not ready)
+  // Gate on !streaming.loading to avoid redundant blob fetch while CTR check resolves
+  const blobPreview = useFilePreview({
+    open:
+      open &&
+      (!isStreamingCandidate || !streaming.isSwReady || (!streaming.loading && !streaming.isCtr)),
+    item,
+    mimeType,
+    folderKey,
+  });
+
+  // Determine active preview mode
+  const isStreaming =
+    isStreamingCandidate && streaming.isSwReady && streaming.isCtr && !streaming.error;
+  const videoSrc = isStreaming ? streaming.streamUrl : blobPreview.objectUrl;
+  const isLoading = isStreaming ? streaming.loading : blobPreview.loading;
+  const previewError = isStreaming ? streaming.error : blobPreview.error;
+  const onDownload = isStreaming ? streaming.handleDownload : blobPreview.handleDownload;
 
   // Video state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -255,13 +282,15 @@ export function VideoPlayerDialog({ open, onClose, item, folderKey }: VideoPlaye
     }
   }, []);
 
+  const streamingCleanup = streaming.cleanup;
   const handleClose = useCallback(() => {
     if (videoRef.current) {
       videoRef.current.pause();
     }
     setIsPlaying(false);
+    streamingCleanup();
     onClose();
-  }, [onClose]);
+  }, [onClose, streamingCleanup]);
 
   if (!item) return null;
 
@@ -269,14 +298,33 @@ export function VideoPlayerDialog({ open, onClose, item, folderKey }: VideoPlaye
   const currentSpeed = SPEED_OPTIONS[speedIndex];
   const showPlayOverlay = !isPlaying;
 
+  // Show decrypt progress bar during streaming fetch
+  const showDecryptProgress =
+    isStreaming && streaming.decryptProgress > 0 && streaming.decryptProgress < 100;
+
   return (
     <Modal open={open} onClose={handleClose} className="video-player-modal">
-      {loading ? (
-        <div className="video-preview-loading">decrypting...</div>
-      ) : error ? (
+      {isLoading || showDecryptProgress ? (
+        <div className="video-preview-loading">
+          {isStreaming && streaming.decryptProgress > 0 ? (
+            <>
+              <div className="video-decrypt-label">decrypting...</div>
+              <div className="video-decrypt-progress-track">
+                <div
+                  className="video-decrypt-progress-fill"
+                  style={{ width: `${streaming.decryptProgress}%` }}
+                />
+              </div>
+              <div className="video-decrypt-percent">{Math.round(streaming.decryptProgress)}%</div>
+            </>
+          ) : (
+            'decrypting...'
+          )}
+        </div>
+      ) : previewError ? (
         <div className="video-preview-error">
           {'> '}
-          {error}
+          {previewError}
         </div>
       ) : (
         <>
@@ -290,7 +338,7 @@ export function VideoPlayerDialog({ open, onClose, item, folderKey }: VideoPlaye
               <button
                 type="button"
                 className="video-btn"
-                onClick={handleDownload}
+                onClick={onDownload}
                 aria-label="Download file"
               >
                 [download]
@@ -300,10 +348,10 @@ export function VideoPlayerDialog({ open, onClose, item, folderKey }: VideoPlaye
 
           {/* Video screen */}
           <div className="video-screen" ref={containerRef} onMouseMove={handleMouseMove}>
-            {objectUrl && (
+            {videoSrc && (
               <video
                 ref={videoRef}
-                src={objectUrl}
+                src={videoSrc}
                 onTimeUpdate={handleTimeUpdate}
                 onLoadedMetadata={handleLoadedMetadata}
                 onEnded={handleEnded}
@@ -339,6 +387,9 @@ export function VideoPlayerDialog({ open, onClose, item, folderKey }: VideoPlaye
                 {videoWidth}x{videoHeight}
               </span>
             )}
+
+            {/* Encrypted streaming badge */}
+            {isStreaming && <span className="video-cipher-badge">ENCRYPTED</span>}
           </div>
 
           {/* Controls bar */}

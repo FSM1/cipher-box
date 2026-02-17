@@ -1,4 +1,4 @@
-import { decryptAesGcm, unwrapKey, hexToBytes, clearBytes } from '@cipherbox/crypto';
+import { decryptAesGcm, decryptAesCtr, unwrapKey, hexToBytes, clearBytes } from '@cipherbox/crypto';
 import { fetchFromIpfs, DownloadProgressCallback } from '../lib/api/ipfs';
 import { UploadedFile } from './upload.service';
 import { resolveFileMetadata } from './file-metadata.service';
@@ -7,7 +7,10 @@ import { resolveFileMetadata } from './file-metadata.service';
  * File metadata required for download and decryption.
  * This matches the UploadedFile type but only needs the fields for download.
  */
-export type FileMetadata = Pick<UploadedFile, 'cid' | 'iv' | 'wrappedKey' | 'originalName'>;
+export type FileMetadata = Pick<UploadedFile, 'cid' | 'iv' | 'wrappedKey' | 'originalName'> & {
+  /** Encryption mode: 'GCM' (default) or 'CTR' (streaming media) */
+  encryptionMode?: 'GCM' | 'CTR';
+};
 
 /**
  * Downloads and decrypts a file from IPFS.
@@ -33,8 +36,11 @@ export async function downloadFile(
   const fileKey = await unwrapKey(wrappedKey, privateKey);
 
   try {
-    // 4. Decrypt file content
-    const plaintext = await decryptAesGcm(ciphertext, fileKey, iv);
+    // 4. Decrypt file content (CTR for streaming media, GCM for everything else)
+    const plaintext =
+      metadata.encryptionMode === 'CTR'
+        ? await decryptAesCtr(ciphertext, fileKey, iv)
+        : await decryptAesGcm(ciphertext, fileKey, iv);
     return plaintext;
   } finally {
     // 5. Clear file key from memory
@@ -116,6 +122,7 @@ export async function downloadFileFromIpns(params: {
       iv: fileMeta.fileIv,
       wrappedKey: fileMeta.fileKeyEncrypted,
       originalName: params.fileName,
+      encryptionMode: fileMeta.encryptionMode,
     },
     params.privateKey,
     params.onProgress

@@ -48,13 +48,13 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 
 - [ ] **Phase 11: Cross-Platform Desktop** - Linux and Windows desktop apps (Tauri, platform-specific FUSE/virtual drive) -- can run in parallel
 - [x] **Phase 12: Core Kit Identity Provider Foundation** - Replace PnP Modal SDK with MPC Core Kit, CipherBox as identity provider
-- [ ] **Phase 12.1: AES-CTR Streaming Encryption** - AES-256-CTR for media files with byte-range decryption and in-browser playback (INSERTED)
+- [x] **Phase 12.1: AES-CTR Streaming Encryption** - AES-256-CTR for media files with byte-range decryption and in-browser playback (INSERTED)
 - [x] **Phase 12.2: Encrypted Device Registry** - Encrypted device metadata on IPFS for cross-device infrastructure (INSERTED)
 - [x] **Phase 12.3: SIWE + Unified Identity** - Wallet login via SIWE, multi-auth linking, ADR-001 cleanup (INSERTED)
 - [x] **Phase 12.3.1: Pre-Wipe Identity Cleanup** - Deterministic IPNS derivation, hashed identifiers, remove auto-linking (INSERTED)
 - [x] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
 - [x] **Phase 12.5: MFA Polishing, UAT & E2E Testing** - Polish auth flows, wallet E2E with mock provider, fix UAT bugs (INSERTED)
-- [ ] **Phase 12.6: Per-File IPNS Metadata Split** - Split file metadata into per-file IPNS records, decouple content updates from folder publishes (INSERTED)
+- [x] **Phase 12.6: Per-File IPNS Metadata Split** - Split file metadata into per-file IPNS records, decouple content updates from folder publishes (INSERTED)
 - [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
 - [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
@@ -114,18 +114,26 @@ Plans:
 
 ### Phase 12.1: AES-CTR Streaming Encryption (INSERTED)
 
-**Goal**: Media files (video/audio) are encrypted with AES-256-CTR instead of GCM, enabling byte-range decryption for in-browser playback and efficient FUSE reads
-**Depends on**: Phase 12 (MFA must stabilize auth and key derivation first)
+**Goal**: Media files (video/audio) are encrypted with AES-256-CTR instead of GCM, enabling byte-range decryption for in-browser streaming playback via Service Worker transparent decrypt proxy
+**Depends on**: Phase 12.6 (per-file IPNS metadata with encryptionMode field)
 **Requirements**: Spec'd in TECHNICAL_ARCHITECTURE.md (v1.1 roadmap item), DATA_FLOWS.md (CTR upload/download sequences)
-**Research flag**: NEEDS `/gsd:research-phase` -- MediaSource API + Service Worker decryption pipeline, byte-range IPFS fetching, CTR nonce/counter management for random-access reads
+**Research flag**: COMPLETE -- Service Worker decrypt proxy pattern, CTR nonce/counter management, streaming upload pipeline, IPFS byte-range limitations researched
 **Success Criteria** (what must be TRUE):
 
-1. Media files (detected by MIME type) are encrypted with AES-256-CTR; all other files continue using AES-256-GCM
-2. User can play encrypted video/audio in-browser without downloading the entire file first (streaming decryption via MediaSource or Service Worker)
-3. Desktop FUSE client can decrypt CTR-encrypted files with random-access byte-range reads (no full-file download)
-4. Existing GCM-encrypted files remain fully readable -- encryptionMode field in metadata drives mode selection
-5. Upload pipeline streams file data through CTR encryption instead of loading entirely into memory
-   **Plans**: TBD
+1. Media files (detected by MIME type + size threshold) are encrypted with AES-256-CTR; all other files continue using AES-256-GCM
+2. User can play encrypted video/audio in-browser without downloading the entire file first (streaming decryption via Service Worker)
+3. Upload pipeline streams file data through CTR encryption instead of loading entirely into memory
+4. Custom player UI with decrypt progress bar, buffering state, and CipherBox branding
+5. encryptionMode field in metadata drives mode selection (CTR for media, GCM default)
+
+**Plans:** 4 plans
+
+Plans:
+
+- [x] 12.1-01-PLAN.md — CTR crypto primitives: encryptAesCtr, decryptAesCtr, decryptAesCtrRange, generateCtrIv, constants, tests
+- [x] 12.1-02-PLAN.md — Streaming upload: mode selection (MIME + size), CTR streaming encrypt via TransformStream, mode-aware pipeline
+- [x] 12.1-03-PLAN.md — Service Worker: decrypt proxy (fetch intercept, CTR range decrypt, auth token, caching), registration, Vite build
+- [x] 12.1-04-PLAN.md — Integration: mode-aware download, useStreamingPreview hook, VideoPlayerDialog + AudioPlayerDialog with decrypt progress
 
 ### Phase 12.2: Encrypted Device Registry (INSERTED)
 
@@ -261,11 +269,11 @@ Plans:
 
 Plans:
 
-- [ ] 12.6-01-PLAN.md — Crypto primitives: file IPNS HKDF derivation, FileMetadata/FilePointer types, encrypt/decrypt, v2 folder schema
-- [ ] 12.6-02-PLAN.md — Backend: batch publish endpoint, FolderIpns record_type column, republish scalability, API client regen
-- [ ] 12.6-03-PLAN.md — Frontend services: file-metadata service, v2 folder.service.ts rewrite, download/delete flow updates, store types
-- [ ] 12.6-04-PLAN.md — Frontend hooks + components: useFolder/useFilePreview/useDropUpload v2, FileBrowser/TextEditor/DetailsDialog updates
-- [ ] 12.6-05-PLAN.md — Recovery tool v2 support, vault export docs update, full build verification
+- [x] 12.6-01-PLAN.md — Crypto primitives: file IPNS HKDF derivation, FileMetadata/FilePointer types, encrypt/decrypt, v2 folder schema
+- [x] 12.6-02-PLAN.md — Backend: batch publish endpoint, FolderIpns record_type column, republish scalability, API client regen
+- [x] 12.6-03-PLAN.md — Frontend services: file-metadata service, v2 folder.service.ts rewrite, download/delete flow updates, store types
+- [x] 12.6-04-PLAN.md — Frontend hooks + components: useFolder/useFilePreview/useDropUpload v2, FileBrowser/TextEditor/DetailsDialog updates
+- [x] 12.6-05-PLAN.md — Recovery tool v2 support, vault export docs update, full build verification
 
 ### Phase 13: File Versioning
 
@@ -368,13 +376,13 @@ Parallel phases:
 | 9.1 Env/DevOps/Staging     | M1        | 6/6            | Complete    | 2026-02-09 |
 | 10. Data Portability       | M1        | 3/3            | Complete    | 2026-02-11 |
 | 12. Core Kit Identity      | M2        | 5/5            | Complete    | 2026-02-13 |
-| 12.1 AES-CTR Streaming     | M2        | 0/TBD          | Not started | -          |
+| 12.1 AES-CTR Streaming     | M2        | 4/4            | Complete    | 2026-02-17 |
 | 12.2 Device Registry       | M2        | 3/3            | Complete    | 2026-02-13 |
 | 12.3 SIWE + Identity       | M2        | 4/4            | Complete    | 2026-02-14 |
 | 12.3.1 Identity Cleanup    | M2        | 4/4            | Complete    | 2026-02-14 |
 | 12.4 MFA + Cross-Device    | M2        | 5/5            | Complete    | 2026-02-15 |
 | 12.5 MFA Polish/UAT/E2E    | M2        | 3/3            | Complete    | 2026-02-16 |
-| 12.6 Per-File IPNS Meta    | M2        | 0/5            | Not started | -          |
+| 12.6 Per-File IPNS Meta    | M2        | 5/5            | Complete    | 2026-02-17 |
 | 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
