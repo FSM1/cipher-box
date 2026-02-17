@@ -52,7 +52,7 @@ pub async fn handle_auth_complete(
     let login_req = types::LoginRequest {
         id_token: id_token.clone(),
         public_key: compressed_public_key_hex,
-        login_type: "social".to_string(),
+        login_type: "corekit".to_string(),
     };
 
     let resp = state

@@ -159,9 +159,51 @@ pub struct FolderMetadataV2 {
 
 /// Union type for version-dispatched folder metadata parsing.
 /// Accepts both v1 and v2 folder metadata.
+#[derive(Debug, Clone)]
 pub enum AnyFolderMetadata {
     V1(FolderMetadata),
     V2(FolderMetadataV2),
+}
+
+impl AnyFolderMetadata {
+    /// Convert to v1 FolderMetadata for FUSE layer compatibility.
+    ///
+    /// V1 is returned as-is. V2 is converted by mapping FilePointers to
+    /// placeholder FileEntries (the FUSE layer resolves actual file metadata
+    /// via per-file IPNS lookups).
+    pub fn to_v1(&self) -> FolderMetadata {
+        match self {
+            AnyFolderMetadata::V1(v1) => v1.clone(),
+            AnyFolderMetadata::V2(v2) => {
+                let children = v2.children.iter().map(|child| match child {
+                    FolderChildV2::Folder(entry) => FolderChild::Folder(entry.clone()),
+                    FolderChildV2::File(ptr) => FolderChild::File(FileEntry {
+                        id: ptr.id.clone(),
+                        name: ptr.name.clone(),
+                        cid: String::new(), // Resolved via per-file IPNS
+                        file_key_encrypted: String::new(), // Resolved via per-file IPNS
+                        file_iv: String::new(), // Resolved via per-file IPNS
+                        size: 0, // Unknown until file metadata resolved
+                        created_at: ptr.created_at,
+                        modified_at: ptr.modified_at,
+                        encryption_mode: "GCM".to_string(),
+                    }),
+                }).collect();
+                FolderMetadata {
+                    version: "v1".to_string(),
+                    children,
+                }
+            }
+        }
+    }
+
+    /// Get the number of children in this folder metadata.
+    pub fn children_len(&self) -> usize {
+        match self {
+            AnyFolderMetadata::V1(v1) => v1.children.len(),
+            AnyFolderMetadata::V2(v2) => v2.children.len(),
+        }
+    }
 }
 
 /// Default encryption mode for FileMetadata: "GCM".
