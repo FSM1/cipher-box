@@ -1,0 +1,10 @@
+# Build outputs
+dist/
+*.tsbuildinfo
+
+# Vite config compiled outputs
+vite.config.js
+vite.config.d.ts
+vite.config.d.ts.map
+
+# Keep custom-instance.ts as it's hand-written (other API files are generated but tracked)

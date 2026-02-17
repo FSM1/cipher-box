@@ -1,0 +1,1 @@
+ok jsut tested the wallet auth flow, and both times I had to sign messages twice, with different nonces. once there was a wagmi error before the wallet selection dialog.

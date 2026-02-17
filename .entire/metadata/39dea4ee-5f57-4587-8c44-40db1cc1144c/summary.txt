@@ -1,0 +1,9 @@
+Good. Here's the summary of the two fixes:
+
+**Fix 1 — Double signing race condition** (`WalletLoginButton.tsx`):
+- Removed the direct `handleSiweFlow()` call from `handleConnectorClick`. Now only the `useEffect` triggers SIWE after wagmi updates `isConnected`/`address`. Previously both the effect and the callback called it, racing each other with different nonces.
+
+**Fix 2 — Wagmi error on mount** (`config.ts`):
+- Added `reconnectOnMount: false` to the wagmi config. Since CipherBox disconnects immediately after SIWE signing, there's no reason for wagmi to try reconnecting to a stale connector on page load — that was causing errors especially in Brave.
+
+Ready to commit and push when you want.
