@@ -35,11 +35,11 @@ Progress: [####################] 90% (M1 complete, M2 Phase 12 complete, Phase 1
 | M2 Phase 12.3.1 | 4/4   | 38 min  | 9.5 min  |
 | M2 Phase 12.4   | 5/5   | 47 min  | 9.4 min  |
 | M2 Phase 12.5   | 3/3   | 9 min   | 3.0 min  |
-| M2 Phase 12.6   | 1/5   | 4 min   | 4.0 min  |
+| M2 Phase 12.6   | 2/5   | 9 min   | 4.5 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 2m, 3m, 4m, 4m
+- Last 5 plans: 2m, 3m, 4m, 4m, 5m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -108,6 +108,8 @@ Recent decisions affecting current work:
 | File metadata encrypted with parent folderKey (not file's key)   | 12.6-01   | Consistent with folder metadata access control pattern; parent key controls child access                         |
 | encryptionMode optional with GCM default in validator            | 12.6-01   | Phase 12.1 AES-CTR files set 'CTR' explicitly; omission defaults to 'GCM' for backward compat                    |
 | fileId minimum 10 chars validation                               | 12.6-01   | Ensures UUID-length identifiers; prevents accidental short strings in HKDF info                                  |
+| Partial success for batch publish (per-record results)           | 12.6-02   | Failed records logged and counted, not re-thrown; batch returns totalSucceeded/totalFailed                       |
+| Concurrency=10 for batch delegated routing calls                 | 12.6-02   | Promise.allSettled in groups of 10 to avoid overwhelming delegated-ipfs.dev                                      |
 
 ### Pending Todos
 
@@ -163,17 +165,17 @@ Recent decisions affecting current work:
 - Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
 - Phase 12.4 (MFA + Cross-Device): COMPLETE -- all 5 plans done (bulletin board API, MFA hooks, enrollment wizard, cross-device approval, integration verification)
 - Phase 12.5 (MFA Polishing, UAT & E2E): COMPLETE -- all 3 plans done (SecurityTab wiring, wallet E2E tests, UAT final verification)
-- Phase 12.6 (Per-File IPNS Metadata): IN PROGRESS -- research done, plan 1/5 complete (crypto primitives)
+- Phase 12.6 (Per-File IPNS Metadata): IN PROGRESS -- research done, plans 1-2/5 complete (crypto primitives, batch publish backend)
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 12.6-01-PLAN.md (Crypto Primitives)
+Stopped at: Completed 12.6-02-PLAN.md (Batch Publish Backend)
 Resume file: None
-Next: Phase 12.6 Plan 02 (API Batch Publish Endpoints)
+Next: Phase 12.6 Plan 03 (Frontend Integration)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-17 after completing Phase 12.6 Plan 01 (Crypto Primitives) -- Phase 12.6 in progress_
+_Last updated: 2026-02-17 after completing Phase 12.6 Plan 02 (Batch Publish Backend) -- Phase 12.6 in progress_
