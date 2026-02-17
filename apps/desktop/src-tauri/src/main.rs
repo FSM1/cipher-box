@@ -5,6 +5,7 @@ mod api;
 mod commands;
 mod crypto;
 mod fuse;
+mod registry;
 mod state;
 mod sync;
 mod tray;
