@@ -2,7 +2,10 @@
  * @cipherbox/crypto - Folder Metadata Types
  *
  * Type definitions for encrypted folder metadata stored in IPNS records.
+ * Supports both v1 (inline file data) and v2 (per-file IPNS pointer) schemas.
  */
+
+import type { FilePointer } from '../file/types';
 
 /**
  * Decrypted folder metadata structure.
@@ -67,6 +70,27 @@ export type FileEntry = {
   /** Last modification timestamp (Unix ms) */
   modifiedAt: number;
 };
+
+/**
+ * v2 folder metadata with per-file IPNS pointers instead of inline file data.
+ * Children can be FolderEntry (unchanged) or FilePointer (slim IPNS reference).
+ */
+export type FolderMetadataV2 = {
+  /** Schema version for v2 format */
+  version: 'v2';
+  /** Folders and file pointers in this folder */
+  children: FolderChildV2[];
+};
+
+/**
+ * A v2 child entry can be either a folder or a file pointer.
+ */
+export type FolderChildV2 = FolderEntry | FilePointer;
+
+/**
+ * Union type for validation - accepts both v1 and v2 folder metadata.
+ */
+export type AnyFolderMetadata = FolderMetadata | FolderMetadataV2;
 
 /**
  * Encrypted folder metadata for storage/transmission.
