@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import type { FilePointer } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useFilePreview } from '../../hooks/useFilePreview';
+import { useStreamingPreview } from '../../hooks/useStreamingPreview';
 import '../../styles/audio-player-dialog.css';
 
 type AudioPlayerDialogProps = {
@@ -21,6 +22,15 @@ const AUDIO_MIME: Record<string, string> = {
   '.flac': 'audio/flac',
 };
 
+/** MIME types eligible for CTR streaming playback. */
+const STREAMING_AUDIO_MIMES = new Set([
+  'audio/mpeg',
+  'audio/mp4',
+  'audio/webm',
+  'audio/ogg',
+  'audio/aac',
+]);
+
 function getAudioMime(filename: string): string {
   const lower = filename.toLowerCase();
   const lastDot = lower.lastIndexOf('.');
@@ -38,17 +48,37 @@ function formatTime(seconds: number): string {
 /**
  * Modal dialog for playing audio files with custom controls.
  *
+ * Supports both CTR streaming (via Service Worker) and GCM blob URL playback.
  * Uses Web Audio API AnalyserNode for frequency spectrum visualization.
  * No native browser audio controls -- fully custom transport UI.
  */
 export function AudioPlayerDialog({ open, onClose, item, folderKey }: AudioPlayerDialogProps) {
   const mimeType = item ? getAudioMime(item.name) : 'audio/mpeg';
-  const { loading, error, objectUrl, handleDownload } = useFilePreview({
-    open,
+  const isStreamingCandidate = item ? STREAMING_AUDIO_MIMES.has(getAudioMime(item.name)) : false;
+
+  // Streaming preview (CTR via Service Worker)
+  const streaming = useStreamingPreview({
+    open: open && isStreamingCandidate,
     item,
     mimeType,
     folderKey,
   });
+
+  // Blob URL preview (GCM fallback or when SW not ready)
+  const blobPreview = useFilePreview({
+    open: open && (!isStreamingCandidate || !streaming.isSwReady || !streaming.isCtr),
+    item,
+    mimeType,
+    folderKey,
+  });
+
+  // Determine active preview mode
+  const isStreaming =
+    isStreamingCandidate && streaming.isSwReady && streaming.isCtr && !streaming.error;
+  const audioSrc = isStreaming ? streaming.streamUrl : blobPreview.objectUrl;
+  const isLoading = isStreaming ? streaming.loading : blobPreview.loading;
+  const previewError = isStreaming ? streaming.error : blobPreview.error;
+  const onDownload = isStreaming ? streaming.handleDownload : blobPreview.handleDownload;
 
   // Audio state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -66,9 +96,9 @@ export function AudioPlayerDialog({ open, onClose, item, folderKey }: AudioPlaye
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const progressRef = useRef<HTMLDivElement | null>(null);
 
-  // Create Audio element and connect Web Audio API when objectUrl is ready
+  // Create Audio element and connect Web Audio API when audioSrc is ready
   useEffect(() => {
-    if (!objectUrl) {
+    if (!audioSrc) {
       // Cleanup on close
       if (animFrameRef.current) {
         cancelAnimationFrame(animFrameRef.current);
@@ -91,7 +121,7 @@ export function AudioPlayerDialog({ open, onClose, item, folderKey }: AudioPlaye
       return;
     }
 
-    const audio = new Audio(objectUrl);
+    const audio = new Audio(audioSrc);
     audio.volume = volume;
     audio.crossOrigin = 'anonymous';
     audioRef.current = audio;
@@ -141,7 +171,7 @@ export function AudioPlayerDialog({ open, onClose, item, folderKey }: AudioPlaye
       analyserRef.current = null;
       sourceRef.current = null;
     };
-  }, [objectUrl]);
+  }, [audioSrc]);
 
   // Sync volume to audio element
   useEffect(() => {
@@ -224,7 +254,7 @@ export function AudioPlayerDialog({ open, onClose, item, folderKey }: AudioPlaye
 
     resizeObserver.observe(canvas.parentElement!);
     return () => resizeObserver.disconnect();
-  }, [objectUrl]);
+  }, [audioSrc]);
 
   // Transport controls
   const handlePlayPause = useCallback(async () => {
@@ -291,21 +321,41 @@ export function AudioPlayerDialog({ open, onClose, item, folderKey }: AudioPlaye
       audioRef.current.pause();
     }
     setIsPlaying(false);
+    streaming.cleanup();
     onClose();
-  }, [onClose]);
+  }, [onClose, streaming]);
 
   if (!item) return null;
 
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
+  // Show decrypt progress bar during streaming fetch
+  const showDecryptProgress =
+    isStreaming && streaming.decryptProgress > 0 && streaming.decryptProgress < 100;
+
   return (
     <Modal open={open} onClose={handleClose} className="audio-player-modal">
-      {loading ? (
-        <div className="audio-preview-loading">decrypting...</div>
-      ) : error ? (
+      {isLoading || showDecryptProgress ? (
+        <div className="audio-preview-loading">
+          {isStreaming && streaming.decryptProgress > 0 ? (
+            <div className="audio-decrypt-loading">
+              <div className="audio-decrypt-label">decrypting...</div>
+              <div className="audio-decrypt-progress-track">
+                <div
+                  className="audio-decrypt-progress-fill"
+                  style={{ width: `${streaming.decryptProgress}%` }}
+                />
+              </div>
+              <div className="audio-decrypt-percent">{Math.round(streaming.decryptProgress)}%</div>
+            </div>
+          ) : (
+            'decrypting...'
+          )}
+        </div>
+      ) : previewError ? (
         <div className="audio-preview-error">
           {'> '}
-          {error}
+          {previewError}
         </div>
       ) : (
         <>
@@ -319,7 +369,7 @@ export function AudioPlayerDialog({ open, onClose, item, folderKey }: AudioPlaye
               <button
                 type="button"
                 className="audio-btn"
-                onClick={handleDownload}
+                onClick={onDownload}
                 aria-label="Download file"
               >
                 [download]
