@@ -13,6 +13,7 @@ export type EncryptedFileResult = {
   wrappedKey: string; // hex-encoded for storage
   originalSize: number;
   encryptedSize: number;
+  encryptionMode: 'GCM' | 'CTR';
 };
 
 /**
@@ -50,5 +51,6 @@ export async function encryptFile(
     wrappedKey: bytesToHex(wrappedKey),
     originalSize,
     encryptedSize: ciphertext.length,
+    encryptionMode: 'GCM' as const,
   };
 }
