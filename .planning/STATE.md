@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 12.5 complete, next: Phase 12.6 (Per-File IPNS Metadata Split)
+**Current focus:** Milestone 2 -- Phase 12.6 in progress (Per-File IPNS Metadata Split)
 
 ## Current Position
 
-Phase: 12.5 (MFA Polishing, UAT & E2E) -- COMPLETE
-Plan: 3 of 3 planned
-Status: Phase complete
-Last activity: 2026-02-16 -- Completed quick task 016: Refine wallet and MFA UI elements
+Phase: 12.6 (Per-File IPNS Metadata Split) -- IN PROGRESS
+Plan: 2 of 5 planned
+Status: In progress
+Last activity: 2026-02-17 -- Completed 12.6-02-PLAN.md (Batch Publish Backend)
 
-Progress: [####################] 89% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete)
+Progress: [####################] 90% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6: 2/5)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 97
-- Average duration: 5.0 min
-- Total execution time: 8.6 hours
+- Total plans completed: 99
+- Average duration: 5.3 min
+- Total execution time: 8.8 hours
 
 **By Phase (M1 summary):**
 
@@ -35,10 +35,11 @@ Progress: [####################] 89% (M1 complete, M2 Phase 12 complete, Phase 1
 | M2 Phase 12.3.1 | 4/4   | 38 min  | 9.5 min  |
 | M2 Phase 12.4   | 5/5   | 47 min  | 9.4 min  |
 | M2 Phase 12.5   | 3/3   | 9 min   | 3.0 min  |
+| M2 Phase 12.6   | 1/5   | 4 min   | 4.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 9m, 4m, 2m, 3m, 4m
+- Last 5 plans: 4m, 2m, 3m, 4m, 4m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -104,6 +105,9 @@ Recent decisions affecting current work:
 | Hardhat account #0 for wallet E2E test key                       | 12.5-02   | Well-known deterministic key; reproducible tests without real wallet funds                                       |
 | Wallet E2E tests validate UI flow independently of Core Kit      | 12.5-02   | TC09 accepts both redirect-to-files and error as valid; tests frontend wallet interaction                        |
 | UAT quality gate: 16 PASS / 19 SKIP / 1 NOTE (all documented)    | 12.5-03   | Destructive and multi-device tests skipped with reasons; all 4 issues resolved; gate passed for Phase 12.1       |
+| File metadata encrypted with parent folderKey (not file's key)   | 12.6-01   | Consistent with folder metadata access control pattern; parent key controls child access                         |
+| encryptionMode optional with GCM default in validator            | 12.6-01   | Phase 12.1 AES-CTR files set 'CTR' explicitly; omission defaults to 'GCM' for backward compat                    |
+| fileId minimum 10 chars validation                               | 12.6-01   | Ensures UUID-length identifiers; prevents accidental short strings in HKDF info                                  |
 
 ### Pending Todos
 
@@ -159,17 +163,17 @@ Recent decisions affecting current work:
 - Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
 - Phase 12.4 (MFA + Cross-Device): COMPLETE -- all 5 plans done (bulletin board API, MFA hooks, enrollment wizard, cross-device approval, integration verification)
 - Phase 12.5 (MFA Polishing, UAT & E2E): COMPLETE -- all 3 plans done (SecurityTab wiring, wallet E2E tests, UAT final verification)
-- Phase 12.6 (Per-File IPNS Metadata): NEEDS `/gsd:research-phase` -- TEE republish scalability, batch publish strategy, HKDF file keypair derivation, FUSE client impact
+- Phase 12.6 (Per-File IPNS Metadata): IN PROGRESS -- research done, plan 1/5 complete (crypto primitives)
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
-Last session: 2026-02-16
-Stopped at: Completed quick-016 (Refine wallet and MFA UI elements)
+Last session: 2026-02-17
+Stopped at: Completed 12.6-01-PLAN.md (Crypto Primitives)
 Resume file: None
-Next: Phase 12.6 (Per-File IPNS Metadata Split) -- needs research phase first
+Next: Phase 12.6 Plan 02 (API Batch Publish Endpoints)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-16 after completing Phase 12.5 Plan 03 (UAT Verification & Final Status) -- Phase 12.5 complete_
+_Last updated: 2026-02-17 after completing Phase 12.6 Plan 01 (Crypto Primitives) -- Phase 12.6 in progress_
