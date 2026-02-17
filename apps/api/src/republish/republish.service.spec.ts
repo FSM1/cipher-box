@@ -151,7 +151,7 @@ describe('RepublishService', () => {
       expect(scheduleRepository.find).toHaveBeenCalledWith(
         expect.objectContaining({
           order: { nextRepublishAt: 'ASC' },
-          take: 500,
+          take: 2000,
         })
       );
     });
@@ -391,26 +391,26 @@ describe('RepublishService', () => {
     });
 
     it('should process multiple batches when entries exceed BATCH_SIZE', async () => {
-      // Create 60 entries (BATCH_SIZE is 50, so this is 2 batches)
+      // Create 150 entries (BATCH_SIZE is 100, so this is 2 batches: 100 + 50)
       const entries: IpnsRepublishSchedule[] = [];
-      for (let i = 0; i < 60; i++) {
+      for (let i = 0; i < 150; i++) {
         entries.push(createMockEntry({ id: `entry-${i}`, ipnsName: `k51test${i}` }));
       }
       scheduleRepository.find.mockResolvedValue(entries);
       teeKeyStateService.getCurrentState!.mockResolvedValue(createMockTeeState());
 
-      // First batch of 50 entries
-      const firstBatchResults: RepublishResult[] = Array.from({ length: 50 }, (_, i) => ({
+      // First batch of 100 entries
+      const firstBatchResults: RepublishResult[] = Array.from({ length: 100 }, (_, i) => ({
         ipnsName: `k51test${i}`,
         success: true,
         signedRecord: Buffer.from(`record-${i}`).toString('base64'),
         newSequenceNumber: '6',
       }));
-      // Second batch of 10 entries
-      const secondBatchResults: RepublishResult[] = Array.from({ length: 10 }, (_, i) => ({
-        ipnsName: `k51test${50 + i}`,
+      // Second batch of 50 entries
+      const secondBatchResults: RepublishResult[] = Array.from({ length: 50 }, (_, i) => ({
+        ipnsName: `k51test${100 + i}`,
         success: true,
-        signedRecord: Buffer.from(`record-${50 + i}`).toString('base64'),
+        signedRecord: Buffer.from(`record-${100 + i}`).toString('base64'),
         newSequenceNumber: '6',
       }));
 
@@ -424,7 +424,7 @@ describe('RepublishService', () => {
 
       const result = await service.processRepublishBatch();
 
-      expect(result).toEqual({ processed: 60, succeeded: 60, failed: 0 });
+      expect(result).toEqual({ processed: 150, succeeded: 150, failed: 0 });
       expect(teeService.republish).toHaveBeenCalledTimes(2);
     });
   });

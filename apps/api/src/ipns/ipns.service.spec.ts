@@ -440,6 +440,7 @@ describe('IpnsService', () => {
         encryptedIpnsPrivateKey: Buffer.from(testEncryptedIpnsPrivateKey, 'hex'),
         keyEpoch: testKeyEpoch,
         isRoot: false,
+        recordType: 'folder',
       });
     });
 
