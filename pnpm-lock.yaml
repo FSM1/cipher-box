@@ -197,6 +197,12 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@cipherbox/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
+      '@noble/secp256k1':
+        specifier: ^3.0.0
+        version: 3.0.0
       '@tauri-apps/api':
         specifier: ^2.0.0
         version: 2.10.1
@@ -212,6 +218,9 @@ importers:
       '@web3auth/mpc-core-kit':
         specifier: ^3.5.0
         version: 3.5.0(@babel/runtime@7.28.6)(@toruslabs/tss-dkls-lib@4.1.0)(@types/eslint@9.6.1)(bufferutil@4.1.0)(eslint@9.39.2(jiti@2.6.1))(prettier@3.8.0)(typescript@5.9.3)(utf-8-validate@5.0.10)
+      bn.js:
+        specifier: ^5.2.0
+        version: 5.2.2
       buffer:
         specifier: ^6.0.3
         version: 6.0.3
@@ -222,6 +231,9 @@ importers:
       '@tauri-apps/cli':
         specifier: ^2.0.0
         version: 2.10.0
+      '@types/bn.js':
+        specifier: ^5.1.6
+        version: 5.2.0
       typescript:
         specifier: ^5.7.0
         version: 5.9.3

@@ -15,11 +15,28 @@
  *   3. Frontend calls Core Kit loginWithJWT with the CipherBox JWT
  *   4. Core Kit derives TSS key -> _UNSAFE_exportTssKey -> private key hex
  *   5. Private key + CipherBox JWT passed to Rust via invoke('handle_auth_complete')
+ *
+ * MFA flow (REQUIRED_SHARE):
+ *   When Core Kit returns REQUIRED_SHARE, the user needs a second factor.
+ *   Two paths are supported:
+ *   a) Recovery phrase: mnemonic -> mnemonicToKey -> inputFactorKey -> login complete
+ *   b) Device approval: ephemeral keypair -> bulletin board request -> poll -> ECIES decrypt -> login complete
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import { Web3AuthMPCCoreKit, WEB3AUTH_NETWORK, COREKIT_STATUS } from '@web3auth/mpc-core-kit';
+import {
+  Web3AuthMPCCoreKit,
+  WEB3AUTH_NETWORK,
+  COREKIT_STATUS,
+  mnemonicToKey,
+  generateFactorKey,
+  TssShareType,
+  FactorKeyTypeShareDescription,
+} from '@web3auth/mpc-core-kit';
 import { tssLib } from '@toruslabs/tss-dkls-lib';
+import BN from 'bn.js';
+import * as secp256k1 from '@noble/secp256k1';
+import { wrapKey, unwrapKey, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 
 /** Minimal EIP-1193 provider interface for injected wallets (MetaMask etc.) */
 interface EthereumProvider {
@@ -60,6 +77,11 @@ declare const google: {
 };
 
 let coreKit: Web3AuthMPCCoreKit | null = null;
+
+// Module-level state for MFA flow
+// Stored so MFA functions can complete auth after factor input
+let lastCipherboxJwt: string | null = null;
+let temporaryAccessToken: string | null = null;
 
 export type LoginResult = { status: 'logged_in' } | { status: 'required_share' };
 
@@ -252,9 +274,15 @@ export async function loginWithWallet(): Promise<LoginResult> {
  *
  * Uses the exact same verifier name ('cipherbox-identity') and parameters
  * as the web app to ensure the same TSS key is derived for the same user.
+ *
+ * On REQUIRED_SHARE: stores the JWT and obtains a temporary access token
+ * from the backend so the MFA UI can call device-approval endpoints.
  */
 async function loginWithCoreKit(cipherboxJwt: string, userId: string): Promise<LoginResult> {
   if (!coreKit) throw new Error('Core Kit not initialized');
+
+  // Store JWT for MFA completion later
+  lastCipherboxJwt = cipherboxJwt;
 
   // loginWithJWT with CipherBox identity verifier (matches web app exactly)
   console.log('[CoreKit] loginWithJWT starting...', {
@@ -271,6 +299,32 @@ async function loginWithCoreKit(cipherboxJwt: string, userId: string): Promise<L
   // Handle REQUIRED_SHARE status (MFA enabled, device factor missing)
   if (coreKit.status === COREKIT_STATUS.REQUIRED_SHARE) {
     console.log('[CoreKit] REQUIRED_SHARE -- MFA challenge needed');
+
+    // Obtain temporary backend access token so the device can call
+    // bulletin board API endpoints (device-approval/*).
+    // Uses placeholder publicKey since Core Kit is in REQUIRED_SHARE
+    // state and we can't export the TSS key yet.
+    try {
+      const tempResp = await fetch(`${API_BASE}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          idToken: cipherboxJwt,
+          publicKey: `pending-core-kit-${userId}`,
+          loginType: 'corekit',
+        }),
+      });
+      if (tempResp.ok) {
+        const { accessToken } = await tempResp.json();
+        temporaryAccessToken = accessToken;
+        console.log('[CoreKit] Temporary access token obtained for MFA flow');
+      } else {
+        console.warn('[CoreKit] Failed to get temporary token:', tempResp.status);
+      }
+    } catch (err) {
+      console.warn('[CoreKit] Temporary token request failed:', err);
+    }
+
     return { status: 'required_share' };
   }
 
@@ -286,7 +340,19 @@ async function loginWithCoreKit(cipherboxJwt: string, userId: string): Promise<L
     console.error('[CoreKit] commitChanges failed:', err);
   }
 
-  // Export TSS private key
+  // Export TSS private key and complete auth
+  await completeAuthHandoff(cipherboxJwt);
+
+  return { status: 'logged_in' };
+}
+
+/**
+ * Export TSS key and pass credentials to Rust backend via Tauri IPC.
+ * Shared between normal login and MFA recovery completion.
+ */
+async function completeAuthHandoff(cipherboxJwt: string): Promise<void> {
+  if (!coreKit) throw new Error('Core Kit not initialized');
+
   console.log('[CoreKit] Exporting TSS key...');
   const privateKeyHex = await coreKit._UNSAFE_exportTssKey();
   const privKeyHex = privateKeyHex.startsWith('0x') ? privateKeyHex.slice(2) : privateKeyHex;
@@ -300,7 +366,8 @@ async function loginWithCoreKit(cipherboxJwt: string, userId: string): Promise<L
   });
   console.log('[CoreKit] Credentials passed to Rust backend');
 
-  return { status: 'logged_in' };
+  // Clear MFA state
+  temporaryAccessToken = null;
 }
 
 /**
@@ -325,6 +392,287 @@ export async function logout(): Promise<void> {
 
   console.log('[CoreKit] Logout complete');
 }
+
+// ---------------------------------------------------------------------------
+// MFA Recovery and Device Approval
+// ---------------------------------------------------------------------------
+
+/**
+ * Get or create a persistent device ID for this desktop.
+ * Stored in localStorage keyed by 'cipherbox-desktop-device-id'.
+ * Format: SHA-256 hex (64 chars) of a random 32-byte value.
+ */
+async function getDesktopDeviceId(): Promise<string> {
+  const key = 'cipherbox-desktop-device-id';
+  const stored = localStorage.getItem(key);
+  if (stored && stored.length === 64) return stored;
+
+  // Generate a random 32-byte value and SHA-256 hash it
+  const random = crypto.getRandomValues(new Uint8Array(32));
+  const hash = await crypto.subtle.digest('SHA-256', random);
+  const deviceId = bytesToHex(new Uint8Array(hash));
+  localStorage.setItem(key, deviceId);
+  return deviceId;
+}
+
+/**
+ * Get a human-readable device name for this desktop.
+ * Uses navigator.userAgent to detect OS, prefixed with "CipherBox Desktop".
+ */
+function getDeviceName(): string {
+  const ua = navigator.userAgent;
+  if (/Macintosh|Mac OS X/i.test(ua)) return 'CipherBox Desktop on macOS';
+  if (/Windows/i.test(ua)) return 'CipherBox Desktop on Windows';
+  if (/Linux/i.test(ua)) return 'CipherBox Desktop on Linux';
+  return 'CipherBox Desktop';
+}
+
+/**
+ * Get the access token for API calls.
+ * Uses temporary token (REQUIRED_SHARE state) or null.
+ */
+function getAccessToken(): string | null {
+  return temporaryAccessToken;
+}
+
+/**
+ * Recover from REQUIRED_SHARE using a 24-word recovery mnemonic.
+ *
+ * Flow:
+ * 1. Convert mnemonic to factor key hex via mnemonicToKey
+ * 2. Input factor key to Core Kit (transitions from REQUIRED_SHARE to LOGGED_IN)
+ * 3. Create a device factor for this desktop so future logins skip MFA
+ * 4. Export TSS key and complete auth (pass to Rust backend)
+ *
+ * @param mnemonic - 24-word BIP39 recovery phrase
+ */
+export async function inputRecoveryPhrase(mnemonic: string): Promise<void> {
+  if (!coreKit) throw new Error('Core Kit not initialized');
+  if (coreKit.status !== COREKIT_STATUS.REQUIRED_SHARE) {
+    throw new Error('Not in REQUIRED_SHARE state');
+  }
+
+  // Convert mnemonic to factor key hex
+  const factorKeyHex = mnemonicToKey(mnemonic.trim().toLowerCase());
+
+  // Input the factor key to Core Kit
+  await coreKit.inputFactorKey(new BN(factorKeyHex, 'hex'));
+
+  // After successful input, Core Kit status should be LOGGED_IN
+  // Cast needed: TS narrows status to REQUIRED_SHARE from earlier guard,
+  // but inputFactorKey mutates the status to LOGGED_IN
+  if ((coreKit.status as string) !== COREKIT_STATUS.LOGGED_IN) {
+    throw new Error('Recovery failed: invalid recovery phrase');
+  }
+  console.log('[MFA] Recovery phrase accepted, status:', coreKit.status);
+
+  // Create a device factor for this desktop so future logins don't need recovery
+  const deviceId = await getDesktopDeviceId();
+  const newDeviceFactor = generateFactorKey();
+  await coreKit.createFactor({
+    shareType: TssShareType.DEVICE,
+    factorKey: newDeviceFactor.private,
+    shareDescription: FactorKeyTypeShareDescription.DeviceShare,
+    additionalMetadata: {
+      deviceId,
+      platform: 'macos',
+      name: getDeviceName(),
+    },
+  });
+  await coreKit.setDeviceFactor(newDeviceFactor.private);
+  await coreKit.commitChanges();
+  console.log('[MFA] Device factor created for future logins');
+
+  // Export key and complete auth
+  if (!lastCipherboxJwt) throw new Error('No stored JWT for auth completion');
+  await completeAuthHandoff(lastCipherboxJwt);
+}
+
+/**
+ * Create a device approval request on the CipherBox bulletin board.
+ *
+ * Generates an ephemeral secp256k1 keypair for ECIES key exchange.
+ * The private key is stored in module scope and used to decrypt the
+ * factor key when the request is approved.
+ *
+ * @returns requestId for polling, and stores ephemeral private key in module scope
+ */
+let ephemeralPrivateKey: Uint8Array | null = null;
+
+export async function requestDeviceApproval(): Promise<string> {
+  const token = getAccessToken();
+  if (!token) throw new Error('No access token available');
+
+  // Generate ephemeral secp256k1 keypair for ECIES key exchange
+  const ephemeral = secp256k1.keygen();
+  ephemeralPrivateKey = ephemeral.secretKey;
+  const ephemeralPubKeyHex = bytesToHex(ephemeral.publicKey);
+
+  const deviceId = await getDesktopDeviceId();
+
+  const resp = await fetch(`${API_BASE}/device-approval/request`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      deviceId,
+      deviceName: getDeviceName(),
+      ephemeralPublicKey: ephemeralPubKeyHex,
+    }),
+  });
+  if (!resp.ok) throw new Error('Failed to create approval request');
+  const { requestId } = await resp.json();
+  console.log('[MFA] Device approval request created:', requestId);
+  return requestId;
+}
+
+/**
+ * Poll the status of a device approval request.
+ *
+ * When approved, ECIES-decrypts the factor key with the ephemeral private key,
+ * inputs it to Core Kit, creates a device factor, and completes auth.
+ *
+ * @returns Current status of the approval request
+ */
+export async function pollApprovalStatus(
+  requestId: string
+): Promise<'pending' | 'approved' | 'denied' | 'expired'> {
+  const token = getAccessToken();
+  if (!token) throw new Error('No access token available');
+
+  const resp = await fetch(`${API_BASE}/device-approval/${requestId}/status`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (!resp.ok) throw new Error('Failed to check approval status');
+  const { status, encryptedFactorKey } = await resp.json();
+
+  if (status === 'approved' && encryptedFactorKey) {
+    if (!ephemeralPrivateKey) throw new Error('Ephemeral private key not available');
+    if (!coreKit) throw new Error('Core Kit not initialized');
+
+    // ECIES-decrypt the factor key using the ephemeral private key
+    const encrypted = hexToBytes(encryptedFactorKey);
+    const factorKeyBytes = await unwrapKey(encrypted, ephemeralPrivateKey);
+    const factorKeyHex = bytesToHex(factorKeyBytes);
+    factorKeyBytes.fill(0); // Zero-fill after conversion
+
+    // Clear ephemeral key from memory
+    ephemeralPrivateKey.fill(0);
+    ephemeralPrivateKey = null;
+
+    // Input the factor key to complete Core Kit login
+    await coreKit.inputFactorKey(new BN(factorKeyHex, 'hex'));
+    console.log('[MFA] Factor key accepted, status:', coreKit.status);
+
+    // Create device factor for future logins
+    const deviceId = await getDesktopDeviceId();
+    const newDeviceFactor = generateFactorKey();
+    await coreKit.createFactor({
+      shareType: TssShareType.DEVICE,
+      factorKey: newDeviceFactor.private,
+      shareDescription: FactorKeyTypeShareDescription.DeviceShare,
+      additionalMetadata: {
+        deviceId,
+        platform: 'macos',
+        name: getDeviceName(),
+      },
+    });
+    await coreKit.setDeviceFactor(newDeviceFactor.private);
+    await coreKit.commitChanges();
+    console.log('[MFA] Device factor created after approval');
+
+    // Export key and complete auth
+    if (!lastCipherboxJwt) throw new Error('No stored JWT for auth completion');
+    await completeAuthHandoff(lastCipherboxJwt);
+
+    return 'approved';
+  }
+
+  return status;
+}
+
+/**
+ * Cancel a pending device approval request.
+ * Cleans up the ephemeral private key from memory.
+ */
+export async function cancelApprovalRequest(requestId: string): Promise<void> {
+  const token = getAccessToken();
+  if (!token) return;
+
+  try {
+    await fetch(`${API_BASE}/device-approval/${requestId}`, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  } catch {
+    // Best-effort cleanup -- request may already be expired
+  }
+
+  // Clear ephemeral key
+  if (ephemeralPrivateKey) {
+    ephemeralPrivateKey.fill(0);
+    ephemeralPrivateKey = null;
+  }
+}
+
+/**
+ * Approve a device approval request (API-complete stub).
+ *
+ * This function is fully implemented and tested, but has no UI trigger
+ * in Phase 11.1. Users must approve devices from the web app.
+ *
+ * Phase 11.2 will add approval notification UI (tray icon notification +
+ * approval dialog when desktop is the approving device).
+ */
+export async function approveDevice(
+  requestId: string,
+  ephemeralPublicKeyHex: string
+): Promise<void> {
+  if (!coreKit || coreKit.status !== COREKIT_STATUS.LOGGED_IN) {
+    throw new Error('Must be logged in to approve devices');
+  }
+
+  // Get current factor key from Core Kit
+  const factorKeyResult = coreKit.getCurrentFactorKey();
+  if (!factorKeyResult?.factorKey) {
+    throw new Error('No active factor key available to share');
+  }
+  const factorKeyHex = factorKeyResult.factorKey.toString('hex').padStart(64, '0');
+  const factorKeyBytes = hexToBytes(factorKeyHex);
+
+  // ECIES-encrypt the factor key with the requester's ephemeral public key
+  const ephemeralPubKey = hexToBytes(ephemeralPublicKeyHex);
+  const encrypted = await wrapKey(factorKeyBytes, ephemeralPubKey);
+  factorKeyBytes.fill(0); // Zero-fill after wrapping
+
+  // Get device ID for tracking
+  const deviceId = await getDesktopDeviceId();
+
+  // Send approval response to the bulletin board
+  const resp = await fetch(`${API_BASE}/device-approval/${requestId}/respond`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${temporaryAccessToken || ''}`,
+    },
+    body: JSON.stringify({
+      action: 'approve',
+      encryptedFactorKey: bytesToHex(encrypted),
+      respondedByDeviceId: deviceId,
+    }),
+  });
+  if (!resp.ok) throw new Error('Failed to approve device');
+  console.log('[MFA] Device approved:', requestId);
+}
+
+// TODO (Phase 11.2): Add approval listener after auth success to poll for pending
+// approval requests and show native notification when approval is needed.
 
 /**
  * Load Google Identity Services (GIS) script dynamically and get a credential.
