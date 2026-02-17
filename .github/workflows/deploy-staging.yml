@@ -161,6 +161,8 @@ jobs:
           SENDGRID_API_KEY=${{ secrets.SENDGRID_API_KEY }}
           SENDGRID_FROM_EMAIL=${{ vars.SENDGRID_FROM_EMAIL }}
           GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }}
+          SIWE_DOMAIN=${{ vars.SIWE_DOMAIN }}
+          IDENTITY_JWT_PRIVATE_KEY=${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}
           ENVEOF
           # Append image tag and lowercase owner (can't use shell vars in quoted heredoc)
           OWNER="${{ github.repository_owner }}"
