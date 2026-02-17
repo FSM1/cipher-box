@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 12.6 in progress (Per-File IPNS Metadata Split)
+**Current focus:** Milestone 2 -- Phase 12.6 complete (Per-File IPNS Metadata Split)
 
 ## Current Position
 
-Phase: 12.6 (Per-File IPNS Metadata Split) -- IN PROGRESS
-Plan: 4 of 5 planned
-Status: In progress
-Last activity: 2026-02-17 -- Completed 12.6-04-PLAN.md (Hooks & Components Update)
+Phase: 12.6 (Per-File IPNS Metadata Split) -- COMPLETE
+Plan: 5 of 5 planned
+Status: Phase complete
+Last activity: 2026-02-17 -- Completed 12.6-05-PLAN.md (Recovery Tool v2, Docs, Build Verification)
 
-Progress: [####################] 90% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6: 4/5)
+Progress: [####################] 100% (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 101
+- Total plans completed: 102
 - Average duration: 5.3 min
-- Total execution time: 8.95 hours
+- Total execution time: 9.12 hours
 
 **By Phase (M1 summary):**
 
@@ -35,11 +35,11 @@ Progress: [####################] 90% (M1 complete, M2 Phase 12 complete, Phase 1
 | M2 Phase 12.3.1 | 4/4   | 38 min  | 9.5 min  |
 | M2 Phase 12.4   | 5/5   | 47 min  | 9.4 min  |
 | M2 Phase 12.5   | 3/3   | 9 min   | 3.0 min  |
-| M2 Phase 12.6   | 4/5   | 19 min  | 4.8 min  |
+| M2 Phase 12.6   | 5/5   | 29 min  | 5.8 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 4m, 5m, 7m, 3m
+- Last 5 plans: 4m, 5m, 7m, 3m, 10m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -114,6 +114,8 @@ Recent decisions affecting current work:
 | deleteFolder returns fileMetaIpnsName list (not CIDs) for v2     | 12.6-03   | v2 FilePointers have no inline CID; caller resolves IPNS to get CID for unpinning                                |
 | replaceFileInFolder publishes only file IPNS (folder untouched)  | 12.6-03   | Primary optimization of per-file IPNS: content update skips folder metadata entirely                             |
 | DetailsDialog parentFolderId prop removed                        | 12.6-04   | IPNS resolution uses item's own IPNS name directly; parent folder lookup no longer needed                        |
+| Inline base36 + protobuf for IPNS name in recovery.html          | 12.6-05   | No libp2p CDN dependency needed; self-contained BigInt-based implementation                                      |
+| IPNS failures non-blocking in recovery tool                      | 12.6-05   | Warn and continue; collect failures, report at end with IPNS names for manual recovery                           |
 
 ### Pending Todos
 
@@ -169,17 +171,17 @@ Recent decisions affecting current work:
 - Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
 - Phase 12.4 (MFA + Cross-Device): COMPLETE -- all 5 plans done (bulletin board API, MFA hooks, enrollment wizard, cross-device approval, integration verification)
 - Phase 12.5 (MFA Polishing, UAT & E2E): COMPLETE -- all 3 plans done (SecurityTab wiring, wallet E2E tests, UAT final verification)
-- Phase 12.6 (Per-File IPNS Metadata): IN PROGRESS -- research done, plans 1-4/5 complete (crypto primitives, batch publish backend, frontend service layer, hooks & components)
+- Phase 12.6 (Per-File IPNS Metadata): COMPLETE -- all 5 plans done (crypto primitives, batch publish backend, frontend service layer, hooks & components, recovery tool + docs)
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 12.6-04-PLAN.md (Hooks & Components Update)
+Stopped at: Completed 12.6-05-PLAN.md (Recovery Tool v2, Docs, Build Verification)
 Resume file: None
-Next: Phase 12.6 Plan 05 (Final Integration / Cleanup)
+Next: Phase 12.1 (AES-256-CTR Streaming Encryption) or next milestone phase
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-17 after completing Phase 12.6 Plan 04 (Hooks & Components Update) -- Phase 12.6 in progress_
+_Last updated: 2026-02-17 after completing Phase 12.6 Plan 05 (Recovery Tool v2, Docs, Build Verification) -- Phase 12.6 complete_
