@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 11.1 (macOS Desktop Catch-Up)
-Plan: 6 of 7 planned
-Status: In progress
-Last activity: 2026-02-17 -- Completed 11.1-06-PLAN.md (Device Registry)
+Plan: 7 of 7 planned
+Status: Phase complete
+Last activity: 2026-02-17 -- Completed 11.1-05-PLAN.md (MFA Challenge UI)
 
-Progress: [####################-] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 6/7)
+Progress: [######################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 112
+- Total plans completed: 113
 - Average duration: 5.3 min
-- Total execution time: 10.16 hours
+- Total execution time: 10.3 hours
 
 **By Phase (M1 summary):**
 
@@ -37,11 +37,11 @@ Progress: [####################-] (M1 complete, M2 Phase 12 complete, Phase 12.2
 | M2 Phase 12.5   | 3/3   | 9 min   | 3.0 min  |
 | M2 Phase 12.6   | 5/5   | 29 min  | 5.8 min  |
 | M2 Phase 12.1   | 4/4   | 27 min  | 6.8 min  |
-| M2 Phase 11.1   | 6/7   | 28 min  | 4.7 min  |
+| M2 Phase 11.1   | 7/7   | 36 min  | 5.1 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 7m, 7m, 8m, 2m, 4m
+- Last 5 plans: 8m, 2m, 4m, 8m, 8m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -137,6 +137,8 @@ Recent decisions affecting current work:
 | Typed enums for DeviceAuthStatus/DevicePlatform (not raw strings) | 11.1-06   | Compile-time safety with serde rename_all lowercase for JSON compatibility                                       |
 | Fire-and-forget tokio::spawn for device registry                  | 11.1-06   | Non-blocking: failures logged but never block login flow                                                         |
 | Keychain-backed persistent device ID with UUID v4                 | 11.1-06   | keyring crate with delete-before-write pattern to avoid macOS "already exists" error                             |
+| ECIES key exchange for desktop device approval (not plaintext)    | 11.1-05   | Matches web app pattern; ephemeral secp256k1 keypair + wrapKey/unwrapKey from @cipherbox/crypto                  |
+| Module-level JWT/token state for MFA flow (not localStorage)      | 11.1-05   | Sensitive tokens cleared on auth completion; avoids persisting temporary access tokens                           |
 
 ### Pending Todos
 
@@ -198,11 +200,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 11.1-06-PLAN.md
+Stopped at: Completed 11.1-05-PLAN.md (Phase 11.1 fully complete - all 7/7 plans done)
 Resume file: None
-Next: 11.1-05-PLAN.md (MFA challenge UI)
+Next: Phase 11.1 complete. Next phase TBD.
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-17 after completing Phase 11.1 Plan 06 (Device Registry)_
+_Last updated: 2026-02-17 after completing Phase 11.1 Plan 05 (MFA Challenge UI) - Phase 11.1 complete_
