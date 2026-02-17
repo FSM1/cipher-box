@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 12.1 (AES-CTR Streaming Encryption) -- In progress
-Plan: 2 of TBD planned
+Plan: 3 of TBD planned
 Status: In progress
-Last activity: 2026-02-17 -- Completed 12.1-02-PLAN.md (Streaming Upload Pipeline)
+Last activity: 2026-02-17 -- Completed 12.1-03-PLAN.md (Service Worker Decrypt Proxy)
 
-Progress: [####################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 plans 01-02 complete)
+Progress: [####################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 plans 01-03 complete)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 104
+- Total plans completed: 105
 - Average duration: 5.3 min
-- Total execution time: 9.26 hours
+- Total execution time: 9.46 hours
 
 **By Phase (M1 summary):**
 
@@ -36,11 +36,11 @@ Progress: [####################] (M1 complete, M2 Phase 12 complete, Phase 12.2 
 | M2 Phase 12.4   | 5/5   | 47 min  | 9.4 min  |
 | M2 Phase 12.5   | 3/3   | 9 min   | 3.0 min  |
 | M2 Phase 12.6   | 5/5   | 29 min  | 5.8 min  |
-| M2 Phase 12.1   | 2/?   | 9 min   | 4.5 min  |
+| M2 Phase 12.1   | 3/?   | 21 min  | 7.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 7m, 3m, 10m, 4m, 5m
+- Last 5 plans: 3m, 10m, 4m, 5m, 12m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -117,6 +117,9 @@ Recent decisions affecting current work:
 | DetailsDialog parentFolderId prop removed                        | 12.6-04   | IPNS resolution uses item's own IPNS name directly; parent folder lookup no longer needed                        |
 | Inline base36 + protobuf for IPNS name in recovery.html          | 12.6-05   | No libp2p CDN dependency needed; self-contained BigInt-based implementation                                      |
 | IPNS failures non-blocking in recovery tool                      | 12.6-05   | Warn and continue; collect failures, report at end with IPNS names for manual recovery                           |
+| Post-build script for SW compilation (not Vite plugin)           | 12.1-03   | Vite 7 Environment API breaks Rollup output hooks in standard plugins; build-sw.mjs via Vite lib-mode is simpler |
+| Separate tsconfig.sw.json for WebWorker lib types                | 12.1-03   | SW runs in ServiceWorkerGlobalScope, needs WebWorker lib; excluded from main tsconfig to avoid type conflicts    |
+| Dev mode serves SW as raw TS, production as compiled IIFE        | 12.1-03   | Vite dev server transforms TS on-the-fly; production uses minified 2.8KB IIFE at /decrypt-sw.js                  |
 
 ### Pending Todos
 
@@ -167,7 +170,7 @@ Recent decisions affecting current work:
 - Phase 15 (Link Sharing): NEEDS `/gsd:research-phase` -- unauthenticated web viewer security
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
-- Phase 12.1 (AES-CTR Streaming): IN PROGRESS -- Plans 01-02 complete (crypto primitives, streaming upload pipeline), research done
+- Phase 12.1 (AES-CTR Streaming): IN PROGRESS -- Plans 01-03 complete (crypto primitives, streaming upload pipeline, service worker decrypt proxy), research done
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
 - Phase 12.3 (SIWE + Identity): COMPLETE -- all 4 plans done (backend SIWE, wallet endpoints, ADR-001 cleanup, frontend wallet login, linked methods UI)
 - Phase 12.4 (MFA + Cross-Device): COMPLETE -- all 5 plans done (bulletin board API, MFA hooks, enrollment wizard, cross-device approval, integration verification)
@@ -178,11 +181,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 12.1-02-PLAN.md (Streaming Upload Pipeline)
+Stopped at: Completed 12.1-03-PLAN.md (Service Worker Decrypt Proxy)
 Resume file: None
-Next: Phase 12.1 Plan 03 (Service Worker decryption or media playback)
+Next: Phase 12.1 Plan 04 (media playback hooks or integration)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-17 after completing Phase 12.1 Plan 02 (Streaming Upload Pipeline) -- Phase 12.1 in progress_
+_Last updated: 2026-02-17 after completing Phase 12.1 Plan 03 (Service Worker Decrypt Proxy) -- Phase 12.1 in progress_
