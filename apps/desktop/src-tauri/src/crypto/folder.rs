@@ -1,8 +1,10 @@
 //! Folder metadata types and encryption.
 //!
-//! Matches the TypeScript `FolderMetadata` type exactly.
+//! Matches the TypeScript `FolderMetadata` and `FolderMetadataV2` types exactly.
 //! Uses Serde `rename_all = "camelCase"` to produce JSON field names
 //! identical to the TypeScript format.
+//!
+//! Supports both v1 (inline file data) and v2 (per-file IPNS pointer) schemas.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -107,6 +109,148 @@ pub fn decrypt_folder_metadata(
     sealed: &[u8],
     folder_key: &[u8; 32],
 ) -> Result<FolderMetadata, FolderError> {
+    let mut json = aes::unseal_aes_gcm(sealed, folder_key).map_err(FolderError::EncryptionFailed)?;
+    let result = serde_json::from_slice(&json).map_err(|_| FolderError::DeserializationFailed);
+    json.zeroize();
+    result
+}
+
+// ============================================================
+// v2 Folder Metadata Types (per-file IPNS pointers)
+// ============================================================
+
+/// Slim file reference stored in v2 folder metadata.
+/// Points to a file's own IPNS record instead of embedding all file data inline.
+/// Matches TypeScript `FilePointer` from `@cipherbox/crypto/file/types.ts`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilePointer {
+    /// UUID for internal reference.
+    pub id: String,
+    /// File name (plaintext, since folder metadata is encrypted).
+    pub name: String,
+    /// IPNS name of the file's own metadata record.
+    pub file_meta_ipns_name: String,
+    /// Creation timestamp (Unix ms).
+    pub created_at: u64,
+    /// Last modification timestamp (Unix ms).
+    pub modified_at: u64,
+}
+
+/// A v2 child entry can be either a folder or a file pointer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum FolderChildV2 {
+    /// A subfolder entry (same structure as v1).
+    Folder(FolderEntry),
+    /// A file pointer referencing a per-file IPNS record.
+    File(FilePointer),
+}
+
+/// v2 folder metadata with per-file IPNS pointers instead of inline file data.
+/// Children can be FolderEntry (unchanged) or FilePointer (slim IPNS reference).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FolderMetadataV2 {
+    /// Schema version for v2 format.
+    pub version: String,
+    /// Folders and file pointers in this folder.
+    pub children: Vec<FolderChildV2>,
+}
+
+/// Union type for version-dispatched folder metadata parsing.
+/// Accepts both v1 and v2 folder metadata.
+pub enum AnyFolderMetadata {
+    V1(FolderMetadata),
+    V2(FolderMetadataV2),
+}
+
+/// Default encryption mode for FileMetadata: "GCM".
+fn default_encryption_mode() -> String {
+    "GCM".to_string()
+}
+
+/// Decrypted per-file metadata structure.
+/// Stored as an encrypted blob in the file's own IPNS record.
+/// Encrypted with the parent folder's folderKey (NOT the file's own key).
+/// Matches TypeScript `FileMetadata` from `@cipherbox/crypto/file/types.ts`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileMetadata {
+    /// Schema version.
+    pub version: String,
+    /// IPFS CID of the encrypted file content.
+    pub cid: String,
+    /// Hex-encoded ECIES-wrapped AES-256 key for decrypting file.
+    pub file_key_encrypted: String,
+    /// Hex-encoded IV used for file encryption.
+    pub file_iv: String,
+    /// Original file size in bytes (before encryption).
+    pub size: u64,
+    /// MIME type of the original file.
+    pub mime_type: String,
+    /// Encryption mode (optional for backward compat; defaults to "GCM").
+    #[serde(default = "default_encryption_mode")]
+    pub encryption_mode: String,
+    /// Creation timestamp (Unix ms).
+    pub created_at: u64,
+    /// Last modification timestamp (Unix ms).
+    pub modified_at: u64,
+}
+
+/// Decrypt folder metadata from AES-256-GCM sealed bytes, dispatching to v1 or v2.
+///
+/// Decrypts the sealed blob, then checks the `version` field to determine format.
+pub fn decrypt_any_folder_metadata(
+    sealed: &[u8],
+    folder_key: &[u8; 32],
+) -> Result<AnyFolderMetadata, FolderError> {
+    let mut json = aes::unseal_aes_gcm(sealed, folder_key).map_err(FolderError::EncryptionFailed)?;
+
+    // Parse as generic JSON to check version field
+    let value: serde_json::Value =
+        serde_json::from_slice(&json).map_err(|_| FolderError::DeserializationFailed)?;
+
+    let result = match value.get("version").and_then(|v| v.as_str()) {
+        Some("v2") => {
+            let v2: FolderMetadataV2 =
+                serde_json::from_value(value).map_err(|_| FolderError::DeserializationFailed)?;
+            Ok(AnyFolderMetadata::V2(v2))
+        }
+        _ => {
+            // Default to v1 for backward compatibility
+            let v1: FolderMetadata =
+                serde_json::from_value(value).map_err(|_| FolderError::DeserializationFailed)?;
+            Ok(AnyFolderMetadata::V1(v1))
+        }
+    };
+
+    json.zeroize();
+    result
+}
+
+/// Encrypt file metadata with AES-256-GCM.
+///
+/// JSON serializes the metadata, then seals with AES-GCM.
+/// Uses the parent folder's folderKey for encryption.
+/// Returns the sealed bytes: IV (12) || ciphertext || tag (16).
+pub fn encrypt_file_metadata(
+    metadata: &FileMetadata,
+    folder_key: &[u8; 32],
+) -> Result<Vec<u8>, FolderError> {
+    let mut json = serde_json::to_vec(metadata).map_err(|_| FolderError::SerializationFailed)?;
+    let result = aes::seal_aes_gcm(&json, folder_key).map_err(FolderError::EncryptionFailed);
+    json.zeroize();
+    result
+}
+
+/// Decrypt file metadata from AES-256-GCM sealed bytes.
+///
+/// Uses the parent folder's folderKey for decryption.
+/// Unseals, then JSON deserializes to FileMetadata.
+pub fn decrypt_file_metadata(
+    sealed: &[u8],
+    folder_key: &[u8; 32],
+) -> Result<FileMetadata, FolderError> {
     let mut json = aes::unseal_aes_gcm(sealed, folder_key).map_err(FolderError::EncryptionFailed)?;
     let result = serde_json::from_slice(&json).map_err(|_| FolderError::DeserializationFailed);
     json.zeroize();

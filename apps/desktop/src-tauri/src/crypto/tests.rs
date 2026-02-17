@@ -6,12 +6,15 @@
 //! Ed25519 signatures, IPNS name derivation).
 
 use super::aes;
+use super::aes_ctr;
 use super::ecies;
 use super::ed25519;
 use super::folder::{
-    decrypt_folder_metadata, encrypt_folder_metadata, FileEntry, FolderChild, FolderEntry,
-    FolderMetadata,
+    decrypt_any_folder_metadata, decrypt_file_metadata, decrypt_folder_metadata,
+    encrypt_file_metadata, encrypt_folder_metadata, AnyFolderMetadata, FileEntry, FileMetadata,
+    FilePointer, FolderChild, FolderChildV2, FolderEntry, FolderMetadata, FolderMetadataV2,
 };
+use super::hkdf;
 use super::ipns;
 use super::utils;
 
@@ -785,4 +788,419 @@ fn clear_bytes_zeros_data() {
     let mut data = vec![0xff; 32];
     utils::clear_bytes(&mut data);
     assert!(data.iter().all(|&b| b == 0));
+}
+
+// ============================================================
+// HKDF Derivation Tests
+// ============================================================
+
+/// A fixed 32-byte private key for HKDF tests.
+const HKDF_TEST_KEY: [u8; 32] = [
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
+    0x1f, 0x20,
+];
+
+#[test]
+fn hkdf_vault_derivation_produces_k51_name() {
+    let (priv_key, pub_key, ipns_name) = hkdf::derive_vault_ipns_keypair(&HKDF_TEST_KEY).unwrap();
+
+    assert_eq!(priv_key.len(), 32, "Ed25519 private key should be 32 bytes");
+    assert_eq!(pub_key.len(), 32, "Ed25519 public key should be 32 bytes");
+    assert!(
+        ipns_name.starts_with("k51"),
+        "IPNS name should start with k51 (base36 CIDv1), got: {}",
+        ipns_name
+    );
+}
+
+#[test]
+fn hkdf_vault_derivation_is_deterministic() {
+    let (_, _, name1) = hkdf::derive_vault_ipns_keypair(&HKDF_TEST_KEY).unwrap();
+    let (_, _, name2) = hkdf::derive_vault_ipns_keypair(&HKDF_TEST_KEY).unwrap();
+    assert_eq!(name1, name2, "Same key should produce same IPNS name");
+}
+
+#[test]
+fn hkdf_file_derivation_different_file_ids_produce_different_names() {
+    let (_, _, name1) =
+        hkdf::derive_file_ipns_keypair(&HKDF_TEST_KEY, "file-id-001-abcdef").unwrap();
+    let (_, _, name2) =
+        hkdf::derive_file_ipns_keypair(&HKDF_TEST_KEY, "file-id-002-ghijkl").unwrap();
+
+    assert_ne!(name1, name2, "Different file IDs should produce different IPNS names");
+    assert!(name1.starts_with("k51"));
+    assert!(name2.starts_with("k51"));
+}
+
+#[test]
+fn hkdf_file_derivation_same_file_id_is_deterministic() {
+    let file_id = "test-file-id-1234567890";
+    let (_, _, name1) = hkdf::derive_file_ipns_keypair(&HKDF_TEST_KEY, file_id).unwrap();
+    let (_, _, name2) = hkdf::derive_file_ipns_keypair(&HKDF_TEST_KEY, file_id).unwrap();
+    assert_eq!(name1, name2, "Same key + fileId should produce same IPNS name");
+}
+
+#[test]
+fn hkdf_file_derivation_rejects_short_file_id() {
+    let result = hkdf::derive_file_ipns_keypair(&HKDF_TEST_KEY, "short");
+    assert!(result.is_err(), "File ID < 10 chars should fail");
+}
+
+#[test]
+fn hkdf_registry_derivation_differs_from_vault() {
+    let (_, _, vault_name) = hkdf::derive_vault_ipns_keypair(&HKDF_TEST_KEY).unwrap();
+    let (_, _, registry_name) = hkdf::derive_registry_ipns_keypair(&HKDF_TEST_KEY).unwrap();
+
+    assert_ne!(
+        vault_name, registry_name,
+        "Vault and registry should have different IPNS names (domain separation)"
+    );
+}
+
+#[test]
+fn hkdf_all_three_domains_produce_different_names() {
+    let (_, _, vault_name) = hkdf::derive_vault_ipns_keypair(&HKDF_TEST_KEY).unwrap();
+    let (_, _, file_name) =
+        hkdf::derive_file_ipns_keypair(&HKDF_TEST_KEY, "file-id-001-abcdef").unwrap();
+    let (_, _, registry_name) = hkdf::derive_registry_ipns_keypair(&HKDF_TEST_KEY).unwrap();
+
+    assert_ne!(vault_name, file_name);
+    assert_ne!(vault_name, registry_name);
+    assert_ne!(file_name, registry_name);
+}
+
+// ============================================================
+// AES-256-CTR Tests
+// ============================================================
+
+#[test]
+fn aes_ctr_roundtrip() {
+    let key: [u8; 32] = utils::generate_file_key();
+    let iv: [u8; 16] = {
+        let bytes = utils::generate_random_bytes(16);
+        bytes.try_into().unwrap()
+    };
+    let plaintext = b"Hello, AES-256-CTR!";
+
+    let ciphertext = aes_ctr::encrypt_aes_ctr(plaintext, &key, &iv).unwrap();
+    assert_eq!(ciphertext.len(), plaintext.len(), "CTR output should be same size as input");
+
+    let decrypted = aes_ctr::decrypt_aes_ctr(&ciphertext, &key, &iv).unwrap();
+    assert_eq!(decrypted, plaintext);
+}
+
+#[test]
+fn aes_ctr_roundtrip_large_data() {
+    let key: [u8; 32] = utils::generate_file_key();
+    let iv: [u8; 16] = utils::generate_random_bytes(16).try_into().unwrap();
+    let plaintext: Vec<u8> = (0..10_000).map(|i| (i % 256) as u8).collect();
+
+    let ciphertext = aes_ctr::encrypt_aes_ctr(&plaintext, &key, &iv).unwrap();
+    let decrypted = aes_ctr::decrypt_aes_ctr(&ciphertext, &key, &iv).unwrap();
+    assert_eq!(decrypted, plaintext);
+}
+
+#[test]
+fn aes_ctr_range_decrypt_start_zero() {
+    let key: [u8; 32] = utils::generate_file_key();
+    let iv: [u8; 16] = utils::generate_random_bytes(16).try_into().unwrap();
+    let plaintext: Vec<u8> = (0..256).map(|i| i as u8).collect();
+
+    let ciphertext = aes_ctr::encrypt_aes_ctr(&plaintext, &key, &iv).unwrap();
+
+    // Decrypt first 32 bytes
+    let range_result =
+        aes_ctr::decrypt_aes_ctr_range(&ciphertext, &key, &iv, 0, 31).unwrap();
+    assert_eq!(range_result, &plaintext[0..32]);
+}
+
+#[test]
+fn aes_ctr_range_decrypt_block_aligned() {
+    let key: [u8; 32] = utils::generate_file_key();
+    let iv: [u8; 16] = utils::generate_random_bytes(16).try_into().unwrap();
+    let plaintext: Vec<u8> = (0..256).map(|i| i as u8).collect();
+
+    let ciphertext = aes_ctr::encrypt_aes_ctr(&plaintext, &key, &iv).unwrap();
+
+    // Decrypt bytes 16..47 (block-aligned start)
+    let range_result =
+        aes_ctr::decrypt_aes_ctr_range(&ciphertext, &key, &iv, 16, 47).unwrap();
+    assert_eq!(range_result, &plaintext[16..48]);
+}
+
+#[test]
+fn aes_ctr_range_decrypt_mid_block() {
+    let key: [u8; 32] = utils::generate_file_key();
+    let iv: [u8; 16] = utils::generate_random_bytes(16).try_into().unwrap();
+    let plaintext: Vec<u8> = (0..256).map(|i| i as u8).collect();
+
+    let ciphertext = aes_ctr::encrypt_aes_ctr(&plaintext, &key, &iv).unwrap();
+
+    // Decrypt bytes 7..24 (mid-block start)
+    let range_result =
+        aes_ctr::decrypt_aes_ctr_range(&ciphertext, &key, &iv, 7, 24).unwrap();
+    assert_eq!(range_result, &plaintext[7..25]);
+}
+
+#[test]
+fn aes_ctr_range_decrypt_single_byte() {
+    let key: [u8; 32] = utils::generate_file_key();
+    let iv: [u8; 16] = utils::generate_random_bytes(16).try_into().unwrap();
+    let plaintext: Vec<u8> = (0..256).map(|i| i as u8).collect();
+
+    let ciphertext = aes_ctr::encrypt_aes_ctr(&plaintext, &key, &iv).unwrap();
+
+    // Decrypt single byte at offset 100
+    let range_result =
+        aes_ctr::decrypt_aes_ctr_range(&ciphertext, &key, &iv, 100, 100).unwrap();
+    assert_eq!(range_result, &plaintext[100..101]);
+}
+
+#[test]
+fn aes_ctr_range_decrypt_invalid_range_returns_error() {
+    let key: [u8; 32] = utils::generate_file_key();
+    let iv: [u8; 16] = utils::generate_random_bytes(16).try_into().unwrap();
+    let ciphertext = vec![0u8; 256];
+
+    // start > end should fail
+    let result = aes_ctr::decrypt_aes_ctr_range(&ciphertext, &key, &iv, 100, 50);
+    assert!(result.is_err());
+}
+
+#[test]
+fn aes_ctr_empty_data() {
+    let key: [u8; 32] = utils::generate_file_key();
+    let iv: [u8; 16] = utils::generate_random_bytes(16).try_into().unwrap();
+
+    let ciphertext = aes_ctr::encrypt_aes_ctr(b"", &key, &iv).unwrap();
+    assert!(ciphertext.is_empty(), "CTR of empty input should be empty");
+
+    let decrypted = aes_ctr::decrypt_aes_ctr(&ciphertext, &key, &iv).unwrap();
+    assert!(decrypted.is_empty());
+}
+
+// ============================================================
+// v2 Folder Metadata Type Tests
+// ============================================================
+
+#[test]
+fn v2_folder_metadata_deserialization_with_file_pointers() {
+    let json = r#"{
+        "version": "v2",
+        "children": [
+            {
+                "type": "folder",
+                "id": "folder-001",
+                "name": "documents",
+                "ipnsName": "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgq",
+                "folderKeyEncrypted": "cafebabe",
+                "ipnsPrivateKeyEncrypted": "abcd1234",
+                "createdAt": 1700000000000,
+                "modifiedAt": 1700000000000
+            },
+            {
+                "type": "file",
+                "id": "file-001",
+                "name": "photo.jpg",
+                "fileMetaIpnsName": "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx",
+                "createdAt": 1700000000000,
+                "modifiedAt": 1700000000000
+            }
+        ]
+    }"#;
+
+    let metadata: FolderMetadataV2 = serde_json::from_str(json).unwrap();
+    assert_eq!(metadata.version, "v2");
+    assert_eq!(metadata.children.len(), 2);
+
+    match &metadata.children[0] {
+        FolderChildV2::Folder(f) => assert_eq!(f.name, "documents"),
+        _ => panic!("First child should be a folder"),
+    }
+    match &metadata.children[1] {
+        FolderChildV2::File(fp) => {
+            assert_eq!(fp.name, "photo.jpg");
+            assert_eq!(
+                fp.file_meta_ipns_name,
+                "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx"
+            );
+        }
+        _ => panic!("Second child should be a file pointer"),
+    }
+}
+
+#[test]
+fn file_pointer_camel_case_serialization() {
+    let fp = FilePointer {
+        id: "fp-001".to_string(),
+        name: "test.mp4".to_string(),
+        file_meta_ipns_name: "k51abc".to_string(),
+        created_at: 1000,
+        modified_at: 2000,
+    };
+
+    let json = serde_json::to_string(&fp).unwrap();
+    assert!(json.contains("fileMetaIpnsName"), "Must use camelCase: fileMetaIpnsName");
+    assert!(json.contains("createdAt"), "Must use camelCase: createdAt");
+    assert!(!json.contains("file_meta_ipns_name"), "Should NOT contain snake_case");
+}
+
+#[test]
+fn file_metadata_deserialization_with_encryption_mode() {
+    let json = r#"{
+        "version": "v1",
+        "cid": "bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4",
+        "fileKeyEncrypted": "deadbeef",
+        "fileIv": "aabbccdd",
+        "size": 1024,
+        "mimeType": "video/mp4",
+        "encryptionMode": "CTR",
+        "createdAt": 1700000000000,
+        "modifiedAt": 1700000000000
+    }"#;
+
+    let metadata: FileMetadata = serde_json::from_str(json).unwrap();
+    assert_eq!(metadata.version, "v1");
+    assert_eq!(metadata.cid, "bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4");
+    assert_eq!(metadata.encryption_mode, "CTR");
+    assert_eq!(metadata.mime_type, "video/mp4");
+    assert_eq!(metadata.size, 1024);
+}
+
+#[test]
+fn file_metadata_deserialization_without_encryption_mode_defaults_gcm() {
+    let json = r#"{
+        "version": "v1",
+        "cid": "bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4",
+        "fileKeyEncrypted": "deadbeef",
+        "fileIv": "aabbccdd",
+        "size": 512,
+        "mimeType": "image/png",
+        "createdAt": 1700000000000,
+        "modifiedAt": 1700000000000
+    }"#;
+
+    let metadata: FileMetadata = serde_json::from_str(json).unwrap();
+    assert_eq!(
+        metadata.encryption_mode, "GCM",
+        "Missing encryptionMode should default to GCM"
+    );
+}
+
+#[test]
+fn any_folder_metadata_dispatch_v1() {
+    let key = utils::generate_file_key();
+    let v1 = FolderMetadata {
+        version: "v1".to_string(),
+        children: vec![],
+    };
+
+    let sealed = encrypt_folder_metadata(&v1, &key).unwrap();
+    let any = decrypt_any_folder_metadata(&sealed, &key).unwrap();
+
+    match any {
+        AnyFolderMetadata::V1(m) => assert_eq!(m.version, "v1"),
+        AnyFolderMetadata::V2(_) => panic!("Should dispatch to V1"),
+    }
+}
+
+#[test]
+fn any_folder_metadata_dispatch_v2() {
+    let key = utils::generate_file_key();
+
+    // Manually create and encrypt v2 metadata
+    let v2 = FolderMetadataV2 {
+        version: "v2".to_string(),
+        children: vec![FolderChildV2::File(FilePointer {
+            id: "file-001".to_string(),
+            name: "test.txt".to_string(),
+            file_meta_ipns_name: "k51abc".to_string(),
+            created_at: 1700000000000,
+            modified_at: 1700000000000,
+        })],
+    };
+
+    let mut json = serde_json::to_vec(&v2).unwrap();
+    let sealed = aes::seal_aes_gcm(&json, &key).unwrap();
+    json.fill(0);
+
+    let any = decrypt_any_folder_metadata(&sealed, &key).unwrap();
+
+    match any {
+        AnyFolderMetadata::V1(_) => panic!("Should dispatch to V2"),
+        AnyFolderMetadata::V2(m) => {
+            assert_eq!(m.version, "v2");
+            assert_eq!(m.children.len(), 1);
+        }
+    }
+}
+
+#[test]
+fn file_metadata_encrypt_decrypt_roundtrip() {
+    let key = utils::generate_file_key();
+    let metadata = FileMetadata {
+        version: "v1".to_string(),
+        cid: "bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4".to_string(),
+        file_key_encrypted: "deadbeef".to_string(),
+        file_iv: "aabbccdd".to_string(),
+        size: 2048,
+        mime_type: "video/mp4".to_string(),
+        encryption_mode: "CTR".to_string(),
+        created_at: 1700000000000,
+        modified_at: 1700000000000,
+    };
+
+    let sealed = encrypt_file_metadata(&metadata, &key).unwrap();
+    let decrypted = decrypt_file_metadata(&sealed, &key).unwrap();
+
+    assert_eq!(decrypted.version, "v1");
+    assert_eq!(decrypted.cid, metadata.cid);
+    assert_eq!(decrypted.encryption_mode, "CTR");
+    assert_eq!(decrypted.mime_type, "video/mp4");
+    assert_eq!(decrypted.size, 2048);
+}
+
+#[test]
+fn file_metadata_wrong_key_fails() {
+    let key1 = utils::generate_file_key();
+    let key2 = utils::generate_file_key();
+    let metadata = FileMetadata {
+        version: "v1".to_string(),
+        cid: "bafytest".to_string(),
+        file_key_encrypted: "aa".to_string(),
+        file_iv: "bb".to_string(),
+        size: 100,
+        mime_type: "text/plain".to_string(),
+        encryption_mode: "GCM".to_string(),
+        created_at: 1000,
+        modified_at: 2000,
+    };
+
+    let sealed = encrypt_file_metadata(&metadata, &key1).unwrap();
+    let result = decrypt_file_metadata(&sealed, &key2);
+    assert!(result.is_err(), "Wrong key should fail decryption");
+}
+
+#[test]
+fn file_metadata_camel_case_serialization() {
+    let metadata = FileMetadata {
+        version: "v1".to_string(),
+        cid: "bafytest".to_string(),
+        file_key_encrypted: "aa".to_string(),
+        file_iv: "bb".to_string(),
+        size: 100,
+        mime_type: "video/mp4".to_string(),
+        encryption_mode: "CTR".to_string(),
+        created_at: 1000,
+        modified_at: 2000,
+    };
+
+    let json = serde_json::to_string(&metadata).unwrap();
+    assert!(json.contains("fileKeyEncrypted"), "Must use camelCase: fileKeyEncrypted");
+    assert!(json.contains("fileIv"), "Must use camelCase: fileIv");
+    assert!(json.contains("mimeType"), "Must use camelCase: mimeType");
+    assert!(json.contains("encryptionMode"), "Must use camelCase: encryptionMode");
+    assert!(!json.contains("file_key_encrypted"), "Should NOT contain snake_case");
+    assert!(!json.contains("mime_type"), "Should NOT contain snake_case");
 }
