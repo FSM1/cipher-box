@@ -67,6 +67,13 @@ export class FolderIpns {
   @Column({ type: 'boolean', name: 'is_root', default: false })
   isRoot!: boolean;
 
+  /**
+   * Distinguishes folder metadata IPNS records from per-file metadata IPNS records.
+   * Default 'folder' ensures backward compatibility with existing rows.
+   */
+  @Column({ type: 'varchar', length: 10, name: 'record_type', default: 'folder' })
+  recordType!: 'folder' | 'file';
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt!: Date;
 
