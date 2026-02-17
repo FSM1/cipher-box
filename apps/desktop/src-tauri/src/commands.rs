@@ -44,15 +44,16 @@ pub async fn handle_auth_complete(
         return Err("Private key must be 32 bytes".to_string());
     }
 
-    // Derive public keys from private key
-    let public_key_bytes = derive_public_key(&private_key_bytes)?; // 65 bytes, uncompressed (for ECIES)
-    let compressed_public_key_hex = derive_compressed_public_key_hex(&private_key_bytes)?; // 33 bytes hex (for backend auth)
+    // Derive uncompressed public key from private key (65 bytes, 0x04 prefix)
+    // Used for both ECIES operations and backend auth (backend expects uncompressed)
+    let public_key_bytes = derive_public_key(&private_key_bytes)?;
+    let public_key_hex = hex::encode(&public_key_bytes); // 130 hex chars
 
-    // 2. Login with backend (requires compressed publicKey matching Web3Auth JWT)
+    // 2. Login with backend (requires uncompressed publicKey, 130 hex chars)
     let login_req = types::LoginRequest {
         id_token: id_token.clone(),
-        public_key: compressed_public_key_hex,
-        login_type: "social".to_string(),
+        public_key: public_key_hex,
+        login_type: "corekit".to_string(),
     };
 
     let resp = state
@@ -107,6 +108,35 @@ pub async fn handle_auth_complete(
 
     // 8. Mark as authenticated
     *state.is_authenticated.write().await = true;
+
+    // 8b. Register device in encrypted registry (non-blocking)
+    //     Fire-and-forget: failures are logged but never block login.
+    {
+        let reg_api = state.api.clone();
+        let reg_private_key = private_key_bytes.clone();
+        let reg_public_key = public_key_bytes.clone();
+        let reg_user_id = user_id.clone();
+        tokio::spawn(async move {
+            let pk_arr: [u8; 32] = match reg_private_key.as_slice().try_into() {
+                Ok(arr) => arr,
+                Err(_) => {
+                    log::warn!("Device registry: invalid private key length");
+                    return;
+                }
+            };
+            match crate::registry::register_device(
+                &reg_api,
+                &pk_arr,
+                &reg_public_key,
+                &reg_user_id,
+            )
+            .await
+            {
+                Ok(()) => log::info!("Device registry updated"),
+                Err(e) => log::warn!("Device registry update failed (non-blocking): {}", e),
+            }
+        });
+    }
 
     // 9. Mount FUSE filesystem (or just mark as synced if FUSE not enabled)
     #[cfg(not(feature = "fuse"))]
@@ -344,6 +374,16 @@ pub async fn start_sync_daemon(
     Ok(())
 }
 
+/// Get the dev-key if one was provided via CLI (debug builds only).
+///
+/// Returns `Some(hex_string)` if `--dev-key` was passed at startup, `None` otherwise.
+/// The webview can use this to skip Web3Auth login and call `handle_auth_complete`
+/// directly with a synthetic identity token or via the test-login endpoint.
+#[tauri::command]
+pub async fn get_dev_key(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    Ok(state.dev_key.read().await.clone())
+}
+
 /// Logout: invalidate session, clear Keychain, zero all sensitive keys.
 #[tauri::command]
 pub async fn logout(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
@@ -381,28 +421,34 @@ pub async fn logout(app: tauri::AppHandle, state: State<'_, AppState>) -> Result
 
 /// Initialize a new vault for a first-time user.
 ///
-/// Generates a root folder AES-256 key and an Ed25519 IPNS keypair,
-/// ECIES-wraps them with the user's secp256k1 public key, derives the IPNS name,
-/// and POSTs everything to `/vault/init`.
+/// Generates a root folder AES-256 key and derives a deterministic Ed25519 IPNS
+/// keypair via HKDF from the user's private key. ECIES-wraps them with the
+/// user's secp256k1 public key, and POSTs everything to `/vault/init`.
 async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Result<(), String> {
     // Generate root folder AES-256 key (32 random bytes)
     let root_folder_key = crypto::utils::generate_random_bytes(32);
 
-    // Generate root IPNS Ed25519 keypair
-    let (ipns_public_key, ipns_private_key) = crypto::ed25519::generate_ed25519_keypair();
+    // Derive IPNS keypair deterministically via HKDF from user's private key
+    let private_key = state
+        .private_key
+        .read()
+        .await
+        .as_ref()
+        .ok_or("Private key not available for vault IPNS derivation")?
+        .clone();
+    let private_key_arr: [u8; 32] = private_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| "Invalid private key length")?;
+    let (ipns_private_key, _ipns_public_key, root_ipns_name) =
+        crypto::hkdf::derive_vault_ipns_keypair(&private_key_arr)
+            .map_err(|e| format!("Vault IPNS derivation failed: {:?}", e))?;
 
     // ECIES-wrap keys with user's uncompressed secp256k1 public key
     let encrypted_root_folder_key = crypto::ecies::wrap_key(&root_folder_key, public_key)
         .map_err(|e| format!("Failed to wrap root folder key: {}", e))?;
     let encrypted_ipns_private_key = crypto::ecies::wrap_key(&ipns_private_key, public_key)
         .map_err(|e| format!("Failed to wrap IPNS private key: {}", e))?;
-
-    // Derive IPNS name from Ed25519 public key
-    let ipns_pub_array: [u8; 32] = ipns_public_key
-        .try_into()
-        .map_err(|_| "IPNS public key is not 32 bytes")?;
-    let root_ipns_name = crypto::ipns::derive_ipns_name(&ipns_pub_array)
-        .map_err(|e| format!("Failed to derive IPNS name: {}", e))?;
 
     // 1. Register vault with backend
     let init_req = types::InitVaultRequest {
@@ -530,6 +576,19 @@ async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), String> {
     let root_ipns_private_key =
         crypto::ecies::unwrap_key(&encrypted_root_ipns_private_key, &private_key)
             .map_err(|e| format!("Failed to decrypt root IPNS private key: {}", e))?;
+
+    // Verify stored IPNS key matches HKDF derivation (consistency check)
+    let private_key_arr: [u8; 32] = private_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| "Invalid private key length for HKDF check")?;
+    if let Ok((expected_ipns_key, _, _)) = crypto::hkdf::derive_vault_ipns_keypair(&private_key_arr) {
+        if root_ipns_private_key != expected_ipns_key {
+            log::warn!("Vault IPNS key mismatch: stored key differs from HKDF derivation");
+            // Don't block - proceed with stored key for backward compatibility
+        }
+    }
+
     *state.root_ipns_private_key.write().await = Some(root_ipns_private_key);
 
     // Store IPNS name and TEE keys

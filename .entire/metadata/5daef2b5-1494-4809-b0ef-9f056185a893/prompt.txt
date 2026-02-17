@@ -1,1 +1,1 @@
-Login request failed: error sending request for url (http://localhost:3000/auth/login) - its still trying to hit the local api
+Login failed (400 Bad Request): {"message":["publicKey must be an uncompressed secp256k1 public key (130 hex chars starting with 04)"],"error":"Bad Request","statusCode":400}
