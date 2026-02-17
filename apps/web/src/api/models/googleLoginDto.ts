@@ -5,8 +5,11 @@
  * Zero-knowledge encrypted cloud storage API
  * OpenAPI spec version: 0.1.0
  */
+import type { GoogleLoginDtoIntent } from './googleLoginDtoIntent';
 
 export interface GoogleLoginDto {
   /** Google OAuth ID token (from Google Sign-In) */
   idToken: string;
+  /** Intent: "login" (default) creates/finds a user, "link" only verifies ownership */
+  intent?: GoogleLoginDtoIntent;
 }

@@ -192,6 +192,11 @@
   border-color: var(--color-text-dim);
 }
 
+.google-native-btn-container {
+  display: flex;
+  justify-content: center;
+}
+
 /* ==========================================================================
    Email Login Form
    ========================================================================== */

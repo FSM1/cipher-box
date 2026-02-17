@@ -1382,6 +1382,11 @@
             "type": "string",
             "description": "Google OAuth ID token (from Google Sign-In)",
             "example": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+          },
+          "intent": {
+            "type": "string",
+            "description": "Intent: \"login\" (default) creates/finds a user, \"link\" only verifies ownership",
+            "enum": ["login", "link"]
           }
         },
         "required": ["idToken"]
@@ -1446,6 +1451,11 @@
             "type": "string",
             "description": "6-digit OTP code",
             "example": "123456"
+          },
+          "intent": {
+            "type": "string",
+            "description": "Intent: \"login\" (default) creates/finds a user, \"link\" only verifies ownership",
+            "enum": ["login", "link"]
           }
         },
         "required": ["email", "otp"]
@@ -1462,6 +1472,11 @@
             "type": "string",
             "description": "Wallet signature of the SIWE message (hex with 0x prefix)",
             "example": "0xabc123..."
+          },
+          "intent": {
+            "type": "string",
+            "description": "Intent: \"login\" (default) creates/finds a user, \"link\" only verifies ownership",
+            "enum": ["login", "link"]
           }
         },
         "required": ["message", "signature"]

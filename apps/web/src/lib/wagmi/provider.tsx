@@ -10,5 +10,12 @@ import { wagmiConfig } from './config';
  * and will discover the existing QueryClient from context.
  */
 export function WagmiSetup({ children }: { children: ReactNode }) {
-  return <WagmiProvider config={wagmiConfig}>{children}</WagmiProvider>;
+  // reconnectOnMount=false: CipherBox only uses wagmi transiently for SIWE
+  // signing and disconnects immediately after. Prevents stale connector errors
+  // on page load (especially in Brave which has a built-in wallet).
+  return (
+    <WagmiProvider config={wagmiConfig} reconnectOnMount={false}>
+      {children}
+    </WagmiProvider>
+  );
 }

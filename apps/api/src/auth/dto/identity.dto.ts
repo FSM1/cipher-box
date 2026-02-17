@@ -1,5 +1,14 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsEmail, Length, Matches, MaxLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsString,
+  IsNotEmpty,
+  IsEmail,
+  IsOptional,
+  IsIn,
+  Length,
+  Matches,
+  MaxLength,
+} from 'class-validator';
 
 export class GoogleLoginDto {
   @ApiProperty({
@@ -9,6 +18,14 @@ export class GoogleLoginDto {
   @IsString()
   @IsNotEmpty()
   idToken!: string;
+
+  @ApiPropertyOptional({
+    description: 'Intent: "login" (default) creates/finds a user, "link" only verifies ownership',
+    enum: ['login', 'link'],
+  })
+  @IsOptional()
+  @IsIn(['login', 'link'])
+  intent?: 'login' | 'link';
 }
 
 export class SendOtpDto {
@@ -38,6 +55,14 @@ export class VerifyOtpDto {
   @Length(6, 6)
   @Matches(/^\d{6}$/, { message: 'OTP must be exactly 6 digits' })
   otp!: string;
+
+  @ApiPropertyOptional({
+    description: 'Intent: "login" (default) creates/finds a user, "link" only verifies ownership',
+    enum: ['login', 'link'],
+  })
+  @IsOptional()
+  @IsIn(['login', 'link'])
+  intent?: 'login' | 'link';
 }
 
 export class IdentityTokenResponseDto {
@@ -87,6 +112,14 @@ export class WalletVerifyDto {
     message: 'signature must be a 65-byte hex string with 0x prefix',
   })
   signature!: string;
+
+  @ApiPropertyOptional({
+    description: 'Intent: "login" (default) creates/finds a user, "link" only verifies ownership',
+    enum: ['login', 'link'],
+  })
+  @IsOptional()
+  @IsIn(['login', 'link'])
+  intent?: 'login' | 'link';
 }
 
 export class SendOtpResponseDto {

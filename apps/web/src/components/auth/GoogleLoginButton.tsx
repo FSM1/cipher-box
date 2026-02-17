@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 /** Minimal type declarations for Google Identity Services (GIS) library */
 declare const google: {
@@ -15,6 +15,16 @@ declare const google: {
           isSkippedMoment: () => boolean;
         }) => void
       ) => void;
+      renderButton: (
+        parent: HTMLElement,
+        options: {
+          theme?: 'outline' | 'filled_blue' | 'filled_black';
+          size?: 'large' | 'medium' | 'small';
+          width?: number;
+          text?: 'signin_with' | 'signup_with' | 'continue_with' | 'signin';
+          shape?: 'rectangular' | 'pill' | 'circle' | 'square';
+        }
+      ) => void;
     };
   };
 };
@@ -27,15 +37,18 @@ interface GoogleLoginButtonProps {
 /**
  * Google OAuth login button using Google Identity Services (GIS) library.
  * Loads the GIS script dynamically, initializes with VITE_GOOGLE_CLIENT_ID,
- * and triggers the Google One Tap / popup flow on click.
+ * and triggers the Google One Tap flow on click.
  *
- * If VITE_GOOGLE_CLIENT_ID is not set, renders in a disabled state.
+ * If One Tap is blocked (e.g. Brave browser), falls back to Google's native
+ * Sign In button which uses a standard OAuth popup.
  */
 export function GoogleLoginButton({ onLogin, disabled }: GoogleLoginButtonProps) {
   const [gisLoaded, setGisLoaded] = useState(false);
   const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showNativeButton, setShowNativeButton] = useState(false);
+  const nativeButtonRef = useRef<HTMLDivElement>(null);
 
   const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
 
@@ -100,6 +113,29 @@ export function GoogleLoginButton({ onLogin, disabled }: GoogleLoginButtonProps)
     }
   }, [gisLoaded, clientId, handleCredentialResponse]);
 
+  // Render native Google button when fallback is needed
+  useEffect(() => {
+    if (!showNativeButton || !ready || !nativeButtonRef.current) return;
+
+    // Re-initialize to ensure the callback is current
+    google.accounts.id.initialize({
+      client_id: clientId!,
+      callback: (response: { credential: string }) => {
+        setLoading(true);
+        handleCredentialResponse(response);
+      },
+      auto_select: false,
+    });
+
+    google.accounts.id.renderButton(nativeButtonRef.current, {
+      theme: 'filled_black',
+      size: 'large',
+      width: 300,
+      text: 'continue_with',
+      shape: 'rectangular',
+    });
+  }, [showNativeButton, ready, clientId, handleCredentialResponse]);
+
   const handleClick = () => {
     if (!ready || disabled || loading) return;
 
@@ -128,8 +164,9 @@ export function GoogleLoginButton({ onLogin, disabled }: GoogleLoginButtonProps)
     google.accounts.id.prompt((notification) => {
       if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
         clearTimeout(timeoutId);
-        setError('Google popup was blocked. Please allow popups for this site.');
         setLoading(false);
+        // Fall back to native Google button (standard OAuth popup)
+        setShowNativeButton(true);
       }
     });
   };
@@ -144,23 +181,32 @@ export function GoogleLoginButton({ onLogin, disabled }: GoogleLoginButtonProps)
 
   return (
     <div className="google-login-wrapper">
-      <button
-        type="button"
-        data-testid="google-login-button"
-        className={[
-          'google-login-btn',
-          loading ? 'google-login-btn--loading' : '',
-          !clientId ? 'google-login-btn--not-configured' : '',
-        ]
-          .filter(Boolean)
-          .join(' ')}
-        onClick={handleClick}
-        disabled={isDisabled}
-        aria-label="Sign in with Google"
-        aria-busy={loading}
-      >
-        {buttonText()}
-      </button>
+      {!showNativeButton && (
+        <button
+          type="button"
+          data-testid="google-login-button"
+          className={[
+            'google-login-btn',
+            loading ? 'google-login-btn--loading' : '',
+            !clientId ? 'google-login-btn--not-configured' : '',
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          onClick={handleClick}
+          disabled={isDisabled}
+          aria-label="Sign in with Google"
+          aria-busy={loading}
+        >
+          {buttonText()}
+        </button>
+      )}
+      {showNativeButton && (
+        <div
+          ref={nativeButtonRef}
+          className="google-native-btn-container"
+          data-testid="google-native-button"
+        />
+      )}
       {error && (
         <div className="login-error" role="alert" aria-live="polite">
           {error}
