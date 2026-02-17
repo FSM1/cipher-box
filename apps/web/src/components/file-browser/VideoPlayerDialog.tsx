@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { FileEntry } from '@cipherbox/crypto';
+import type { FilePointer } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useFilePreview } from '../../hooks/useFilePreview';
 import '../../styles/video-player-dialog.css';
@@ -7,7 +7,9 @@ import '../../styles/video-player-dialog.css';
 type VideoPlayerDialogProps = {
   open: boolean;
   onClose: () => void;
-  item: FileEntry | null;
+  item: FilePointer | null;
+  /** Parent folder's decrypted AES-256 key (needed to decrypt file metadata) */
+  folderKey: Uint8Array | null;
 };
 
 /** Map common video extensions to MIME types. */
@@ -40,12 +42,13 @@ const SPEED_OPTIONS = [1, 1.5, 2, 0.5] as const;
  * No native browser video controls -- fully custom UI with play/pause,
  * seek, volume, speed, and fullscreen. Controls auto-hide during playback.
  */
-export function VideoPlayerDialog({ open, onClose, item }: VideoPlayerDialogProps) {
+export function VideoPlayerDialog({ open, onClose, item, folderKey }: VideoPlayerDialogProps) {
   const mimeType = item ? getVideoMime(item.name) : 'video/mp4';
   const { loading, error, objectUrl, handleDownload } = useFilePreview({
     open,
     item,
     mimeType,
+    folderKey,
   });
 
   // Video state

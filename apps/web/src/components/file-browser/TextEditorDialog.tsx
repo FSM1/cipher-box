@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { FileEntry } from '@cipherbox/crypto';
+import type { FilePointer } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useAuthStore } from '../../stores/auth.store';
 import { useFolder } from '../../hooks/useFolder';
-import { downloadFile } from '../../services/download.service';
+import { downloadFileFromIpns } from '../../services/download.service';
 import { encryptFile } from '../../services/file-crypto.service';
 import { addToIpfs } from '../../lib/api/ipfs';
 import '../../styles/text-editor-dialog.css';
@@ -11,8 +11,10 @@ import '../../styles/text-editor-dialog.css';
 type TextEditorDialogProps = {
   open: boolean;
   onClose: () => void;
-  item: FileEntry | null;
+  item: FilePointer | null;
   parentFolderId: string;
+  /** Parent folder's decrypted AES-256 key (needed to decrypt file metadata) */
+  folderKey: Uint8Array | null;
 };
 
 /**
@@ -21,7 +23,13 @@ type TextEditorDialogProps = {
  * Full crypto round-trip: download -> decrypt -> edit -> encrypt -> re-upload
  * -> update folder metadata -> unpin old CID.
  */
-export function TextEditorDialog({ open, onClose, item, parentFolderId }: TextEditorDialogProps) {
+export function TextEditorDialog({
+  open,
+  onClose,
+  item,
+  parentFolderId,
+  folderKey,
+}: TextEditorDialogProps) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [content, setContent] = useState('');
@@ -45,6 +53,11 @@ export function TextEditorDialog({ open, onClose, item, parentFolderId }: TextEd
       return;
     }
 
+    if (!folderKey) {
+      setError('Folder key not available');
+      return;
+    }
+
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -56,15 +69,12 @@ export function TextEditorDialog({ open, onClose, item, parentFolderId }: TextEd
           throw new Error('No keypair available - please log in again');
         }
 
-        const plaintext = await downloadFile(
-          {
-            cid: item.cid,
-            iv: item.fileIv,
-            wrappedKey: item.fileKeyEncrypted,
-            originalName: item.name,
-          },
-          auth.vaultKeypair.privateKey
-        );
+        const plaintext = await downloadFileFromIpns({
+          fileMetaIpnsName: item.fileMetaIpnsName,
+          folderKey: folderKey!,
+          privateKey: auth.vaultKeypair.privateKey,
+          fileName: item.name,
+        });
 
         if (cancelled) return;
 
@@ -87,7 +97,7 @@ export function TextEditorDialog({ open, onClose, item, parentFolderId }: TextEd
     return () => {
       cancelled = true;
     };
-  }, [open, item]);
+  }, [open, item, folderKey]);
 
   const handleSave = useCallback(async () => {
     if (!item || !isDirty) return;

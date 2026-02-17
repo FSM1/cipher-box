@@ -6,8 +6,8 @@ import {
   type MouseEvent,
   type TouchEvent,
 } from 'react';
-import type { FolderChild, FileEntry, FolderEntry } from '@cipherbox/crypto';
-import { formatBytes, formatDate } from '../../utils/format';
+import type { FolderChildV2, FilePointer, FolderEntry } from '@cipherbox/crypto';
+import { formatDate } from '../../utils/format';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
 
 /**
@@ -20,7 +20,7 @@ export type DragItem = { id: string; type: 'file' | 'folder' };
 
 type FileListItemProps = {
   /** The file or folder item to display */
-  item: FolderChild;
+  item: FolderChildV2;
   /** Whether this item is currently selected */
   isSelected: boolean;
   /** Parent folder ID (for drag data) */
@@ -28,7 +28,7 @@ type FileListItemProps = {
   /** All currently selected item IDs (for multi-select drag) */
   selectedIds: Set<string>;
   /** All items in the current folder (for resolving types of selected IDs) */
-  allItems: FolderChild[];
+  allItems: FolderChildV2[];
   /** Callback when item is clicked (with modifier key info) */
   onSelect: (
     itemId: string,
@@ -37,9 +37,9 @@ type FileListItemProps = {
   /** Callback when folder is double-clicked to navigate into */
   onNavigate: (folderId: string) => void;
   /** Callback when right-click context menu is requested */
-  onContextMenu: (event: MouseEvent, item: FolderChild) => void;
+  onContextMenu: (event: MouseEvent, item: FolderChildV2) => void;
   /** Callback when drag starts */
-  onDragStart: (event: DragEvent, item: FolderChild) => void;
+  onDragStart: (event: DragEvent, item: FolderChildV2) => void;
   /** Callback when items are dropped onto this folder (folders only) */
   onDrop?: (items: DragItem[], sourceParentId: string) => void;
   /** Callback when external files are dropped onto this folder */
@@ -49,21 +49,21 @@ type FileListItemProps = {
 /**
  * Type guard for folder entries.
  */
-function isFolder(item: FolderChild): item is FolderEntry {
+function isFolder(item: FolderChildV2): item is FolderEntry {
   return item.type === 'folder';
 }
 
 /**
- * Type guard for file entries.
+ * Type guard for file pointers (v2).
  */
-function isFile(item: FolderChild): item is FileEntry {
+function isFile(item: FolderChildV2): item is FilePointer {
   return item.type === 'file';
 }
 
 /**
  * Get text prefix for item type (terminal-style).
  */
-function getItemIcon(item: FolderChild): string {
+function getItemIcon(item: FolderChildV2): string {
   if (isFolder(item)) {
     return '[DIR]';
   }
@@ -302,8 +302,9 @@ export function FileListItem({
     [item, onDrop, onExternalFileDrop]
   );
 
-  // Display size only for files (folders show "-")
-  const sizeDisplay = isFile(item) ? formatBytes(item.size) : '-';
+  // Display size: v2 FilePointers don't have inline size (lives in per-file IPNS metadata).
+  // Show '--' for files until size is resolved on download/preview.
+  const sizeDisplay = isFile(item) ? '--' : '-';
 
   // Display modified date
   const dateDisplay = formatDate(item.modifiedAt);

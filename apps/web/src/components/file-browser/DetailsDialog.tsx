@@ -1,17 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { FolderChild, FileEntry, FolderEntry } from '@cipherbox/crypto';
+import type { FolderChildV2, FilePointer, FolderEntry } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useFolderStore } from '../../stores/folder.store';
 import { resolveIpnsRecord } from '../../services/ipns.service';
-import { formatBytes, formatDate } from '../../utils/format';
+import { formatDate } from '../../utils/format';
 import '../../styles/details-dialog.css';
 
 type DetailsDialogProps = {
   open: boolean;
   onClose: () => void;
-  item: FolderChild | null;
-  /** The parent folder ID containing this item */
-  parentFolderId: string;
+  item: FolderChildV2 | null;
 };
 
 /**
@@ -76,14 +74,14 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
 }
 
 /**
- * File details content.
+ * File details content (v2: FilePointer with per-file IPNS metadata).
  */
 function FileDetails({
   item,
   metadataCid,
   metadataLoading,
 }: {
-  item: FileEntry;
+  item: FilePointer;
   metadataCid: string | null;
   metadataLoading: boolean;
 }) {
@@ -97,18 +95,14 @@ function FileDetails({
         <span className="details-type-badge details-type-badge--file">[FILE]</span>
       </DetailRow>
 
-      <DetailRow label="Size">
-        <span className="details-value">{formatBytes(item.size)}</span>
+      {/* IPNS section */}
+      <div className="details-section-header">{'// ipns'}</div>
+
+      <DetailRow label="File Metadata IPNS">
+        <CopyableValue value={item.fileMetaIpnsName} />
       </DetailRow>
 
-      {/* Crypto section */}
-      <div className="details-section-header">{'// encryption'}</div>
-
-      <DetailRow label="Content CID">
-        <CopyableValue value={item.cid} />
-      </DetailRow>
-
-      <DetailRow label="Folder Metadata CID">
+      <DetailRow label="Metadata CID">
         {metadataLoading ? (
           <span className="details-loading">resolving...</span>
         ) : metadataCid ? (
@@ -116,20 +110,6 @@ function FileDetails({
         ) : (
           <span className="details-value details-value--dim">unavailable</span>
         )}
-      </DetailRow>
-
-      <DetailRow label="Encryption Mode">
-        <span className="details-value">AES-256-{item.encryptionMode}</span>
-      </DetailRow>
-
-      <DetailRow label="File IV">
-        <CopyableValue value={item.fileIv} />
-      </DetailRow>
-
-      <DetailRow label="Wrapped File Key">
-        <span className="details-value details-value--redacted">
-          {item.fileKeyEncrypted.slice(0, 16)}...{item.fileKeyEncrypted.slice(-8)} (ECIES-wrapped)
-        </span>
       </DetailRow>
 
       {/* Timestamps */}
@@ -246,12 +226,9 @@ function FolderDetails({
  * Resolves the parent folder's IPNS record on open to get the live
  * metadata CID. Sensitive key material is displayed in redacted form.
  */
-export function DetailsDialog({ open, onClose, item, parentFolderId }: DetailsDialogProps) {
+export function DetailsDialog({ open, onClose, item }: DetailsDialogProps) {
   const [metadataCid, setMetadataCid] = useState<string | null>(null);
   const [metadataLoading, setMetadataLoading] = useState(false);
-
-  // Get parent folder's IPNS name for resolving metadata CID
-  const parentFolder = useFolderStore((state) => state.folders[parentFolderId]);
 
   // For folders, also look up the folder node for sequence number and child count
   const folderNode = useFolderStore((state) =>
@@ -265,7 +242,8 @@ export function DetailsDialog({ open, onClose, item, parentFolderId }: DetailsDi
       return;
     }
 
-    const ipnsName = item.type === 'folder' ? item.ipnsName : parentFolder?.ipnsName;
+    const ipnsName =
+      item.type === 'folder' ? item.ipnsName : (item as FilePointer).fileMetaIpnsName;
 
     if (!ipnsName) {
       setMetadataLoading(false);
@@ -296,7 +274,7 @@ export function DetailsDialog({ open, onClose, item, parentFolderId }: DetailsDi
     return () => {
       cancelled = true;
     };
-  }, [open, item, parentFolder?.ipnsName]);
+  }, [open, item]);
 
   if (!item) return null;
 

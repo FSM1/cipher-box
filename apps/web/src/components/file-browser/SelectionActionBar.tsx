@@ -1,8 +1,8 @@
-import type { FolderChild } from '@cipherbox/crypto';
+import type { FolderChildV2 } from '@cipherbox/crypto';
 
 type SelectionActionBarProps = {
   /** Selected items */
-  selectedItems: FolderChild[];
+  selectedItems: FolderChildV2[];
   /** Whether an operation is in progress */
   isLoading: boolean;
   /** Callback to clear selection */
