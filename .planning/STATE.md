@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 11.1 (macOS Desktop Catch-Up)
-Plan: 2 of 7 planned
+Plan: 4 of 7 planned
 Status: In progress
-Last activity: 2026-02-17 -- Completed 11.1-02-PLAN.md (Security Fixes & Dev-Key CLI)
+Last activity: 2026-02-17 -- Completed 11.1-04-PLAN.md (Core Kit Auth Migration)
 
-Progress: [####################-] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 2/7)
+Progress: [####################-] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 4/7)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 108
+- Total plans completed: 109
 - Average duration: 5.3 min
-- Total execution time: 9.80 hours
+- Total execution time: 9.93 hours
 
 **By Phase (M1 summary):**
 
@@ -37,11 +37,11 @@ Progress: [####################-] (M1 complete, M2 Phase 12 complete, Phase 12.2
 | M2 Phase 12.5   | 3/3   | 9 min   | 3.0 min  |
 | M2 Phase 12.6   | 5/5   | 29 min  | 5.8 min  |
 | M2 Phase 12.1   | 4/4   | 27 min  | 6.8 min  |
-| M2 Phase 11.1   | 2/7   | 14 min  | 7.0 min  |
+| M2 Phase 11.1   | 4/7   | 22 min  | 5.5 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 5m, 12m, 6m, 7m, 7m
+- Last 5 plans: 12m, 6m, 7m, 7m, 8m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -128,6 +128,8 @@ Recent decisions affecting current work:
 | FileMetadata encryptionMode serde default "GCM"                  | 11.1-01   | Matches TypeScript optional field behavior for backward compat                                                   |
 | sanitize_error uses char-walking (not regex crate)               | 11.1-02   | Avoids adding regex dependency for simple path/token replacement                                                 |
 | dev_key field always present in AppState (not cfg-gated)         | 11.1-02   | Simplifies struct; only CLI parsing is cfg(debug_assertions) gated                                               |
+| AnyFolderMetadata Clone/Debug + to_v1() for FUSE compat          | 11.1-04   | Converts v2 FilePointers to placeholder FileEntries for backward-compatible FUSE layer                           |
+| Dev-key auth via test-login endpoint for CI/debug                | 11.1-04   | Debug builds use POST /auth/test-login to get JWT, bypassing Core Kit entirely                                   |
 
 ### Pending Todos
 
@@ -189,11 +191,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Completed 11.1-02-PLAN.md
+Stopped at: Completed 11.1-04-PLAN.md
 Resume file: None
-Next: 11.1-03-PLAN.md (Core Kit auth migration)
+Next: 11.1-05-PLAN.md (MFA challenge UI)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-17 after completing Phase 11.1 Plan 02 (Security Fixes & Dev-Key CLI)_
+_Last updated: 2026-02-17 after completing Phase 11.1 Plan 04 (Core Kit Auth Migration)_
