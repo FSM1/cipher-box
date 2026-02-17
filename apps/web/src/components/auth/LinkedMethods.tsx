@@ -69,8 +69,8 @@ export function LinkedMethods() {
     async (googleIdToken: string) => {
       setActionError(null);
       try {
-        // Get CipherBox identity JWT from Google token
-        const identity = await authApi.identityGoogle(googleIdToken);
+        // Get CipherBox identity JWT from Google token (link intent skips user creation)
+        const identity = await authApi.identityGoogle(googleIdToken, 'link');
         // Link with the CipherBox JWT
         await linkMethod({
           idToken: identity.idToken,
@@ -89,8 +89,8 @@ export function LinkedMethods() {
     async (email: string, otp: string) => {
       setActionError(null);
       try {
-        // Verify OTP and get CipherBox identity JWT
-        const identity = await authApi.identityEmailVerify(email, otp);
+        // Verify OTP and get CipherBox identity JWT (link intent skips user creation)
+        const identity = await authApi.identityEmailVerify(email, otp, 'link');
         // Link with the CipherBox JWT
         await linkMethod({
           idToken: identity.idToken,

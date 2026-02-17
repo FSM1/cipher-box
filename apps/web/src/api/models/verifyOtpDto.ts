@@ -5,10 +5,13 @@
  * Zero-knowledge encrypted cloud storage API
  * OpenAPI spec version: 0.1.0
  */
+import type { VerifyOtpDtoIntent } from './verifyOtpDtoIntent';
 
 export interface VerifyOtpDto {
   /** Email address the OTP was sent to */
   email: string;
   /** 6-digit OTP code */
   otp: string;
+  /** Intent: "login" (default) creates/finds a user, "link" only verifies ownership */
+  intent?: VerifyOtpDtoIntent;
 }

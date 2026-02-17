@@ -98,9 +98,13 @@ export const authApi = {
   // --- CipherBox Identity Provider endpoints (Plan 12-01) ---
 
   /** Get CipherBox identity JWT via Google OAuth token */
-  identityGoogle: async (googleIdToken: string): Promise<IdentityTokenResponse> => {
+  identityGoogle: async (
+    googleIdToken: string,
+    intent?: 'login' | 'link'
+  ): Promise<IdentityTokenResponse> => {
     const response = await apiClient.post<IdentityTokenResponse>('/auth/identity/google', {
       idToken: googleIdToken,
+      ...(intent && { intent }),
     });
     return response.data;
   },
@@ -114,12 +118,17 @@ export const authApi = {
   },
 
   /** Verify email OTP and get CipherBox identity JWT */
-  identityEmailVerify: async (email: string, otp: string): Promise<IdentityTokenResponse> => {
+  identityEmailVerify: async (
+    email: string,
+    otp: string,
+    intent?: 'login' | 'link'
+  ): Promise<IdentityTokenResponse> => {
     const response = await apiClient.post<IdentityTokenResponse>(
       '/auth/identity/email/verify-otp',
       {
         email,
         otp,
+        ...(intent && { intent }),
       }
     );
     return response.data;

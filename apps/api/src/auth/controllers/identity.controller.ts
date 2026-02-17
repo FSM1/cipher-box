@@ -92,19 +92,29 @@ export class IdentityController implements OnModuleDestroy {
   async googleLogin(@Body() dto: GoogleLoginDto): Promise<IdentityTokenResponseDto> {
     // 1. Verify Google token
     const googlePayload = await this.googleOAuthService.verifyGoogleToken(dto.idToken);
-
-    // 2. Hash Google sub (immutable user ID) -- NOT email (which can change)
-    const identifierHash = this.siweService.hashIdentifier(googlePayload.sub);
     const normalizedEmail = googlePayload.email?.toLowerCase().trim() ?? '';
 
-    // 3. Find or create user by hashed identifier
+    // 2. Link intent: just verify ownership and issue JWT (no user creation)
+    if (dto.intent === 'link') {
+      const idToken = await this.jwtIssuerService.signIdentityJwt(
+        'link-verification',
+        normalizedEmail
+      );
+      this.logger.log(`Google link verification: email=${normalizedEmail}`);
+      return { idToken, userId: '', isNewUser: false, email: normalizedEmail };
+    }
+
+    // 3. Hash Google sub (immutable user ID) -- NOT email (which can change)
+    const identifierHash = this.siweService.hashIdentifier(googlePayload.sub);
+
+    // 4. Find or create user by hashed identifier
     const { user, isNewUser } = await this.findOrCreateUserByIdentifier(
       identifierHash,
       this.siweService.truncateEmail(normalizedEmail),
       'google'
     );
 
-    // 4. Sign CipherBox identity JWT (include email for auth method identifier)
+    // 5. Sign CipherBox identity JWT (include email for auth method identifier)
     const idToken = await this.jwtIssuerService.signIdentityJwt(user.id, normalizedEmail);
 
     this.logger.log(`Google login: userId=${user.id}, isNew=${isNewUser}`);
@@ -153,18 +163,30 @@ export class IdentityController implements OnModuleDestroy {
     // 1. Verify OTP
     await this.emailOtpService.verifyOtp(dto.email, dto.otp);
 
-    // 2. Normalize email and hash for identifier
+    // 2. Normalize email
     const normalizedEmail = dto.email.toLowerCase().trim();
+
+    // 3. Link intent: just verify ownership and issue JWT (no user creation)
+    if (dto.intent === 'link') {
+      const idToken = await this.jwtIssuerService.signIdentityJwt(
+        'link-verification',
+        normalizedEmail
+      );
+      this.logger.log(`Email link verification: email=${normalizedEmail}`);
+      return { idToken, userId: '', isNewUser: false, email: normalizedEmail };
+    }
+
+    // 4. Hash for identifier lookup
     const identifierHash = this.siweService.hashIdentifier(normalizedEmail);
 
-    // 3. Find or create user by hashed identifier
+    // 5. Find or create user by hashed identifier
     const { user, isNewUser } = await this.findOrCreateUserByIdentifier(
       identifierHash,
       this.siweService.truncateEmail(normalizedEmail),
       'email'
     );
 
-    // 4. Sign CipherBox identity JWT (include email for auth method identifier)
+    // 6. Sign CipherBox identity JWT (include email for auth method identifier)
     const idToken = await this.jwtIssuerService.signIdentityJwt(user.id, normalizedEmail);
 
     this.logger.log(`Email OTP login: userId=${user.id}, isNew=${isNewUser}`);
@@ -242,7 +264,14 @@ export class IdentityController implements OnModuleDestroy {
       domain
     );
 
-    // 5. Find or create user by wallet address hash
+    // 5. Link intent: just verify ownership and issue JWT (no user creation)
+    if (dto.intent === 'link') {
+      const idToken = await this.jwtIssuerService.signIdentityJwt('link-verification');
+      this.logger.log(`Wallet link verification: address=${walletAddress}`);
+      return { idToken, userId: '', isNewUser: false };
+    }
+
+    // 6. Find or create user by wallet address hash
     const addressHash = this.siweService.hashWalletAddress(walletAddress);
     const truncated = this.siweService.truncateWalletAddress(walletAddress);
     const { user, isNewUser } = await this.findOrCreateUserByIdentifier(
@@ -251,7 +280,7 @@ export class IdentityController implements OnModuleDestroy {
       'wallet'
     );
 
-    // 6. Issue CipherBox JWT (sub=userId)
+    // 7. Issue CipherBox JWT (sub=userId)
     const idToken = await this.jwtIssuerService.signIdentityJwt(user.id);
 
     this.logger.log(`Wallet login: userId=${user.id}, isNew=${isNewUser}`);
