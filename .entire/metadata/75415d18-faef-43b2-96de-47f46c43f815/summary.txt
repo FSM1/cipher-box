@@ -1,0 +1,35 @@
+Committed and pushed. Now let me present the gap closure route:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► PHASE 12.6 GAPS FOUND ⚠
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Phase 12.6: Per-File IPNS Metadata Split**
+
+Score: 7/8 must-haves verified
+Report: .planning/phases/12.6-per-file-ipns-metadata-split/12.6-VERIFICATION.md
+
+### What's Missing
+
+**Desktop FUSE client v2 support** — The Rust FUSE client in `apps/desktop/src-tauri/` has zero v2/per-file IPNS awareness. No `FilePointer` struct, no `fileMetaIpnsName` handling, no per-file IPNS resolution. Was explicitly deferred in CONTEXT.md but required by success criteria #7.
+
+───────────────────────────────────────────────────────────────
+
+## ▶ Next Up
+
+**Plan gap closure** — create additional plan to add FUSE v2 support
+
+`/gsd:plan-phase 12.6 --gaps`
+
+<sub>`/clear` first → fresh context window</sub>
+
+───────────────────────────────────────────────────────────────
+
+**Also available:**
+
+- `cat .planning/phases/12.6-per-file-ipns-metadata-split/12.6-VERIFICATION.md` — see full report
+- `/gsd:verify-work 12.6` — manual testing before planning
+
+───────────────────────────────────────────────────────────────
+
+PR updated with all commits: https://github.com/FSM1/cipher-box/pull/133

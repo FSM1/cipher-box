@@ -1,0 +1,6 @@
+<task-notification>
+<task-id>a15ef9a</task-id>
+<status>failed</status>
+<summary>Agent "Execute plan 12.6-04" failed: classifyHandoffIfNeeded is not defined</summary>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/a15ef9a.output
