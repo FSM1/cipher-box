@@ -344,6 +344,16 @@ pub async fn start_sync_daemon(
     Ok(())
 }
 
+/// Get the dev-key if one was provided via CLI (debug builds only).
+///
+/// Returns `Some(hex_string)` if `--dev-key` was passed at startup, `None` otherwise.
+/// The webview can use this to skip Web3Auth login and call `handle_auth_complete`
+/// directly with a synthetic identity token or via the test-login endpoint.
+#[tauri::command]
+pub async fn get_dev_key(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    Ok(state.dev_key.read().await.clone())
+}
+
 /// Logout: invalidate session, clear Keychain, zero all sensitive keys.
 #[tauri::command]
 pub async fn logout(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {

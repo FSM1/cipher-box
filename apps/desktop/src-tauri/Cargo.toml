@@ -40,6 +40,7 @@ ciborium = "0.2"
 multihash = "0.19"
 unsigned-varint = "0.8"
 urlencoding = "2"
+clap = { version = "4", features = ["derive"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
