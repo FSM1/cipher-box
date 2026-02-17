@@ -22,7 +22,14 @@ import {
   requestEmailOtp,
   loginWithEmailOtp,
   logout,
+  inputRecoveryPhrase,
+  requestDeviceApproval,
+  pollApprovalStatus,
+  cancelApprovalRequest,
 } from './auth';
+
+// TODO (Phase 11.2): Add approval listener after auth success to poll for
+// pending approval requests and show native notification when approval needed.
 
 // CipherBox API base URL for dev-key test-login flow
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
@@ -282,35 +289,227 @@ function renderLoginForm(appDiv: HTMLElement): void {
 }
 
 /**
- * Show stub UI for MFA REQUIRED_SHARE status.
- * Users with MFA enabled on a new device see this. Full MFA UI in Plan 05.
+ * MFA REQUIRED_SHARE UI with two recovery paths:
+ * 1. Enter Recovery Phrase -- textarea for 24-word mnemonic
+ * 2. Request Device Approval -- creates bulletin board request and polls
+ *
+ * After either path succeeds, auth completes normally (TSS key export +
+ * Rust handoff happens inside the auth.ts MFA functions).
  */
 function renderRequiredShareUI(appDiv: HTMLElement): void {
-  appDiv.innerHTML = `
-    <div style="color: #d1d5db; font-family: 'Courier New', Courier, monospace; padding: 2rem; text-align: center; max-width: 340px; margin: 0 auto;">
-      <div style="font-size: 1.25rem; margin-bottom: 0.25rem; color: #e5e7eb; letter-spacing: 0.1em;">CIPHERBOX</div>
-      <div style="font-size: 0.75rem; color: #6b7280; margin-bottom: 1.5rem;">device verification required</div>
+  const font = "'Courier New', Courier, monospace";
+  const btnStyle = [
+    'width: 100%',
+    'padding: 0.625rem 1rem',
+    'background: #1f2937',
+    'border: 1px solid #374151',
+    'color: #d1d5db',
+    `font-family: ${font}`,
+    'font-size: 0.875rem',
+    'cursor: pointer',
+    'transition: border-color 0.15s',
+  ].join('; ');
 
-      <div style="background: #1f2937; border: 1px solid #374151; padding: 1.25rem; text-align: left; font-size: 0.8rem; line-height: 1.6;">
-        <div style="color: #f59e0b; margin-bottom: 0.75rem;">MFA is enabled on your account.</div>
-        <div style="color: #9ca3af;">This device needs to be verified before you can access your vault.</div>
-        <div style="color: #9ca3af; margin-top: 0.75rem;">Options:</div>
-        <div style="color: #d1d5db; margin-top: 0.25rem; padding-left: 1rem;">
-          1. Approve from an existing device<br/>
-          2. Enter your recovery phrase
-        </div>
-        <div style="color: #6b7280; margin-top: 0.75rem; font-size: 0.7rem;">
-          (Full MFA verification coming in a future update)
-        </div>
+  appDiv.innerHTML = `
+    <div style="color: #d1d5db; font-family: ${font}; padding: 2rem; text-align: center; max-width: 380px; margin: 0 auto;">
+      <div style="font-size: 1.25rem; margin-bottom: 0.25rem; color: #e5e7eb; letter-spacing: 0.1em;">CIPHERBOX</div>
+      <div style="font-size: 0.75rem; color: #6b7280; margin-bottom: 1rem;">device verification required</div>
+
+      <div style="color: #f59e0b; font-size: 0.8rem; margin-bottom: 1rem;">
+        MFA is enabled. This device needs a second factor.
       </div>
 
-      <button id="mfa-logout-btn" style="margin-top: 1rem; padding: 0.5rem 1rem; background: transparent; border: 1px solid #374151; color: #6b7280; font-family: 'Courier New', Courier, monospace; font-size: 0.75rem; cursor: pointer;">
-        [ back to login ]
+      <div style="margin-bottom: 0.5rem;">
+        <button id="recovery-btn" style="${btnStyle}">
+          [ enter recovery phrase ]
+        </button>
+      </div>
+
+      <div style="margin-bottom: 1rem;">
+        <button id="approval-btn" style="${btnStyle}">
+          [ request device approval ]
+        </button>
+      </div>
+
+      <div id="recovery-form" style="display: none; text-align: left; margin-top: 1rem;">
+        <div style="font-size: 0.75rem; color: #9ca3af; margin-bottom: 0.5rem;">
+          Enter your 24-word recovery phrase:
+        </div>
+        <textarea id="mnemonic-input" rows="3"
+          placeholder="word1 word2 word3 ..."
+          style="width: 100%; background: #111827; border: 1px solid #374151; color: #d1d5db; font-family: ${font}; font-size: 0.8rem; padding: 0.5rem; box-sizing: border-box; outline: none; resize: vertical;"></textarea>
+        <button id="submit-recovery" style="${btnStyle}; margin-top: 0.5rem;">
+          [ recover ]
+        </button>
+      </div>
+
+      <div id="approval-waiting" style="display: none; text-align: left; margin-top: 1rem;">
+        <div style="font-size: 0.8rem; color: #9ca3af;">
+          Waiting for approval from another device...
+        </div>
+        <div style="font-size: 0.7rem; color: #6b7280; margin-top: 0.5rem;">
+          Approve this device from your web app or another authorized device.
+        </div>
+        <div id="approval-status" style="margin-top: 0.5rem; font-size: 0.8rem;"></div>
+        <button id="cancel-approval-btn" style="margin-top: 0.75rem; padding: 0.375rem 1rem; background: transparent; border: 1px solid #374151; color: #6b7280; font-family: ${font}; font-size: 0.75rem; cursor: pointer;">
+          [ cancel ]
+        </button>
+      </div>
+
+      <div id="mfa-status" style="margin-top: 1rem; font-size: 0.8rem; min-height: 1.25rem;"></div>
+
+      <button id="mfa-logout-btn" style="margin-top: 1rem; padding: 0.375rem 1rem; background: transparent; border: none; color: #6b7280; font-family: ${font}; font-size: 0.75rem; cursor: pointer;">
+        back to login
       </button>
     </div>
   `;
 
+  // Hover effects for buttons
+  for (const id of ['recovery-btn', 'approval-btn', 'submit-recovery']) {
+    const btn = document.getElementById(id);
+    if (btn) {
+      btn.addEventListener('mouseenter', () => {
+        btn.style.borderColor = '#10b981';
+      });
+      btn.addEventListener('mouseleave', () => {
+        btn.style.borderColor = '#374151';
+      });
+    }
+  }
+
+  // Focus effect for textarea
+  const textarea = document.getElementById('mnemonic-input');
+  if (textarea) {
+    textarea.addEventListener('focus', () => {
+      (textarea as HTMLTextAreaElement).style.borderColor = '#10b981';
+    });
+    textarea.addEventListener('blur', () => {
+      (textarea as HTMLTextAreaElement).style.borderColor = '#374151';
+    });
+  }
+
+  // Track active approval request for cleanup
+  let activeRequestId: string | null = null;
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
+
+  const mfaStatus = document.getElementById('mfa-status')!;
+
+  // --- Recovery phrase path ---
+  document.getElementById('recovery-btn')?.addEventListener('click', () => {
+    document.getElementById('recovery-form')!.style.display = 'block';
+    document.getElementById('approval-waiting')!.style.display = 'none';
+    mfaStatus.textContent = '';
+    // Cancel any active approval request
+    if (activeRequestId) {
+      void cancelApprovalRequest(activeRequestId);
+      activeRequestId = null;
+    }
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+  });
+
+  document.getElementById('submit-recovery')?.addEventListener('click', async () => {
+    const mnemonicEl = document.getElementById('mnemonic-input') as HTMLTextAreaElement;
+    const mnemonic = mnemonicEl.value.trim();
+    if (!mnemonic) {
+      mfaStatus.style.color = '#ef4444';
+      mfaStatus.textContent = 'Please enter your recovery phrase';
+      return;
+    }
+    // Basic word count validation
+    const wordCount = mnemonic.split(/\s+/).length;
+    if (wordCount !== 24) {
+      mfaStatus.style.color = '#ef4444';
+      mfaStatus.textContent = `Expected 24 words, got ${wordCount}`;
+      return;
+    }
+    mfaStatus.style.color = '#9ca3af';
+    mfaStatus.textContent = 'Recovering...';
+    try {
+      await inputRecoveryPhrase(mnemonic);
+      handleAuthSuccess(appDiv);
+    } catch (err) {
+      mfaStatus.style.color = '#ef4444';
+      mfaStatus.textContent = err instanceof Error ? err.message : 'Recovery failed';
+    }
+  });
+
+  // --- Device approval path ---
+  document.getElementById('approval-btn')?.addEventListener('click', async () => {
+    document.getElementById('recovery-form')!.style.display = 'none';
+    document.getElementById('approval-waiting')!.style.display = 'block';
+    mfaStatus.textContent = '';
+
+    const statusEl = document.getElementById('approval-status')!;
+
+    try {
+      statusEl.style.color = '#9ca3af';
+      statusEl.textContent = 'Creating approval request...';
+
+      activeRequestId = await requestDeviceApproval();
+      statusEl.textContent = 'Approval request sent. Waiting...';
+
+      // Poll every 3 seconds
+      pollInterval = setInterval(async () => {
+        if (!activeRequestId) return;
+        try {
+          const status = await pollApprovalStatus(activeRequestId);
+          if (status === 'approved') {
+            if (pollInterval) clearInterval(pollInterval);
+            pollInterval = null;
+            activeRequestId = null;
+            handleAuthSuccess(appDiv);
+          } else if (status === 'denied') {
+            if (pollInterval) clearInterval(pollInterval);
+            pollInterval = null;
+            activeRequestId = null;
+            statusEl.style.color = '#ef4444';
+            statusEl.textContent = 'Approval was rejected.';
+          } else if (status === 'expired') {
+            if (pollInterval) clearInterval(pollInterval);
+            pollInterval = null;
+            activeRequestId = null;
+            statusEl.style.color = '#ef4444';
+            statusEl.textContent = 'Approval request expired.';
+          }
+        } catch {
+          // Continue polling on transient errors
+        }
+      }, 3000);
+    } catch (err) {
+      statusEl.style.color = '#ef4444';
+      statusEl.textContent = 'Failed to request approval';
+      console.error('[MFA] Approval request error:', err);
+    }
+  });
+
+  // Cancel approval button
+  document.getElementById('cancel-approval-btn')?.addEventListener('click', async () => {
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+    if (activeRequestId) {
+      await cancelApprovalRequest(activeRequestId);
+      activeRequestId = null;
+    }
+    document.getElementById('approval-waiting')!.style.display = 'none';
+    mfaStatus.textContent = '';
+  });
+
+  // Back to login button
   document.getElementById('mfa-logout-btn')?.addEventListener('click', async () => {
+    // Clean up any active approval
+    if (pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
+    }
+    if (activeRequestId) {
+      await cancelApprovalRequest(activeRequestId);
+      activeRequestId = null;
+    }
     try {
       await logout();
     } catch (err) {
