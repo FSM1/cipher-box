@@ -1,12 +1,1 @@
-Done. 6 code cleanup todos captured (including the CoreKit logging one from earlier):
-
-| # | Todo | Area |
-|---|------|------|
-| 1 | Remove CoreKit logging in web app | ui |
-| 2 | Split FileBrowser.tsx god component | ui |
-| 3 | Deduplicate Audio/Video player dialog logic | ui |
-| 4 | Consolidate API base URL definition | ui |
-| 5 | Split folder.service.ts into focused modules | ui |
-| 6 | Centralize error handling in FileBrowser | ui |
-
-13 total pending todos now. Committed to `main`.
+Tauri compiled and is running. The app window should have opened on your screen. Let me know what you see — it should be loading the login page pointed at the staging API.
