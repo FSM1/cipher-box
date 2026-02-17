@@ -21,6 +21,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { Web3AuthMPCCoreKit, WEB3AUTH_NETWORK, COREKIT_STATUS } from '@web3auth/mpc-core-kit';
 import { tssLib } from '@toruslabs/tss-dkls-lib';
 
+/** Minimal EIP-1193 provider interface for injected wallets (MetaMask etc.) */
+interface EthereumProvider {
+  request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
+}
+
 // CipherBox API base URL (same as Rust backend uses)
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 const WEB3AUTH_CLIENT_ID = import.meta.env.VITE_WEB3AUTH_CLIENT_ID || '';
@@ -161,6 +166,84 @@ export async function loginWithEmailOtp(email: string, otp: string): Promise<Log
   const { idToken: cipherboxJwt, userId } = await resp.json();
 
   // 2. Core Kit login + key export
+  return await loginWithCoreKit(cipherboxJwt, userId);
+}
+
+/**
+ * Login with an Ethereum wallet via SIWE (Sign-In with Ethereum).
+ *
+ * Flow:
+ * 1. Detect injected wallet provider (window.ethereum)
+ * 2. Request accounts via eth_requestAccounts
+ * 3. Fetch SIWE nonce from CipherBox API
+ * 4. Build EIP-4361 SIWE message (matching web app format exactly)
+ * 5. Sign with personal_sign
+ * 6. Verify signature on CipherBox API -> CipherBox JWT
+ * 7. Core Kit loginWithJWT (same as Google/Email)
+ *
+ * Note: Tauri webview may not support browser wallet extensions.
+ * If window.ethereum is not available, an informative error is shown.
+ * WalletConnect QR code flow is deferred to Phase 11 (cross-platform).
+ */
+export async function loginWithWallet(): Promise<LoginResult> {
+  if (!coreKit) throw new Error('Core Kit not initialized');
+
+  // 1. Check for injected wallet provider
+  const ethereum = (window as unknown as { ethereum?: EthereumProvider }).ethereum;
+  if (!ethereum) {
+    throw new Error(
+      'No Ethereum wallet detected. Install a wallet browser extension to use wallet login.'
+    );
+  }
+
+  // 2. Request accounts
+  const accounts = (await ethereum.request({ method: 'eth_requestAccounts' })) as string[];
+  if (!accounts || accounts.length === 0) {
+    throw new Error('No wallet accounts available');
+  }
+  const address = accounts[0];
+
+  // 3. Get SIWE nonce from CipherBox API
+  const nonceResp = await fetch(`${API_BASE}/auth/identity/wallet/nonce`);
+  if (!nonceResp.ok) throw new Error('Failed to get SIWE nonce');
+  const { nonce } = await nonceResp.json();
+
+  // 4. Create SIWE message (EIP-4361 format matching web app's createSiweMessage)
+  const domain = new URL(API_BASE).host;
+  const uri = API_BASE;
+  const issuedAt = new Date().toISOString();
+  const siweMessage = [
+    `${domain} wants you to sign in with your Ethereum account:`,
+    address,
+    '',
+    'Sign in to CipherBox encrypted storage',
+    '',
+    `URI: ${uri}`,
+    `Version: 1`,
+    `Chain ID: 1`,
+    `Nonce: ${nonce}`,
+    `Issued At: ${issuedAt}`,
+  ].join('\n');
+
+  // 5. Sign SIWE message with wallet
+  const signature = (await ethereum.request({
+    method: 'personal_sign',
+    params: [siweMessage, address],
+  })) as string;
+
+  // 6. Verify signature with CipherBox API
+  const verifyResp = await fetch(`${API_BASE}/auth/identity/wallet`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: siweMessage, signature }),
+  });
+  if (!verifyResp.ok) {
+    const body = await verifyResp.text().catch(() => '');
+    throw new Error(`SIWE verification failed (${verifyResp.status}): ${body}`);
+  }
+  const { idToken: cipherboxJwt, userId } = await verifyResp.json();
+
+  // 7. Core Kit loginWithJWT (same as Google/Email)
   return await loginWithCoreKit(cipherboxJwt, userId);
 }
 

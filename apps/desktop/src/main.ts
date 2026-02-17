@@ -15,7 +15,14 @@
 import './polyfills';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { initCoreKit, loginWithGoogle, requestEmailOtp, loginWithEmailOtp, logout } from './auth';
+import {
+  initCoreKit,
+  loginWithGoogle,
+  loginWithWallet,
+  requestEmailOtp,
+  loginWithEmailOtp,
+  logout,
+} from './auth';
 
 // CipherBox API base URL for dev-key test-login flow
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000';
@@ -100,9 +107,15 @@ function renderLoginForm(appDiv: HTMLElement): void {
       <div style="font-size: 1.25rem; margin-bottom: 0.25rem; color: #e5e7eb; letter-spacing: 0.1em;">CIPHERBOX</div>
       <div style="font-size: 0.75rem; color: #6b7280; margin-bottom: 1.5rem;">zero-knowledge encrypted storage</div>
 
-      <div id="google-section" style="margin-bottom: 1rem;">
+      <div id="google-section" style="margin-bottom: 0.5rem;">
         <button id="google-btn" style="width: 100%; padding: 0.625rem 1rem; background: #1f2937; border: 1px solid #374151; color: #d1d5db; font-family: 'Courier New', Courier, monospace; font-size: 0.875rem; cursor: pointer; transition: border-color 0.15s;">
           [ sign in with Google ]
+        </button>
+      </div>
+
+      <div id="wallet-section" style="margin-bottom: 1rem;">
+        <button id="wallet-btn" style="width: 100%; padding: 0.625rem 1rem; background: #1f2937; border: 1px solid #374151; color: #d1d5db; font-family: 'Courier New', Courier, monospace; font-size: 0.875rem; cursor: pointer; transition: border-color 0.15s;">
+          [ connect wallet ]
         </button>
       </div>
 
@@ -132,7 +145,7 @@ function renderLoginForm(appDiv: HTMLElement): void {
   `;
 
   // Hover effects
-  for (const btnId of ['google-btn', 'email-btn', 'otp-btn']) {
+  for (const btnId of ['google-btn', 'wallet-btn', 'email-btn', 'otp-btn']) {
     const btn = document.getElementById(btnId);
     if (btn) {
       btn.addEventListener('mouseenter', () => {
@@ -174,6 +187,24 @@ function renderLoginForm(appDiv: HTMLElement): void {
       handleAuthSuccess(appDiv);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : 'Google login failed', '#ef4444');
+      disableButtons(false);
+    }
+  });
+
+  // Wire Wallet button
+  const walletBtn = document.getElementById('wallet-btn');
+  walletBtn?.addEventListener('click', async () => {
+    setStatus('Connecting wallet...', '#9ca3af');
+    disableButtons(true);
+    try {
+      const result = await loginWithWallet();
+      if (result.status === 'required_share') {
+        renderRequiredShareUI(appDiv);
+        return;
+      }
+      handleAuthSuccess(appDiv);
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : 'Wallet login failed', '#ef4444');
       disableButtons(false);
     }
   });
@@ -360,7 +391,7 @@ function setStatus(message: string, color: string): void {
 }
 
 function disableButtons(disabled: boolean): void {
-  for (const id of ['google-btn', 'email-btn', 'otp-btn']) {
+  for (const id of ['google-btn', 'wallet-btn', 'email-btn', 'otp-btn']) {
     const btn = document.getElementById(id) as HTMLButtonElement | null;
     if (btn) {
       btn.disabled = disabled;
