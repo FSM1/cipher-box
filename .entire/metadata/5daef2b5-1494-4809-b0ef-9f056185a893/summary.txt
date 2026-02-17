@@ -1,6 +1,7 @@
-Good. The wallet button stays removed (no `window.ethereum` in Tauri webview), but Google is back. The Tauri app should auto-reload with the changes. 
+Done. Here's what I set up:
 
-Summary of what's done:
-- **Google button**: Kept (removed wallet only — no wallet extensions in Tauri webview)
-- **CORS fix**: Added `http://localhost:1420` to staging CORS config and restarted the API container
-- Email login should now work — try submitting an email again
+- **`.env`** — All defaults filled in, pointing at staging API
+- **`.env.example`** — Same values, committed to git as a reference
+- **`CLAUDE.md`** — Notes on switching to local API when needed, plus Tauri webview constraints
+
+The app will need a restart to pick up the new env vars (it was started with command-line overrides before). Want me to restart it?

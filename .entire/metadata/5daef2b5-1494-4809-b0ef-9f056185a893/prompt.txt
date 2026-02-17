@@ -1,1 +1,1 @@
-no google client id is configured. wallet also doesnt work and should probably be removed as no wallets in the webview. submitting an email shows `Load failed`
+I think the desktop env and env.example should be updated with all the default values including pointing at the staging api. you can make a note of this in the `apps/desktop/claude.md`, if some task necessitates developing against the local api in future but most tasks should be able to be completed against the staging api.
