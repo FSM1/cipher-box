@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 12.1 complete (AES-CTR Streaming Encryption)
+**Current focus:** Milestone 2 -- Phase 11.1 in progress (macOS Desktop Catch-Up)
 
 ## Current Position
 
-Phase: 12.1 (AES-CTR Streaming Encryption) -- COMPLETE
-Plan: 4 of 4 planned
-Status: Phase complete
-Last activity: 2026-02-17 -- Phase 12.1 complete (all 4 plans executed, verified 5/5 must-haves)
+Phase: 11.1 (macOS Desktop Catch-Up)
+Plan: 1 of 7 planned
+Status: In progress
+Last activity: 2026-02-17 -- Completed 11.1-01-PLAN.md (Crypto Primitives)
 
-Progress: [####################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete)
+Progress: [####################-] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 1/7)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 106
+- Total plans completed: 107
 - Average duration: 5.3 min
-- Total execution time: 9.56 hours
+- Total execution time: 9.68 hours
 
 **By Phase (M1 summary):**
 
@@ -37,10 +37,11 @@ Progress: [####################] (M1 complete, M2 Phase 12 complete, Phase 12.2 
 | M2 Phase 12.5   | 3/3   | 9 min   | 3.0 min  |
 | M2 Phase 12.6   | 5/5   | 29 min  | 5.8 min  |
 | M2 Phase 12.1   | 4/4   | 27 min  | 6.8 min  |
+| M2 Phase 11.1   | 1/7   | 7 min   | 7.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 10m, 4m, 5m, 12m, 6m
+- Last 5 plans: 4m, 5m, 12m, 6m, 7m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -123,6 +124,8 @@ Recent decisions affecting current work:
 | Dual-hook pattern for streaming vs blob URL preview              | 12.1-04   | Both useStreamingPreview and useFilePreview called; open flag controls which is active                           |
 | isCtr return from useStreamingPreview for mode detection         | 12.1-04   | Caller knows if file is CTR-encrypted without separate metadata lookup                                           |
 | SW body streaming with getReader() for progress tracking         | 12.1-04   | Changed from arrayBuffer() to chunk-by-chunk reading for postMessage progress                                    |
+| Ctr64BE matches Web Crypto AES-CTR length:64                     | 11.1-01   | Cross-platform compatibility for desktop decrypting web-encrypted CTR files                                      |
+| FileMetadata encryptionMode serde default "GCM"                  | 11.1-01   | Matches TypeScript optional field behavior for backward compat                                                   |
 
 ### Pending Todos
 
@@ -184,11 +187,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-17
-Stopped at: Phase 12.1 complete
+Stopped at: Completed 11.1-01-PLAN.md
 Resume file: None
-Next: Phase 13 (File Versioning) or next milestone phase
+Next: 11.1-02-PLAN.md (v2 vault metadata resolution + per-file IPNS)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-17 after completing Phase 12.1 (AES-CTR Streaming Encryption) -- Phase 12.1 complete_
+_Last updated: 2026-02-17 after completing Phase 11.1 Plan 01 (Crypto Primitives)_
