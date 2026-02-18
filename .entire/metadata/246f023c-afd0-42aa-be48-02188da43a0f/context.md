@@ -3,7 +3,7 @@
 **Session ID:** 246f023c-afd0-42aa-be48-02188da43a0f
 
 **Commit Message:** <task-notification>
-<task-id>b2bd46a</task-id>
+<task-id>b4615af</task-id>
 <output-file>/private/tmp
 
 ## Prompt
@@ -1405,11 +1405,21 @@ Read the output file to retrieve the result: /private/tmp/claude-501/-Users-mich
 </task-notification>
 Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/b2bd46a.output
 
+---
+
+<task-notification>
+<task-id>b4615af</task-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/b4615af.output</output-file>
+<status>completed</status>
+<summary>Background command "Start desktop app with mount option changes" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/b4615af.output
+
 ## Summary
 
 
 
-Stale — that was the pre-patch 10MB test that crashed with `Short read`. The fix is committed and verified.
+Stale — from an earlier mount option experiment. All work is committed and clean.
 
 ## Key Actions
 
