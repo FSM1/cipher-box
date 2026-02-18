@@ -48,9 +48,7 @@ impl ApiClient {
     /// Send an authenticated GET request to a relative API path.
     pub async fn authenticated_get(&self, path: &str) -> Result<Response, reqwest::Error> {
         let url = format!("{}{}", self.base_url, path);
-        eprintln!(">>> authenticated_get: acquiring token lock for {}", path);
         let token = self.access_token.read().await;
-        eprintln!(">>> authenticated_get: token lock acquired, sending {}", path);
 
         let mut builder = self
             .client
@@ -61,9 +59,7 @@ impl ApiClient {
             builder = builder.bearer_auth(t);
         }
 
-        let result = builder.send().await;
-        eprintln!(">>> authenticated_get: send complete for {}", path);
-        result
+        builder.send().await
     }
 
     /// Send an authenticated POST request with a JSON body to a relative API path.

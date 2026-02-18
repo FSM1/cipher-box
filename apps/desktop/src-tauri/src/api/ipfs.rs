@@ -9,12 +9,10 @@ use super::client::ApiClient;
 ///
 /// GET /ipfs/{cid} returns raw encrypted bytes (application/octet-stream).
 pub async fn fetch_content(client: &ApiClient, cid: &str) -> Result<Vec<u8>, String> {
-    eprintln!(">>> fetch_content: starting GET /ipfs/{}", cid);
     let resp = client
         .authenticated_get(&format!("/ipfs/{}", cid))
         .await
         .map_err(|e| format!("IPFS fetch failed: {}", e))?;
-    eprintln!(">>> fetch_content: got response status={}", resp.status());
 
     if !resp.status().is_success() {
         let status = resp.status();

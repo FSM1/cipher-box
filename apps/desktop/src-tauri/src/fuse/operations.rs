@@ -388,13 +388,8 @@ mod implementation {
         fn init(
             &mut self,
             _req: &Request<'_>,
-            config: &mut fuser::KernelConfig,
+            _config: &mut fuser::KernelConfig,
         ) -> Result<(), libc::c_int> {
-            // Limit max write size to 256KB. FUSE-T's SMB backend sends
-            // malformed FUSE requests for large writes ("Short read of FUSE
-            // request") causing session crashes. Capping max_write ensures
-            // writes are chunked to a safe size.
-            let _ = config.set_max_write(256 * 1024);
             log::info!("CipherBoxFS::init (root pre-populated, no network I/O)");
             log::info!("Root IPNS name: {}", self.root_ipns_name);
             log::info!("Inode count: {}", self.inodes.inodes.len());
@@ -433,7 +428,6 @@ mod implementation {
             name: &OsStr,
             reply: ReplyEntry,
         ) {
-            eprintln!(">>> FUSE lookup: parent={} name={:?}", parent, name);
             self.drain_upload_completions();
             self.drain_refresh_completions();
 
@@ -551,7 +545,6 @@ mod implementation {
             _fh: Option<u64>,
             reply: ReplyAttr,
         ) {
-            eprintln!(">>> FUSE getattr: ino={}", ino);
             self.drain_upload_completions();
 
             if let Some(inode) = self.inodes.get(ino) {
@@ -583,7 +576,6 @@ mod implementation {
             _flags: Option<u32>,
             reply: ReplyAttr,
         ) {
-            eprintln!(">>> FUSE setattr: ino={} size={:?}", ino, size);
             // Handle truncate if size is specified
             if let Some(new_size) = size {
                 // Truncate temp file if file handle exists
@@ -636,7 +628,6 @@ mod implementation {
             offset: i64,
             mut reply: ReplyDirectory,
         ) {
-            eprintln!(">>> FUSE readdir: ino={} offset={}", ino, offset);
             // 1. Drain any pending background refresh results (non-blocking)
             self.drain_refresh_completions();
 
@@ -760,7 +751,6 @@ mod implementation {
                                 && self.content_cache.get(cid).is_none()
                                 && !self.prefetching.contains(cid)
                             {
-                                eprintln!(">>> readdir: proactive prefetch for {} (CID {})", child.name, &cid[..cid.len().min(12)]);
                                 let api = self.api.clone();
                                 let rt = self.rt.clone();
                                 let tx = self.content_tx.clone();
@@ -793,10 +783,8 @@ mod implementation {
                                             });
                                         }
                                         Ok(Err(e)) => {
-                                            eprintln!(">>> prefetch(readdir): FAILED for CID {}: {}", &cid_clone[..cid_clone.len().min(12)], e);
                                         }
                                         Err(_) => {
-                                            eprintln!(">>> prefetch(readdir): TIMED OUT for CID {}", &cid_clone[..cid_clone.len().min(12)]);
                                         }
                                     }
                                 });
@@ -822,7 +810,6 @@ mod implementation {
             flags: i32,
             reply: ReplyCreate,
         ) {
-            eprintln!(">>> FUSE create: parent={} name={:?}", parent, name);
             let name_str = match name.to_str() {
                 Some(n) => n,
                 None => {
@@ -919,10 +906,7 @@ mod implementation {
             self.mutated_folders.insert(parent, std::time::Instant::now());
 
             log::debug!("create: {} in parent {} -> ino {} fh {}", name_str, parent, ino, fh);
-            // FOPEN_DIRECT_IO (0x1) tells FUSE-T to bypass page cache and send
-            // writes directly. This works around macOS NFS client bugs where
-            // writes to newly created files stall in the kernel page cache.
-            reply.created(&FILE_TTL, &attr, 0, fh, 0x1);
+            reply.created(&FILE_TTL, &attr, 0, fh, 0);
         }
 
         /// Open a file for reading or writing.
@@ -936,7 +920,6 @@ mod implementation {
             flags: i32,
             reply: ReplyOpen,
         ) {
-            eprintln!(">>> FUSE open: ino={} flags={:#x}", ino, flags);
             // Get file info
             let file_info = match self.inodes.get(ino) {
                 Some(inode) => match &inode.kind {
@@ -964,10 +947,8 @@ mod implementation {
                 let existing_content = if !cid.is_empty() {
                     self.drain_content_prefetches();
                     if let Some(cached) = self.content_cache.get(&cid) {
-                        eprintln!(">>> FUSE open(write): using cached content for CID {}", &cid[..cid.len().min(12)]);
                         Some(cached.to_vec())
                     } else {
-                        eprintln!(">>> FUSE open(write): fetching content for CID {} ...", &cid[..cid.len().min(12)]);
                         match fetch_and_decrypt_file_content(self, &cid, &encrypted_file_key, &iv, &encryption_mode) {
                             Ok(content) => Some(content),
                             Err(e) => {
@@ -990,8 +971,7 @@ mod implementation {
                 ) {
                     Ok(handle) => {
                         self.open_files.insert(fh, handle);
-                        // FOPEN_DIRECT_IO (0x1) — bypass NFS page cache for writes
-                        reply.opened(fh, 0x1);
+                        reply.opened(fh, 0);
                     }
                     Err(e) => {
                         log::error!("Failed to create write handle: {}", e);
@@ -1012,7 +992,6 @@ mod implementation {
                     && self.content_cache.get(&cid).is_none()
                     && !self.prefetching.contains(&cid)
                 {
-                    eprintln!(">>> FUSE open: starting async prefetch for CID {} ...", &cid[..cid.len().min(12)]);
                     let api = self.api.clone();
                     let rt = self.rt.clone();
                     let tx = self.content_tx.clone();
@@ -1080,7 +1059,6 @@ mod implementation {
             _lock_owner: Option<u64>,
             reply: ReplyWrite,
         ) {
-            eprintln!(">>> FUSE write: ino={} fh={} offset={} size={}", ino, fh, offset, data.len());
             let handle = match self.open_files.get_mut(&fh) {
                 Some(h) => h,
                 None => {
@@ -1125,7 +1103,6 @@ mod implementation {
             _lock: Option<u64>,
             reply: ReplyData,
         ) {
-            eprintln!(">>> FUSE read: ino={} fh={} offset={} size={}", ino, fh, offset, size);
             // Drain any pending content prefetches into the cache
             self.drain_content_prefetches();
 
@@ -1243,7 +1220,6 @@ mod implementation {
 
             // Start prefetch if not already in progress
             if !self.prefetching.contains(&cid) {
-                eprintln!(">>> FUSE read: starting prefetch for CID {} ...", &cid[..cid.len().min(12)]);
                 let api = self.api.clone();
                 let rt = self.rt.clone();
                 let tx = self.content_tx.clone();
@@ -1277,11 +1253,9 @@ mod implementation {
                         }
                         Ok(Err(e)) => {
                             log::error!("Read prefetch failed for CID {}: {}", cid_clone, e);
-                            eprintln!(">>> prefetch(read): FAILED for CID {}: {}", &cid_clone[..cid_clone.len().min(12)], e);
                         }
                         Err(_) => {
                             log::error!("Read prefetch timed out for CID {}", cid_clone);
-                            eprintln!(">>> prefetch(read): TIMED OUT for CID {}", &cid_clone[..cid_clone.len().min(12)]);
                         }
                     }
                 });
@@ -1316,7 +1290,6 @@ mod implementation {
 
             // Content still downloading — return EIO. The prefetch continues
             // in background. Next open+read will find it cached.
-            eprintln!(">>> FUSE read: content not ready after 3s for CID {}, returning EIO", &cid[..cid.len().min(12)]);
             reply.error(libc::EIO);
         }
 
@@ -1335,7 +1308,6 @@ mod implementation {
             _flush: bool,
             reply: ReplyEmpty,
         ) {
-            eprintln!(">>> FUSE release: ino={} fh={}", ino, fh);
             // Drain any completed uploads from previous operations
             self.drain_upload_completions();
 
@@ -1476,7 +1448,6 @@ mod implementation {
             _lock_owner: u64,
             reply: ReplyEmpty,
         ) {
-            eprintln!(">>> FUSE flush: ino={} fh={}", _ino, _fh);
             reply.ok();
         }
 
@@ -1488,7 +1459,6 @@ mod implementation {
             name: &OsStr,
             reply: ReplyEmpty,
         ) {
-            eprintln!(">>> FUSE unlink: parent={} name={:?}", parent, name);
             let name_str = match name.to_str() {
                 Some(n) => n,
                 None => {
@@ -2111,7 +2081,6 @@ mod implementation {
             mask: i32,
             reply: ReplyEmpty,
         ) {
-            eprintln!(">>> FUSE access: ino={} mask={:#x}", ino, mask);
             let Some(inode) = self.inodes.get(ino) else {
                 reply.error(libc::ENOENT);
                 return;
@@ -2156,7 +2125,6 @@ mod implementation {
             _size: u32,
             reply: ReplyXattr,
         ) {
-            eprintln!(">>> FUSE getxattr: ino={} name={:?}", _ino, _name);
             // ENODATA = attribute not found (expected for files with no xattrs)
             #[cfg(target_os = "macos")]
             { reply.error(libc::ENOATTR); }

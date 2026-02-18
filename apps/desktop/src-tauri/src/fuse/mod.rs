@@ -591,7 +591,6 @@ impl CipherBoxFS {
 
         for folder_ino in ready {
             self.publish_queue.remove(&folder_ino);
-            eprintln!(">>> Debounced publish triggered for folder ino={}", folder_ino);
             match self.build_folder_metadata(folder_ino) {
                 Ok((metadata, folder_key, ipns_private_key, ipns_name, old_cid)) => {
                     spawn_metadata_publish(
@@ -659,7 +658,6 @@ impl CipherBoxFS {
             // For v2 metadata, resolve FilePointers eagerly
             if matches!(&refresh.metadata, crate::crypto::folder::AnyFolderMetadata::V2(_)) {
                 let unresolved = self.inodes.get_unresolved_file_pointers();
-                eprintln!(">>> drain_refresh: v2 metadata, {} unresolved file pointers", unresolved.len());
                 if !unresolved.is_empty() {
                     // Get folder key for FilePointer resolution
                     let folder_key = match self.inodes.get(refresh.ino) {
@@ -822,14 +820,11 @@ pub async fn mount_filesystem(
     // This runs on the calling thread (tokio context available via rt handle).
     let mut metadata_cache = cache::MetadataCache::new();
     log::info!("Pre-populating root folder from IPNS...");
-    eprintln!(">>> Pre-populate: resolving IPNS name {}", &root_ipns_name);
     let fetch_result: Result<(Vec<u8>, String), String> = async {
         let resolve_resp =
             crate::api::ipns::resolve_ipns(&state.api, &root_ipns_name).await?;
-        eprintln!(">>> Pre-populate: IPNS resolved to CID {}", &resolve_resp.cid);
         let encrypted_bytes =
             crate::api::ipfs::fetch_content(&state.api, &resolve_resp.cid).await?;
-        eprintln!(">>> Pre-populate: fetched {} bytes", encrypted_bytes.len());
         Ok((encrypted_bytes, resolve_resp.cid))
     }.await;
     match fetch_result {
@@ -1009,17 +1004,13 @@ pub async fn mount_filesystem(
     // FUSE-T mount options:
     // - backend=smb: Use SMB instead of NFS backend. NFS has a known macOS kernel
     //   bug where WRITE RPCs never reach the FUSE-T server for newly created files,
-    //   causing permanent process hangs. SMB backend avoids this.
-    // - rwsize=65536: Limit SMB read/write chunk size to 64KB. Without this,
-    //   large writes cause FUSE-T to send malformed FUSE requests that crash
-    //   the session ("Short read of FUSE request").
+    //   causing permanent process hangs. SMB backend avoids this entirely.
     let options = vec![
         MountOption::FSName("CipherBox".to_string()),
         MountOption::CUSTOM("volname=CipherBox".to_string()),
         MountOption::CUSTOM("noappledouble".to_string()),
         MountOption::CUSTOM("noapplexattr".to_string()),
         MountOption::CUSTOM("backend=smb".to_string()),
-        MountOption::CUSTOM("rwsize=65536".to_string()),
         MountOption::RW,
     ];
 
