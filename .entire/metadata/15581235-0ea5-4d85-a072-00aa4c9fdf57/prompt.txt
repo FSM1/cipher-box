@@ -1,1 +1,1 @@
-Lets leave them in for now, and add removal of these workarounds to the existing fix webapp todo.
+also add a note to that todo, around ensuring metadata versioning consistency.

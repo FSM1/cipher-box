@@ -1,1 +1,1 @@
-Done. The todo now documents exactly which workarounds to revert. Want me to commit the Rust changes and the updated todo?
+Done. Want me to commit everything now — the Rust workarounds + the updated todo?
