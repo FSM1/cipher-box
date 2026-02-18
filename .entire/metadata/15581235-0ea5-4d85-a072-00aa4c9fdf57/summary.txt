@@ -1,0 +1,1 @@
+App is up and waiting for login. Please log in again, and I'll check the debug output to see the actual decrypted JSON.

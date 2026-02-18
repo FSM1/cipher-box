@@ -248,20 +248,35 @@ pub fn decrypt_any_folder_metadata(
 ) -> Result<AnyFolderMetadata, FolderError> {
     let mut json = aes::unseal_aes_gcm(sealed, folder_key).map_err(FolderError::EncryptionFailed)?;
 
+    // Debug: log the decrypted JSON to diagnose deserialization failures
+    if let Ok(s) = std::str::from_utf8(&json) {
+        let preview = if s.len() > 500 { &s[..500] } else { s };
+        log::debug!("Decrypted folder metadata JSON: {}", preview);
+    }
+
     // Parse as generic JSON to check version field
     let value: serde_json::Value =
-        serde_json::from_slice(&json).map_err(|_| FolderError::DeserializationFailed)?;
+        serde_json::from_slice(&json).map_err(|e| {
+            log::error!("JSON parse failed: {}", e);
+            FolderError::DeserializationFailed
+        })?;
 
     let result = match value.get("version").and_then(|v| v.as_str()) {
         Some("v2") => {
             let v2: FolderMetadataV2 =
-                serde_json::from_value(value).map_err(|_| FolderError::DeserializationFailed)?;
+                serde_json::from_value(value).map_err(|e| {
+                    log::error!("V2 metadata deserialization failed: {}", e);
+                    FolderError::DeserializationFailed
+                })?;
             Ok(AnyFolderMetadata::V2(v2))
         }
         _ => {
             // Default to v1 for backward compatibility
             let v1: FolderMetadata =
-                serde_json::from_value(value).map_err(|_| FolderError::DeserializationFailed)?;
+                serde_json::from_value(value).map_err(|e| {
+                    log::error!("V1 metadata deserialization failed: {}", e);
+                    FolderError::DeserializationFailed
+                })?;
             Ok(AnyFolderMetadata::V1(v1))
         }
     };
