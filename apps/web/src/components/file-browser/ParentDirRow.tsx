@@ -25,7 +25,7 @@ export function ParentDirRow({ onClick }: ParentDirRowProps) {
   return (
     <div
       className="file-list-item file-list-item--parent"
-      onClick={onClick}
+      onDoubleClick={onClick}
       role="row"
       tabIndex={0}
       onKeyDown={(e) => {
