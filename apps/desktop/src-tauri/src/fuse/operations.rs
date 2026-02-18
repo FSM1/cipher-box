@@ -62,8 +62,14 @@ mod implementation {
     /// Maximum time for a network operation before returning EIO.
     /// FUSE-T runs NFS callbacks on a single thread; blocking too long
     /// causes ALL subsequent operations (including ls) to hang.
-    /// Keep this SHORT — macOS NFS client times out in ~3-5s.
+    /// Keep this SHORT for non-read operations.
     const NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
+
+    /// Maximum time for file content download in open().
+    /// Large files (e.g., 64MB) can take 30-60s from staging IPFS.
+    /// This blocks the NFS thread, but since the content is cached after
+    /// open(), all subsequent reads are instant.
+    const CONTENT_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 
     /// Run an async operation with a timeout, blocking the current thread.
     /// Returns Err if the operation fails or times out.
@@ -176,8 +182,9 @@ mod implementation {
             }
         }
 
-        // Populate inode table with children (dispatches v1/v2)
-        fs.inodes.populate_folder_any(ino, &any_metadata, &private_key)?;
+        // Populate inode table with children (dispatches v1/v2).
+        // First load for this folder — replace mode (merge_only=false).
+        fs.inodes.populate_folder_any(ino, &any_metadata, &private_key, false)?;
 
         // For v2 metadata, resolve unresolved FilePointers eagerly
         let unresolved = fs.inodes.get_unresolved_file_pointers();
@@ -877,39 +884,29 @@ mod implementation {
                     }
                 }
             } else {
-                // Read-only open — prefetch content in background if not cached
+                // Read-only open — download and cache content synchronously.
+                // This blocks the NFS thread during download, but ensures reads
+                // never fail with EIO. NFS clients are more tolerant of slow
+                // opens than repeated read failures.
                 self.drain_content_prefetches();
-                let fh = self.next_fh.fetch_add(1, Ordering::SeqCst);
-                self.open_files.insert(fh, OpenFileHandle::new_read(ino, flags));
 
-                if !cid.is_empty()
-                    && self.content_cache.get(&cid).is_none()
-                    && !self.prefetching.contains(&cid)
-                {
-                    self.prefetching.insert(cid.clone());
-                    let api = self.api.clone();
-                    let private_key = self.private_key.clone();
-                    let rt = self.rt.clone();
-                    let cid_clone = cid.clone();
-                    let efk = encrypted_file_key.clone();
-                    let iv_clone = iv.clone();
-                    let mode_clone = encryption_mode.clone();
-                    let tx = self.content_tx.clone();
-                    rt.spawn(async move {
-                        let result: Result<Vec<u8>, String> = async {
+                if !cid.is_empty() && self.content_cache.get(&cid).is_none() {
+                    eprintln!(">>> FUSE open: downloading content for CID {} ...", &cid[..12]);
+                    let result = self.rt.block_on(async {
+                        tokio::time::timeout(CONTENT_DOWNLOAD_TIMEOUT, async {
                             let encrypted_bytes =
-                                crate::api::ipfs::fetch_content(&api, &cid_clone).await?;
-                            let encrypted_file_key = hex::decode(&efk)
+                                crate::api::ipfs::fetch_content(&self.api, &cid).await?;
+                            let encrypted_file_key_bytes = hex::decode(&encrypted_file_key)
                                 .map_err(|_| "Invalid file key hex".to_string())?;
                             let mut file_key =
-                                crate::crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
+                                crate::crypto::ecies::unwrap_key(&encrypted_file_key_bytes, &self.private_key)
                                     .map_err(|e| format!("File key unwrap failed: {}", e))?;
                             let file_key_arr: [u8; 32] = file_key.as_slice()
                                 .try_into()
                                 .map_err(|_| "Invalid file key length".to_string())?;
 
-                            let plaintext = if mode_clone == "CTR" {
-                                let iv_bytes = hex::decode(&iv_clone)
+                            let plaintext = if encryption_mode == "CTR" {
+                                let iv_bytes = hex::decode(&iv)
                                     .map_err(|_| "Invalid file IV hex".to_string())?;
                                 let iv_arr: [u8; 16] = iv_bytes
                                     .try_into()
@@ -919,7 +916,7 @@ mod implementation {
                                 )
                                 .map_err(|e| format!("CTR decryption failed: {}", e))?
                             } else {
-                                let iv_bytes = hex::decode(&iv_clone)
+                                let iv_bytes = hex::decode(&iv)
                                     .map_err(|_| "Invalid file IV hex".to_string())?;
                                 let iv_arr: [u8; 12] = iv_bytes
                                     .try_into()
@@ -931,21 +928,30 @@ mod implementation {
                             };
 
                             crate::crypto::utils::clear_bytes(&mut file_key);
-                            Ok(plaintext)
-                        }
-                        .await;
-                        match result {
-                            Ok(data) => {
-                                let _ = tx.send(crate::fuse::PendingContent {
-                                    cid: cid_clone,
-                                    data,
-                                });
-                            }
-                            Err(e) => log::warn!("Content prefetch failed: {}", e),
-                        }
+                            Ok::<Vec<u8>, String>(plaintext)
+                        }).await
                     });
+
+                    match result {
+                        Ok(Ok(plaintext)) => {
+                            eprintln!(">>> FUSE open: cached {} bytes for CID {}", plaintext.len(), &cid[..12]);
+                            self.content_cache.set(&cid, plaintext);
+                        }
+                        Ok(Err(e)) => {
+                            log::error!("Content download failed for CID {}: {}", cid, e);
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                        Err(_) => {
+                            log::error!("Content download timed out for CID {} ({}s)", cid, CONTENT_DOWNLOAD_TIMEOUT.as_secs());
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    }
                 }
 
+                let fh = self.next_fh.fetch_add(1, Ordering::SeqCst);
+                self.open_files.insert(fh, OpenFileHandle::new_read(ino, flags));
                 reply.opened(fh, 0);
             }
         }
@@ -1115,124 +1121,72 @@ mod implementation {
                 return;
             }
 
-            // Cache miss — drain any pending prefetches first, then recheck
-            self.drain_content_prefetches();
+            // Content not in cache — download synchronously as fallback.
+            // This handles the case where FUSE-T NFS calls read() without open()
+            // (NFSv3 is stateless), or when content was evicted from cache.
+            eprintln!(">>> FUSE read: cache miss for CID {}, downloading...", &cid[..cid.len().min(12)]);
+            let result = self.rt.block_on(async {
+                tokio::time::timeout(CONTENT_DOWNLOAD_TIMEOUT, async {
+                    let encrypted_bytes =
+                        crate::api::ipfs::fetch_content(&self.api, &cid).await?;
+                    let encrypted_file_key_bytes = hex::decode(&encrypted_file_key_hex)
+                        .map_err(|_| "Invalid file key hex".to_string())?;
+                    let mut file_key =
+                        crate::crypto::ecies::unwrap_key(&encrypted_file_key_bytes, &self.private_key)
+                            .map_err(|e| format!("File key unwrap failed: {}", e))?;
+                    let file_key_arr: [u8; 32] = file_key.as_slice()
+                        .try_into()
+                        .map_err(|_| "Invalid file key length".to_string())?;
 
-            // Recheck content cache after drain
-            if let Some(cached) = self.content_cache.get(&cid) {
-                let start = offset as usize;
-                if start >= cached.len() {
-                    reply.data(&[]);
-                    return;
-                }
-                let end = std::cmp::min(start + size as usize, cached.len());
-                let data_slice = cached[start..end].to_vec();
-                if let Some(handle) = self.open_files.get_mut(&fh) {
-                    handle.cached_content = Some(cached.to_vec());
-                }
-                reply.data(&data_slice);
-                return;
-            }
-
-            // Still not cached — prefetch may still be in flight, or was never started.
-            // Fire a prefetch if not already in flight.
-            if !self.prefetching.contains(&cid) {
-                self.prefetching.insert(cid.clone());
-                let api = self.api.clone();
-                let private_key = self.private_key.clone();
-                let rt = self.rt.clone();
-                let cid_clone = cid.clone();
-                let efk = encrypted_file_key_hex.clone();
-                let iv_clone = iv_hex.clone();
-                let mode_clone = encryption_mode.clone();
-                let tx = self.content_tx.clone();
-                rt.spawn(async move {
-                    let result: Result<Vec<u8>, String> = async {
-                        let encrypted_bytes =
-                            crate::api::ipfs::fetch_content(&api, &cid_clone).await?;
-                        let encrypted_file_key = hex::decode(&efk)
-                            .map_err(|_| "Invalid file key hex".to_string())?;
-                        let mut file_key =
-                            crate::crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
-                                .map_err(|e| format!("File key unwrap failed: {}", e))?;
-                        let file_key_arr: [u8; 32] = file_key.as_slice()
+                    let plaintext = if encryption_mode == "CTR" {
+                        let iv_bytes = hex::decode(&iv_hex)
+                            .map_err(|_| "Invalid file IV hex".to_string())?;
+                        let iv_arr: [u8; 16] = iv_bytes
                             .try_into()
-                            .map_err(|_| "Invalid file key length".to_string())?;
+                            .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
+                        crate::crypto::aes_ctr::decrypt_aes_ctr(
+                            &encrypted_bytes, &file_key_arr, &iv_arr,
+                        )
+                        .map_err(|e| format!("CTR decryption failed: {}", e))?
+                    } else {
+                        let iv_bytes = hex::decode(&iv_hex)
+                            .map_err(|_| "Invalid file IV hex".to_string())?;
+                        let iv_arr: [u8; 12] = iv_bytes
+                            .try_into()
+                            .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
+                        crate::crypto::aes::decrypt_aes_gcm(
+                            &encrypted_bytes, &file_key_arr, &iv_arr,
+                        )
+                        .map_err(|e| format!("GCM decryption failed: {}", e))?
+                    };
 
-                        let plaintext = if mode_clone == "CTR" {
-                            let iv_bytes = hex::decode(&iv_clone)
-                                .map_err(|_| "Invalid file IV hex".to_string())?;
-                            let iv_arr: [u8; 16] = iv_bytes
-                                .try_into()
-                                .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
-                            crate::crypto::aes_ctr::decrypt_aes_ctr(
-                                &encrypted_bytes, &file_key_arr, &iv_arr,
-                            )
-                            .map_err(|e| format!("CTR decryption failed: {}", e))?
-                        } else {
-                            let iv_bytes = hex::decode(&iv_clone)
-                                .map_err(|_| "Invalid file IV hex".to_string())?;
-                            let iv_arr: [u8; 12] = iv_bytes
-                                .try_into()
-                                .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
-                            crate::crypto::aes::decrypt_aes_gcm(
-                                &encrypted_bytes, &file_key_arr, &iv_arr,
-                            )
-                            .map_err(|e| format!("GCM decryption failed: {}", e))?
-                        };
+                    crate::crypto::utils::clear_bytes(&mut file_key);
+                    Ok::<Vec<u8>, String>(plaintext)
+                }).await
+            });
 
-                        crate::crypto::utils::clear_bytes(&mut file_key);
-                        Ok(plaintext)
-                    }
-                    .await;
-                    match result {
-                        Ok(data) => {
-                            let _ = tx.send(crate::fuse::PendingContent {
-                                cid: cid_clone,
-                                data,
-                            });
-                        }
-                        Err(e) => log::warn!("Content prefetch failed: {}", e),
-                    }
-                });
-            }
-
-            // Poll-wait for the prefetch to deliver content.
-            // FUSE-T NFS is single-threaded, so this blocks ALL other callbacks.
-            // But for file reads, blocking here is better than returning EIO
-            // (which causes the NFS client to give up after a few retries).
-            // Use a longer timeout than NETWORK_TIMEOUT since large files
-            // may take 30+ seconds to download from IPFS.
-            let read_deadline = std::time::Instant::now() + Duration::from_secs(60);
-            loop {
-                self.drain_content_prefetches();
-                if let Some(cached) = self.content_cache.get(&cid) {
+            match result {
+                Ok(Ok(plaintext)) => {
                     let start = offset as usize;
-                    if start >= cached.len() {
+                    if start >= plaintext.len() {
+                        self.content_cache.set(&cid, plaintext);
                         reply.data(&[]);
-                        return;
+                    } else {
+                        let end = std::cmp::min(start + size as usize, plaintext.len());
+                        let data_slice = plaintext[start..end].to_vec();
+                        self.content_cache.set(&cid, plaintext);
+                        reply.data(&data_slice);
                     }
-                    let end = std::cmp::min(start + size as usize, cached.len());
-                    let data_slice = cached[start..end].to_vec();
-                    if let Some(handle) = self.open_files.get_mut(&fh) {
-                        handle.cached_content = Some(cached.to_vec());
-                    }
-                    reply.data(&data_slice);
-                    return;
                 }
-                if std::time::Instant::now() >= read_deadline {
-                    break;
+                Ok(Err(e)) => {
+                    log::error!("Read fallback download failed for CID {}: {}", cid, e);
+                    reply.error(libc::EIO);
                 }
-                // If prefetch is no longer in flight (failed), don't keep waiting
-                if !self.prefetching.contains(&cid) {
-                    break;
+                Err(_) => {
+                    log::error!("Read fallback download timed out for CID {}", cid);
+                    reply.error(libc::EIO);
                 }
-                std::thread::sleep(Duration::from_millis(200));
             }
-
-            // Prefetch timed out or failed
-            log::warn!("Read timed out for ino {} CID {}", ino, cid);
-            reply.error(libc::EIO);
         }
 
         /// Release (close) a file handle.

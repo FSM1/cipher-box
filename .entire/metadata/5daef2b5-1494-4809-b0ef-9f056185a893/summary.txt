@@ -1,11 +1,21 @@
-App is running. You'll need to log in through the Tauri webview. Once you're logged in and the mount appears, let me know and I'll test the read/write operations.
+Good, committed. The app is running and waiting for login. Please log in when ready and I'll test the FUSE operations.
 
-The changes I made:
+Here's a summary of what was done in this session:
 
-1. **`read()` now poll-waits** for up to 60 seconds instead of returning EIO immediately. This lets large file downloads complete before the NFS client gives up.
+**Committed (10 commits on `feat/phase-11.1-01`):**
 
-2. **`create()` marks parent as mutated** to prevent background refresh from wiping newly created files.
+1. **Tray icons** — branded `>_` tray icon + green `>` app icons
+2. **Login styling** — CipherBox green-on-black terminal aesthetic
+3. **Google OAuth** — switched from GIS One Tap to OAuth2 implicit flow (popup)
+4. **Public key format** — send uncompressed secp256k1 (130 hex chars) to backend
+5. **dotenvy + API URL** — share `.env` between webview and Rust backend
+6. **FUSE race conditions** — create/release mutation tracking, sync download in open()
+7. **CLAUDE.md** — development notes
+8. **Dev-key docs** — documented `--dev-key` mode and requirements
+9. **Merge-only refresh** — background IPNS refresh preserves local files
+10. **Read fallback** — read() downloads content if cache misses (handles NFSv3 stateless)
 
-3. **`release()` uploads new files** (CID empty) even if no data was written, so `touch newfile` persists to IPFS.
-
-Please log in and let me know when you're ready for testing.
+**Still pending:**
+- Test file read/write after login
+- Staging API needs `TEST_LOGIN_SECRET` + `NODE_ENV=staging` for `--dev-key` to work
+- Remove `eprintln!(">>> ` debug lines before final merge

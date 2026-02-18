@@ -1,6 +1,10 @@
-ok its running I am logged in, and my vault is mapped, but I can't really do anything with that. I can't write to the vault, I cant copy from the vault.
-
-You can test everything in CLi
+<task-notification>
+<task-id>b152c8e</task-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/b152c8e.output</output-file>
+<status>completed</status>
+<summary>Background command "Start desktop app with output capture" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/b152c8e.output
 
 ---
 
@@ -9,268 +13,165 @@ This session is being continued from a previous conversation that ran out of con
 Analysis:
 Let me chronologically trace through this conversation carefully:
 
-1. **Context from previous session**: The conversation is a continuation of previous work on CipherBox desktop app (Tauri). Previous session covered:
-   - Generating tray icons (>_ symbol) and app icons
-   - Updating tray/mod.rs to load dedicated tray icon
-   - Fixing login page styling to CipherBox green-on-black terminal aesthetic
-   - Removing wallet button (no window.ethereum in Tauri webview)
+1. **Context from previous session**: The conversation is a continuation of previous work on CipherBox desktop app (Tauri). Previous sessions covered:
+   - Generating tray icons and fixing login page styling
+   - Fixing Google OAuth in Tauri webview (switched from GIS One Tap to OAuth2 implicit flow with localStorage)
    - Fixing CORS for staging API
-   - Adding Google login button back after accidentally removing it
+   - Adding dotenvy for Rust .env loading
+   - Fixing public key format (uncompressed secp256k1)
+   - Discovering FUSE mount file operations hang issue
 
-2. **User points out Web3Auth client ID is in .env**: User says "what do you mean the web3auth clientid is not set? its in the @apps/desktop/.env" — pointing out I was wrong about needing the Web3Auth client ID. It was already in `apps/desktop/.env` with value `BKBrLnxLHHqsis7NVyUhYoFB3RehqEziJRIWfKWFweEycHWaBduqQYZtgpEuKon4M2engmUgiax6k2xcNCbzP7s`.
+2. **This session's work**: Diagnosing and fixing FUSE mount issues. The FUSE-T NFS mounted vault at ~/CipherBox had `ls` working but all file operations (cp, touch, read, write) hanging.
 
-3. **User says W3Auth client ID shouldn't be a secret**: "also there is no reason for the w3auth client id to be in secrets" — it's a public client ID.
+3. **Diagnostic approach**: 
+   - Read through FUSE operations code extensively (operations.rs, mod.rs, inode.rs, file_handle.rs)
+   - Identified potential blocking in `drain_refresh_completions` for v2 metadata file pointer resolution
+   - Added `eprintln!` trace logging to all FUSE callbacks
+   - Built and tested
 
-4. **User requests .env update**: "I think the desktop env and env.example should be updated with all the default values including pointing at the staging api. you can make a note of this in the `apps/desktop/claude.md`, if some task necessitates developing against the local api in future but most tasks should be able to be completed against the staging api."
+4. **First test round (with trace logging)**:
+   - `touch ~/CipherBox/test.txt` — WORKED (didn't hang like before)
+   - `ls ~/CipherBox/` — showed test.txt disappeared (background refresh race)
+   - FLAC file read — NFS gave up after 5 EIO retries
 
-5. I created/updated:
-   - `apps/desktop/.env` — all defaults pointing at staging
-   - `apps/desktop/.env.example` — same, committed to git
-   - `apps/desktop/CLAUDE.md` — notes on switching to local API
+5. **Identified three bugs**:
+   - Bug 1: `read()` returns EIO immediately, NFS gives up after ~5 retries for large files
+   - Bug 2: `create()` doesn't mark parent as mutated → background refresh wipes new files
+   - Bug 3: `release()` only uploads dirty files → `touch newfile` never persists to IPFS
 
-6. **Google popup blocked**: User reports "the google popup is being blocked" — the GIS One Tap flow doesn't work in Tauri webview (no Google session, unregistered origin).
+6. **Fix attempt 1 (60s poll-wait in read)**:
+   - Changed `read()` to poll-wait up to 60 seconds for prefetch completion
+   - This blocked the entire NFS thread → `rm` timed out while FLAC was downloading
+   - FLAC download was still in progress after 2+ minutes
 
-7. I switched from GIS One Tap to OAuth2 implicit flow:
-   - Created `apps/desktop/public/google-callback.html` 
-   - Rewrote `getGoogleCredential()` in `auth.ts`
-   - Removed GIS type declarations
+7. **Fix attempt 2 (synchronous download in open)**:
+   - Changed `open()` for read-only to do synchronous download with 120s timeout
+   - Simplified `read()` to only serve from cache
+   - Also kept fixes for create() mutated_folders and release() new file upload
+   - Build succeeded
+   - Testing: `ls` worked, `hello.txt` persisted from previous session, but `cat hello.txt` timed out at 30s
+   - Traces showed: lookup for hello.txt succeeded, but `open()` was NEVER called
+   - No access() or open() callbacks at all — something is blocking between lookup and NFS's next operation
 
-8. **Redirect fired but postMessage failed**: User says "ok the redirect was fired, google oauth popup is showing `completing signin` in cipherbox colors, but the actual login webview has a `google signin was cancelled`"
+8. **Current state**: The app is running, mount is active, but `cat hello.txt` doesn't reach the open() callback. The NFS client seems stuck between lookup and open. Need to investigate why.
 
-9. I switched from postMessage to localStorage-based communication between popup and main window (postMessage doesn't survive cross-origin redirects in Tauri's WKWebView).
+Key files modified:
+- `apps/desktop/src-tauri/src/fuse/operations.rs` — Major changes to open(), read(), create(), release()
+- `apps/desktop/src-tauri/src/fuse/mod.rs` — Added trace in drain_refresh_completions
 
-10. **"Load failed" error**: CORS issue — staging API's `.env` (used by Docker Compose) was missing `http://localhost:1420`. Fixed by editing `.env.staging` but Docker Compose uses `env_file: .env.staging`. Key discovery: `docker compose restart` does NOT re-read env files — must use `docker compose up -d` to recreate the container.
+User messages in this session:
+- "I jsut logged in" (while I was killing old app)
+- "ok logged in again" (after restart)
+- "ok logged in and ready" (for final test round)
 
-11. **Popup staying open**: User noted the Google OAuth popup stays open after auth. Not yet fixed.
-
-12. **"Google login failed" generic error**: Improved error handling to show actual error with `String(err)`.
-
-13. **Rust backend hitting localhost:3000**: The Rust binary doesn't read Vite's `.env` file. Fixed by:
-    - Adding `dotenvy = "0.15"` to Cargo.toml
-    - Loading `../.env` in main.rs before env_logger init
-    - Falling back to `VITE_API_URL` when `CIPHERBOX_API_URL` isn't set
-
-14. **Public key format mismatch (400 Bad Request)**: Backend expects uncompressed secp256k1 public key (130 hex chars, 04 prefix) but desktop was sending compressed (66 hex chars). Fixed by changing `compressed_public_key_hex` to `hex::encode(&public_key_bytes)` (uncompressed).
-
-15. **User logged in, vault mounted, but can't read/write**: FUSE mount is active (FUSE-T NFS), `ls` shows files, but all file operations (cp, echo >, touch) hang indefinitely.
-
-16. **FUSE debugging**: 
-    - `ls -la ~/CipherBox/` works and shows 1 FLAC file (64MB)
-    - `stat`, `cp`, `dd`, `touch` all hang
-    - Even `touch ~/CipherBox/test.txt` (new file, ASCII name) hangs
-    - No FUSE callback logs at INFO level — need DEBUG level
-    - Was about to restart with `RUST_LOG=cipherbox_desktop::fuse=debug` to diagnose
-
-Files modified in this session:
-- `apps/desktop/.env` — updated with all defaults pointing to staging
-- `apps/desktop/.env.example` — created with same defaults
-- `apps/desktop/CLAUDE.md` — created with dev notes
-- `apps/desktop/public/google-callback.html` — OAuth callback page (localStorage approach)
-- `apps/desktop/src/auth.ts` — rewrote getGoogleCredential() for OAuth2 implicit flow, removed GIS types
-- `apps/desktop/src/main.ts` — improved Google error handling
-- `apps/desktop/src-tauri/Cargo.toml` — added `dotenvy = "0.15"`
-- `apps/desktop/src-tauri/src/main.rs` — added dotenvy .env loading, VITE_API_URL fallback
-- `apps/desktop/src-tauri/src/commands.rs` — fixed public key to use uncompressed format
-- Staging server `/opt/cipherbox/docker/.env.staging` — already had localhost:1420 in CORS
-
-Branch: `feat/phase-11.1-01`
-No commits made yet — all changes are uncommitted.
+The previous session had many uncommitted changes. All changes remain uncommitted on branch `feat/phase-11.1-01`.
 
 Summary:
 1. Primary Request and Intent:
-   The user is working on fixing the CipherBox desktop app (Tauri) to be functional against the staging environment. The original task was fixing tray icon and login page styling (from a previous session), but this session evolved into making the entire Google OAuth login flow work in a Tauri webview, fixing CORS issues with staging, fixing the Rust backend's API URL configuration, and now diagnosing why the FUSE-mounted vault is non-functional (file operations hang). The user explicitly wants to test everything via CLI and wants the app to "just work" with `pnpm --filter desktop dev` using the `.env` file defaults pointing at staging.
+   The user is working on making the CipherBox desktop app (Tauri + FUSE-T NFS) functional against the staging environment. The immediate task is diagnosing and fixing why file operations (read, write, touch, cp) on the FUSE-mounted vault at `~/CipherBox` don't work. The original issue from the previous session was that `ls` worked but all other file operations hung. The user explicitly wants everything testable via CLI: "ok its running I am logged in, and my vault is mapped, but I can't really do anything with that. I can't write to the vault, I cant copy from the vault. You can test everything in CLi"
 
 2. Key Technical Concepts:
-   - **Tauri 2 webview OAuth**: GIS One Tap doesn't work in Tauri webview (no Google session, unregistered origin). Must use OAuth2 implicit flow with popup window.
-   - **postMessage failure in Tauri WKWebView**: `window.opener.postMessage()` doesn't survive cross-origin redirects (Google → localhost). Solution: use localStorage for popup-to-main-window communication.
-   - **Docker Compose env reloading**: `docker compose restart` does NOT re-read `env_file` — must use `docker compose up -d` to recreate the container.
-   - **Vite `.env` vs Rust process environment**: Vite's `.env` file only populates `import.meta.env.*` for the webview. The Rust binary needs `dotenvy` crate to load the same `.env` file.
-   - **secp256k1 public key formats**: Backend expects uncompressed (130 hex, `04` prefix), not compressed (66 hex, `02`/`03` prefix).
-   - **FUSE-T NFS single-thread model**: All NFS callbacks run on one thread. Any blocking call stalls everything.
-   - **Google OAuth2 implicit flow**: `response_type=id_token` with `nonce` parameter returns ID token directly in URL hash fragment.
-   - **Staging env**: API at `https://api-staging.cipherbox.cc`, Docker Compose file is `docker-compose.staging.yml`, env file is `.env.staging` (via `env_file` directive).
+   - **FUSE-T NFS single-thread model**: ALL NFS callbacks run on a single thread. ANY blocking call stalls everything.
+   - **v2 folder metadata**: The web app creates v2 metadata with FilePointer entries (per-file IPNS names) that need resolution
+   - **Background refresh race**: readdir fires async metadata refresh; when refresh completes, `drain_refresh_completions` re-populates folder from remote metadata, wiping local-only files
+   - **`mutated_folders` cooldown**: HashMap<u64, Instant> that prevents background refreshes from overwriting recently-mutated folders for 30 seconds
+   - **Content prefetch pattern**: open() fires async download, read() returns EIO until content arrives via mpsc channel
+   - **NFS EIO behavior**: macOS NFS client gives up after ~5 EIO retries (not indefinite), making the prefetch+EIO pattern unreliable for large files
+   - **Synchronous download in open()**: Alternative approach where open() blocks the NFS thread to download content, making reads instant after open
+   - **CONTENT_DOWNLOAD_TIMEOUT**: 120 second timeout for synchronous file downloads in open()
 
 3. Files and Code Sections:
 
-   - **`apps/desktop/.env`** — Updated with all defaults pointing at staging API
-     ```
-     # Web3Auth
-     VITE_WEB3AUTH_CLIENT_ID=BKBrLnxLHHqsis7NVyUhYoFB3RehqEziJRIWfKWFweEycHWaBduqQYZtgpEuKon4M2engmUgiax6k2xcNCbzP7s
-     # Google OAuth (social login)
-     VITE_GOOGLE_CLIENT_ID=164556913424-uif44is1apnl7rqc9a2ac7vn8u9dq0ee.apps.googleusercontent.com
-     # API endpoint (staging by default)
-     VITE_API_URL=https://api-staging.cipherbox.cc
-     # Environment
-     VITE_ENVIRONMENT=staging
-     ```
+   - **`apps/desktop/src-tauri/src/fuse/operations.rs`** — Main FUSE callback implementations. Heavily modified.
+     - Added `eprintln!` trace logging to ALL callbacks (lookup, getattr, setattr, readdir, create, open, read, write, release, flush, access, unlink, getxattr)
+     - Added `CONTENT_DOWNLOAD_TIMEOUT` constant (120 seconds)
+     - **`create()` fix** — Added `self.mutated_folders.insert(parent, std::time::Instant::now())` before reply to prevent background refresh race
+     - **`release()` fix** — Changed condition from `handle.dirty && handle.temp_path.is_some()` to also upload new files (CID empty):
+       ```rust
+       let is_new_file = handle.temp_path.is_some() && {
+           self.inodes.get(ino).map(|i| match &i.kind {
+               InodeKind::File { cid, .. } => cid.is_empty(),
+               _ => false,
+           }).unwrap_or(false)
+       };
+       let needs_upload = handle.temp_path.is_some() && (handle.dirty || is_new_file);
+       ```
+     - **`release()` fix** — Added `self.mutated_folders.insert(parent_ino, std::time::Instant::now())` in the upload preparation block
+     - **`open()` for read-only rewrite** — Replaced async prefetch with synchronous download:
+       ```rust
+       if !cid.is_empty() && self.content_cache.get(&cid).is_none() {
+           let result = self.rt.block_on(async {
+               tokio::time::timeout(CONTENT_DOWNLOAD_TIMEOUT, async {
+                   let encrypted_bytes = crate::api::ipfs::fetch_content(&self.api, &cid).await?;
+                   // ... decrypt ...
+                   Ok::<Vec<u8>, String>(plaintext)
+               }).await
+           });
+           match result {
+               Ok(Ok(plaintext)) => { self.content_cache.set(&cid, plaintext); }
+               Ok(Err(e)) => { reply.error(libc::EIO); return; }
+               Err(_) => { reply.error(libc::EIO); return; }
+           }
+       }
+       ```
+     - **`read()` simplification** — Removed the 60s poll-wait and old prefetch code. Now just checks caches (handle, content_cache) and returns EIO on miss since content should have been downloaded in open()
 
-   - **`apps/desktop/.env.example`** — Created, same as `.env` but committed to git as reference
+   - **`apps/desktop/src-tauri/src/fuse/mod.rs`** — CipherBoxFS struct and drain methods
+     - Added trace in `drain_refresh_completions`: `eprintln!(">>> drain_refresh: v2 metadata, {} unresolved file pointers", unresolved.len())`
+     - Key finding: `drain_refresh_completions()` (line 592) does `block_with_timeout` for v2 FilePointer resolution ON the NFS thread, but testing showed 0 unresolved pointers (already resolved at mount time)
 
-   - **`apps/desktop/CLAUDE.md`** — Created with notes about defaulting to staging API, how to switch to local, and Tauri webview constraints
+   - **`apps/desktop/src-tauri/src/fuse/inode.rs`** — Inode management
+     - Read to understand `populate_folder_v2` preserves already-resolved file pointers (line 569: `file_meta_resolved: true` check)
+     - `get_unresolved_file_pointers()` returns Vec<(u64, String)> of inodes with `file_meta_resolved: false`
 
-   - **`apps/desktop/public/google-callback.html`** — OAuth callback page using localStorage (not postMessage)
-     ```html
-     <!doctype html>
-     <html>
-     <head>
-       <style>body{background:#000;color:#006644;font-family:'JetBrains Mono',monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}</style>
-     </head>
-     <body>
-       <p>Completing sign-in...</p>
-       <script>
-         var hash = window.location.hash.substring(1);
-         var params = new URLSearchParams(hash);
-         var idToken = params.get('id_token');
-         var error = params.get('error');
-         localStorage.setItem('google-auth-result', JSON.stringify({
-           idToken: idToken,
-           error: error || (!idToken ? 'No ID token received' : null)
-         }));
-         setTimeout(function() { window.close(); }, 300);
-       </script>
-     </body>
-     </html>
-     ```
-
-   - **`apps/desktop/src/auth.ts`** — Major changes:
-     - Removed GIS type declarations (`declare const google: { ... }`)
-     - Rewrote `getGoogleCredential()` from GIS One Tap to OAuth2 implicit flow with localStorage polling:
-     ```typescript
-     function getGoogleCredential(): Promise<string> {
-       return new Promise((resolve, reject) => {
-         if (!GOOGLE_CLIENT_ID) {
-           reject(new Error('Google Client ID not configured'));
-           return;
-         }
-         const nonce = crypto.randomUUID();
-         const redirectUri = `${window.location.origin}/google-callback.html`;
-         const params = new URLSearchParams({
-           client_id: GOOGLE_CLIENT_ID,
-           redirect_uri: redirectUri,
-           response_type: 'id_token',
-           scope: 'openid email profile',
-           nonce,
-           prompt: 'select_account',
-         });
-         const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
-         localStorage.removeItem('google-auth-result');
-         window.open(authUrl, '_blank', 'width=500,height=700');
-         const cleanup = () => { clearInterval(pollStorage); clearTimeout(timeout); };
-         const pollStorage = setInterval(() => {
-           const raw = localStorage.getItem('google-auth-result');
-           if (!raw) return;
-           localStorage.removeItem('google-auth-result');
-           cleanup();
-           try {
-             const result = JSON.parse(raw);
-             if (result.idToken) resolve(result.idToken);
-             else reject(new Error(result.error || 'Google sign-in failed'));
-           } catch { reject(new Error('Invalid auth callback data')); }
-         }, 200);
-         const timeout = setTimeout(() => { cleanup(); reject(new Error('Google authentication timed out')); }, 120000);
-       });
-     }
-     ```
-     - Requires `http://localhost:1420/google-callback.html` as authorized redirect URI in Google Cloud Console (user confirmed they added it)
-
-   - **`apps/desktop/src/main.ts`** — Improved Google login error handling:
-     ```typescript
-     } catch (err) {
-       const msg = err instanceof Error ? err.message : String(err);
-       console.error('[Google login error]', err);
-       setStatus(msg || 'Google login failed', '#ef4444');
-       disableButtons(false);
-     }
-     ```
-
-   - **`apps/desktop/src-tauri/Cargo.toml`** — Added `dotenvy = "0.15"`
-
-   - **`apps/desktop/src-tauri/src/main.rs`** — Added dotenvy loading and VITE_API_URL fallback:
-     ```rust
-     fn main() {
-         // Load .env from the desktop app root (parent of src-tauri)
-         let _ = dotenvy::from_filename("../.env");
-         env_logger::init();
-         // ...
-         // API base URL: CIPHERBOX_API_URL > VITE_API_URL > localhost default
-         let api_base_url = std::env::var("CIPHERBOX_API_URL")
-             .or_else(|_| std::env::var("VITE_API_URL"))
-             .unwrap_or_else(|_| "http://localhost:3000".to_string());
-     ```
-
-   - **`apps/desktop/src-tauri/src/commands.rs`** — Fixed public key to use uncompressed format:
-     ```rust
-     // Derive uncompressed public key from private key (65 bytes, 0x04 prefix)
-     let public_key_bytes = derive_public_key(&private_key_bytes)?;
-     let public_key_hex = hex::encode(&public_key_bytes); // 130 hex chars
-     
-     // 2. Login with backend (requires uncompressed publicKey, 130 hex chars)
-     let login_req = types::LoginRequest {
-         id_token: id_token.clone(),
-         public_key: public_key_hex,
-         login_type: "corekit".to_string(),
-     };
-     ```
-
-   - **`apps/desktop/src-tauri/src/fuse/operations.rs`** — Read to diagnose FUSE hang. Key findings:
-     - `read()` (line 992) uses async prefetch pattern: fires background download, returns EIO, NFS client retries
-     - `open()` for read-only (line 869) starts background prefetch and returns immediately
-     - `open()` for writable (line 837) calls `fetch_and_decrypt_file_content()` synchronously (potential blocker)
-     - File in vault is 64MB FLAC — downloading from staging IPFS could be slow
-
-   - **Staging server** — `/opt/cipherbox/docker/.env.staging` already had `http://localhost:1420` in CORS. The `.env` file (used for Docker Compose variable substitution, not by the API container) was also updated but isn't used by the API service. The API uses `env_file: .env.staging` per `docker-compose.staging.yml`.
+   - **`apps/desktop/src-tauri/src/fuse/file_handle.rs`** — OpenFileHandle
+     - `new_write()` creates handle with `dirty: false` (line 90)
+     - `write_at()` sets `self.dirty = true` (line 114)
+     - This means `touch` (create + release without write) leaves dirty=false, so release() wouldn't upload
 
 4. Errors and fixes:
-   - **Web3Auth client ID "not set"**: I incorrectly said it wasn't available — user pointed out it was already in `apps/desktop/.env`. User feedback: "what do you mean the web3auth clientid is not set? its in the @apps/desktop/.env"
-   - **Google popup blocked** (`isNotDisplayed()`): GIS One Tap doesn't work in Tauri webview. Fixed by switching to OAuth2 implicit flow with `response_type=id_token`.
-   - **postMessage failure between popup and main window**: `window.opener.postMessage()` doesn't work after cross-origin redirect in Tauri WKWebView. Fixed by switching to localStorage-based communication.
-   - **"Load failed" on API calls (CORS 500)**: The staging API's Docker container didn't have `http://localhost:1420` in its CORS origins. Root cause: edited `.env.staging` but used `docker compose restart` which doesn't re-read env files. Fix: `docker compose -f docker-compose.staging.yml up -d api` (recreates container).
-   - **"Google login failed" generic error**: `err` from Core Kit wasn't an `Error` instance. Fixed by changing to `String(err)` fallback instead of hardcoded string.
-   - **Rust backend hitting localhost:3000**: Vite's `.env` only affects the webview, not the Rust process. Fixed by adding `dotenvy` crate to load `../.env` from the Rust binary, and falling back to `VITE_API_URL` env var.
-   - **Public key format 400 Bad Request**: Backend expects uncompressed secp256k1 (130 hex, `04` prefix) but desktop was sending compressed (66 hex). Fixed by using `hex::encode(&public_key_bytes)` (uncompressed) instead of `derive_compressed_public_key_hex()`.
-   - **FUSE mount files inaccessible (current)**: `ls` works but `cp`, `touch`, `read`, `write` all hang. Under investigation — no FUSE callback logs appear at INFO level. Need DEBUG logging to diagnose.
+   - **Background refresh wipes newly created files**: `touch test.txt` succeeded but file disappeared on next `ls`. 
+     - Fix: Added `self.mutated_folders.insert(parent, ...)` in `create()` and `release()` upload path
+   - **NFS gives up after ~5 EIO retries for large files**: The prefetch+EIO pattern doesn't work for 64MB FLAC files because NFS stops retrying
+     - Fix attempt 1: 60-second poll-wait in read() — blocked entire NFS thread, other operations (rm) timed out
+     - Fix attempt 2: Synchronous download in open() with 120s timeout — content cached after open, reads instant
+   - **`touch newfile` not persisted**: New files created with `touch` were never uploaded to IPFS because `release()` only uploaded dirty files
+     - Fix: Changed release() condition to also upload when CID is empty (new file)
+   - **Current unresolved issue**: After rewriting open() for synchronous download, `cat hello.txt` times out at 30s. Traces show lookup succeeds but open() callback is NEVER reached. No access() calls either. Something between NFS lookup and open is stuck.
+   - **hello.txt and test.txt upload DID work**: Log shows `File uploaded: ino 3 -> CID bafkrei...` and `ino 4 -> CID bafkrei...`, and `hello.txt` persisted across app restarts (visible with correct size 16 bytes)
 
 5. Problem Solving:
-   - **Solved**: Google OAuth in Tauri webview — complete flow working (popup → Google sign-in → callback → localStorage → main window → backend auth → Core Kit → TSS key → Rust handoff)
-   - **Solved**: CORS for staging API — container recreated with correct env
-   - **Solved**: Rust API URL — dotenvy loads shared `.env` file
-   - **Solved**: Public key format — switched to uncompressed
-   - **Ongoing**: FUSE mount file operations hang. `ls` works (readdir/getattr from memory), but any file I/O (read, write, create via touch) hangs indefinitely. No error logs at INFO level. Was about to restart with DEBUG logging.
-   - **Ongoing**: Google OAuth popup stays open after auth completion (user noted: "the popup is also staying open")
+   - **Solved**: Background refresh race — create() and release() now mark parent as mutated
+   - **Solved**: New files (touch) not persisting — release() now uploads CID-empty files
+   - **Solved**: File uploads work — hello.txt and test.txt were uploaded to IPFS and metadata published
+   - **Partially solved**: Large file reads — synchronous download in open() should work but open() is never reached by NFS client
+   - **Ongoing**: After the rewrite, NFS client doesn't send OPEN after successful LOOKUP. This is the current blocking issue. Possible causes: (1) NFS client caching preventing open, (2) something blocking the NFS thread between lookup and open that we're not tracing, (3) an NFS-level issue with FUSE-T
 
 6. All user messages:
-   - "what do you mean the web3auth clientid is not set? its in the @apps/desktop/.env"
-   - "also there is no reason for the w3auth client id to be in secrets"
-   - "I think the desktop env and env.example should be updated with all the default values including pointing at the staging api. you can make a note of this in the `apps/desktop/claude.md`, if some task necessitates developing against the local api in future but most tasks should be able to be completed against the staging api."
-   - "ok, next problem is the google popup is being blocked"
-   - "ok both allowed origin and redirect uri have been added"
-   - "ok the redirect was fired, google oauth popup is showing `completing signin` in cipherbox colors, but the actual login webview has a `google signin was cancelled` - probably some weird comms error on the postMessage"
-   - "the popup is also staying open"
-   - "ok now its saying `load failed` in the main login webview"
-   - "`Google login failed` message in login webview"
-   - "Login request failed: error sending request for url (http://localhost:3000/auth/login) - its still trying to hit the local api"
-   - "Login failed (400 Bad Request): {\"message\":[\"publicKey must be an uncompressed secp256k1 public key (130 hex chars starting with 04)\"],\"error\":\"Bad Request\",\"statusCode\":400}"
-   - "ok its running I am logged in, and my vault is mapped, but I can't really do anything with that. I can't write to the vault, I cant copy from the vault. You can test everything in CLi"
-   - "ok im logged in again, you can test"
+   - "I jsut logged in" (sent while I was killing the old app instance)
+   - "ok logged in again" (after I restarted the app with trace logging)
+   - "ok logged in and ready" (after the final rebuild with synchronous open() download)
 
 7. Pending Tasks:
-   - **Diagnose and fix FUSE mount file operations hanging** — all file I/O (read, write, touch) hangs on the mounted vault
-   - **Close Google OAuth popup after auth** — popup stays open after authentication completes
-   - **Commit all changes** — no commits have been made yet, all work is uncommitted on branch `feat/phase-11.1-01`
-   - **Remove CoreKit logging in web app** — captured as a todo via `/gsd:add-todo`
+   - **Fix why NFS open() callback is never reached** after lookup succeeds — this is the immediate blocker
+   - **Close Google OAuth popup after auth** — popup stays open after authentication (from previous session)
+   - **Remove CoreKit logging in web app** — captured as todo
+   - **Commit all changes** — ALL work remains uncommitted on branch `feat/phase-11.1-01`
+   - **Remove `eprintln!(">>> ` debug lines** before final commit/merge
 
 8. Current Work:
-   Diagnosing why the FUSE-T NFS mounted vault at `~/CipherBox` is non-functional. The mount is active (`fuse-t:/CipherBox on /Users/michael/CipherBox (nfs)`), `ls -la` works and shows 1 file (64MB FLAC), but all file operations hang:
-   - `cp` from vault hangs
-   - `echo > file.txt` hangs
-   - `touch test.txt` hangs
-   - `dd if=file.flac bs=1024 count=1` hangs
-   - Python `open(file, 'rb').read(16)` hangs
+   Testing the third iteration of FUSE fixes. The app is running, mount is active, `ls` works and shows files. But `cat ~/CipherBox/hello.txt` hangs — the FUSE traces show `lookup: parent=1 name="hello.txt"` succeeds (found the inode) but `open()` callback is NEVER called. No `access()` calls appear either. The NFS client appears stuck between lookup and open.
    
-   No FUSE callback logs appear at INFO level after the initial mount logs. Was about to restart the app with `RUST_LOG=cipherbox_desktop::fuse=debug` (or similar) to see what FUSE callbacks are being invoked and where they block. The previous app instance (`b507590`) was stopped right before the summary was requested.
+   The last trace output showed:
+   ```
+   >>> FUSE lookup: parent=1 name="hello.txt"
+   >>> FUSE getattr: ino=1
+   >>> FUSE getattr: ino=1
+   ```
+   No open, no access, no read. Only getattr for ino=1 (root dir) which are likely from Finder polling.
 
 9. Optional Next Step:
-   Restart the Tauri app with `RUST_LOG=debug` or `RUST_LOG=cipherbox_desktop::fuse=debug` to get verbose FUSE callback logging, then test a minimal operation (`touch ~/CipherBox/test.txt`) to see exactly which NFS callback is hanging and why. The user explicitly said: "ok its running I am logged in, and my vault is mapped, but I can't really do anything with that. I can't write to the vault, I cant copy from the vault. You can test everything in CLi" — so the immediate task is diagnosing and fixing the FUSE hang.
+   Investigate why the NFS client doesn't send OPEN after successful LOOKUP. The `open()` rewrite uses `self.api`, `self.private_key` directly (not cloned) inside `self.rt.block_on()`. This accesses `&self` fields while inside a `&mut self` callback, which Rust normally wouldn't allow... but it compiled. Need to check if there's a borrow issue or if the NFS protocol requires additional callbacks (like ACCESS) that we're not seeing. Also check if FUSE-T NFS has specific requirements for the OPEN flow that differ from kernel FUSE. May need to revert to a non-blocking approach in open() and instead use a hybrid: fire async prefetch in open(), then in read() do a shorter poll-wait (5-10s) that at least gives the download a head start.
 
 If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.claude/projects/-Users-michael-Code-cipher-box/5daef2b5-1494-4809-b0ef-9f056185a893.jsonl
 Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.

@@ -564,8 +564,10 @@ impl CipherBoxFS {
             }
 
             self.metadata_cache.set(&refresh.ipns_name, cache_metadata, refresh.cid.clone());
+            // Background refresh: merge_only=true to preserve locally-created files
+            // that haven't been published to IPNS yet.
             if let Err(e) = self.inodes.populate_folder_any(
-                refresh.ino, &refresh.metadata, &self.private_key,
+                refresh.ino, &refresh.metadata, &self.private_key, true,
             ) {
                 log::warn!("Drain refresh apply failed for ino {}: {}", refresh.ino, e);
             }
@@ -759,8 +761,8 @@ pub async fn mount_filesystem(
                     };
                     metadata_cache.set(&root_ipns_name, cache_meta, cid);
 
-                    // Populate inode table (dispatches v1/v2)
-                    match inodes.populate_folder_any(inode::ROOT_INO, &any_metadata, &private_key) {
+                    // Populate inode table (dispatches v1/v2) — initial mount, full replace
+                    match inodes.populate_folder_any(inode::ROOT_INO, &any_metadata, &private_key, false) {
                         Ok(()) => {
                             log::info!("Root folder pre-populated successfully");
 
@@ -835,7 +837,7 @@ pub async fn mount_filesystem(
                                             }
                                         };
                                         metadata_cache.set(sub_ipns, sub_cache_meta, sub_cid);
-                                        match inodes.populate_folder_any(*sub_ino, &sub_any_meta, &private_key) {
+                                        match inodes.populate_folder_any(*sub_ino, &sub_any_meta, &private_key, false) {
                                             Ok(()) => {
                                                 log::info!("Subfolder ino={} pre-populated", sub_ino);
                                                 // Resolve FilePointers in subfolder
