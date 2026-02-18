@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.2](https://github.com/FSM1/cipher-box/compare/v0.9.1...v0.9.2) (2026-02-18)
+
+
+### Bug Fixes
+
+* **web:** Display file encryption metadata in details dialog ([#139](https://github.com/FSM1/cipher-box/issues/139)) ([a06fb22](https://github.com/FSM1/cipher-box/commit/a06fb226481d781caf0cf5fef089085d35c72d9c))
+
 ## [0.9.1](https://github.com/FSM1/cipher-box/compare/v0.9.0...v0.9.1) (2026-02-17)
 
 
