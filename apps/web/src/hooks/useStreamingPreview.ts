@@ -112,7 +112,7 @@ export function useStreamingPreview({
     (async () => {
       try {
         // 1. Resolve file metadata from IPNS
-        const fileMeta = await resolveFileMetadata(item.fileMetaIpnsName, folderKey);
+        const { metadata: fileMeta } = await resolveFileMetadata(item.fileMetaIpnsName, folderKey);
 
         if (cancelled) return;
 

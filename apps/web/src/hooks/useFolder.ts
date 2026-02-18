@@ -799,7 +799,7 @@ export function useFolder() {
         }
 
         // 2. Resolve current file metadata from IPNS
-        const currentMetadata = await resolveFileMetadata(
+        const { metadata: currentMetadata } = await resolveFileMetadata(
           filePointer.fileMetaIpnsName,
           parentFolder.folderKey
         );

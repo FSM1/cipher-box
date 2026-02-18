@@ -91,8 +91,6 @@ function FileDetails({
   fileMeta: FileMetadata | null;
   fileMetaLoading: boolean;
 }) {
-  const encryptionMode = fileMeta?.encryptionMode ?? 'GCM';
-
   return (
     <div className="details-rows">
       <DetailRow label="Name">
@@ -128,9 +126,9 @@ function FileDetails({
           <span className="details-loading">resolving...</span>
         ) : fileMeta ? (
           <span className="details-value">
-            AES-256-{encryptionMode}{' '}
+            AES-256-{fileMeta.encryptionMode}{' '}
             <span className="details-value--dim">
-              ({encryptionMode === 'CTR' ? 'streaming' : 'authenticated'})
+              ({fileMeta.encryptionMode === 'CTR' ? 'streaming' : 'authenticated'})
             </span>
           </span>
         ) : (
@@ -276,18 +274,17 @@ export function DetailsDialog({ open, onClose, item, folderKey }: DetailsDialogP
     item?.type === 'folder' ? state.folders[item.id] : undefined
   );
 
-  // Resolve IPNS to get metadata CID when dialog opens
+  // Resolve folder IPNS to get metadata CID (folders only)
   useEffect(() => {
-    if (!open || !item) {
-      setMetadataCid(null);
-      setMetadataLoading(false);
+    if (!open || !item || item.type !== 'folder') {
+      if (!item || item.type !== 'file') {
+        setMetadataCid(null);
+        setMetadataLoading(false);
+      }
       return;
     }
 
-    const ipnsName =
-      item.type === 'folder' ? item.ipnsName : (item as FilePointer).fileMetaIpnsName;
-
-    if (!ipnsName) {
+    if (!item.ipnsName) {
       setMetadataLoading(false);
       setMetadataCid(null);
       return;
@@ -296,7 +293,7 @@ export function DetailsDialog({ open, onClose, item, folderKey }: DetailsDialogP
     let cancelled = false;
     setMetadataLoading(true);
 
-    resolveIpnsRecord(ipnsName)
+    resolveIpnsRecord(item.ipnsName)
       .then((result) => {
         if (!cancelled) {
           setMetadataCid(result?.cid ?? null);
@@ -318,31 +315,40 @@ export function DetailsDialog({ open, onClose, item, folderKey }: DetailsDialogP
     };
   }, [open, item]);
 
-  // Resolve per-file metadata (encryption mode, wrapped key, etc.) for files
+  // Resolve per-file metadata and CID in a single IPNS call (files only)
   useEffect(() => {
     if (!open || !item || item.type !== 'file' || !folderKey) {
       setFileMeta(null);
       setFileMetaLoading(false);
+      // Only reset shared metadataCid when dialog is closed, not when viewing a folder
+      if (!open || !item) {
+        setMetadataCid(null);
+        setMetadataLoading(false);
+      }
       return;
     }
 
     let cancelled = false;
     setFileMetaLoading(true);
+    setMetadataLoading(true);
 
     resolveFileMetadata(item.fileMetaIpnsName, folderKey)
-      .then((meta) => {
+      .then(({ metadata, metadataCid: cid }) => {
         if (!cancelled) {
-          setFileMeta(meta);
+          setFileMeta(metadata);
+          setMetadataCid(cid);
         }
       })
       .catch(() => {
         if (!cancelled) {
           setFileMeta(null);
+          setMetadataCid(null);
         }
       })
       .finally(() => {
         if (!cancelled) {
           setFileMetaLoading(false);
+          setMetadataLoading(false);
         }
       });
 
