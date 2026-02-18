@@ -107,10 +107,7 @@ export class IpnsController {
     @Body() dto: BatchPublishIpnsDto
   ): Promise<BatchPublishIpnsResponseDto> {
     const result = await this.ipnsService.publishBatch(req.user.id, dto);
-    this.metricsService.ipnsPublishes.inc(
-      { type: 'batch' },
-      result.totalSucceeded + result.totalFailed
-    );
+    this.metricsService.ipnsPublishes.inc({ type: 'batch' }, result.totalSucceeded);
     return result;
   }
 

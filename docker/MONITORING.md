@@ -80,7 +80,7 @@ The API exposes a `/metrics` endpoint (unauthenticated, excluded from Swagger) w
 | `cipherbox_ipns_resolves_total`               | `source` (network/db_cache) | IPNS resolve operations by source |
 | `cipherbox_republish_runs_total`              |                             | Republish cron job runs           |
 | `cipherbox_republish_entries_processed_total` | `result` (succeeded/failed) | Republish entries processed       |
-| `cipherbox_auth_logins_total`                 | `method`, `new_user`        | Login attempts                    |
+| `cipherbox_auth_logins_total`                 | `method`, `new_user`        | Successful logins                 |
 
 ### Histograms
 

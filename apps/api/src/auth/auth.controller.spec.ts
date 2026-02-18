@@ -7,6 +7,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { LoginDto } from './dto/login.dto';
 import { LinkMethodDto } from './dto/link-method.dto';
+import { MetricsService } from '../metrics/metrics.service';
 
 describe('AuthController', () => {
   let controller: AuthController;
@@ -42,12 +43,20 @@ describe('AuthController', () => {
       headers: {},
     } as unknown as ExpressRequest;
 
+    const mockMetricsService = {
+      authLogins: { inc: jest.fn() },
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       controllers: [AuthController],
       providers: [
         {
           provide: AuthService,
           useValue: mockAuthService,
+        },
+        {
+          provide: MetricsService,
+          useValue: mockMetricsService,
         },
       ],
     })

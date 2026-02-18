@@ -139,7 +139,7 @@ export class MetricsService implements OnModuleInit {
 
     this.authLogins = new client.Counter({
       name: 'cipherbox_auth_logins_total',
-      help: 'Total authentication attempts',
+      help: 'Total successful logins',
       labelNames: ['method', 'new_user'],
       registers: [this.registry],
     });
@@ -155,8 +155,10 @@ export class MetricsService implements OnModuleInit {
   }
 
   async onModuleInit(): Promise<void> {
-    // Collect gauge values immediately, then every 30 seconds
-    await this.collectGauges();
+    // Attempt an immediate collection; log and continue if DB isn't ready yet
+    await this.collectGauges().catch((err) => {
+      this.logger.warn(`Initial gauge collection failed: ${err.message}`);
+    });
     this.collectInterval = setInterval(() => {
       this.collectGauges().catch((err) => {
         this.logger.warn(`Gauge collection failed: ${err.message}`);

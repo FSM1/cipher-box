@@ -18,10 +18,15 @@ export class HttpMetricsInterceptor implements NestInterceptor {
           const res = httpContext.getResponse<Response>();
           this.recordDuration(req, res.statusCode, startTime);
         },
-        error: () => {
-          const res = httpContext.getResponse<Response>();
-          // On error, statusCode may already be set by exception filter
-          const statusCode = res.statusCode >= 400 ? res.statusCode : 500;
+        error: (err: unknown) => {
+          // Exception filters haven't run yet, so derive status from the exception
+          const statusCode =
+            err &&
+            typeof err === 'object' &&
+            'getStatus' in err &&
+            typeof (err as { getStatus: unknown }).getStatus === 'function'
+              ? (err as { getStatus: () => number }).getStatus()
+              : 500;
           this.recordDuration(req, statusCode, startTime);
         },
       })
