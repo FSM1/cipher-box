@@ -1154,54 +1154,89 @@ mod implementation {
                 return;
             }
 
-            // Content not in cache — download synchronously as fallback.
-            // This handles the case where the background prefetch from open()
-            // hasn't completed yet, or FUSE-T NFS calls read() without prior open(),
-            // or when content was evicted from cache.
+            // Content not in cache. Instead of blocking the NFS thread for a
+            // potentially long download (which causes "not responding" mount state
+            // with FUSE-T's 1-second NFS timeout), we:
             //
-            // NOTE: This blocks the single FUSE-T NFS thread. FUSE-T uses
-            // NFSv4 hard mount with timeo=10 (1s). The NFS client will show
-            // "not responding" during download but recovers once we reply.
-            eprintln!(">>> FUSE read: cache miss for CID {}, downloading synchronously...", &cid[..cid.len().min(12)]);
-            let result = self.rt.block_on(async {
-                tokio::time::timeout(
-                    CONTENT_DOWNLOAD_TIMEOUT,
-                    fetch_and_decrypt_content_async(
-                        &self.api,
-                        &cid,
-                        &encrypted_file_key_hex,
-                        &iv_hex,
-                        &encryption_mode,
-                        &self.private_key,
-                    ),
-                ).await
-            });
+            // 1. Ensure a background prefetch is running
+            // 2. Poll the prefetch channel briefly (500ms)
+            // 3. If content arrived, serve it
+            // 4. If not yet, return EAGAIN so the NFS client retries
+            //
+            // The NFS hard mount retries indefinitely. Each retry, we poll
+            // again. Eventually the prefetch completes and we serve from cache.
+            // Meanwhile, the NFS thread is only blocked 500ms per retry, so
+            // other operations (ls, stat) still work between retries.
 
-            match result {
-                Ok(Ok(plaintext)) => {
-                    eprintln!(">>> FUSE read: downloaded {} bytes for CID {}", plaintext.len(), &cid[..cid.len().min(12)]);
+            // Start prefetch if not already in progress
+            if !self.prefetching.contains(&cid) {
+                eprintln!(">>> FUSE read: starting prefetch for CID {} ...", &cid[..cid.len().min(12)]);
+                let api = self.api.clone();
+                let rt = self.rt.clone();
+                let tx = self.content_tx.clone();
+                let cid_clone = cid.clone();
+                let efk = encrypted_file_key_hex.clone();
+                let iv_clone = iv_hex.clone();
+                let enc_mode = encryption_mode.clone();
+                let pk = self.private_key.clone();
+                self.prefetching.insert(cid.clone());
+
+                rt.spawn(async move {
+                    let result = tokio::time::timeout(
+                        CONTENT_DOWNLOAD_TIMEOUT,
+                        fetch_and_decrypt_content_async(
+                            &api, &cid_clone, &efk, &iv_clone, &enc_mode, &pk,
+                        ),
+                    )
+                    .await;
+
+                    match result {
+                        Ok(Ok(plaintext)) => {
+                            eprintln!(
+                                ">>> prefetch(read): cached {} bytes for CID {}",
+                                plaintext.len(),
+                                &cid_clone[..cid_clone.len().min(12)]
+                            );
+                            let _ = tx.send(crate::fuse::PendingContent {
+                                cid: cid_clone,
+                                data: plaintext,
+                            });
+                        }
+                        Ok(Err(e)) => {
+                            log::error!("Read prefetch failed for CID {}: {}", cid_clone, e);
+                            eprintln!(">>> prefetch(read): FAILED for CID {}: {}", &cid_clone[..cid_clone.len().min(12)], e);
+                        }
+                        Err(_) => {
+                            log::error!("Read prefetch timed out for CID {}", cid_clone);
+                            eprintln!(">>> prefetch(read): TIMED OUT for CID {}", &cid_clone[..cid_clone.len().min(12)]);
+                        }
+                    }
+                });
+            }
+
+            // Poll the prefetch channel briefly (up to 500ms in 50ms increments)
+            // to give the background download a chance to complete without
+            // blocking the NFS thread for too long.
+            for _ in 0..10 {
+                std::thread::sleep(Duration::from_millis(50));
+                self.drain_content_prefetches();
+                if let Some(cached) = self.content_cache.get(&cid) {
                     let start = offset as usize;
-                    if start >= plaintext.len() {
-                        self.content_cache.set(&cid, plaintext);
+                    if start >= cached.len() {
                         reply.data(&[]);
                     } else {
-                        let end = std::cmp::min(start + size as usize, plaintext.len());
-                        let data_slice = plaintext[start..end].to_vec();
-                        self.content_cache.set(&cid, plaintext);
-                        reply.data(&data_slice);
+                        let end = std::cmp::min(start + size as usize, cached.len());
+                        reply.data(&cached[start..end]);
                     }
-                }
-                Ok(Err(e)) => {
-                    log::error!("Read fallback download failed for CID {}: {}", cid, e);
-                    eprintln!(">>> FUSE read: download FAILED for CID {}: {}", &cid[..cid.len().min(12)], e);
-                    reply.error(libc::EIO);
-                }
-                Err(_) => {
-                    log::error!("Read fallback download timed out for CID {} ({}s)", cid, CONTENT_DOWNLOAD_TIMEOUT.as_secs());
-                    eprintln!(">>> FUSE read: download TIMED OUT for CID {}", &cid[..cid.len().min(12)]);
-                    reply.error(libc::EIO);
+                    return;
                 }
             }
+
+            // Prefetch still in progress — return EAGAIN so the NFS client retries.
+            // With FUSE-T's hard mount, the client will retry after timeo (1s).
+            // On the next attempt, we'll poll again and eventually serve the data.
+            eprintln!(">>> FUSE read: prefetch not ready for CID {}, returning EAGAIN", &cid[..cid.len().min(12)]);
+            reply.error(libc::EAGAIN);
         }
 
         /// Release (close) a file handle.
