@@ -54,11 +54,13 @@ export function TextEditorDialog({
     }
 
     if (!folderKey) {
+      setLoading(false);
       setError('Folder key not available');
       return;
     }
 
     if (!item.fileMetaIpnsName) {
+      setLoading(false);
       setError('File metadata IPNS name not available (legacy v1 file?)');
       return;
     }
