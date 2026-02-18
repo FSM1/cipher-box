@@ -21,6 +21,16 @@ use crate::crypto::folder::{
     AnyFolderMetadata, FolderChild, FolderChildV2, FolderMetadata, FolderMetadataV2,
 };
 
+/// Normalize a filename to NFC (composed) form for consistent HashMap lookups.
+/// macOS NFS client may send names in either NFC or NFD form; FUSE-T's go-nfsv4
+/// may also re-normalize. By normalizing to NFC on both storage and lookup,
+/// we avoid mismatches with accented characters (e.g., `è` vs `e` + combining grave).
+#[cfg(feature = "fuse")]
+fn normalize_name(name: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    name.nfc().collect()
+}
+
 /// Root inode number (standard FUSE convention).
 pub const ROOT_INO: u64 = 1;
 
@@ -164,8 +174,9 @@ impl InodeTable {
     }
 
     /// Insert an inode into the table and update the name lookup index.
+    /// Name is normalized to NFC for consistent lookup across Unicode forms.
     pub fn insert(&mut self, data: InodeData) {
-        let key = (data.parent_ino, data.name.clone());
+        let key = (data.parent_ino, normalize_name(&data.name));
         self.name_to_ino.insert(key, data.ino);
         self.inodes.insert(data.ino, data);
     }
@@ -181,9 +192,10 @@ impl InodeTable {
     }
 
     /// Find a child inode by parent inode + child name.
+    /// Name is normalized to NFC for consistent lookup across Unicode forms.
     pub fn find_child(&self, parent_ino: u64, name: &str) -> Option<u64> {
         self.name_to_ino
-            .get(&(parent_ino, name.to_string()))
+            .get(&(parent_ino, normalize_name(name)))
             .copied()
     }
 
@@ -192,7 +204,7 @@ impl InodeTable {
     pub fn remove(&mut self, ino: u64) {
         if let Some(data) = self.inodes.remove(&ino) {
             self.name_to_ino
-                .remove(&(data.parent_ino, data.name.clone()));
+                .remove(&(data.parent_ino, normalize_name(&data.name)));
             // Also remove from parent's children list
             if let Some(parent) = self.inodes.get_mut(&data.parent_ino) {
                 if let Some(ref mut children) = parent.children {
@@ -254,7 +266,7 @@ impl InodeTable {
                     if !new_names.contains(&old_child.name) {
                         let name = old_child.name.clone();
                         self.inodes.remove(old_ino);
-                        self.name_to_ino.remove(&(parent_ino, name));
+                        self.name_to_ino.remove(&(parent_ino, normalize_name(&name)));
                     }
                 }
             }
@@ -483,7 +495,7 @@ impl InodeTable {
                     if !new_names.contains(&old_child.name) {
                         let name = old_child.name.clone();
                         self.inodes.remove(old_ino);
-                        self.name_to_ino.remove(&(parent_ino, name));
+                        self.name_to_ino.remove(&(parent_ino, normalize_name(&name)));
                     }
                 }
             }

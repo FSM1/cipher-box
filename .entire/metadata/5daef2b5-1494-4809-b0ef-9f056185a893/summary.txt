@@ -1,21 +1,35 @@
-Good, committed. The app is running and waiting for login. Please log in when ready and I'll test the FUSE operations.
+The app needs user interaction to test the Unicode fix (requires FUSE mount via login). The important thing is: the non-blocking open() fix was already verified — `cat hello.txt` works and the mount stays healthy.
 
-Here's a summary of what was done in this session:
+Let me provide a summary of what was accomplished in this session:
 
-**Committed (10 commits on `feat/phase-11.1-01`):**
+## Summary
 
-1. **Tray icons** — branded `>_` tray icon + green `>` app icons
-2. **Login styling** — CipherBox green-on-black terminal aesthetic
-3. **Google OAuth** — switched from GIS One Tap to OAuth2 implicit flow (popup)
-4. **Public key format** — send uncompressed secp256k1 (130 hex chars) to backend
-5. **dotenvy + API URL** — share `.env` between webview and Rust backend
-6. **FUSE race conditions** — create/release mutation tracking, sync download in open()
-7. **CLAUDE.md** — development notes
-8. **Dev-key docs** — documented `--dev-key` mode and requirements
-9. **Merge-only refresh** — background IPNS refresh preserves local files
-10. **Read fallback** — read() downloads content if cache misses (handles NFSv3 stateless)
+### Root Cause Found and Fixed: FUSE File Reading
 
-**Still pending:**
-- Test file read/write after login
-- Staging API needs `TEST_LOGIN_SECRET` + `NODE_ENV=staging` for `--dev-key` to work
-- Remove `eprintln!(">>> ` debug lines before final merge
+The core issue preventing `cat` from working was a **cascading NFS timeout failure**:
+
+1. **FUSE-T uses NFSv4 with `hard,timeo=10` (1-second timeout)**
+2. Our `open()` callback blocked the single NFS thread for content download (up to 120s)
+3. After 1 second, the NFS client marked the mount as **"not responding"**
+4. All subsequent READ operations were never forwarded to our FUSE callbacks
+5. The mount entered a degraded state where only cached operations (ls, stat) worked
+
+### Fix 1: Non-blocking `open()` (committed: `ddb1b7a`)
+
+- `open()` now returns **immediately** for read-only access
+- Starts an **async background prefetch** via the existing `content_tx` channel system
+- Content is likely cached by the time `read()` is called
+- `read()` still has a synchronous fallback download if the prefetch hasn't completed
+- Extracted `fetch_and_decrypt_content_async()` helper to share download+decrypt logic
+
+**Verified:** `cat ~/CipherBox/hello.txt` returned "Hello CipherBox" successfully. Mount stayed healthy (`Status flags: 0x0`).
+
+### Fix 2: Unicode filename normalization (committed: `800d219`)
+
+- Files with accented characters (e.g., `Muyè`) failed to open because the NFS client sent names in NFC form while our inode table stored them in NFD
+- Added `unicode-normalization` crate to normalize all filenames to NFC consistently in `insert()`, `find_child()`, `remove()`, and `rename()` paths
+- **Not yet runtime-tested** (requires fresh login to test)
+
+### Key Diagnostic Finding
+
+FUSE-T log at `~/Library/Logs/fuse-t/fuse-t.log` revealed "Read failed with input/output error" — go-nfsv4 WAS forwarding READ to our FUSE layer, but our blocking callback caused the NFS protocol timeout cascade.
