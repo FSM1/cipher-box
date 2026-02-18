@@ -60,6 +60,25 @@ VITE_API_URL=http://localhost:3000 pnpm --filter desktop dev -- -- --dev-key $DE
 
 **Note:** Each unique dev key creates its own vault. Use the same key across restarts to persist data.
 
+## Stashed WIP: Proactive Readdir Prefetch
+
+There is a stashed change on `feat/phase-11.1-01` with WIP FUSE improvements:
+
+```bash
+git stash list  # Look for: "WIP: proactive readdir prefetch + poll-based read fallback (phase 11.1 debugging)"
+git stash show -p 'stash@{0}'  # Review the diff
+git stash pop 'stash@{0}'     # Restore when ready
+```
+
+**What it does:**
+
+- Proactive content prefetch on `readdir` (offset=0): starts downloading/decrypting all child file contents in background so they're cached before the user opens them
+- Write-open (`O_WRONLY`/`O_RDWR`): checks content cache before falling back to sync download
+- `read()` cache miss: replaces blocking sync download with poll-based approach (100ms increments, 3s max) to avoid stalling the single NFS thread
+- Contains `eprintln!(">>>` debug lines that must be removed before merge
+
+**Status:** Untested — was mid-debugging when stashed. Needs UAT verification.
+
 ## Tauri Webview Constraints
 
 - No `window.ethereum` — wallet login is not available in the Tauri webview
