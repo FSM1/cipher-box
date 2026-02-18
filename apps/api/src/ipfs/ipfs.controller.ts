@@ -29,6 +29,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { IPFS_PROVIDER, IpfsProvider } from './providers';
 import { UploadResponseDto, UnpinDto, UnpinResponseDto } from './dto';
 import { VaultService } from '../vault/vault.service';
+import { MetricsService } from '../metrics/metrics.service';
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 
@@ -43,7 +44,8 @@ interface RequestWithUser extends ExpressRequest {
 export class IpfsController {
   constructor(
     @Inject(IPFS_PROVIDER) private readonly ipfsProvider: IpfsProvider,
-    private readonly vaultService: VaultService
+    private readonly vaultService: VaultService,
+    private readonly metricsService: MetricsService
   ) {}
 
   @Post('upload')
@@ -102,6 +104,8 @@ export class IpfsController {
       await this.ipfsProvider.unpinFile(result.cid).catch(() => undefined);
       throw err;
     }
+    this.metricsService.fileUploads.inc();
+    this.metricsService.fileUploadBytes.inc(result.size);
     return { cid: result.cid, size: result.size, recorded: true };
   }
 
@@ -121,6 +125,7 @@ export class IpfsController {
   })
   async unpin(@Body() dto: UnpinDto): Promise<UnpinResponseDto> {
     await this.ipfsProvider.unpinFile(dto.cid);
+    this.metricsService.fileUnpins.inc();
     return { success: true };
   }
 
@@ -154,6 +159,7 @@ export class IpfsController {
     @Res({ passthrough: true }) res: Response
   ): Promise<StreamableFile> {
     const buffer = await this.ipfsProvider.getFile(cid);
+    this.metricsService.fileDownloads.inc();
     res.set({
       'Content-Type': 'application/octet-stream',
       'Content-Length': buffer.length.toString(),

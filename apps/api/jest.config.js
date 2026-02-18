@@ -17,6 +17,7 @@ module.exports = {
     '!app.controller.ts', // Exclude default NestJS app controller
     '!app.service.ts', // Exclude default NestJS app service
     '!health/**', // Exclude health check (infrastructure)
+    '!metrics/**', // Exclude Prometheus metrics (infrastructure)
     '!data-source.ts', // Exclude TypeORM CLI data source config
     '!migrations/**', // Exclude database migrations
   ],

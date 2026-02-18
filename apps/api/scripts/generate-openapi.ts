@@ -32,6 +32,7 @@ import { IpnsController } from '../src/ipns/ipns.controller';
 import { IpnsService } from '../src/ipns/ipns.service';
 import { DeviceApprovalController } from '../src/device-approval/device-approval.controller';
 import { DeviceApprovalService } from '../src/device-approval/device-approval.service';
+import { MetricsService } from '../src/metrics/metrics.service';
 import { User } from '../src/auth/entities/user.entity';
 import { AuthMethod } from '../src/auth/entities/auth-method.entity';
 import { RefreshToken } from '../src/auth/entities/refresh-token.entity';
@@ -123,6 +124,10 @@ const mockConfigService = {
     },
     {
       provide: DeviceApprovalService,
+      useValue: {},
+    },
+    {
+      provide: MetricsService,
       useValue: {},
     },
     mockRepository,

@@ -27,6 +27,7 @@ import { ThrottlerGuard } from '@nestjs/throttler';
 import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { User } from './entities/user.entity';
+import { MetricsService } from '../metrics/metrics.service';
 
 interface RequestWithUser extends Request {
   user: User;
@@ -44,7 +45,10 @@ const REFRESH_TOKEN_COOKIE_OPTIONS = {
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private authService: AuthService) {}
+  constructor(
+    private authService: AuthService,
+    private readonly metricsService: MetricsService
+  ) {}
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -63,6 +67,10 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response
   ): Promise<LoginResponseDto> {
     const result = await this.authService.login(loginDto);
+    this.metricsService.authLogins.inc({
+      method: 'web3auth',
+      new_user: String(result.isNewUser),
+    });
     const isDesktop = req.headers['x-client-type'] === 'desktop';
 
     if (isDesktop) {
@@ -230,6 +238,10 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response
   ): Promise<TestLoginResponseDto> {
     const result = await this.authService.testLogin(dto.email, dto.secret);
+    this.metricsService.authLogins.inc({
+      method: 'test',
+      new_user: String(result.isNewUser),
+    });
 
     // Set refresh token cookie (same as normal login for web clients)
     res.cookie('refresh_token', result.refreshToken, REFRESH_TOKEN_COOKIE_OPTIONS);

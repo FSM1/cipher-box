@@ -8,6 +8,7 @@
 
 api-staging.cipherbox.cc {
 	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin-key.pem
+	respond /metrics 403
 	reverse_proxy api:3000
 }
 

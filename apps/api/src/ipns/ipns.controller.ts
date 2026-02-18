@@ -20,6 +20,7 @@ import {
   ResolveIpnsQueryDto,
   ResolveIpnsResponseDto,
 } from './dto';
+import { MetricsService } from '../metrics/metrics.service';
 
 interface RequestWithUser extends Request {
   user: {
@@ -32,7 +33,10 @@ interface RequestWithUser extends Request {
 @UseGuards(JwtAuthGuard, ThrottlerGuard)
 @Controller('ipns')
 export class IpnsController {
-  constructor(private readonly ipnsService: IpnsService) {}
+  constructor(
+    private readonly ipnsService: IpnsService,
+    private readonly metricsService: MetricsService
+  ) {}
 
   // [SECURITY: HIGH-04] Rate limit IPNS publish to prevent abuse
   // Each publish makes external HTTP calls to delegated-ipfs.dev
@@ -66,7 +70,9 @@ export class IpnsController {
     @Request() req: RequestWithUser,
     @Body() dto: PublishIpnsDto
   ): Promise<PublishIpnsResponseDto> {
-    return this.ipnsService.publishRecord(req.user.id, dto);
+    const result = await this.ipnsService.publishRecord(req.user.id, dto);
+    this.metricsService.ipnsPublishes.inc({ type: 'single' });
+    return result;
   }
 
   // [SECURITY: HIGH-04] Rate limit batch publish - lower limit since each batch can have up to 200 records
@@ -100,7 +106,9 @@ export class IpnsController {
     @Request() req: RequestWithUser,
     @Body() dto: BatchPublishIpnsDto
   ): Promise<BatchPublishIpnsResponseDto> {
-    return this.ipnsService.publishBatch(req.user.id, dto);
+    const result = await this.ipnsService.publishBatch(req.user.id, dto);
+    this.metricsService.ipnsPublishes.inc({ type: 'batch' }, result.totalSucceeded);
+    return result;
   }
 
   // [SECURITY: HIGH-04] Rate limit IPNS resolve - higher limit than publish since read-only
@@ -145,6 +153,10 @@ export class IpnsController {
     if (!result) {
       throw new NotFoundException('IPNS name not found in routing network');
     }
+
+    // Track resolve source: if signatureV2 is present, it came from the network
+    const source = result.signatureV2 ? 'network' : 'db_cache';
+    this.metricsService.ipnsResolves.inc({ source });
 
     // Include signature fields as all-or-nothing bundle for client verification
     const hasSigData = result.signatureV2 && result.data && result.pubKey;

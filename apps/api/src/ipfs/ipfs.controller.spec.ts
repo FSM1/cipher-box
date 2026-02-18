@@ -5,6 +5,7 @@ import { IpfsController } from './ipfs.controller';
 import { IPFS_PROVIDER, IpfsProvider } from './providers';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { VaultService } from '../vault/vault.service';
+import { MetricsService } from '../metrics/metrics.service';
 
 interface RequestWithUser extends ExpressRequest {
   user: { id: string };
@@ -27,6 +28,13 @@ describe('IpfsController', () => {
       recordPin: jest.fn(),
     };
 
+    const mockMetricsService = {
+      fileUploads: { inc: jest.fn() },
+      fileUploadBytes: { inc: jest.fn() },
+      fileDownloads: { inc: jest.fn() },
+      fileUnpins: { inc: jest.fn() },
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       controllers: [IpfsController],
       providers: [
@@ -37,6 +45,10 @@ describe('IpfsController', () => {
         {
           provide: VaultService,
           useValue: mockVaultService,
+        },
+        {
+          provide: MetricsService,
+          useValue: mockMetricsService,
         },
       ],
     })

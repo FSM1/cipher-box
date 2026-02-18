@@ -14,6 +14,7 @@ import request from 'supertest';
 import { IpnsController } from '../ipns.controller';
 import { IpnsService } from '../ipns.service';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { MetricsService } from '../../metrics/metrics.service';
 
 describe('IPNS Integration Tests', () => {
   const validIpnsName = 'k51qzi5uqu5dkkciu33khkzbcmxtyhn2hgdqyp6rv7s5egjlsdj6a2xpz9lxvz';
@@ -41,6 +42,11 @@ describe('IPNS Integration Tests', () => {
         getAllFolderIpns: jest.fn(),
       };
 
+      const mockMetricsService = {
+        ipnsPublishes: { inc: jest.fn() },
+        ipnsResolves: { inc: jest.fn() },
+      };
+
       const module: TestingModule = await Test.createTestingModule({
         imports: [
           // Configure throttler with strict limits for testing
@@ -56,6 +62,10 @@ describe('IPNS Integration Tests', () => {
           {
             provide: IpnsService,
             useValue: mockIpnsService,
+          },
+          {
+            provide: MetricsService,
+            useValue: mockMetricsService,
           },
         ],
       })
@@ -157,6 +167,11 @@ describe('IPNS Integration Tests', () => {
         getAllFolderIpns: jest.fn(),
       };
 
+      const mockMetricsService2 = {
+        ipnsPublishes: { inc: jest.fn() },
+        ipnsResolves: { inc: jest.fn() },
+      };
+
       const module: TestingModule = await Test.createTestingModule({
         imports: [ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }])],
         controllers: [IpnsController],
@@ -164,6 +179,10 @@ describe('IPNS Integration Tests', () => {
           {
             provide: IpnsService,
             useValue: mockIpnsService,
+          },
+          {
+            provide: MetricsService,
+            useValue: mockMetricsService2,
           },
         ],
       })
@@ -309,6 +328,11 @@ describe('Attack Scenario Tests', () => {
         getAllFolderIpns: jest.fn(),
       };
 
+      const mockMetricsService3 = {
+        ipnsPublishes: { inc: jest.fn() },
+        ipnsResolves: { inc: jest.fn() },
+      };
+
       const module: TestingModule = await Test.createTestingModule({
         imports: [ThrottlerModule.forRoot([{ ttl: 60000, limit: 100 }])],
         controllers: [IpnsController],
@@ -316,6 +340,10 @@ describe('Attack Scenario Tests', () => {
           {
             provide: IpnsService,
             useValue: mockIpnsService,
+          },
+          {
+            provide: MetricsService,
+            useValue: mockMetricsService3,
           },
         ],
       })
