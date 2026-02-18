@@ -539,7 +539,7 @@ async function handleDevKeyAuth(_devKeyHex: string): Promise<void> {
   if (!testLoginSecret) {
     throw new Error(
       'VITE_TEST_LOGIN_SECRET is not set in .env. ' +
-      'Dev-key mode requires a test-login secret matching the API\'s TEST_LOGIN_SECRET.'
+        "Dev-key mode requires a test-login secret matching the API's TEST_LOGIN_SECRET."
     );
   }
 
