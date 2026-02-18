@@ -82,6 +82,7 @@ pub async fn handle_auth_complete(
         private_key_bytes,
         public_key_bytes,
         login_resp.is_new_user,
+        false,
     )
     .await
 }
@@ -98,6 +99,7 @@ async fn complete_auth_setup(
     private_key_bytes: Vec<u8>,
     public_key_bytes: Vec<u8>,
     is_new_user: bool,
+    skip_keychain: bool,
 ) -> Result<(), String> {
     // 1. Store access token in API client
     state.api.set_access_token(access_token.clone()).await;
@@ -106,11 +108,15 @@ async fn complete_auth_setup(
     let user_id = extract_user_id_from_jwt(&access_token)?;
     *state.user_id.write().await = Some(user_id.clone());
 
-    // 3. Store refresh token in Keychain
-    auth::store_refresh_token(&user_id, &refresh_token)
-        .map_err(|e| format!("Keychain store failed: {}", e))?;
-    auth::store_user_id(&user_id)
-        .map_err(|e| format!("Keychain store user ID failed: {}", e))?;
+    // 3. Store refresh token in Keychain (skip in test-login mode to avoid popups)
+    if !skip_keychain {
+        auth::store_refresh_token(&user_id, &refresh_token)
+            .map_err(|e| format!("Keychain store failed: {}", e))?;
+        auth::store_user_id(&user_id)
+            .map_err(|e| format!("Keychain store user ID failed: {}", e))?;
+    } else {
+        log::info!("Skipping Keychain storage (test-login mode)");
+    }
 
     // 4. Store keys in AppState
     *state.private_key.write().await = Some(private_key_bytes.clone());
@@ -448,7 +454,7 @@ pub async fn handle_test_login_complete(
     // Derive public key from the test-login private key
     let public_key_bytes = derive_public_key(&private_key_bytes)?;
 
-    // Delegate to shared post-auth setup (skips /auth/login POST)
+    // Delegate to shared post-auth setup (skips /auth/login POST and Keychain)
     complete_auth_setup(
         &app,
         &state,
@@ -457,6 +463,7 @@ pub async fn handle_test_login_complete(
         private_key_bytes,
         public_key_bytes,
         is_new_user,
+        true, // skip Keychain — test-login re-authenticates each time
     )
     .await
 }

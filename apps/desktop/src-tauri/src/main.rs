@@ -10,7 +10,7 @@ mod state;
 mod sync;
 mod tray;
 
-use tauri::WindowEvent;
+use tauri::{Manager, WindowEvent};
 use state::AppState;
 
 /// CLI arguments for debug builds only.
@@ -81,6 +81,30 @@ fn main() {
 
             // Initial tray status: NotConnected
             let _ = tray::update_tray_status(&handle, &tray::TrayStatus::NotConnected);
+
+            // In dev-key mode, auto-create the login webview so the JS auth
+            // flow runs immediately without user interaction.
+            #[cfg(debug_assertions)]
+            {
+                let state = handle.state::<AppState>();
+                if state.dev_key.blocking_read().is_some() {
+                    log::info!("Dev-key mode: auto-creating login webview");
+                    let _ = tauri::WebviewWindowBuilder::new(
+                        app,
+                        "main",
+                        tauri::WebviewUrl::App("index.html".into()),
+                    )
+                    .title("CipherBox")
+                    .inner_size(480.0, 600.0)
+                    .center()
+                    .resizable(false)
+                    .visible(false)
+                    .build()
+                    .map_err(|e| {
+                        log::error!("Failed to create dev-key webview: {}", e);
+                    });
+                }
+            }
 
             log::info!("CipherBox Desktop setup complete (tray icon active)");
             Ok(())

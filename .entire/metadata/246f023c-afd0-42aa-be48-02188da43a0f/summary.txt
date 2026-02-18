@@ -1,1 +1,3 @@
-Back on `feat/phase-11.1-01` and ready to continue once you've merged PR #146 and deployed.
+FUSE-T NFS mounted and responding. Empty vault (new test user). The whole headless dev flow is now working — auth, vault, and mount all happen automatically without any manual interaction or popups.
+
+The app is running and ready for debugging the WIP readdir prefetch changes. Want me to test file operations (upload via web app, then read from FUSE) to exercise the prefetch code?

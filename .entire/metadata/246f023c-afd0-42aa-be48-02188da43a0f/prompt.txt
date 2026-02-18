@@ -1,1 +1,1 @@
-ok lets get these changes pushed to the branch, switch to main, branch off that, update the CI script, I will set the variable on github, we merge and deploy this change, then continue with testing
+do everything except removing the debug lines - the whole system is still completely unstable and will require a lot of debugging. Good luck
