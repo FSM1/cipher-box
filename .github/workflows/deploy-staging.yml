@@ -135,8 +135,9 @@ jobs:
       - name: Generate .env.staging
         run: |
           cat > .env.staging << 'ENVEOF'
-          NODE_ENV=production
+          NODE_ENV=staging
           CIPHERBOX_ENVIRONMENT=staging
+          TEST_LOGIN_SECRET=${{ secrets.STAGING_TEST_LOGIN_SECRET }}
           PORT=3000
           DB_HOST=postgres
           DB_PORT=5432
