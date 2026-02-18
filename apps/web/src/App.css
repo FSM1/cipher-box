@@ -2060,23 +2060,37 @@
    ========================================================================== */
 
 .mfa-prompt {
+  grid-area: banner;
   display: flex;
   align-items: center;
   gap: var(--spacing-sm);
-  padding: var(--spacing-xs) var(--spacing-md);
+  padding: 10px var(--spacing-md);
   background-color: rgb(245 158 11 / 8%);
   border-bottom: 1px solid rgb(245 158 11 / 25%);
   font-family: var(--font-family-mono);
+  z-index: 2;
+}
+
+.mfa-prompt-icon {
+  flex-shrink: 0;
 }
 
 .mfa-prompt-text {
   flex: 1;
-  font-size: var(--font-size-xs);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 
 .mfa-prompt-text strong {
   color: var(--color-warning);
+  font-weight: var(--font-weight-bold);
+}
+
+.mfa-prompt-desc {
+  color: var(--color-text-secondary);
 }
 
 .mfa-prompt-btn {
@@ -2085,7 +2099,7 @@
   font-family: var(--font-family-mono);
   font-size: 10px;
   color: var(--color-text-secondary);
-  padding: 2px var(--spacing-sm);
+  padding: 6px var(--spacing-md);
   cursor: pointer;
   white-space: nowrap;
   transition: border-color 0.2s ease, color 0.2s ease;
@@ -2105,7 +2119,7 @@
   background-color: var(--color-green-primary);
   color: var(--color-black);
   border-color: var(--color-green-primary);
-  font-weight: var(--font-weight-semibold);
+  font-weight: 500;
 }
 
 .mfa-prompt-btn-setup:hover {
