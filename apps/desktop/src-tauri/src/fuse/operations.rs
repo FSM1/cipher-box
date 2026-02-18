@@ -62,8 +62,14 @@ mod implementation {
     /// Maximum time for a network operation before returning EIO.
     /// FUSE-T runs NFS callbacks on a single thread; blocking too long
     /// causes ALL subsequent operations (including ls) to hang.
-    /// Keep this SHORT — macOS NFS client times out in ~3-5s.
+    /// Keep this SHORT for non-read operations.
     const NETWORK_TIMEOUT: Duration = Duration::from_secs(3);
+
+    /// Maximum time for file content download in open().
+    /// Large files (e.g., 64MB) can take 30-60s from staging IPFS.
+    /// This blocks the NFS thread, but since the content is cached after
+    /// open(), all subsequent reads are instant.
+    const CONTENT_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 
     /// Run an async operation with a timeout, blocking the current thread.
     /// Returns Err if the operation fails or times out.
@@ -381,6 +387,7 @@ mod implementation {
             name: &OsStr,
             reply: ReplyEntry,
         ) {
+            eprintln!(">>> FUSE lookup: parent={} name={:?}", parent, name);
             self.drain_upload_completions();
             self.drain_refresh_completions();
 
@@ -498,6 +505,7 @@ mod implementation {
             _fh: Option<u64>,
             reply: ReplyAttr,
         ) {
+            eprintln!(">>> FUSE getattr: ino={}", ino);
             self.drain_upload_completions();
 
             if let Some(inode) = self.inodes.get(ino) {
@@ -529,6 +537,7 @@ mod implementation {
             _flags: Option<u32>,
             reply: ReplyAttr,
         ) {
+            eprintln!(">>> FUSE setattr: ino={} size={:?}", ino, size);
             // Handle truncate if size is specified
             if let Some(new_size) = size {
                 // Truncate temp file if file handle exists
@@ -581,6 +590,7 @@ mod implementation {
             offset: i64,
             mut reply: ReplyDirectory,
         ) {
+            eprintln!(">>> FUSE readdir: ino={} offset={}", ino, offset);
             // 1. Drain any pending background refresh results (non-blocking)
             self.drain_refresh_completions();
 
@@ -708,6 +718,7 @@ mod implementation {
             flags: i32,
             reply: ReplyCreate,
         ) {
+            eprintln!(">>> FUSE create: parent={} name={:?}", parent, name);
             let name_str = match name.to_str() {
                 Some(n) => n,
                 None => {
@@ -799,6 +810,10 @@ mod implementation {
                 }
             }
 
+            // Mark parent as locally mutated to prevent background refreshes
+            // from overwriting this new file before IPNS publish propagates.
+            self.mutated_folders.insert(parent, std::time::Instant::now());
+
             log::debug!("create: {} in parent {} -> ino {} fh {}", name_str, parent, ino, fh);
             reply.created(&FILE_TTL, &attr, 0, fh, 0);
         }
@@ -814,6 +829,7 @@ mod implementation {
             flags: i32,
             reply: ReplyOpen,
         ) {
+            eprintln!(">>> FUSE open: ino={} flags={:#x}", ino, flags);
             // Get file info
             let file_info = match self.inodes.get(ino) {
                 Some(inode) => match &inode.kind {
@@ -867,39 +883,29 @@ mod implementation {
                     }
                 }
             } else {
-                // Read-only open — prefetch content in background if not cached
+                // Read-only open — download and cache content synchronously.
+                // This blocks the NFS thread during download, but ensures reads
+                // never fail with EIO. NFS clients are more tolerant of slow
+                // opens than repeated read failures.
                 self.drain_content_prefetches();
-                let fh = self.next_fh.fetch_add(1, Ordering::SeqCst);
-                self.open_files.insert(fh, OpenFileHandle::new_read(ino, flags));
 
-                if !cid.is_empty()
-                    && self.content_cache.get(&cid).is_none()
-                    && !self.prefetching.contains(&cid)
-                {
-                    self.prefetching.insert(cid.clone());
-                    let api = self.api.clone();
-                    let private_key = self.private_key.clone();
-                    let rt = self.rt.clone();
-                    let cid_clone = cid.clone();
-                    let efk = encrypted_file_key.clone();
-                    let iv_clone = iv.clone();
-                    let mode_clone = encryption_mode.clone();
-                    let tx = self.content_tx.clone();
-                    rt.spawn(async move {
-                        let result: Result<Vec<u8>, String> = async {
+                if !cid.is_empty() && self.content_cache.get(&cid).is_none() {
+                    eprintln!(">>> FUSE open: downloading content for CID {} ...", &cid[..12]);
+                    let result = self.rt.block_on(async {
+                        tokio::time::timeout(CONTENT_DOWNLOAD_TIMEOUT, async {
                             let encrypted_bytes =
-                                crate::api::ipfs::fetch_content(&api, &cid_clone).await?;
-                            let encrypted_file_key = hex::decode(&efk)
+                                crate::api::ipfs::fetch_content(&self.api, &cid).await?;
+                            let encrypted_file_key_bytes = hex::decode(&encrypted_file_key)
                                 .map_err(|_| "Invalid file key hex".to_string())?;
                             let mut file_key =
-                                crate::crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
+                                crate::crypto::ecies::unwrap_key(&encrypted_file_key_bytes, &self.private_key)
                                     .map_err(|e| format!("File key unwrap failed: {}", e))?;
                             let file_key_arr: [u8; 32] = file_key.as_slice()
                                 .try_into()
                                 .map_err(|_| "Invalid file key length".to_string())?;
 
-                            let plaintext = if mode_clone == "CTR" {
-                                let iv_bytes = hex::decode(&iv_clone)
+                            let plaintext = if encryption_mode == "CTR" {
+                                let iv_bytes = hex::decode(&iv)
                                     .map_err(|_| "Invalid file IV hex".to_string())?;
                                 let iv_arr: [u8; 16] = iv_bytes
                                     .try_into()
@@ -909,7 +915,7 @@ mod implementation {
                                 )
                                 .map_err(|e| format!("CTR decryption failed: {}", e))?
                             } else {
-                                let iv_bytes = hex::decode(&iv_clone)
+                                let iv_bytes = hex::decode(&iv)
                                     .map_err(|_| "Invalid file IV hex".to_string())?;
                                 let iv_arr: [u8; 12] = iv_bytes
                                     .try_into()
@@ -921,21 +927,30 @@ mod implementation {
                             };
 
                             crate::crypto::utils::clear_bytes(&mut file_key);
-                            Ok(plaintext)
-                        }
-                        .await;
-                        match result {
-                            Ok(data) => {
-                                let _ = tx.send(crate::fuse::PendingContent {
-                                    cid: cid_clone,
-                                    data,
-                                });
-                            }
-                            Err(e) => log::warn!("Content prefetch failed: {}", e),
-                        }
+                            Ok::<Vec<u8>, String>(plaintext)
+                        }).await
                     });
+
+                    match result {
+                        Ok(Ok(plaintext)) => {
+                            eprintln!(">>> FUSE open: cached {} bytes for CID {}", plaintext.len(), &cid[..12]);
+                            self.content_cache.set(&cid, plaintext);
+                        }
+                        Ok(Err(e)) => {
+                            log::error!("Content download failed for CID {}: {}", cid, e);
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                        Err(_) => {
+                            log::error!("Content download timed out for CID {} ({}s)", cid, CONTENT_DOWNLOAD_TIMEOUT.as_secs());
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    }
                 }
 
+                let fh = self.next_fh.fetch_add(1, Ordering::SeqCst);
+                self.open_files.insert(fh, OpenFileHandle::new_read(ino, flags));
                 reply.opened(fh, 0);
             }
         }
@@ -956,6 +971,7 @@ mod implementation {
             _lock_owner: Option<u64>,
             reply: ReplyWrite,
         ) {
+            eprintln!(">>> FUSE write: ino={} fh={} offset={} size={}", ino, fh, offset, data.len());
             let handle = match self.open_files.get_mut(&fh) {
                 Some(h) => h,
                 None => {
@@ -1000,6 +1016,7 @@ mod implementation {
             _lock: Option<u64>,
             reply: ReplyData,
         ) {
+            eprintln!(">>> FUSE read: ino={} fh={} offset={} size={}", ino, fh, offset, size);
             // Drain any pending content prefetches into the cache
             self.drain_content_prefetches();
 
@@ -1103,90 +1120,10 @@ mod implementation {
                 return;
             }
 
-            // Cache miss — drain any pending prefetches first, then recheck
-            self.drain_content_prefetches();
-
-            // Recheck content cache after drain
-            if let Some(cached) = self.content_cache.get(&cid) {
-                let start = offset as usize;
-                if start >= cached.len() {
-                    reply.data(&[]);
-                    return;
-                }
-                let end = std::cmp::min(start + size as usize, cached.len());
-                let data_slice = cached[start..end].to_vec();
-                if let Some(handle) = self.open_files.get_mut(&fh) {
-                    handle.cached_content = Some(cached.to_vec());
-                }
-                reply.data(&data_slice);
-                return;
-            }
-
-            // Still not cached — prefetch may still be in flight, or was never started.
-            // Fire a prefetch if not already in flight, and return EIO so NFS retries.
-            if !self.prefetching.contains(&cid) {
-                self.prefetching.insert(cid.clone());
-                let api = self.api.clone();
-                let private_key = self.private_key.clone();
-                let rt = self.rt.clone();
-                let cid_clone = cid.clone();
-                let efk = encrypted_file_key_hex.clone();
-                let iv_clone = iv_hex.clone();
-                let mode_clone = encryption_mode.clone();
-                let tx = self.content_tx.clone();
-                rt.spawn(async move {
-                    let result: Result<Vec<u8>, String> = async {
-                        let encrypted_bytes =
-                            crate::api::ipfs::fetch_content(&api, &cid_clone).await?;
-                        let encrypted_file_key = hex::decode(&efk)
-                            .map_err(|_| "Invalid file key hex".to_string())?;
-                        let mut file_key =
-                            crate::crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
-                                .map_err(|e| format!("File key unwrap failed: {}", e))?;
-                        let file_key_arr: [u8; 32] = file_key.as_slice()
-                            .try_into()
-                            .map_err(|_| "Invalid file key length".to_string())?;
-
-                        let plaintext = if mode_clone == "CTR" {
-                            let iv_bytes = hex::decode(&iv_clone)
-                                .map_err(|_| "Invalid file IV hex".to_string())?;
-                            let iv_arr: [u8; 16] = iv_bytes
-                                .try_into()
-                                .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
-                            crate::crypto::aes_ctr::decrypt_aes_ctr(
-                                &encrypted_bytes, &file_key_arr, &iv_arr,
-                            )
-                            .map_err(|e| format!("CTR decryption failed: {}", e))?
-                        } else {
-                            let iv_bytes = hex::decode(&iv_clone)
-                                .map_err(|_| "Invalid file IV hex".to_string())?;
-                            let iv_arr: [u8; 12] = iv_bytes
-                                .try_into()
-                                .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
-                            crate::crypto::aes::decrypt_aes_gcm(
-                                &encrypted_bytes, &file_key_arr, &iv_arr,
-                            )
-                            .map_err(|e| format!("GCM decryption failed: {}", e))?
-                        };
-
-                        crate::crypto::utils::clear_bytes(&mut file_key);
-                        Ok(plaintext)
-                    }
-                    .await;
-                    match result {
-                        Ok(data) => {
-                            let _ = tx.send(crate::fuse::PendingContent {
-                                cid: cid_clone,
-                                data,
-                            });
-                        }
-                        Err(e) => log::warn!("Content prefetch failed: {}", e),
-                    }
-                });
-            } else {
-            }
-
-            // Return EIO — NFS client will retry, and the prefetch will populate the cache
+            // Content should have been downloaded in open(). If we reach here,
+            // something went wrong (e.g., file opened before our changes, or
+            // content was evicted from cache). Return EIO.
+            log::warn!("Read cache miss for ino {} CID {} — content not downloaded in open()", ino, cid);
             reply.error(libc::EIO);
         }
 
@@ -1205,15 +1142,26 @@ mod implementation {
             _flush: bool,
             reply: ReplyEmpty,
         ) {
+            eprintln!(">>> FUSE release: ino={} fh={}", ino, fh);
             // Drain any completed uploads from previous operations
             self.drain_upload_completions();
 
             let handle = self.open_files.remove(&fh);
 
             if let Some(handle) = handle {
-                if handle.dirty && handle.temp_path.is_some() {
-                    // Dirty file: do CPU work synchronously, spawn network I/O
-                    log::debug!("release: dirty file ino {}, preparing background upload", ino);
+                // Upload if: (a) file was written to (dirty), OR
+                // (b) file was just created and never existed on IPFS (CID empty).
+                // Case (b) handles `touch newfile` which creates + releases without writing.
+                let is_new_file = handle.temp_path.is_some() && {
+                    self.inodes.get(ino).map(|i| match &i.kind {
+                        InodeKind::File { cid, .. } => cid.is_empty(),
+                        _ => false,
+                    }).unwrap_or(false)
+                };
+                let needs_upload = handle.temp_path.is_some() && (handle.dirty || is_new_file);
+                if needs_upload {
+                    // Dirty or new file: do CPU work synchronously, spawn network I/O
+                    log::debug!("release: uploading ino {} (dirty={}, new={})", ino, handle.dirty, is_new_file);
 
                     let prepare_result = (|| -> Result<(), String> {
                         // Read complete temp file content (local I/O, fast)
@@ -1278,6 +1226,10 @@ mod implementation {
                         let parent_ino = self.inodes.get(ino)
                             .map(|i| i.parent_ino)
                             .unwrap_or(ROOT_INO);
+
+                        // Mark parent folder as mutated to prevent background refreshes
+                        // from overwriting local changes while upload is in flight.
+                        self.mutated_folders.insert(parent_ino, std::time::Instant::now());
 
                         // Build folder metadata snapshot (CPU-only).
                         // This will have CID="" for the new/modified file.
@@ -1407,6 +1359,7 @@ mod implementation {
             _lock_owner: u64,
             reply: ReplyEmpty,
         ) {
+            eprintln!(">>> FUSE flush: ino={} fh={}", _ino, _fh);
             reply.ok();
         }
 
@@ -1418,6 +1371,7 @@ mod implementation {
             name: &OsStr,
             reply: ReplyEmpty,
         ) {
+            eprintln!(">>> FUSE unlink: parent={} name={:?}", parent, name);
             let name_str = match name.to_str() {
                 Some(n) => n,
                 None => {
@@ -2032,6 +1986,7 @@ mod implementation {
             mask: i32,
             reply: ReplyEmpty,
         ) {
+            eprintln!(">>> FUSE access: ino={} mask={:#x}", ino, mask);
             let Some(inode) = self.inodes.get(ino) else {
                 reply.error(libc::ENOENT);
                 return;
@@ -2076,6 +2031,7 @@ mod implementation {
             _size: u32,
             reply: ReplyXattr,
         ) {
+            eprintln!(">>> FUSE getxattr: ino={} name={:?}", _ino, _name);
             // ENODATA = attribute not found (expected for files with no xattrs)
             #[cfg(target_os = "macos")]
             { reply.error(libc::ENOATTR); }

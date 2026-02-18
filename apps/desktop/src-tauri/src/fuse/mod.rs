@@ -573,6 +573,7 @@ impl CipherBoxFS {
             // For v2 metadata, resolve FilePointers eagerly
             if matches!(&refresh.metadata, crate::crypto::folder::AnyFolderMetadata::V2(_)) {
                 let unresolved = self.inodes.get_unresolved_file_pointers();
+                eprintln!(">>> drain_refresh: v2 metadata, {} unresolved file pointers", unresolved.len());
                 if !unresolved.is_empty() {
                     // Get folder key for FilePointer resolution
                     let folder_key = match self.inodes.get(refresh.ino) {
