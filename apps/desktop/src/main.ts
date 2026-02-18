@@ -18,7 +18,6 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   initCoreKit,
   loginWithGoogle,
-  loginWithWallet,
   requestEmailOtp,
   loginWithEmailOtp,
   logout,
@@ -109,40 +108,38 @@ async function init(): Promise<void> {
  * Render the CipherBox-branded login form with Google OAuth and Email OTP.
  */
 function renderLoginForm(appDiv: HTMLElement): void {
-  appDiv.innerHTML = `
-    <div style="color: #d1d5db; font-family: 'Courier New', Courier, monospace; padding: 2rem; text-align: center; max-width: 340px; margin: 0 auto;">
-      <div style="font-size: 1.25rem; margin-bottom: 0.25rem; color: #e5e7eb; letter-spacing: 0.1em;">CIPHERBOX</div>
-      <div style="font-size: 0.75rem; color: #6b7280; margin-bottom: 1.5rem;">zero-knowledge encrypted storage</div>
+  const font = "'JetBrains Mono', 'Courier New', monospace";
+  const btnStyle = `width: 100%; padding: 0.625rem 1rem; background: #001108; border: 1px solid #003322; color: #00D084; font-family: ${font}; font-size: 0.875rem; cursor: pointer; transition: border-color 0.15s;`;
+  const inputStyle = `width: 100%; padding: 0.5rem; background: #000000; border: 1px solid #003322; color: #00D084; font-family: ${font}; font-size: 0.875rem; margin-bottom: 0.5rem; box-sizing: border-box; outline: none;`;
 
-      <div id="google-section" style="margin-bottom: 0.5rem;">
-        <button id="google-btn" style="width: 100%; padding: 0.625rem 1rem; background: #1f2937; border: 1px solid #374151; color: #d1d5db; font-family: 'Courier New', Courier, monospace; font-size: 0.875rem; cursor: pointer; transition: border-color 0.15s;">
+  appDiv.innerHTML = `
+    <div style="color: #00D084; font-family: ${font}; padding: 2rem; text-align: center; max-width: 340px; margin: 0 auto;">
+      <div style="font-size: 1.25rem; margin-bottom: 0.25rem; letter-spacing: 0.1em;"><span style="color: #006644;">&gt; </span><span style="color: #00D084;">CIPHERBOX</span></div>
+      <div style="font-size: 0.75rem; color: #006644; margin-bottom: 1.5rem;">zero-knowledge encrypted storage</div>
+
+      <div id="google-section" style="margin-bottom: 1rem;">
+        <button id="google-btn" style="${btnStyle}">
           [ sign in with Google ]
         </button>
       </div>
 
-      <div id="wallet-section" style="margin-bottom: 1rem;">
-        <button id="wallet-btn" style="width: 100%; padding: 0.625rem 1rem; background: #1f2937; border: 1px solid #374151; color: #d1d5db; font-family: 'Courier New', Courier, monospace; font-size: 0.875rem; cursor: pointer; transition: border-color 0.15s;">
-          [ connect wallet ]
-        </button>
-      </div>
-
-      <div style="color: #4b5563; margin: 0.75rem 0; font-size: 0.75rem;">// or</div>
+      <div style="color: #006644; margin: 0.75rem 0; font-size: 0.75rem;">// or</div>
 
       <div id="email-section">
         <input id="email-input" type="email" placeholder="email address"
-          style="width: 100%; padding: 0.5rem; background: #111827; border: 1px solid #374151; color: #d1d5db; font-family: 'Courier New', Courier, monospace; font-size: 0.875rem; margin-bottom: 0.5rem; box-sizing: border-box; outline: none;" />
-        <button id="email-btn" style="width: 100%; padding: 0.625rem 1rem; background: #1f2937; border: 1px solid #374151; color: #d1d5db; font-family: 'Courier New', Courier, monospace; font-size: 0.875rem; cursor: pointer; transition: border-color 0.15s;">
+          style="${inputStyle}" />
+        <button id="email-btn" style="${btnStyle}">
           [ send code ]
         </button>
       </div>
 
       <div id="otp-section" style="display: none;">
         <input id="otp-input" type="text" placeholder="enter 6-digit code" maxlength="6"
-          style="width: 100%; padding: 0.5rem; background: #111827; border: 1px solid #374151; color: #d1d5db; font-family: 'Courier New', Courier, monospace; font-size: 0.875rem; margin-bottom: 0.5rem; box-sizing: border-box; outline: none; text-align: center; letter-spacing: 0.3em;" />
-        <button id="otp-btn" style="width: 100%; padding: 0.625rem 1rem; background: #1f2937; border: 1px solid #374151; color: #d1d5db; font-family: 'Courier New', Courier, monospace; font-size: 0.875rem; cursor: pointer; transition: border-color 0.15s;">
+          style="${inputStyle} text-align: center; letter-spacing: 0.3em;" />
+        <button id="otp-btn" style="${btnStyle}">
           [ verify ]
         </button>
-        <button id="back-btn" style="width: 100%; padding: 0.375rem 1rem; background: transparent; border: none; color: #6b7280; font-family: 'Courier New', Courier, monospace; font-size: 0.75rem; cursor: pointer; margin-top: 0.25rem;">
+        <button id="back-btn" style="width: 100%; padding: 0.375rem 1rem; background: transparent; border: none; color: #006644; font-family: ${font}; font-size: 0.75rem; cursor: pointer; margin-top: 0.25rem;">
           back
         </button>
       </div>
@@ -152,14 +149,14 @@ function renderLoginForm(appDiv: HTMLElement): void {
   `;
 
   // Hover effects
-  for (const btnId of ['google-btn', 'wallet-btn', 'email-btn', 'otp-btn']) {
+  for (const btnId of ['google-btn', 'email-btn', 'otp-btn']) {
     const btn = document.getElementById(btnId);
     if (btn) {
       btn.addEventListener('mouseenter', () => {
-        btn.style.borderColor = '#10b981';
+        btn.style.borderColor = '#00D084';
       });
       btn.addEventListener('mouseleave', () => {
-        btn.style.borderColor = '#374151';
+        btn.style.borderColor = '#003322';
       });
     }
   }
@@ -169,10 +166,10 @@ function renderLoginForm(appDiv: HTMLElement): void {
     const input = document.getElementById(inputId);
     if (input) {
       input.addEventListener('focus', () => {
-        (input as HTMLInputElement).style.borderColor = '#10b981';
+        (input as HTMLInputElement).style.borderColor = '#00D084';
       });
       input.addEventListener('blur', () => {
-        (input as HTMLInputElement).style.borderColor = '#374151';
+        (input as HTMLInputElement).style.borderColor = '#003322';
       });
     }
   }
@@ -183,7 +180,7 @@ function renderLoginForm(appDiv: HTMLElement): void {
   // Wire Google button
   const googleBtn = document.getElementById('google-btn');
   googleBtn?.addEventListener('click', async () => {
-    setStatus('Connecting to Google...', '#9ca3af');
+    setStatus('Connecting to Google...', '#006644');
     disableButtons(true);
     try {
       const result = await loginWithGoogle();
@@ -193,25 +190,9 @@ function renderLoginForm(appDiv: HTMLElement): void {
       }
       handleAuthSuccess(appDiv);
     } catch (err) {
-      setStatus(err instanceof Error ? err.message : 'Google login failed', '#ef4444');
-      disableButtons(false);
-    }
-  });
-
-  // Wire Wallet button
-  const walletBtn = document.getElementById('wallet-btn');
-  walletBtn?.addEventListener('click', async () => {
-    setStatus('Connecting wallet...', '#9ca3af');
-    disableButtons(true);
-    try {
-      const result = await loginWithWallet();
-      if (result.status === 'required_share') {
-        renderRequiredShareUI(appDiv);
-        return;
-      }
-      handleAuthSuccess(appDiv);
-    } catch (err) {
-      setStatus(err instanceof Error ? err.message : 'Wallet login failed', '#ef4444');
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[Google login error]', err);
+      setStatus(msg || 'Google login failed', '#ef4444');
       disableButtons(false);
     }
   });
@@ -226,7 +207,7 @@ function renderLoginForm(appDiv: HTMLElement): void {
       return;
     }
     currentEmail = email;
-    setStatus('Sending code...', '#9ca3af');
+    setStatus('Sending code...', '#006644');
     disableButtons(true);
     try {
       await requestEmailOtp(email);
@@ -235,7 +216,7 @@ function renderLoginForm(appDiv: HTMLElement): void {
       const otpSection = document.getElementById('otp-section');
       if (emailSection) emailSection.style.display = 'none';
       if (otpSection) otpSection.style.display = 'block';
-      setStatus('Code sent to ' + email, '#9ca3af');
+      setStatus('Code sent to ' + email, '#006644');
       disableButtons(false);
       // Focus OTP input
       document.getElementById('otp-input')?.focus();
@@ -254,7 +235,7 @@ function renderLoginForm(appDiv: HTMLElement): void {
       setStatus('Please enter the verification code', '#ef4444');
       return;
     }
-    setStatus('Verifying...', '#9ca3af');
+    setStatus('Verifying...', '#006644');
     disableButtons(true);
     try {
       const result = await loginWithEmailOtp(currentEmail, otp);
@@ -276,7 +257,7 @@ function renderLoginForm(appDiv: HTMLElement): void {
     const otpSection = document.getElementById('otp-section');
     if (emailSection) emailSection.style.display = 'block';
     if (otpSection) otpSection.style.display = 'none';
-    setStatus('', '#9ca3af');
+    setStatus('', '#006644');
   });
 
   // Allow Enter key submission on inputs
@@ -297,13 +278,13 @@ function renderLoginForm(appDiv: HTMLElement): void {
  * Rust handoff happens inside the auth.ts MFA functions).
  */
 function renderRequiredShareUI(appDiv: HTMLElement): void {
-  const font = "'Courier New', Courier, monospace";
+  const font = "'JetBrains Mono', 'Courier New', monospace";
   const btnStyle = [
     'width: 100%',
     'padding: 0.625rem 1rem',
-    'background: #1f2937',
-    'border: 1px solid #374151',
-    'color: #d1d5db',
+    'background: #001108',
+    'border: 1px solid #003322',
+    'color: #00D084',
     `font-family: ${font}`,
     'font-size: 0.875rem',
     'cursor: pointer',
@@ -311,9 +292,9 @@ function renderRequiredShareUI(appDiv: HTMLElement): void {
   ].join('; ');
 
   appDiv.innerHTML = `
-    <div style="color: #d1d5db; font-family: ${font}; padding: 2rem; text-align: center; max-width: 380px; margin: 0 auto;">
-      <div style="font-size: 1.25rem; margin-bottom: 0.25rem; color: #e5e7eb; letter-spacing: 0.1em;">CIPHERBOX</div>
-      <div style="font-size: 0.75rem; color: #6b7280; margin-bottom: 1rem;">device verification required</div>
+    <div style="color: #00D084; font-family: ${font}; padding: 2rem; text-align: center; max-width: 380px; margin: 0 auto;">
+      <div style="font-size: 1.25rem; margin-bottom: 0.25rem; letter-spacing: 0.1em;"><span style="color: #006644;">&gt; </span><span style="color: #00D084;">CIPHERBOX</span></div>
+      <div style="font-size: 0.75rem; color: #006644; margin-bottom: 1rem;">device verification required</div>
 
       <div style="color: #f59e0b; font-size: 0.8rem; margin-bottom: 1rem;">
         MFA is enabled. This device needs a second factor.
@@ -332,33 +313,33 @@ function renderRequiredShareUI(appDiv: HTMLElement): void {
       </div>
 
       <div id="recovery-form" style="display: none; text-align: left; margin-top: 1rem;">
-        <div style="font-size: 0.75rem; color: #9ca3af; margin-bottom: 0.5rem;">
+        <div style="font-size: 0.75rem; color: #006644; margin-bottom: 0.5rem;">
           Enter your 24-word recovery phrase:
         </div>
         <textarea id="mnemonic-input" rows="3"
           placeholder="word1 word2 word3 ..."
-          style="width: 100%; background: #111827; border: 1px solid #374151; color: #d1d5db; font-family: ${font}; font-size: 0.8rem; padding: 0.5rem; box-sizing: border-box; outline: none; resize: vertical;"></textarea>
+          style="width: 100%; background: #000000; border: 1px solid #003322; color: #00D084; font-family: ${font}; font-size: 0.8rem; padding: 0.5rem; box-sizing: border-box; outline: none; resize: vertical;"></textarea>
         <button id="submit-recovery" style="${btnStyle}; margin-top: 0.5rem;">
           [ recover ]
         </button>
       </div>
 
       <div id="approval-waiting" style="display: none; text-align: left; margin-top: 1rem;">
-        <div style="font-size: 0.8rem; color: #9ca3af;">
+        <div style="font-size: 0.8rem; color: #006644;">
           Waiting for approval from another device...
         </div>
-        <div style="font-size: 0.7rem; color: #6b7280; margin-top: 0.5rem;">
+        <div style="font-size: 0.7rem; color: #006644; margin-top: 0.5rem;">
           Approve this device from your web app or another authorized device.
         </div>
         <div id="approval-status" style="margin-top: 0.5rem; font-size: 0.8rem;"></div>
-        <button id="cancel-approval-btn" style="margin-top: 0.75rem; padding: 0.375rem 1rem; background: transparent; border: 1px solid #374151; color: #6b7280; font-family: ${font}; font-size: 0.75rem; cursor: pointer;">
+        <button id="cancel-approval-btn" style="margin-top: 0.75rem; padding: 0.375rem 1rem; background: transparent; border: 1px solid #003322; color: #006644; font-family: ${font}; font-size: 0.75rem; cursor: pointer;">
           [ cancel ]
         </button>
       </div>
 
       <div id="mfa-status" style="margin-top: 1rem; font-size: 0.8rem; min-height: 1.25rem;"></div>
 
-      <button id="mfa-logout-btn" style="margin-top: 1rem; padding: 0.375rem 1rem; background: transparent; border: none; color: #6b7280; font-family: ${font}; font-size: 0.75rem; cursor: pointer;">
+      <button id="mfa-logout-btn" style="margin-top: 1rem; padding: 0.375rem 1rem; background: transparent; border: none; color: #006644; font-family: ${font}; font-size: 0.75rem; cursor: pointer;">
         back to login
       </button>
     </div>
@@ -369,10 +350,10 @@ function renderRequiredShareUI(appDiv: HTMLElement): void {
     const btn = document.getElementById(id);
     if (btn) {
       btn.addEventListener('mouseenter', () => {
-        btn.style.borderColor = '#10b981';
+        btn.style.borderColor = '#00D084';
       });
       btn.addEventListener('mouseleave', () => {
-        btn.style.borderColor = '#374151';
+        btn.style.borderColor = '#003322';
       });
     }
   }
@@ -381,10 +362,10 @@ function renderRequiredShareUI(appDiv: HTMLElement): void {
   const textarea = document.getElementById('mnemonic-input');
   if (textarea) {
     textarea.addEventListener('focus', () => {
-      (textarea as HTMLTextAreaElement).style.borderColor = '#10b981';
+      (textarea as HTMLTextAreaElement).style.borderColor = '#00D084';
     });
     textarea.addEventListener('blur', () => {
-      (textarea as HTMLTextAreaElement).style.borderColor = '#374151';
+      (textarea as HTMLTextAreaElement).style.borderColor = '#003322';
     });
   }
 
@@ -425,7 +406,7 @@ function renderRequiredShareUI(appDiv: HTMLElement): void {
       mfaStatus.textContent = `Expected 24 words, got ${wordCount}`;
       return;
     }
-    mfaStatus.style.color = '#9ca3af';
+    mfaStatus.style.color = '#006644';
     mfaStatus.textContent = 'Recovering...';
     try {
       await inputRecoveryPhrase(mnemonic);
@@ -445,7 +426,7 @@ function renderRequiredShareUI(appDiv: HTMLElement): void {
     const statusEl = document.getElementById('approval-status')!;
 
     try {
-      statusEl.style.color = '#9ca3af';
+      statusEl.style.color = '#006644';
       statusEl.textContent = 'Creating approval request...';
 
       activeRequestId = await requestDeviceApproval();
@@ -525,9 +506,9 @@ function renderRequiredShareUI(appDiv: HTMLElement): void {
 function handleAuthSuccess(appDiv: HTMLElement | null): void {
   if (appDiv) {
     appDiv.innerHTML = `
-      <div style="color: #10b981; font-family: 'Courier New', Courier, monospace; padding: 2rem; text-align: center;">
+      <div style="color: #00D084; font-family: 'JetBrains Mono', 'Courier New', monospace; padding: 2rem; text-align: center;">
         <div style="font-size: 1rem; margin-bottom: 0.5rem;">authenticated</div>
-        <div style="font-size: 0.75rem; color: #6b7280;">CipherBox is running in the menu bar.</div>
+        <div style="font-size: 0.75rem; color: #006644;">CipherBox is running in the menu bar.</div>
       </div>
     `;
   }
@@ -590,7 +571,7 @@ function setStatus(message: string, color: string): void {
 }
 
 function disableButtons(disabled: boolean): void {
-  for (const id of ['google-btn', 'wallet-btn', 'email-btn', 'otp-btn']) {
+  for (const id of ['google-btn', 'email-btn', 'otp-btn']) {
     const btn = document.getElementById(id) as HTMLButtonElement | null;
     if (btn) {
       btn.disabled = disabled;
@@ -601,14 +582,14 @@ function disableButtons(disabled: boolean): void {
 }
 
 function loadingHtml(message: string): string {
-  return `<div style="color: #9ca3af; font-family: 'Courier New', Courier, monospace; padding: 2rem; text-align: center;">${message}</div>`;
+  return `<div style="color: #006644; font-family: 'JetBrains Mono', 'Courier New', monospace; padding: 2rem; text-align: center;">${message}</div>`;
 }
 
 function errorHtml(message: string): string {
-  return `<div style="color: #ef4444; font-family: 'Courier New', Courier, monospace; padding: 2rem; text-align: center;">
+  return `<div style="color: #ef4444; font-family: 'JetBrains Mono', 'Courier New', monospace; padding: 2rem; text-align: center;">
     Failed to initialize authentication.<br/>
-    <small style="color: #9ca3af;">${message}</small><br/><br/>
-    <button onclick="location.reload()" style="color: #9ca3af; background: #1f2937; border: 1px solid #374151; padding: 0.5rem 1rem; cursor: pointer; font-family: 'Courier New', Courier, monospace;">
+    <small style="color: #006644;">${message}</small><br/><br/>
+    <button onclick="location.reload()" style="color: #00D084; background: #001108; border: 1px solid #003322; padding: 0.5rem 1rem; cursor: pointer; font-family: 'JetBrains Mono', 'Courier New', monospace;">
       [ retry ]
     </button>
   </div>`;
