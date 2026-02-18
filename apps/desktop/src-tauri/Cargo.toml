@@ -5,7 +5,7 @@ edition = "2021"
 
 [features]
 default = ["fuse"]
-fuse = ["dep:fuser"]
+fuse = ["dep:fuser", "dep:unicode-normalization"]
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
@@ -43,6 +43,7 @@ urlencoding = "2"
 clap = { version = "4", features = ["derive"] }
 hostname = "0.4"
 dotenvy = "0.15"
+unicode-normalization = { version = "0.1.25", optional = true }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

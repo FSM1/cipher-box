@@ -1960,8 +1960,12 @@ mod implementation {
                 self.inodes.remove(dest_ino);
             }
 
-            // Remove source from old parent's name index
-            self.inodes.name_to_ino.remove(&(parent, name_str.to_string()));
+            // Remove source from old parent's name index (NFC-normalized)
+            {
+                use unicode_normalization::UnicodeNormalization;
+                let nfc_key: String = name_str.nfc().collect();
+                self.inodes.name_to_ino.remove(&(parent, nfc_key));
+            }
 
             // Update the source inode's name and parent
             if let Some(inode) = self.inodes.get_mut(source_ino) {
@@ -1970,11 +1974,15 @@ mod implementation {
                 inode.attr.ctime = SystemTime::now();
             }
 
-            // Update the name lookup index for the new location
-            self.inodes.name_to_ino.insert(
-                (newparent, newname_str.to_string()),
-                source_ino,
-            );
+            // Update the name lookup index for the new location (NFC-normalized)
+            {
+                use unicode_normalization::UnicodeNormalization;
+                let nfc_key: String = newname_str.nfc().collect();
+                self.inodes.name_to_ino.insert(
+                    (newparent, nfc_key),
+                    source_ino,
+                );
+            }
 
             if parent != newparent {
                 // Cross-folder move: update both parent children lists
