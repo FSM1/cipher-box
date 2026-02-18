@@ -57,25 +57,6 @@ const NETWORK_MAP: Record<string, (typeof WEB3AUTH_NETWORK)[keyof typeof WEB3AUT
   production: WEB3AUTH_NETWORK.MAINNET,
 };
 
-/** Minimal type declarations for Google Identity Services (GIS) library */
-declare const google: {
-  accounts: {
-    id: {
-      initialize: (config: {
-        client_id: string;
-        callback: (response: { credential: string }) => void;
-        auto_select: boolean;
-      }) => void;
-      prompt: (
-        momentListener?: (notification: {
-          isNotDisplayed: () => boolean;
-          isSkippedMoment: () => boolean;
-        }) => void
-      ) => void;
-    };
-  };
-};
-
 let coreKit: Web3AuthMPCCoreKit | null = null;
 
 // Module-level state for MFA flow
@@ -675,10 +656,15 @@ export async function approveDevice(
 // approval requests and show native notification when approval is needed.
 
 /**
- * Load Google Identity Services (GIS) script dynamically and get a credential.
+ * Get a Google credential (ID token) via OAuth2 implicit flow in a popup.
  *
- * Returns the Google JWT (credential) from the GIS prompt/popup flow.
- * Same pattern as web app's GoogleLoginButton component.
+ * GIS One Tap doesn't work in Tauri webview (no Google session, unregistered
+ * origin). Instead, open a proper Google OAuth consent page in a popup window.
+ * Tauri's on_new_window handler creates the popup with shared
+ * WKWebViewConfiguration so window.opener.postMessage works for the callback.
+ *
+ * Requires `http://localhost:1420/google-callback.html` to be registered as
+ * an authorized redirect URI in the Google Cloud Console.
  */
 function getGoogleCredential(): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -687,58 +673,56 @@ function getGoogleCredential(): Promise<string> {
       return;
     }
 
-    // Safety timeout: if Google prompt doesn't resolve within 60s
-    const timeoutId = setTimeout(() => {
-      reject(new Error('Google authentication timed out'));
-    }, 60000);
+    const nonce = crypto.randomUUID();
+    const redirectUri = `${window.location.origin}/google-callback.html`;
 
-    const handleCredential = (response: { credential: string }) => {
-      clearTimeout(timeoutId);
-      resolve(response.credential);
+    const params = new URLSearchParams({
+      client_id: GOOGLE_CLIENT_ID,
+      redirect_uri: redirectUri,
+      response_type: 'id_token',
+      scope: 'openid email profile',
+      nonce,
+      prompt: 'select_account',
+    });
+
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+
+    // Clear any stale result from a previous attempt
+    localStorage.removeItem('google-auth-result');
+
+    // Open Google OAuth in a popup — Tauri's on_new_window handler creates the webview
+    window.open(authUrl, '_blank', 'width=500,height=700');
+
+    const cleanup = () => {
+      clearInterval(pollStorage);
+      clearTimeout(timeout);
     };
 
-    // Check if GIS script is already loaded
-    if (typeof google !== 'undefined' && google?.accounts?.id) {
-      google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: handleCredential,
-        auto_select: false,
-      });
-      google.accounts.id.prompt((notification) => {
-        if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-          clearTimeout(timeoutId);
-          reject(new Error('Google popup was blocked. Please allow popups for this app.'));
-        }
-      });
-      return;
-    }
+    // Poll localStorage for the result (postMessage doesn't survive
+    // cross-origin redirects in Tauri's WKWebView)
+    const pollStorage = setInterval(() => {
+      const raw = localStorage.getItem('google-auth-result');
+      if (!raw) return;
 
-    // Load GIS script dynamically
-    const script = document.createElement('script');
-    script.src = 'https://accounts.google.com/gsi/client';
-    script.async = true;
-    script.onload = () => {
+      localStorage.removeItem('google-auth-result');
+      cleanup();
+
       try {
-        google.accounts.id.initialize({
-          client_id: GOOGLE_CLIENT_ID,
-          callback: handleCredential,
-          auto_select: false,
-        });
-        google.accounts.id.prompt((notification) => {
-          if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-            clearTimeout(timeoutId);
-            reject(new Error('Google popup was blocked. Please allow popups for this app.'));
-          }
-        });
+        const result = JSON.parse(raw);
+        if (result.idToken) {
+          resolve(result.idToken);
+        } else {
+          reject(new Error(result.error || 'Google sign-in failed'));
+        }
       } catch {
-        clearTimeout(timeoutId);
-        reject(new Error('Failed to initialize Google authentication'));
+        reject(new Error('Invalid auth callback data'));
       }
-    };
-    script.onerror = () => {
-      clearTimeout(timeoutId);
-      reject(new Error('Failed to load Google authentication'));
-    };
-    document.body.appendChild(script);
+    }, 200);
+
+    // Timeout after 2 minutes
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('Google authentication timed out'));
+    }, 120000);
   });
 }
