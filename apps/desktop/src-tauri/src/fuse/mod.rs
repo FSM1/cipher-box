@@ -481,6 +481,7 @@ impl CipherBoxFS {
                             created_at: if created_ms > 0 { created_ms } else { now_ms },
                             modified_at: if modified_ms > 0 { modified_ms } else { now_ms },
                             encryption_mode: encryption_mode.clone(),
+                            file_meta_ipns_name: None,
                         },
                     ));
                 }

@@ -445,6 +445,7 @@ fn folder_metadata_encrypt_decrypt_roundtrip() {
                 created_at: 1700000000000,
                 modified_at: 1700000000000,
                 encryption_mode: "GCM".to_string(),
+                file_meta_ipns_name: None,
             }),
             FolderChild::Folder(FolderEntry {
                 id: "folder-001".to_string(),
@@ -478,6 +479,7 @@ fn folder_metadata_camel_case_serialization() {
         created_at: 1000,
         modified_at: 2000,
         encryption_mode: "GCM".to_string(),
+        file_meta_ipns_name: None,
     };
 
     let json = serde_json::to_string(&file_entry).unwrap();
