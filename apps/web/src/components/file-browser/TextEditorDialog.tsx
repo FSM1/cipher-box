@@ -58,6 +58,11 @@ export function TextEditorDialog({
       return;
     }
 
+    if (!item.fileMetaIpnsName) {
+      setError('File metadata IPNS name not available (legacy v1 file?)');
+      return;
+    }
+
     let cancelled = false;
     setLoading(true);
     setError(null);

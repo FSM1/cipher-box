@@ -42,9 +42,15 @@ import { SelectionActionBar } from './SelectionActionBar';
 
 /**
  * Type guard for file pointers (v2).
+ * Checks both type and fileMetaIpnsName to distinguish v2 FilePointer
+ * from v1 FileEntry objects that may pass through via metadata casting.
  */
 function isFilePointer(item: FolderChildV2): item is FilePointer {
-  return item.type === 'file';
+  return (
+    item.type === 'file' &&
+    'fileMetaIpnsName' in item &&
+    typeof (item as FilePointer).fileMetaIpnsName === 'string'
+  );
 }
 
 /** Extensions recognized as editable text files. */

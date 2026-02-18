@@ -328,11 +328,21 @@ export function DetailsDialog({ open, onClose, item, folderKey }: DetailsDialogP
       return;
     }
 
+    // Guard against v1 FileEntry objects that lack fileMetaIpnsName
+    const fileItem = item as FilePointer;
+    if (!fileItem.fileMetaIpnsName) {
+      setFileMeta(null);
+      setFileMetaLoading(false);
+      setMetadataCid(null);
+      setMetadataLoading(false);
+      return;
+    }
+
     let cancelled = false;
     setFileMetaLoading(true);
     setMetadataLoading(true);
 
-    resolveFileMetadata(item.fileMetaIpnsName, folderKey)
+    resolveFileMetadata(fileItem.fileMetaIpnsName, folderKey)
       .then(({ metadata, metadataCid: cid }) => {
         if (!cancelled) {
           setFileMeta(metadata);
