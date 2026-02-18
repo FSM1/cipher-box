@@ -88,14 +88,15 @@ mod implementation {
         data: String,
     }
 
-    /// Decrypt folder metadata fetched from IPFS.
+    /// Decrypt folder metadata fetched from IPFS, dispatching to v1 or v2.
     ///
     /// The IPFS content is JSON: `{ "iv": "<hex>", "data": "<base64>" }`.
     /// Decode IV from hex, decode ciphertext from base64, then AES-256-GCM decrypt.
+    /// Checks the `version` field to determine v1 or v2 format.
     fn decrypt_metadata_from_ipfs(
         encrypted_bytes: &[u8],
         folder_key: &[u8],
-    ) -> Result<crate::crypto::folder::FolderMetadata, String> {
+    ) -> Result<crate::crypto::folder::AnyFolderMetadata, String> {
         let encrypted: EncryptedFolderMetadata = serde_json::from_slice(encrypted_bytes)
             .map_err(|e| format!("Failed to parse encrypted metadata JSON: {}", e))?;
 
@@ -114,21 +115,26 @@ mod implementation {
             .map_err(|e| format!("Invalid metadata base64: {}", e))?;
 
         // Decrypt with AES-256-GCM
-        let folder_key_arr: &[u8; 32] = folder_key
+        let folder_key_arr: [u8; 32] = folder_key
             .try_into()
             .map_err(|_| "Invalid folder key length".to_string())?;
-        let plaintext = crate::crypto::aes::decrypt_aes_gcm(&ciphertext, folder_key_arr, &iv)
-            .map_err(|e| format!("Metadata decryption failed: {}", e))?;
 
-        // Parse JSON to FolderMetadata
-        serde_json::from_slice(&plaintext)
-            .map_err(|e| format!("Failed to parse decrypted metadata: {}", e))
+        // Reconstruct sealed format: IV || ciphertext (includes tag)
+        let mut sealed = Vec::with_capacity(12 + ciphertext.len());
+        sealed.extend_from_slice(&iv);
+        sealed.extend_from_slice(&ciphertext);
+
+        // Use version-dispatched decryption
+        crate::crypto::folder::decrypt_any_folder_metadata(&sealed, &folder_key_arr)
+            .map_err(|e| format!("Metadata decryption failed: {}", e))
     }
 
     /// Helper: Fetch, decrypt, and populate a folder's children.
     ///
     /// Resolves the folder's IPNS name to CID, fetches encrypted metadata,
     /// decrypts with the folder key, and populates the inode table.
+    /// Supports both v1 and v2 metadata formats.
+    /// For v2 with FilePointers, resolves per-file IPNS metadata eagerly.
     fn fetch_and_populate_folder(
         fs: &mut CipherBoxFS,
         ino: u64,
@@ -151,35 +157,143 @@ mod implementation {
 
         let (encrypted_bytes, cid) = result;
 
-        // Decrypt metadata
-        let metadata = decrypt_metadata_from_ipfs(&encrypted_bytes, &folder_key_owned)?;
+        // Decrypt metadata (v1 or v2)
+        let any_metadata = decrypt_metadata_from_ipfs(&encrypted_bytes, &folder_key_owned)?;
 
-        // Cache metadata
-        fs.metadata_cache
-            .set(&ipns_name.to_string(), metadata.clone(), cid);
+        // Cache metadata (store as v1 for cache compatibility; v2 folders are identified by inode state)
+        match &any_metadata {
+            crate::crypto::folder::AnyFolderMetadata::V1(v1) => {
+                fs.metadata_cache.set(&ipns_name.to_string(), v1.clone(), cid);
+            }
+            crate::crypto::folder::AnyFolderMetadata::V2(_) => {
+                // For v2 metadata, store a synthetic v1 entry in cache for readdir staleness checks.
+                // The actual v2 data is handled via the inode table.
+                let synthetic = crate::crypto::folder::FolderMetadata {
+                    version: "v2".to_string(),
+                    children: vec![],
+                };
+                fs.metadata_cache.set(&ipns_name.to_string(), synthetic, cid);
+            }
+        }
 
-        // Populate inode table with children
-        fs.inodes
-            .populate_folder(ino, &metadata, &private_key)?;
+        // Populate inode table with children (dispatches v1/v2)
+        fs.inodes.populate_folder_any(ino, &any_metadata, &private_key)?;
+
+        // For v2 metadata, resolve unresolved FilePointers eagerly
+        let unresolved = fs.inodes.get_unresolved_file_pointers();
+        if !unresolved.is_empty() {
+            log::info!("Resolving {} FilePointer(s) for folder ino {}", unresolved.len(), ino);
+            resolve_file_pointers_blocking(fs, &unresolved, &folder_key_owned)?;
+        }
 
         Ok(())
+    }
+
+    /// Resolve FilePointer inodes by fetching and decrypting per-file IPNS metadata.
+    ///
+    /// This is called eagerly during populate_folder to ensure all files have correct
+    /// CID/key/IV/size BEFORE the first READDIR (NFS stability requirement).
+    fn resolve_file_pointers_blocking(
+        fs: &mut CipherBoxFS,
+        unresolved: &[(u64, String)],
+        folder_key: &[u8],
+    ) -> Result<(), String> {
+        let api = fs.api.clone();
+        let rt = fs.rt.clone();
+        let folder_key_arr: [u8; 32] = folder_key.try_into()
+            .map_err(|_| "Invalid folder key length for FilePointer resolution".to_string())?;
+
+        for (ino, ipns_name) in unresolved {
+            let resolve_result = block_with_timeout(&rt, async {
+                let resp = crate::api::ipns::resolve_ipns(&api, ipns_name).await?;
+                let encrypted_bytes = crate::api::ipfs::fetch_content(&api, &resp.cid).await?;
+                Ok::<Vec<u8>, String>(encrypted_bytes)
+            });
+
+            match resolve_result {
+                Ok(encrypted_bytes) => {
+                    // Decrypt file metadata JSON (same format as folder metadata: { iv, data })
+                    match decrypt_file_metadata_from_ipfs(&encrypted_bytes, &folder_key_arr) {
+                        Ok(file_meta) => {
+                            fs.inodes.resolve_file_pointer(
+                                *ino,
+                                file_meta.cid,
+                                file_meta.file_key_encrypted,
+                                file_meta.file_iv,
+                                file_meta.size,
+                                file_meta.encryption_mode,
+                            );
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "FilePointer resolution failed for ino {} ({}): {}",
+                                ino, ipns_name, e
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "FilePointer IPNS resolve failed for ino {} ({}): {}",
+                        ino, ipns_name, e
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Decrypt per-file metadata fetched from IPFS.
+    ///
+    /// The IPFS content is JSON: `{ "iv": "<hex>", "data": "<base64>" }`.
+    /// Uses the parent folder's key for decryption.
+    fn decrypt_file_metadata_from_ipfs(
+        encrypted_bytes: &[u8],
+        folder_key: &[u8; 32],
+    ) -> Result<crate::crypto::folder::FileMetadata, String> {
+        let encrypted: EncryptedFolderMetadata = serde_json::from_slice(encrypted_bytes)
+            .map_err(|e| format!("Failed to parse encrypted file metadata JSON: {}", e))?;
+
+        let iv_bytes = hex::decode(&encrypted.iv)
+            .map_err(|_| "Invalid file metadata IV hex".to_string())?;
+        if iv_bytes.len() != 12 {
+            return Err(format!("Invalid IV length: {} (expected 12)", iv_bytes.len()));
+        }
+        let iv: [u8; 12] = iv_bytes.try_into().unwrap();
+
+        use base64::Engine;
+        let ciphertext = base64::engine::general_purpose::STANDARD
+            .decode(&encrypted.data)
+            .map_err(|e| format!("Invalid file metadata base64: {}", e))?;
+
+        // Reconstruct sealed format: IV || ciphertext (includes tag)
+        let mut sealed = Vec::with_capacity(12 + ciphertext.len());
+        sealed.extend_from_slice(&iv);
+        sealed.extend_from_slice(&ciphertext);
+
+        crate::crypto::folder::decrypt_file_metadata(&sealed, folder_key)
+            .map_err(|e| format!("File metadata decryption failed: {}", e))
     }
 
     /// Helper: Fetch and decrypt existing file content for editing.
     ///
     /// Used when opening an existing file for writing -- need to pre-populate
     /// the temp file with the current decrypted content.
+    /// Dispatches to AES-GCM or AES-CTR based on encryption_mode.
     fn fetch_and_decrypt_file_content(
         fs: &CipherBoxFS,
         cid: &str,
         encrypted_file_key_hex: &str,
         iv_hex: &str,
+        encryption_mode: &str,
     ) -> Result<Vec<u8>, String> {
         let api = fs.api.clone();
         let private_key = fs.private_key.clone();
         let cid_owned = cid.to_string();
         let key_hex = encrypted_file_key_hex.to_string();
         let iv_hex_owned = iv_hex.to_string();
+        let mode = encryption_mode.to_string();
         let rt = fs.rt.clone();
 
         block_with_timeout(&rt, async {
@@ -190,16 +304,29 @@ mod implementation {
             let mut file_key =
                 crate::crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
                     .map_err(|e| format!("File key unwrap failed: {}", e))?;
-            let iv = hex::decode(&iv_hex_owned)
-                .map_err(|_| "Invalid file IV hex".to_string())?;
-            let iv_arr: [u8; 12] = iv.try_into()
-                .map_err(|_| "Invalid IV length".to_string())?;
             let file_key_arr: [u8; 32] = file_key.as_slice().try_into()
                 .map_err(|_| "Invalid file key length".to_string())?;
-            let plaintext = crate::crypto::aes::decrypt_aes_gcm(
-                &encrypted_bytes, &file_key_arr, &iv_arr,
-            )
-            .map_err(|e| format!("File decryption failed: {}", e))?;
+
+            let plaintext = if mode == "CTR" {
+                // AES-CTR: 16-byte IV, no auth tag
+                let iv = hex::decode(&iv_hex_owned)
+                    .map_err(|_| "Invalid file IV hex".to_string())?;
+                let iv_arr: [u8; 16] = iv.try_into()
+                    .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
+                crate::crypto::aes_ctr::decrypt_aes_ctr(&encrypted_bytes, &file_key_arr, &iv_arr)
+                    .map_err(|e| format!("CTR file decryption failed: {}", e))?
+            } else {
+                // AES-GCM: 12-byte IV, 16-byte auth tag appended
+                let iv = hex::decode(&iv_hex_owned)
+                    .map_err(|_| "Invalid file IV hex".to_string())?;
+                let iv_arr: [u8; 12] = iv.try_into()
+                    .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
+                crate::crypto::aes::decrypt_aes_gcm(
+                    &encrypted_bytes, &file_key_arr, &iv_arr,
+                )
+                .map_err(|e| format!("GCM file decryption failed: {}", e))?
+            };
+
             crate::crypto::utils::clear_bytes(&mut file_key);
             Ok(plaintext)
         })
@@ -254,6 +381,7 @@ mod implementation {
             name: &OsStr,
             reply: ReplyEntry,
         ) {
+            eprintln!(">>> FUSE lookup: parent={} name={:?}", parent, name);
             self.drain_upload_completions();
             self.drain_refresh_completions();
 
@@ -371,6 +499,7 @@ mod implementation {
             _fh: Option<u64>,
             reply: ReplyAttr,
         ) {
+            eprintln!(">>> FUSE getattr: ino={}", ino);
             self.drain_upload_completions();
 
             if let Some(inode) = self.inodes.get(ino) {
@@ -402,6 +531,7 @@ mod implementation {
             _flags: Option<u32>,
             reply: ReplyAttr,
         ) {
+            eprintln!(">>> FUSE setattr: ino={} size={:?}", ino, size);
             // Handle truncate if size is specified
             if let Some(new_size) = size {
                 // Truncate temp file if file handle exists
@@ -454,6 +584,7 @@ mod implementation {
             offset: i64,
             mut reply: ReplyDirectory,
         ) {
+            eprintln!(">>> FUSE readdir: ino={} offset={}", ino, offset);
             // 1. Drain any pending background refresh results (non-blocking)
             self.drain_refresh_completions();
 
@@ -581,6 +712,7 @@ mod implementation {
             flags: i32,
             reply: ReplyCreate,
         ) {
+            eprintln!(">>> FUSE create: parent={} name={:?}", parent, name);
             let name_str = match name.to_str() {
                 Some(n) => n,
                 None => {
@@ -639,6 +771,8 @@ mod implementation {
                     iv: String::new(),
                     size: 0,
                     encryption_mode: "GCM".to_string(),
+                    file_meta_ipns_name: None,
+                    file_meta_resolved: true,
                 },
                 attr,
                 children: None,
@@ -670,6 +804,10 @@ mod implementation {
                 }
             }
 
+            // Mark parent as locally mutated to prevent background refreshes
+            // from overwriting this new file before IPNS publish propagates.
+            self.mutated_folders.insert(parent, std::time::Instant::now());
+
             log::debug!("create: {} in parent {} -> ino {} fh {}", name_str, parent, ino, fh);
             reply.created(&FILE_TTL, &attr, 0, fh, 0);
         }
@@ -685,11 +823,12 @@ mod implementation {
             flags: i32,
             reply: ReplyOpen,
         ) {
+            eprintln!(">>> FUSE open: ino={} flags={:#x}", ino, flags);
             // Get file info
             let file_info = match self.inodes.get(ino) {
                 Some(inode) => match &inode.kind {
-                    InodeKind::File { cid, encrypted_file_key, iv, .. } => {
-                        Some((cid.clone(), encrypted_file_key.clone(), iv.clone()))
+                    InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, .. } => {
+                        Some((cid.clone(), encrypted_file_key.clone(), iv.clone(), encryption_mode.clone()))
                     }
                     _ => {
                         reply.error(libc::EISDIR);
@@ -702,14 +841,14 @@ mod implementation {
                 }
             };
 
-            let (cid, encrypted_file_key, iv) = file_info.unwrap();
+            let (cid, encrypted_file_key, iv, encryption_mode) = file_info.unwrap();
             let access_mode = flags & libc::O_ACCMODE;
 
             if access_mode == libc::O_WRONLY || access_mode == libc::O_RDWR {
                 // Writable open: create temp file
                 // If existing file (has CID), pre-populate with decrypted content
                 let existing_content = if !cid.is_empty() {
-                    match fetch_and_decrypt_file_content(self, &cid, &encrypted_file_key, &iv) {
+                    match fetch_and_decrypt_file_content(self, &cid, &encrypted_file_key, &iv, &encryption_mode) {
                         Ok(content) => Some(content),
                         Err(e) => {
                             log::error!("Failed to fetch content for write-open: {}", e);
@@ -754,6 +893,7 @@ mod implementation {
                     let cid_clone = cid.clone();
                     let efk = encrypted_file_key.clone();
                     let iv_clone = iv.clone();
+                    let mode_clone = encryption_mode.clone();
                     let tx = self.content_tx.clone();
                     rt.spawn(async move {
                         let result: Result<Vec<u8>, String> = async {
@@ -764,20 +904,32 @@ mod implementation {
                             let mut file_key =
                                 crate::crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
                                     .map_err(|e| format!("File key unwrap failed: {}", e))?;
-                            let iv_bytes = hex::decode(&iv_clone)
-                                .map_err(|_| "Invalid file IV hex".to_string())?;
-                            let iv_arr: [u8; 12] = iv_bytes
-                                .try_into()
-                                .map_err(|_| "Invalid IV length".to_string())?;
                             let file_key_arr: [u8; 32] = file_key.as_slice()
                                 .try_into()
                                 .map_err(|_| "Invalid file key length".to_string())?;
-                            let plaintext = crate::crypto::aes::decrypt_aes_gcm(
-                                &encrypted_bytes,
-                                &file_key_arr,
-                                &iv_arr,
-                            )
-                            .map_err(|e| format!("File decryption failed: {}", e))?;
+
+                            let plaintext = if mode_clone == "CTR" {
+                                let iv_bytes = hex::decode(&iv_clone)
+                                    .map_err(|_| "Invalid file IV hex".to_string())?;
+                                let iv_arr: [u8; 16] = iv_bytes
+                                    .try_into()
+                                    .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
+                                crate::crypto::aes_ctr::decrypt_aes_ctr(
+                                    &encrypted_bytes, &file_key_arr, &iv_arr,
+                                )
+                                .map_err(|e| format!("CTR decryption failed: {}", e))?
+                            } else {
+                                let iv_bytes = hex::decode(&iv_clone)
+                                    .map_err(|_| "Invalid file IV hex".to_string())?;
+                                let iv_arr: [u8; 12] = iv_bytes
+                                    .try_into()
+                                    .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
+                                crate::crypto::aes::decrypt_aes_gcm(
+                                    &encrypted_bytes, &file_key_arr, &iv_arr,
+                                )
+                                .map_err(|e| format!("GCM decryption failed: {}", e))?
+                            };
+
                             crate::crypto::utils::clear_bytes(&mut file_key);
                             Ok(plaintext)
                         }
@@ -814,6 +966,7 @@ mod implementation {
             _lock_owner: Option<u64>,
             reply: ReplyWrite,
         ) {
+            eprintln!(">>> FUSE write: ino={} fh={} offset={} size={}", ino, fh, offset, data.len());
             let handle = match self.open_files.get_mut(&fh) {
                 Some(h) => h,
                 None => {
@@ -858,6 +1011,7 @@ mod implementation {
             _lock: Option<u64>,
             reply: ReplyData,
         ) {
+            eprintln!(">>> FUSE read: ino={} fh={} offset={} size={}", ino, fh, offset, size);
             // Drain any pending content prefetches into the cache
             self.drain_content_prefetches();
 
@@ -890,15 +1044,16 @@ mod implementation {
             }
 
             // Read-only path: get file metadata
-            let (cid, encrypted_file_key_hex, iv_hex) = {
+            let (cid, encrypted_file_key_hex, iv_hex, encryption_mode) = {
                 match self.inodes.get(ino) {
                     Some(inode) => match &inode.kind {
                         InodeKind::File {
                             cid,
                             encrypted_file_key,
                             iv,
+                            encryption_mode,
                             ..
-                        } => (cid.clone(), encrypted_file_key.clone(), iv.clone()),
+                        } => (cid.clone(), encrypted_file_key.clone(), iv.clone(), encryption_mode.clone()),
                         _ => {
                             reply.error(libc::EISDIR);
                             return;
@@ -980,7 +1135,7 @@ mod implementation {
             }
 
             // Still not cached — prefetch may still be in flight, or was never started.
-            // Fire a prefetch if not already in flight, and return EIO so NFS retries.
+            // Fire a prefetch if not already in flight.
             if !self.prefetching.contains(&cid) {
                 self.prefetching.insert(cid.clone());
                 let api = self.api.clone();
@@ -989,6 +1144,7 @@ mod implementation {
                 let cid_clone = cid.clone();
                 let efk = encrypted_file_key_hex.clone();
                 let iv_clone = iv_hex.clone();
+                let mode_clone = encryption_mode.clone();
                 let tx = self.content_tx.clone();
                 rt.spawn(async move {
                     let result: Result<Vec<u8>, String> = async {
@@ -999,20 +1155,32 @@ mod implementation {
                         let mut file_key =
                             crate::crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
                                 .map_err(|e| format!("File key unwrap failed: {}", e))?;
-                        let iv_bytes = hex::decode(&iv_clone)
-                            .map_err(|_| "Invalid file IV hex".to_string())?;
-                        let iv_arr: [u8; 12] = iv_bytes
-                            .try_into()
-                            .map_err(|_| "Invalid IV length".to_string())?;
                         let file_key_arr: [u8; 32] = file_key.as_slice()
                             .try_into()
                             .map_err(|_| "Invalid file key length".to_string())?;
-                        let plaintext = crate::crypto::aes::decrypt_aes_gcm(
-                            &encrypted_bytes,
-                            &file_key_arr,
-                            &iv_arr,
-                        )
-                        .map_err(|e| format!("File decryption failed: {}", e))?;
+
+                        let plaintext = if mode_clone == "CTR" {
+                            let iv_bytes = hex::decode(&iv_clone)
+                                .map_err(|_| "Invalid file IV hex".to_string())?;
+                            let iv_arr: [u8; 16] = iv_bytes
+                                .try_into()
+                                .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
+                            crate::crypto::aes_ctr::decrypt_aes_ctr(
+                                &encrypted_bytes, &file_key_arr, &iv_arr,
+                            )
+                            .map_err(|e| format!("CTR decryption failed: {}", e))?
+                        } else {
+                            let iv_bytes = hex::decode(&iv_clone)
+                                .map_err(|_| "Invalid file IV hex".to_string())?;
+                            let iv_arr: [u8; 12] = iv_bytes
+                                .try_into()
+                                .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
+                            crate::crypto::aes::decrypt_aes_gcm(
+                                &encrypted_bytes, &file_key_arr, &iv_arr,
+                            )
+                            .map_err(|e| format!("GCM decryption failed: {}", e))?
+                        };
+
                         crate::crypto::utils::clear_bytes(&mut file_key);
                         Ok(plaintext)
                     }
@@ -1027,10 +1195,43 @@ mod implementation {
                         Err(e) => log::warn!("Content prefetch failed: {}", e),
                     }
                 });
-            } else {
             }
 
-            // Return EIO — NFS client will retry, and the prefetch will populate the cache
+            // Poll-wait for the prefetch to deliver content.
+            // FUSE-T NFS is single-threaded, so this blocks ALL other callbacks.
+            // But for file reads, blocking here is better than returning EIO
+            // (which causes the NFS client to give up after a few retries).
+            // Use a longer timeout than NETWORK_TIMEOUT since large files
+            // may take 30+ seconds to download from IPFS.
+            let read_deadline = std::time::Instant::now() + Duration::from_secs(60);
+            loop {
+                self.drain_content_prefetches();
+                if let Some(cached) = self.content_cache.get(&cid) {
+                    let start = offset as usize;
+                    if start >= cached.len() {
+                        reply.data(&[]);
+                        return;
+                    }
+                    let end = std::cmp::min(start + size as usize, cached.len());
+                    let data_slice = cached[start..end].to_vec();
+                    if let Some(handle) = self.open_files.get_mut(&fh) {
+                        handle.cached_content = Some(cached.to_vec());
+                    }
+                    reply.data(&data_slice);
+                    return;
+                }
+                if std::time::Instant::now() >= read_deadline {
+                    break;
+                }
+                // If prefetch is no longer in flight (failed), don't keep waiting
+                if !self.prefetching.contains(&cid) {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+
+            // Prefetch timed out or failed
+            log::warn!("Read timed out for ino {} CID {}", ino, cid);
             reply.error(libc::EIO);
         }
 
@@ -1049,15 +1250,26 @@ mod implementation {
             _flush: bool,
             reply: ReplyEmpty,
         ) {
+            eprintln!(">>> FUSE release: ino={} fh={}", ino, fh);
             // Drain any completed uploads from previous operations
             self.drain_upload_completions();
 
             let handle = self.open_files.remove(&fh);
 
             if let Some(handle) = handle {
-                if handle.dirty && handle.temp_path.is_some() {
-                    // Dirty file: do CPU work synchronously, spawn network I/O
-                    log::debug!("release: dirty file ino {}, preparing background upload", ino);
+                // Upload if: (a) file was written to (dirty), OR
+                // (b) file was just created and never existed on IPFS (CID empty).
+                // Case (b) handles `touch newfile` which creates + releases without writing.
+                let is_new_file = handle.temp_path.is_some() && {
+                    self.inodes.get(ino).map(|i| match &i.kind {
+                        InodeKind::File { cid, .. } => cid.is_empty(),
+                        _ => false,
+                    }).unwrap_or(false)
+                };
+                let needs_upload = handle.temp_path.is_some() && (handle.dirty || is_new_file);
+                if needs_upload {
+                    // Dirty or new file: do CPU work synchronously, spawn network I/O
+                    log::debug!("release: uploading ino {} (dirty={}, new={})", ino, handle.dirty, is_new_file);
 
                     let prepare_result = (|| -> Result<(), String> {
                         // Read complete temp file content (local I/O, fast)
@@ -1107,6 +1319,8 @@ mod implementation {
                                 iv: iv_hex.clone(),
                                 size: file_size,
                                 encryption_mode: "GCM".to_string(),
+                                file_meta_ipns_name: None,
+                                file_meta_resolved: true,
                             };
                             inode.attr.size = file_size;
                             inode.attr.blocks = (file_size + 511) / 512;
@@ -1120,6 +1334,10 @@ mod implementation {
                         let parent_ino = self.inodes.get(ino)
                             .map(|i| i.parent_ino)
                             .unwrap_or(ROOT_INO);
+
+                        // Mark parent folder as mutated to prevent background refreshes
+                        // from overwriting local changes while upload is in flight.
+                        self.mutated_folders.insert(parent_ino, std::time::Instant::now());
 
                         // Build folder metadata snapshot (CPU-only).
                         // This will have CID="" for the new/modified file.
@@ -1249,6 +1467,7 @@ mod implementation {
             _lock_owner: u64,
             reply: ReplyEmpty,
         ) {
+            eprintln!(">>> FUSE flush: ino={} fh={}", _ino, _fh);
             reply.ok();
         }
 
@@ -1260,6 +1479,7 @@ mod implementation {
             name: &OsStr,
             reply: ReplyEmpty,
         ) {
+            eprintln!(">>> FUSE unlink: parent={} name={:?}", parent, name);
             let name_str = match name.to_str() {
                 Some(n) => n,
                 None => {
@@ -1874,6 +2094,7 @@ mod implementation {
             mask: i32,
             reply: ReplyEmpty,
         ) {
+            eprintln!(">>> FUSE access: ino={} mask={:#x}", ino, mask);
             let Some(inode) = self.inodes.get(ino) else {
                 reply.error(libc::ENOENT);
                 return;
@@ -1918,6 +2139,7 @@ mod implementation {
             _size: u32,
             reply: ReplyXattr,
         ) {
+            eprintln!(">>> FUSE getxattr: ino={} name={:?}", _ino, _name);
             // ENODATA = attribute not found (expected for files with no xattrs)
             #[cfg(target_os = "macos")]
             { reply.error(libc::ENOATTR); }
@@ -1978,11 +2200,12 @@ mod implementation {
 }
 
 /// Public wrapper for decrypt_metadata_from_ipfs, used by mod.rs for pre-population.
+/// Returns AnyFolderMetadata (v1 or v2) based on the version field.
 #[cfg(feature = "fuse")]
 pub fn decrypt_metadata_from_ipfs_public(
     encrypted_bytes: &[u8],
     folder_key: &[u8],
-) -> Result<crate::crypto::folder::FolderMetadata, String> {
+) -> Result<crate::crypto::folder::AnyFolderMetadata, String> {
     #[derive(serde::Deserialize)]
     struct EncryptedFolderMetadata {
         iv: String,
@@ -2004,12 +2227,51 @@ pub fn decrypt_metadata_from_ipfs_public(
         .decode(&encrypted.data)
         .map_err(|e| format!("Invalid metadata base64: {}", e))?;
 
-    let folder_key_arr: &[u8; 32] = folder_key
+    let folder_key_arr: [u8; 32] = folder_key
         .try_into()
         .map_err(|_| "Invalid folder key length".to_string())?;
-    let plaintext = crate::crypto::aes::decrypt_aes_gcm(&ciphertext, folder_key_arr, &iv)
-        .map_err(|e| format!("Metadata decryption failed: {}", e))?;
 
-    serde_json::from_slice(&plaintext)
-        .map_err(|e| format!("Failed to parse decrypted metadata: {}", e))
+    // Reconstruct sealed format: IV || ciphertext (includes tag)
+    let mut sealed = Vec::with_capacity(12 + ciphertext.len());
+    sealed.extend_from_slice(&iv);
+    sealed.extend_from_slice(&ciphertext);
+
+    crate::crypto::folder::decrypt_any_folder_metadata(&sealed, &folder_key_arr)
+        .map_err(|e| format!("Metadata decryption failed: {}", e))
+}
+
+/// Public wrapper for decrypt_file_metadata_from_ipfs, used by mod.rs for FilePointer resolution.
+#[cfg(feature = "fuse")]
+pub fn decrypt_file_metadata_from_ipfs_public(
+    encrypted_bytes: &[u8],
+    folder_key: &[u8; 32],
+) -> Result<crate::crypto::folder::FileMetadata, String> {
+    #[derive(serde::Deserialize)]
+    struct EncryptedFolderMetadata {
+        iv: String,
+        data: String,
+    }
+
+    let encrypted: EncryptedFolderMetadata = serde_json::from_slice(encrypted_bytes)
+        .map_err(|e| format!("Failed to parse encrypted file metadata JSON: {}", e))?;
+
+    let iv_bytes = hex::decode(&encrypted.iv)
+        .map_err(|_| "Invalid file metadata IV hex".to_string())?;
+    if iv_bytes.len() != 12 {
+        return Err(format!("Invalid IV length: {} (expected 12)", iv_bytes.len()));
+    }
+    let iv: [u8; 12] = iv_bytes.try_into().unwrap();
+
+    use base64::Engine;
+    let ciphertext = base64::engine::general_purpose::STANDARD
+        .decode(&encrypted.data)
+        .map_err(|e| format!("Invalid file metadata base64: {}", e))?;
+
+    // Reconstruct sealed format: IV || ciphertext (includes tag)
+    let mut sealed = Vec::with_capacity(12 + ciphertext.len());
+    sealed.extend_from_slice(&iv);
+    sealed.extend_from_slice(&ciphertext);
+
+    crate::crypto::folder::decrypt_file_metadata(&sealed, folder_key)
+        .map_err(|e| format!("File metadata decryption failed: {}", e))
 }

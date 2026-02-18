@@ -1,1 +1,11 @@
-Built and running. Try Google login again — it should now send the uncompressed public key (130 hex chars) that the backend expects.
+App is running. You'll need to log in through the Tauri webview. Once you're logged in and the mount appears, let me know and I'll test the read/write operations.
+
+The changes I made:
+
+1. **`read()` now poll-waits** for up to 60 seconds instead of returning EIO immediately. This lets large file downloads complete before the NFS client gives up.
+
+2. **`create()` marks parent as mutated** to prevent background refresh from wiping newly created files.
+
+3. **`release()` uploads new files** (CID empty) even if no data was written, so `touch newfile` persists to IPFS.
+
+Please log in and let me know when you're ready for testing.
