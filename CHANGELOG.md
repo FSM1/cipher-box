@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/FSM1/cipher-box/compare/v0.9.2...v0.10.0) (2026-02-18)
+
+
+### Features
+
+* **api:** Add Prometheus metrics and Grafana dashboard for staging monitoring ([#141](https://github.com/FSM1/cipher-box/issues/141)) ([835d6c3](https://github.com/FSM1/cipher-box/commit/835d6c3b22182e73b3fe5828b9f3895249ef8f2a))
+
 ## [0.9.2](https://github.com/FSM1/cipher-box/compare/v0.9.1...v0.9.2) (2026-02-18)
 
 
