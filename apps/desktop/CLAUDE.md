@@ -25,6 +25,41 @@ pnpm --filter desktop dev
 
 Vite env vars are loaded from `apps/desktop/.env` automatically. No need to pass them on the command line.
 
+## Dev-Key Mode (Headless Auth for Debugging)
+
+Debug builds accept `--dev-key <hex>` to bypass Web3Auth login entirely, enabling fast restart cycles during FUSE/backend debugging.
+
+**How it works:**
+
+1. Pass a 64-char hex secp256k1 private key via `--dev-key`
+2. The webview detects it via the `get_dev_key` IPC command
+3. Calls `POST /auth/test-login` with the configured `VITE_TEST_LOGIN_SECRET`
+4. Gets a JWT, then calls `handle_auth_complete` with the JWT + dev key
+
+**Requirements:**
+
+- `VITE_TEST_LOGIN_SECRET` must be set in `.env` (must match the API's `TEST_LOGIN_SECRET`)
+- The API must have `TEST_LOGIN_SECRET` configured and `NODE_ENV` != `production`
+- **Staging currently does NOT support this** — staging API has `NODE_ENV=production` which blocks test-login. To enable: set `NODE_ENV=staging` and `TEST_LOGIN_SECRET=<secret>` in the staging Docker Compose env.
+
+**Usage with local API:**
+
+```bash
+# Generate a dev key (any valid secp256k1 private key)
+DEV_KEY=$(openssl rand -hex 32)
+
+# Set up .env with test-login secret
+echo 'VITE_TEST_LOGIN_SECRET=e2e-test-secret-do-not-use-in-production' >> apps/desktop/.env
+
+# Also set TEST_LOGIN_SECRET in the API .env
+echo 'TEST_LOGIN_SECRET=e2e-test-secret-do-not-use-in-production' >> apps/api/.env
+
+# Run with dev key (local API)
+VITE_API_URL=http://localhost:3000 pnpm --filter desktop dev -- -- --dev-key $DEV_KEY
+```
+
+**Note:** Each unique dev key creates its own vault. Use the same key across restarts to persist data.
+
 ## Tauri Webview Constraints
 
 - No `window.ethereum` — wallet login is not available in the Tauri webview
