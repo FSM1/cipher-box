@@ -29,6 +29,10 @@ mod cli {
 }
 
 fn main() {
+    // Load .env from the desktop app root (parent of src-tauri)
+    // This shares VITE_* vars between the webview and the Rust backend
+    let _ = dotenvy::from_filename("../.env");
+
     env_logger::init();
     log::info!("CipherBox Desktop starting...");
 
@@ -45,9 +49,10 @@ fn main() {
     #[cfg(not(debug_assertions))]
     let dev_key: Option<String> = None;
 
-    // API base URL: use env var or default to localhost for development
-    let api_base_url =
-        std::env::var("CIPHERBOX_API_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
+    // API base URL: CIPHERBOX_API_URL > VITE_API_URL > localhost default
+    let api_base_url = std::env::var("CIPHERBOX_API_URL")
+        .or_else(|_| std::env::var("VITE_API_URL"))
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
 
     let app_state = AppState::new(&api_base_url, dev_key);
 
