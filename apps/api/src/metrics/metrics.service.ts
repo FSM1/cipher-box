@@ -156,12 +156,16 @@ export class MetricsService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     // Attempt an immediate collection; log and continue if DB isn't ready yet
-    await this.collectGauges().catch((err) => {
-      this.logger.warn(`Initial gauge collection failed: ${err.message}`);
+    await this.collectGauges().catch((err: unknown) => {
+      this.logger.warn(
+        `Initial gauge collection failed: ${err instanceof Error ? err.message : String(err)}`
+      );
     });
     this.collectInterval = setInterval(() => {
-      this.collectGauges().catch((err) => {
-        this.logger.warn(`Gauge collection failed: ${err.message}`);
+      this.collectGauges().catch((err: unknown) => {
+        this.logger.warn(
+          `Gauge collection failed: ${err instanceof Error ? err.message : String(err)}`
+        );
       });
     }, 30_000);
     this.logger.log('Prometheus metrics initialized (collecting gauges every 30s)');

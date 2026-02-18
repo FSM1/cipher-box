@@ -34,11 +34,15 @@ export class HttpMetricsInterceptor implements NestInterceptor {
   }
 
   private recordDuration(req: Request, statusCode: number, startTime: bigint): void {
+    // Use the route template when available (already parameterised by Express/NestJS);
+    // only normalise the raw req.path when the route was not matched.
+    const route = req.route?.path ?? this.normalizeRoute(req.path);
+
+    // Exclude /metrics endpoint to avoid self-referential noise
+    if (route === '/metrics') return;
+
     const durationNs = Number(process.hrtime.bigint() - startTime);
     const durationSec = durationNs / 1e9;
-
-    // Normalize route to avoid high-cardinality labels (e.g., /ipfs/:cid)
-    const route = this.normalizeRoute(req.route?.path ?? req.path);
 
     this.metricsService.httpRequestDuration
       .labels(req.method, route, String(statusCode))
@@ -46,9 +50,6 @@ export class HttpMetricsInterceptor implements NestInterceptor {
   }
 
   private normalizeRoute(path: string): string {
-    // Skip metrics endpoint to avoid self-referential noise
-    if (path === '/metrics') return '/metrics';
-
     // Replace UUIDs and CIDs with placeholders to keep cardinality low
     return path
       .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ':id')

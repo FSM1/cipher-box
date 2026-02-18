@@ -264,7 +264,7 @@ The pre-built dashboard (`docker/grafana/dashboards/cipherbox-staging.json`) inc
 
 ### Authentication Row
 
-- Login attempts by method, new vs returning users
+- Successful logins by method, new vs returning users
 
 ### HTTP Performance Row
 
