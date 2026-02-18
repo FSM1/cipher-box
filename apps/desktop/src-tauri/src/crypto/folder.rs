@@ -263,12 +263,21 @@ pub fn decrypt_any_folder_metadata(
 
     let result = match value.get("version").and_then(|v| v.as_str()) {
         Some("v2") => {
-            let v2: FolderMetadataV2 =
-                serde_json::from_value(value).map_err(|e| {
-                    log::error!("V2 metadata deserialization failed: {}", e);
-                    FolderError::DeserializationFailed
-                })?;
-            Ok(AnyFolderMetadata::V2(v2))
+            // Try strict v2 first (FilePointer children with fileMetaIpnsName).
+            // Fall back to v1 parsing if the web app wrote v2-tagged metadata
+            // with v1-style inline file entries (cid, fileKeyEncrypted, etc.).
+            match serde_json::from_value::<FolderMetadataV2>(value.clone()) {
+                Ok(v2) => Ok(AnyFolderMetadata::V2(v2)),
+                Err(v2_err) => {
+                    log::debug!("V2 parse failed ({}), trying v1 fallback", v2_err);
+                    let v1: FolderMetadata =
+                        serde_json::from_value(value).map_err(|e| {
+                            log::error!("V1 fallback also failed: {}", e);
+                            FolderError::DeserializationFailed
+                        })?;
+                    Ok(AnyFolderMetadata::V1(v1))
+                }
+            }
         }
         _ => {
             // Default to v1 for backward compatibility

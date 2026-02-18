@@ -1,1 +1,7 @@
-ok logged in
+<task-notification>
+<task-id>b787437</task-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/b787437.output</output-file>
+<status>completed</status>
+<summary>Background command "Relaunch with debug logging" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/b787437.output
