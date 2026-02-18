@@ -142,7 +142,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-7 pending todo(s):
+10 pending todo(s):
 
 - `2026-02-07-web-worker-large-file-encryption.md` -- Offload large file encryption to Web Worker (area: ui)
 - `2026-02-14-bring-your-own-ipfs-node.md` -- Add bring-your-own IPFS node support (area: api)
@@ -151,6 +151,7 @@ Recent decisions affecting current work:
 - `2026-02-14-fix-orval-generated-client-any-warnings.md` -- Fix no-explicit-any warnings in generated API client (area: tooling)
 - `2026-02-15-security-review-short-term-fixes.md` -- Security review short-term fixes: H-01, H-06, H-07, M-01, M-04, M-06 (area: auth)
 - `2026-02-15-security-review-medium-term-fixes.md` -- Security review medium-term fixes: H-08, M-07, M-11 (area: auth)
+- `2026-02-18-fix-v2-metadata-version-mismatch.md` -- **URGENT:** Fix web app writing v2-tagged metadata with v1-style file entries (area: crypto)
 
 ### Roadmap Evolution
 
