@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
@@ -6,6 +7,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { HealthModule } from './health/health.module';
+import { MetricsModule, HttpMetricsInterceptor } from './metrics';
 import { AuthModule } from './auth/auth.module';
 import { IpfsModule } from './ipfs/ipfs.module';
 import { VaultModule } from './vault/vault.module';
@@ -84,6 +86,7 @@ import { DeviceApproval } from './device-approval/device-approval.entity';
       }),
       inject: [ConfigService],
     }),
+    MetricsModule,
     HealthModule,
     AuthModule,
     IpfsModule.forRootAsync(),
@@ -94,6 +97,12 @@ import { DeviceApproval } from './device-approval/device-approval.entity';
     DeviceApprovalModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: HttpMetricsInterceptor,
+    },
+  ],
 })
 export class AppModule {}

@@ -2,20 +2,28 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { RepublishService } from './republish.service';
+import { MetricsService } from '../metrics/metrics.service';
 
 @Processor('republish')
 export class RepublishProcessor extends WorkerHost {
   private readonly logger = new Logger(RepublishProcessor.name);
 
-  constructor(private readonly republishService: RepublishService) {
+  constructor(
+    private readonly republishService: RepublishService,
+    private readonly metricsService: MetricsService
+  ) {
     super();
   }
 
   async process(job: Job): Promise<void> {
     this.logger.log(`Republish job started: ${job.name} (id: ${job.id})`);
+    this.metricsService.republishRuns.inc();
 
     try {
       const result = await this.republishService.processRepublishBatch();
+
+      this.metricsService.republishEntriesProcessed.inc({ result: 'succeeded' }, result.succeeded);
+      this.metricsService.republishEntriesProcessed.inc({ result: 'failed' }, result.failed);
 
       this.logger.log(
         `Republish job complete: processed=${result.processed}, succeeded=${result.succeeded}, failed=${result.failed}`
