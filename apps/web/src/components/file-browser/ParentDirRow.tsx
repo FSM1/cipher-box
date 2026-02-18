@@ -1,31 +1,31 @@
 type ParentDirRowProps = {
-  /** Callback when row is clicked to navigate up */
-  onClick: () => void;
+  /** Callback when row is activated (double-click or keyboard) to navigate up */
+  onActivate: () => void;
 };
 
 /**
  * Parent directory navigation row.
  *
  * Displays [..] PARENT_DIR row as first item in file list for non-root folders.
- * Clicking navigates up to parent folder.
+ * Double-clicking or pressing Enter/Space navigates up to parent folder.
  *
  * @example
  * ```tsx
  * function FileList({ showParentRow, onNavigateUp }) {
  *   return (
  *     <div className="file-list-body">
- *       {showParentRow && <ParentDirRow onClick={onNavigateUp} />}
+ *       {showParentRow && <ParentDirRow onActivate={onNavigateUp} />}
  *       {items.map(item => <FileListItem key={item.id} item={item} />)}
  *     </div>
  *   );
  * }
  * ```
  */
-export function ParentDirRow({ onClick }: ParentDirRowProps) {
+export function ParentDirRow({ onActivate }: ParentDirRowProps) {
   return (
     <div
       className="file-list-item file-list-item--parent"
-      onClick={onClick}
+      onDoubleClick={onActivate}
       role="row"
       tabIndex={0}
       onKeyDown={(e) => {
@@ -33,7 +33,7 @@ export function ParentDirRow({ onClick }: ParentDirRowProps) {
           if (e.key === ' ') {
             e.preventDefault();
           }
-          onClick();
+          onActivate();
         }
       }}
       data-testid="parent-dir-row"

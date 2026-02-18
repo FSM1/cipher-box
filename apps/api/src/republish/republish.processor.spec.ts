@@ -1,10 +1,15 @@
 import { RepublishProcessor } from './republish.processor';
 import { RepublishService } from './republish.service';
+import { MetricsService } from '../metrics/metrics.service';
 import { Job } from 'bullmq';
 
 describe('RepublishProcessor', () => {
   let processor: RepublishProcessor;
   let republishService: jest.Mocked<Partial<RepublishService>>;
+  let metricsService: {
+    republishRuns: { inc: jest.Mock };
+    republishEntriesProcessed: { inc: jest.Mock };
+  };
 
   function createMockJob(overrides: Partial<Job> = {}): Job {
     return {
@@ -19,9 +24,17 @@ describe('RepublishProcessor', () => {
       processRepublishBatch: jest.fn(),
     };
 
+    metricsService = {
+      republishRuns: { inc: jest.fn() },
+      republishEntriesProcessed: { inc: jest.fn() },
+    };
+
     // Construct directly instead of using Test.createTestingModule,
     // since WorkerHost from @nestjs/bullmq has minimal base-class requirements.
-    processor = new RepublishProcessor(republishService as unknown as RepublishService);
+    processor = new RepublishProcessor(
+      republishService as unknown as RepublishService,
+      metricsService as unknown as MetricsService
+    );
   });
 
   afterEach(() => {

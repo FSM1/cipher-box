@@ -101,7 +101,7 @@ jobs:
       - name: Build web app with staging env vars
         run: pnpm --filter @cipherbox/web build
         env:
-          VITE_WEB3AUTH_CLIENT_ID: ${{ secrets.VITE_WEB3AUTH_CLIENT_ID }}
+          VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
           VITE_API_URL: ${{ vars.STAGING_API_URL }}
           VITE_ENVIRONMENT: staging
           VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
@@ -135,8 +135,9 @@ jobs:
       - name: Generate .env.staging
         run: |
           cat > .env.staging << 'ENVEOF'
-          NODE_ENV=production
+          NODE_ENV=staging
           CIPHERBOX_ENVIRONMENT=staging
+          TEST_LOGIN_SECRET=${{ secrets.STAGING_TEST_LOGIN_SECRET }}
           PORT=3000
           DB_HOST=postgres
           DB_PORT=5432
@@ -158,9 +159,14 @@ jobs:
           GRAFANA_LOKI_URL=${{ vars.GRAFANA_LOKI_URL }}
           GRAFANA_LOKI_USERNAME=${{ vars.GRAFANA_LOKI_USERNAME }}
           GRAFANA_LOKI_API_KEY=${{ secrets.GRAFANA_LOKI_API_KEY }}
+          GRAFANA_PROMETHEUS_URL=${{ vars.GRAFANA_PROMETHEUS_URL }}
+          GRAFANA_PROMETHEUS_USERNAME=${{ vars.GRAFANA_PROMETHEUS_USERNAME }}
+          GRAFANA_PROMETHEUS_API_KEY=${{ secrets.GRAFANA_PROMETHEUS_API_KEY }}
           SENDGRID_API_KEY=${{ secrets.SENDGRID_API_KEY }}
           SENDGRID_FROM_EMAIL=${{ vars.SENDGRID_FROM_EMAIL }}
           GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }}
+          SIWE_DOMAIN=${{ vars.SIWE_DOMAIN }}
+          IDENTITY_JWT_PRIVATE_KEY=${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}
           ENVEOF
           # Append image tag and lowercase owner (can't use shell vars in quoted heredoc)
           OWNER="${{ github.repository_owner }}"

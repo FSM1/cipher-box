@@ -80,13 +80,13 @@ jobs:
       - name: Build packages (excluding desktop)
         run: pnpm --filter @cipherbox/crypto --filter @cipherbox/api --filter @cipherbox/web build
         env:
-          VITE_WEB3AUTH_CLIENT_ID: ${{ secrets.VITE_WEB3AUTH_CLIENT_ID }}
+          VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
           VITE_API_URL: http://localhost:3000
 
       - name: Create .env files for E2E
         run: |
           # Web app .env (for Vite dev server)
-          echo "VITE_WEB3AUTH_CLIENT_ID=${{ secrets.VITE_WEB3AUTH_CLIENT_ID }}" > apps/web/.env
+          echo "VITE_WEB3AUTH_CLIENT_ID=${{ vars.VITE_WEB3AUTH_CLIENT_ID }}" > apps/web/.env
           echo "VITE_API_URL=http://localhost:3000" >> apps/web/.env
           # API .env (for NestJS)
           echo "NODE_ENV=test" > apps/api/.env
@@ -131,7 +131,7 @@ jobs:
           REDIS_HOST: localhost
           REDIS_PORT: 6379
           # Web app configuration (needed for Web3Auth initialization)
-          VITE_WEB3AUTH_CLIENT_ID: ${{ secrets.VITE_WEB3AUTH_CLIENT_ID }}
+          VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
           VITE_API_URL: http://localhost:3000
           # Test-login endpoint for E2E (bypasses Core Kit, uses deterministic keypair)
           TEST_LOGIN_SECRET: e2e-test-secret-ci-only

@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { FolderChildV2, FilePointer, FolderEntry } from '@cipherbox/crypto';
+import type { FolderChildV2, FilePointer, FolderEntry, FileMetadata } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useFolderStore } from '../../stores/folder.store';
 import { resolveIpnsRecord } from '../../services/ipns.service';
+import { resolveFileMetadata } from '../../services/file-metadata.service';
 import { formatDate } from '../../utils/format';
 import '../../styles/details-dialog.css';
 
@@ -10,6 +11,7 @@ type DetailsDialogProps = {
   open: boolean;
   onClose: () => void;
   item: FolderChildV2 | null;
+  folderKey: Uint8Array | null;
 };
 
 /**
@@ -80,10 +82,14 @@ function FileDetails({
   item,
   metadataCid,
   metadataLoading,
+  fileMeta,
+  fileMetaLoading,
 }: {
   item: FilePointer;
   metadataCid: string | null;
   metadataLoading: boolean;
+  fileMeta: FileMetadata | null;
+  fileMetaLoading: boolean;
 }) {
   return (
     <div className="details-rows">
@@ -107,6 +113,37 @@ function FileDetails({
           <span className="details-loading">resolving...</span>
         ) : metadataCid ? (
           <CopyableValue value={metadataCid} />
+        ) : (
+          <span className="details-value details-value--dim">unavailable</span>
+        )}
+      </DetailRow>
+
+      {/* Encryption section */}
+      <div className="details-section-header">{'// encryption'}</div>
+
+      <DetailRow label="Mode">
+        {fileMetaLoading ? (
+          <span className="details-loading">resolving...</span>
+        ) : fileMeta ? (
+          <span className="details-value">
+            AES-256-{fileMeta.encryptionMode}{' '}
+            <span className="details-value--dim">
+              ({fileMeta.encryptionMode === 'CTR' ? 'streaming' : 'authenticated'})
+            </span>
+          </span>
+        ) : (
+          <span className="details-value details-value--dim">unavailable</span>
+        )}
+      </DetailRow>
+
+      <DetailRow label="File Key">
+        {fileMetaLoading ? (
+          <span className="details-loading">resolving...</span>
+        ) : fileMeta ? (
+          <span className="details-value details-value--redacted">
+            {fileMeta.fileKeyEncrypted.slice(0, 16)}...{fileMeta.fileKeyEncrypted.slice(-8)}{' '}
+            (ECIES-wrapped)
+          </span>
         ) : (
           <span className="details-value details-value--dim">unavailable</span>
         )}
@@ -226,26 +263,28 @@ function FolderDetails({
  * Resolves the parent folder's IPNS record on open to get the live
  * metadata CID. Sensitive key material is displayed in redacted form.
  */
-export function DetailsDialog({ open, onClose, item }: DetailsDialogProps) {
+export function DetailsDialog({ open, onClose, item, folderKey }: DetailsDialogProps) {
   const [metadataCid, setMetadataCid] = useState<string | null>(null);
   const [metadataLoading, setMetadataLoading] = useState(false);
+  const [fileMeta, setFileMeta] = useState<FileMetadata | null>(null);
+  const [fileMetaLoading, setFileMetaLoading] = useState(false);
 
   // For folders, also look up the folder node for sequence number and child count
   const folderNode = useFolderStore((state) =>
     item?.type === 'folder' ? state.folders[item.id] : undefined
   );
 
-  // Resolve IPNS to get metadata CID when dialog opens
+  // Resolve folder IPNS to get metadata CID (folders only)
   useEffect(() => {
-    if (!open || !item) {
-      setMetadataCid(null);
+    if (!open || !item || item.type !== 'folder') {
+      if (!item || item.type !== 'file') {
+        setMetadataCid(null);
+        setMetadataLoading(false);
+      }
       return;
     }
 
-    const ipnsName =
-      item.type === 'folder' ? item.ipnsName : (item as FilePointer).fileMetaIpnsName;
-
-    if (!ipnsName) {
+    if (!item.ipnsName) {
       setMetadataLoading(false);
       setMetadataCid(null);
       return;
@@ -254,7 +293,7 @@ export function DetailsDialog({ open, onClose, item }: DetailsDialogProps) {
     let cancelled = false;
     setMetadataLoading(true);
 
-    resolveIpnsRecord(ipnsName)
+    resolveIpnsRecord(item.ipnsName)
       .then((result) => {
         if (!cancelled) {
           setMetadataCid(result?.cid ?? null);
@@ -276,14 +315,80 @@ export function DetailsDialog({ open, onClose, item }: DetailsDialogProps) {
     };
   }, [open, item]);
 
+  // Resolve per-file metadata and CID in a single IPNS call (files only)
+  useEffect(() => {
+    if (!open || !item || item.type !== 'file' || !folderKey) {
+      setFileMeta(null);
+      setFileMetaLoading(false);
+      // Only reset shared metadataCid when dialog is closed, not when viewing a folder
+      if (!open || !item) {
+        setMetadataCid(null);
+        setMetadataLoading(false);
+      }
+      return;
+    }
+
+    // Guard against v1 FileEntry objects that lack fileMetaIpnsName
+    const fileItem = item as FilePointer;
+    if (!fileItem.fileMetaIpnsName) {
+      setFileMeta(null);
+      setFileMetaLoading(false);
+      setMetadataCid(null);
+      setMetadataLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setFileMetaLoading(true);
+    setMetadataLoading(true);
+
+    resolveFileMetadata(fileItem.fileMetaIpnsName, folderKey)
+      .then(({ metadata, metadataCid: cid }) => {
+        if (!cancelled) {
+          setFileMeta(metadata);
+          setMetadataCid(cid);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setFileMeta(null);
+          setMetadataCid(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setFileMetaLoading(false);
+          setMetadataLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, item, folderKey]);
+
   if (!item) return null;
 
   const title = item.type === 'folder' ? 'Folder Details' : 'File Details';
 
   return (
     <Modal open={open} onClose={onClose} title={title}>
-      {item.type === 'file' ? (
-        <FileDetails item={item} metadataCid={metadataCid} metadataLoading={metadataLoading} />
+      {item.type === 'file' &&
+      'fileMetaIpnsName' in item &&
+      typeof (item as FilePointer).fileMetaIpnsName === 'string' ? (
+        <FileDetails
+          item={item as FilePointer}
+          metadataCid={metadataCid}
+          metadataLoading={metadataLoading}
+          fileMeta={fileMeta}
+          fileMetaLoading={fileMetaLoading}
+        />
+      ) : item.type === 'file' ? (
+        <div className="details-rows">
+          <span className="details-value details-value--dim">
+            File metadata unavailable (legacy v1 entry)
+          </span>
+        </div>
       ) : (
         <FolderDetails
           item={item}

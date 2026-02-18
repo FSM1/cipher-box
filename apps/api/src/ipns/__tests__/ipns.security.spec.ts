@@ -14,6 +14,7 @@ import request from 'supertest';
 import { IpnsController } from '../ipns.controller';
 import { IpnsService } from '../ipns.service';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { MetricsService } from '../../metrics/metrics.service';
 
 describe('IPNS API Security Tests', () => {
   let app: INestApplication;
@@ -39,6 +40,11 @@ describe('IPNS API Security Tests', () => {
       getAllFolderIpns: jest.fn(),
     };
 
+    const mockMetricsService = {
+      ipnsPublishes: { inc: jest.fn() },
+      ipnsResolves: { inc: jest.fn() },
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       imports: [
         ThrottlerModule.forRoot([
@@ -53,6 +59,10 @@ describe('IPNS API Security Tests', () => {
         {
           provide: IpnsService,
           useValue: mockIpnsService,
+        },
+        {
+          provide: MetricsService,
+          useValue: mockMetricsService,
         },
       ],
     })

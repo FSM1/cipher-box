@@ -112,16 +112,11 @@ export function WalletLoginButton({ onLogin, disabled }: WalletLoginButtonProps)
       setPhase('connecting');
 
       try {
-        const result = await connectAsync({ connector });
-        const walletAddress = result.accounts[0];
-
-        if (!walletAddress) {
-          throw new Error('No wallet address returned');
-        }
-
-        // connectAsync resolves with the address, so we can start SIWE immediately
-        siweInProgress.current = true;
-        await handleSiweFlow(walletAddress);
+        await connectAsync({ connector });
+        // Don't call handleSiweFlow here — the useEffect watching
+        // isConnected+address will trigger it. Calling it from both
+        // places causes a race where the user gets two signing prompts
+        // with different nonces.
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Connection failed';
 
@@ -142,7 +137,7 @@ export function WalletLoginButton({ onLogin, disabled }: WalletLoginButtonProps)
         siweInProgress.current = false;
       }
     },
-    [connectAsync, signMessageAsync, disconnect, onLogin]
+    [connectAsync]
   );
 
   const handleButtonClick = () => {

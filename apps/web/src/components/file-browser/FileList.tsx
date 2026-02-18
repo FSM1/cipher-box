@@ -123,7 +123,7 @@ export function FileList({
 
       {/* Item rows */}
       <div className="file-list-body" role="rowgroup">
-        {showParentRow && onNavigateUp && <ParentDirRow onClick={onNavigateUp} />}
+        {showParentRow && onNavigateUp && <ParentDirRow onActivate={onNavigateUp} />}
         {sortedItems.map((item) => (
           <FileListItem
             key={item.id}

@@ -5,10 +5,13 @@
  * Zero-knowledge encrypted cloud storage API
  * OpenAPI spec version: 0.1.0
  */
+import type { WalletVerifyDtoIntent } from './walletVerifyDtoIntent';
 
 export interface WalletVerifyDto {
   /** EIP-4361 SIWE message string */
   message: string;
   /** Wallet signature of the SIWE message (hex with 0x prefix) */
   signature: string;
+  /** Intent: "login" (default) creates/finds a user, "link" only verifies ownership */
+  intent?: WalletVerifyDtoIntent;
 }

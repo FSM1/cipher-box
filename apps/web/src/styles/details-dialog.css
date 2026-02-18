@@ -156,7 +156,6 @@
   font-weight: var(--font-weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  border: var(--border-thickness) solid var(--color-border-dim);
 }
 
 .details-type-badge--file {

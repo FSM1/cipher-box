@@ -113,7 +113,10 @@ export async function downloadFileFromIpns(params: {
   onProgress?: DownloadProgressCallback;
 }): Promise<Uint8Array> {
   // 1. Resolve per-file IPNS to get FileMetadata (cid, fileKeyEncrypted, fileIv)
-  const fileMeta = await resolveFileMetadata(params.fileMetaIpnsName, params.folderKey);
+  const { metadata: fileMeta } = await resolveFileMetadata(
+    params.fileMetaIpnsName,
+    params.folderKey
+  );
 
   // 2. Download and decrypt using existing low-level function
   return downloadFile(
