@@ -1,1 +1,7 @@
-ok i am logged in
+<task-notification>
+<task-id>b51714f</task-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/b51714f.output</output-file>
+<status>failed</status>
+<summary>Background command "Start the desktop app with staging API" failed with exit code 143</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/b51714f.output

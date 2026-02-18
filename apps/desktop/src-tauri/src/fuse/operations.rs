@@ -1154,19 +1154,17 @@ mod implementation {
                 return;
             }
 
-            // Content not in cache. Instead of blocking the NFS thread for a
-            // potentially long download (which causes "not responding" mount state
-            // with FUSE-T's 1-second NFS timeout), we:
+            // Content not in cache. Download it on-demand:
             //
-            // 1. Ensure a background prefetch is running
-            // 2. Poll the prefetch channel briefly (500ms)
-            // 3. If content arrived, serve it
-            // 4. If not yet, return EAGAIN so the NFS client retries
+            // 1. Ensure a background prefetch is running (async download+decrypt)
+            // 2. Poll the prefetch channel in 100ms increments (up to 120s)
+            // 3. Serve data once it arrives
             //
-            // The NFS hard mount retries indefinitely. Each retry, we poll
-            // again. Eventually the prefetch completes and we serve from cache.
-            // Meanwhile, the NFS thread is only blocked 500ms per retry, so
-            // other operations (ls, stat) still work between retries.
+            // This blocks the FUSE-T NFS thread during download, causing the
+            // mount to show "not responding" for large files. The hard mount
+            // recovers as soon as we reply. This is acceptable behavior —
+            // EAGAIN/EIO would cause NFSv4 client to cache the error and
+            // permanently refuse to read the file.
 
             // Start prefetch if not already in progress
             if !self.prefetching.contains(&cid) {
@@ -1214,13 +1212,21 @@ mod implementation {
                 });
             }
 
-            // Poll the prefetch channel briefly (up to 500ms in 50ms increments)
-            // to give the background download a chance to complete without
-            // blocking the NFS thread for too long.
-            for _ in 0..10 {
-                std::thread::sleep(Duration::from_millis(50));
+            // Poll the prefetch channel until content arrives (up to 120s).
+            // The NFS thread is blocked during this time, which causes the mount
+            // to show "not responding" after ~1s. With hard mount, the client
+            // queues subsequent ops and delivers them once we return.
+            let poll_start = std::time::Instant::now();
+            let max_wait = CONTENT_DOWNLOAD_TIMEOUT + Duration::from_secs(5);
+            loop {
+                std::thread::sleep(Duration::from_millis(100));
                 self.drain_content_prefetches();
                 if let Some(cached) = self.content_cache.get(&cid) {
+                    eprintln!(
+                        ">>> FUSE read: content ready after {:.1}s for CID {}",
+                        poll_start.elapsed().as_secs_f64(),
+                        &cid[..cid.len().min(12)]
+                    );
                     let start = offset as usize;
                     if start >= cached.len() {
                         reply.data(&[]);
@@ -1230,13 +1236,14 @@ mod implementation {
                     }
                     return;
                 }
+                if poll_start.elapsed() > max_wait {
+                    break;
+                }
             }
 
-            // Prefetch still in progress — return EAGAIN so the NFS client retries.
-            // With FUSE-T's hard mount, the client will retry after timeo (1s).
-            // On the next attempt, we'll poll again and eventually serve the data.
-            eprintln!(">>> FUSE read: prefetch not ready for CID {}, returning EAGAIN", &cid[..cid.len().min(12)]);
-            reply.error(libc::EAGAIN);
+            // Download failed or timed out
+            eprintln!(">>> FUSE read: download timed out for CID {}", &cid[..cid.len().min(12)]);
+            reply.error(libc::EIO);
         }
 
         /// Release (close) a file handle.
