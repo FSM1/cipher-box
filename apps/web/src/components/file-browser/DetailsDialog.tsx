@@ -280,6 +280,7 @@ export function DetailsDialog({ open, onClose, item, folderKey }: DetailsDialogP
   useEffect(() => {
     if (!open || !item) {
       setMetadataCid(null);
+      setMetadataLoading(false);
       return;
     }
 
@@ -321,6 +322,7 @@ export function DetailsDialog({ open, onClose, item, folderKey }: DetailsDialogP
   useEffect(() => {
     if (!open || !item || item.type !== 'file' || !folderKey) {
       setFileMeta(null);
+      setFileMetaLoading(false);
       return;
     }
 
