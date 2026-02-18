@@ -209,7 +209,7 @@ test.describe.serial('Full Workflow', () => {
         break;
       }
 
-      await parentDirRow.click();
+      await parentDirRow.dblclick();
       await page.waitForTimeout(300); // Wait for navigation
     }
 

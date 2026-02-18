@@ -144,13 +144,13 @@ export async function createFileMetadata(params: {
  *
  * @param fileMetaIpnsName - IPNS name of the file's metadata record
  * @param folderKey - Parent folder's decrypted AES-256 key
- * @returns Decrypted file metadata
+ * @returns Decrypted file metadata and the resolved metadata CID
  * @throws Error if IPNS resolution fails or metadata cannot be decrypted
  */
 export async function resolveFileMetadata(
   fileMetaIpnsName: string,
   folderKey: Uint8Array
-): Promise<FileMetadata> {
+): Promise<{ metadata: FileMetadata; metadataCid: string }> {
   // 1. Resolve IPNS to get current metadata CID
   const resolved = await resolveIpnsRecord(fileMetaIpnsName);
 
@@ -166,7 +166,7 @@ export async function resolveFileMetadata(
   const encrypted: EncryptedFileMetadata = JSON.parse(encryptedJson);
   const metadata = await decryptFileMetadata(encrypted, folderKey);
 
-  return metadata;
+  return { metadata, metadataCid: resolved.cid };
 }
 
 /**

@@ -34,10 +34,10 @@ export class ParentDirPage {
   }
 
   /**
-   * Click the parent directory row to navigate up.
+   * Double-click the parent directory row to navigate up.
    */
   async click(): Promise<void> {
-    await this.row().click();
+    await this.row().dblclick();
   }
 
   /**
