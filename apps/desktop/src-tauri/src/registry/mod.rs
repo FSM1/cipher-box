@@ -143,38 +143,56 @@ async fn fetch_and_decrypt_registry(
 ///
 /// Uses the `keyring` crate with service "cipherbox-desktop" and key "device-id".
 /// If no device ID exists, generates a UUID v4 and stores it.
+///
+/// In debug builds, skips Keychain entirely and uses an ephemeral UUID.
+/// This avoids macOS Keychain permission prompts that fire on every rebuild
+/// (each build produces a new binary signature).
 fn get_or_create_device_id() -> String {
-    let entry = keyring::Entry::new("cipherbox-desktop", "device-id")
-        .unwrap_or_else(|e| {
-            log::warn!("Keychain entry creation failed: {}", e);
-            // Fallback: create a new UUID each time (not persisted)
-            panic!("Cannot create keyring entry: {}", e);
-        });
+    #[cfg(debug_assertions)]
+    {
+        let bytes = crypto::utils::generate_random_bytes(16);
+        let uuid = format!(
+            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-4{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            bytes[0], bytes[1], bytes[2], bytes[3],
+            bytes[4], bytes[5],
+            bytes[6] & 0x0f, bytes[7],
+            (bytes[8] & 0x3f) | 0x80, bytes[9],
+            bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        );
+        log::info!("Debug mode: using ephemeral device ID (no Keychain access)");
+        return uuid;
+    }
 
-    // Try to read existing device ID
-    match entry.get_password() {
-        Ok(id) if !id.is_empty() => id,
-        _ => {
-            // Generate new UUID v4 using random bytes
-            let bytes = crypto::utils::generate_random_bytes(16);
-            let uuid = format!(
-                "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-4{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-                bytes[0], bytes[1], bytes[2], bytes[3],
-                bytes[4], bytes[5],
-                bytes[6] & 0x0f, bytes[7],
-                (bytes[8] & 0x3f) | 0x80, bytes[9],
-                bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-            );
+    #[cfg(not(debug_assertions))]
+    {
+        let entry = keyring::Entry::new("cipherbox-desktop", "device-id")
+            .unwrap_or_else(|e| {
+                log::warn!("Keychain entry creation failed: {}", e);
+                panic!("Cannot create keyring entry: {}", e);
+            });
 
-            // Store in Keychain (delete first to avoid "already exists" error)
-            let _ = entry.delete_credential();
-            if let Err(e) = entry.set_password(&uuid) {
-                log::warn!(
-                    "Failed to store device ID in Keychain: {}. Using ephemeral ID.",
-                    e
+        match entry.get_password() {
+            Ok(id) if !id.is_empty() => id,
+            _ => {
+                let bytes = crypto::utils::generate_random_bytes(16);
+                let uuid = format!(
+                    "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-4{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                    bytes[0], bytes[1], bytes[2], bytes[3],
+                    bytes[4], bytes[5],
+                    bytes[6] & 0x0f, bytes[7],
+                    (bytes[8] & 0x3f) | 0x80, bytes[9],
+                    bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
                 );
+
+                let _ = entry.delete_credential();
+                if let Err(e) = entry.set_password(&uuid) {
+                    log::warn!(
+                        "Failed to store device ID in Keychain: {}. Using ephemeral ID.",
+                        e
+                    );
+                }
+                uuid
             }
-            uuid
         }
     }
 }

@@ -21,8 +21,13 @@ pub struct ApiClient {
 impl ApiClient {
     /// Create a new API client with the given base URL.
     pub fn new(base_url: &str) -> Self {
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| Client::new());
         Self {
-            client: Client::new(),
+            client,
             base_url: base_url.trim_end_matches('/').to_string(),
             access_token: Arc::new(RwLock::new(None)),
         }

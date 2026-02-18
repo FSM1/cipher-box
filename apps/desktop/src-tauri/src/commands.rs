@@ -141,36 +141,9 @@ async fn complete_auth_setup(
     // 6. Mark as authenticated
     *state.is_authenticated.write().await = true;
 
-    // 6b. Register device in encrypted registry (non-blocking)
-    //     Fire-and-forget: failures are logged but never block login.
-    {
-        let reg_api = state.api.clone();
-        let reg_private_key = private_key_bytes.clone();
-        let reg_public_key = public_key_bytes.clone();
-        let reg_user_id = user_id.clone();
-        tokio::spawn(async move {
-            let pk_arr: [u8; 32] = match reg_private_key.as_slice().try_into() {
-                Ok(arr) => arr,
-                Err(_) => {
-                    log::warn!("Device registry: invalid private key length");
-                    return;
-                }
-            };
-            match crate::registry::register_device(
-                &reg_api,
-                &pk_arr,
-                &reg_public_key,
-                &reg_user_id,
-            )
-            .await
-            {
-                Ok(()) => log::info!("Device registry updated"),
-                Err(e) => log::warn!("Device registry update failed (non-blocking): {}", e),
-            }
-        });
-    }
-
     // 7. Mount FUSE filesystem (or just mark as synced if FUSE not enabled)
+    // NOTE: Device registry spawn moved AFTER mount to avoid concurrent HTTP
+    //       requests that cause reqwest connection pool starvation during pre-populate.
     #[cfg(not(feature = "fuse"))]
     {
         let _ = crate::tray::update_tray_status(app, &crate::tray::TrayStatus::Synced);
@@ -245,6 +218,34 @@ async fn complete_auth_setup(
                 // Don't fail auth -- user is authenticated but mount failed
             }
         }
+    }
+
+    // 8. Register device in encrypted registry (non-blocking, after mount)
+    {
+        let reg_api = state.api.clone();
+        let reg_private_key = private_key_bytes.clone();
+        let reg_public_key = public_key_bytes.clone();
+        let reg_user_id = user_id.clone();
+        tokio::spawn(async move {
+            let pk_arr: [u8; 32] = match reg_private_key.as_slice().try_into() {
+                Ok(arr) => arr,
+                Err(_) => {
+                    log::warn!("Device registry: invalid private key length");
+                    return;
+                }
+            };
+            match crate::registry::register_device(
+                &reg_api,
+                &pk_arr,
+                &reg_public_key,
+                &reg_user_id,
+            )
+            .await
+            {
+                Ok(()) => log::info!("Device registry updated"),
+                Err(e) => log::warn!("Device registry update failed (non-blocking): {}", e),
+            }
+        });
     }
 
     // Close OAuth popup windows and hide the login webview
