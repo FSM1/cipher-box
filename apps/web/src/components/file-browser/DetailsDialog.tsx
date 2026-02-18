@@ -328,11 +328,21 @@ export function DetailsDialog({ open, onClose, item, folderKey }: DetailsDialogP
       return;
     }
 
+    // Guard against v1 FileEntry objects that lack fileMetaIpnsName
+    const fileItem = item as FilePointer;
+    if (!fileItem.fileMetaIpnsName) {
+      setFileMeta(null);
+      setFileMetaLoading(false);
+      setMetadataCid(null);
+      setMetadataLoading(false);
+      return;
+    }
+
     let cancelled = false;
     setFileMetaLoading(true);
     setMetadataLoading(true);
 
-    resolveFileMetadata(item.fileMetaIpnsName, folderKey)
+    resolveFileMetadata(fileItem.fileMetaIpnsName, folderKey)
       .then(({ metadata, metadataCid: cid }) => {
         if (!cancelled) {
           setFileMeta(metadata);
@@ -363,14 +373,22 @@ export function DetailsDialog({ open, onClose, item, folderKey }: DetailsDialogP
 
   return (
     <Modal open={open} onClose={onClose} title={title}>
-      {item.type === 'file' ? (
+      {item.type === 'file' &&
+      'fileMetaIpnsName' in item &&
+      typeof (item as FilePointer).fileMetaIpnsName === 'string' ? (
         <FileDetails
-          item={item}
+          item={item as FilePointer}
           metadataCid={metadataCid}
           metadataLoading={metadataLoading}
           fileMeta={fileMeta}
           fileMetaLoading={fileMetaLoading}
         />
+      ) : item.type === 'file' ? (
+        <div className="details-rows">
+          <span className="details-value details-value--dim">
+            File metadata unavailable (legacy v1 entry)
+          </span>
+        </div>
       ) : (
         <FolderDetails
           item={item}
