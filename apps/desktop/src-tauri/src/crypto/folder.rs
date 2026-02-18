@@ -65,6 +65,10 @@ pub struct FolderEntry {
 
 /// File entry within folder metadata.
 /// Contains reference to encrypted file on IPFS and ECIES-wrapped decryption key.
+///
+/// Fields that may be absent in hybrid v2 metadata (where some children are
+/// FilePointers with only `fileMetaIpnsName`) use `#[serde(default)]` so that
+/// both pure-v1 and hybrid formats can deserialize into this struct.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileEntry {
@@ -72,20 +76,28 @@ pub struct FileEntry {
     pub id: String,
     /// File name (plaintext, since whole metadata is encrypted).
     pub name: String,
-    /// IPFS CID of the encrypted file content.
+    /// IPFS CID of the encrypted file content (empty if unresolved v2 pointer).
+    #[serde(default)]
     pub cid: String,
     /// Hex-encoded ECIES-wrapped AES-256 key for decrypting file.
+    #[serde(default)]
     pub file_key_encrypted: String,
     /// Hex-encoded IV used for file encryption.
+    #[serde(default)]
     pub file_iv: String,
     /// Original file size in bytes (before encryption).
+    #[serde(default)]
     pub size: u64,
     /// Creation timestamp (Unix ms).
     pub created_at: u64,
     /// Last modification timestamp (Unix ms).
     pub modified_at: u64,
     /// Encryption mode (always "GCM" for v1.0).
+    #[serde(default = "default_encryption_mode")]
     pub encryption_mode: String,
+    /// v2 FilePointer IPNS name (present in hybrid metadata for unresolved files).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_meta_ipns_name: Option<String>,
 }
 
 /// Encrypt folder metadata with AES-256-GCM.
@@ -187,6 +199,7 @@ impl AnyFolderMetadata {
                         created_at: ptr.created_at,
                         modified_at: ptr.modified_at,
                         encryption_mode: "GCM".to_string(),
+                        file_meta_ipns_name: Some(ptr.file_meta_ipns_name.clone()),
                     }),
                 }).collect();
                 FolderMetadata {

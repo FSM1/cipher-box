@@ -1,1 +1,1 @@
-App's up — please log in. I'll grab the full JSON once it appears.
+Build succeeded, app is running. Please log in, then I'll check if files show up.

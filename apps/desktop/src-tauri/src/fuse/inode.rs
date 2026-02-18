@@ -372,10 +372,51 @@ impl InodeTable {
                     let modified = UNIX_EPOCH
                         + Duration::from_millis(file.modified_at);
 
+                    // Detect v2 FilePointer in hybrid metadata: cid is empty but
+                    // fileMetaIpnsName is present. These need IPNS resolution.
+                    let is_pointer = file.cid.is_empty() && file.file_meta_ipns_name.is_some();
+
+                    let kind = if is_pointer {
+                        // Check if an existing inode already has resolved metadata
+                        let already_resolved = existing_ino
+                            .and_then(|e| self.inodes.get(&e))
+                            .map(|existing| matches!(&existing.kind, InodeKind::File { file_meta_resolved: true, .. }))
+                            .unwrap_or(false);
+
+                        if already_resolved {
+                            self.inodes.get(&ino).unwrap().kind.clone()
+                        } else {
+                            InodeKind::File {
+                                cid: String::new(),
+                                encrypted_file_key: String::new(),
+                                iv: String::new(),
+                                size: 0,
+                                encryption_mode: "GCM".to_string(),
+                                file_meta_ipns_name: file.file_meta_ipns_name.clone(),
+                                file_meta_resolved: false,
+                            }
+                        }
+                    } else {
+                        InodeKind::File {
+                            cid: file.cid.clone(),
+                            encrypted_file_key: file.file_key_encrypted.clone(),
+                            iv: file.file_iv.clone(),
+                            size: file.size,
+                            encryption_mode: file.encryption_mode.clone(),
+                            file_meta_ipns_name: None,
+                            file_meta_resolved: true,
+                        }
+                    };
+
+                    let display_size = match &kind {
+                        InodeKind::File { size, .. } => *size,
+                        _ => 0,
+                    };
+
                     let attr = FileAttr {
                         ino,
-                        size: file.size,
-                        blocks: (file.size + 511) / 512,
+                        size: display_size,
+                        blocks: (display_size + 511) / 512,
                         atime: modified,
                         mtime: modified,
                         ctime: modified,
@@ -394,15 +435,7 @@ impl InodeTable {
                         ino,
                         parent_ino,
                         name: file.name.clone(),
-                        kind: InodeKind::File {
-                            cid: file.cid.clone(),
-                            encrypted_file_key: file.file_key_encrypted.clone(),
-                            iv: file.file_iv.clone(),
-                            size: file.size,
-                            encryption_mode: file.encryption_mode.clone(),
-                            file_meta_ipns_name: None,
-                            file_meta_resolved: true,
-                        },
+                        kind,
                         attr,
                         children: None,
                     };
@@ -982,6 +1015,7 @@ mod tests {
                     created_at: 1700000000000,
                     modified_at: 1700000000000,
                     encryption_mode: "GCM".to_string(),
+                    file_meta_ipns_name: None,
                 }),
             ],
         };
