@@ -38,6 +38,14 @@ Decrypted JSON: {"version":"v2","children":[{"type":"file","id":"...","name":"he
 
 4. **Check if existing vault data on staging is corrupted** — all metadata currently stored may have this mismatch.
 
-## Workaround in place
+## Workarounds in place (remove after web app fix)
 
-Rust `decrypt_any_folder_metadata()` now falls back to v1 parsing when v2 fails. This lets the desktop client display files, but doesn't fix the root cause in the web app.
+The following Rust desktop changes work around the hybrid format. **All should be reverted** once the web app writes correct metadata:
+
+- `crypto/folder.rs`: `FileEntry` fields (`cid`, `file_key_encrypted`, `file_iv`, `size`, `encryption_mode`) changed to `#[serde(default)]` — only needed because v2 pointers lack these fields
+- `crypto/folder.rs`: `file_meta_ipns_name: Option<String>` added to `FileEntry` — carries pointer IPNS name through v1 parse path
+- `crypto/folder.rs`: `decrypt_any_folder_metadata()` V2→V1 fallback — tries v1 parse when v2 fails
+- `fuse/inode.rs`: `populate_folder()` `is_pointer` branch — handles pointer entries that arrived via v1 code path
+- `crypto/tests.rs`, `fuse/mod.rs`, `fuse/inode.rs`: `file_meta_ipns_name: None` added to all `FileEntry` struct literals
+
+Debug logging (`Decrypted folder metadata JSON` preview, specific serde error messages) can stay — useful regardless.

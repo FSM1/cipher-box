@@ -1,1 +1,1 @@
-Build succeeded, app is running. Please log in, then I'll check if files show up.
+Done. The todo now documents exactly which workarounds to revert. Want me to commit the Rust changes and the updated todo?
