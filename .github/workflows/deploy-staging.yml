@@ -101,7 +101,7 @@ jobs:
       - name: Build web app with staging env vars
         run: pnpm --filter @cipherbox/web build
         env:
-          VITE_WEB3AUTH_CLIENT_ID: ${{ secrets.VITE_WEB3AUTH_CLIENT_ID }}
+          VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
           VITE_API_URL: ${{ vars.STAGING_API_URL }}
           VITE_ENVIRONMENT: staging
           VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
