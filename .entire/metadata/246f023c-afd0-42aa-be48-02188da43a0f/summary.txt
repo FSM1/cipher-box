@@ -1,3 +1,1 @@
-FUSE-T NFS mounted and responding. Empty vault (new test user). The whole headless dev flow is now working — auth, vault, and mount all happen automatically without any manual interaction or popups.
-
-The app is running and ready for debugging the WIP readdir prefetch changes. Want me to test file operations (upload via web app, then read from FUSE) to exercise the prefetch code?
+API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has expired. Please obtain a new token or refresh your existing token."},"request_id":"req_011CYG72k6CzijXhTBmsWhKd"} · Please run /login

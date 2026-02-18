@@ -742,6 +742,64 @@ mod implementation {
             }
 
             reply.ok();
+
+            // Proactive content prefetch: start downloading file content for
+            // all children so it's cached by the time the user reads them.
+            // Only on offset=0 to avoid duplicate prefetches.
+            if offset == 0 {
+                self.drain_content_prefetches();
+                for &child_ino in &children {
+                    if let Some(child) = self.inodes.get(child_ino) {
+                        if let InodeKind::File { cid, encrypted_file_key, iv, encryption_mode, .. } = &child.kind {
+                            if !cid.is_empty()
+                                && self.content_cache.get(cid).is_none()
+                                && !self.prefetching.contains(cid)
+                            {
+                                eprintln!(">>> readdir: proactive prefetch for {} (CID {})", child.name, &cid[..cid.len().min(12)]);
+                                let api = self.api.clone();
+                                let rt = self.rt.clone();
+                                let tx = self.content_tx.clone();
+                                let cid_clone = cid.clone();
+                                let efk = encrypted_file_key.clone();
+                                let iv_clone = iv.clone();
+                                let enc_mode = encryption_mode.clone();
+                                let pk = self.private_key.clone();
+                                self.prefetching.insert(cid.clone());
+
+                                rt.spawn(async move {
+                                    let result = tokio::time::timeout(
+                                        CONTENT_DOWNLOAD_TIMEOUT,
+                                        fetch_and_decrypt_content_async(
+                                            &api, &cid_clone, &efk, &iv_clone, &enc_mode, &pk,
+                                        ),
+                                    )
+                                    .await;
+
+                                    match result {
+                                        Ok(Ok(plaintext)) => {
+                                            eprintln!(
+                                                ">>> prefetch(readdir): cached {} bytes for CID {}",
+                                                plaintext.len(),
+                                                &cid_clone[..cid_clone.len().min(12)]
+                                            );
+                                            let _ = tx.send(crate::fuse::PendingContent {
+                                                cid: cid_clone,
+                                                data: plaintext,
+                                            });
+                                        }
+                                        Ok(Err(e)) => {
+                                            eprintln!(">>> prefetch(readdir): FAILED for CID {}: {}", &cid_clone[..cid_clone.len().min(12)], e);
+                                        }
+                                        Err(_) => {
+                                            eprintln!(">>> prefetch(readdir): TIMED OUT for CID {}", &cid_clone[..cid_clone.len().min(12)]);
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         /// Create a new file in a directory.
@@ -893,14 +951,22 @@ mod implementation {
 
             if access_mode == libc::O_WRONLY || access_mode == libc::O_RDWR {
                 // Writable open: create temp file
-                // If existing file (has CID), pre-populate with decrypted content
+                // If existing file (has CID), pre-populate with decrypted content.
+                // Try content cache first (populated by readdir proactive prefetch).
                 let existing_content = if !cid.is_empty() {
-                    match fetch_and_decrypt_file_content(self, &cid, &encrypted_file_key, &iv, &encryption_mode) {
-                        Ok(content) => Some(content),
-                        Err(e) => {
-                            log::error!("Failed to fetch content for write-open: {}", e);
-                            reply.error(libc::EIO);
-                            return;
+                    self.drain_content_prefetches();
+                    if let Some(cached) = self.content_cache.get(&cid) {
+                        eprintln!(">>> FUSE open(write): using cached content for CID {}", &cid[..cid.len().min(12)]);
+                        Some(cached.to_vec())
+                    } else {
+                        eprintln!(">>> FUSE open(write): fetching content for CID {} ...", &cid[..cid.len().min(12)]);
+                        match fetch_and_decrypt_file_content(self, &cid, &encrypted_file_key, &iv, &encryption_mode) {
+                            Ok(content) => Some(content),
+                            Err(e) => {
+                                log::error!("Failed to fetch content for write-open: {}", e);
+                                reply.error(libc::EIO);
+                                return;
+                            }
                         }
                     }
                 } else {
@@ -1154,61 +1220,102 @@ mod implementation {
                 return;
             }
 
-            // Content not in cache — download synchronously as fallback.
-            // This handles the case where the background prefetch from open()
-            // hasn't completed yet, or FUSE-T NFS calls read() without prior open(),
-            // or when content was evicted from cache.
+            // Content not in cache. Download it on-demand:
             //
-            // NOTE: This blocks the single FUSE-T NFS thread. FUSE-T uses
-            // NFSv4 hard mount with timeo=10 (1s). The NFS client will show
-            // "not responding" during download but recovers once we reply.
-            eprintln!(">>> FUSE read: cache miss for CID {}, downloading synchronously...", &cid[..cid.len().min(12)]);
-            let result = self.rt.block_on(async {
-                tokio::time::timeout(
-                    CONTENT_DOWNLOAD_TIMEOUT,
-                    fetch_and_decrypt_content_async(
-                        &self.api,
-                        &cid,
-                        &encrypted_file_key_hex,
-                        &iv_hex,
-                        &encryption_mode,
-                        &self.private_key,
-                    ),
-                ).await
-            });
+            // 1. Ensure a background prefetch is running (async download+decrypt)
+            // 2. Poll the prefetch channel in 100ms increments (up to 3s)
+            // 3. Serve data once it arrives, or EIO if still downloading
+            //
+            // We limit blocking to 3s to avoid corrupting NFSv4 client state.
+            // FUSE-T's single NFS thread means longer blocks prevent ALL other
+            // ops, causing the NFS client to time out queued requests and get
+            // confused about file state. 3s is enough for small files; large
+            // files use proactive prefetch from readdir to be cached ahead of time.
 
-            match result {
-                Ok(Ok(plaintext)) => {
-                    eprintln!(">>> FUSE read: downloaded {} bytes for CID {}", plaintext.len(), &cid[..cid.len().min(12)]);
+            // Start prefetch if not already in progress
+            if !self.prefetching.contains(&cid) {
+                eprintln!(">>> FUSE read: starting prefetch for CID {} ...", &cid[..cid.len().min(12)]);
+                let api = self.api.clone();
+                let rt = self.rt.clone();
+                let tx = self.content_tx.clone();
+                let cid_clone = cid.clone();
+                let efk = encrypted_file_key_hex.clone();
+                let iv_clone = iv_hex.clone();
+                let enc_mode = encryption_mode.clone();
+                let pk = self.private_key.clone();
+                self.prefetching.insert(cid.clone());
+
+                rt.spawn(async move {
+                    let result = tokio::time::timeout(
+                        CONTENT_DOWNLOAD_TIMEOUT,
+                        fetch_and_decrypt_content_async(
+                            &api, &cid_clone, &efk, &iv_clone, &enc_mode, &pk,
+                        ),
+                    )
+                    .await;
+
+                    match result {
+                        Ok(Ok(plaintext)) => {
+                            eprintln!(
+                                ">>> prefetch(read): cached {} bytes for CID {}",
+                                plaintext.len(),
+                                &cid_clone[..cid_clone.len().min(12)]
+                            );
+                            let _ = tx.send(crate::fuse::PendingContent {
+                                cid: cid_clone,
+                                data: plaintext,
+                            });
+                        }
+                        Ok(Err(e)) => {
+                            log::error!("Read prefetch failed for CID {}: {}", cid_clone, e);
+                            eprintln!(">>> prefetch(read): FAILED for CID {}: {}", &cid_clone[..cid_clone.len().min(12)], e);
+                        }
+                        Err(_) => {
+                            log::error!("Read prefetch timed out for CID {}", cid_clone);
+                            eprintln!(">>> prefetch(read): TIMED OUT for CID {}", &cid_clone[..cid_clone.len().min(12)]);
+                        }
+                    }
+                });
+            }
+
+            // Poll the prefetch channel (up to 3s in 100ms increments).
+            // Keep this SHORT to avoid blocking the single NFS thread too long.
+            let poll_start = std::time::Instant::now();
+            let max_wait = Duration::from_secs(3);
+            loop {
+                std::thread::sleep(Duration::from_millis(100));
+                self.drain_content_prefetches();
+                if let Some(cached) = self.content_cache.get(&cid) {
+                    eprintln!(
+                        ">>> FUSE read: content ready after {:.1}s for CID {}",
+                        poll_start.elapsed().as_secs_f64(),
+                        &cid[..cid.len().min(12)]
+                    );
                     let start = offset as usize;
-                    if start >= plaintext.len() {
-                        self.content_cache.set(&cid, plaintext);
+                    if start >= cached.len() {
                         reply.data(&[]);
                     } else {
-                        let end = std::cmp::min(start + size as usize, plaintext.len());
-                        let data_slice = plaintext[start..end].to_vec();
-                        self.content_cache.set(&cid, plaintext);
-                        reply.data(&data_slice);
+                        let end = std::cmp::min(start + size as usize, cached.len());
+                        reply.data(&cached[start..end]);
                     }
+                    return;
                 }
-                Ok(Err(e)) => {
-                    log::error!("Read fallback download failed for CID {}: {}", cid, e);
-                    eprintln!(">>> FUSE read: download FAILED for CID {}: {}", &cid[..cid.len().min(12)], e);
-                    reply.error(libc::EIO);
-                }
-                Err(_) => {
-                    log::error!("Read fallback download timed out for CID {} ({}s)", cid, CONTENT_DOWNLOAD_TIMEOUT.as_secs());
-                    eprintln!(">>> FUSE read: download TIMED OUT for CID {}", &cid[..cid.len().min(12)]);
-                    reply.error(libc::EIO);
+                if poll_start.elapsed() > max_wait {
+                    break;
                 }
             }
+
+            // Content still downloading — return EIO. The prefetch continues
+            // in background. Next open+read will find it cached.
+            eprintln!(">>> FUSE read: content not ready after 3s for CID {}, returning EIO", &cid[..cid.len().min(12)]);
+            reply.error(libc::EIO);
         }
 
         /// Release (close) a file handle.
         ///
         /// If the handle is dirty (has been written to), encrypts the temp file
-        /// content, uploads to IPFS, updates inode metadata, and publishes
-        /// updated folder metadata via IPNS.
+        /// content and spawns a background upload to IPFS. Metadata publish is
+        /// debounced — handled by flush_publish_queue() after uploads settle.
         fn release(
             &mut self,
             _req: &Request<'_>,
@@ -1273,19 +1380,16 @@ mod implementation {
                             }
                         });
 
-                        // Update local inode (CID="" for now — background thread will fix it)
+                        // Update local inode (CID="" for now — drain_upload_completions will fix it)
                         let encrypted_file_key_hex = hex::encode(&wrapped_key);
                         let iv_hex = hex::encode(&iv);
                         let file_size = plaintext.len() as u64;
-                        let file_name = self.inodes.get(ino)
-                            .map(|i| i.name.clone())
-                            .unwrap_or_default();
 
                         if let Some(inode) = self.inodes.get_mut(ino) {
                             inode.kind = InodeKind::File {
                                 cid: String::new(),
-                                encrypted_file_key: encrypted_file_key_hex.clone(),
-                                iv: iv_hex.clone(),
+                                encrypted_file_key: encrypted_file_key_hex,
+                                iv: iv_hex,
                                 size: file_size,
                                 encryption_mode: "GCM".to_string(),
                                 file_meta_ipns_name: None,
@@ -1299,110 +1403,37 @@ mod implementation {
                         // Cache plaintext so reads work before upload completes
                         self.pending_content.insert(ino, plaintext);
 
-                        // Get parent inode for metadata
+                        // Get parent inode for metadata publish queue
                         let parent_ino = self.inodes.get(ino)
                             .map(|i| i.parent_ino)
                             .unwrap_or(ROOT_INO);
 
-                        // Mark parent folder as mutated to prevent background refreshes
-                        // from overwriting local changes while upload is in flight.
-                        self.mutated_folders.insert(parent_ino, std::time::Instant::now());
-
-                        // Build folder metadata snapshot (CPU-only).
-                        // This will have CID="" for the new/modified file.
-                        // The background thread will replace it with the real CID after upload.
-                        let (mut metadata, folder_key, ipns_private_key, ipns_name, old_metadata_cid) =
-                            self.build_folder_metadata(parent_ino)?;
+                        // Queue debounced metadata publish (with pending upload)
+                        self.queue_publish(parent_ino, true);
 
                         // Clone data for background thread
                         let api = self.api.clone();
                         let rt = self.rt.clone();
                         let upload_tx = self.upload_tx.clone();
-                        let coordinator = self.publish_coordinator.clone();
 
-                        // Spawn background OS thread for ALL network I/O
+                        // Spawn background OS thread for file upload ONLY
+                        // Metadata publish is handled by the debounced publish queue
                         std::thread::spawn(move || {
                             let result = rt.block_on(async {
-                                // 1. Upload file content to IPFS
                                 let file_cid = crate::api::ipfs::upload_content(
                                     &api, &ciphertext,
                                 ).await?;
 
                                 log::info!("File uploaded: ino {} -> CID {}", ino, file_cid);
 
-                                // Acquire per-folder publish lock
-                                let lock = coordinator.get_lock(&ipns_name);
-                                let _guard = lock.lock().await;
-
-                                // 2. Fix the CID in the metadata snapshot
-                                for child in &mut metadata.children {
-                                    if let crate::crypto::folder::FolderChild::File(entry) = child {
-                                        if entry.cid.is_empty() && entry.name == file_name {
-                                            entry.cid = file_cid.clone();
-                                            entry.file_key_encrypted = encrypted_file_key_hex.clone();
-                                            entry.file_iv = iv_hex.clone();
-                                            entry.size = file_size;
-                                            break;
-                                        }
-                                    }
-                                }
-
-                                // 3. Encrypt metadata
-                                let json_bytes = crate::fuse::encrypt_metadata_to_json(
-                                    &metadata, &folder_key,
-                                )?;
-
-                                // 4. Resolve current IPNS seq (monotonic cache fallback)
-                                let seq = coordinator.resolve_sequence(&api, &ipns_name).await?;
-
-                                // 5. Upload metadata to IPFS
-                                let meta_cid = crate::api::ipfs::upload_content(
-                                    &api, &json_bytes,
-                                ).await?;
-
-                                // 6. Create + sign IPNS record
-                                let ipns_key_arr: [u8; 32] = ipns_private_key.try_into()
-                                    .map_err(|_| "Invalid IPNS key length".to_string())?;
-                                let new_seq = seq + 1;
-                                let value = format!("/ipfs/{}", meta_cid);
-                                let record = crate::crypto::ipns::create_ipns_record(
-                                    &ipns_key_arr, &value, new_seq, 86_400_000,
-                                ).map_err(|e| format!("IPNS record creation failed: {}", e))?;
-                                let marshaled = crate::crypto::ipns::marshal_ipns_record(&record)
-                                    .map_err(|e| format!("IPNS marshal failed: {}", e))?;
-
-                                use base64::Engine;
-                                let record_b64 = base64::engine::general_purpose::STANDARD
-                                    .encode(&marshaled);
-
-                                // 7. Publish IPNS record
-                                let req = crate::api::ipns::IpnsPublishRequest {
-                                    ipns_name: ipns_name.clone(),
-                                    record: record_b64,
-                                    metadata_cid: meta_cid,
-                                    encrypted_ipns_private_key: None,
-                                    key_epoch: None,
-                                };
-                                crate::api::ipns::publish_ipns(&api, &req).await?;
-
-                                // Record successful publish in coordinator cache
-                                coordinator.record_publish(&ipns_name, new_seq);
-
-                                // 8. Unpin old CIDs
-                                if let Some(old) = old_file_cid {
-                                    let _ = crate::api::ipfs::unpin_content(&api, &old).await;
-                                }
-                                if let Some(old) = old_metadata_cid {
-                                    let _ = crate::api::ipfs::unpin_content(&api, &old).await;
-                                }
-
                                 // Notify main thread of completed upload
                                 let _ = upload_tx.send(crate::fuse::UploadComplete {
                                     ino,
                                     new_cid: file_cid,
+                                    parent_ino,
+                                    old_file_cid,
                                 });
 
-                                log::info!("Background file+metadata upload complete for ino {}", ino);
                                 Ok::<(), String>(())
                             });
 

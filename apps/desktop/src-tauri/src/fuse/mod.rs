@@ -74,6 +74,18 @@ pub struct PendingContent {
 pub struct UploadComplete {
     pub ino: u64,
     pub new_cid: String,
+    pub parent_ino: u64,
+    pub old_file_cid: Option<String>,
+}
+
+/// Entry in the debounced publish queue.
+/// Tracks folders that need metadata published after file mutations.
+#[cfg(feature = "fuse")]
+struct PublishQueueEntry {
+    /// When the first mutation was queued (for debounce timing).
+    first_dirty: std::time::Instant,
+    /// Number of file uploads still in flight for this folder.
+    pending_uploads: usize,
 }
 
 /// Coordinates IPNS publish operations to prevent sequence number races
@@ -321,6 +333,9 @@ pub struct CipherBoxFS {
     pub upload_tx: std::sync::mpsc::Sender<UploadComplete>,
     /// Shared coordinator for IPNS publish sequencing and per-folder locking.
     pub publish_coordinator: Arc<PublishCoordinator>,
+    /// Debounced publish queue: folders needing metadata publish after mutations.
+    /// Publishes are coalesced and deferred until uploads settle.
+    publish_queue: HashMap<u64, PublishQueueEntry>,
 }
 
 #[cfg(feature = "fuse")]
@@ -483,17 +498,15 @@ impl CipherBoxFS {
         Ok((metadata, folder_key, ipns_private_key, ipns_name, old_cid))
     }
 
-    /// Non-blocking metadata update: build metadata (CPU), then spawn
-    /// a background OS thread for encrypt + upload + IPNS publish.
-    /// Returns immediately — does NOT block the FUSE NFS thread.
+    /// Publish folder metadata immediately (no debounce).
+    /// Used for non-upload mutations (unlink, rmdir, rename) where the inode tree
+    /// is already in its final state and we want the IPNS record updated ASAP.
     pub fn update_folder_metadata(&mut self, folder_ino: u64) -> Result<(), String> {
+        // Mark folder as locally mutated to prevent background refreshes
+        self.mutated_folders.insert(folder_ino, std::time::Instant::now());
+        // Build metadata and publish immediately (no debounce needed)
         let (metadata, folder_key, ipns_private_key, ipns_name, old_cid) =
             self.build_folder_metadata(folder_ino)?;
-
-        // Mark folder as locally mutated — prevents background refreshes
-        // from overwriting local changes until IPNS publish propagates.
-        self.mutated_folders.insert(folder_ino, std::time::Instant::now());
-
         spawn_metadata_publish(
             self.api.clone(),
             self.rt.clone(),
@@ -504,11 +517,11 @@ impl CipherBoxFS {
             old_cid,
             self.publish_coordinator.clone(),
         );
-
         Ok(())
     }
 
     /// Drain completed upload notifications and update inode CIDs + caches.
+    /// Also flushes the debounced publish queue when uploads settle.
     pub fn drain_upload_completions(&mut self) {
         while let Ok(result) = self.upload_rx.try_recv() {
             log::debug!(
@@ -527,6 +540,74 @@ impl CipherBoxFS {
             // Move plaintext from pending_content to content_cache
             if let Some(plaintext) = self.pending_content.remove(&result.ino) {
                 self.content_cache.set(&result.new_cid, plaintext);
+            }
+            // Unpin old file CID in background
+            if let Some(old_cid) = result.old_file_cid {
+                let api = self.api.clone();
+                self.rt.spawn(async move {
+                    let _ = crate::api::ipfs::unpin_content(&api, &old_cid).await;
+                });
+            }
+            // Decrement pending upload count for this folder
+            if let Some(entry) = self.publish_queue.get_mut(&result.parent_ino) {
+                entry.pending_uploads = entry.pending_uploads.saturating_sub(1);
+            }
+        }
+        // Flush any publish queue entries that are ready
+        self.flush_publish_queue();
+    }
+
+    /// Queue a folder for debounced metadata publish.
+    /// Called after mutations (create, unlink, rmdir, rename) that change folder contents.
+    pub fn queue_publish(&mut self, folder_ino: u64, has_pending_upload: bool) {
+        let entry = self.publish_queue.entry(folder_ino).or_insert(PublishQueueEntry {
+            first_dirty: std::time::Instant::now(),
+            pending_uploads: 0,
+        });
+        if has_pending_upload {
+            entry.pending_uploads += 1;
+        }
+        // Mark folder as locally mutated to prevent background refreshes
+        self.mutated_folders.insert(folder_ino, std::time::Instant::now());
+    }
+
+    /// Flush publish queue entries that are ready.
+    /// Criteria: all uploads complete AND debounce period elapsed (1.5s),
+    /// OR safety valve: 10s since first change regardless of pending uploads.
+    fn flush_publish_queue(&mut self) {
+        let now = std::time::Instant::now();
+        let debounce = std::time::Duration::from_millis(1500);
+        let safety_valve = std::time::Duration::from_secs(10);
+
+        // Collect folders ready to publish
+        let ready: Vec<u64> = self.publish_queue.iter()
+            .filter(|(_, entry)| {
+                let elapsed = now.duration_since(entry.first_dirty);
+                (entry.pending_uploads == 0 && elapsed >= debounce)
+                    || elapsed >= safety_valve
+            })
+            .map(|(&ino, _)| ino)
+            .collect();
+
+        for folder_ino in ready {
+            self.publish_queue.remove(&folder_ino);
+            eprintln!(">>> Debounced publish triggered for folder ino={}", folder_ino);
+            match self.build_folder_metadata(folder_ino) {
+                Ok((metadata, folder_key, ipns_private_key, ipns_name, old_cid)) => {
+                    spawn_metadata_publish(
+                        self.api.clone(),
+                        self.rt.clone(),
+                        metadata,
+                        folder_key,
+                        ipns_private_key,
+                        ipns_name,
+                        old_cid,
+                        self.publish_coordinator.clone(),
+                    );
+                }
+                Err(e) => {
+                    log::error!("Failed to build folder metadata for publish (ino {}): {}", folder_ino, e);
+                }
             }
         }
     }
@@ -552,10 +633,13 @@ impl CipherBoxFS {
                 }
             };
 
-            // Skip stale refreshes for recently-mutated folders
-            if self.mutated_folders.contains_key(&refresh.ino) {
+            // Skip stale refreshes for recently-mutated folders or folders
+            // with pending publishes (to prevent re-adding deleted/stale children)
+            if self.mutated_folders.contains_key(&refresh.ino)
+                || self.publish_queue.contains_key(&refresh.ino)
+            {
                 log::debug!(
-                    "refresh skipped for ino {} (locally mutated, waiting for IPNS propagation)",
+                    "refresh skipped for ino {} (locally mutated or publish pending)",
                     refresh.ino
                 );
                 // Still update cache so readdir doesn't re-fire refreshes
@@ -738,11 +822,14 @@ pub async fn mount_filesystem(
     // This runs on the calling thread (tokio context available via rt handle).
     let mut metadata_cache = cache::MetadataCache::new();
     log::info!("Pre-populating root folder from IPNS...");
+    eprintln!(">>> Pre-populate: resolving IPNS name {}", &root_ipns_name);
     let fetch_result: Result<(Vec<u8>, String), String> = async {
         let resolve_resp =
             crate::api::ipns::resolve_ipns(&state.api, &root_ipns_name).await?;
+        eprintln!(">>> Pre-populate: IPNS resolved to CID {}", &resolve_resp.cid);
         let encrypted_bytes =
             crate::api::ipfs::fetch_content(&state.api, &resolve_resp.cid).await?;
+        eprintln!(">>> Pre-populate: fetched {} bytes", encrypted_bytes.len());
         Ok((encrypted_bytes, resolve_resp.cid))
     }.await;
     match fetch_result {
@@ -910,6 +997,7 @@ pub async fn mount_filesystem(
         upload_tx,
         mutated_folders: HashMap::new(),
         publish_coordinator: Arc::new(PublishCoordinator::new()),
+        publish_queue: HashMap::new(),
     };
 
     let mount_path_clone = mount_path.clone();
