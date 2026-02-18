@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.2](https://github.com/FSM1/cipher-box/compare/v0.10.1...v0.10.2) (2026-02-18)
+
+
+### Bug Fixes
+
+* **ci:** enable test-login on staging API ([#146](https://github.com/FSM1/cipher-box/issues/146)) ([63b0a69](https://github.com/FSM1/cipher-box/commit/63b0a69fa31ebc545a29c0b9e67611c323ae2425))
+* **web:** guard against undefined ipnsName in text editor and details dialog ([#145](https://github.com/FSM1/cipher-box/issues/145)) ([8105af9](https://github.com/FSM1/cipher-box/commit/8105af9b4c4666558d8e501228dee9d733b47536))
+
 ## [0.10.1](https://github.com/FSM1/cipher-box/compare/v0.10.0...v0.10.1) (2026-02-18)
 
 

@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/nicklasxyz/tauri-v2-schema/refs/heads/main/tauri.conf.json",
   "productName": "CipherBox",
   "identifier": "com.cipherbox.desktop",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "build": {
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist",
