@@ -1,0 +1,247 @@
+name: Deploy Staging
+
+on:
+  push:
+    tags:
+      - 'v*-staging*'
+  workflow_call:
+    inputs:
+      staging_tag:
+        required: true
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  # Resolve tag: workflow_call passes it as input, push trigger uses ref_name
+  DEPLOY_TAG: ${{ inputs.staging_tag || github.ref_name }}
+
+jobs:
+  build-api:
+    name: Build & Push API Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.staging_tag || github.ref_name }}
+
+      - name: Set lowercase image name
+        run: echo "API_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cipherbox-api" >> "$GITHUB_ENV"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          push: true
+          tags: |
+            ${{ env.API_IMAGE }}:${{ env.DEPLOY_TAG }}
+            ${{ env.API_IMAGE }}:latest
+
+  build-tee:
+    name: Build & Push TEE Worker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.staging_tag || github.ref_name }}
+
+      - name: Set lowercase image name
+        run: echo "TEE_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cipherbox-tee-worker" >> "$GITHUB_ENV"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v5
+        with:
+          context: ./tee-worker
+          file: tee-worker/Dockerfile
+          push: true
+          tags: |
+            ${{ env.TEE_IMAGE }}:${{ env.DEPLOY_TAG }}
+            ${{ env.TEE_IMAGE }}:latest
+
+  build-web:
+    name: Build Web App
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.staging_tag || github.ref_name }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build crypto package
+        run: pnpm --filter @cipherbox/crypto build
+
+      - name: Build web app with staging env vars
+        run: pnpm --filter @cipherbox/web build
+        env:
+          VITE_WEB3AUTH_CLIENT_ID: ${{ secrets.VITE_WEB3AUTH_CLIENT_ID }}
+          VITE_API_URL: ${{ vars.STAGING_API_URL }}
+          VITE_ENVIRONMENT: staging
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+
+      - name: Upload web dist as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: apps/web/dist/
+          retention-days: 1
+
+  deploy-vps:
+    name: Deploy to Staging VPS
+    needs: [build-api, build-tee, build-web]
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.staging_tag || github.ref_name }}
+
+      - name: Download web dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: web-dist/
+
+      - name: Generate .env.staging
+        run: |
+          cat > .env.staging << 'ENVEOF'
+          NODE_ENV=staging
+          CIPHERBOX_ENVIRONMENT=staging
+          TEST_LOGIN_SECRET=${{ secrets.STAGING_TEST_LOGIN_SECRET }}
+          PORT=3000
+          DB_HOST=postgres
+          DB_PORT=5432
+          DB_USERNAME=${{ vars.STAGING_DB_USERNAME }}
+          DB_PASSWORD=${{ secrets.STAGING_DB_PASSWORD }}
+          DB_DATABASE=cipherbox_staging
+          JWT_SECRET=${{ secrets.STAGING_JWT_SECRET }}
+          WEB_APP_URL=${{ vars.STAGING_WEB_APP_URL }}
+          CORS_ALLOWED_ORIGINS=${{ vars.CORS_ALLOWED_ORIGINS }}
+          IPFS_PROVIDER=local
+          IPFS_LOCAL_API_URL=http://ipfs:5001
+          IPFS_LOCAL_GATEWAY_URL=http://ipfs:8080
+          DELEGATED_ROUTING_URL=https://delegated-ipfs.dev
+          REDIS_HOST=redis
+          REDIS_PORT=6379
+          TEE_WORKER_URL=http://tee-worker:3001
+          TEE_WORKER_SECRET=${{ secrets.STAGING_TEE_WORKER_SECRET }}
+          REDIS_PASSWORD=${{ secrets.STAGING_REDIS_PASSWORD }}
+          GRAFANA_LOKI_URL=${{ vars.GRAFANA_LOKI_URL }}
+          GRAFANA_LOKI_USERNAME=${{ vars.GRAFANA_LOKI_USERNAME }}
+          GRAFANA_LOKI_API_KEY=${{ secrets.GRAFANA_LOKI_API_KEY }}
+          SENDGRID_API_KEY=${{ secrets.SENDGRID_API_KEY }}
+          SENDGRID_FROM_EMAIL=${{ vars.SENDGRID_FROM_EMAIL }}
+          GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }}
+          ENVEOF
+          # Append image tag and lowercase owner (can't use shell vars in quoted heredoc)
+          OWNER="${{ github.repository_owner }}"
+          echo "GITHUB_REPOSITORY_OWNER=${OWNER,,}" >> .env.staging
+          echo "TAG=${{ env.DEPLOY_TAG }}" >> .env.staging
+
+      - name: Copy files to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ vars.STAGING_HOST }}
+          username: ${{ vars.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          source: '.env.staging,docker/docker-compose.staging.yml,docker/Caddyfile,docker/alloy-config.river'
+          target: /opt/cipherbox
+          strip_components: 0
+
+      - name: Arrange files on VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ vars.STAGING_HOST }}
+          username: ${{ vars.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            # Move files to correct locations
+            mv /opt/cipherbox/.env.staging /opt/cipherbox/docker/.env.staging 2>/dev/null || true
+            cd /opt/cipherbox/docker
+
+            # Docker Compose reads .env automatically for variable substitution
+            cp .env.staging .env
+
+            # Restrict env file permissions (contains secrets)
+            chmod 600 .env .env.staging
+
+            # Ensure certs symlink exists for Caddy
+            rm -rf /opt/cipherbox/docker/certs
+            ln -sf /opt/cipherbox/certs /opt/cipherbox/docker/certs
+
+      - name: Deploy web app files to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ vars.STAGING_HOST }}
+          username: ${{ vars.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          source: 'web-dist/*'
+          target: /opt/cipherbox/web
+          strip_components: 1
+          rm: true
+
+      - name: Deploy services
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ vars.STAGING_HOST }}
+          username: ${{ vars.STAGING_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/cipherbox/docker
+
+            # Login to GHCR
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+            # Set image tag from git tag (GHCR requires lowercase owner)
+            export TAG="${{ env.DEPLOY_TAG }}"
+            OWNER="${{ github.repository_owner }}"
+            export GITHUB_REPOSITORY_OWNER="${OWNER,,}"
+
+            # Pull new images
+            docker compose -f docker-compose.staging.yml pull
+
+            # Run database migrations before starting services
+            # (api service inherits env vars from env_file in compose)
+            docker compose -f docker-compose.staging.yml run --rm \
+              api node dist/run-migrations.js
+
+            # Start/restart services
+            docker compose -f docker-compose.staging.yml up -d
+
+            # Restart Caddy to pick up refreshed web files bind mount
+            # (scp rm:true recreates the host dir, breaking the old mount inode)
+            docker compose -f docker-compose.staging.yml restart caddy
+
+            # Cleanup old images
+            docker image prune -f

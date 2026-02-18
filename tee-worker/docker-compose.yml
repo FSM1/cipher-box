@@ -1,0 +1,14 @@
+version: '3.8'
+services:
+  tee-worker:
+    build: .
+    volumes:
+      - /var/run/tappd.sock:/var/run/tappd.sock
+    ports:
+      - '3001:3001'
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - TEE_MODE=cvm
+      - TEE_WORKER_SECRET=${TEE_WORKER_SECRET}

@@ -1,0 +1,87 @@
+name: cipherbox-infrastructure
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cipherbox-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_DATABASE:-cipherbox}
+    ports:
+      - '${DB_PORT:-5432}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ipfs:
+    image: ipfs/kubo:v0.34.0
+    container_name: cipherbox-ipfs
+    restart: unless-stopped
+    environment:
+      - IPFS_PATH=/data/ipfs
+    volumes:
+      - ipfs_data:/data/ipfs
+    ports:
+      # Swarm - P2P connections
+      - '4001:4001/tcp'
+      - '4001:4001/udp'
+      # TODO: Create environment-specific configs for staging/prod with:
+      #   - 127.0.0.1 bindings or reverse proxy with authentication
+      #   - IPFS API auth enabled
+      # API - bound to all interfaces for dev (VM/host access)
+      - '5001:5001'
+      # Gateway - bound to all interfaces for dev (VM/host access)
+      - '8080:8080'
+    healthcheck:
+      test: ['CMD-SHELL', 'ipfs id || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+
+  redis:
+    image: redis:7-alpine
+    container_name: cipherbox-redis
+    restart: unless-stopped
+    ports:
+      - '${REDIS_PORT:-6380}:6379'
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  mock-ipns-routing:
+    build:
+      context: ../tools/mock-ipns-routing
+      dockerfile: Dockerfile
+    container_name: cipherbox-mock-ipns-routing
+    restart: unless-stopped
+    environment:
+      - HOST=0.0.0.0
+      - PORT=3001
+      - LOG_LEVEL=info
+    ports:
+      - '127.0.0.1:3001:3001'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q --spider http://localhost:3001/health || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  ipfs_data:
+  redis_data:

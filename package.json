@@ -1,0 +1,52 @@
+{
+  "name": "cipher-box",
+  "version": "0.8.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently --kill-others -n api,web -c blue,green \"pnpm --filter @cipherbox/api dev\" \"pnpm --filter @cipherbox/web dev\"",
+    "build": "pnpm -r run build",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "lint:md": "markdownlint '**/*.md' --ignore node_modules --ignore '**/node_modules/**'",
+    "lint:md:fix": "markdownlint '**/*.md' --ignore node_modules --ignore '**/node_modules/**' --fix",
+    "typecheck": "pnpm --filter @cipherbox/crypto build && pnpm --filter @cipherbox/web exec tsc -b",
+    "test": "pnpm --parallel -r run test",
+    "test:e2e": "DELEGATED_ROUTING_URL=http://localhost:3001 pnpm --filter @cipherbox/e2e test",
+    "test:e2e:headed": "DELEGATED_ROUTING_URL=http://localhost:3001 pnpm --filter @cipherbox/e2e test:headed",
+    "openapi:generate": "pnpm --filter @cipherbox/api openapi:generate",
+    "api:generate": "pnpm openapi:generate && pnpm --filter @cipherbox/web api:generate && pnpm lint:fix",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.4.1",
+    "@commitlint/config-conventional": "^20.4.1",
+    "@eslint/js": "^9.18.0",
+    "@noble/secp256k1": "^3.0.0",
+    "concurrently": "^9.2.1",
+    "eslint": "^9.18.0",
+    "eslint-config-prettier": "^10.0.1",
+    "eslint-plugin-prettier": "^5.2.3",
+    "globals": "^15.14.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.4.3",
+    "markdownlint-cli": "^0.47.0",
+    "prettier": "^3.4.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.21.0"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,yml,yaml}": [
+      "prettier --write"
+    ],
+    "*.md": [
+      "markdownlint --fix",
+      "prettier --write"
+    ]
+  }
+}

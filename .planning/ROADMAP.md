@@ -1,0 +1,407 @@
+# Roadmap: CipherBox
+
+## Milestones
+
+- Milestone 1: Staging MVP (Phases 1-10) -- shipped 2026-02-11
+- Milestone 2: Production v1.0 (Phases 11-17) -- in progress
+- Milestone 3: Encrypted Productivity Suite (Phases 18-21) -- planned
+
+## Phases
+
+**Phase Numbering:**
+
+- Integer phases (1, 2, 3): Planned milestone work
+- Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
+
+Decimal phases appear between their surrounding integers in numeric order.
+
+<details>
+<summary>Milestone 1: Staging MVP (Phases 1-10) -- SHIPPED 2026-02-11</summary>
+
+- [x] **Phase 1: Foundation** - Project scaffolding, CI/CD, development environment
+- [x] **Phase 2: Authentication** - Web3Auth integration with backend token management
+- [x] **Phase 3: Core Encryption** - Shared crypto module and vault initialization
+- [x] **Phase 4: File Storage** - Upload/download encrypted files via IPFS relay
+- [x] **Phase 4.1: API Service Testing** - Unit tests for backend services per TESTING.md (INSERTED)
+- [x] **Phase 4.2: Local IPFS Testing Infrastructure** - Add local IPFS node to Docker for offline testing (INSERTED)
+- [x] **Phase 5: Folder System** - IPNS metadata, folder hierarchy, and operations
+- [x] **Phase 6: File Browser UI** - Web interface for file management
+- [x] **Phase 6.1: Webapp Automation Testing** - E2E UI testing with automation framework (INSERTED)
+- [x] **Phase 6.2: Restyle App with Pencil Design** - Complete UI redesign using Pencil design tool (INSERTED)
+- [x] **Phase 6.3: UI Structure Refactor** - Page layouts, component hierarchy, and structural redesign using Pencil (INSERTED)
+- [x] **Phase 7: Multi-Device Sync** - IPNS polling and sync state management
+- [x] **Phase 7.1: Atomic File Upload** - Refactor multi-request upload into single atomic backend call with batch IPNS publishing (INSERTED)
+- [x] **Phase 8: TEE Integration** - Auto-republishing via Phala Cloud
+- [x] **Phase 9: Desktop Client** - Tauri app with FUSE mount for macOS
+- [x] **Phase 9.1: Environment Changes, DevOps & Staging Deployment** - CI/CD, environment config, staging deploy (INSERTED)
+- [x] **Phase 10: Data Portability** - Vault export and documentation
+
+**72 plans executed across 15 phase directories. Total execution time: ~5.6 hours.**
+
+See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
+
+</details>
+
+### Milestone 2: Production v1.0 (In Progress)
+
+**Milestone Goal:** Elevate the staging MVP into a production-ready encrypted storage platform with sharing, search, MFA, file versioning, cross-platform desktop, and TEE failover.
+
+- [ ] **Phase 11: Cross-Platform Desktop** - Linux and Windows desktop apps (Tauri, platform-specific FUSE/virtual drive) -- can run in parallel
+- [x] **Phase 11.1: macOS Desktop Catch-Up** - Close all desktop gaps from Phases 12-12.6 before cross-platform expansion (INSERTED)
+- [x] **Phase 12: Core Kit Identity Provider Foundation** - Replace PnP Modal SDK with MPC Core Kit, CipherBox as identity provider
+- [x] **Phase 12.1: AES-CTR Streaming Encryption** - AES-256-CTR for media files with byte-range decryption and in-browser playback (INSERTED)
+- [x] **Phase 12.2: Encrypted Device Registry** - Encrypted device metadata on IPFS for cross-device infrastructure (INSERTED)
+- [x] **Phase 12.3: SIWE + Unified Identity** - Wallet login via SIWE, multi-auth linking, ADR-001 cleanup (INSERTED)
+- [x] **Phase 12.3.1: Pre-Wipe Identity Cleanup** - Deterministic IPNS derivation, hashed identifiers, remove auto-linking (INSERTED)
+- [x] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
+- [x] **Phase 12.5: MFA Polishing, UAT & E2E Testing** - Polish auth flows, wallet E2E with mock provider, fix UAT bugs (INSERTED)
+- [x] **Phase 12.6: Per-File IPNS Metadata Split** - Split file metadata into per-file IPNS records, decouple content updates from folder publishes (INSERTED)
+- [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
+- [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
+- [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
+- [ ] **Phase 16: Advanced Sync** - Conflict detection, offline queue, and idempotent replay
+- [ ] **Phase 17: AWS Nitro TEE** - Nitro enclave as fallback TEE provider for IPNS republishing
+
+### Milestone 3: Encrypted Productivity Suite (Planned)
+
+**Milestone Goal:** Transform CipherBox into an encrypted productivity platform with billing, team accounts, document editors, and document signing.
+
+- [ ] **Phase 18: Billing Infrastructure** - Stripe subscriptions, NOWPayments crypto billing, tier enforcement
+- [ ] **Phase 19: Team Accounts** - Team CRUD, ECIES-wrapped Per-Team Key hierarchy, CASL permissions
+- [ ] **Phase 20: Document Editors** - TipTap rich text and Univer spreadsheet editors with decrypt-edit-encrypt pipeline
+- [ ] **Phase 21: Document Signing** - ECDSA signing/verification, visual signature capture, multi-party workflows
+
+See `.planning/milestones/m3/ROADMAP.md` for full M3 phase details.
+
+## Phase Details
+
+### Phase 11: Cross-Platform Desktop
+
+**Goal**: CipherBox desktop app runs on Linux and Windows with native filesystem integration
+**Depends on**: Phase 9 (macOS desktop complete in M1). Can run in parallel with any M2 phase.
+**Requirements**: PLAT-01, PLAT-02
+**Research flag**: NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse) and Windows virtual drive (WinFsp or Dokany) have platform-specific build and packaging requirements. Tauri cross-compilation and CI matrix need investigation.
+**Success Criteria** (what must be TRUE):
+
+1. Linux user can install CipherBox via AppImage or .deb, log in, and access a FUSE mount at ~/CipherBox
+2. Windows user can install CipherBox via MSI or NSIS installer, log in, and access a virtual drive (e.g., C:\CipherBox or mapped drive letter)
+3. Background sync, system tray, and keychain storage work on both platforms (parity with macOS)
+4. CI builds and packages desktop apps for all three platforms (macOS, Linux, Windows)
+   **Plans**: TBD
+
+### Phase 12: Core Kit Identity Provider Foundation
+
+**Goal**: Replace PnP Modal SDK with MPC Core Kit and establish CipherBox backend as the identity provider for Web3Auth, building the foundation for MFA, SIWE, and cross-device approval in subsequent phases
+**Depends on**: Phase 10 (Milestone 1 complete)
+**Requirements**: MFA-01 (partial — foundation only), AUTH infrastructure
+**Success Criteria** (what must be TRUE):
+
+1. User can log in via Google OAuth through CipherBox-branded UI (not Web3Auth modal)
+2. User can log in via email through CipherBox-branded UI
+3. CipherBox backend issues JWTs with `sub = userId`, verified by Web3Auth custom verifier
+4. Core Kit initialization, login, and private key export work end-to-end
+5. Existing PnP users' keys are preserved via `importTssKey` migration
+6. User's derived keypair (publicKey) remains identical after migration — vault data stays accessible
+
+**Plans:** 5 plans
+
+Plans:
+
+- [ ] 12-PLAN-01.md — Backend identity provider (JWKS, Google OAuth, email OTP, JWT issuing)
+- [ ] 12-PLAN-02.md — Core Kit SDK installation + React context provider
+- [ ] 12-PLAN-03.md — Frontend auth flow rewrite (loginWithJWT, key export, session)
+- [ ] 12-PLAN-04.md — Custom CipherBox-branded login UI (Google + email)
+- [ ] 12-PLAN-05.md — PnP migration (importTssKey), cleanup, and E2E verification
+
+### Phase 12.1: AES-CTR Streaming Encryption (INSERTED)
+
+**Goal**: Media files (video/audio) are encrypted with AES-256-CTR instead of GCM, enabling byte-range decryption for in-browser streaming playback via Service Worker transparent decrypt proxy
+**Depends on**: Phase 12.6 (per-file IPNS metadata with encryptionMode field)
+**Requirements**: Spec'd in TECHNICAL_ARCHITECTURE.md (v1.1 roadmap item), DATA_FLOWS.md (CTR upload/download sequences)
+**Research flag**: COMPLETE -- Service Worker decrypt proxy pattern, CTR nonce/counter management, streaming upload pipeline, IPFS byte-range limitations researched
+**Success Criteria** (what must be TRUE):
+
+1. Media files (detected by MIME type + size threshold) are encrypted with AES-256-CTR; all other files continue using AES-256-GCM
+2. User can play encrypted video/audio in-browser without downloading the entire file first (streaming decryption via Service Worker)
+3. Upload pipeline streams file data through CTR encryption instead of loading entirely into memory
+4. Custom player UI with decrypt progress bar, buffering state, and CipherBox branding
+5. encryptionMode field in metadata drives mode selection (CTR for media, GCM default)
+
+**Plans:** 4 plans
+
+Plans:
+
+- [x] 12.1-01-PLAN.md — CTR crypto primitives: encryptAesCtr, decryptAesCtr, decryptAesCtrRange, generateCtrIv, constants, tests
+- [x] 12.1-02-PLAN.md — Streaming upload: mode selection (MIME + size), CTR streaming encrypt via TransformStream, mode-aware pipeline
+- [x] 12.1-03-PLAN.md — Service Worker: decrypt proxy (fetch intercept, CTR range decrypt, auth token, caching), registration, Vite build
+- [x] 12.1-04-PLAN.md — Integration: mode-aware download, useStreamingPreview hook, VideoPlayerDialog + AudioPlayerDialog with decrypt progress
+
+### Phase 12.2: Encrypted Device Registry (INSERTED)
+
+**Goal**: Encrypted device metadata stored on IPFS alongside user's vault, providing durable infrastructure for cross-device approval and resilience against backend rebuilds
+**Depends on**: Phase 12 (Core Kit foundation must be in place)
+**Requirements**: Infrastructure for MFA-02 (device management)
+**Success Criteria** (what must be TRUE):
+
+1. Authenticated devices are tracked in an encrypted registry pinned on IPFS
+2. Device registry is encrypted with user's key and only readable by the user
+3. Device metadata includes public keys, device names, authorization status, and revocation capability
+4. Registry is discoverable and recoverable by any authenticated session
+
+**Plans:** 3 plans
+
+Plans:
+
+- [x] 12.2-PLAN-01.md — Registry and device crypto primitives (types, HKDF IPNS derivation, ECIES encrypt/decrypt, device keygen, tests)
+- [x] 12.2-PLAN-02.md — Device identity persistence (IndexedDB) and registry service (CRUD + IPFS/IPNS publish)
+- [x] 12.2-PLAN-03.md — Auth flow integration (Zustand store, non-blocking init, polling, logout cleanup)
+
+### Phase 12.3: SIWE + Unified Identity (INSERTED)
+
+**Goal**: Wallet users can log in via SIWE and all auth methods (wallet, Google, email) resolve to the same CipherBox identity and Web3Auth key
+**Depends on**: Phase 12.2 (device registry for multi-device state)
+**Requirements**: AUTH unification, MFA-01 (wallet MFA prerequisite)
+**Research flag**: COMPLETE -- SIWE message format, backend verification, wallet address hashing, multi-auth linking UX researched
+**Success Criteria** (what must be TRUE):
+
+1. Wallet user can sign SIWE message -> CipherBox API verifies -> issues JWT -> Core Kit login succeeds
+2. User can link additional auth methods (second wallet, email) from settings
+3. Any linked auth method produces a JWT with same `sub = userId` -> same Web3Auth key
+4. Wallet addresses are stored as hashes in the database (not plaintext)
+5. ADR-001 legacy code (signatureKeyDerivation, derivationVersion, external_wallet) is fully removed (clean break, no migration needed)
+
+**Plans:** 4 plans
+
+Plans:
+
+- [x] 12.3-01-PLAN.md — Backend SIWE service, schema evolution, wallet identity endpoints
+- [x] 12.3-02-PLAN.md — Backend ADR-001 cleanup (auth service, vault export, verifier, API client regen)
+- [x] 12.3-03-PLAN.md — Frontend wallet login (wagmi, WalletLoginButton, SIWE flow) + ADR-001 cleanup (rename derivedKeypair to vaultKeypair)
+- [x] 12.3-04-PLAN.md — Settings page auth method management (view, link, unlink)
+
+### Phase 12.3.1: Pre-Wipe Identity Cleanup (INSERTED)
+
+**Goal**: Implement schema-level identity changes as clean breaks before database wipe, avoiding throwaway migration code: deterministic vault IPNS derivation, SHA-256 hashed identifiers for all auth methods, and removal of cross-method email auto-linking
+**Depends on**: Phase 12.3 (SIWE + unified identity complete)
+**Requirements**: Self-sovereign recovery infrastructure, privacy-preserving auth storage
+**Research flag**: Skip — builds on established patterns (HKDF from Phase 12.2, SHA-256 hashing from Phase 12.3 wallet work)
+**Success Criteria** (what must be TRUE):
+
+1. Vault IPNS keypair is derived deterministically from user's privateKey via HKDF (context: "cipherbox-vault-ipns-v1") — no random keygen, no backend dependency for vault discovery
+2. All auth method identifiers are stored as SHA-256 hashes: Google uses SHA-256(google_sub), email uses SHA-256(normalized_email), wallet uses SHA-256(checksummed_address)
+3. Each auth method (google, email, wallet) is an independent identity — no cross-method email auto-linking; users link methods explicitly via Settings
+4. Self-sovereign recovery path works: recovery phrase → privateKey → derive vault IPNS key → resolve IPNS → decrypt vault metadata
+5. TEE republishing continues to work — ipns.service.ts has no rootIpnsPublicKey dependency (passive compatibility, verified by grep)
+
+**Plans:** 4 plans
+
+Plans:
+
+- [x] 12.3.1-01-PLAN.md — Crypto: deterministic vault IPNS keypair derivation (HKDF) + updated initializeVault/encryptVaultKeys/decryptVaultKeys + EncryptedVaultKeys type cleanup + tests
+- [x] 12.3.1-02-PLAN.md — Backend: SHA-256 hashed identifiers for all auth methods + remove cross-method auto-linking
+- [x] 12.3.1-03-PLAN.md — Backend vault schema + frontend vault init for deterministic IPNS + API client regen
+- [x] 12.3.1-04-PLAN.md — Codebase-wide cleanup: desktop Rust, E2E helpers, controller spec rootIpnsPublicKey removal
+
+### Phase 12.4: MFA + Cross-Device Approval (INSERTED)
+
+**Goal**: Users can enroll in MFA with device shares and recovery phrases, and approve new devices from existing authenticated devices
+**Depends on**: Phase 12.3.1 (identity cleanup complete, deterministic IPNS for recovery)
+**Requirements**: MFA-01, MFA-02, MFA-03, MFA-04
+**Research flag**: COMPLETE -- Core Kit enableMFA() flow, factor management, bulletin board API, ECIES ephemeral key exchange researched
+**Success Criteria** (what must be TRUE):
+
+1. User can enable MFA from settings and is guided through factor enrollment (device share + recovery phrase)
+2. User can approve a new device from an existing authenticated device (bulletin board pattern)
+3. User can recover access using recovery phrase when device share is lost
+4. User's derived keypair (publicKey) remains identical after MFA enrollment — vault data stays accessible
+5. MFA factors are manageable from settings (view, add, revoke)
+
+**Plans:** 5 plans
+
+Plans:
+
+- [x] 12.4-01-PLAN.md — Backend bulletin board API (DeviceApproval entity, service, controller, DTOs)
+- [x] 12.4-02-PLAN.md — MFA hooks + store + REQUIRED_SHARE login flow branching
+- [x] 12.4-03-PLAN.md — MFA enrollment wizard + Settings Security tab UI
+- [x] 12.4-04-PLAN.md — Cross-device approval flow (waiting screen, approval modal, recovery input, enrollment prompt)
+- [x] 12.4-05-PLAN.md — API client regen + integration verification + cleanup
+
+### Phase 12.5: MFA Polishing, UAT & E2E Testing (INSERTED)
+
+**Goal**: Fix bugs from CoreKit auth UAT, wire missing SecurityTab UI, add wallet E2E tests with `@johanneskares/wallet-mock` (EIP-6963 mock provider), and complete UAT for all auth + MFA flows
+**Depends on**: Phase 12.4 (MFA + Cross-Device Approval complete)
+**Requirements**: Quality gate before proceeding to new features
+**Research flag**: Skip — builds on existing E2E infrastructure and UAT findings from `.planning/debug/corekit-auth-uat.md`
+**Success Criteria** (what must be TRUE):
+
+1. ISSUE-004 fixed: SecurityTab wired into SettingsPage with tab navigation (unblocks MFA enrollment/device management UI)
+2. Wallet E2E tests pass using `@johanneskares/wallet-mock` EIP-6963 mock provider — no real wallet extension required
+3. Wallet UAT complete: TC09 (happy path), TC10 (cancel), TC11 (no wallet), TC12 (reject signature) all PASS
+4. MFA UAT complete: TC15-23 (MFA login flows) and TC25-31 (enrollment, devices, recovery) all PASS or documented
+5. All bugs discovered during UAT are fixed and verified
+6. Auth-related E2E test suite runs reliably in CI without flakiness
+
+**Plans:** 3 plans
+
+Plans:
+
+- [x] 12.5-01-PLAN.md — Fix ISSUE-004: Wire SecurityTab into SettingsPage with ARIA tab navigation
+- [x] 12.5-02-PLAN.md — Install wallet-mock, add wallet E2E tests (TC09-TC12)
+- [x] 12.5-03-PLAN.md — Run wallet E2E tests, human-verify SecurityTab + MFA, update UAT document
+
+### Phase 12.6: Per-File IPNS Metadata Split (INSERTED)
+
+**Goal**: Split file metadata into separate per-file IPNS-addressed objects so content updates don't require folder republishes, and per-file sharing becomes possible
+**Depends on**: Phase 12.5 (MFA polish complete, clean-break window before vault wipe)
+**Requirements**: Foundation for SHARE-01 (per-file sharing), VER-01 (version history in file metadata), performance improvement for content updates
+**Research flag**: COMPLETE -- TEE republish scalability benchmarked, HKDF file keypair derivation designed, batch publish strategy defined, FUSE client impact deferred
+**Success Criteria** (what must be TRUE):
+
+1. File metadata (CID, fileKeyEncrypted, fileIv, size, mimeType) lives in its own IPNS record, derived via HKDF from user privateKey + fileId
+2. Folder metadata contains only file name fields + fileMetaIpnsName pointer — no embedded CIDs or file keys
+3. Content update (re-upload) publishes only the file's IPNS record, not the parent folder's
+4. File rename publishes only the folder IPNS record, not the file's
+5. Batch operations (multi-file upload) publish all file IPNS records in a single API call (preserving Phase 7.1 atomicity)
+6. TEE republisher handles per-file IPNS records with acceptable scalability (defined during research)
+7. Desktop FUSE client reads per-file IPNS metadata correctly
+8. Vault export includes per-file metadata in portable format
+
+**Plans:** 5 plans
+
+Plans:
+
+- [x] 12.6-01-PLAN.md — Crypto primitives: file IPNS HKDF derivation, FileMetadata/FilePointer types, encrypt/decrypt, v2 folder schema
+- [x] 12.6-02-PLAN.md — Backend: batch publish endpoint, FolderIpns record_type column, republish scalability, API client regen
+- [x] 12.6-03-PLAN.md — Frontend services: file-metadata service, v2 folder.service.ts rewrite, download/delete flow updates, store types
+- [x] 12.6-04-PLAN.md — Frontend hooks + components: useFolder/useFilePreview/useDropUpload v2, FileBrowser/TextEditor/DetailsDialog updates
+- [x] 12.6-05-PLAN.md — Recovery tool v2 support, vault export docs update, full build verification
+
+### Phase 13: File Versioning
+
+**Goal**: Users can access and restore previous versions of their files
+**Depends on**: Phase 12
+**Requirements**: VER-01, VER-02, VER-03, VER-04, VER-05
+**Research flag**: Standard patterns -- metadata schema extension plus "stop unpinning old CIDs." Skip `/gsd:research-phase`.
+**Success Criteria** (what must be TRUE):
+
+1. When a user uploads a new version of an existing file, the previous version is automatically retained (old CID stays pinned)
+2. User can open a version history panel for any file and see a list of previous versions with timestamps
+3. User can restore a previous version, which becomes the current version while preserving the version chain
+4. Version retention policy is enforced (configurable max versions per file) and excess versions are pruned automatically
+5. Storage consumed by retained versions counts against the user's 500 MiB quota
+   **Plans**: TBD
+
+### Phase 14: User-to-User Sharing
+
+**Goal**: Users can share encrypted folders with other CipherBox users while maintaining zero-knowledge guarantees
+**Depends on**: Phase 13
+**Requirements**: SHARE-01, SHARE-02, SHARE-03, SHARE-04, SHARE-05
+**Research flag**: NEEDS `/gsd:research-phase` -- share revocation key rotation protocol is the most complex protocol in M2. ECIES re-wrapping correctness must be validated with test vectors.
+**Success Criteria** (what must be TRUE):
+
+1. User can share a folder (read-only) with another CipherBox user by re-wrapping the folderKey with the recipient's publicKey via ECIES
+2. User can invite a recipient by email or public key, and the recipient sees the invitation and can accept or decline
+3. User can revoke a share, which triggers folderKey rotation and re-wrapping for all remaining recipients
+4. Recipient can browse shared folders in a "Shared with me" section of the file browser
+5. Server never sees plaintext folderKey at any point during the sharing flow
+   **Plans**: TBD
+
+### Phase 15: Link Sharing and Search
+
+**Goal**: Users can share individual files via link with non-users, and search across their entire vault
+**Depends on**: Phase 14
+**Requirements**: SHARE-06, SHARE-07, SRCH-01, SRCH-02, SRCH-03
+**Research flag**: Link sharing NEEDS `/gsd:research-phase` -- web viewer for unauthenticated access is a new security surface. Search is standard patterns (skip research).
+**Success Criteria** (what must be TRUE):
+
+1. User can generate a shareable link for a file where the decryption key is in the URL fragment only (never sent to server)
+2. Recipient can open the link in a browser and download the decrypted file without a CipherBox account
+3. User can search file names across all folders and see matching results with navigation to the file location
+4. Search index is encrypted and persisted in IndexedDB, surviving page refreshes
+5. Search index updates incrementally when IPNS polling detects metadata changes
+   **Plans**: TBD
+
+### Phase 16: Advanced Sync
+
+**Goal**: Users experience reliable sync with conflict awareness and offline resilience
+**Depends on**: Phase 15
+**Requirements**: SYNC-04, SYNC-05, SYNC-06
+**Research flag**: NEEDS `/gsd:research-phase` -- three-way merge edge cases with encrypted metadata need exhaustive test matrix. Offline replay with idempotency keys is uncharted territory for this codebase.
+**Success Criteria** (what must be TRUE):
+
+1. Client detects when another device has published a newer IPNS sequence number and alerts the user before overwriting
+2. When the user goes offline and makes changes, operations are queued locally and automatically replayed on reconnect
+3. Queued operations use idempotency keys so replaying them after reconnect never produces duplicate files or folders
+   **Plans**: TBD
+
+### Phase 17: AWS Nitro TEE
+
+**Goal**: IPNS republishing has a fallback TEE provider for high availability
+**Depends on**: Phase 12 (can run in parallel with Phases 14-16 after MFA stabilizes auth)
+**Requirements**: TEE-06
+**Research flag**: NEEDS `/gsd:research-phase` -- Rust enclave binary, vsock communication, KMS attestation are entirely new technology for this project. Highest-risk item in M2.
+**Success Criteria** (what must be TRUE):
+
+1. AWS Nitro enclave can receive ECIES-encrypted IPNS keys, decrypt in hardware, sign IPNS records, and zero memory
+2. Backend routes republish jobs to Nitro when Phala Cloud is unavailable, with automatic failover and failback
+   **Plans**: TBD
+
+## Progress
+
+**Execution Order:**
+
+Sequential order: 12 -> 12.5 -> 12.6 -> 12.1 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
+
+Parallel phases:
+
+- Phase 11 (Cross-Platform Desktop) can run in parallel with any M2 phase (depends only on Phase 9/M1).
+- Phase 17 (AWS Nitro TEE) can optionally execute in parallel with Phases 14-16 (depends on Phase 12).
+
+| Phase                       | Milestone | Plans Complete | Status      | Completed  |
+| --------------------------- | --------- | -------------- | ----------- | ---------- |
+| 1. Foundation               | M1        | 3/3            | Complete    | 2026-01-20 |
+| 2. Authentication           | M1        | 4/4            | Complete    | 2026-01-20 |
+| 3. Core Encryption          | M1        | 3/3            | Complete    | 2026-01-20 |
+| 4. File Storage             | M1        | 4/4            | Complete    | 2026-01-20 |
+| 4.1 API Service Testing     | M1        | 3/3            | Complete    | 2026-01-21 |
+| 4.2 Local IPFS Testing      | M1        | 2/2            | Complete    | 2026-01-21 |
+| 5. Folder System            | M1        | 4/4            | Complete    | 2026-01-21 |
+| 6. File Browser UI          | M1        | 4/4            | Complete    | 2026-01-22 |
+| 6.1 Webapp Automation       | M1        | 7/7            | Complete    | 2026-01-22 |
+| 6.2 Restyle App             | M1        | 6/6            | Complete    | 2026-01-27 |
+| 6.3 UI Structure            | M1        | 5/5            | Complete    | 2026-01-30 |
+| 7. Multi-Device Sync        | M1        | 4/4            | Complete    | 2026-02-02 |
+| 7.1 Atomic File Upload      | M1        | 2/2            | Complete    | 2026-02-07 |
+| 8. TEE Integration          | M1        | 4/4            | Complete    | 2026-02-07 |
+| 9. Desktop Client           | M1        | 7/7            | Complete    | 2026-02-08 |
+| 9.1 Env/DevOps/Staging      | M1        | 6/6            | Complete    | 2026-02-09 |
+| 10. Data Portability        | M1        | 3/3            | Complete    | 2026-02-11 |
+| 12. Core Kit Identity       | M2        | 5/5            | Complete    | 2026-02-13 |
+| 12.1 AES-CTR Streaming      | M2        | 4/4            | Complete    | 2026-02-17 |
+| 12.2 Device Registry        | M2        | 3/3            | Complete    | 2026-02-13 |
+| 12.3 SIWE + Identity        | M2        | 4/4            | Complete    | 2026-02-14 |
+| 12.3.1 Identity Cleanup     | M2        | 4/4            | Complete    | 2026-02-14 |
+| 12.4 MFA + Cross-Device     | M2        | 5/5            | Complete    | 2026-02-15 |
+| 12.5 MFA Polish/UAT/E2E     | M2        | 3/3            | Complete    | 2026-02-16 |
+| 12.6 Per-File IPNS Meta     | M2        | 5/5            | Complete    | 2026-02-17 |
+| 11.1 macOS Desktop Catch-Up | M2        | 7/7            | Complete    | 2026-02-17 |
+| 13. File Versioning         | M2        | 0/TBD          | Not started | -          |
+| 14. User-to-User Sharing    | M2        | 0/TBD          | Not started | -          |
+| 15. Link Sharing + Search   | M2        | 0/TBD          | Not started | -          |
+| 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
+| 11. Cross-Platform Desktop  | M2        | 0/TBD          | Not started | -          |
+| 17. AWS Nitro TEE           | M2        | 0/TBD          | Not started | -          |
+| 18. Billing Infrastructure  | M3        | 0/TBD          | Not started | -          |
+| 19. Team Accounts           | M3        | 0/TBD          | Not started | -          |
+| 20. Document Editors        | M3        | 0/TBD          | Not started | -          |
+| 21. Document Signing        | M3        | 0/TBD          | Not started | -          |
+
+---
+
+Roadmap created: 2026-01-20
+Milestone 1 shipped: 2026-02-11
+Milestone 2 roadmap created: 2026-02-11
+Milestone 3 roadmap created: 2026-02-11
+Total M1 phases: 17 | Total M1 plans: 72 | Depth: Comprehensive
+Total M2 phases: 9 | Total M2 plans: TBD | Depth: Comprehensive
+Total M3 phases: 4 | Total M3 plans: TBD | Depth: Comprehensive

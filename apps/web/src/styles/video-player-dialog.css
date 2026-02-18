@@ -1,0 +1,360 @@
+/**
+ * Video Player Dialog Styles - Terminal Aesthetic
+ *
+ * Custom video player with overlay controls.
+ * No native browser video controls.
+ */
+
+/* ==========================================================================
+   Modal Override
+   ========================================================================== */
+
+.video-player-modal .modal-container {
+  max-width: 960px;
+  width: 95vw;
+}
+
+.video-player-modal .modal-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+/* ==========================================================================
+   Toolbar
+   ========================================================================== */
+
+.video-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-xs) var(--spacing-md);
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
+  flex-shrink: 0;
+}
+
+.video-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+
+.video-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  flex-shrink: 0;
+}
+
+/* ==========================================================================
+   File Type Tag
+   ========================================================================== */
+
+.video-tag {
+  background-color: var(--color-green-primary);
+  color: var(--color-black);
+  padding: 2px 6px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.video-filename {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* ==========================================================================
+   Shared Button Style
+   ========================================================================== */
+
+.video-btn {
+  background: transparent;
+  border: var(--border-thickness) solid var(--color-border);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  white-space: nowrap;
+}
+
+.video-btn:hover:not(:disabled) {
+  background-color: var(--color-green-darker);
+}
+
+.video-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ==========================================================================
+   Video Screen
+   ========================================================================== */
+
+.video-screen {
+  position: relative;
+  background: #000;
+  overflow: hidden;
+}
+
+.video-screen video {
+  width: 100%;
+  display: block;
+  max-height: calc(80vh - 200px);
+}
+
+/* ==========================================================================
+   Play Overlay
+   ========================================================================== */
+
+.video-play-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  background: rgb(0 0 0 / 30%);
+  transition: background-color 0.15s ease;
+}
+
+.video-play-overlay:hover {
+  background: rgb(0 0 0 / 50%);
+}
+
+.video-play-icon {
+  font-size: 48px;
+  color: var(--color-green-primary);
+  font-family: var(--font-family-mono);
+  user-select: none;
+}
+
+/* ==========================================================================
+   Resolution Badge
+   ========================================================================== */
+
+.video-resolution {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  background: rgb(0 0 0 / 60%);
+  padding: 2px 6px;
+  pointer-events: none;
+}
+
+/* ==========================================================================
+   Controls Bar
+   ========================================================================== */
+
+.video-controls-bar {
+  padding: var(--spacing-xs) var(--spacing-md);
+  background: rgb(0 0 0 / 80%);
+  transition: opacity 0.3s ease;
+}
+
+.video-controls-bar--hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ==========================================================================
+   Progress Bar
+   ========================================================================== */
+
+.video-progress-track {
+  height: 4px;
+  background: var(--color-green-darker);
+  cursor: pointer;
+  position: relative;
+}
+
+.video-progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: var(--color-green-primary);
+  pointer-events: none;
+}
+
+.video-progress-buffered {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: rgb(0 208 132 / 20%);
+  pointer-events: none;
+}
+
+/* ==========================================================================
+   Control Row
+   ========================================================================== */
+
+.video-control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  margin-top: 4px;
+}
+
+.video-control-left {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.video-control-right {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.video-time-display {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   Volume Slider
+   ========================================================================== */
+
+.video-volume-wrapper {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+}
+
+.video-volume-label {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.video-volume-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 60px;
+  height: 4px;
+  background: var(--color-green-darker);
+  outline: none;
+  cursor: pointer;
+}
+
+.video-volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  background: var(--color-green-primary);
+  cursor: pointer;
+}
+
+.video-volume-slider::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  background: var(--color-green-primary);
+  border: none;
+  cursor: pointer;
+}
+
+.video-volume-slider::-moz-range-track {
+  background: var(--color-green-darker);
+  height: 4px;
+}
+
+/* ==========================================================================
+   Encrypted Streaming Badge
+   ========================================================================== */
+
+.video-cipher-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-family: var(--font-family-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--color-green-primary);
+  background: rgb(0 0 0 / 60%);
+  padding: 2px 6px;
+  pointer-events: none;
+  border: 1px solid rgb(0 208 132 / 30%);
+}
+
+/* ==========================================================================
+   Loading State
+   ========================================================================== */
+
+.video-preview-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  min-height: 300px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* ==========================================================================
+   Decrypt Progress (streaming CTR)
+   ========================================================================== */
+
+.video-decrypt-label {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.video-decrypt-progress-track {
+  width: 200px;
+  height: 4px;
+  background: var(--color-green-darker);
+  position: relative;
+}
+
+.video-decrypt-progress-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: var(--color-green-primary);
+  transition: width 0.3s ease;
+}
+
+.video-decrypt-percent {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-green-primary);
+}
+
+/* ==========================================================================
+   Error Message
+   ========================================================================== */
+
+.video-preview-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  padding: var(--spacing-md);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-error);
+}

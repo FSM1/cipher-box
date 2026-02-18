@@ -1,0 +1,49 @@
+[package]
+name = "cipherbox-desktop"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["fuse"]
+fuse = ["dep:fuser", "dep:unicode-normalization"]
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-deep-link = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-notification = "2"
+fuser = { version = "0.16", default-features = false, features = ["libfuse"], optional = true }
+keyring = { version = "3", features = ["apple-native"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+aes = "0.8"
+aes-gcm = "0.10"
+ctr = "0.9"
+hkdf = "0.12"
+sha2 = "0.10"
+ecies = { version = "0.2", default-features = false, features = ["pure"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+hex = "0.4"
+base64 = "0.22"
+dirs = "5"
+log = "0.4"
+env_logger = "0.11"
+libc = "0.2"
+thiserror = "2"
+zeroize = { version = "1", features = ["derive"] }
+prost = "0.13"
+ciborium = "0.2"
+multihash = "0.19"
+unsigned-varint = "0.8"
+urlencoding = "2"
+clap = { version = "4", features = ["derive"] }
+hostname = "0.4"
+dotenvy = "0.15"
+unicode-normalization = { version = "0.1.25", optional = true }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
