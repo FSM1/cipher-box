@@ -250,7 +250,7 @@ pub fn decrypt_any_folder_metadata(
 
     // Debug: log the decrypted JSON to diagnose deserialization failures
     if let Ok(s) = std::str::from_utf8(&json) {
-        let preview = if s.len() > 500 { &s[..500] } else { s };
+        let preview = if s.len() > 4000 { &s[..4000] } else { s };
         log::debug!("Decrypted folder metadata JSON: {}", preview);
     }
 

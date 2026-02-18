@@ -1,8 +1,1 @@
-Todo saved: `.planning/todos/pending/2026-02-18-fix-v2-metadata-version-mismatch.md`
-
-> **URGENT: Fix web app writing v2-tagged metadata with v1-style file entries**
-> Area: crypto
-> Priority: urgent
-> Files: 4 referenced
-
-Now, back to the desktop app — the Rust fallback fix should let files show up. Do you want to log in again so we can verify the fix works? The app should still be running.
+App's up — please log in. I'll grab the full JSON once it appears.
