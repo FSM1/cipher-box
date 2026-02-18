@@ -527,15 +527,20 @@ function handleAuthSuccess(appDiv: HTMLElement | null): void {
 /**
  * Handle dev-key authentication (debug builds only).
  *
- * Uses the backend's test-login endpoint to get a JWT and then calls
- * handle_auth_complete directly with the dev key, bypassing Core Kit entirely.
+ * Uses the backend's test-login endpoint to get tokens and a deterministic
+ * keypair, then calls handle_test_login_complete (skips /auth/login POST).
+ *
+ * The private key comes from the test-login response (server-generated),
+ * NOT from the CLI --dev-key argument. This ensures the keypair matches
+ * the user record so vault ECIES operations succeed.
  */
-async function handleDevKeyAuth(devKeyHex: string): Promise<void> {
-  // Use the test-login endpoint to get a JWT and keypair
-  const testLoginSecret = import.meta.env.VITE_TEST_LOGIN_SECRET || '';
+async function handleDevKeyAuth(_devKeyHex: string): Promise<void> {
+  const testLoginSecret = import.meta.env.VITE_TEST_LOGIN_SECRET;
   if (!testLoginSecret) {
-    // Fall back to direct invoke with a synthetic approach
-    console.warn('No TEST_LOGIN_SECRET configured, attempting direct dev-key auth');
+    throw new Error(
+      'VITE_TEST_LOGIN_SECRET is not set in .env. ' +
+        "Dev-key mode requires a test-login secret matching the API's TEST_LOGIN_SECRET."
+    );
   }
 
   const resp = await fetch(`${API_BASE}/auth/test-login`, {
@@ -548,15 +553,20 @@ async function handleDevKeyAuth(devKeyHex: string): Promise<void> {
   });
 
   if (!resp.ok) {
-    throw new Error(`Test-login failed (${resp.status}). Is TEST_LOGIN_SECRET configured?`);
+    const body = await resp.text().catch(() => '');
+    throw new Error(`Test-login failed (${resp.status}): ${body}`);
   }
 
   const data = await resp.json();
 
-  // Call handle_auth_complete with the test JWT and dev key
-  await invoke('handle_auth_complete', {
-    idToken: data.idToken,
-    privateKey: devKeyHex,
+  // Call handle_test_login_complete with the server-issued tokens and keypair.
+  // Uses accessToken (not idToken) and privateKeyHex from test-login response
+  // (not the CLI dev key) so the keypair matches the user record.
+  await invoke('handle_test_login_complete', {
+    accessToken: data.accessToken,
+    refreshToken: data.refreshToken,
+    privateKeyHex: data.privateKeyHex,
+    isNewUser: data.isNewUser,
   });
 }
 

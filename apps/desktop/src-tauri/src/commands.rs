@@ -73,43 +73,69 @@ pub async fn handle_auth_complete(
         .await
         .map_err(|e| format!("Failed to parse login response: {}", e))?;
 
-    // 3. Store access token in API client
-    state.api.set_access_token(login_resp.access_token.clone()).await;
+    // Delegate to shared post-auth setup
+    complete_auth_setup(
+        &app,
+        &state,
+        login_resp.access_token,
+        login_resp.refresh_token,
+        private_key_bytes,
+        public_key_bytes,
+        login_resp.is_new_user,
+    )
+    .await
+}
 
-    // 4. Extract user ID from JWT claims (decode payload, read `sub`)
-    let user_id = extract_user_id_from_jwt(&login_resp.access_token)?;
+/// Shared post-auth setup used by both `handle_auth_complete` and `handle_test_login_complete`.
+///
+/// Stores tokens and keys, initializes/fetches vault, registers device, mounts FUSE,
+/// and hides the login window.
+async fn complete_auth_setup(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    access_token: String,
+    refresh_token: String,
+    private_key_bytes: Vec<u8>,
+    public_key_bytes: Vec<u8>,
+    is_new_user: bool,
+) -> Result<(), String> {
+    // 1. Store access token in API client
+    state.api.set_access_token(access_token.clone()).await;
+
+    // 2. Extract user ID from JWT claims (decode payload, read `sub`)
+    let user_id = extract_user_id_from_jwt(&access_token)?;
     *state.user_id.write().await = Some(user_id.clone());
 
-    // 5. Store refresh token in Keychain
-    auth::store_refresh_token(&user_id, &login_resp.refresh_token)
+    // 3. Store refresh token in Keychain
+    auth::store_refresh_token(&user_id, &refresh_token)
         .map_err(|e| format!("Keychain store failed: {}", e))?;
     auth::store_user_id(&user_id)
         .map_err(|e| format!("Keychain store user ID failed: {}", e))?;
 
-    // 6. Store keys in AppState
+    // 4. Store keys in AppState
     *state.private_key.write().await = Some(private_key_bytes.clone());
     *state.public_key.write().await = Some(public_key_bytes.clone());
 
-    // 7. Initialize vault for new users, or fetch existing vault
+    // 5. Initialize vault for new users, or fetch existing vault
     //    Also handle the edge case where user exists but vault was deleted.
-    if login_resp.is_new_user {
+    if is_new_user {
         log::info!("New user detected, initializing vault");
-        initialize_vault(&state, &public_key_bytes).await?;
+        initialize_vault(state, &public_key_bytes).await?;
     }
-    match fetch_and_decrypt_vault(&state).await {
+    match fetch_and_decrypt_vault(state).await {
         Ok(()) => {}
-        Err(e) if e.contains("404") && !login_resp.is_new_user => {
+        Err(e) if e.contains("404") && !is_new_user => {
             log::warn!("Vault not found for existing user, re-initializing");
-            initialize_vault(&state, &public_key_bytes).await?;
-            fetch_and_decrypt_vault(&state).await?;
+            initialize_vault(state, &public_key_bytes).await?;
+            fetch_and_decrypt_vault(state).await?;
         }
         Err(e) => return Err(e),
     }
 
-    // 8. Mark as authenticated
+    // 6. Mark as authenticated
     *state.is_authenticated.write().await = true;
 
-    // 8b. Register device in encrypted registry (non-blocking)
+    // 6b. Register device in encrypted registry (non-blocking)
     //     Fire-and-forget: failures are logged but never block login.
     {
         let reg_api = state.api.clone();
@@ -138,10 +164,10 @@ pub async fn handle_auth_complete(
         });
     }
 
-    // 9. Mount FUSE filesystem (or just mark as synced if FUSE not enabled)
+    // 7. Mount FUSE filesystem (or just mark as synced if FUSE not enabled)
     #[cfg(not(feature = "fuse"))]
     {
-        let _ = crate::tray::update_tray_status(&app, &crate::tray::TrayStatus::Synced);
+        let _ = crate::tray::update_tray_status(app, &crate::tray::TrayStatus::Synced);
     }
     #[cfg(feature = "fuse")]
     {
@@ -186,7 +212,7 @@ pub async fn handle_auth_complete(
 
         let rt = tokio::runtime::Handle::current();
         match crate::fuse::mount_filesystem(
-            &state,
+            state,
             rt,
             private_key,
             public_key,
@@ -198,7 +224,7 @@ pub async fn handle_auth_complete(
         ).await {
             Ok(_handle) => {
                 *state.mount_status.write().await = crate::state::MountStatus::Mounted;
-                let _ = crate::tray::update_tray_status(&app, &crate::tray::TrayStatus::Synced);
+                let _ = crate::tray::update_tray_status(app, &crate::tray::TrayStatus::Synced);
                 log::info!("FUSE filesystem mounted at ~/CipherBox");
             }
             Err(e) => {
@@ -206,7 +232,7 @@ pub async fn handle_auth_complete(
                 *state.mount_status.write().await =
                     crate::state::MountStatus::Error(err_msg.clone());
                 let _ = crate::tray::update_tray_status(
-                    &app,
+                    app,
                     &crate::tray::TrayStatus::Error(err_msg.clone()),
                 );
                 log::error!("{}", err_msg);
@@ -382,6 +408,57 @@ pub async fn start_sync_daemon(
 #[tauri::command]
 pub async fn get_dev_key(state: State<'_, AppState>) -> Result<Option<String>, String> {
     Ok(state.dev_key.read().await.clone())
+}
+
+/// Handle test-login authentication (debug builds only).
+///
+/// Called from the webview after a successful `POST /auth/test-login` response.
+/// Unlike `handle_auth_complete`, this skips the `/auth/login` POST because
+/// test-login already returns access + refresh tokens directly.
+///
+/// The private key comes from the test-login response (server-generated
+/// deterministic keypair), NOT from the CLI `--dev-key` argument.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub async fn handle_test_login_complete(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    access_token: String,
+    refresh_token: String,
+    private_key_hex: String,
+    is_new_user: bool,
+) -> Result<(), String> {
+    log::info!("Handling test-login auth completion (debug mode)");
+
+    // Update tray status: Mounting
+    let _ = crate::tray::update_tray_status(&app, &crate::tray::TrayStatus::Mounting);
+
+    // Convert private key hex to bytes
+    let pk_hex = if private_key_hex.starts_with("0x") {
+        &private_key_hex[2..]
+    } else {
+        &private_key_hex
+    };
+    let private_key_bytes =
+        hex::decode(pk_hex).map_err(|_| "Invalid private key hex from test-login".to_string())?;
+    if private_key_bytes.len() != 32 {
+        return Err("Private key must be 32 bytes".to_string());
+    }
+
+    // Derive public key from the test-login private key
+    let public_key_bytes = derive_public_key(&private_key_bytes)?;
+
+    // Delegate to shared post-auth setup (skips /auth/login POST)
+    complete_auth_setup(
+        &app,
+        &state,
+        access_token,
+        refresh_token,
+        private_key_bytes,
+        public_key_bytes,
+        is_new_user,
+    )
+    .await
 }
 
 /// Logout: invalidate session, clear Keychain, zero all sensitive keys.

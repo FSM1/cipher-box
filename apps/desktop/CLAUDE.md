@@ -31,16 +31,19 @@ Debug builds accept `--dev-key <hex>` to bypass Web3Auth login entirely, enablin
 
 **How it works:**
 
-1. Pass a 64-char hex secp256k1 private key via `--dev-key`
+1. Pass a 64-char hex secp256k1 private key via `--dev-key` (value is ignored but triggers headless mode)
 2. The webview detects it via the `get_dev_key` IPC command
 3. Calls `POST /auth/test-login` with the configured `VITE_TEST_LOGIN_SECRET`
-4. Gets a JWT, then calls `handle_auth_complete` with the JWT + dev key
+4. Gets `{ accessToken, refreshToken, privateKeyHex, isNewUser }` back
+5. Calls `handle_test_login_complete` (debug-only Rust command) which skips `/auth/login` and uses the server-generated keypair directly
+
+**Why the server keypair?** Test-login creates/finds a user with a deterministic keypair derived from the email. Using the CLI dev key would cause a keypair mismatch and vault ECIES decryption failures.
 
 **Requirements:**
 
 - `VITE_TEST_LOGIN_SECRET` must be set in `.env` (must match the API's `TEST_LOGIN_SECRET`)
 - The API must have `TEST_LOGIN_SECRET` configured and `NODE_ENV` != `production`
-- **Staging currently does NOT support this** — staging API has `NODE_ENV=production` which blocks test-login. To enable: set `NODE_ENV=staging` and `TEST_LOGIN_SECRET=<secret>` in the staging Docker Compose env.
+- Staging supports this when `NODE_ENV=staging` and `TEST_LOGIN_SECRET` is set in the staging Docker Compose env
 
 **Usage with local API:**
 

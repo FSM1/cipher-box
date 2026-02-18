@@ -95,13 +95,29 @@ fn main() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![
-            commands::handle_auth_complete,
-            commands::try_silent_refresh,
-            commands::logout,
-            commands::start_sync_daemon,
-            commands::get_dev_key,
-        ])
+        .invoke_handler({
+            #[cfg(debug_assertions)]
+            {
+                tauri::generate_handler![
+                    commands::handle_auth_complete,
+                    commands::try_silent_refresh,
+                    commands::logout,
+                    commands::start_sync_daemon,
+                    commands::get_dev_key,
+                    commands::handle_test_login_complete,
+                ]
+            }
+            #[cfg(not(debug_assertions))]
+            {
+                tauri::generate_handler![
+                    commands::handle_auth_complete,
+                    commands::try_silent_refresh,
+                    commands::logout,
+                    commands::start_sync_daemon,
+                    commands::get_dev_key,
+                ]
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running CipherBox Desktop");
 }
