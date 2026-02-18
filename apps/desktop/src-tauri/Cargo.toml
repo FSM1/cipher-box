@@ -47,3 +47,11 @@ unicode-normalization = { version = "0.1.25", optional = true }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[patch.crates-io]
+# Patched fuser with loop-read for FUSE-T socket compatibility.
+# FUSE-T communicates via Unix domain socket (not /dev/fuse), so large
+# FUSE messages can arrive in fragments. Stock fuser does a single read()
+# and fails with "Short read of FUSE request". This patch loop-reads
+# until the full message is received.
+fuser = { path = "vendor/fuser" }

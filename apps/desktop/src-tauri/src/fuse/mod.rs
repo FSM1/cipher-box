@@ -1006,11 +1006,20 @@ pub async fn mount_filesystem(
     // Note: AutoUnmount and DefaultPermissions removed for FUSE-T compatibility.
     // FUSE-T is NFS-based and does not support kernel-level permission checks
     // or fusermount3-based auto-unmount.
+    // FUSE-T mount options:
+    // - backend=smb: Use SMB instead of NFS backend. NFS has a known macOS kernel
+    //   bug where WRITE RPCs never reach the FUSE-T server for newly created files,
+    //   causing permanent process hangs. SMB backend avoids this.
+    // - rwsize=65536: Limit SMB read/write chunk size to 64KB. Without this,
+    //   large writes cause FUSE-T to send malformed FUSE requests that crash
+    //   the session ("Short read of FUSE request").
     let options = vec![
         MountOption::FSName("CipherBox".to_string()),
         MountOption::CUSTOM("volname=CipherBox".to_string()),
         MountOption::CUSTOM("noappledouble".to_string()),
         MountOption::CUSTOM("noapplexattr".to_string()),
+        MountOption::CUSTOM("backend=smb".to_string()),
+        MountOption::CUSTOM("rwsize=65536".to_string()),
         MountOption::RW,
     ];
 

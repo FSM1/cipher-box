@@ -388,8 +388,13 @@ mod implementation {
         fn init(
             &mut self,
             _req: &Request<'_>,
-            _config: &mut fuser::KernelConfig,
+            config: &mut fuser::KernelConfig,
         ) -> Result<(), libc::c_int> {
+            // Limit max write size to 256KB. FUSE-T's SMB backend sends
+            // malformed FUSE requests for large writes ("Short read of FUSE
+            // request") causing session crashes. Capping max_write ensures
+            // writes are chunked to a safe size.
+            let _ = config.set_max_write(256 * 1024);
             log::info!("CipherBoxFS::init (root pre-populated, no network I/O)");
             log::info!("Root IPNS name: {}", self.root_ipns_name);
             log::info!("Inode count: {}", self.inodes.inodes.len());
@@ -914,7 +919,10 @@ mod implementation {
             self.mutated_folders.insert(parent, std::time::Instant::now());
 
             log::debug!("create: {} in parent {} -> ino {} fh {}", name_str, parent, ino, fh);
-            reply.created(&FILE_TTL, &attr, 0, fh, 0);
+            // FOPEN_DIRECT_IO (0x1) tells FUSE-T to bypass page cache and send
+            // writes directly. This works around macOS NFS client bugs where
+            // writes to newly created files stall in the kernel page cache.
+            reply.created(&FILE_TTL, &attr, 0, fh, 0x1);
         }
 
         /// Open a file for reading or writing.
@@ -982,7 +990,8 @@ mod implementation {
                 ) {
                     Ok(handle) => {
                         self.open_files.insert(fh, handle);
-                        reply.opened(fh, 0);
+                        // FOPEN_DIRECT_IO (0x1) — bypass NFS page cache for writes
+                        reply.opened(fh, 0x1);
                     }
                     Err(e) => {
                         log::error!("Failed to create write handle: {}", e);
@@ -2178,7 +2187,8 @@ mod implementation {
         /// Open a directory handle.
         ///
         /// Finder calls opendir before readdir. Return success for any
-        /// known directory inode.
+        /// known directory inode. Must return a non-zero fh for FUSE-T's
+        /// SMB backend (fh=0 is treated as "no handle").
         fn opendir(
             &mut self,
             _req: &Request<'_>,
@@ -2187,7 +2197,8 @@ mod implementation {
             reply: ReplyOpen,
         ) {
             if self.inodes.get(ino).is_some() {
-                reply.opened(0, 0);
+                let fh = self.next_fh.fetch_add(1, Ordering::SeqCst);
+                reply.opened(fh, 0);
             } else {
                 reply.error(libc::ENOENT);
             }
