@@ -2068,7 +2068,6 @@
   background-color: rgb(245 158 11 / 8%);
   border-bottom: 1px solid rgb(245 158 11 / 25%);
   font-family: var(--font-family-mono);
-  z-index: 2;
 }
 
 .mfa-prompt-icon {
