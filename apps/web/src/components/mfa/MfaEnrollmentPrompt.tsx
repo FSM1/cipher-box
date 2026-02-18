@@ -89,7 +89,7 @@ export function MfaEnrollmentPrompt() {
   if (!visible || !isAuthenticated || isMfaEnabled) return null;
 
   return (
-    <div className="mfa-prompt" role="banner">
+    <div className="mfa-prompt" role="status" aria-live="polite">
       <svg
         className="mfa-prompt-icon"
         aria-hidden="true"
