@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/FSM1/cipher-box/compare/v0.10.0...v0.10.1) (2026-02-18)
+
+
+### Bug Fixes
+
+* **web:** align MFA enrollment banner with Pencil design ([#143](https://github.com/FSM1/cipher-box/issues/143)) ([24d5cd1](https://github.com/FSM1/cipher-box/commit/24d5cd1f705b12f5722f419abc74b936415215e6))
+
 ## [0.10.0](https://github.com/FSM1/cipher-box/compare/v0.9.2...v0.10.0) (2026-02-18)
 
 
