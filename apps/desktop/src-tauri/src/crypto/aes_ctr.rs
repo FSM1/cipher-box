@@ -92,6 +92,10 @@ pub fn decrypt_aes_ctr_range(
         return Err(AesCtrError::InvalidRange);
     }
 
+    if ciphertext.is_empty() || start_byte >= ciphertext.len() {
+        return Ok(Vec::new());
+    }
+
     // Clamp end_byte to actual data
     let clamped_end = end_byte.min(ciphertext.len().saturating_sub(1));
     if clamped_end < start_byte {

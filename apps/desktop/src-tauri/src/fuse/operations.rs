@@ -777,14 +777,18 @@ mod implementation {
                                                 plaintext.len(),
                                                 &cid_clone[..cid_clone.len().min(12)]
                                             );
-                                            let _ = tx.send(crate::fuse::PendingContent {
+                                            let _ = tx.send(crate::fuse::PendingContent::Success {
                                                 cid: cid_clone,
                                                 data: plaintext,
                                             });
                                         }
                                         Ok(Err(e)) => {
+                                            log::error!("Prefetch(readdir) failed for CID {}: {}", cid_clone, e);
+                                            let _ = tx.send(crate::fuse::PendingContent::Failure { cid: cid_clone });
                                         }
                                         Err(_) => {
+                                            log::error!("Prefetch(readdir) timed out for CID {}", cid_clone);
+                                            let _ = tx.send(crate::fuse::PendingContent::Failure { cid: cid_clone });
                                         }
                                     }
                                 });
@@ -1018,13 +1022,14 @@ mod implementation {
                                     plaintext.len(),
                                     &cid_clone[..cid_clone.len().min(12)]
                                 );
-                                let _ = tx.send(crate::fuse::PendingContent {
+                                let _ = tx.send(crate::fuse::PendingContent::Success {
                                     cid: cid_clone,
                                     data: plaintext,
                                 });
                             }
                             Ok(Err(e)) => {
                                 log::error!("Prefetch failed for CID {}: {}", cid_clone, e);
+                                let _ = tx.send(crate::fuse::PendingContent::Failure { cid: cid_clone });
                             }
                             Err(_) => {
                                 log::error!(
@@ -1032,6 +1037,7 @@ mod implementation {
                                     cid_clone,
                                     CONTENT_DOWNLOAD_TIMEOUT.as_secs()
                                 );
+                                let _ = tx.send(crate::fuse::PendingContent::Failure { cid: cid_clone });
                             }
                         }
                     });
@@ -1246,16 +1252,18 @@ mod implementation {
                                 plaintext.len(),
                                 &cid_clone[..cid_clone.len().min(12)]
                             );
-                            let _ = tx.send(crate::fuse::PendingContent {
+                            let _ = tx.send(crate::fuse::PendingContent::Success {
                                 cid: cid_clone,
                                 data: plaintext,
                             });
                         }
                         Ok(Err(e)) => {
                             log::error!("Read prefetch failed for CID {}: {}", cid_clone, e);
+                            let _ = tx.send(crate::fuse::PendingContent::Failure { cid: cid_clone });
                         }
                         Err(_) => {
                             log::error!("Read prefetch timed out for CID {}", cid_clone);
+                            let _ = tx.send(crate::fuse::PendingContent::Failure { cid: cid_clone });
                         }
                     }
                 });

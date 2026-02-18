@@ -726,17 +726,6 @@ fn derive_public_key(private_key: &[u8]) -> Result<Vec<u8>, String> {
     Ok(pk.serialize().to_vec()) // 65-byte uncompressed format
 }
 
-/// Derive a compressed secp256k1 public key (33 bytes) as hex string from a 32-byte private key.
-///
-/// Used for backend auth — Web3Auth JWT stores the compressed key format,
-/// so the login request must send compressed to pass the public key match check.
-fn derive_compressed_public_key_hex(private_key: &[u8]) -> Result<String, String> {
-    let sk = ecies::SecretKey::parse_slice(private_key)
-        .map_err(|e| format!("Invalid secp256k1 private key: {:?}", e))?;
-    let pk = ecies::PublicKey::from_secret_key(&sk);
-    Ok(hex::encode(pk.serialize_compressed())) // 33-byte compressed format
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

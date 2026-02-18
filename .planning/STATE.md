@@ -152,6 +152,8 @@ Recent decisions affecting current work:
 - `2026-02-15-security-review-short-term-fixes.md` -- Security review short-term fixes: H-01, H-06, H-07, M-01, M-04, M-06 (area: auth)
 - `2026-02-15-security-review-medium-term-fixes.md` -- Security review medium-term fixes: H-08, M-07, M-11 (area: auth)
 - `2026-02-18-fix-v2-metadata-version-mismatch.md` -- **URGENT:** Fix web app writing v2-tagged metadata with v1-style file entries (area: crypto)
+- `2026-02-18-remove-pinata-references-from-api.md` -- Remove Pinata references from API server (area: api)
+- `2026-02-18-fix-fuse-rename-on-smb-backend.md` -- Fix FUSE rename on SMB backend (area: desktop)
 
 ### Roadmap Evolution
 

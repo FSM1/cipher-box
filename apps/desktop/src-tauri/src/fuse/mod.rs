@@ -64,9 +64,9 @@ pub struct PendingRefresh {
 
 /// Pending content prefetch result sent from background tasks.
 #[cfg(feature = "fuse")]
-pub struct PendingContent {
-    pub cid: String,
-    pub data: Vec<u8>,
+pub enum PendingContent {
+    Success { cid: String, data: Vec<u8> },
+    Failure { cid: String },
 }
 
 /// Notification from a background upload thread that a file upload completed.
@@ -451,6 +451,7 @@ impl CipherBoxFS {
                     iv,
                     size,
                     encryption_mode,
+                    file_meta_ipns_name,
                     ..
                 } => {
                     let now_ms = std::time::SystemTime::now()
@@ -481,7 +482,7 @@ impl CipherBoxFS {
                             created_at: if created_ms > 0 { created_ms } else { now_ms },
                             modified_at: if modified_ms > 0 { modified_ms } else { now_ms },
                             encryption_mode: encryption_mode.clone(),
-                            file_meta_ipns_name: None,
+                            file_meta_ipns_name: file_meta_ipns_name.clone(),
                         },
                     ));
                 }
@@ -583,9 +584,11 @@ impl CipherBoxFS {
         // Collect folders ready to publish
         let ready: Vec<u64> = self.publish_queue.iter()
             .filter(|(_, entry)| {
+                if entry.pending_uploads > 0 {
+                    return false;
+                }
                 let elapsed = now.duration_since(entry.first_dirty);
-                (entry.pending_uploads == 0 && elapsed >= debounce)
-                    || elapsed >= safety_valve
+                elapsed >= debounce || elapsed >= safety_valve
             })
             .map(|(&ino, _)| ino)
             .collect();
@@ -705,9 +708,16 @@ impl CipherBoxFS {
     /// Drain background content prefetch results into the content cache (non-blocking).
     /// Called from read() and open() to apply results from async IPFS fetches.
     pub fn drain_content_prefetches(&mut self) {
-        while let Ok(content) = self.content_rx.try_recv() {
-            self.prefetching.remove(&content.cid);
-            self.content_cache.set(&content.cid, content.data);
+        while let Ok(msg) = self.content_rx.try_recv() {
+            match msg {
+                PendingContent::Success { cid, data } => {
+                    self.prefetching.remove(&cid);
+                    self.content_cache.set(&cid, data);
+                }
+                PendingContent::Failure { cid } => {
+                    self.prefetching.remove(&cid);
+                }
+            }
         }
     }
 }

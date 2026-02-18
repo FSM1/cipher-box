@@ -165,11 +165,21 @@ fn get_or_create_device_id() -> String {
 
     #[cfg(not(debug_assertions))]
     {
-        let entry = keyring::Entry::new("cipherbox-desktop", "device-id")
-            .unwrap_or_else(|e| {
-                log::warn!("Keychain entry creation failed: {}", e);
-                panic!("Cannot create keyring entry: {}", e);
-            });
+        let entry = match keyring::Entry::new("cipherbox-desktop", "device-id") {
+            Ok(e) => e,
+            Err(e) => {
+                log::warn!("Keychain entry creation failed: {}. Using ephemeral ID.", e);
+                let bytes = crypto::utils::generate_random_bytes(16);
+                return format!(
+                    "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-4{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                    bytes[0], bytes[1], bytes[2], bytes[3],
+                    bytes[4], bytes[5],
+                    bytes[6] & 0x0f, bytes[7],
+                    (bytes[8] & 0x3f) | 0x80, bytes[9],
+                    bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+                );
+            }
+        };
 
         match entry.get_password() {
             Ok(id) if !id.is_empty() => id,

@@ -138,7 +138,6 @@ fn main() {
                     commands::try_silent_refresh,
                     commands::logout,
                     commands::start_sync_daemon,
-                    commands::get_dev_key,
                 ]
             }
         })

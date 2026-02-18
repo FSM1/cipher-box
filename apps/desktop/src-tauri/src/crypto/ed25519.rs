@@ -87,10 +87,11 @@ pub fn get_public_key(private_key: &[u8]) -> Result<Vec<u8>, Ed25519Error> {
         return Err(Ed25519Error::InvalidPrivateKeySize);
     }
 
-    let key_bytes: [u8; 32] = private_key
+    let mut key_bytes: [u8; 32] = private_key
         .try_into()
         .map_err(|_| Ed25519Error::InvalidPrivateKeySize)?;
     let signing_key = SigningKey::from_bytes(&key_bytes);
+    key_bytes.zeroize();
     let verifying_key = signing_key.verifying_key();
 
     Ok(verifying_key.to_bytes().to_vec())

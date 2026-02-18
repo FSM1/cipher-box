@@ -674,6 +674,7 @@ function getGoogleCredential(): Promise<string> {
     }
 
     const nonce = crypto.randomUUID();
+    const state = crypto.randomUUID();
     const redirectUri = `${window.location.origin}/google-callback.html`;
 
     const params = new URLSearchParams({
@@ -682,13 +683,15 @@ function getGoogleCredential(): Promise<string> {
       response_type: 'id_token',
       scope: 'openid email profile',
       nonce,
+      state,
       prompt: 'select_account',
     });
 
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
 
-    // Clear any stale result from a previous attempt
-    localStorage.removeItem('google-auth-result');
+    // Clear any stale result and store expected state for CSRF validation
+    sessionStorage.removeItem('google-auth-result');
+    sessionStorage.setItem('google-auth-state', state);
 
     // Open Google OAuth in a popup — Tauri's on_new_window handler creates the webview
     window.open(authUrl, '_blank', 'width=500,height=700');
@@ -698,13 +701,13 @@ function getGoogleCredential(): Promise<string> {
       clearTimeout(timeout);
     };
 
-    // Poll localStorage for the result (postMessage doesn't survive
+    // Poll sessionStorage for the result (postMessage doesn't survive
     // cross-origin redirects in Tauri's WKWebView)
     const pollStorage = setInterval(() => {
-      const raw = localStorage.getItem('google-auth-result');
+      const raw = sessionStorage.getItem('google-auth-result');
       if (!raw) return;
 
-      localStorage.removeItem('google-auth-result');
+      sessionStorage.removeItem('google-auth-result');
       cleanup();
 
       try {

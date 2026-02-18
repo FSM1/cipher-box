@@ -234,7 +234,12 @@ fn sanitize_error(error: &str) -> String {
         .next()
         .unwrap_or(error);
     let truncated = if truncated.len() > 80 {
-        format!("{}...", &truncated[..80])
+        // Find the last char boundary at or before byte 80
+        let mut boundary = 80;
+        while boundary > 0 && !truncated.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        format!("{}...", &truncated[..boundary])
     } else {
         truncated.to_string()
     };

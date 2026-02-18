@@ -10,7 +10,14 @@
     var params = new URLSearchParams(hash);
     var idToken = params.get('id_token');
     var error = params.get('error');
-    localStorage.setItem('google-auth-result', JSON.stringify({
+    var state = params.get('state');
+    var expectedState = sessionStorage.getItem('google-auth-state');
+    sessionStorage.removeItem('google-auth-state');
+    if (!error && state !== expectedState) {
+      error = 'state_mismatch';
+      idToken = null;
+    }
+    sessionStorage.setItem('google-auth-result', JSON.stringify({
       idToken: idToken,
       error: error || (!idToken ? 'No ID token received' : null)
     }));

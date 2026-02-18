@@ -16,6 +16,7 @@ use ed25519_dalek::SigningKey;
 use hkdf::Hkdf;
 use sha2::Sha256;
 use thiserror::Error;
+use zeroize::Zeroize;
 
 use super::ipns;
 
@@ -61,6 +62,7 @@ fn derive_ipns_keypair(
 
     // 2. Ed25519 keypair from 32-byte seed
     let signing_key = SigningKey::from_bytes(&okm);
+    okm.zeroize();
     let verifying_key = signing_key.verifying_key();
 
     let private_key = signing_key.to_bytes().to_vec();
