@@ -182,8 +182,9 @@ mod implementation {
             }
         }
 
-        // Populate inode table with children (dispatches v1/v2)
-        fs.inodes.populate_folder_any(ino, &any_metadata, &private_key)?;
+        // Populate inode table with children (dispatches v1/v2).
+        // First load for this folder — replace mode (merge_only=false).
+        fs.inodes.populate_folder_any(ino, &any_metadata, &private_key, false)?;
 
         // For v2 metadata, resolve unresolved FilePointers eagerly
         let unresolved = fs.inodes.get_unresolved_file_pointers();
@@ -1120,11 +1121,72 @@ mod implementation {
                 return;
             }
 
-            // Content should have been downloaded in open(). If we reach here,
-            // something went wrong (e.g., file opened before our changes, or
-            // content was evicted from cache). Return EIO.
-            log::warn!("Read cache miss for ino {} CID {} — content not downloaded in open()", ino, cid);
-            reply.error(libc::EIO);
+            // Content not in cache — download synchronously as fallback.
+            // This handles the case where FUSE-T NFS calls read() without open()
+            // (NFSv3 is stateless), or when content was evicted from cache.
+            eprintln!(">>> FUSE read: cache miss for CID {}, downloading...", &cid[..cid.len().min(12)]);
+            let result = self.rt.block_on(async {
+                tokio::time::timeout(CONTENT_DOWNLOAD_TIMEOUT, async {
+                    let encrypted_bytes =
+                        crate::api::ipfs::fetch_content(&self.api, &cid).await?;
+                    let encrypted_file_key_bytes = hex::decode(&encrypted_file_key_hex)
+                        .map_err(|_| "Invalid file key hex".to_string())?;
+                    let mut file_key =
+                        crate::crypto::ecies::unwrap_key(&encrypted_file_key_bytes, &self.private_key)
+                            .map_err(|e| format!("File key unwrap failed: {}", e))?;
+                    let file_key_arr: [u8; 32] = file_key.as_slice()
+                        .try_into()
+                        .map_err(|_| "Invalid file key length".to_string())?;
+
+                    let plaintext = if encryption_mode == "CTR" {
+                        let iv_bytes = hex::decode(&iv_hex)
+                            .map_err(|_| "Invalid file IV hex".to_string())?;
+                        let iv_arr: [u8; 16] = iv_bytes
+                            .try_into()
+                            .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
+                        crate::crypto::aes_ctr::decrypt_aes_ctr(
+                            &encrypted_bytes, &file_key_arr, &iv_arr,
+                        )
+                        .map_err(|e| format!("CTR decryption failed: {}", e))?
+                    } else {
+                        let iv_bytes = hex::decode(&iv_hex)
+                            .map_err(|_| "Invalid file IV hex".to_string())?;
+                        let iv_arr: [u8; 12] = iv_bytes
+                            .try_into()
+                            .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
+                        crate::crypto::aes::decrypt_aes_gcm(
+                            &encrypted_bytes, &file_key_arr, &iv_arr,
+                        )
+                        .map_err(|e| format!("GCM decryption failed: {}", e))?
+                    };
+
+                    crate::crypto::utils::clear_bytes(&mut file_key);
+                    Ok::<Vec<u8>, String>(plaintext)
+                }).await
+            });
+
+            match result {
+                Ok(Ok(plaintext)) => {
+                    let start = offset as usize;
+                    if start >= plaintext.len() {
+                        self.content_cache.set(&cid, plaintext);
+                        reply.data(&[]);
+                    } else {
+                        let end = std::cmp::min(start + size as usize, plaintext.len());
+                        let data_slice = plaintext[start..end].to_vec();
+                        self.content_cache.set(&cid, plaintext);
+                        reply.data(&data_slice);
+                    }
+                }
+                Ok(Err(e)) => {
+                    log::error!("Read fallback download failed for CID {}: {}", cid, e);
+                    reply.error(libc::EIO);
+                }
+                Err(_) => {
+                    log::error!("Read fallback download timed out for CID {}", cid);
+                    reply.error(libc::EIO);
+                }
+            }
         }
 
         /// Release (close) a file handle.

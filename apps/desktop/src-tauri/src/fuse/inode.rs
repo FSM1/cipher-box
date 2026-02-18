@@ -215,11 +215,18 @@ impl InodeTable {
     ///
     /// The `private_key` parameter is the user's secp256k1 private key for ECIES decryption.
     #[cfg(feature = "fuse")]
+    /// Populate a folder's children from v1 metadata.
+    ///
+    /// When `merge_only` is true (background refresh), existing children not
+    /// present in the remote metadata are preserved. This prevents background
+    /// IPNS refreshes from wiping files whose publish hasn't propagated yet.
+    /// When false (initial mount), children not in metadata are removed.
     pub fn populate_folder(
         &mut self,
         parent_ino: u64,
         metadata: &FolderMetadata,
         private_key: &[u8],
+        merge_only: bool,
     ) -> Result<(), String> {
         let uid = unsafe { libc::getuid() };
         let gid = unsafe { libc::getgid() };
@@ -238,13 +245,17 @@ impl InodeTable {
             .cloned()
             .unwrap_or_default();
 
-        // Remove children that no longer exist in the new metadata
-        for old_ino in &old_child_inos {
-            if let Some(old_child) = self.inodes.get(old_ino) {
-                if !new_names.contains(&old_child.name) {
-                    let name = old_child.name.clone();
-                    self.inodes.remove(old_ino);
-                    self.name_to_ino.remove(&(parent_ino, name));
+        // Remove children that no longer exist in the new metadata.
+        // In merge_only mode (background refresh), preserve all existing children
+        // to prevent stale IPNS data from wiping locally-created or in-flight files.
+        if !merge_only {
+            for old_ino in &old_child_inos {
+                if let Some(old_child) = self.inodes.get(old_ino) {
+                    if !new_names.contains(&old_child.name) {
+                        let name = old_child.name.clone();
+                        self.inodes.remove(old_ino);
+                        self.name_to_ino.remove(&(parent_ino, name));
+                    }
                 }
             }
         }
@@ -390,6 +401,16 @@ impl InodeTable {
             }
         }
 
+        // In merge_only mode, preserve existing children not in remote metadata
+        if merge_only {
+            for &old_ino in &old_child_inos {
+                if !child_inos.contains(&old_ino) {
+                    // This child exists locally but not in remote — preserve it
+                    child_inos.push(old_ino);
+                }
+            }
+        }
+
         // Set parent's children list
         if let Some(parent) = self.inodes.get_mut(&parent_ino) {
             // Detect if children changed (new entries appeared or were removed).
@@ -436,6 +457,7 @@ impl InodeTable {
         parent_ino: u64,
         metadata: &FolderMetadataV2,
         private_key: &[u8],
+        merge_only: bool,
     ) -> Result<(), String> {
         let uid = unsafe { libc::getuid() };
         let gid = unsafe { libc::getgid() };
@@ -454,13 +476,15 @@ impl InodeTable {
             .cloned()
             .unwrap_or_default();
 
-        // Remove children that no longer exist in the new metadata
-        for old_ino in &old_child_inos {
-            if let Some(old_child) = self.inodes.get(old_ino) {
-                if !new_names.contains(&old_child.name) {
-                    let name = old_child.name.clone();
-                    self.inodes.remove(old_ino);
-                    self.name_to_ino.remove(&(parent_ino, name));
+        // Remove children not in remote metadata (only during initial mount, not refresh)
+        if !merge_only {
+            for old_ino in &old_child_inos {
+                if let Some(old_child) = self.inodes.get(old_ino) {
+                    if !new_names.contains(&old_child.name) {
+                        let name = old_child.name.clone();
+                        self.inodes.remove(old_ino);
+                        self.name_to_ino.remove(&(parent_ino, name));
+                    }
                 }
             }
         }
@@ -629,6 +653,15 @@ impl InodeTable {
             }
         }
 
+        // In merge_only mode, preserve existing children not in remote metadata
+        if merge_only {
+            for &old_ino in &old_child_inos {
+                if !child_inos.contains(&old_ino) {
+                    child_inos.push(old_ino);
+                }
+            }
+        }
+
         // Set parent's children list
         if let Some(parent) = self.inodes.get_mut(&parent_ino) {
             let old_children = parent.children.as_ref().cloned().unwrap_or_default();
@@ -654,16 +687,18 @@ impl InodeTable {
     }
 
     /// Populate a folder from any metadata version (v1 or v2 dispatch).
+    /// When `merge_only` is true, existing children not in remote metadata are preserved.
     #[cfg(feature = "fuse")]
     pub fn populate_folder_any(
         &mut self,
         parent_ino: u64,
         metadata: &AnyFolderMetadata,
         private_key: &[u8],
+        merge_only: bool,
     ) -> Result<(), String> {
         match metadata {
-            AnyFolderMetadata::V1(v1) => self.populate_folder(parent_ino, v1, private_key),
-            AnyFolderMetadata::V2(v2) => self.populate_folder_v2(parent_ino, v2, private_key),
+            AnyFolderMetadata::V1(v1) => self.populate_folder(parent_ino, v1, private_key, merge_only),
+            AnyFolderMetadata::V2(v2) => self.populate_folder_v2(parent_ino, v2, private_key, merge_only),
         }
     }
 
@@ -941,7 +976,7 @@ mod tests {
 
         // For files, populate_folder doesn't need ECIES decryption
         let private_key = vec![0u8; 32]; // unused for files
-        let result = table.populate_folder(ROOT_INO, &metadata, &private_key);
+        let result = table.populate_folder(ROOT_INO, &metadata, &private_key, false);
         assert!(result.is_ok());
 
         // Root should have 1 child
