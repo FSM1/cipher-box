@@ -63,27 +63,114 @@ VITE_API_URL=http://localhost:3000 pnpm --filter desktop dev -- -- --dev-key $DE
 
 **Note:** Each unique dev key creates its own vault. Use the same key across restarts to persist data.
 
-## Stashed WIP: Proactive Readdir Prefetch
+## FUSE Mount Architecture
 
-There is a stashed change on `feat/phase-11.1-01` with WIP FUSE improvements:
+The desktop app mounts an encrypted vault at `~/CipherBox` using FUSE-T on macOS. Understanding this architecture is critical for debugging and porting to other platforms.
+
+### macOS: FUSE-T with SMB Backend
+
+**We use FUSE-T's SMB backend, not its NFS backend.** This is a deliberate choice due to a macOS kernel bug (Sequoia 15.3+) where the NFS client never sends WRITE RPCs for newly created files, causing permanent hangs. The SMB backend avoids this entirely.
+
+Mount type shows as `smbfs` in `mount` output — this is expected.
+
+### Vendored Fuser Crate
+
+We vendor fuser 0.16 at `src-tauri/vendor/fuser/` with a critical patch to `channel.rs:receive()`. The patch is required because:
+
+- Stock fuser assumes `/dev/fuse` which delivers complete FUSE messages atomically.
+- FUSE-T uses a Unix domain socket where large messages (>256KB) arrive in fragments.
+- Without the patch, large file writes crash the FUSE session with `Short read of FUSE request`.
+
+The patch uses `recv(MSG_PEEK)` to read the FUSE header length, then loop-reads exactly that many bytes. It's harmless on Linux where `/dev/fuse` delivers atomic messages.
+
+The vendor dependency is declared in `Cargo.toml` via `[patch.crates-io]`.
+
+### Single-Thread Constraint
+
+ALL FUSE callbacks run on a single thread. Any blocking call stalls the entire filesystem. Rules:
+
+- **NEVER do network I/O in callbacks** (except `release()` which spawns a background task)
+- `open()` fires async prefetch — `read()` checks cache, returns EIO on miss (NFS retries)
+- `write()` writes to a local temp file — encrypt+upload happens on `release()`
+- Background tasks communicate via `mpsc` channels, drained in `readdir()`
+
+### Debounced Metadata Publish
+
+File mutations (create, write, delete, rename) trigger IPNS metadata publish via a debounce queue:
+
+- 1.5s debounce / 10s safety valve (coalesces rapid changes)
+- Upload completions track per-folder pending count
+- Publish uses `PublishCoordinator` for per-IPNS-name serialization and monotonic sequence numbers
+
+### Known Limitations (macOS)
+
+- **Rename (`mv`) fails with EPERM** — macOS SMB client rejects before reaching FUSE. Open issue.
+- **Keychain prompts in debug builds** — each rebuild changes binary signature. Debug builds skip Keychain entirely (`#[cfg(debug_assertions)]`), using ephemeral UUIDs for device ID.
+- **`opendir` must return non-zero file handles** — SMB treats `fh=0` as invalid.
+- **No FSEvents on FUSE mounts** — Finder won't auto-refresh. CLI-created files appear in `ls` but not Finder until a new window is opened.
+- **Stale mount after crash** — `~/CipherBox` may contain `.DS_Store`. App cleans stale contents before mount. Use `diskutil unmount force ~/CipherBox` if mount is stuck.
+
+### FUSE-T Debugging
 
 ```bash
-git stash list  # Look for: "WIP: proactive readdir prefetch + poll-based read fallback (phase 11.1 debugging)"
-git stash show -p 'stash@{0}'  # Review the diff
-git stash pop 'stash@{0}'     # Restore when ready
+# FUSE-T's own log (NFS/SMB server side)
+tail -f ~/Library/Logs/fuse-t/fuse-t.log
+
+# Our Rust FUSE daemon log (via env_logger)
+RUST_LOG=debug pnpm --filter desktop dev -- -- --dev-key test
+
+# Force-kill stale processes after crash
+ps aux | grep cipherbox-desktop | grep -v grep | awk '{print $2}' | xargs kill -9
+ps aux | grep go-nfsv4 | grep -v grep | awk '{print $2}' | xargs kill -9
+diskutil unmount force ~/CipherBox
 ```
 
-**What it does:**
+### Platform Porting Notes
 
-- Proactive content prefetch on `readdir` (offset=0): starts downloading/decrypting all child file contents in background so they're cached before the user opens them
-- Write-open (`O_WRONLY`/`O_RDWR`): checks content cache before falling back to sync download
-- `read()` cache miss: replaces blocking sync download with poll-based approach (100ms increments, 3s max) to avoid stalling the single NFS thread
-- Contains `eprintln!(">>>` debug lines that must be removed before merge
+**When implementing the Linux version:**
 
-**Status:** Untested — was mid-debugging when stashed. Needs UAT verification.
+- Use kernel FUSE (libfuse) directly — no NFS/SMB translation layer
+- The vendored fuser patch is harmless on Linux (loop-read completes in one iteration with `/dev/fuse`)
+- Most NFS-specific workarounds become unnecessary: no READDIR cache issue, no rename truncation, no single-thread constraint (FUSE supports multithreaded mode)
+- Inode stability still matters (same requirement across all FUSE implementations)
+- Channel-based prefetch architecture is still beneficial for performance
+- Platform special files: filter `.Trash-*`, `.directory`, `desktop.ini` equivalents
+- No Keychain — use `libsecret` or file-based credential storage
+
+**When implementing the Windows version:**
+
+- WinFSP or Dokan — completely different filesystem driver API, fuser not used
+- Same _principle_ applies: verify IPC transport handles large messages reliably
+- File IDs replace inodes — same stability requirement
+- Platform special files: `desktop.ini`, `Thumbs.db`, `$RECYCLE.BIN`, Zone.Identifier ADS
+- Credential storage: Windows Credential Manager (via `keyring` crate — same API)
+- No SMB/NFS translation — WinFSP is native kernel minifilter
+
+**Shared across all platforms:**
+
+- `InodeTable`, `MetadataCache`, `ContentCache` are platform-agnostic data structures
+- Channel-based async prefetch pattern (readdir triggers background fetch, read checks cache)
+- Debounced publish queue with per-folder coalescing
+- `PublishCoordinator` for IPNS sequence number management
+- `encrypt_metadata_to_json()` and `decrypt_metadata_from_ipfs_public()` — pure crypto, no OS deps
+- `FileHandle` with temp-file-backed writes — concept translates to all platforms
 
 ## Tauri Webview Constraints
 
 - No `window.ethereum` — wallet login is not available in the Tauri webview
 - OAuth popups use `on_new_window` handler with shared WKWebViewConfiguration
 - Use `clearCache()` not `logout({cleanup:true})` for Web3Auth session cleanup
+
+## Key Files
+
+| File                                    | Purpose                                                                          |
+| --------------------------------------- | -------------------------------------------------------------------------------- |
+| `src-tauri/src/fuse/mod.rs`             | Mount/unmount, debounced publish, pre-populate, drain helpers                    |
+| `src-tauri/src/fuse/operations.rs`      | All FUSE callbacks (lookup, getattr, readdir, read, write, create, rename, etc.) |
+| `src-tauri/src/fuse/inode.rs`           | Inode table with ino reuse, populate_folder                                      |
+| `src-tauri/src/fuse/cache.rs`           | Metadata and content caches with TTL                                             |
+| `src-tauri/src/fuse/file_handle.rs`     | Open file handles with temp-file-backed writes                                   |
+| `src-tauri/src/commands.rs`             | Tauri IPC commands (auth, mount, unmount)                                        |
+| `src-tauri/src/registry/mod.rs`         | Device registry (IPNS-based cross-device awareness)                              |
+| `src-tauri/vendor/fuser/src/channel.rs` | Patched fuser receive() for FUSE-T socket compat                                 |
+| `src-tauri/Cargo.toml`                  | `[patch.crates-io]` for vendored fuser                                           |

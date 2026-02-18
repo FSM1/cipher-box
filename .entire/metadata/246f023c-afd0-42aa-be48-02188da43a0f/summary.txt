@@ -1,29 +1,3 @@
-Here's a summary of what was accomplished:
 
-## FUSE Large File Write Fix - Complete
 
-**Problem:** FUSE-T's NFS backend had a macOS kernel bug preventing writes to new files. Switching to SMB fixed writes but crashed on large files (>1MB) with `Short read of FUSE request`.
-
-**Root cause:** Stock fuser assumes `/dev/fuse` delivers atomic messages, but FUSE-T uses a Unix domain socket where large messages fragment and small messages coalesce.
-
-**Fix:** Vendored fuser with a patched `channel.rs:receive()` that peeks at the FUSE header's 4-byte length field, then loop-reads exactly that many bytes — preventing both short reads and over-reads.
-
-**Test results (all passing):**
-| Test | Result |
-|------|--------|
-| 50MB file write+readback | checksum match |
-| 100MB file write+readback | checksum match (upload fails: 413 size limit) |
-| 20 rapid small files | all created + verified |
-| File deletion | pass |
-| mkdir + nested file | pass |
-| Content readback (18 files) | 18/18 pass |
-| Rename | FAIL (SMB limitation — captured as todo) |
-
-**Commits (3):**
-1. `a22a262` — Core fix: SMB backend + vendored fuser + opendir fix
-2. `2f82a1f` — Supporting: HTTP timeout, registry spawn, keychain skip
-3. `9d1779f` — Todos: Pinata API cleanup + FUSE rename fix
-
-**Todos captured:**
-- Remove Pinata references from API server (per your request)
-- Fix FUSE rename on SMB backend
+Stale — that was the pre-patch 10MB test that crashed with `Short read`. The fix is committed and verified.
