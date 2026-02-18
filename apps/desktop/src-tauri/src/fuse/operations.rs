@@ -339,6 +339,46 @@ mod implementation {
         })
     }
 
+    /// Async version of content download + decrypt for use in background prefetch tasks.
+    /// Does not require a reference to CipherBoxFS — takes all needed params by value.
+    async fn fetch_and_decrypt_content_async(
+        api: &crate::api::client::ApiClient,
+        cid: &str,
+        encrypted_file_key_hex: &str,
+        iv_hex: &str,
+        encryption_mode: &str,
+        private_key: &[u8],
+    ) -> Result<Vec<u8>, String> {
+        let encrypted_bytes =
+            crate::api::ipfs::fetch_content(api, cid).await?;
+        let encrypted_file_key = hex::decode(encrypted_file_key_hex)
+            .map_err(|_| "Invalid file key hex".to_string())?;
+        let mut file_key =
+            crate::crypto::ecies::unwrap_key(&encrypted_file_key, private_key)
+                .map_err(|e| format!("File key unwrap failed: {}", e))?;
+        let file_key_arr: [u8; 32] = file_key.as_slice().try_into()
+            .map_err(|_| "Invalid file key length".to_string())?;
+
+        let plaintext = if encryption_mode == "CTR" {
+            let iv = hex::decode(iv_hex)
+                .map_err(|_| "Invalid file IV hex".to_string())?;
+            let iv_arr: [u8; 16] = iv.try_into()
+                .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
+            crate::crypto::aes_ctr::decrypt_aes_ctr(&encrypted_bytes, &file_key_arr, &iv_arr)
+                .map_err(|e| format!("CTR decryption failed: {}", e))?
+        } else {
+            let iv = hex::decode(iv_hex)
+                .map_err(|_| "Invalid file IV hex".to_string())?;
+            let iv_arr: [u8; 12] = iv.try_into()
+                .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
+            crate::crypto::aes::decrypt_aes_gcm(&encrypted_bytes, &file_key_arr, &iv_arr)
+                .map_err(|e| format!("GCM decryption failed: {}", e))?
+        };
+
+        crate::crypto::utils::clear_bytes(&mut file_key);
+        Ok(plaintext)
+    }
+
     impl Filesystem for CipherBoxFS {
         /// Initialize the filesystem.
         ///
@@ -884,70 +924,63 @@ mod implementation {
                     }
                 }
             } else {
-                // Read-only open — download and cache content synchronously.
-                // This blocks the NFS thread during download, but ensures reads
-                // never fail with EIO. NFS clients are more tolerant of slow
-                // opens than repeated read failures.
+                // Read-only open — return IMMEDIATELY to avoid blocking the
+                // FUSE-T NFS thread. FUSE-T uses NFSv4 with a 1-second timeout
+                // (timeo=10); blocking here causes "not responding" mount state.
+                //
+                // Instead, start an async background prefetch so content is
+                // likely cached by the time read() is called. If it's not ready
+                // yet, read() will do a synchronous fallback download.
                 self.drain_content_prefetches();
 
-                if !cid.is_empty() && self.content_cache.get(&cid).is_none() {
-                    eprintln!(">>> FUSE open: downloading content for CID {} ...", &cid[..12]);
-                    let result = self.rt.block_on(async {
-                        tokio::time::timeout(CONTENT_DOWNLOAD_TIMEOUT, async {
-                            let encrypted_bytes =
-                                crate::api::ipfs::fetch_content(&self.api, &cid).await?;
-                            let encrypted_file_key_bytes = hex::decode(&encrypted_file_key)
-                                .map_err(|_| "Invalid file key hex".to_string())?;
-                            let mut file_key =
-                                crate::crypto::ecies::unwrap_key(&encrypted_file_key_bytes, &self.private_key)
-                                    .map_err(|e| format!("File key unwrap failed: {}", e))?;
-                            let file_key_arr: [u8; 32] = file_key.as_slice()
-                                .try_into()
-                                .map_err(|_| "Invalid file key length".to_string())?;
+                if !cid.is_empty()
+                    && self.content_cache.get(&cid).is_none()
+                    && !self.prefetching.contains(&cid)
+                {
+                    eprintln!(">>> FUSE open: starting async prefetch for CID {} ...", &cid[..cid.len().min(12)]);
+                    let api = self.api.clone();
+                    let rt = self.rt.clone();
+                    let tx = self.content_tx.clone();
+                    let cid_clone = cid.clone();
+                    let efk = encrypted_file_key.clone();
+                    let iv_clone = iv.clone();
+                    let enc_mode = encryption_mode.clone();
+                    let pk = self.private_key.clone();
+                    self.prefetching.insert(cid.clone());
 
-                            let plaintext = if encryption_mode == "CTR" {
-                                let iv_bytes = hex::decode(&iv)
-                                    .map_err(|_| "Invalid file IV hex".to_string())?;
-                                let iv_arr: [u8; 16] = iv_bytes
-                                    .try_into()
-                                    .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
-                                crate::crypto::aes_ctr::decrypt_aes_ctr(
-                                    &encrypted_bytes, &file_key_arr, &iv_arr,
-                                )
-                                .map_err(|e| format!("CTR decryption failed: {}", e))?
-                            } else {
-                                let iv_bytes = hex::decode(&iv)
-                                    .map_err(|_| "Invalid file IV hex".to_string())?;
-                                let iv_arr: [u8; 12] = iv_bytes
-                                    .try_into()
-                                    .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
-                                crate::crypto::aes::decrypt_aes_gcm(
-                                    &encrypted_bytes, &file_key_arr, &iv_arr,
-                                )
-                                .map_err(|e| format!("GCM decryption failed: {}", e))?
-                            };
+                    rt.spawn(async move {
+                        let result = tokio::time::timeout(
+                            CONTENT_DOWNLOAD_TIMEOUT,
+                            fetch_and_decrypt_content_async(
+                                &api, &cid_clone, &efk, &iv_clone, &enc_mode, &pk,
+                            ),
+                        )
+                        .await;
 
-                            crate::crypto::utils::clear_bytes(&mut file_key);
-                            Ok::<Vec<u8>, String>(plaintext)
-                        }).await
+                        match result {
+                            Ok(Ok(plaintext)) => {
+                                eprintln!(
+                                    ">>> prefetch: cached {} bytes for CID {}",
+                                    plaintext.len(),
+                                    &cid_clone[..cid_clone.len().min(12)]
+                                );
+                                let _ = tx.send(crate::fuse::PendingContent {
+                                    cid: cid_clone,
+                                    data: plaintext,
+                                });
+                            }
+                            Ok(Err(e)) => {
+                                log::error!("Prefetch failed for CID {}: {}", cid_clone, e);
+                            }
+                            Err(_) => {
+                                log::error!(
+                                    "Prefetch timed out for CID {} ({}s)",
+                                    cid_clone,
+                                    CONTENT_DOWNLOAD_TIMEOUT.as_secs()
+                                );
+                            }
+                        }
                     });
-
-                    match result {
-                        Ok(Ok(plaintext)) => {
-                            eprintln!(">>> FUSE open: cached {} bytes for CID {}", plaintext.len(), &cid[..12]);
-                            self.content_cache.set(&cid, plaintext);
-                        }
-                        Ok(Err(e)) => {
-                            log::error!("Content download failed for CID {}: {}", cid, e);
-                            reply.error(libc::EIO);
-                            return;
-                        }
-                        Err(_) => {
-                            log::error!("Content download timed out for CID {} ({}s)", cid, CONTENT_DOWNLOAD_TIMEOUT.as_secs());
-                            reply.error(libc::EIO);
-                            return;
-                        }
-                    }
                 }
 
                 let fh = self.next_fh.fetch_add(1, Ordering::SeqCst);
@@ -1122,51 +1155,31 @@ mod implementation {
             }
 
             // Content not in cache — download synchronously as fallback.
-            // This handles the case where FUSE-T NFS calls read() without open()
-            // (NFSv3 is stateless), or when content was evicted from cache.
-            eprintln!(">>> FUSE read: cache miss for CID {}, downloading...", &cid[..cid.len().min(12)]);
+            // This handles the case where the background prefetch from open()
+            // hasn't completed yet, or FUSE-T NFS calls read() without prior open(),
+            // or when content was evicted from cache.
+            //
+            // NOTE: This blocks the single FUSE-T NFS thread. FUSE-T uses
+            // NFSv4 hard mount with timeo=10 (1s). The NFS client will show
+            // "not responding" during download but recovers once we reply.
+            eprintln!(">>> FUSE read: cache miss for CID {}, downloading synchronously...", &cid[..cid.len().min(12)]);
             let result = self.rt.block_on(async {
-                tokio::time::timeout(CONTENT_DOWNLOAD_TIMEOUT, async {
-                    let encrypted_bytes =
-                        crate::api::ipfs::fetch_content(&self.api, &cid).await?;
-                    let encrypted_file_key_bytes = hex::decode(&encrypted_file_key_hex)
-                        .map_err(|_| "Invalid file key hex".to_string())?;
-                    let mut file_key =
-                        crate::crypto::ecies::unwrap_key(&encrypted_file_key_bytes, &self.private_key)
-                            .map_err(|e| format!("File key unwrap failed: {}", e))?;
-                    let file_key_arr: [u8; 32] = file_key.as_slice()
-                        .try_into()
-                        .map_err(|_| "Invalid file key length".to_string())?;
-
-                    let plaintext = if encryption_mode == "CTR" {
-                        let iv_bytes = hex::decode(&iv_hex)
-                            .map_err(|_| "Invalid file IV hex".to_string())?;
-                        let iv_arr: [u8; 16] = iv_bytes
-                            .try_into()
-                            .map_err(|_| "Invalid CTR IV length (expected 16)".to_string())?;
-                        crate::crypto::aes_ctr::decrypt_aes_ctr(
-                            &encrypted_bytes, &file_key_arr, &iv_arr,
-                        )
-                        .map_err(|e| format!("CTR decryption failed: {}", e))?
-                    } else {
-                        let iv_bytes = hex::decode(&iv_hex)
-                            .map_err(|_| "Invalid file IV hex".to_string())?;
-                        let iv_arr: [u8; 12] = iv_bytes
-                            .try_into()
-                            .map_err(|_| "Invalid GCM IV length (expected 12)".to_string())?;
-                        crate::crypto::aes::decrypt_aes_gcm(
-                            &encrypted_bytes, &file_key_arr, &iv_arr,
-                        )
-                        .map_err(|e| format!("GCM decryption failed: {}", e))?
-                    };
-
-                    crate::crypto::utils::clear_bytes(&mut file_key);
-                    Ok::<Vec<u8>, String>(plaintext)
-                }).await
+                tokio::time::timeout(
+                    CONTENT_DOWNLOAD_TIMEOUT,
+                    fetch_and_decrypt_content_async(
+                        &self.api,
+                        &cid,
+                        &encrypted_file_key_hex,
+                        &iv_hex,
+                        &encryption_mode,
+                        &self.private_key,
+                    ),
+                ).await
             });
 
             match result {
                 Ok(Ok(plaintext)) => {
+                    eprintln!(">>> FUSE read: downloaded {} bytes for CID {}", plaintext.len(), &cid[..cid.len().min(12)]);
                     let start = offset as usize;
                     if start >= plaintext.len() {
                         self.content_cache.set(&cid, plaintext);
@@ -1180,10 +1193,12 @@ mod implementation {
                 }
                 Ok(Err(e)) => {
                     log::error!("Read fallback download failed for CID {}: {}", cid, e);
+                    eprintln!(">>> FUSE read: download FAILED for CID {}: {}", &cid[..cid.len().min(12)], e);
                     reply.error(libc::EIO);
                 }
                 Err(_) => {
-                    log::error!("Read fallback download timed out for CID {}", cid);
+                    log::error!("Read fallback download timed out for CID {} ({}s)", cid, CONTENT_DOWNLOAD_TIMEOUT.as_secs());
+                    eprintln!(">>> FUSE read: download TIMED OUT for CID {}", &cid[..cid.len().min(12)]);
                     reply.error(libc::EIO);
                 }
             }
