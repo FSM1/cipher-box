@@ -1684,7 +1684,9 @@ mod op {
                     arg: data.fetch()?,
                     data: data.fetch_all(),
                 };
-                assert!(out.data().len() == out.arg.size as usize);
+                if out.data().len() != out.arg.size as usize {
+                    return None;
+                }
                 out
             }),
             fuse_opcode::FUSE_STATFS => Operation::StatFs(StatFs { header }),
@@ -1703,7 +1705,9 @@ mod op {
                     name: data.fetch_str()?,
                     value: data.fetch_all(),
                 };
-                assert!(out.value.len() == out.arg.size as usize);
+                if out.value.len() != out.arg.size as usize {
+                    return None;
+                }
                 out
             }),
             fuse_opcode::FUSE_GETXATTR => Operation::GetXAttr(GetXAttr {

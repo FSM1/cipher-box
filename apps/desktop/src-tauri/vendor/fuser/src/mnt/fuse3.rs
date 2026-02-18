@@ -82,6 +82,9 @@ impl Drop for Mount {
             }
             warn!("umount failed with {err:?}");
         }
+        unsafe {
+            fuse_session_destroy(self.fuse_session);
+        }
     }
 }
 unsafe impl Send for Mount {}

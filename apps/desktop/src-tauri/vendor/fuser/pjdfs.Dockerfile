@@ -22,3 +22,5 @@ ARG BUILD_FEATURES
 ADD . /code/fuser/
 
 RUN cd /code/fuser && cargo build --release --examples $BUILD_FEATURES && cp target/release/examples/simple /bin/fuser
+
+USER fsgqa

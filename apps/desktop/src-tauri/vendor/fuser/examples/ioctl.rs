@@ -98,7 +98,13 @@ impl Filesystem for FiocFS {
         reply: ReplyData,
     ) {
         if ino == 2 {
-            reply.data(&self.content[offset as usize..])
+            if offset < 0 || offset as usize >= self.content.len() {
+                reply.data(&[]);
+            } else {
+                let start = offset as usize;
+                let end = (start + _size as usize).min(self.content.len());
+                reply.data(&self.content[start..end]);
+            }
         } else {
             reply.error(ENOENT);
         }
@@ -157,8 +163,14 @@ impl Filesystem for FiocFS {
                 reply.ioctl(0, &size_bytes);
             }
             FIOC_SET_SIZE => {
-                let new_size = usize::from_ne_bytes(in_data.try_into().unwrap());
+                let Ok(bytes) = in_data.try_into() else {
+                    reply.error(EINVAL);
+                    return;
+                };
+                let new_size = usize::from_ne_bytes(bytes);
                 self.content = vec![0_u8; new_size];
+                self.fioc_file_attr.size = new_size as u64;
+                self.fioc_file_attr.blocks = (new_size as u64 + 511) / 512;
                 reply.ioctl(0, &[]);
             }
             _ => {
