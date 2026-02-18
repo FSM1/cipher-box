@@ -44,14 +44,15 @@ pub async fn handle_auth_complete(
         return Err("Private key must be 32 bytes".to_string());
     }
 
-    // Derive public keys from private key
-    let public_key_bytes = derive_public_key(&private_key_bytes)?; // 65 bytes, uncompressed (for ECIES)
-    let compressed_public_key_hex = derive_compressed_public_key_hex(&private_key_bytes)?; // 33 bytes hex (for backend auth)
+    // Derive uncompressed public key from private key (65 bytes, 0x04 prefix)
+    // Used for both ECIES operations and backend auth (backend expects uncompressed)
+    let public_key_bytes = derive_public_key(&private_key_bytes)?;
+    let public_key_hex = hex::encode(&public_key_bytes); // 130 hex chars
 
-    // 2. Login with backend (requires compressed publicKey matching Web3Auth JWT)
+    // 2. Login with backend (requires uncompressed publicKey, 130 hex chars)
     let login_req = types::LoginRequest {
         id_token: id_token.clone(),
-        public_key: compressed_public_key_hex,
+        public_key: public_key_hex,
         login_type: "corekit".to_string(),
     };
 
