@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { FolderChildV2, FilePointer, FolderEntry, FileMetadata } from '@cipherbox/crypto';
+import type { FolderChild, FilePointer, FolderEntry, FileMetadata } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useFolderStore } from '../../stores/folder.store';
 import { resolveIpnsRecord } from '../../services/ipns.service';
@@ -10,7 +10,7 @@ import '../../styles/details-dialog.css';
 type DetailsDialogProps = {
   open: boolean;
   onClose: () => void;
-  item: FolderChildV2 | null;
+  item: FolderChild | null;
   folderKey: Uint8Array | null;
 };
 
@@ -328,7 +328,6 @@ export function DetailsDialog({ open, onClose, item, folderKey }: DetailsDialogP
       return;
     }
 
-    // Guard against v1 FileEntry objects that lack fileMetaIpnsName
     const fileItem = item as FilePointer;
     if (!fileItem.fileMetaIpnsName) {
       setFileMeta(null);
@@ -373,9 +372,7 @@ export function DetailsDialog({ open, onClose, item, folderKey }: DetailsDialogP
 
   return (
     <Modal open={open} onClose={onClose} title={title}>
-      {item.type === 'file' &&
-      'fileMetaIpnsName' in item &&
-      typeof (item as FilePointer).fileMetaIpnsName === 'string' ? (
+      {item.type === 'file' ? (
         <FileDetails
           item={item as FilePointer}
           metadataCid={metadataCid}
@@ -383,12 +380,6 @@ export function DetailsDialog({ open, onClose, item, folderKey }: DetailsDialogP
           fileMeta={fileMeta}
           fileMetaLoading={fileMetaLoading}
         />
-      ) : item.type === 'file' ? (
-        <div className="details-rows">
-          <span className="details-value details-value--dim">
-            File metadata unavailable (legacy v1 entry)
-          </span>
-        </div>
       ) : (
         <FolderDetails
           item={item}

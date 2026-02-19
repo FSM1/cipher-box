@@ -1,11 +1,10 @@
 /**
- * Folder Service - Folder CRUD operations with encryption (v2 metadata)
+ * Folder Service - Folder CRUD operations with encryption
  *
  * Handles folder creation, loading, and metadata updates with
  * client-side encryption using @cipherbox/crypto.
  *
- * v2 metadata: Folders store slim FilePointer references instead of
- * inline FileEntry objects. File metadata lives in per-file IPNS records.
+ * Folders store slim FilePointer references. File metadata lives in per-file IPNS records.
  */
 
 import {
@@ -20,10 +19,9 @@ import {
   createIpnsRecord,
   marshalIpnsRecord,
   type FolderMetadata,
-  type FolderMetadataV2,
   type EncryptedFolderMetadata,
   type FolderEntry,
-  type FolderChildV2,
+  type FolderChild,
   type FilePointer,
 } from '@cipherbox/crypto';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
@@ -76,7 +74,7 @@ export function getDepth(folderId: string | null, folders: Record<string, Folder
  *
  * Resolves the folder's IPNS name to get the current metadata CID,
  * fetches and decrypts the metadata, and returns a complete FolderNode.
- * Returns v2 metadata with FolderChildV2[] children (v1 data requires DB wipe).
+ * Returns v2 metadata with FolderChild[] children.
  *
  * IMPORTANT: Does NOT eagerly resolve per-file IPNS records during folder load.
  * File metadata is lazy-loaded on download/preview (Pitfall 1 from research).
@@ -123,14 +121,13 @@ export async function loadFolder(
   const metadata = await fetchAndDecryptMetadata(resolved.cid, folderKey);
 
   // 4. Return complete FolderNode with decrypted children
-  // v2 FilePointer objects have fileMetaIpnsName instead of inline file data.
-  // v1 data cannot exist at runtime (clean break / DB wipe required for v2 migration).
+  // FilePointer objects have fileMetaIpnsName instead of inline file data.
   return {
     id: folderId ?? 'root',
     name,
     ipnsName,
     parentId,
-    children: (metadata.children ?? []) as FolderChildV2[],
+    children: metadata.children ?? [],
     isLoaded: true,
     isLoading: false,
     sequenceNumber: resolved.sequenceNumber,
@@ -225,7 +222,7 @@ export async function createFolder(params: {
  * and publishes an updated IPNS record pointing to the new CID.
  *
  * @param params.folderId - Folder being updated
- * @param params.children - New children array (FolderChildV2[])
+ * @param params.children - New children array (FolderChild[])
  * @param params.folderKey - Decrypted AES-256 folder key
  * @param params.ipnsPrivateKey - Decrypted Ed25519 IPNS private key
  * @param params.ipnsName - IPNS name for this folder
@@ -236,7 +233,7 @@ export async function createFolder(params: {
  */
 export async function updateFolderMetadata(params: {
   folderId: string;
-  children: FolderChildV2[];
+  children: FolderChild[];
   folderKey: Uint8Array;
   ipnsPrivateKey: Uint8Array;
   ipnsName: string;
@@ -245,7 +242,7 @@ export async function updateFolderMetadata(params: {
   keyEpoch?: number;
 }): Promise<{ cid: string; newSequenceNumber: bigint }> {
   // 1. Create v2 folder metadata
-  const metadata: FolderMetadataV2 = {
+  const metadata: FolderMetadata = {
     version: 'v2',
     children: params.children,
   };
@@ -282,7 +279,7 @@ export async function updateFolderMetadata(params: {
  * @returns Folder IPNS record payload for batch publish
  */
 async function buildFolderIpnsRecord(params: {
-  children: FolderChildV2[];
+  children: FolderChild[];
   folderKey: Uint8Array;
   ipnsPrivateKey: Uint8Array;
   ipnsName: string;
@@ -295,7 +292,7 @@ async function buildFolderIpnsRecord(params: {
   newSequenceNumber: bigint;
 }> {
   // 1. Create v2 folder metadata
-  const metadata: FolderMetadataV2 = {
+  const metadata: FolderMetadata = {
     version: 'v2',
     children: params.children,
   };
@@ -537,7 +534,7 @@ export async function addFileToFolder(params: {
   };
 
   // 3. Add FilePointer to parent's children
-  const children: FolderChildV2[] = [...params.parentFolderState.children, filePointer];
+  const children: FolderChild[] = [...params.parentFolderState.children, filePointer];
 
   // 4. Build folder IPNS record for batch publish
   const folderResult = await buildFolderIpnsRecord({
@@ -609,7 +606,7 @@ export async function addFilesToFolder(params: {
   }
 
   // 3. Build updated children array
-  const children: FolderChildV2[] = [...params.parentFolderState.children, ...filePointers];
+  const children: FolderChild[] = [...params.parentFolderState.children, ...filePointers];
 
   // 4. Build folder IPNS record
   const folderResult = await buildFolderIpnsRecord({
@@ -771,7 +768,7 @@ export async function moveFolder(params: {
   }
 
   // 5. ADD to destination FIRST (add-before-remove pattern)
-  const destChildren: FolderChildV2[] = [
+  const destChildren: FolderChild[] = [
     ...params.destFolderState.children,
     {
       ...folder,
@@ -832,7 +829,7 @@ export async function moveFile(params: {
   if (nameExists) throw new Error('An item with this name already exists in destination');
 
   // 3. ADD to destination FIRST
-  const destChildren: FolderChildV2[] = [
+  const destChildren: FolderChild[] = [
     ...params.destFolderState.children,
     {
       ...file,
@@ -912,17 +909,15 @@ export async function renameFile(params: {
  *
  * Used for sync operations when remote IPNS resolves to a different CID.
  * Fetches the encrypted metadata blob from IPFS and decrypts it with the folder key.
- * Returns either v1 or v2 metadata depending on the encrypted content.
- *
  * @param cid - IPFS CID of the encrypted metadata blob
  * @param folderKey - Decrypted AES-256 folder key
- * @returns Decrypted folder metadata (v1 or v2)
+ * @returns Decrypted folder metadata (v2)
  * @throws Error if fetch or decryption fails
  */
 export async function fetchAndDecryptMetadata(
   cid: string,
   folderKey: Uint8Array
-): Promise<FolderMetadata | FolderMetadataV2> {
+): Promise<FolderMetadata> {
   // 1. Fetch encrypted metadata blob from IPFS
   const encryptedBytes = await fetchFromIpfs(cid);
 
@@ -930,7 +925,7 @@ export async function fetchAndDecryptMetadata(
   const encryptedJson = new TextDecoder().decode(encryptedBytes);
   const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
 
-  // 3. Decrypt using folder key (returns v1 or v2 depending on content)
+  // 3. Decrypt using folder key
   const metadata = await decryptFolderMetadata(encrypted, folderKey);
 
   return metadata;

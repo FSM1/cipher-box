@@ -7,7 +7,7 @@ import {
   type DragEvent,
   type MouseEvent,
 } from 'react';
-import type { FolderChildV2, FilePointer } from '@cipherbox/crypto';
+import type { FolderChild, FilePointer } from '@cipherbox/crypto';
 import { useFolderNavigation } from '../../hooks/useFolderNavigation';
 import { useFolder } from '../../hooks/useFolder';
 import { useFileDownload } from '../../hooks/useFileDownload';
@@ -41,16 +41,11 @@ import { OfflineBanner } from './OfflineBanner';
 import { SelectionActionBar } from './SelectionActionBar';
 
 /**
- * Type guard for file pointers (v2).
- * Checks both type and fileMetaIpnsName to distinguish v2 FilePointer
- * from v1 FileEntry objects that may pass through via metadata casting.
+ * Type guard for file pointers.
+ * Narrows FolderChild to FilePointer by checking type discriminant.
  */
-function isFilePointer(item: FolderChildV2): item is FilePointer {
-  return (
-    item.type === 'file' &&
-    'fileMetaIpnsName' in item &&
-    typeof (item as FilePointer).fileMetaIpnsName === 'string'
-  );
+function isFilePointer(item: FolderChild): item is FilePointer {
+  return item.type === 'file';
 }
 
 /** Extensions recognized as editable text files. */
@@ -191,7 +186,7 @@ function isPreviewableFile(name: string): boolean {
  */
 type DialogState = {
   open: boolean;
-  item: FolderChildV2 | null;
+  item: FolderChild | null;
 };
 
 /**
@@ -290,7 +285,7 @@ export function FileBrowser() {
 
       // Update folder store with new children
       // Per CONTEXT.md: last write wins, instant refresh (no toast/prompt)
-      useFolderStore.getState().updateFolderChildren('root', metadata.children as FolderChildV2[]);
+      useFolderStore.getState().updateFolderChildren('root', metadata.children);
       useFolderStore.getState().updateFolderSequence('root', resolved.sequenceNumber);
     } catch (err) {
       console.error('Sync refresh failed:', err);
@@ -542,7 +537,7 @@ export function FileBrowser() {
   // Context menu handler - show context menu
   // If right-clicked item is not in selection, select only that item
   const handleContextMenu = useCallback(
-    (event: MouseEvent, item: FolderChildV2) => {
+    (event: MouseEvent, item: FolderChild) => {
       if (!selectedIds.has(item.id)) {
         setSelectedIds(new Set([item.id]));
         lastSelectedIdRef.current = item.id;
@@ -553,7 +548,7 @@ export function FileBrowser() {
   );
 
   // Drag start handler
-  const handleDragStart = useCallback((_event: DragEvent, _item: FolderChildV2) => {
+  const handleDragStart = useCallback((_event: DragEvent, _item: FolderChild) => {
     // Drag data is set by FileListItem component
   }, []);
 
@@ -653,13 +648,13 @@ export function FileBrowser() {
   // Batch delete state: stores multiple items for batch confirmation
   const [batchDeleteDialog, setBatchDeleteDialog] = useState<{
     open: boolean;
-    items: FolderChildV2[];
+    items: FolderChild[];
   }>({ open: false, items: [] });
 
   // Batch move state: stores items for batch move dialog
   const [batchMoveDialog, setBatchMoveDialog] = useState<{
     open: boolean;
-    items: FolderChildV2[];
+    items: FolderChild[];
   }>({ open: false, items: [] });
 
   // Open batch delete confirmation

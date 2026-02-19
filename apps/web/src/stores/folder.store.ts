@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { FolderChildV2 } from '@cipherbox/crypto';
+import type { FolderChild } from '@cipherbox/crypto';
 
 /**
  * A folder node in the in-memory folder tree.
@@ -15,7 +15,7 @@ export type FolderNode = {
   /** Parent folder ID (null for root) */
   parentId: string | null;
   /** Decrypted children (files and subfolders) */
-  children: FolderChildV2[];
+  children: FolderChild[];
   /** Has metadata been fetched and decrypted? */
   isLoaded: boolean;
   /** Is metadata currently being fetched? */
@@ -49,7 +49,7 @@ type FolderState = {
 
   // Actions
   setFolder: (folder: FolderNode) => void;
-  updateFolderChildren: (folderId: string, children: FolderChildV2[]) => void;
+  updateFolderChildren: (folderId: string, children: FolderChild[]) => void;
   updateFolderSequence: (folderId: string, sequenceNumber: bigint) => void;
   setCurrentFolder: (folderId: string | null) => void;
   setBreadcrumbs: (breadcrumbs: Breadcrumb[]) => void;

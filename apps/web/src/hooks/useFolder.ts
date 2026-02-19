@@ -11,7 +11,7 @@ import {
   updateFileMetadata,
 } from '../services/file-metadata.service';
 import type { FolderNode } from '../stores/folder.store';
-import type { FolderEntry, FilePointer, FolderChildV2 } from '@cipherbox/crypto';
+import type { FolderEntry, FilePointer, FolderChild } from '@cipherbox/crypto';
 
 /** Maximum folder nesting depth per FOLD-03 */
 const MAX_FOLDER_DEPTH = 20;
@@ -655,7 +655,7 @@ export function useFolder() {
         });
 
         // 3. Update local state with new child and sequence number
-        const updatedChildren: FolderChildV2[] = [...parentFolder.children, filePointer];
+        const updatedChildren: FolderChild[] = [...parentFolder.children, filePointer];
         const store = useFolderStore.getState();
         store.updateFolderChildren(parentId, updatedChildren);
         store.updateFolderSequence(parentId, newSequenceNumber);
