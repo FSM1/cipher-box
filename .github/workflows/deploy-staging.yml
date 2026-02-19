@@ -124,8 +124,8 @@ jobs:
         with:
           ref: ${{ inputs.staging_tag || github.ref_name }}
 
-      - name: Install macFUSE headers
-        run: brew install --cask macfuse
+      - name: Install FUSE-T
+        run: brew install --cask fuse-t
 
       - uses: pnpm/action-setup@v4
         with:

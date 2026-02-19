@@ -1,0 +1,1 @@
+https://github.com/FSM1/cipher-box/actions/runs/22181848464 the desktop build is failing in CI
