@@ -213,4 +213,178 @@ export class DetailsDialogPage {
   async isFolderBadge(): Promise<boolean> {
     return await this.dialog().locator('.details-type-badge--folder').isVisible();
   }
+
+  // ============================================
+  // Version History Locators & Methods
+  // ============================================
+
+  /**
+   * Get the version history section container.
+   */
+  versionSection(): Locator {
+    return this.dialog().locator('.details-version-section');
+  }
+
+  /**
+   * Get all version entry elements within the version section.
+   */
+  versionEntries(): Locator {
+    return this.versionSection().locator('.details-version-entry');
+  }
+
+  /**
+   * Get a specific version entry by index (0-based, 0 = newest displayed).
+   */
+  versionEntry(index: number): Locator {
+    return this.versionEntries().nth(index);
+  }
+
+  /**
+   * Get the version number element within a version entry.
+   */
+  versionNumber(index: number): Locator {
+    return this.versionEntry(index).locator('.details-version-number');
+  }
+
+  /**
+   * Get the version actions container within a version entry.
+   */
+  versionActions(index: number): Locator {
+    return this.versionEntry(index).locator('.details-version-actions');
+  }
+
+  /**
+   * Get the download button for a version entry.
+   */
+  versionDownloadBtn(index: number): Locator {
+    return this.versionEntry(index).locator('button', { hasText: /^dl$/i });
+  }
+
+  /**
+   * Get the restore button for a version entry.
+   */
+  versionRestoreBtn(index: number): Locator {
+    return this.versionEntry(index).locator('button', { hasText: /^restore$/i });
+  }
+
+  /**
+   * Get the delete button for a version entry.
+   */
+  versionDeleteBtn(index: number): Locator {
+    return this.versionEntry(index).locator('button', { hasText: /^rm$/i });
+  }
+
+  /**
+   * Get the inline confirm dialog within the version section.
+   */
+  versionConfirm(): Locator {
+    return this.dialog().locator('.details-version-confirm');
+  }
+
+  /**
+   * Get the confirm (yes) button in the inline confirm dialog.
+   */
+  versionConfirmYes(): Locator {
+    return this.versionConfirm().locator('.details-version-confirm-btn--yes');
+  }
+
+  /**
+   * Get the cancel (no) button in the inline confirm dialog.
+   */
+  versionConfirmNo(): Locator {
+    return this.versionConfirm().locator('.details-version-confirm-btn--no');
+  }
+
+  /**
+   * Get the version error element.
+   */
+  versionError(): Locator {
+    return this.dialog().locator('.details-version-error');
+  }
+
+  /**
+   * Check if the version history section is visible.
+   */
+  async isVersionSectionVisible(): Promise<boolean> {
+    return await this.versionSection().isVisible();
+  }
+
+  /**
+   * Get the count of version entries.
+   */
+  async getVersionCount(): Promise<number> {
+    return await this.versionEntries().count();
+  }
+
+  /**
+   * Get the version number text for a specific entry (e.g. "v1", "v2").
+   */
+  async getVersionNumberText(index: number): Promise<string> {
+    return (await this.versionNumber(index).textContent()) ?? '';
+  }
+
+  /**
+   * Get the version size text for a specific entry.
+   */
+  async getVersionSizeText(index: number): Promise<string> {
+    return (await this.versionEntry(index).locator('.details-version-size').textContent()) ?? '';
+  }
+
+  /**
+   * Click the download button for a version entry.
+   */
+  async clickVersionDownload(index: number): Promise<void> {
+    await this.versionDownloadBtn(index).click();
+  }
+
+  /**
+   * Click the restore button for a version entry (opens inline confirm).
+   */
+  async clickVersionRestore(index: number): Promise<void> {
+    await this.versionRestoreBtn(index).click();
+  }
+
+  /**
+   * Click the delete button for a version entry (opens inline confirm).
+   */
+  async clickVersionDelete(index: number): Promise<void> {
+    await this.versionDeleteBtn(index).click();
+  }
+
+  /**
+   * Check if the inline confirm dialog is visible.
+   */
+  async isVersionConfirmVisible(): Promise<boolean> {
+    return await this.versionConfirm().isVisible();
+  }
+
+  /**
+   * Click the confirm button in the inline confirm dialog.
+   */
+  async confirmVersionAction(): Promise<void> {
+    await this.versionConfirmYes().click();
+  }
+
+  /**
+   * Click the cancel button in the inline confirm dialog.
+   */
+  async cancelVersionAction(): Promise<void> {
+    await this.versionConfirmNo().click();
+  }
+
+  /**
+   * Get the version error text if visible, null otherwise.
+   */
+  async getVersionErrorText(): Promise<string | null> {
+    const isVisible = await this.versionError().isVisible();
+    if (!isVisible) return null;
+    return (await this.versionError().textContent()) ?? null;
+  }
+
+  /**
+   * Wait for the version history section to appear.
+   */
+  async waitForVersionSection(options?: { timeout?: number }): Promise<void> {
+    await this.versionSection().waitFor({ state: 'visible', ...options });
+  }
 }
