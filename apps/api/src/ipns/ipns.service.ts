@@ -53,15 +53,8 @@ export class IpnsService {
       throw new BadRequestException('Invalid base64-encoded record');
     }
 
-    // Note: TEE fields (encryptedIpnsPrivateKey, keyEpoch) are optional for Phase 6
-    // They will be required when TEE republishing is implemented (Phase 7+)
-    // For now, allow publishing without them - the folder will be created/updated
-    // via upsert and TEE fields can be added later when the client supports it
-
-    // Publish to delegated routing API with retries
-    await this.publishToDelegatedRouting(dto.ipnsName, recordBytes);
-
-    // Update or create folder tracking
+    // Save to DB first so resolve always has a fallback, even if delegated
+    // routing fails (e.g. rate-limited, network error, DHT propagation delay).
     const folder = await this.upsertFolderIpns(
       userId,
       dto.ipnsName,
@@ -69,6 +62,15 @@ export class IpnsService {
       dto.encryptedIpnsPrivateKey,
       dto.keyEpoch
     );
+
+    // Publish to delegated routing API (best-effort — DB is the reliable source)
+    try {
+      await this.publishToDelegatedRouting(dto.ipnsName, recordBytes);
+    } catch (error) {
+      this.logger.warn(
+        `Delegated routing publish failed for ${dto.ipnsName}, DB record saved: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
 
     return {
       success: true,
@@ -106,10 +108,7 @@ export class IpnsService {
             throw new BadRequestException(`Invalid base64-encoded record for ${entry.ipnsName}`);
           }
 
-          // Publish to delegated routing
-          await this.publishToDelegatedRouting(entry.ipnsName, recordBytes);
-
-          // Upsert FolderIpns entry with recordType
+          // Save to DB first so resolve always has a fallback
           const folder = await this.upsertFolderIpns(
             userId,
             entry.ipnsName,
@@ -118,6 +117,15 @@ export class IpnsService {
             entry.keyEpoch,
             entry.recordType ?? 'folder'
           );
+
+          // Publish to delegated routing (best-effort)
+          try {
+            await this.publishToDelegatedRouting(entry.ipnsName, recordBytes);
+          } catch (error) {
+            this.logger.warn(
+              `Delegated routing publish failed for ${entry.ipnsName}, DB record saved: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
 
           return {
             success: true,
