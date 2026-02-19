@@ -839,8 +839,14 @@
         return;
       }
 
-      const isV2 = metadata.version === 'v2';
-      log(`  Found ${metadata.children.length} items in ${path || '/'} (${isV2 ? 'v2' : 'v1'} schema)`, 'success');
+      // Reject non-v2 metadata
+      if (metadata.version !== 'v2') {
+        log(`  ERROR: Unsupported metadata version "${metadata.version}" for ${path || '/'} (only v2 supported). Skipping folder.`, 'error');
+        errorCount++;
+        return;
+      }
+
+      log(`  Found ${metadata.children.length} items in ${path || '/'}`, 'success');
 
       // 5. Process each child
       for (const child of metadata.children) {
@@ -860,17 +866,22 @@
             log(`  ERROR recovering folder "${child.name}": ${e.message}`, 'error');
             errorCount++;
           }
-        } else if (child.type === 'file' && isV2 && child.fileMetaIpnsName) {
-          // ── v2 FilePointer: resolve per-file IPNS to get file metadata ──
+        } else if (child.type === 'file') {
+          // Validate FilePointer has required fileMetaIpnsName
+          if (!child.fileMetaIpnsName) {
+            log(`  ERROR: Invalid file child "${child.name}": missing fileMetaIpnsName (v1 format not supported)`, 'error');
+            errorCount++;
+            continue;
+          }
+
+          // ── FilePointer: resolve per-file IPNS to get file metadata ──
           try {
             const filePath = path ? `${path}/${child.name}` : child.name;
             log(`Resolving file IPNS: ${child.name}...`, 'info');
 
-            // a. Derive expected IPNS name from user's private key + fileId
-            //    (used for verification, but we use the stored fileMetaIpnsName for resolution)
             const fileIpnsName = child.fileMetaIpnsName;
 
-            // b. Resolve file IPNS to get file metadata CID
+            // a. Resolve file IPNS to get file metadata CID
             let fileMetaCid;
             try {
               fileMetaCid = await resolveIpns(fileIpnsName, gatewayConfig.ipnsGateway);
@@ -885,52 +896,28 @@
 
             log(`  File metadata CID: ${truncate(fileMetaCid, 40)}`, 'info');
 
-            // c. Fetch encrypted file metadata from IPFS
+            // b. Fetch encrypted file metadata from IPFS
             const encFileMetaBytes = await fetchFromIpfs(fileMetaCid, gatewayConfig.ipfsGateway);
             const encFileMeta = JSON.parse(new TextDecoder().decode(encFileMetaBytes));
 
-            // d. Decrypt file metadata with parent's folderKey
+            // c. Decrypt file metadata with parent's folderKey
             const fileMeta = await decryptFileMetadata(encFileMeta, folderKey);
 
-            // e. Extract file details from decrypted metadata
+            // d. Extract file details from decrypted metadata
             const { cid: contentCid, fileKeyEncrypted, fileIv, size, encryptionMode } = fileMeta;
 
             log(`Downloading: ${filePath}... (${formatSize(size || 0)})`, 'info');
 
-            // f. ECIES-decrypt file key
+            // e. ECIES-decrypt file key
             const fileKey = await eciesDecrypt(privateKeyBytes, fileKeyEncrypted);
 
-            // g. Fetch encrypted file from IPFS
+            // f. Fetch encrypted file from IPFS
             const encryptedFile = await fetchFromIpfs(contentCid, gatewayConfig.ipfsGateway);
 
-            // h. Decrypt file content
+            // g. Decrypt file content
             const decryptedFile = await decryptFile(encryptedFile, fileKey, fileIv);
 
             // Store for zip
-            recoveredFiles.push({ path: filePath, data: decryptedFile });
-            fileCount++;
-
-            log(`  Decrypted: ${filePath} (${formatSize(decryptedFile.length)})`, 'success');
-          } catch (e) {
-            log(`  ERROR recovering file "${child.name}": ${e.message}`, 'error');
-            errorCount++;
-          }
-        } else if (child.type === 'file') {
-          // ── v1 inline file entry: cid, fileKeyEncrypted, fileIv embedded ──
-          try {
-            log(`Downloading: ${path ? path + '/' : ''}${child.name}...`, 'info');
-
-            // ECIES-decrypt file key
-            const fileKey = await eciesDecrypt(privateKeyBytes, child.fileKeyEncrypted);
-
-            // Fetch encrypted file from IPFS
-            const encryptedFile = await fetchFromIpfs(child.cid, gatewayConfig.ipfsGateway);
-
-            // Decrypt file
-            const decryptedFile = await decryptFile(encryptedFile, fileKey, child.fileIv);
-
-            // Store for zip
-            const filePath = path ? `${path}/${child.name}` : child.name;
             recoveredFiles.push({ path: filePath, data: decryptedFile });
             fileCount++;
 
