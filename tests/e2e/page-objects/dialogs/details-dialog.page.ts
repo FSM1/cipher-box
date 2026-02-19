@@ -257,21 +257,21 @@ export class DetailsDialogPage {
    * Get the download button for a version entry.
    */
   versionDownloadBtn(index: number): Locator {
-    return this.versionEntry(index).locator('button', { hasText: 'dl' });
+    return this.versionEntry(index).locator('button', { hasText: /^dl$/i });
   }
 
   /**
    * Get the restore button for a version entry.
    */
   versionRestoreBtn(index: number): Locator {
-    return this.versionEntry(index).locator('button', { hasText: 'restore' });
+    return this.versionEntry(index).locator('button', { hasText: /^restore$/i });
   }
 
   /**
    * Get the delete button for a version entry.
    */
   versionDeleteBtn(index: number): Locator {
-    return this.versionEntry(index).locator('button', { hasText: 'rm' });
+    return this.versionEntry(index).locator('button', { hasText: /^rm$/i });
   }
 
   /**

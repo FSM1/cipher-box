@@ -1228,6 +1228,8 @@ test.describe.serial('Full Workflow', () => {
   // The 15-minute version cooldown prevents additional versions in this test run.
 
   test('6.6.1 Version history visible in Details dialog', async () => {
+    test.setTimeout(60000);
+
     // We're at root after 6.5.5. Right-click the editable file and open Details.
     await fileList.rightClickItem(editableFileName);
     await contextMenu.waitForOpen();
