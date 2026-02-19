@@ -9,6 +9,7 @@ import {
   createFileMetadata,
   resolveFileMetadata,
   updateFileMetadata,
+  shouldCreateVersion,
 } from '../services/file-metadata.service';
 import type { FolderNode } from '../stores/folder.store';
 import type { FolderEntry, FilePointer, FolderChild } from '@cipherbox/crypto';
@@ -756,6 +757,9 @@ export function useFolder() {
   /**
    * Update a file's content in-place (v2: re-encrypt, update file IPNS, folder untouched).
    *
+   * Old CIDs are preserved as version history (VER-01). Only pruned versions
+   * (excess beyond max 10) have their CIDs unpinned.
+   *
    * @param parentId - Parent folder ID ('root' or folder UUID)
    * @param fileData - New file data after re-encryption
    * @returns Resolves when the update is complete
@@ -769,6 +773,7 @@ export function useFolder() {
         newFileKeyEncrypted: string;
         newFileIv: string;
         newSize: number;
+        forceVersion?: boolean; // true for web re-upload, false/undefined for text editor
       }
     ): Promise<void> => {
       setState({ isLoading: true, error: null });
@@ -804,11 +809,11 @@ export function useFolder() {
           parentFolder.folderKey
         );
 
-        // 3. Get old CID for unpinning before we overwrite
-        const oldCid = currentMetadata.cid;
+        // 3. Determine whether to create a version entry
+        const createVersion = shouldCreateVersion(currentMetadata, fileData.forceVersion ?? false);
 
         // 4. Update file metadata and publish new IPNS record
-        const { ipnsRecord } = await updateFileMetadata({
+        const { ipnsRecord, prunedCids } = await updateFileMetadata({
           fileId: fileData.fileId,
           folderKey: parentFolder.folderKey,
           userPrivateKey: auth.vaultKeypair.privateKey,
@@ -819,6 +824,7 @@ export function useFolder() {
             fileIv: fileData.newFileIv,
             size: fileData.newSize,
           },
+          createVersion,
         });
 
         // 5. Publish only the file IPNS record (folder metadata untouched!)
@@ -839,8 +845,11 @@ export function useFolder() {
         const store = useFolderStore.getState();
         store.updateFolderChildren(parentId, updatedChildren);
 
-        // 7. Unpin old CID fire-and-forget
-        unpinFromIpfs(oldCid).catch(() => {});
+        // 7. Only unpin CIDs of pruned versions (excess beyond max 10)
+        // Old CIDs stay pinned as version history (VER-01)
+        for (const prunedCid of prunedCids) {
+          unpinFromIpfs(prunedCid).catch(() => {});
+        }
 
         // Refresh quota
         useQuotaStore.getState().fetchQuota();
