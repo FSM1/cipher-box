@@ -120,7 +120,7 @@ export function FileList({
           [MODIFIED]
         </div>
         {/* Empty header cell for mobile action column - hidden on desktop via CSS */}
-        <div className="file-list-header-actions" role="columnheader" aria-hidden="true" />
+        <div className="file-list-header-actions" aria-hidden="true" />
       </div>
 
       {/* Item rows */}

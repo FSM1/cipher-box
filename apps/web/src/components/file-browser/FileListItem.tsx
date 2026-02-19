@@ -151,6 +151,7 @@ export function FileListItem({
       const rect = e.currentTarget.getBoundingClientRect();
       const syntheticEvent = {
         preventDefault: () => {},
+        stopPropagation: () => {},
         clientX: rect.left,
         clientY: rect.bottom,
       } as unknown as MouseEvent;
@@ -208,6 +209,7 @@ export function FileListItem({
         // Create synthetic mouse event for context menu
         const syntheticEvent = {
           preventDefault: () => {},
+          stopPropagation: () => {},
           clientX: touch.clientX,
           clientY: touch.clientY,
         } as unknown as MouseEvent;
