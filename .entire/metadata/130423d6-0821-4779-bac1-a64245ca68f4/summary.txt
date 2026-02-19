@@ -1,1 +1,1 @@
-Only one file in `resolved/`. That's from early in the project (Jan 22) — likely a one-off inconsistency before the `done/` convention was established. Want me to move it from `resolved/` to `done/` to keep things consistent?
+All clean. Moved the stale `resolved/` todo to `done/` and removed the empty directory. Everything's staged — same commit message applies when you're ready to commit from your terminal.

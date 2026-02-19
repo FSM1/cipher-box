@@ -2,19 +2,17 @@
 
 **Session ID:** 130423d6-0821-4779-bac1-a64245ca68f4
 
-**Commit Message:** Also why was the @.learnings/2026-02-07-atomic-file-upload.md todo get m
+**Commit Message:** Yeah lets do some cleaning
 
 ## Prompt
 
-also why was the @.learnings/2026-02-07-atomic-file-upload.md todo get moved to `resolved` rather than `done`?
+yeah lets do some cleaning
 
 ## Summary
 
-Only one file in `resolved/`. That's from early in the project (Jan 22) — likely a one-off inconsistency before the `done/` convention was established. Want me to move it from `resolved/` to `done/` to keep things consistent?
+All clean. Moved the stale `resolved/` todo to `done/` and removed the empty directory. Everything's staged — same commit message applies when you're ready to commit from your terminal.
 
 ## Key Actions
 
-- - **Glob**: .planning/todos/**/*atomic*
-- - **Glob**: .planning/todos/**/
-- - **Bash**: List todo subdirectories
-- - **Bash**: List resolved todos
+- - **Bash**: Move todo to done and remove empty resolved directory
+- - **Bash**: Stage the move and check status

@@ -1,1 +1,1 @@
-also why was the @.learnings/2026-02-07-atomic-file-upload.md todo get moved to `resolved` rather than `done`?
+yeah lets do some cleaning
