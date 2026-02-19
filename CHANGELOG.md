@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/FSM1/cipher-box/compare/v0.12.2...v0.13.0) (2026-02-19)
+
+
+### Features
+
+* Phase 13 — File Versioning ([#161](https://github.com/FSM1/cipher-box/issues/161)) ([60a2dc7](https://github.com/FSM1/cipher-box/commit/60a2dc7ec12780c4c9f5e57d5116f440dd55e2d1))
+
 ## [0.12.2](https://github.com/FSM1/cipher-box/compare/v0.12.1...v0.12.2) (2026-02-19)
 
 
