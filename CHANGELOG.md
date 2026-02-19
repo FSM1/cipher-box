@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.0](https://github.com/FSM1/cipher-box/compare/v0.10.2...v0.11.0) (2026-02-19)
+
+
+### Features
+
+* **desktop:** macOS desktop catch-up and hybrid metadata fix ([#148](https://github.com/FSM1/cipher-box/issues/148)) ([ccad747](https://github.com/FSM1/cipher-box/commit/ccad7472c768de4e9019d6b86c8ac084ed2ca3d4))
+* remove v1 folder metadata, make v2 FilePointer canonical ([#150](https://github.com/FSM1/cipher-box/issues/150)) ([30d982c](https://github.com/FSM1/cipher-box/commit/30d982ce6da0c128205ce08e0806b7db03fc65e4))
+
 ## [0.10.2](https://github.com/FSM1/cipher-box/compare/v0.10.1...v0.10.2) (2026-02-18)
 
 ### Bug Fixes
