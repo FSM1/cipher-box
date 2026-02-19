@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.1](https://github.com/FSM1/cipher-box/compare/v0.11.0...v0.11.1) (2026-02-19)
+
+
+### Bug Fixes
+
+* **api:** save IPNS record to DB before delegated routing publish ([#151](https://github.com/FSM1/cipher-box/issues/151)) ([28edbc2](https://github.com/FSM1/cipher-box/commit/28edbc2dfc72d868148309dd66a80c0fd4a42530))
+* **desktop:** session restore on cold start and Google OAuth storage fix ([#153](https://github.com/FSM1/cipher-box/issues/153)) ([967bcc0](https://github.com/FSM1/cipher-box/commit/967bcc0c569c871759e08752efb9657fc10bb941))
+
 ## [0.11.0](https://github.com/FSM1/cipher-box/compare/v0.10.2...v0.11.0) (2026-02-19)
 
 
