@@ -165,3 +165,176 @@
 .details-type-badge--folder {
   color: var(--color-green-primary);
 }
+
+/* ==========================================================================
+   Version History Section
+   ========================================================================== */
+
+.details-version-section {
+  margin-top: var(--spacing-xs);
+}
+
+.details-version-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.details-version-entry {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs) 0;
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.details-version-entry:last-child {
+  border-bottom: none;
+}
+
+.details-version-info {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+}
+
+.details-version-number {
+  color: var(--color-green-primary);
+  font-weight: var(--font-weight-semibold);
+  min-width: 24px;
+}
+
+.details-version-date {
+  color: var(--color-text-primary);
+}
+
+.details-version-size {
+  color: var(--color-text-secondary);
+}
+
+.details-version-mode {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+}
+
+/* Version Action Buttons */
+
+.details-version-actions {
+  display: flex;
+  gap: var(--spacing-xs);
+}
+
+.details-version-btn {
+  padding: 2px 8px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: var(--border-thickness) solid var(--color-border-dim);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.details-version-btn:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  background-color: var(--color-green-darker);
+  border-color: var(--color-border);
+}
+
+.details-version-btn:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
+.details-version-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.details-version-btn--restore:hover:not(:disabled) {
+  color: var(--color-green-primary);
+  border-color: var(--color-green-primary);
+}
+
+.details-version-btn--delete:hover:not(:disabled) {
+  color: var(--color-red, #ff4444);
+  border-color: var(--color-red, #ff4444);
+}
+
+/* Version Confirm Dialog (inline) */
+
+.details-version-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-xs);
+  border: var(--border-thickness) solid var(--color-border);
+  background: rgb(0 0 0 / 30%);
+}
+
+.details-version-confirm-text {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  line-height: 1.4;
+}
+
+.details-version-confirm-actions {
+  display: flex;
+  gap: var(--spacing-xs);
+}
+
+.details-version-confirm-btn {
+  padding: 2px 10px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  background: transparent;
+  border: var(--border-thickness) solid var(--color-border-dim);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.details-version-confirm-btn--yes {
+  color: var(--color-green-primary);
+  border-color: var(--color-green-dim);
+}
+
+.details-version-confirm-btn--yes:hover {
+  background-color: var(--color-green-darker);
+  border-color: var(--color-green-primary);
+}
+
+.details-version-confirm-btn--yes:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
+.details-version-confirm-btn--no {
+  color: var(--color-text-muted);
+  border-color: var(--color-border-dim);
+}
+
+.details-version-confirm-btn--no:hover {
+  color: var(--color-text-secondary);
+  border-color: var(--color-border);
+}
+
+.details-version-confirm-btn--no:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
+/* Version Error */
+
+.details-version-error {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-red, #ff4444);
+  padding: var(--spacing-xs) 0;
+}
