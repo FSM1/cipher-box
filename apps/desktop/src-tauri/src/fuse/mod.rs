@@ -584,11 +584,18 @@ impl CipherBoxFS {
         // Collect folders ready to publish
         let ready: Vec<u64> = self.publish_queue.iter()
             .filter(|(_, entry)| {
-                if entry.pending_uploads > 0 {
-                    return false;
-                }
                 let elapsed = now.duration_since(entry.first_dirty);
-                elapsed >= debounce || elapsed >= safety_valve
+                if elapsed >= safety_valve {
+                    // Safety valve: force publish regardless of pending uploads
+                    if entry.pending_uploads > 0 {
+                        log::warn!(
+                            "Publish safety valve triggered with {} pending upload(s)",
+                            entry.pending_uploads
+                        );
+                    }
+                    return true;
+                }
+                entry.pending_uploads == 0 && elapsed >= debounce
             })
             .map(|(&ino, _)| ino)
             .collect();
@@ -659,7 +666,11 @@ impl CipherBoxFS {
                 log::warn!("Drain refresh apply failed for ino {}: {}", refresh.ino, e);
             }
 
-            // For v2 metadata, resolve FilePointers eagerly
+            // For v2 metadata, resolve FilePointers eagerly.
+            // TODO: This blocks the FUSE thread with O(N × timeout) latency for N
+            // unresolved FilePointers. Should be refactored to spawn async tasks via
+            // a file_pointer_tx/rx channel pair (like refresh_tx/rx) to avoid stalling
+            // the single NFS thread on network I/O.
             if matches!(&refresh.metadata, crate::crypto::folder::AnyFolderMetadata::V2(_)) {
                 let unresolved = self.inodes.get_unresolved_file_pointers();
                 if !unresolved.is_empty() {

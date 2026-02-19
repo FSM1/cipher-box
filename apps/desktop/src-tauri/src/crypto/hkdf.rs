@@ -16,7 +16,7 @@ use ed25519_dalek::SigningKey;
 use hkdf::Hkdf;
 use sha2::Sha256;
 use thiserror::Error;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::ipns;
 
@@ -53,7 +53,7 @@ pub enum HkdfError {
 fn derive_ipns_keypair(
     user_private_key: &[u8; 32],
     info: &[u8],
-) -> Result<(Vec<u8>, Vec<u8>, String), HkdfError> {
+) -> Result<(Zeroizing<Vec<u8>>, Vec<u8>, String), HkdfError> {
     // 1. HKDF-SHA256: extract + expand
     let hk = Hkdf::<Sha256>::new(Some(HKDF_SALT), user_private_key);
     let mut okm = [0u8; 32];
@@ -65,7 +65,7 @@ fn derive_ipns_keypair(
     okm.zeroize();
     let verifying_key = signing_key.verifying_key();
 
-    let private_key = signing_key.to_bytes().to_vec();
+    let private_key = Zeroizing::new(signing_key.to_bytes().to_vec());
     let public_key = verifying_key.to_bytes().to_vec();
 
     // 3. Derive IPNS name from public key
@@ -85,7 +85,7 @@ fn derive_ipns_keypair(
 /// Returns (ed25519_private_key, ed25519_public_key, ipns_name).
 pub fn derive_vault_ipns_keypair(
     user_private_key: &[u8; 32],
-) -> Result<(Vec<u8>, Vec<u8>, String), HkdfError> {
+) -> Result<(Zeroizing<Vec<u8>>, Vec<u8>, String), HkdfError> {
     derive_ipns_keypair(user_private_key, VAULT_HKDF_INFO)
 }
 
@@ -97,7 +97,7 @@ pub fn derive_vault_ipns_keypair(
 pub fn derive_file_ipns_keypair(
     user_private_key: &[u8; 32],
     file_id: &str,
-) -> Result<(Vec<u8>, Vec<u8>, String), HkdfError> {
+) -> Result<(Zeroizing<Vec<u8>>, Vec<u8>, String), HkdfError> {
     if file_id.len() < MIN_FILE_ID_LENGTH {
         return Err(HkdfError::InvalidFileId);
     }
@@ -113,6 +113,6 @@ pub fn derive_file_ipns_keypair(
 /// Returns (ed25519_private_key, ed25519_public_key, ipns_name).
 pub fn derive_registry_ipns_keypair(
     user_private_key: &[u8; 32],
-) -> Result<(Vec<u8>, Vec<u8>, String), HkdfError> {
+) -> Result<(Zeroizing<Vec<u8>>, Vec<u8>, String), HkdfError> {
     derive_ipns_keypair(user_private_key, REGISTRY_HKDF_INFO)
 }

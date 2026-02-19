@@ -7,6 +7,8 @@
 use std::sync::Arc;
 use tauri::{Manager, State};
 
+use zeroize::Zeroizing;
+
 use crate::api::{auth, types};
 use crate::crypto;
 use crate::state::AppState;
@@ -79,7 +81,7 @@ pub async fn handle_auth_complete(
         &state,
         login_resp.access_token,
         login_resp.refresh_token,
-        private_key_bytes,
+        Zeroizing::new(private_key_bytes),
         public_key_bytes,
         login_resp.is_new_user,
         false,
@@ -96,7 +98,7 @@ async fn complete_auth_setup(
     state: &AppState,
     access_token: String,
     refresh_token: String,
-    private_key_bytes: Vec<u8>,
+    private_key_bytes: Zeroizing<Vec<u8>>,
     public_key_bytes: Vec<u8>,
     is_new_user: bool,
     skip_keychain: bool,
@@ -119,7 +121,7 @@ async fn complete_auth_setup(
     }
 
     // 4. Store keys in AppState
-    *state.private_key.write().await = Some(private_key_bytes.clone());
+    *state.private_key.write().await = Some(private_key_bytes.to_vec());
     *state.public_key.write().await = Some(public_key_bytes.clone());
 
     // 5. Initialize vault for new users, or fetch existing vault
@@ -223,7 +225,7 @@ async fn complete_auth_setup(
     // 8. Register device in encrypted registry (non-blocking, after mount)
     {
         let reg_api = state.api.clone();
-        let reg_private_key = private_key_bytes.clone();
+        let reg_private_key = Zeroizing::new(private_key_bytes.to_vec());
         let reg_public_key = public_key_bytes.clone();
         let reg_user_id = user_id.clone();
         tokio::spawn(async move {
@@ -461,7 +463,7 @@ pub async fn handle_test_login_complete(
         &state,
         access_token,
         refresh_token,
-        private_key_bytes,
+        Zeroizing::new(private_key_bytes),
         public_key_bytes,
         is_new_user,
         true, // skip Keychain — test-login re-authenticates each time
@@ -586,7 +588,7 @@ async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Result<(), Str
     let initial_cid = crate::api::ipfs::upload_content(&state.api, &json_bytes).await?;
 
     // Create and sign IPNS record (sequence 0, 24h lifetime)
-    let ipns_key_arr: [u8; 32] = ipns_private_key
+    let ipns_key_arr: [u8; 32] = ipns_private_key.as_slice()
         .try_into()
         .map_err(|_| "Invalid IPNS private key length".to_string())?;
     let value = format!("/ipfs/{}", initial_cid);
@@ -668,7 +670,7 @@ async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), String> {
         .try_into()
         .map_err(|_| "Invalid private key length for HKDF check")?;
     if let Ok((expected_ipns_key, _, _)) = crypto::hkdf::derive_vault_ipns_keypair(&private_key_arr) {
-        if root_ipns_private_key != expected_ipns_key {
+        if root_ipns_private_key != *expected_ipns_key {
             log::warn!("Vault IPNS key mismatch: stored key differs from HKDF derivation");
             // Don't block - proceed with stored key for backward compatibility
         }

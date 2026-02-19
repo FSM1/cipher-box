@@ -308,9 +308,10 @@ mod implementation {
                 crate::api::ipfs::fetch_content(&api, &cid_owned).await?;
             let encrypted_file_key = hex::decode(&key_hex)
                 .map_err(|_| "Invalid file key hex".to_string())?;
-            let mut file_key =
+            let file_key = zeroize::Zeroizing::new(
                 crate::crypto::ecies::unwrap_key(&encrypted_file_key, &private_key)
-                    .map_err(|e| format!("File key unwrap failed: {}", e))?;
+                    .map_err(|e| format!("File key unwrap failed: {}", e))?,
+            );
             let file_key_arr: [u8; 32] = file_key.as_slice().try_into()
                 .map_err(|_| "Invalid file key length".to_string())?;
 
@@ -334,7 +335,6 @@ mod implementation {
                 .map_err(|e| format!("GCM file decryption failed: {}", e))?
             };
 
-            crate::crypto::utils::clear_bytes(&mut file_key);
             Ok(plaintext)
         })
     }
@@ -353,9 +353,10 @@ mod implementation {
             crate::api::ipfs::fetch_content(api, cid).await?;
         let encrypted_file_key = hex::decode(encrypted_file_key_hex)
             .map_err(|_| "Invalid file key hex".to_string())?;
-        let mut file_key =
+        let file_key = zeroize::Zeroizing::new(
             crate::crypto::ecies::unwrap_key(&encrypted_file_key, private_key)
-                .map_err(|e| format!("File key unwrap failed: {}", e))?;
+                .map_err(|e| format!("File key unwrap failed: {}", e))?,
+        );
         let file_key_arr: [u8; 32] = file_key.as_slice().try_into()
             .map_err(|_| "Invalid file key length".to_string())?;
 
@@ -375,7 +376,6 @@ mod implementation {
                 .map_err(|e| format!("GCM decryption failed: {}", e))?
         };
 
-        crate::crypto::utils::clear_bytes(&mut file_key);
         Ok(plaintext)
     }
 
@@ -772,8 +772,8 @@ mod implementation {
 
                                     match result {
                                         Ok(Ok(plaintext)) => {
-                                            eprintln!(
-                                                ">>> prefetch(readdir): cached {} bytes for CID {}",
+                                            log::debug!(
+                                                "prefetch(readdir): cached {} bytes for CID {}",
                                                 plaintext.len(),
                                                 &cid_clone[..cid_clone.len().min(12)]
                                             );
@@ -1017,8 +1017,8 @@ mod implementation {
 
                         match result {
                             Ok(Ok(plaintext)) => {
-                                eprintln!(
-                                    ">>> prefetch: cached {} bytes for CID {}",
+                                log::debug!(
+                                    "prefetch: cached {} bytes for CID {}",
                                     plaintext.len(),
                                     &cid_clone[..cid_clone.len().min(12)]
                                 );
@@ -1247,8 +1247,8 @@ mod implementation {
 
                     match result {
                         Ok(Ok(plaintext)) => {
-                            eprintln!(
-                                ">>> prefetch(read): cached {} bytes for CID {}",
+                            log::debug!(
+                                "prefetch(read): cached {} bytes for CID {}",
                                 plaintext.len(),
                                 &cid_clone[..cid_clone.len().min(12)]
                             );
@@ -1277,8 +1277,8 @@ mod implementation {
                 std::thread::sleep(Duration::from_millis(100));
                 self.drain_content_prefetches();
                 if let Some(cached) = self.content_cache.get(&cid) {
-                    eprintln!(
-                        ">>> FUSE read: content ready after {:.1}s for CID {}",
+                    log::debug!(
+                        "FUSE read: content ready after {:.1}s for CID {}",
                         poll_start.elapsed().as_secs_f64(),
                         &cid[..cid.len().min(12)]
                     );

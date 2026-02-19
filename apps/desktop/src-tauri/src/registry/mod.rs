@@ -99,7 +99,7 @@ pub async fn register_device(
     let cid = crate::api::ipfs::upload_content(api, &encrypted).await?;
 
     // 7. Create and publish IPNS record
-    let reg_ipns_priv_arr: [u8; 32] = reg_ipns_priv
+    let reg_ipns_priv_arr: [u8; 32] = reg_ipns_priv.as_slice()
         .try_into()
         .map_err(|_| "Invalid registry IPNS key length".to_string())?;
     let value = format!("/ipfs/{}", cid);
@@ -139,6 +139,19 @@ async fn fetch_and_decrypt_registry(
     serde_json::from_slice(&decrypted).map_err(|e| format!("Registry parse failed: {}", e))
 }
 
+/// Generate a random UUID v4 string.
+fn generate_uuid_v4() -> String {
+    let bytes = crypto::utils::generate_random_bytes(16);
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-4{:01x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        bytes[0], bytes[1], bytes[2], bytes[3],
+        bytes[4], bytes[5],
+        bytes[6] & 0x0f, bytes[7],
+        (bytes[8] & 0x3f) | 0x80, bytes[9],
+        bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+    )
+}
+
 /// Get or create a persistent device ID stored in macOS Keychain.
 ///
 /// Uses the `keyring` crate with service "cipherbox-desktop" and key "device-id".
@@ -150,17 +163,8 @@ async fn fetch_and_decrypt_registry(
 fn get_or_create_device_id() -> String {
     #[cfg(debug_assertions)]
     {
-        let bytes = crypto::utils::generate_random_bytes(16);
-        let uuid = format!(
-            "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-4{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-            bytes[0], bytes[1], bytes[2], bytes[3],
-            bytes[4], bytes[5],
-            bytes[6] & 0x0f, bytes[7],
-            (bytes[8] & 0x3f) | 0x80, bytes[9],
-            bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-        );
         log::info!("Debug mode: using ephemeral device ID (no Keychain access)");
-        return uuid;
+        return generate_uuid_v4();
     }
 
     #[cfg(not(debug_assertions))]
@@ -169,30 +173,14 @@ fn get_or_create_device_id() -> String {
             Ok(e) => e,
             Err(e) => {
                 log::warn!("Keychain entry creation failed: {}. Using ephemeral ID.", e);
-                let bytes = crypto::utils::generate_random_bytes(16);
-                return format!(
-                    "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-4{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-                    bytes[0], bytes[1], bytes[2], bytes[3],
-                    bytes[4], bytes[5],
-                    bytes[6] & 0x0f, bytes[7],
-                    (bytes[8] & 0x3f) | 0x80, bytes[9],
-                    bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-                );
+                return generate_uuid_v4();
             }
         };
 
         match entry.get_password() {
             Ok(id) if !id.is_empty() => id,
             _ => {
-                let bytes = crypto::utils::generate_random_bytes(16);
-                let uuid = format!(
-                    "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-4{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-                    bytes[0], bytes[1], bytes[2], bytes[3],
-                    bytes[4], bytes[5],
-                    bytes[6] & 0x0f, bytes[7],
-                    (bytes[8] & 0x3f) | 0x80, bytes[9],
-                    bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-                );
+                let uuid = generate_uuid_v4();
 
                 let _ = entry.delete_credential();
                 if let Err(e) = entry.set_password(&uuid) {

@@ -205,7 +205,6 @@ Recent decisions affecting current work:
 Last session: 2026-02-17
 Stopped at: Phase 11.1 complete (verified 10/10 must-haves)
 Resume file: None
-Next: Phase 13 (File Versioning) or Phase 11 (Cross-Platform Desktop)
 Next: Phase 11.1 complete. Next phase TBD.
 
 ---
