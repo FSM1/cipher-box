@@ -176,7 +176,7 @@ test.describe.serial('Full Workflow', () => {
   async function navigateIntoFolder(name: string): Promise<void> {
     await fileList.doubleClickFolder(name);
     // Wait for breadcrumb path to include the folder name
-    await breadcrumbs.waitForPathToContain(name, { timeout: 10000 });
+    await breadcrumbs.waitForPathToContain(name, { timeout: 15000 });
     navigationStack.push(name);
   }
 

@@ -921,6 +921,7 @@ export function FileBrowser() {
           items={children}
           selectedIds={selectedIds}
           parentId={currentFolderId}
+          folderKey={currentFolder?.folderKey ?? null}
           showParentRow={currentFolderId !== 'root'}
           onNavigateUp={navigateUp}
           onSelect={handleSelect}

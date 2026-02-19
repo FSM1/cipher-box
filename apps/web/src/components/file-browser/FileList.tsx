@@ -10,6 +10,8 @@ type FileListProps = {
   selectedIds: Set<string>;
   /** Parent folder ID (for drag operations) */
   parentId: string;
+  /** Parent folder's decrypted AES-256 key (for resolving file sizes) */
+  folderKey: Uint8Array | null;
   /** Whether to show [..] PARENT_DIR row (non-root folders) */
   showParentRow?: boolean;
   /** Callback when [..] row is clicked to navigate up */
@@ -77,6 +79,7 @@ export function FileList({
   items,
   selectedIds,
   parentId,
+  folderKey,
   showParentRow,
   onNavigateUp,
   onSelect,
@@ -134,6 +137,7 @@ export function FileList({
             parentId={parentId}
             selectedIds={selectedIds}
             allItems={items}
+            folderKey={folderKey}
             onSelect={onSelect}
             onNavigate={onNavigate}
             onContextMenu={onContextMenu}
