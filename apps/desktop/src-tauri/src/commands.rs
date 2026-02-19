@@ -562,7 +562,7 @@ async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Result<(), Str
     log::info!("Publishing initial empty root folder metadata");
 
     let empty_metadata = crypto::folder::FolderMetadata {
-        version: "v1".to_string(),
+        version: "v2".to_string(),
         children: vec![],
     };
 

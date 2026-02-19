@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 11.1 complete (macOS Desktop Catch-Up)
+**Current focus:** Milestone 2 -- Phase 11.2 COMPLETE (Remove v1 Folder Metadata)
 
 ## Current Position
 
-Phase: 11.1 (macOS Desktop Catch-Up) -- COMPLETE
-Plan: 7 of 7 planned
-Status: Phase complete, verified 10/10 must-haves
-Last activity: 2026-02-17 -- Phase 11.1 complete (all 7 plans executed, verified 10/10 must-haves)
+Phase: 11.2 (Remove v1 Folder Metadata)
+Plan: 3 of 3
+Status: Phase complete
+Last activity: 2026-02-19 -- Completed 11.2-03-PLAN.md (per-file IPNS publish in FUSE create/release)
 
-Progress: [######################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE)
+Progress: [########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 113
-- Average duration: 5.3 min
-- Total execution time: 10.3 hours
+- Total plans completed: 116
+- Average duration: 5.4 min
+- Total execution time: 10.8 hours
 
 **By Phase (M1 summary):**
 
@@ -38,10 +38,11 @@ Progress: [######################] (M1 complete, M2 Phase 12 complete, Phase 12.
 | M2 Phase 12.6   | 5/5   | 29 min  | 5.8 min  |
 | M2 Phase 12.1   | 4/4   | 27 min  | 6.8 min  |
 | M2 Phase 11.1   | 7/7   | 36 min  | 5.1 min  |
+| M2 Phase 11.2   | 3/3   | 30 min  | 10.0 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 8m, 2m, 4m, 8m, 8m
+- Last 5 plans: 8m, 8m, 7m, 14m, 9m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -128,7 +129,7 @@ Recent decisions affecting current work:
 | FileMetadata encryptionMode serde default "GCM"                   | 11.1-01   | Matches TypeScript optional field behavior for backward compat                                                   |
 | sanitize_error uses char-walking (not regex crate)                | 11.1-02   | Avoids adding regex dependency for simple path/token replacement                                                 |
 | dev_key field always present in AppState (not cfg-gated)          | 11.1-02   | Simplifies struct; only CLI parsing is cfg(debug_assertions) gated                                               |
-| Keep v1 write-back format for build_folder_metadata               | 11.1-03   | Desktop doesn't create per-file IPNS records; web app handles both formats                                       |
+| Keep v1 write-back format for build_folder_metadata               | 11.1-03   | SUPERSEDED by 11.2: Desktop now creates per-file IPNS records and writes v2 format exclusively                   |
 | Synthetic v1 cache entries for v2 folders (version='v2')          | 11.1-03   | Preserves MetadataCache staleness-check API without storing AnyFolderMetadata                                    |
 | Eager FilePointer resolution before NFS mount                     | 11.1-03   | NFS caches READDIR aggressively; first response must be complete and correct                                     |
 | AnyFolderMetadata Clone/Debug + to_v1() for FUSE compat           | 11.1-04   | Converts v2 FilePointers to placeholder FileEntries for backward-compatible FUSE layer                           |
@@ -139,19 +140,24 @@ Recent decisions affecting current work:
 | Keychain-backed persistent device ID with UUID v4                 | 11.1-06   | keyring crate with delete-before-write pattern to avoid macOS "already exists" error                             |
 | ECIES key exchange for desktop device approval (not plaintext)    | 11.1-05   | Matches web app pattern; ephemeral secp256k1 keypair + wrapKey/unwrapKey from @cipherbox/crypto                  |
 | Module-level JWT/token state for MFA flow (not localStorage)      | 11.1-05   | Sensitive tokens cleared on auth completion; avoids persisting temporary access tokens                           |
+| isFilePointer simplified to type discriminant only                | 11.2-01   | All file children are FilePointer; no need to check for fileMetaIpnsName presence                                |
+| validateFolderMetadata rejects v1 with CryptoError                | 11.2-01   | Strict enforcement: only v2 schema accepted, not silent v1 acceptance                                            |
+| decrypt_folder_metadata rejects non-v2 with version check         | 11.2-02   | Strict validation: parses JSON, checks version field is "v2", rejects anything else with DeserializationFailed   |
+| FilePointer with None ipns_name uses empty string placeholder     | 11.2-02   | Newly created files before IPNS publish use "" with warning log; Plan 03 addresses deriving IPNS in create()     |
+| file_ipns_private_key stored on InodeKind::File                   | 11.2-03   | Option<Zeroizing<Vec<u8>>> for IPNS signing; matches folder IPNS key pattern                                     |
+| build_folder_metadata skips files without file_meta_ipns_name     | 11.2-03   | Error log + continue instead of empty placeholder; create() always derives IPNS name                             |
+| Per-file IPNS publish reuses PublishCoordinator                   | 11.2-03   | Same monotonic sequence number management as folder publishes                                                    |
 
 ### Pending Todos
 
-10 pending todo(s):
+8 pending todo(s):
 
 - `2026-02-07-web-worker-large-file-encryption.md` -- Offload large file encryption to Web Worker (area: ui)
 - `2026-02-14-bring-your-own-ipfs-node.md` -- Add bring-your-own IPFS node support (area: api)
-- `2026-02-14-file-metadata-evolution-v2.md` -- Split file metadata into per-file IPNS objects (area: crypto)
 - `2026-02-14-erc-1271-contract-wallet-authentication.md` -- Add ERC-1271 contract wallet authentication support (area: auth)
 - `2026-02-14-fix-orval-generated-client-any-warnings.md` -- Fix no-explicit-any warnings in generated API client (area: tooling)
 - `2026-02-15-security-review-short-term-fixes.md` -- Security review short-term fixes: H-01, H-06, H-07, M-01, M-04, M-06 (area: auth)
 - `2026-02-15-security-review-medium-term-fixes.md` -- Security review medium-term fixes: H-08, M-07, M-11 (area: auth)
-- `2026-02-18-fix-v2-metadata-version-mismatch.md` -- **URGENT:** Fix web app writing v2-tagged metadata with v1-style file entries (area: crypto)
 - `2026-02-18-remove-pinata-references-from-api.md` -- Remove Pinata references from API server (area: api)
 - `2026-02-18-fix-fuse-rename-on-smb-backend.md` -- Fix FUSE rename on SMB backend (area: desktop)
 
@@ -165,6 +171,7 @@ Recent decisions affecting current work:
 - Phase 12.3.1 inserted after Phase 12.3: Pre-Wipe Identity Cleanup — deterministic IPNS derivation, SHA-256 hashed identifiers for all auth methods, remove cross-method email auto-linking. Done before DB wipe to avoid migration code.
 - Phase 12.5 inserted after Phase 12.4: MFA Polishing, UAT & E2E Testing — polish auth flows, add wallet E2E with mock EIP-1193/6963 provider, fix bugs from CoreKit auth UAT
 - Phase 12.6 inserted after Phase 12.5: Per-File IPNS Metadata Split — split file metadata into per-file IPNS records before vault wipe (clean break, no dual-schema). Phase 12.1 (AES-CTR) moved to after 12.6.
+- Phase 11.2 inserted after Phase 11.1: Remove v1 Folder Metadata — eliminate v1/v2 dual-schema code, make v2 FilePointer canonical everywhere, add per-file IPNS publishing to desktop FUSE. Triggered by cross-device format oscillation bug (desktop writes v1, web re-saves as v2 hybrid, desktop rejects).
 
 ### Blockers/Concerns
 
@@ -202,12 +209,13 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-17
-Stopped at: Phase 11.1 complete (verified 10/10 must-haves)
+Last session: 2026-02-19
+Stopped at: Phase 11.2 verified (8/8 must-haves passed) and complete
 Resume file: None
-Next: Phase 11.1 complete. Next phase TBD.
+Next: Run /gsd:discuss-phase 13 or /gsd:plan-phase 13 for File Versioning.
+Next: Phase 11.2 complete. Next phase TBD.
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-17 after completing Phase 11.1 Plan 05 (MFA Challenge UI) - Phase 11.1 complete_
+_Last updated: 2026-02-19 after completing 11.2-03 (per-file IPNS publish in FUSE create/release, Phase 11.2 complete)_

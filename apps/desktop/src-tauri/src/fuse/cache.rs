@@ -181,7 +181,7 @@ mod tests {
     fn test_metadata_cache_set_and_get() {
         let mut cache = MetadataCache::new();
         let metadata = FolderMetadata {
-            version: "v1".to_string(),
+            version: "v2".to_string(),
             children: vec![],
         };
         cache.set("k51test", metadata, "bafytest".to_string());
@@ -201,7 +201,7 @@ mod tests {
     fn test_metadata_cache_invalidate() {
         let mut cache = MetadataCache::new();
         let metadata = FolderMetadata {
-            version: "v1".to_string(),
+            version: "v2".to_string(),
             children: vec![],
         };
         cache.set("k51test", metadata, "bafytest".to_string());

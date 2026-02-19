@@ -10,9 +10,9 @@ use super::aes_ctr;
 use super::ecies;
 use super::ed25519;
 use super::folder::{
-    decrypt_any_folder_metadata, decrypt_file_metadata, decrypt_folder_metadata,
-    encrypt_file_metadata, encrypt_folder_metadata, AnyFolderMetadata, FileEntry, FileMetadata,
-    FilePointer, FolderChild, FolderChildV2, FolderEntry, FolderMetadata, FolderMetadataV2,
+    decrypt_file_metadata, decrypt_folder_metadata,
+    encrypt_file_metadata, encrypt_folder_metadata, FileMetadata,
+    FilePointer, FolderChild, FolderEntry, FolderMetadata,
 };
 use super::hkdf;
 use super::ipns;
@@ -433,19 +433,14 @@ fn ecies_tampered_ciphertext_fails() {
 fn folder_metadata_encrypt_decrypt_roundtrip() {
     let key = utils::generate_file_key();
     let metadata = FolderMetadata {
-        version: "v1".to_string(),
+        version: "v2".to_string(),
         children: vec![
-            FolderChild::File(FileEntry {
+            FolderChild::File(FilePointer {
                 id: "file-001".to_string(),
                 name: "test.txt".to_string(),
-                cid: "bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4".to_string(),
-                file_key_encrypted: "deadbeef".to_string(),
-                file_iv: "aabbccdd".to_string(),
-                size: 1024,
+                file_meta_ipns_name: "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx".to_string(),
                 created_at: 1700000000000,
                 modified_at: 1700000000000,
-                encryption_mode: "GCM".to_string(),
-                file_meta_ipns_name: None,
             }),
             FolderChild::Folder(FolderEntry {
                 id: "folder-001".to_string(),
@@ -463,36 +458,70 @@ fn folder_metadata_encrypt_decrypt_roundtrip() {
     let sealed = encrypt_folder_metadata(&metadata, &key).unwrap();
     let decrypted = decrypt_folder_metadata(&sealed, &key).unwrap();
 
-    assert_eq!(decrypted.version, "v1");
+    assert_eq!(decrypted.version, "v2");
     assert_eq!(decrypted.children.len(), 2);
 }
 
 #[test]
-fn folder_metadata_camel_case_serialization() {
-    let file_entry = FileEntry {
-        id: "f1".to_string(),
-        name: "test.txt".to_string(),
-        cid: "bafy123".to_string(),
-        file_key_encrypted: "abc".to_string(),
-        file_iv: "def".to_string(),
-        size: 100,
+fn folder_metadata_deserialization_with_file_pointers() {
+    let json = r#"{
+        "version": "v2",
+        "children": [
+            {
+                "type": "folder",
+                "id": "folder-001",
+                "name": "documents",
+                "ipnsName": "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgq",
+                "folderKeyEncrypted": "cafebabe",
+                "ipnsPrivateKeyEncrypted": "abcd1234",
+                "createdAt": 1700000000000,
+                "modifiedAt": 1700000000000
+            },
+            {
+                "type": "file",
+                "id": "file-001",
+                "name": "photo.jpg",
+                "fileMetaIpnsName": "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx",
+                "createdAt": 1700000000000,
+                "modifiedAt": 1700000000000
+            }
+        ]
+    }"#;
+
+    let metadata: FolderMetadata = serde_json::from_str(json).unwrap();
+    assert_eq!(metadata.version, "v2");
+    assert_eq!(metadata.children.len(), 2);
+
+    match &metadata.children[0] {
+        FolderChild::Folder(f) => assert_eq!(f.name, "documents"),
+        _ => panic!("First child should be a folder"),
+    }
+    match &metadata.children[1] {
+        FolderChild::File(fp) => {
+            assert_eq!(fp.name, "photo.jpg");
+            assert_eq!(
+                fp.file_meta_ipns_name,
+                "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx"
+            );
+        }
+        _ => panic!("Second child should be a file pointer"),
+    }
+}
+
+#[test]
+fn file_pointer_camel_case_serialization() {
+    let fp = FilePointer {
+        id: "fp-001".to_string(),
+        name: "test.mp4".to_string(),
+        file_meta_ipns_name: "k51abc".to_string(),
         created_at: 1000,
         modified_at: 2000,
-        encryption_mode: "GCM".to_string(),
-        file_meta_ipns_name: None,
     };
 
-    let json = serde_json::to_string(&file_entry).unwrap();
-    // Verify camelCase field names
-    assert!(json.contains("fileKeyEncrypted"), "Must use camelCase: fileKeyEncrypted");
-    assert!(json.contains("fileIv"), "Must use camelCase: fileIv");
-    assert!(json.contains("encryptionMode"), "Must use camelCase: encryptionMode");
+    let json = serde_json::to_string(&fp).unwrap();
+    assert!(json.contains("fileMetaIpnsName"), "Must use camelCase: fileMetaIpnsName");
     assert!(json.contains("createdAt"), "Must use camelCase: createdAt");
-    assert!(json.contains("modifiedAt"), "Must use camelCase: modifiedAt");
-    // Should NOT contain snake_case
-    assert!(!json.contains("file_key_encrypted"));
-    assert!(!json.contains("file_iv"));
-    assert!(!json.contains("encryption_mode"));
+    assert!(!json.contains("file_meta_ipns_name"), "Should NOT contain snake_case");
 }
 
 #[test]
@@ -530,13 +559,30 @@ fn folder_metadata_wrong_key_fails() {
     let key1 = utils::generate_file_key();
     let key2 = utils::generate_file_key();
     let metadata = FolderMetadata {
-        version: "v1".to_string(),
+        version: "v2".to_string(),
         children: vec![],
     };
 
     let sealed = encrypt_folder_metadata(&metadata, &key1).unwrap();
     let result = decrypt_folder_metadata(&sealed, &key2);
     assert!(result.is_err());
+}
+
+#[test]
+fn folder_metadata_rejects_v1_version() {
+    let key = utils::generate_file_key();
+
+    // Manually create a v1-tagged JSON and encrypt it
+    let v1_json = serde_json::json!({
+        "version": "v1",
+        "children": []
+    });
+    let mut json_bytes = serde_json::to_vec(&v1_json).unwrap();
+    let sealed = aes::seal_aes_gcm(&json_bytes, &key).unwrap();
+    json_bytes.fill(0);
+
+    let result = decrypt_folder_metadata(&sealed, &key);
+    assert!(result.is_err(), "v1 metadata should be rejected");
 }
 
 // ============================================================
@@ -983,70 +1029,8 @@ fn aes_ctr_empty_data() {
 }
 
 // ============================================================
-// v2 Folder Metadata Type Tests
+// FileMetadata Tests (per-file IPNS, separate schema)
 // ============================================================
-
-#[test]
-fn v2_folder_metadata_deserialization_with_file_pointers() {
-    let json = r#"{
-        "version": "v2",
-        "children": [
-            {
-                "type": "folder",
-                "id": "folder-001",
-                "name": "documents",
-                "ipnsName": "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgq",
-                "folderKeyEncrypted": "cafebabe",
-                "ipnsPrivateKeyEncrypted": "abcd1234",
-                "createdAt": 1700000000000,
-                "modifiedAt": 1700000000000
-            },
-            {
-                "type": "file",
-                "id": "file-001",
-                "name": "photo.jpg",
-                "fileMetaIpnsName": "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx",
-                "createdAt": 1700000000000,
-                "modifiedAt": 1700000000000
-            }
-        ]
-    }"#;
-
-    let metadata: FolderMetadataV2 = serde_json::from_str(json).unwrap();
-    assert_eq!(metadata.version, "v2");
-    assert_eq!(metadata.children.len(), 2);
-
-    match &metadata.children[0] {
-        FolderChildV2::Folder(f) => assert_eq!(f.name, "documents"),
-        _ => panic!("First child should be a folder"),
-    }
-    match &metadata.children[1] {
-        FolderChildV2::File(fp) => {
-            assert_eq!(fp.name, "photo.jpg");
-            assert_eq!(
-                fp.file_meta_ipns_name,
-                "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx"
-            );
-        }
-        _ => panic!("Second child should be a file pointer"),
-    }
-}
-
-#[test]
-fn file_pointer_camel_case_serialization() {
-    let fp = FilePointer {
-        id: "fp-001".to_string(),
-        name: "test.mp4".to_string(),
-        file_meta_ipns_name: "k51abc".to_string(),
-        created_at: 1000,
-        modified_at: 2000,
-    };
-
-    let json = serde_json::to_string(&fp).unwrap();
-    assert!(json.contains("fileMetaIpnsName"), "Must use camelCase: fileMetaIpnsName");
-    assert!(json.contains("createdAt"), "Must use camelCase: createdAt");
-    assert!(!json.contains("file_meta_ipns_name"), "Should NOT contain snake_case");
-}
 
 #[test]
 fn file_metadata_deserialization_with_encryption_mode() {
@@ -1088,54 +1072,6 @@ fn file_metadata_deserialization_without_encryption_mode_defaults_gcm() {
         metadata.encryption_mode, "GCM",
         "Missing encryptionMode should default to GCM"
     );
-}
-
-#[test]
-fn any_folder_metadata_dispatch_v1() {
-    let key = utils::generate_file_key();
-    let v1 = FolderMetadata {
-        version: "v1".to_string(),
-        children: vec![],
-    };
-
-    let sealed = encrypt_folder_metadata(&v1, &key).unwrap();
-    let any = decrypt_any_folder_metadata(&sealed, &key).unwrap();
-
-    match any {
-        AnyFolderMetadata::V1(m) => assert_eq!(m.version, "v1"),
-        AnyFolderMetadata::V2(_) => panic!("Should dispatch to V1"),
-    }
-}
-
-#[test]
-fn any_folder_metadata_dispatch_v2() {
-    let key = utils::generate_file_key();
-
-    // Manually create and encrypt v2 metadata
-    let v2 = FolderMetadataV2 {
-        version: "v2".to_string(),
-        children: vec![FolderChildV2::File(FilePointer {
-            id: "file-001".to_string(),
-            name: "test.txt".to_string(),
-            file_meta_ipns_name: "k51abc".to_string(),
-            created_at: 1700000000000,
-            modified_at: 1700000000000,
-        })],
-    };
-
-    let mut json = serde_json::to_vec(&v2).unwrap();
-    let sealed = aes::seal_aes_gcm(&json, &key).unwrap();
-    json.fill(0);
-
-    let any = decrypt_any_folder_metadata(&sealed, &key).unwrap();
-
-    match any {
-        AnyFolderMetadata::V1(_) => panic!("Should dispatch to V2"),
-        AnyFolderMetadata::V2(m) => {
-            assert_eq!(m.version, "v2");
-            assert_eq!(m.children.len(), 1);
-        }
-    }
 }
 
 #[test]

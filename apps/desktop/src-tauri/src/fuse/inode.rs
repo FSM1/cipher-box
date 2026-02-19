@@ -17,14 +17,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use zeroize::Zeroizing;
 
 use crate::crypto;
-use crate::crypto::folder::{
-    AnyFolderMetadata, FolderChild, FolderChildV2, FolderMetadata, FolderMetadataV2,
-};
+use crate::crypto::folder::{FolderChild, FolderMetadata};
 
 /// Normalize a filename to NFC (composed) form for consistent HashMap lookups.
 /// macOS NFS client may send names in either NFC or NFD form; FUSE-T's go-nfsv4
 /// may also re-normalize. By normalizing to NFC on both storage and lookup,
-/// we avoid mismatches with accented characters (e.g., `è` vs `e` + combining grave).
+/// we avoid mismatches with accented characters (e.g., `e` vs `e` + combining grave).
 #[cfg(feature = "fuse")]
 fn normalize_name(name: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
@@ -81,10 +79,14 @@ pub enum InodeKind {
         size: u64,
         /// Encryption mode ("GCM" for v1/standard, "CTR" for streaming media).
         encryption_mode: String,
-        /// Per-file IPNS name for v2 FilePointer resolution (None for v1 inline files).
+        /// Per-file IPNS name for FilePointer resolution (None for files loaded from remote metadata before IPNS resolve).
         file_meta_ipns_name: Option<String>,
-        /// Whether per-file IPNS metadata has been resolved (always true for v1 files).
+        /// Whether per-file IPNS metadata has been resolved.
         file_meta_resolved: bool,
+        /// Decrypted Ed25519 IPNS private key for signing this file's IPNS record.
+        /// Only set for newly created files (derived via HKDF from user privateKey + fileId).
+        /// Wrapped in `Zeroizing` for automatic zeroization on drop.
+        file_ipns_private_key: Option<Zeroizing<Vec<u8>>>,
     },
 }
 
@@ -214,25 +216,22 @@ impl InodeTable {
         }
     }
 
-    /// Populate a folder's children from decrypted folder metadata.
+    /// Populate a folder's children from decrypted v2 folder metadata (per-file IPNS pointers).
     ///
     /// For each child:
     /// - **Subfolder:** Decrypts `folder_key_encrypted` and `ipns_private_key_encrypted`
     ///   using the user's secp256k1 private key (ECIES unwrap).
-    /// - **File:** Stores CID, encrypted file key, IV, size, and encryption mode.
+    /// - **FilePointer:** Creates a placeholder inode with fileMetaIpnsName set.
+    ///   The file's CID/key/IV/size are NOT yet known -- they require IPNS resolution.
+    ///   Callers must resolve FilePointers before the first READDIR (NFS stability).
     ///
-    /// IMPORTANT: Reuses existing inode numbers for children that match by name.
-    /// NFS clients cache inode numbers; allocating new ones causes "stale file handle"
-    /// errors and NFS disconnects. Only allocate new inos for genuinely new entries.
-    ///
-    /// The `private_key` parameter is the user's secp256k1 private key for ECIES decryption.
-    #[cfg(feature = "fuse")]
-    /// Populate a folder's children from v1 metadata.
+    /// IMPORTANT: Reuses existing inode numbers for children matching by name (NFS stability).
     ///
     /// When `merge_only` is true (background refresh), existing children not
     /// present in the remote metadata are preserved. This prevents background
     /// IPNS refreshes from wiping files whose publish hasn't propagated yet.
     /// When false (initial mount), children not in metadata are removed.
+    #[cfg(feature = "fuse")]
     pub fn populate_folder(
         &mut self,
         parent_ino: u64,
@@ -248,270 +247,6 @@ impl InodeTable {
             match c {
                 FolderChild::Folder(f) => f.name.clone(),
                 FolderChild::File(f) => f.name.clone(),
-            }
-        }).collect();
-
-        // Get existing children to detect removals
-        let old_child_inos: Vec<u64> = self.inodes.get(&parent_ino)
-            .and_then(|p| p.children.as_ref())
-            .cloned()
-            .unwrap_or_default();
-
-        // Remove children that no longer exist in the new metadata.
-        // In merge_only mode (background refresh), preserve all existing children
-        // to prevent stale IPNS data from wiping locally-created or in-flight files.
-        if !merge_only {
-            for old_ino in &old_child_inos {
-                if let Some(old_child) = self.inodes.get(old_ino) {
-                    if !new_names.contains(&old_child.name) {
-                        let name = old_child.name.clone();
-                        self.inodes.remove(old_ino);
-                        self.name_to_ino.remove(&(parent_ino, normalize_name(&name)));
-                    }
-                }
-            }
-        }
-
-        let mut child_inos = Vec::new();
-
-        for child in &metadata.children {
-            match child {
-                FolderChild::Folder(folder) => {
-                    // Reuse existing ino if child with same name exists
-                    let existing_ino = self.find_child(parent_ino, &folder.name);
-                    let ino = existing_ino.unwrap_or_else(|| self.allocate_ino());
-
-                    // Decrypt folder key (ECIES unwrap)
-                    let encrypted_folder_key_bytes =
-                        hex::decode(&folder.folder_key_encrypted)
-                            .map_err(|_| format!(
-                                "Invalid folderKeyEncrypted hex for folder '{}'",
-                                folder.name
-                            ))?;
-                    let folder_key = Zeroizing::new(
-                        crypto::ecies::unwrap_key(&encrypted_folder_key_bytes, private_key)
-                            .map_err(|e| format!(
-                                "Failed to decrypt folder key for '{}': {}",
-                                folder.name, e
-                            ))?
-                    );
-
-                    // Decrypt IPNS private key (ECIES unwrap)
-                    let encrypted_ipns_key_bytes =
-                        hex::decode(&folder.ipns_private_key_encrypted)
-                            .map_err(|_| format!(
-                                "Invalid ipnsPrivateKeyEncrypted hex for folder '{}'",
-                                folder.name
-                            ))?;
-                    let ipns_private_key = Zeroizing::new(
-                        crypto::ecies::unwrap_key(&encrypted_ipns_key_bytes, private_key)
-                            .map_err(|e| format!(
-                                "Failed to decrypt IPNS private key for '{}': {}",
-                                folder.name, e
-                            ))?
-                    );
-
-                    let created = UNIX_EPOCH
-                        + Duration::from_millis(folder.created_at);
-                    let modified = UNIX_EPOCH
-                        + Duration::from_millis(folder.modified_at);
-
-                    // Preserve existing children list and loaded state for existing folders
-                    let (existing_children, was_loaded) = if existing_ino.is_some() {
-                        let old = self.inodes.get(&ino);
-                        let ch = old.and_then(|o| o.children.clone());
-                        let loaded = old.map(|o| matches!(&o.kind, InodeKind::Folder { children_loaded: true, .. })).unwrap_or(false);
-                        (ch, loaded)
-                    } else {
-                        (Some(vec![]), false)
-                    };
-
-                    let attr = FileAttr {
-                        ino,
-                        size: 0,
-                        blocks: 0,
-                        atime: modified,
-                        mtime: modified,
-                        ctime: modified,
-                        crtime: created,
-                        kind: FileType::Directory,
-                        perm: 0o755,
-                        nlink: 2,
-                        uid,
-                        gid,
-                        rdev: 0,
-                        blksize: BLOCK_SIZE,
-                        flags: 0,
-                    };
-
-                    let inode = InodeData {
-                        ino,
-                        parent_ino,
-                        name: folder.name.clone(),
-                        kind: InodeKind::Folder {
-                            ipns_name: folder.ipns_name.clone(),
-                            encrypted_folder_key: folder.folder_key_encrypted.clone(),
-                            folder_key,
-                            ipns_private_key: Some(ipns_private_key),
-                            children_loaded: was_loaded,
-                        },
-                        attr,
-                        children: existing_children,
-                    };
-
-                    self.insert(inode);
-                    child_inos.push(ino);
-                }
-                FolderChild::File(file) => {
-                    // Reuse existing ino if child with same name exists
-                    let existing_ino = self.find_child(parent_ino, &file.name);
-                    let ino = existing_ino.unwrap_or_else(|| self.allocate_ino());
-
-                    let created = UNIX_EPOCH
-                        + Duration::from_millis(file.created_at);
-                    let modified = UNIX_EPOCH
-                        + Duration::from_millis(file.modified_at);
-
-                    // Detect v2 FilePointer in hybrid metadata: cid is empty but
-                    // fileMetaIpnsName is present. These need IPNS resolution.
-                    let is_pointer = file.cid.is_empty() && file.file_meta_ipns_name.is_some();
-
-                    let kind = if is_pointer {
-                        // Check if an existing inode already has resolved metadata
-                        let already_resolved = existing_ino
-                            .and_then(|e| self.inodes.get(&e))
-                            .map(|existing| matches!(&existing.kind, InodeKind::File { file_meta_resolved: true, .. }))
-                            .unwrap_or(false);
-
-                        if already_resolved {
-                            self.inodes.get(&ino).unwrap().kind.clone()
-                        } else {
-                            InodeKind::File {
-                                cid: String::new(),
-                                encrypted_file_key: String::new(),
-                                iv: String::new(),
-                                size: 0,
-                                encryption_mode: "GCM".to_string(),
-                                file_meta_ipns_name: file.file_meta_ipns_name.clone(),
-                                file_meta_resolved: false,
-                            }
-                        }
-                    } else {
-                        InodeKind::File {
-                            cid: file.cid.clone(),
-                            encrypted_file_key: file.file_key_encrypted.clone(),
-                            iv: file.file_iv.clone(),
-                            size: file.size,
-                            encryption_mode: file.encryption_mode.clone(),
-                            file_meta_ipns_name: None,
-                            file_meta_resolved: true,
-                        }
-                    };
-
-                    let display_size = match &kind {
-                        InodeKind::File { size, .. } => *size,
-                        _ => 0,
-                    };
-
-                    let attr = FileAttr {
-                        ino,
-                        size: display_size,
-                        blocks: (display_size + 511) / 512,
-                        atime: modified,
-                        mtime: modified,
-                        ctime: modified,
-                        crtime: created,
-                        kind: FileType::RegularFile,
-                        perm: 0o644,
-                        nlink: 1,
-                        uid,
-                        gid,
-                        rdev: 0,
-                        blksize: BLOCK_SIZE,
-                        flags: 0,
-                    };
-
-                    let inode = InodeData {
-                        ino,
-                        parent_ino,
-                        name: file.name.clone(),
-                        kind,
-                        attr,
-                        children: None,
-                    };
-
-                    self.insert(inode);
-                    child_inos.push(ino);
-                }
-            }
-        }
-
-        // In merge_only mode, preserve existing children not in remote metadata
-        if merge_only {
-            for &old_ino in &old_child_inos {
-                if !child_inos.contains(&old_ino) {
-                    // This child exists locally but not in remote — preserve it
-                    child_inos.push(old_ino);
-                }
-            }
-        }
-
-        // Set parent's children list
-        if let Some(parent) = self.inodes.get_mut(&parent_ino) {
-            // Detect if children changed (new entries appeared or were removed).
-            // If so, bump mtime to NOW so NFS client invalidates its readdir cache.
-            let old_children = parent.children.as_ref().cloned().unwrap_or_default();
-            let children_changed = old_children.len() != child_inos.len()
-                || old_children != child_inos;
-            if children_changed {
-                let now = SystemTime::now();
-                parent.attr.mtime = now;
-                parent.attr.ctime = now;
-            }
-
-            parent.children = Some(child_inos);
-            // Mark folder as loaded
-            match &mut parent.kind {
-                InodeKind::Root { .. } => {
-                    // Root is always "loaded" after populate
-                }
-                InodeKind::Folder {
-                    children_loaded, ..
-                } => {
-                    *children_loaded = true;
-                }
-                _ => {}
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Populate a folder's children from v2 folder metadata (per-file IPNS pointers).
-    ///
-    /// For each child:
-    /// - **Subfolder:** Same as v1 (decrypt folder_key + ipns_private_key via ECIES).
-    /// - **FilePointer:** Creates a placeholder inode with fileMetaIpnsName set.
-    ///   The file's CID/key/IV/size are NOT yet known — they require IPNS resolution.
-    ///   Callers must resolve FilePointers before the first READDIR (NFS stability).
-    ///
-    /// IMPORTANT: Reuses existing inode numbers for children matching by name (NFS stability).
-    #[cfg(feature = "fuse")]
-    pub fn populate_folder_v2(
-        &mut self,
-        parent_ino: u64,
-        metadata: &FolderMetadataV2,
-        private_key: &[u8],
-        merge_only: bool,
-    ) -> Result<(), String> {
-        let uid = unsafe { libc::getuid() };
-        let gid = unsafe { libc::getgid() };
-
-        // Build set of new child names for detecting removals
-        let new_names: std::collections::HashSet<String> = metadata.children.iter().map(|c| {
-            match c {
-                FolderChildV2::Folder(f) => f.name.clone(),
-                FolderChildV2::File(f) => f.name.clone(),
             }
         }).collect();
 
@@ -538,7 +273,7 @@ impl InodeTable {
 
         for child in &metadata.children {
             match child {
-                FolderChildV2::Folder(folder) => {
+                FolderChild::Folder(folder) => {
                     // Reuse existing ino if child with same name exists
                     let existing_ino = self.find_child(parent_ino, &folder.name);
                     let ino = existing_ino.unwrap_or_else(|| self.allocate_ino());
@@ -622,7 +357,7 @@ impl InodeTable {
                     self.insert(inode);
                     child_inos.push(ino);
                 }
-                FolderChildV2::File(file_pointer) => {
+                FolderChild::File(file_pointer) => {
                     // Reuse existing ino if child with same name exists
                     let existing_ino = self.find_child(parent_ino, &file_pointer.name);
                     let ino = existing_ino.unwrap_or_else(|| self.allocate_ino());
@@ -656,6 +391,7 @@ impl InodeTable {
                             encryption_mode: "GCM".to_string(),
                             file_meta_ipns_name: Some(file_pointer.file_meta_ipns_name.clone()),
                             file_meta_resolved: false,
+                            file_ipns_private_key: None,
                         }
                     };
 
@@ -731,22 +467,6 @@ impl InodeTable {
         Ok(())
     }
 
-    /// Populate a folder from any metadata version (v1 or v2 dispatch).
-    /// When `merge_only` is true, existing children not in remote metadata are preserved.
-    #[cfg(feature = "fuse")]
-    pub fn populate_folder_any(
-        &mut self,
-        parent_ino: u64,
-        metadata: &AnyFolderMetadata,
-        private_key: &[u8],
-        merge_only: bool,
-    ) -> Result<(), String> {
-        match metadata {
-            AnyFolderMetadata::V1(v1) => self.populate_folder(parent_ino, v1, private_key, merge_only),
-            AnyFolderMetadata::V2(v2) => self.populate_folder_v2(parent_ino, v2, private_key, merge_only),
-        }
-    }
-
     /// Update a FilePointer inode with resolved metadata (CID, key, IV, size, mode).
     ///
     /// Called after per-file IPNS resolution succeeds. Updates the inode in place.
@@ -772,6 +492,10 @@ impl InodeTable {
                     _ => None,
                 },
                 file_meta_resolved: true,
+                file_ipns_private_key: match &inode.kind {
+                    InodeKind::File { file_ipns_private_key, .. } => file_ipns_private_key.clone(),
+                    _ => None,
+                },
             };
             // Update attr size for GETATTR/READDIR
             inode.attr.size = size;
@@ -906,6 +630,7 @@ mod tests {
                 encryption_mode: "GCM".to_string(),
                 file_meta_ipns_name: None,
                 file_meta_resolved: true,
+                file_ipns_private_key: None,
             },
             attr: FileAttr {
                 ino,
@@ -986,6 +711,7 @@ mod tests {
             encryption_mode: "GCM".to_string(),
             file_meta_ipns_name: None,
             file_meta_resolved: true,
+            file_ipns_private_key: None,
         };
 
         match kind {
@@ -999,29 +725,24 @@ mod tests {
     }
 
     #[test]
-    fn test_populate_folder_with_files() {
+    fn test_populate_folder_with_file_pointers() {
         let mut table = InodeTable::new();
 
         let metadata = FolderMetadata {
-            version: "v1".to_string(),
+            version: "v2".to_string(),
             children: vec![
-                FolderChild::File(crate::crypto::folder::FileEntry {
+                FolderChild::File(crate::crypto::folder::FilePointer {
                     id: "file-1".to_string(),
                     name: "hello.txt".to_string(),
-                    cid: "bafyfile1".to_string(),
-                    file_key_encrypted: "aa".to_string(),
-                    file_iv: "bb".to_string(),
-                    size: 100,
+                    file_meta_ipns_name: "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx".to_string(),
                     created_at: 1700000000000,
                     modified_at: 1700000000000,
-                    encryption_mode: "GCM".to_string(),
-                    file_meta_ipns_name: None,
                 }),
             ],
         };
 
-        // For files, populate_folder doesn't need ECIES decryption
-        let private_key = vec![0u8; 32]; // unused for files
+        // For FilePointer children, populate_folder doesn't need ECIES decryption
+        let private_key = vec![0u8; 32]; // unused for FilePointers
         let result = table.populate_folder(ROOT_INO, &metadata, &private_key, false);
         assert!(result.is_ok());
 
@@ -1032,6 +753,15 @@ mod tests {
         let child_ino = root.children.as_ref().unwrap()[0];
         let child = table.get(child_ino).unwrap();
         assert_eq!(child.name, "hello.txt");
-        assert!(matches!(child.kind, InodeKind::File { .. }));
+        match &child.kind {
+            InodeKind::File { file_meta_ipns_name, file_meta_resolved, .. } => {
+                assert_eq!(
+                    file_meta_ipns_name.as_deref(),
+                    Some("k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx")
+                );
+                assert!(!file_meta_resolved, "FilePointer should not be resolved yet");
+            }
+            _ => panic!("Expected File kind"),
+        }
     }
 }

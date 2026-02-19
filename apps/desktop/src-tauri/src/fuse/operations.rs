@@ -59,6 +59,48 @@ mod implementation {
             || name == ".directory"
     }
 
+    /// Detect MIME type from file extension.
+    fn mime_from_extension(filename: &str) -> String {
+        let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
+        match ext.as_str() {
+            "jpg" | "jpeg" => "image/jpeg",
+            "png" => "image/png",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "svg" => "image/svg+xml",
+            "bmp" => "image/bmp",
+            "ico" => "image/x-icon",
+            "pdf" => "application/pdf",
+            "mp4" => "video/mp4",
+            "webm" => "video/webm",
+            "mov" => "video/quicktime",
+            "avi" => "video/x-msvideo",
+            "mkv" => "video/x-matroska",
+            "mp3" => "audio/mpeg",
+            "wav" => "audio/wav",
+            "ogg" => "audio/ogg",
+            "flac" => "audio/flac",
+            "aac" => "audio/aac",
+            "txt" => "text/plain",
+            "html" | "htm" => "text/html",
+            "css" => "text/css",
+            "js" => "application/javascript",
+            "json" => "application/json",
+            "xml" => "application/xml",
+            "zip" => "application/zip",
+            "gz" | "gzip" => "application/gzip",
+            "tar" => "application/x-tar",
+            "doc" => "application/msword",
+            "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "xls" => "application/vnd.ms-excel",
+            "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "ppt" => "application/vnd.ms-powerpoint",
+            "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "md" => "text/markdown",
+            _ => "application/octet-stream",
+        }.to_string()
+    }
+
     /// Maximum time for a network operation before returning EIO.
     /// FUSE-T runs NFS callbacks on a single thread; blocking too long
     /// causes ALL subsequent operations (including ls) to hang.
@@ -94,15 +136,15 @@ mod implementation {
         data: String,
     }
 
-    /// Decrypt folder metadata fetched from IPFS, dispatching to v1 or v2.
+    /// Decrypt folder metadata fetched from IPFS (v2 only).
     ///
     /// The IPFS content is JSON: `{ "iv": "<hex>", "data": "<base64>" }`.
     /// Decode IV from hex, decode ciphertext from base64, then AES-256-GCM decrypt.
-    /// Checks the `version` field to determine v1 or v2 format.
+    /// Rejects non-v2 metadata.
     fn decrypt_metadata_from_ipfs(
         encrypted_bytes: &[u8],
         folder_key: &[u8],
-    ) -> Result<crate::crypto::folder::AnyFolderMetadata, String> {
+    ) -> Result<crate::crypto::folder::FolderMetadata, String> {
         let encrypted: EncryptedFolderMetadata = serde_json::from_slice(encrypted_bytes)
             .map_err(|e| format!("Failed to parse encrypted metadata JSON: {}", e))?;
 
@@ -130,8 +172,7 @@ mod implementation {
         sealed.extend_from_slice(&iv);
         sealed.extend_from_slice(&ciphertext);
 
-        // Use version-dispatched decryption
-        crate::crypto::folder::decrypt_any_folder_metadata(&sealed, &folder_key_arr)
+        crate::crypto::folder::decrypt_folder_metadata(&sealed, &folder_key_arr)
             .map_err(|e| format!("Metadata decryption failed: {}", e))
     }
 
@@ -139,8 +180,7 @@ mod implementation {
     ///
     /// Resolves the folder's IPNS name to CID, fetches encrypted metadata,
     /// decrypts with the folder key, and populates the inode table.
-    /// Supports both v1 and v2 metadata formats.
-    /// For v2 with FilePointers, resolves per-file IPNS metadata eagerly.
+    /// For FilePointers, resolves per-file IPNS metadata eagerly.
     fn fetch_and_populate_folder(
         fs: &mut CipherBoxFS,
         ino: u64,
@@ -163,30 +203,17 @@ mod implementation {
 
         let (encrypted_bytes, cid) = result;
 
-        // Decrypt metadata (v1 or v2)
-        let any_metadata = decrypt_metadata_from_ipfs(&encrypted_bytes, &folder_key_owned)?;
+        // Decrypt metadata (v2 only)
+        let metadata = decrypt_metadata_from_ipfs(&encrypted_bytes, &folder_key_owned)?;
 
-        // Cache metadata (store as v1 for cache compatibility; v2 folders are identified by inode state)
-        match &any_metadata {
-            crate::crypto::folder::AnyFolderMetadata::V1(v1) => {
-                fs.metadata_cache.set(&ipns_name.to_string(), v1.clone(), cid);
-            }
-            crate::crypto::folder::AnyFolderMetadata::V2(_) => {
-                // For v2 metadata, store a synthetic v1 entry in cache for readdir staleness checks.
-                // The actual v2 data is handled via the inode table.
-                let synthetic = crate::crypto::folder::FolderMetadata {
-                    version: "v2".to_string(),
-                    children: vec![],
-                };
-                fs.metadata_cache.set(&ipns_name.to_string(), synthetic, cid);
-            }
-        }
+        // Cache metadata directly
+        fs.metadata_cache.set(&ipns_name.to_string(), metadata.clone(), cid);
 
-        // Populate inode table with children (dispatches v1/v2).
-        // First load for this folder — replace mode (merge_only=false).
-        fs.inodes.populate_folder_any(ino, &any_metadata, &private_key, false)?;
+        // Populate inode table with children.
+        // First load for this folder -- replace mode (merge_only=false).
+        fs.inodes.populate_folder(ino, &metadata, &private_key, false)?;
 
-        // For v2 metadata, resolve unresolved FilePointers eagerly
+        // Resolve unresolved FilePointers eagerly
         let unresolved = fs.inodes.get_unresolved_file_pointers();
         if !unresolved.is_empty() {
             log::info!("Resolving {} FilePointer(s) for folder ino {}", unresolved.len(), ino);
@@ -377,6 +404,73 @@ mod implementation {
         };
 
         Ok(plaintext)
+    }
+
+    /// Encrypt and publish per-file FileMetadata to the file's own IPNS record.
+    ///
+    /// Encrypts with parent folder key (matching web app behavior), uploads to IPFS,
+    /// creates signed IPNS record, and publishes via API.
+    async fn publish_file_metadata(
+        api: &crate::api::client::ApiClient,
+        file_meta: &crate::crypto::folder::FileMetadata,
+        folder_key: &[u8],
+        file_ipns_private_key: &zeroize::Zeroizing<Vec<u8>>,
+        file_ipns_name: &str,
+        coordinator: &crate::fuse::PublishCoordinator,
+    ) -> Result<(), String> {
+        let folder_key_arr: [u8; 32] = folder_key
+            .try_into()
+            .map_err(|_| "Invalid folder key length for FileMetadata encryption".to_string())?;
+
+        // Encrypt FileMetadata with parent folder key
+        let sealed = crate::crypto::folder::encrypt_file_metadata(file_meta, &folder_key_arr)
+            .map_err(|e| format!("FileMetadata encryption failed: {}", e))?;
+
+        // Package as JSON envelope: { "iv": hex, "data": base64 }
+        let iv_hex = hex::encode(&sealed[..12]);
+        use base64::Engine;
+        let data_base64 = base64::engine::general_purpose::STANDARD.encode(&sealed[12..]);
+        let json = serde_json::json!({ "iv": iv_hex, "data": data_base64 });
+        let json_bytes = serde_json::to_vec(&json)
+            .map_err(|e| format!("FileMetadata JSON serialization failed: {}", e))?;
+
+        // Upload encrypted file metadata to IPFS
+        let file_meta_cid = crate::api::ipfs::upload_content(api, &json_bytes).await?;
+
+        // Resolve current IPNS sequence number
+        let seq = coordinator.resolve_sequence(api, file_ipns_name).await?;
+
+        // Create and sign IPNS record
+        let ipns_key_arr: [u8; 32] = file_ipns_private_key.as_slice()
+            .try_into()
+            .map_err(|_| "Invalid file IPNS private key length".to_string())?;
+        let new_seq = seq + 1;
+        let value = format!("/ipfs/{}", file_meta_cid);
+        let record = crate::crypto::ipns::create_ipns_record(
+            &ipns_key_arr,
+            &value,
+            new_seq,
+            86_400_000, // 24h validity
+        )
+        .map_err(|e| format!("File IPNS record creation failed: {}", e))?;
+        let marshaled = crate::crypto::ipns::marshal_ipns_record(&record)
+            .map_err(|e| format!("File IPNS record marshal failed: {}", e))?;
+
+        let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
+
+        let req = crate::api::ipns::IpnsPublishRequest {
+            ipns_name: file_ipns_name.to_string(),
+            record: record_b64,
+            metadata_cid: file_meta_cid.clone(),
+            encrypted_ipns_private_key: None,
+            key_epoch: None,
+        };
+        crate::api::ipns::publish_ipns(api, &req).await?;
+
+        coordinator.record_publish(file_ipns_name, new_seq);
+        log::info!("Per-file IPNS publish succeeded for {}", file_ipns_name);
+
+        Ok(())
     }
 
     impl Filesystem for CipherBoxFS {
@@ -861,7 +955,27 @@ mod implementation {
                 flags: 0,
             };
 
-            // Create inode with empty CID (not yet uploaded)
+            // Derive file IPNS keypair from user privateKey + fileId via HKDF
+            let file_id = crate::fuse::uuid_from_ino(ino);
+            let private_key_arr: [u8; 32] = match self.private_key.as_slice().try_into() {
+                Ok(arr) => arr,
+                Err(_) => {
+                    log::error!("create: invalid private key length for HKDF derivation");
+                    reply.error(libc::EIO);
+                    return;
+                }
+            };
+            let (file_ipns_private_key, _file_ipns_public_key, file_ipns_name) =
+                match crate::crypto::hkdf::derive_file_ipns_keypair(&private_key_arr, &file_id) {
+                    Ok(result) => result,
+                    Err(e) => {
+                        log::error!("create: HKDF file IPNS derivation failed: {}", e);
+                        reply.error(libc::EIO);
+                        return;
+                    }
+                };
+
+            // Create inode with empty CID (not yet uploaded) and derived IPNS name
             let inode = InodeData {
                 ino,
                 parent_ino: parent,
@@ -872,8 +986,9 @@ mod implementation {
                     iv: String::new(),
                     size: 0,
                     encryption_mode: "GCM".to_string(),
-                    file_meta_ipns_name: None,
+                    file_meta_ipns_name: Some(file_ipns_name),
                     file_meta_resolved: true,
+                    file_ipns_private_key: Some(zeroize::Zeroizing::new(file_ipns_private_key.to_vec())),
                 },
                 attr,
                 children: None,
@@ -1359,30 +1474,43 @@ mod implementation {
                         // Zero file key from memory
                         crate::crypto::utils::clear_bytes(&mut file_key);
 
-                        // Get the old file CID for unpinning
-                        let old_file_cid = self.inodes.get(ino).and_then(|inode| {
-                            match &inode.kind {
-                                InodeKind::File { cid, .. } if !cid.is_empty() => {
-                                    Some(cid.clone())
+                        // Get the old file CID and per-file IPNS data for unpinning/publishing
+                        let (old_file_cid, file_ipns_private_key, file_meta_ipns_name) =
+                            self.inodes.get(ino).map(|inode| {
+                                match &inode.kind {
+                                    InodeKind::File {
+                                        cid,
+                                        file_ipns_private_key,
+                                        file_meta_ipns_name,
+                                        ..
+                                    } => (
+                                        if cid.is_empty() { None } else { Some(cid.clone()) },
+                                        file_ipns_private_key.clone(),
+                                        file_meta_ipns_name.clone(),
+                                    ),
+                                    _ => (None, None, None),
                                 }
-                                _ => None,
-                            }
-                        });
+                            }).unwrap_or((None, None, None));
 
                         // Update local inode (CID="" for now — drain_upload_completions will fix it)
                         let encrypted_file_key_hex = hex::encode(&wrapped_key);
                         let iv_hex = hex::encode(&iv);
                         let file_size = plaintext.len() as u64;
 
+                        // Detect MIME type from filename extension
+                        let file_name = self.inodes.get(ino).map(|i| i.name.clone()).unwrap_or_default();
+                        let mime_type = mime_from_extension(&file_name);
+
                         if let Some(inode) = self.inodes.get_mut(ino) {
                             inode.kind = InodeKind::File {
                                 cid: String::new(),
-                                encrypted_file_key: encrypted_file_key_hex,
-                                iv: iv_hex,
+                                encrypted_file_key: encrypted_file_key_hex.clone(),
+                                iv: iv_hex.clone(),
                                 size: file_size,
                                 encryption_mode: "GCM".to_string(),
-                                file_meta_ipns_name: None,
+                                file_meta_ipns_name: file_meta_ipns_name.clone(),
                                 file_meta_resolved: true,
+                                file_ipns_private_key: file_ipns_private_key.clone(),
                             };
                             inode.attr.size = file_size;
                             inode.attr.blocks = (file_size + 511) / 512;
@@ -1392,10 +1520,12 @@ mod implementation {
                         // Cache plaintext so reads work before upload completes
                         self.pending_content.insert(ino, plaintext);
 
-                        // Get parent inode for metadata publish queue
+                        // Get parent inode + folder key for metadata publish queue and FileMetadata encryption
                         let parent_ino = self.inodes.get(ino)
                             .map(|i| i.parent_ino)
                             .unwrap_or(ROOT_INO);
+
+                        let folder_key_for_file_meta = self.get_folder_key(parent_ino);
 
                         // Queue debounced metadata publish (with pending upload)
                         self.queue_publish(parent_ino, true);
@@ -1404,24 +1534,66 @@ mod implementation {
                         let api = self.api.clone();
                         let rt = self.rt.clone();
                         let upload_tx = self.upload_tx.clone();
+                        let coordinator = self.publish_coordinator.clone();
 
-                        // Spawn background OS thread for file upload ONLY
-                        // Metadata publish is handled by the debounced publish queue
+                        // Build FileMetadata for per-file IPNS publish
+                        let now_ms = SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+                        let file_meta = crate::crypto::folder::FileMetadata {
+                            version: "v1".to_string(),
+                            cid: String::new(), // placeholder, updated after upload
+                            file_key_encrypted: encrypted_file_key_hex.clone(),
+                            file_iv: iv_hex.clone(),
+                            size: file_size,
+                            mime_type,
+                            encryption_mode: "GCM".to_string(),
+                            created_at: now_ms,
+                            modified_at: now_ms,
+                        };
+
+                        // Spawn background OS thread for file upload + per-file IPNS publish
                         std::thread::spawn(move || {
                             let result = rt.block_on(async {
+                                // 1. Upload encrypted file content to IPFS
                                 let file_cid = crate::api::ipfs::upload_content(
                                     &api, &ciphertext,
                                 ).await?;
 
                                 log::info!("File uploaded: ino {} -> CID {}", ino, file_cid);
 
-                                // Notify main thread of completed upload
+                                // 2. Notify main thread of completed upload
                                 let _ = upload_tx.send(crate::fuse::UploadComplete {
                                     ino,
-                                    new_cid: file_cid,
+                                    new_cid: file_cid.clone(),
                                     parent_ino,
                                     old_file_cid,
                                 });
+
+                                // 3. Publish per-file FileMetadata to file's own IPNS record
+                                if let (Some(ipns_key), Some(ipns_name), Some(folder_key)) =
+                                    (&file_ipns_private_key, &file_meta_ipns_name, &folder_key_for_file_meta)
+                                {
+                                    let mut file_meta_with_cid = file_meta;
+                                    file_meta_with_cid.cid = file_cid;
+
+                                    if let Err(e) = publish_file_metadata(
+                                        &api,
+                                        &file_meta_with_cid,
+                                        folder_key,
+                                        ipns_key,
+                                        ipns_name,
+                                        &coordinator,
+                                    ).await {
+                                        log::warn!("Per-file IPNS publish failed for ino {}: {}", ino, e);
+                                    }
+                                } else {
+                                    log::warn!(
+                                        "release: skipping per-file IPNS publish for ino {} (missing key/name/folder_key)",
+                                        ino
+                                    );
+                                }
 
                                 Ok::<(), String>(())
                             });
@@ -1644,7 +1816,7 @@ mod implementation {
 
                 // Create initial empty folder metadata (CPU-only)
                 let metadata = crate::crypto::folder::FolderMetadata {
-                    version: "v1".to_string(),
+                    version: "v2".to_string(),
                     children: vec![],
                 };
 
@@ -2195,12 +2367,12 @@ mod implementation {
 }
 
 /// Public wrapper for decrypt_metadata_from_ipfs, used by mod.rs for pre-population.
-/// Returns AnyFolderMetadata (v1 or v2) based on the version field.
+/// Returns FolderMetadata (v2 only). Rejects non-v2 metadata.
 #[cfg(feature = "fuse")]
 pub fn decrypt_metadata_from_ipfs_public(
     encrypted_bytes: &[u8],
     folder_key: &[u8],
-) -> Result<crate::crypto::folder::AnyFolderMetadata, String> {
+) -> Result<crate::crypto::folder::FolderMetadata, String> {
     #[derive(serde::Deserialize)]
     struct EncryptedFolderMetadata {
         iv: String,
@@ -2231,7 +2403,7 @@ pub fn decrypt_metadata_from_ipfs_public(
     sealed.extend_from_slice(&iv);
     sealed.extend_from_slice(&ciphertext);
 
-    crate::crypto::folder::decrypt_any_folder_metadata(&sealed, &folder_key_arr)
+    crate::crypto::folder::decrypt_folder_metadata(&sealed, &folder_key_arr)
         .map_err(|e| format!("Metadata decryption failed: {}", e))
 }
 
