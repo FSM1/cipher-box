@@ -1,0 +1,1 @@
+do all the versions of a file use the same symmetric encryption key? if not, allowing downloads would require storing the encrypted encryption key for the old version in metadata.

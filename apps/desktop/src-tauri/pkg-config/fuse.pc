@@ -1,0 +1,13 @@
+# FUSE-T compatibility shim for fuser crate
+# macFUSE requires kernel extension (blocked on macOS 13+)
+# FUSE-T provides userspace FUSE via NFS — no kext needed
+prefix=/usr/local
+exec_prefix=${prefix}
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: fuse
+Description: Filesystem in Userspace (via FUSE-T)
+Version: 2.9.9
+Libs: -L${libdir} -Wl,-rpath,${libdir} -lfuse-t
+Cflags: -I${includedir}/fuse -D_FILE_OFFSET_BITS=64
