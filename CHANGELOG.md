@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.2](https://github.com/FSM1/cipher-box/compare/v0.12.1...v0.12.2) (2026-02-19)
+
+
+### Bug Fixes
+
+* **ci:** install FUSE-T instead of macFUSE for desktop build ([#159](https://github.com/FSM1/cipher-box/issues/159)) ([d151a07](https://github.com/FSM1/cipher-box/commit/d151a07a51c6535e016f842fcd5f089621715c75))
+
 ## [0.12.1](https://github.com/FSM1/cipher-box/compare/v0.12.0...v0.12.1) (2026-02-19)
 
 
