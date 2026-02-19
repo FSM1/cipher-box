@@ -1551,6 +1551,7 @@ mod implementation {
                             encryption_mode: "GCM".to_string(),
                             created_at: now_ms,
                             modified_at: now_ms,
+                            versions: None,
                         };
 
                         // Spawn background OS thread for file upload + per-file IPNS publish

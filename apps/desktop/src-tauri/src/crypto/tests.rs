@@ -1087,6 +1087,7 @@ fn file_metadata_encrypt_decrypt_roundtrip() {
         encryption_mode: "CTR".to_string(),
         created_at: 1700000000000,
         modified_at: 1700000000000,
+        versions: None,
     };
 
     let sealed = encrypt_file_metadata(&metadata, &key).unwrap();
@@ -1113,6 +1114,7 @@ fn file_metadata_wrong_key_fails() {
         encryption_mode: "GCM".to_string(),
         created_at: 1000,
         modified_at: 2000,
+        versions: None,
     };
 
     let sealed = encrypt_file_metadata(&metadata, &key1).unwrap();
@@ -1132,6 +1134,7 @@ fn file_metadata_camel_case_serialization() {
         encryption_mode: "CTR".to_string(),
         created_at: 1000,
         modified_at: 2000,
+        versions: None,
     };
 
     let json = serde_json::to_string(&metadata).unwrap();
