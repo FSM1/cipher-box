@@ -10,17 +10,17 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 13 (File Versioning)
-Plan: 1 of 5
+Plan: 2 of 5
 Status: In progress
-Last activity: 2026-02-19 -- Completed 13-01-PLAN.md (Version Entry Types)
+Last activity: 2026-02-19 -- Completed 13-02-PLAN.md (Version Creation Service)
 
-Progress: [########################.] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 1/5)
+Progress: [########################.] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 2/5)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 117
+- Total plans completed: 118
 - Average duration: 5.4 min
 - Total execution time: 10.9 hours
 
@@ -39,11 +39,11 @@ Progress: [########################.] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 12.1   | 4/4   | 27 min  | 6.8 min  |
 | M2 Phase 11.1   | 7/7   | 36 min  | 5.1 min  |
 | M2 Phase 11.2   | 3/3   | 30 min  | 10.0 min |
-| M2 Phase 13     | 1/5   | 5 min   | 5.0 min  |
+| M2 Phase 13     | 2/5   | 9 min   | 4.5 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 8m, 7m, 14m, 9m, 5m
+- Last 5 plans: 7m, 14m, 9m, 5m, 4m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -150,6 +150,9 @@ Recent decisions affecting current work:
 | Per-file IPNS publish reuses PublishCoordinator                   | 11.2-03   | Same monotonic sequence number management as folder publishes                                                    |
 | VersionEntry encryptionMode is required (not optional)            | 13-01     | Past versions always record explicit encryption mode; no default needed                                          |
 | versions array omitted when undefined/empty (not null/[])         | 13-01     | Clean JSON for non-versioned files; backward compatible                                                          |
+| shouldCreateVersion returns true for first version (no prior)     | 13-02     | First save always creates baseline version even without forceVersion                                             |
+| Text editor cooldown, web re-upload forceVersion                  | 13-02     | Text editor defaults to 15min cooldown; re-upload passes forceVersion: true when added                           |
+| prunedCids returned from service, caller handles unpinning        | 13-02     | Separation of concerns: service determines what to prune, caller does I/O                                        |
 
 ### Pending Todos
 
@@ -214,11 +217,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-19
-Stopped at: Completed 13-01-PLAN.md (Version Entry Types)
+Stopped at: Completed 13-02-PLAN.md (Version Creation Service)
 Resume file: None
-Next: Execute 13-02-PLAN.md (Version Creation Service)
+Next: Execute 13-03-PLAN.md (Version History UI)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-19 after completing 13-01 (VersionEntry types in TypeScript and Rust)_
+_Last updated: 2026-02-19 after completing 13-02 (Version creation service with cooldown and pruning)_

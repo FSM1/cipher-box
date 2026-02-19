@@ -76,6 +76,8 @@ pub struct UploadComplete {
     pub new_cid: String,
     pub parent_ino: u64,
     pub old_file_cid: Option<String>,
+    /// CIDs of pruned versions (exceeded MAX_VERSIONS_PER_FILE) to unpin.
+    pub pruned_cids: Vec<String>,
 }
 
 /// Entry in the debounced publish queue.
@@ -558,11 +560,13 @@ impl CipherBoxFS {
             if let Some(plaintext) = self.pending_content.remove(&result.ino) {
                 self.content_cache.set(&result.new_cid, plaintext);
             }
-            // Unpin old file CID in background
-            if let Some(old_cid) = result.old_file_cid {
+            // Old file CID is now preserved as a version entry -- do NOT unpin it.
+            // Only unpin CIDs from pruned versions that exceeded MAX_VERSIONS_PER_FILE.
+            for pruned_cid in &result.pruned_cids {
                 let api = self.api.clone();
+                let cid = pruned_cid.clone();
                 self.rt.spawn(async move {
-                    let _ = crate::api::ipfs::unpin_content(&api, &old_cid).await;
+                    let _ = crate::api::ipfs::unpin_content(&api, &cid).await;
                 });
             }
             // Decrement pending upload count for this folder
@@ -704,6 +708,7 @@ impl CipherBoxFS {
                                             self.inodes.resolve_file_pointer(
                                                 *ino, fm.cid, fm.file_key_encrypted,
                                                 fm.file_iv, fm.size, fm.encryption_mode,
+                                                fm.versions,
                                             );
                                         }
                                         Err(e) => log::warn!("Drain FilePointer decrypt failed for ino {}: {}", ino, e),
@@ -882,6 +887,7 @@ pub async fn mount_filesystem(
                                                         inodes.resolve_file_pointer(
                                                             *fp_ino, fm.cid, fm.file_key_encrypted,
                                                             fm.file_iv, fm.size, fm.encryption_mode,
+                                                            fm.versions,
                                                         );
                                                     }
                                                     Err(e) => log::warn!("Root FilePointer decrypt failed for ino {}: {}", fp_ino, e),
@@ -946,6 +952,7 @@ pub async fn mount_filesystem(
                                                                             inodes.resolve_file_pointer(
                                                                                 *fp_ino, fm.cid, fm.file_key_encrypted,
                                                                                 fm.file_iv, fm.size, fm.encryption_mode,
+                                                                                fm.versions,
                                                                             );
                                                                         }
                                                                         Err(e) => log::warn!("Sub FilePointer decrypt failed: {}", e),
