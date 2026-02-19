@@ -56,7 +56,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
 - [x] **Phase 12.5: MFA Polishing, UAT & E2E Testing** - Polish auth flows, wallet E2E with mock provider, fix UAT bugs (INSERTED)
 - [x] **Phase 12.6: Per-File IPNS Metadata Split** - Split file metadata into per-file IPNS records, decouple content updates from folder publishes (INSERTED)
-- [ ] **Phase 11.2: Remove v1 Folder Metadata** - Eliminate v1/v2 dual-schema, make v2 FilePointer canonical, per-file IPNS in desktop FUSE (INSERTED)
+- [x] **Phase 11.2: Remove v1 Folder Metadata** - Eliminate v1/v2 dual-schema, make v2 FilePointer canonical, per-file IPNS in desktop FUSE (INSERTED)
 - [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
 - [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
@@ -297,9 +297,9 @@ Plans:
 
 Plans:
 
-- [ ] 11.2-01-PLAN.md — TypeScript crypto types: delete v1, rename v2 to canonical, update web app imports
-- [ ] 11.2-02-PLAN.md — Rust desktop: delete v1 types, rename v2, rewrite build_folder_metadata to FilePointer
-- [ ] 11.2-03-PLAN.md — Per-file IPNS in FUSE create/release, recovery tool v2-only, cross-platform verification
+- [x] 11.2-01-PLAN.md — TypeScript crypto types: delete v1, rename v2 to canonical, update web app imports
+- [x] 11.2-02-PLAN.md — Rust desktop: delete v1 types, rename v2, rewrite build_folder_metadata to FilePointer
+- [x] 11.2-03-PLAN.md — Per-file IPNS in FUSE create/release, recovery tool v2-only, cross-platform verification
 
 ### Phase 13: File Versioning
 
@@ -410,7 +410,7 @@ Parallel phases:
 | 12.5 MFA Polish/UAT/E2E     | M2        | 3/3            | Complete    | 2026-02-16 |
 | 12.6 Per-File IPNS Meta     | M2        | 5/5            | Complete    | 2026-02-17 |
 | 11.1 macOS Desktop Catch-Up | M2        | 7/7            | Complete    | 2026-02-17 |
-| 11.2 Remove v1 Folder Meta  | M2        | 0/3            | Not started | -          |
+| 11.2 Remove v1 Folder Meta  | M2        | 3/3            | Complete    | 2026-02-19 |
 | 13. File Versioning         | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing    | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search   | M2        | 0/TBD          | Not started | -          |
