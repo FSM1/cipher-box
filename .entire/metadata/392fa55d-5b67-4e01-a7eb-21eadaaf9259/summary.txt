@@ -1,1 +1,3 @@
-Pushed. Changed `contents: read` to `contents: write` in `tag-staging.yml` so the nested `build-desktop` job can create the GitHub Release. Re-run the workflow to test.
+PR created: https://github.com/FSM1/cipher-box/pull/157
+
+One-line fix: `contents: read` → `contents: write` in `tag-staging.yml` so the `build-desktop` job can create the GitHub Release.
