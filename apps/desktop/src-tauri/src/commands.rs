@@ -263,6 +263,62 @@ async fn complete_auth_setup(
     Ok(())
 }
 
+/// Handle session restore when Core Kit has a restored LOGGED_IN session.
+///
+/// Called when Core Kit's init() restores a previous session from localStorage
+/// and the Rust side already has a valid access token from silent refresh.
+/// Unlike `handle_auth_complete`, this skips the `/auth/login` POST since
+/// tokens are already valid.
+#[tauri::command]
+pub async fn handle_session_restore(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    private_key: String,
+) -> Result<(), String> {
+    log::info!("Handling session restore from Core Kit");
+
+    let _ = crate::tray::update_tray_status(&app, &crate::tray::TrayStatus::Mounting);
+
+    // Convert private key from hex to bytes
+    let private_key_hex = if private_key.starts_with("0x") {
+        &private_key[2..]
+    } else {
+        &private_key
+    };
+    let private_key_bytes =
+        hex::decode(private_key_hex).map_err(|_| "Invalid private key hex".to_string())?;
+    if private_key_bytes.len() != 32 {
+        return Err("Private key must be 32 bytes".to_string());
+    }
+
+    let public_key_bytes = derive_public_key(&private_key_bytes)?;
+
+    // Get the existing access token (set by try_silent_refresh)
+    let access_token = state
+        .api
+        .get_access_token()
+        .await
+        .ok_or("No access token available - silent refresh may not have succeeded")?;
+
+    // Extract user_id from the existing access token to look up the refresh token
+    let user_id = extract_user_id_from_jwt(&access_token)?;
+    let refresh_token = auth::get_refresh_token(&user_id)
+        .map_err(|e| format!("Keychain read failed: {}", e))?
+        .ok_or("No refresh token in Keychain")?;
+
+    complete_auth_setup(
+        &app,
+        &state,
+        access_token,
+        refresh_token,
+        Zeroizing::new(private_key_bytes),
+        public_key_bytes,
+        false, // not a new user
+        true,  // skip Keychain writes (already stored)
+    )
+    .await
+}
+
 /// Try to silently refresh the session from a Keychain-stored refresh token.
 ///
 /// On cold start, the private key is NOT available (it requires Web3Auth login).

@@ -39,6 +39,11 @@ impl ApiClient {
         *guard = Some(token);
     }
 
+    /// Read the current access token (used for session restore).
+    pub async fn get_access_token(&self) -> Option<String> {
+        self.access_token.read().await.clone()
+    }
+
     /// Clear the access token (used on logout).
     pub async fn clear_access_token(&self) {
         let mut guard = self.access_token.write().await;

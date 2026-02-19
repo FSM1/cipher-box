@@ -352,6 +352,31 @@ async function completeAuthHandoff(cipherboxJwt: string): Promise<void> {
 }
 
 /**
+ * Restore session from a Core Kit init() that already has LOGGED_IN status.
+ *
+ * When Core Kit restores a previous session from localStorage during init(),
+ * the TSS key is already available. This exports it and passes it to the
+ * Rust backend via the session_restore IPC command (which skips /auth/login
+ * since silent refresh already established API tokens).
+ */
+export async function restoreSession(): Promise<void> {
+  if (!coreKit) throw new Error('Core Kit not initialized');
+  if (coreKit.status !== COREKIT_STATUS.LOGGED_IN) {
+    throw new Error(`Cannot restore session: Core Kit status is ${coreKit.status}`);
+  }
+
+  console.log('[CoreKit] Restoring session from init...');
+  const privateKeyHex = await coreKit._UNSAFE_exportTssKey();
+  const privKeyHex = privateKeyHex.startsWith('0x') ? privateKeyHex.slice(2) : privateKeyHex;
+  console.log('[CoreKit] TSS key exported for session restore');
+
+  await invoke('handle_session_restore', {
+    privateKey: privKeyHex,
+  });
+  console.log('[CoreKit] Session restore complete');
+}
+
+/**
  * Logout from Core Kit and clear Rust-side state.
  *
  * Calls the Rust logout command first (clears Keychain, zeros keys),
@@ -690,9 +715,11 @@ function getGoogleCredential(): Promise<string> {
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
 
     // Clear any stale result and store expected state for CSRF validation
-    sessionStorage.removeItem('google-auth-result');
-    sessionStorage.setItem('google-auth-state', state);
+    // Use localStorage (shared across Tauri webviews) instead of sessionStorage (per-window)
+    localStorage.removeItem('google-auth-result');
+    localStorage.setItem('google-auth-state', state);
 
+    console.log('[Google Auth] Opening OAuth popup...');
     // Open Google OAuth in a popup — Tauri's on_new_window handler creates the webview
     window.open(authUrl, '_blank', 'width=500,height=700');
 
@@ -701,14 +728,21 @@ function getGoogleCredential(): Promise<string> {
       clearTimeout(timeout);
     };
 
-    // Poll sessionStorage for the result (postMessage doesn't survive
-    // cross-origin redirects in Tauri's WKWebView)
+    // Poll localStorage for the result (postMessage doesn't survive
+    // cross-origin redirects in Tauri's WKWebView, and sessionStorage
+    // is per-window so the popup can't write to the main window's storage)
+    let pollCount = 0;
     const pollStorage = setInterval(() => {
-      const raw = sessionStorage.getItem('google-auth-result');
+      const raw = localStorage.getItem('google-auth-result');
+      pollCount++;
+      if (pollCount % 25 === 0) {
+        console.log(`[Google Auth] Polling... (${pollCount} checks, ${pollCount * 0.2}s)`);
+      }
       if (!raw) return;
 
-      sessionStorage.removeItem('google-auth-result');
+      localStorage.removeItem('google-auth-result');
       cleanup();
+      console.log('[Google Auth] Got result from callback');
 
       try {
         const result = JSON.parse(raw);
@@ -725,6 +759,7 @@ function getGoogleCredential(): Promise<string> {
     // Timeout after 2 minutes
     const timeout = setTimeout(() => {
       cleanup();
+      console.error('[Google Auth] Timed out after 2 minutes');
       reject(new Error('Google authentication timed out'));
     }, 120000);
   });
