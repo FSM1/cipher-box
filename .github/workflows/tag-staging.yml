@@ -60,7 +60,7 @@ jobs:
     name: Deploy Staging
     needs: tag-staging
     permissions:
-      contents: read
+      contents: write
       packages: write
     uses: ./.github/workflows/deploy-staging.yml
     with:
