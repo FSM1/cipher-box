@@ -1,0 +1,79 @@
+// Grafana Alloy configuration for CipherBox staging.
+// Ships Docker container logs to Grafana Cloud Loki
+// and scrapes Prometheus metrics to Grafana Cloud Mimir.
+
+// ============================================================
+// LOG COLLECTION
+// ============================================================
+
+// Discover Docker containers via the Docker socket
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+// Relabel to extract useful metadata as log labels
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "project"
+  }
+}
+
+// Collect logs from discovered containers
+loki.source.docker "containers" {
+  host    = "unix:///var/run/docker.sock"
+  targets = discovery.relabel.containers.output
+
+  forward_to = [loki.write.grafana_cloud.receiver]
+}
+
+// Ship to Grafana Cloud Loki
+loki.write "grafana_cloud" {
+  endpoint {
+    url = env("GRAFANA_LOKI_URL")
+
+    basic_auth {
+      username = env("GRAFANA_LOKI_USERNAME")
+      password = env("GRAFANA_LOKI_API_KEY")
+    }
+  }
+}
+
+// ============================================================
+// PROMETHEUS METRICS SCRAPING
+// ============================================================
+
+// Scrape CipherBox API /metrics endpoint every 30 seconds
+prometheus.scrape "cipherbox_api" {
+  targets = [{
+    __address__ = "api:3000",
+  }]
+  metrics_path = "/metrics"
+  scrape_interval = "30s"
+
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
+// Ship metrics to Grafana Cloud Mimir (Prometheus-compatible)
+prometheus.remote_write "grafana_cloud" {
+  endpoint {
+    url = env("GRAFANA_PROMETHEUS_URL")
+
+    basic_auth {
+      username = env("GRAFANA_PROMETHEUS_USERNAME")
+      password = env("GRAFANA_PROMETHEUS_API_KEY")
+    }
+  }
+}
