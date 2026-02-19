@@ -1,1 +1,1 @@
-theres a comment on pr 154 that needs addressing
+ok next error: `The workflow is not valid. .github/workflows/tag-staging.yml (Line: 59, Col: 3): Error calling workflow 'FSM1/cipher-box/.github/workflows/deploy-staging.yml@975b50c987a9be9c3395dcc4e8e225038e784efd'. The nested job 'build-desktop' is requesting 'contents: write', but is only allowed 'contents: read'.`

@@ -1,1 +1,1 @@
-1Password SSH agent isn't cooperating. Can you unlock 1Password and try again, or should I proceed without signing?
+Pushed. Changed `contents: read` to `contents: write` in `tag-staging.yml` so the nested `build-desktop` job can create the GitHub Release. Re-run the workflow to test.
