@@ -17,6 +17,7 @@ import {
   hexToBytes,
   type FileMetadata,
   type EncryptedFileMetadata,
+  type VersionEntry,
 } from '@cipherbox/crypto';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
 import { resolveIpnsRecord } from './ipns.service';
@@ -24,6 +25,12 @@ import { useAuthStore } from '../stores/auth.store';
 
 /** IPNS record lifetime: 24 hours in milliseconds */
 const IPNS_LIFETIME_MS = 24 * 60 * 60 * 1000;
+
+/** Maximum number of past versions retained per file (VER-04) */
+const MAX_VERSIONS_PER_FILE = 10;
+
+/** Cooldown period for automatic version creation (15 minutes in ms) */
+const VERSION_COOLDOWN_MS = 15 * 60 * 1000;
 
 /** Safe base64 encoding that avoids call stack overflow from spread operator */
 function uint8ToBase64(bytes: Uint8Array): string {
@@ -170,6 +177,28 @@ export async function resolveFileMetadata(
 }
 
 /**
+ * Determine whether a file content update should create a new version entry.
+ *
+ * - If `forceVersion` is true, always returns true (web re-upload always versions).
+ * - If no versions exist yet, returns true (first version always created).
+ * - If the newest version is older than VERSION_COOLDOWN_MS, returns true.
+ * - If the newest version is within cooldown, returns false (overwrite without versioning).
+ *
+ * @param currentMetadata - Current file metadata (may have existing versions)
+ * @param forceVersion - Whether to force version creation (e.g., explicit re-upload)
+ * @returns true if a new version entry should be created
+ */
+export function shouldCreateVersion(currentMetadata: FileMetadata, forceVersion: boolean): boolean {
+  if (forceVersion) return true;
+
+  const versions = currentMetadata.versions;
+  if (!versions || versions.length === 0) return true;
+
+  const newestTimestamp = versions[0].timestamp;
+  return Date.now() - newestTimestamp >= VERSION_COOLDOWN_MS;
+}
+
+/**
  * Update an existing file's per-IPNS metadata record.
  *
  * Merges updates into the current metadata, re-encrypts, uploads to IPFS,
@@ -181,7 +210,8 @@ export async function resolveFileMetadata(
  * @param params.userPrivateKey - User's secp256k1 private key (for HKDF derivation)
  * @param params.currentMetadata - Current file metadata to update
  * @param params.updates - Partial updates to apply (cid, fileKeyEncrypted, fileIv, size)
- * @returns Updated IPNS record payload for publish
+ * @param params.createVersion - Whether to push current metadata into versions array before updating
+ * @returns Updated IPNS record payload for publish, plus CIDs of pruned versions to unpin
  */
 export async function updateFileMetadata(params: {
   fileId: string;
@@ -189,20 +219,48 @@ export async function updateFileMetadata(params: {
   userPrivateKey: Uint8Array;
   currentMetadata: FileMetadata;
   updates: Partial<Pick<FileMetadata, 'cid' | 'fileKeyEncrypted' | 'fileIv' | 'size'>>;
+  createVersion: boolean;
 }): Promise<{
   ipnsRecord: FileIpnsRecordPayload;
+  prunedCids: string[];
 }> {
-  // 1. Merge updates into current metadata
+  // 1. Build version history
+  let versions: VersionEntry[] | undefined;
+  let prunedCids: string[] = [];
+
+  if (params.createVersion) {
+    // Push current state into versions array (newest first)
+    const versionEntry: VersionEntry = {
+      cid: params.currentMetadata.cid,
+      fileKeyEncrypted: params.currentMetadata.fileKeyEncrypted,
+      fileIv: params.currentMetadata.fileIv,
+      size: params.currentMetadata.size,
+      timestamp: Date.now(),
+      encryptionMode: params.currentMetadata.encryptionMode ?? 'GCM',
+    };
+    const allVersions = [versionEntry, ...(params.currentMetadata.versions ?? [])];
+
+    // Prune excess versions beyond limit
+    versions = allVersions.slice(0, MAX_VERSIONS_PER_FILE);
+    prunedCids = allVersions.slice(MAX_VERSIONS_PER_FILE).map((v) => v.cid);
+  } else {
+    // Preserve existing versions as-is
+    versions = params.currentMetadata.versions;
+  }
+
+  // 2. Merge updates into current metadata
   const updatedMetadata: FileMetadata = {
     ...params.currentMetadata,
     ...params.updates,
+    // Only include versions field when there are actual versions (backward compat)
+    ...(versions && versions.length > 0 ? { versions } : { versions: undefined }),
     modifiedAt: Date.now(),
   };
 
-  // 2. Re-derive file IPNS keypair
+  // 3. Re-derive file IPNS keypair
   const ipnsKeypair = await deriveFileIpnsKeypair(params.userPrivateKey, params.fileId);
 
-  // 3. Resolve current IPNS to get sequence number
+  // 4. Resolve current IPNS to get sequence number
   const resolved = await resolveIpnsRecord(ipnsKeypair.ipnsName);
   if (!resolved) {
     throw new Error(
@@ -212,14 +270,14 @@ export async function updateFileMetadata(params: {
   const currentSeq = resolved.sequenceNumber;
   const newSeq = currentSeq + 1n;
 
-  // 4. Encrypt updated metadata with folderKey
+  // 5. Encrypt updated metadata with folderKey
   const encrypted = await encryptFileMetadata(updatedMetadata, params.folderKey);
 
-  // 5. Upload to IPFS
+  // 6. Upload to IPFS
   const blob = new Blob([JSON.stringify(encrypted)], { type: 'application/json' });
   const { cid: metadataCid } = await addToIpfs(blob);
 
-  // 6. Create new IPNS record with incremented sequence number
+  // 7. Create new IPNS record with incremented sequence number
   const record = await createIpnsRecord(
     ipnsKeypair.privateKey,
     `/ipfs/${metadataCid}`,
@@ -236,5 +294,6 @@ export async function updateFileMetadata(params: {
       recordBase64,
       metadataCid,
     },
+    prunedCids,
   };
 }
