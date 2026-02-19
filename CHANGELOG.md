@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.12.0](https://github.com/FSM1/cipher-box/compare/v0.11.1...v0.12.0) (2026-02-19)
+
+
+### Features
+
+* add desktop binary build to staging deploy ([#155](https://github.com/FSM1/cipher-box/issues/155)) ([2cee04e](https://github.com/FSM1/cipher-box/commit/2cee04e668a46b98d0d7d47b27386592aa5121a8))
+
+
+### Bug Fixes
+
+* **web:** improve mobile layout for file browser, toolbar, and footer ([#154](https://github.com/FSM1/cipher-box/issues/154)) ([f1fa934](https://github.com/FSM1/cipher-box/commit/f1fa934bd5227e18251461f84ee7dab035a461f0))
+
 ## [0.11.1](https://github.com/FSM1/cipher-box/compare/v0.11.0...v0.11.1) (2026-02-19)
 
 
