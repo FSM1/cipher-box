@@ -1,14 +1,5 @@
----
+Done. Pushed both fixes to PR #163:
 
-GSD ► QUICK TASK COMPLETE
+1. **Generation counter** (`useFileSize.ts`): In-flight `resolveFileMetadata` promises now capture `cacheGeneration` at call time and skip writing to `sizeCache` if `clearFileSizeCache()` was called while they were in flight. Addresses the CodeRabbit review comment.
 
-**Quick Task 018:** Extend E2E tests for versioning
-
-- **DetailsDialogPage** extended with 12 version history methods (locators, inline confirm, actions)
-- **3 new serial tests** added to full-workflow suite (6.6.1–6.6.3): version history visible, restore version, delete version
-- Summary: `.planning/quick/018-e2e-versioning-tests/018-SUMMARY.md`
-- Commit: `4dbdf0e28`
-
----
-
-Ready for next task.
+2. **E2E timeout** (`full-workflow.spec.ts`): `navigateIntoFolder` breadcrumb timeout increased from 10s to 15s. The new per-file IPNS resolution requests add network load in CI, making 10s too tight for post-reload navigation.
