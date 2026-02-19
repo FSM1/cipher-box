@@ -142,6 +142,25 @@ export function FileListItem({
   );
 
   /**
+   * Handle mobile action button click.
+   * Creates a synthetic mouse event positioned at the button for context menu.
+   */
+  const handleActionButtonClick = useCallback(
+    (e: React.MouseEvent<HTMLButtonElement>) => {
+      e.stopPropagation();
+      const rect = e.currentTarget.getBoundingClientRect();
+      const syntheticEvent = {
+        preventDefault: () => {},
+        stopPropagation: () => {},
+        clientX: rect.left,
+        clientY: rect.bottom,
+      } as unknown as MouseEvent;
+      onContextMenu(syntheticEvent, item);
+    },
+    [item, onContextMenu]
+  );
+
+  /**
    * Handle drag start - serialize item data.
    */
   const handleDragStart = useCallback(
@@ -190,6 +209,7 @@ export function FileListItem({
         // Create synthetic mouse event for context menu
         const syntheticEvent = {
           preventDefault: () => {},
+          stopPropagation: () => {},
           clientX: touch.clientX,
           clientY: touch.clientY,
         } as unknown as MouseEvent;
@@ -377,6 +397,18 @@ export function FileListItem({
         <span className="file-list-item-date" role="gridcell">
           {dateDisplay}
         </span>
+      </div>
+
+      {/* Mobile action button - hidden on desktop via CSS */}
+      <div className="file-list-item-mobile-actions" role="gridcell">
+        <button
+          type="button"
+          className="file-list-item-action-btn"
+          onClick={handleActionButtonClick}
+          aria-label={`Actions for ${item.name}`}
+        >
+          ...
+        </button>
       </div>
     </div>
   );
