@@ -517,7 +517,7 @@
     // =========================================================================
     // Crypto: AES-256-GCM File Decrypt
     // =========================================================================
-    async function decryptFile(encryptedBytes, fileKey, fileIvHex) {
+    async function decryptFileGcm(encryptedBytes, fileKey, fileIvHex) {
       const iv = hexToBytes(fileIvHex); // 12 bytes
 
       const cryptoKey = await crypto.subtle.importKey(
@@ -528,6 +528,34 @@
       );
 
       return new Uint8Array(plaintext);
+    }
+
+    // =========================================================================
+    // Crypto: AES-256-CTR File Decrypt
+    // =========================================================================
+    async function decryptFileCtr(encryptedBytes, fileKey, fileIvHex) {
+      const iv = hexToBytes(fileIvHex); // 16 bytes (8-byte nonce + 8-byte counter)
+
+      const cryptoKey = await crypto.subtle.importKey(
+        'raw', fileKey, { name: 'AES-CTR' }, false, ['decrypt']
+      );
+      const plaintext = await crypto.subtle.decrypt(
+        { name: 'AES-CTR', counter: iv, length: 64 }, cryptoKey, encryptedBytes
+      );
+
+      return new Uint8Array(plaintext);
+    }
+
+    /**
+     * Decrypt file content using the appropriate mode (GCM or CTR).
+     * encryptionMode defaults to 'GCM' when not specified (backward compat).
+     */
+    async function decryptFile(encryptedBytes, fileKey, fileIvHex, encryptionMode) {
+      const mode = (encryptionMode || 'GCM').toUpperCase();
+      if (mode === 'CTR') {
+        return decryptFileCtr(encryptedBytes, fileKey, fileIvHex);
+      }
+      return decryptFileGcm(encryptedBytes, fileKey, fileIvHex);
     }
 
     // =========================================================================
@@ -914,14 +942,48 @@
             // f. Fetch encrypted file from IPFS
             const encryptedFile = await fetchFromIpfs(contentCid, gatewayConfig.ipfsGateway);
 
-            // g. Decrypt file content
-            const decryptedFile = await decryptFile(encryptedFile, fileKey, fileIv);
+            // g. Decrypt file content (using encryptionMode, defaults to GCM)
+            const decryptedFile = await decryptFile(encryptedFile, fileKey, fileIv, encryptionMode);
 
             // Store for zip
             recoveredFiles.push({ path: filePath, data: decryptedFile });
             fileCount++;
 
             log(`  Decrypted: ${filePath} (${formatSize(decryptedFile.length)})`, 'success');
+
+            // h. Process past versions if present
+            if (Array.isArray(fileMeta.versions) && fileMeta.versions.length > 0) {
+              log(`  Past versions: ${fileMeta.versions.length}`, 'info');
+
+              for (let vi = 0; vi < fileMeta.versions.length; vi++) {
+                const ver = fileMeta.versions[vi];
+                const verDate = new Date(ver.timestamp).toISOString().slice(0, 19).replace('T', ' ');
+                const verLabel = `v${fileMeta.versions.length - vi}`;
+
+                try {
+                  log(`  Downloading ${verLabel} (${verDate}, ${formatSize(ver.size || 0)}, ${ver.encryptionMode || 'GCM'})...`, 'info');
+
+                  // Decrypt version's file key
+                  const verFileKey = await eciesDecrypt(privateKeyBytes, ver.fileKeyEncrypted);
+
+                  // Fetch version's encrypted content from IPFS
+                  const verEncrypted = await fetchFromIpfs(ver.cid, gatewayConfig.ipfsGateway);
+
+                  // Decrypt version content with appropriate mode
+                  const verDecrypted = await decryptFile(verEncrypted, verFileKey, ver.fileIv, ver.encryptionMode);
+
+                  // Build version filename: "file (v2).txt" pattern
+                  const verPath = buildVersionPath(filePath, verLabel);
+                  recoveredFiles.push({ path: verPath, data: verDecrypted });
+                  fileCount++;
+
+                  log(`  Decrypted: ${verPath} (${formatSize(verDecrypted.length)})`, 'success');
+                } catch (verErr) {
+                  log(`  ERROR recovering ${verLabel} of "${child.name}": ${verErr.message}`, 'error');
+                  errorCount++;
+                }
+              }
+            }
           } catch (e) {
             log(`  ERROR recovering file "${child.name}": ${e.message}`, 'error');
             errorCount++;
@@ -934,6 +996,24 @@
       if (bytes < 1024) return bytes + ' B';
       if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
       return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    /**
+     * Build a versioned file path: "folder/file.txt" + "v2" -> "folder/file (v2).txt"
+     * If no extension, appends the label: "folder/file" + "v2" -> "folder/file (v2)"
+     */
+    function buildVersionPath(filePath, versionLabel) {
+      const lastSlash = filePath.lastIndexOf('/');
+      const dir = lastSlash >= 0 ? filePath.slice(0, lastSlash + 1) : '';
+      const name = lastSlash >= 0 ? filePath.slice(lastSlash + 1) : filePath;
+
+      const dotIndex = name.lastIndexOf('.');
+      if (dotIndex > 0) {
+        const base = name.slice(0, dotIndex);
+        const ext = name.slice(dotIndex);
+        return `${dir}${base} (${versionLabel})${ext}`;
+      }
+      return `${dir}${name} (${versionLabel})`;
     }
 
     // =========================================================================
