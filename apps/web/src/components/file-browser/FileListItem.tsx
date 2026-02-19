@@ -7,7 +7,8 @@ import {
   type TouchEvent,
 } from 'react';
 import type { FolderChild, FilePointer, FolderEntry } from '@cipherbox/crypto';
-import { formatDate } from '../../utils/format';
+import { formatBytes, formatDate } from '../../utils/format';
+import { useFileSize } from '../../hooks/useFileSize';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
 
 /**
@@ -29,6 +30,8 @@ type FileListItemProps = {
   selectedIds: Set<string>;
   /** All items in the current folder (for resolving types of selected IDs) */
   allItems: FolderChild[];
+  /** Parent folder's decrypted AES-256 key (for resolving file sizes) */
+  folderKey: Uint8Array | null;
   /** Callback when item is clicked (with modifier key info) */
   onSelect: (
     itemId: string,
@@ -84,6 +87,7 @@ export function FileListItem({
   parentId,
   selectedIds,
   allItems,
+  folderKey,
   onSelect,
   onNavigate,
   onContextMenu,
@@ -322,9 +326,11 @@ export function FileListItem({
     [item, onDrop, onExternalFileDrop]
   );
 
-  // Display size: v2 FilePointers don't have inline size (lives in per-file IPNS metadata).
-  // Show '--' for files until size is resolved on download/preview.
-  const sizeDisplay = isFile(item) ? '--' : '-';
+  // Lazily resolve file size from per-file IPNS metadata
+  const fileSize = useFileSize(isFile(item) ? item.fileMetaIpnsName : null, folderKey);
+
+  // Display size: resolved from IPNS metadata for files, dash for folders
+  const sizeDisplay = isFile(item) ? (fileSize !== null ? formatBytes(fileSize) : '...') : '-';
 
   // Display modified date
   const dateDisplay = formatDate(item.modifiedAt);
