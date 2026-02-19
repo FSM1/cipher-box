@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 Phase: 11.2 (Remove v1 Folder Metadata)
 Plan: 3 of 3
 Status: Phase complete
-Last activity: 2026-02-19 -- Completed 11.2-03-PLAN.md (per-file IPNS publish in FUSE create/release)
+Last activity: 2026-02-19 -- Completed quick task 017: Desktop binary staging release
 
 Progress: [########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE)
 
