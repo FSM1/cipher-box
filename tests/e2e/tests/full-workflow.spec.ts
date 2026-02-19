@@ -175,8 +175,9 @@ test.describe.serial('Full Workflow', () => {
    */
   async function navigateIntoFolder(name: string): Promise<void> {
     await fileList.doubleClickFolder(name);
-    // Wait for breadcrumb path to include the folder name
-    await breadcrumbs.waitForPathToContain(name, { timeout: 15000 });
+    // Wait for breadcrumb path to include the folder name.
+    // Post-reload navigation requires cold IPNS resolve which can be slow in CI.
+    await breadcrumbs.waitForPathToContain(name, { timeout: 30000 });
     navigationStack.push(name);
   }
 
@@ -607,6 +608,8 @@ test.describe.serial('Full Workflow', () => {
   });
 
   test('3.10 Upload file to subfolder after reload', async () => {
+    test.setTimeout(90000);
+
     // Navigate into images folder
     await navigateIntoFolder(imagesFolder);
 
