@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 11.2 (Remove v1 Folder Metadata)
-Plan: 1 of 3
+Plan: 2 of 3
 Status: In progress
-Last activity: 2026-02-19 -- Completed 11.2-01-PLAN.md (delete v1 types, rename v2 to canonical)
+Last activity: 2026-02-19 -- Completed 11.2-02-PLAN.md (Rust desktop v2-only folder metadata)
 
-Progress: [######################.] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 1/3)
+Progress: [######################.] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 2/3)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 114
-- Average duration: 5.3 min
-- Total execution time: 10.4 hours
+- Total plans completed: 115
+- Average duration: 5.4 min
+- Total execution time: 10.6 hours
 
 **By Phase (M1 summary):**
 
@@ -38,10 +38,11 @@ Progress: [######################.] (M1 complete, M2 Phase 12 complete, Phase 12
 | M2 Phase 12.6   | 5/5   | 29 min  | 5.8 min  |
 | M2 Phase 12.1   | 4/4   | 27 min  | 6.8 min  |
 | M2 Phase 11.1   | 7/7   | 36 min  | 5.1 min  |
+| M2 Phase 11.2   | 2/3   | 21 min  | 10.5 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 2m, 4m, 8m, 8m, 7m
+- Last 5 plans: 4m, 8m, 8m, 7m, 14m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -141,6 +142,8 @@ Recent decisions affecting current work:
 | Module-level JWT/token state for MFA flow (not localStorage)      | 11.1-05   | Sensitive tokens cleared on auth completion; avoids persisting temporary access tokens                           |
 | isFilePointer simplified to type discriminant only                | 11.2-01   | All file children are FilePointer; no need to check for fileMetaIpnsName presence                                |
 | validateFolderMetadata rejects v1 with CryptoError                | 11.2-01   | Strict enforcement: only v2 schema accepted, not silent v1 acceptance                                            |
+| decrypt_folder_metadata rejects non-v2 with version check         | 11.2-02   | Strict validation: parses JSON, checks version field is "v2", rejects anything else with DeserializationFailed   |
+| FilePointer with None ipns_name uses empty string placeholder     | 11.2-02   | Newly created files before IPNS publish use "" with warning log; Plan 03 addresses deriving IPNS in create()     |
 
 ### Pending Todos
 
@@ -204,11 +207,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-19
-Stopped at: Completed 11.2-01-PLAN.md
+Stopped at: Completed 11.2-02-PLAN.md
 Resume file: None
-Next: Execute 11.2-02-PLAN.md (desktop Rust type cleanup)
+Next: Execute 11.2-03-PLAN.md (per-file IPNS publish in FUSE create/release)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-19 after completing 11.2-01 (delete v1 types, rename v2 to canonical)_
+_Last updated: 2026-02-19 after completing 11.2-02 (Rust desktop v2-only folder metadata)_
