@@ -46,9 +46,11 @@
     padding: var(--spacing-xs) var(--spacing-sm);
   }
 
-  /* App footer: tighter padding */
+  /* App footer: center content on mobile */
   .app-footer {
     padding: var(--spacing-xs) var(--spacing-sm);
+    justify-content: center;
+    gap: var(--spacing-sm);
   }
 
   /* Footer links hidden on mobile */
@@ -56,31 +58,67 @@
     display: none;
   }
 
-  /* File browser content area */
-  .file-browser-content {
-    padding: var(--spacing-sm);
+  /* Collapse footer left/right into a centered row */
+  .footer-left,
+  .footer-right {
+    flex-shrink: 0;
   }
 
-  /* Toolbar: wrap on narrow screens */
+  /* File browser content area */
+  .file-browser-content {
+    padding: 0;
+  }
+
+  /* Toolbar: stack breadcrumbs above actions on mobile */
   .file-browser-toolbar {
+    flex-direction: column;
+    align-items: stretch;
     gap: var(--spacing-xs);
-    flex-wrap: wrap;
+    padding: var(--spacing-xs) var(--spacing-sm);
+  }
+
+  .file-browser-toolbar .breadcrumb-nav {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .file-browser-toolbar .file-browser-actions {
+    margin-left: 0;
+    justify-content: flex-end;
   }
 
   /* File list: 2-column layout on mobile (date hidden) */
   .file-list-header {
-    grid-template-columns: 1fr 80px;
-    grid-template-areas: "name size";
+    grid-template-columns: 1fr auto;
+    grid-template-areas: "name actions";
   }
 
   .file-list-item {
-    grid-template-columns: 1fr 80px;
-    grid-template-areas: "name size";
+    grid-template-columns: 1fr auto;
+    grid-template-areas: "name actions";
   }
 
   .file-list-header-date,
   .file-list-item-date {
     display: none;
+  }
+
+  /* Hide size column on mobile to make room for action button */
+  .file-list-header-size,
+  .file-list-item-size {
+    display: none;
+  }
+
+  /* Show the mobile action button and header actions column */
+  .file-list-item-mobile-actions {
+    display: flex;
+    grid-area: actions;
+  }
+
+  .file-list-header-actions {
+    display: block;
+    grid-area: actions;
+    width: 32px;
   }
 
   /* Empty state: smaller margins */
@@ -100,9 +138,9 @@
     flex-wrap: wrap;
   }
 
-  /* Context menu: touch-friendly */
+  /* Context menu: touch-friendly sizing */
   .context-menu {
-    min-width: 200px;
+    min-width: 220px;
   }
 
   .context-menu-item {
