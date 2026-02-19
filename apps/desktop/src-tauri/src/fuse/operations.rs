@@ -94,15 +94,15 @@ mod implementation {
         data: String,
     }
 
-    /// Decrypt folder metadata fetched from IPFS, dispatching to v1 or v2.
+    /// Decrypt folder metadata fetched from IPFS (v2 only).
     ///
     /// The IPFS content is JSON: `{ "iv": "<hex>", "data": "<base64>" }`.
     /// Decode IV from hex, decode ciphertext from base64, then AES-256-GCM decrypt.
-    /// Checks the `version` field to determine v1 or v2 format.
+    /// Rejects non-v2 metadata.
     fn decrypt_metadata_from_ipfs(
         encrypted_bytes: &[u8],
         folder_key: &[u8],
-    ) -> Result<crate::crypto::folder::AnyFolderMetadata, String> {
+    ) -> Result<crate::crypto::folder::FolderMetadata, String> {
         let encrypted: EncryptedFolderMetadata = serde_json::from_slice(encrypted_bytes)
             .map_err(|e| format!("Failed to parse encrypted metadata JSON: {}", e))?;
 
@@ -130,8 +130,7 @@ mod implementation {
         sealed.extend_from_slice(&iv);
         sealed.extend_from_slice(&ciphertext);
 
-        // Use version-dispatched decryption
-        crate::crypto::folder::decrypt_any_folder_metadata(&sealed, &folder_key_arr)
+        crate::crypto::folder::decrypt_folder_metadata(&sealed, &folder_key_arr)
             .map_err(|e| format!("Metadata decryption failed: {}", e))
     }
 
@@ -139,8 +138,7 @@ mod implementation {
     ///
     /// Resolves the folder's IPNS name to CID, fetches encrypted metadata,
     /// decrypts with the folder key, and populates the inode table.
-    /// Supports both v1 and v2 metadata formats.
-    /// For v2 with FilePointers, resolves per-file IPNS metadata eagerly.
+    /// For FilePointers, resolves per-file IPNS metadata eagerly.
     fn fetch_and_populate_folder(
         fs: &mut CipherBoxFS,
         ino: u64,
@@ -163,30 +161,17 @@ mod implementation {
 
         let (encrypted_bytes, cid) = result;
 
-        // Decrypt metadata (v1 or v2)
-        let any_metadata = decrypt_metadata_from_ipfs(&encrypted_bytes, &folder_key_owned)?;
+        // Decrypt metadata (v2 only)
+        let metadata = decrypt_metadata_from_ipfs(&encrypted_bytes, &folder_key_owned)?;
 
-        // Cache metadata (store as v1 for cache compatibility; v2 folders are identified by inode state)
-        match &any_metadata {
-            crate::crypto::folder::AnyFolderMetadata::V1(v1) => {
-                fs.metadata_cache.set(&ipns_name.to_string(), v1.clone(), cid);
-            }
-            crate::crypto::folder::AnyFolderMetadata::V2(_) => {
-                // For v2 metadata, store a synthetic v1 entry in cache for readdir staleness checks.
-                // The actual v2 data is handled via the inode table.
-                let synthetic = crate::crypto::folder::FolderMetadata {
-                    version: "v2".to_string(),
-                    children: vec![],
-                };
-                fs.metadata_cache.set(&ipns_name.to_string(), synthetic, cid);
-            }
-        }
+        // Cache metadata directly
+        fs.metadata_cache.set(&ipns_name.to_string(), metadata.clone(), cid);
 
-        // Populate inode table with children (dispatches v1/v2).
-        // First load for this folder — replace mode (merge_only=false).
-        fs.inodes.populate_folder_any(ino, &any_metadata, &private_key, false)?;
+        // Populate inode table with children.
+        // First load for this folder -- replace mode (merge_only=false).
+        fs.inodes.populate_folder(ino, &metadata, &private_key, false)?;
 
-        // For v2 metadata, resolve unresolved FilePointers eagerly
+        // Resolve unresolved FilePointers eagerly
         let unresolved = fs.inodes.get_unresolved_file_pointers();
         if !unresolved.is_empty() {
             log::info!("Resolving {} FilePointer(s) for folder ino {}", unresolved.len(), ino);
@@ -1644,7 +1629,7 @@ mod implementation {
 
                 // Create initial empty folder metadata (CPU-only)
                 let metadata = crate::crypto::folder::FolderMetadata {
-                    version: "v1".to_string(),
+                    version: "v2".to_string(),
                     children: vec![],
                 };
 
@@ -2195,12 +2180,12 @@ mod implementation {
 }
 
 /// Public wrapper for decrypt_metadata_from_ipfs, used by mod.rs for pre-population.
-/// Returns AnyFolderMetadata (v1 or v2) based on the version field.
+/// Returns FolderMetadata (v2 only). Rejects non-v2 metadata.
 #[cfg(feature = "fuse")]
 pub fn decrypt_metadata_from_ipfs_public(
     encrypted_bytes: &[u8],
     folder_key: &[u8],
-) -> Result<crate::crypto::folder::AnyFolderMetadata, String> {
+) -> Result<crate::crypto::folder::FolderMetadata, String> {
     #[derive(serde::Deserialize)]
     struct EncryptedFolderMetadata {
         iv: String,
@@ -2231,7 +2216,7 @@ pub fn decrypt_metadata_from_ipfs_public(
     sealed.extend_from_slice(&iv);
     sealed.extend_from_slice(&ciphertext);
 
-    crate::crypto::folder::decrypt_any_folder_metadata(&sealed, &folder_key_arr)
+    crate::crypto::folder::decrypt_folder_metadata(&sealed, &folder_key_arr)
         .map_err(|e| format!("Metadata decryption failed: {}", e))
 }
 
