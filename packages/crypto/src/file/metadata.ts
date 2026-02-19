@@ -9,7 +9,7 @@
 import { encryptAesGcm, decryptAesGcm } from '../aes';
 import { generateIv, bytesToHex, hexToBytes } from '../utils';
 import { CryptoError } from '../types';
-import type { FileMetadata, EncryptedFileMetadata } from './types';
+import type { FileMetadata, EncryptedFileMetadata, VersionEntry } from './types';
 
 /**
  * [SECURITY: MEDIUM-08] Chunk-based base64 encoding to avoid call stack issues
@@ -23,6 +23,67 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
     result += String.fromCharCode(...chunk);
   }
   return btoa(result);
+}
+
+/**
+ * Validates a single version entry from the versions array.
+ * All fields are required (versions always have explicit encryption mode).
+ */
+function validateVersionEntry(entry: unknown, index: number): VersionEntry {
+  if (typeof entry !== 'object' || entry === null) {
+    throw new CryptoError(
+      `Invalid file metadata format: versions[${index}] is not an object`,
+      'DECRYPTION_FAILED'
+    );
+  }
+
+  const obj = entry as Record<string, unknown>;
+
+  if (typeof obj.cid !== 'string') {
+    throw new CryptoError(
+      `Invalid file metadata format: versions[${index}].cid must be string`,
+      'DECRYPTION_FAILED'
+    );
+  }
+  if (typeof obj.fileKeyEncrypted !== 'string') {
+    throw new CryptoError(
+      `Invalid file metadata format: versions[${index}].fileKeyEncrypted must be string`,
+      'DECRYPTION_FAILED'
+    );
+  }
+  if (typeof obj.fileIv !== 'string') {
+    throw new CryptoError(
+      `Invalid file metadata format: versions[${index}].fileIv must be string`,
+      'DECRYPTION_FAILED'
+    );
+  }
+  if (typeof obj.size !== 'number') {
+    throw new CryptoError(
+      `Invalid file metadata format: versions[${index}].size must be number`,
+      'DECRYPTION_FAILED'
+    );
+  }
+  if (typeof obj.timestamp !== 'number') {
+    throw new CryptoError(
+      `Invalid file metadata format: versions[${index}].timestamp must be number`,
+      'DECRYPTION_FAILED'
+    );
+  }
+  if (obj.encryptionMode !== 'GCM' && obj.encryptionMode !== 'CTR') {
+    throw new CryptoError(
+      `Invalid file metadata format: versions[${index}].encryptionMode must be GCM or CTR`,
+      'DECRYPTION_FAILED'
+    );
+  }
+
+  return {
+    cid: obj.cid as string,
+    fileKeyEncrypted: obj.fileKeyEncrypted as string,
+    fileIv: obj.fileIv as string,
+    size: obj.size as number,
+    timestamp: obj.timestamp as number,
+    encryptionMode: obj.encryptionMode as 'GCM' | 'CTR',
+  };
 }
 
 /**
@@ -91,7 +152,23 @@ export function validateFileMetadata(data: unknown): FileMetadata {
     }
   }
 
-  return {
+  // Validate optional versions array
+  let validatedVersions: VersionEntry[] | undefined;
+  if (obj.versions !== undefined) {
+    if (!Array.isArray(obj.versions)) {
+      throw new CryptoError(
+        'Invalid file metadata format: versions must be an array',
+        'DECRYPTION_FAILED'
+      );
+    }
+    if (obj.versions.length > 0) {
+      validatedVersions = obj.versions.map((entry: unknown, i: number) =>
+        validateVersionEntry(entry, i)
+      );
+    }
+  }
+
+  const result: FileMetadata = {
     version: 'v1',
     cid: obj.cid as string,
     fileKeyEncrypted: obj.fileKeyEncrypted as string,
@@ -102,6 +179,12 @@ export function validateFileMetadata(data: unknown): FileMetadata {
     createdAt: obj.createdAt as number,
     modifiedAt: obj.modifiedAt as number,
   };
+
+  if (validatedVersions) {
+    result.versions = validatedVersions;
+  }
+
+  return result;
 }
 
 /**

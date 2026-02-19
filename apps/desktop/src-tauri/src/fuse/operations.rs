@@ -38,6 +38,13 @@ mod implementation {
     /// Total storage quota in bytes (500 MiB).
     const QUOTA_BYTES: u64 = 500 * 1024 * 1024;
 
+    /// Maximum number of past versions to keep per file.
+    const MAX_VERSIONS_PER_FILE: usize = 10;
+
+    /// Cooldown period for desktop FUSE version creation (15 minutes in milliseconds).
+    /// Only creates a new version entry if the most recent version is older than this.
+    const VERSION_COOLDOWN_MS: u64 = 15 * 60 * 1000;
+
     /// Returns true if this filename is a platform-specific special file
     /// that should never be created, synced, or shown in directory listings.
     fn is_platform_special(name: &str) -> bool {
@@ -256,6 +263,7 @@ mod implementation {
                                 file_meta.file_iv,
                                 file_meta.size,
                                 file_meta.encryption_mode,
+                                file_meta.versions,
                             );
                         }
                         Err(e) => {
@@ -989,6 +997,7 @@ mod implementation {
                     file_meta_ipns_name: Some(file_ipns_name),
                     file_meta_resolved: true,
                     file_ipns_private_key: Some(zeroize::Zeroizing::new(file_ipns_private_key.to_vec())),
+                    versions: None,
                 },
                 attr,
                 children: None,
@@ -1474,23 +1483,34 @@ mod implementation {
                         // Zero file key from memory
                         crate::crypto::utils::clear_bytes(&mut file_key);
 
-                        // Get the old file CID and per-file IPNS data for unpinning/publishing
-                        let (old_file_cid, file_ipns_private_key, file_meta_ipns_name) =
+                        // Get old file metadata for versioning and per-file IPNS data
+                        let (old_file_cid, old_encrypted_key, old_iv, old_size, old_mode,
+                             existing_versions, file_ipns_private_key, file_meta_ipns_name) =
                             self.inodes.get(ino).map(|inode| {
                                 match &inode.kind {
                                     InodeKind::File {
                                         cid,
+                                        encrypted_file_key,
+                                        iv,
+                                        size,
+                                        encryption_mode,
+                                        versions,
                                         file_ipns_private_key,
                                         file_meta_ipns_name,
                                         ..
                                     } => (
                                         if cid.is_empty() { None } else { Some(cid.clone()) },
+                                        encrypted_file_key.clone(),
+                                        iv.clone(),
+                                        *size,
+                                        encryption_mode.clone(),
+                                        versions.clone(),
                                         file_ipns_private_key.clone(),
                                         file_meta_ipns_name.clone(),
                                     ),
-                                    _ => (None, None, None),
+                                    _ => (None, String::new(), String::new(), 0, "GCM".to_string(), None, None, None),
                                 }
-                            }).unwrap_or((None, None, None));
+                            }).unwrap_or((None, String::new(), String::new(), 0, "GCM".to_string(), None, None, None));
 
                         // Update local inode (CID="" for now — drain_upload_completions will fix it)
                         let encrypted_file_key_hex = hex::encode(&wrapped_key);
@@ -1500,6 +1520,68 @@ mod implementation {
                         // Detect MIME type from filename extension
                         let file_name = self.inodes.get(ino).map(|i| i.name.clone()).unwrap_or_default();
                         let mime_type = mime_from_extension(&file_name);
+
+                        // ── Version creation with 15-minute cooldown ──
+                        let now_ms = SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+
+                        let should_version = if let Some(ref versions) = existing_versions {
+                            if let Some(newest) = versions.first() {
+                                // Cooldown: only version if last version is old enough
+                                now_ms.saturating_sub(newest.timestamp) >= VERSION_COOLDOWN_MS
+                            } else {
+                                // Empty versions array — create first version if old CID exists
+                                old_file_cid.as_ref().is_some_and(|c| !c.is_empty())
+                            }
+                        } else {
+                            // No versions at all — create first version if old CID exists (not a brand new file)
+                            old_file_cid.as_ref().is_some_and(|c| !c.is_empty())
+                        };
+
+                        let (new_versions, pruned_cids) = if should_version {
+                            if let Some(ref old_c) = old_file_cid {
+                                if !old_c.is_empty() {
+                                    let version_entry = crate::crypto::folder::VersionEntry {
+                                        cid: old_c.clone(),
+                                        file_key_encrypted: old_encrypted_key.clone(),
+                                        file_iv: old_iv.clone(),
+                                        size: old_size,
+                                        timestamp: now_ms,
+                                        encryption_mode: old_mode.clone(),
+                                    };
+                                    let mut versions = vec![version_entry];
+                                    versions.extend(existing_versions.unwrap_or_default());
+                                    // Prune to MAX_VERSIONS_PER_FILE
+                                    let pruned: Vec<String> = if versions.len() > MAX_VERSIONS_PER_FILE {
+                                        versions.split_off(MAX_VERSIONS_PER_FILE).into_iter().map(|v| v.cid).collect()
+                                    } else {
+                                        vec![]
+                                    };
+                                    if !pruned.is_empty() {
+                                        log::info!("Pruned {} version(s) for ino {} (exceeded max {})", pruned.len(), ino, MAX_VERSIONS_PER_FILE);
+                                    }
+                                    log::debug!("Created version entry for ino {} (total versions: {})", ino, versions.len());
+                                    (Some(versions), pruned)
+                                } else {
+                                    (existing_versions, vec![])
+                                }
+                            } else {
+                                (existing_versions, vec![])
+                            }
+                        } else {
+                            // Cooldown active: keep existing versions unchanged, no new version
+                            if existing_versions.is_some() {
+                                log::debug!("Version cooldown active for ino {} — skipping version creation", ino);
+                            }
+                            (existing_versions, vec![])
+                        };
+
+                        // Filter out empty version arrays for clean serialization
+                        let versions_for_meta = new_versions.as_ref()
+                            .filter(|v| !v.is_empty())
+                            .cloned();
 
                         if let Some(inode) = self.inodes.get_mut(ino) {
                             inode.kind = InodeKind::File {
@@ -1511,6 +1593,7 @@ mod implementation {
                                 file_meta_ipns_name: file_meta_ipns_name.clone(),
                                 file_meta_resolved: true,
                                 file_ipns_private_key: file_ipns_private_key.clone(),
+                                versions: versions_for_meta.clone(),
                             };
                             inode.attr.size = file_size;
                             inode.attr.blocks = (file_size + 511) / 512;
@@ -1537,10 +1620,6 @@ mod implementation {
                         let coordinator = self.publish_coordinator.clone();
 
                         // Build FileMetadata for per-file IPNS publish
-                        let now_ms = SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as u64;
                         let file_meta = crate::crypto::folder::FileMetadata {
                             version: "v1".to_string(),
                             cid: String::new(), // placeholder, updated after upload
@@ -1551,6 +1630,7 @@ mod implementation {
                             encryption_mode: "GCM".to_string(),
                             created_at: now_ms,
                             modified_at: now_ms,
+                            versions: versions_for_meta,
                         };
 
                         // Spawn background OS thread for file upload + per-file IPNS publish
@@ -1564,11 +1644,14 @@ mod implementation {
                                 log::info!("File uploaded: ino {} -> CID {}", ino, file_cid);
 
                                 // 2. Notify main thread of completed upload
+                                //    Old file CID is preserved as a version — NOT unpinned.
+                                //    Only pruned CIDs (excess versions) are sent for unpinning.
                                 let _ = upload_tx.send(crate::fuse::UploadComplete {
                                     ino,
                                     new_cid: file_cid.clone(),
                                     parent_ino,
                                     old_file_cid,
+                                    pruned_cids,
                                 });
 
                                 // 3. Publish per-file FileMetadata to file's own IPNS record

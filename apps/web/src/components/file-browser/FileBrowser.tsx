@@ -1028,6 +1028,7 @@ export function FileBrowser() {
         onClose={closeDetailsDialog}
         item={detailsDialog.item}
         folderKey={currentFolder?.folderKey ?? null}
+        parentFolderId={currentFolderId}
       />
 
       {/* Text editor dialog */}

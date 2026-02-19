@@ -102,6 +102,7 @@ export {
   type FileMetadata,
   type FilePointer,
   type EncryptedFileMetadata,
+  type VersionEntry,
 } from './file';
 
 // Device registry types and encryption

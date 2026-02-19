@@ -87,6 +87,8 @@ pub enum InodeKind {
         /// Only set for newly created files (derived via HKDF from user privateKey + fileId).
         /// Wrapped in `Zeroizing` for automatic zeroization on drop.
         file_ipns_private_key: Option<Zeroizing<Vec<u8>>>,
+        /// Past versions of this file (newest first). None if no version history.
+        versions: Option<Vec<crate::crypto::folder::VersionEntry>>,
     },
 }
 
@@ -392,6 +394,7 @@ impl InodeTable {
                             file_meta_ipns_name: Some(file_pointer.file_meta_ipns_name.clone()),
                             file_meta_resolved: false,
                             file_ipns_private_key: None,
+                            versions: None,
                         }
                     };
 
@@ -467,7 +470,7 @@ impl InodeTable {
         Ok(())
     }
 
-    /// Update a FilePointer inode with resolved metadata (CID, key, IV, size, mode).
+    /// Update a FilePointer inode with resolved metadata (CID, key, IV, size, mode, versions).
     ///
     /// Called after per-file IPNS resolution succeeds. Updates the inode in place.
     #[cfg(feature = "fuse")]
@@ -479,6 +482,7 @@ impl InodeTable {
         iv: String,
         size: u64,
         encryption_mode: String,
+        versions: Option<Vec<crate::crypto::folder::VersionEntry>>,
     ) {
         if let Some(inode) = self.inodes.get_mut(&ino) {
             inode.kind = InodeKind::File {
@@ -496,6 +500,7 @@ impl InodeTable {
                     InodeKind::File { file_ipns_private_key, .. } => file_ipns_private_key.clone(),
                     _ => None,
                 },
+                versions,
             };
             // Update attr size for GETATTR/READDIR
             inode.attr.size = size;
@@ -631,6 +636,7 @@ mod tests {
                 file_meta_ipns_name: None,
                 file_meta_resolved: true,
                 file_ipns_private_key: None,
+                versions: None,
             },
             attr: FileAttr {
                 ino,
@@ -712,6 +718,7 @@ mod tests {
             file_meta_ipns_name: None,
             file_meta_resolved: true,
             file_ipns_private_key: None,
+            versions: None,
         };
 
         match kind {
