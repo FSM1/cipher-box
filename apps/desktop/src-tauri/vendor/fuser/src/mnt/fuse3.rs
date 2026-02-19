@@ -43,7 +43,7 @@ impl Mount {
                 )
             };
             if fuse_session.is_null() {
-                return Err(io::Error::last_os_error());
+                return Err(ensure_last_os_error());
             }
             let mount = Mount {
                 fuse_session,
@@ -55,7 +55,7 @@ impl Mount {
             }
             let fd = unsafe { fuse_session_fd(mount.fuse_session) };
             if fd < 0 {
-                return Err(io::Error::last_os_error());
+                return Err(ensure_last_os_error());
             }
             // We dup the fd here as the existing fd is owned by the fuse_session, and we
             // don't want it being closed out from under us:
@@ -79,6 +79,11 @@ impl Drop for Mount {
                     fuse_session_destroy(self.fuse_session);
                     return;
                 }
+            }
+            // Non-EPERM failure (e.g. EBUSY): fall back to library unmount
+            // so the kernel mount entry is removed.
+            unsafe {
+                fuse_session_unmount(self.fuse_session);
             }
             warn!("umount failed with {err:?}");
         }

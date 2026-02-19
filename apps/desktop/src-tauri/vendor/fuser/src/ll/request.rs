@@ -1296,7 +1296,8 @@ mod op {
     impl_request!(IoCtl<'a>);
     impl IoCtl<'_> {
         pub fn in_data(&self) -> &[u8] {
-            &self.data[..self.arg.in_size as usize]
+            let len = (self.arg.in_size as usize).min(self.data.len());
+            &self.data[..len]
         }
         pub fn unrestricted(&self) -> bool {
             self.arg.flags & consts::FUSE_IOCTL_UNRESTRICTED != 0
@@ -1607,8 +1608,11 @@ mod op {
     fn system_time_from_time(secs: i64, nsecs: u32) -> SystemTime {
         if secs >= 0 {
             SystemTime::UNIX_EPOCH + Duration::new(secs as u64, nsecs)
+        } else if nsecs == 0 {
+            SystemTime::UNIX_EPOCH - Duration::new((-secs) as u64, 0)
         } else {
-            SystemTime::UNIX_EPOCH - Duration::new((-secs) as u64, nsecs)
+            // POSIX: total = secs + nsecs/1e9. For secs=-1, nsecs=500_000_000 → EPOCH - 0.5s
+            SystemTime::UNIX_EPOCH - Duration::new((-secs) as u64 - 1, 1_000_000_000 - nsecs)
         }
     }
     pub(crate) fn parse<'a>(
@@ -2202,7 +2206,7 @@ mod tests {
     ]);
 
     #[cfg(target_endian = "big")]
-    const MKNOD_REQUEST: AlignedData<[u8; 56]> = [
+    const MKNOD_REQUEST: AlignedData<[u8; 56]> = AlignedData([
         0x00, 0x00, 0x00, 0x38, 0x00, 0x00, 0x00, 0x08, // len, opcode
         0xde, 0xad, 0xbe, 0xef, 0xba, 0xad, 0xd0, 0x0d, // unique
         0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, // nodeid
@@ -2210,7 +2214,7 @@ mod tests {
         0xc0, 0xde, 0xba, 0x5e, 0x00, 0x00, 0x00, 0x00, // pid, padding
         0x00, 0x00, 0x01, 0xa4, 0x00, 0x00, 0x00, 0x00, // mode, rdev
         0x66, 0x6f, 0x6f, 0x2e, 0x74, 0x78, 0x74, 0x00, // name
-    ];
+    ]);
 
     #[cfg(target_endian = "little")]
     const MKNOD_REQUEST: AlignedData<[u8; 64]> = AlignedData([
