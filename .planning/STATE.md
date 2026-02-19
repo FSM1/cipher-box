@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 13 IN PROGRESS (File Versioning)
+**Current focus:** Milestone 2 -- Phase 13 COMPLETE (File Versioning)
 
 ## Current Position
 
 Phase: 13 (File Versioning)
-Plan: 4 of 5
-Status: In progress
-Last activity: 2026-02-19 -- Completed 13-04-PLAN.md (Version History UI)
+Plan: 5 of 5
+Status: Phase complete
+Last activity: 2026-02-19 -- Completed 13-05-PLAN.md (Recovery Tool + Final Verification)
 
-Progress: [########################.] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 4/5)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 120
+- Total plans completed: 121
 - Average duration: 5.4 min
-- Total execution time: 11.1 hours
+- Total execution time: 11.2 hours
 
 **By Phase (M1 summary):**
 
@@ -39,11 +39,11 @@ Progress: [########################.] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 12.1   | 4/4   | 27 min  | 6.8 min  |
 | M2 Phase 11.1   | 7/7   | 36 min  | 5.1 min  |
 | M2 Phase 11.2   | 3/3   | 30 min  | 10.0 min |
-| M2 Phase 13     | 4/5   | 22 min  | 5.5 min  |
+| M2 Phase 13     | 5/5   | 31 min  | 6.2 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 9m, 5m, 4m, 6m, 7m
+- Last 5 plans: 5m, 4m, 6m, 7m, 9m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -159,6 +159,7 @@ Recent decisions affecting current work:
 | parentFolderId re-added to DetailsDialog for version operations   | 13-04     | Needed for useFolder restoreVersion/deleteVersion which require parent context                                   |
 | Version numbering: v1=oldest, vN=newest in display                | 13-04     | Intuitive for users; reversed from array order where index 0=newest                                              |
 | metadataRefresh counter for post-action IPNS re-resolution        | 13-04     | Simple useEffect dependency to force re-fetch after restore/delete                                               |
+| AES-CTR decrypt added to recovery tool for version support        | 13-05     | Versions may use CTR encryption mode; recovery tool needs both GCM and CTR decryption                            |
 
 ### Pending Todos
 
@@ -218,16 +219,17 @@ Recent decisions affecting current work:
 - Phase 12.4 (MFA + Cross-Device): COMPLETE -- all 5 plans done (bulletin board API, MFA hooks, enrollment wizard, cross-device approval, integration verification)
 - Phase 12.5 (MFA Polishing, UAT & E2E): COMPLETE -- all 3 plans done (SecurityTab wiring, wallet E2E tests, UAT final verification)
 - Phase 12.6 (Per-File IPNS Metadata): COMPLETE -- all 5 plans done (crypto primitives, batch publish backend, frontend service layer, hooks & components, recovery tool + docs)
+- Phase 13 (File Versioning): COMPLETE -- all 5 plans done (version entry types, creation service, desktop FUSE, version history UI, recovery tool + build verification)
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
 Last session: 2026-02-19
-Stopped at: Completed 13-04-PLAN.md (Version History UI)
+Stopped at: Completed 13-05-PLAN.md (Recovery Tool + Final Verification)
 Resume file: None
-Next: Execute 13-05-PLAN.md (Recovery Tool + Final Verification)
+Next: Phase 13 complete. Next phase TBD.
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-19 after completing 13-04 (Version history UI with download, restore, delete)_
+_Last updated: 2026-02-19 after completing 13-05 (Recovery tool version support and cross-platform build verification)_
