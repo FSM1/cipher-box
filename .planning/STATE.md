@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 Phase: 11.2 (Remove v1 Folder Metadata)
 Plan: 3 of 3
 Status: Phase complete
-Last activity: 2026-02-19 -- Completed 11.2-03-PLAN.md (per-file IPNS publish in FUSE create/release)
+Last activity: 2026-02-19 -- Completed quick task 017: Desktop binary staging release
 
 Progress: [########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE)
 
@@ -191,6 +191,7 @@ Recent decisions affecting current work:
 | 014 | Fix multiselect button visibility         | 2026-02-13 | 33a56c8 | [014-fix-multiselect-button-visibility](./quick/014-fix-multiselect-button-visibility/)                     |
 | 015 | SendGrid email OTP + Google OAuth staging | 2026-02-13 | 2589aa0 | [015-sendgrid-email-otp-and-google-oauth-staging](./quick/015-sendgrid-email-otp-and-google-oauth-staging/) |
 | 016 | Refine wallet and MFA UI elements         | 2026-02-16 | d004eb0 | [016-refine-wallet-and-mfa-ui-elements](./quick/016-refine-wallet-and-mfa-ui-elements/)                     |
+| 017 | Desktop binary staging release            | 2026-02-19 | 8351fd2 | [017-desktop-binary-staging-release](./quick/017-desktop-binary-staging-release/)                           |
 
 ### Research Flags
 

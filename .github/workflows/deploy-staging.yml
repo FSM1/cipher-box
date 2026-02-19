@@ -113,6 +113,51 @@ jobs:
           path: apps/web/dist/
           retention-days: 1
 
+  build-desktop:
+    name: Build Desktop App (macOS)
+    runs-on: macos-latest
+    environment: staging
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.staging_tag || github.ref_name }}
+
+      - name: Install macFUSE headers
+        run: brew install --cask macfuse
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build crypto package
+        run: pnpm --filter @cipherbox/crypto build
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
+          VITE_API_URL: ${{ vars.STAGING_API_URL }}
+          VITE_ENVIRONMENT: staging
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          tagName: ${{ inputs.staging_tag || github.ref_name }}
+          releaseName: 'CipherBox Desktop ${{ inputs.staging_tag || github.ref_name }}'
+          releaseBody: 'Staging build for ${{ inputs.staging_tag || github.ref_name }}. macOS only (unsigned - right-click > Open to launch).'
+          releaseDraft: false
+          prerelease: true
+
   deploy-vps:
     name: Deploy to Staging VPS
     needs: [build-api, build-tee, build-web]
