@@ -205,6 +205,7 @@ Recent decisions affecting current work:
 | 015 | SendGrid email OTP + Google OAuth staging | 2026-02-13 | 2589aa0 | [015-sendgrid-email-otp-and-google-oauth-staging](./quick/015-sendgrid-email-otp-and-google-oauth-staging/) |
 | 016 | Refine wallet and MFA UI elements         | 2026-02-16 | d004eb0 | [016-refine-wallet-and-mfa-ui-elements](./quick/016-refine-wallet-and-mfa-ui-elements/)                     |
 | 017 | Desktop binary staging release            | 2026-02-19 | 8351fd2 | [017-desktop-binary-staging-release](./quick/017-desktop-binary-staging-release/)                           |
+| 018 | E2E versioning tests                      | 2026-02-19 | 3fd131e | [018-e2e-versioning-tests](./quick/018-e2e-versioning-tests/)                                               |
 
 ### Research Flags
 
