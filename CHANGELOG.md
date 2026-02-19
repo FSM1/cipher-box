@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/FSM1/cipher-box/compare/v0.12.0...v0.12.1) (2026-02-19)
+
+
+### Bug Fixes
+
+* **ci:** grant contents:write to staging deploy for release upload ([#157](https://github.com/FSM1/cipher-box/issues/157)) ([0312006](https://github.com/FSM1/cipher-box/commit/0312006f84e32427cc68488dbeafe84e45c6ce64))
+
 ## [0.12.0](https://github.com/FSM1/cipher-box/compare/v0.11.1...v0.12.0) (2026-02-19)
 
 
