@@ -1,1 +1,33 @@
-All clean. Moved the stale `resolved/` todo to `done/` and removed the empty directory. Everything's staged — same commit message applies when you're ready to commit from your terminal.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► PHASE 11.2 PLANNED ✓
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Phase 11.2: Remove v1 Folder Metadata** — 3 plan(s) in 2 wave(s)
+
+| Wave | Plans | What it builds |
+|------|-------|----------------|
+| 1    | 01, 02 | TS: delete v1 types, rename v2 to canonical, update imports. Rust: delete v1 types, rename v2, rewrite build_folder_metadata, fix init_vault/mkdir |
+| 2    | 03     | Per-file IPNS in FUSE create/release, recovery tool v2-only, cross-platform verification |
+
+Research: Skipped (internal refactor, GOAL.md has full scope)
+Verification: Passed (iteration 2/2 — 2 blockers fixed in revision)
+
+───────────────────────────────────────────────────────────────
+
+## ▶ Next Up
+
+**Execute Phase 11.2** — run all 3 plans
+
+`/gsd:execute-phase 11.2`
+
+<sub>`/clear` first → fresh context window</sub>
+
+───────────────────────────────────────────────────────────────
+
+**Also available:**
+- `cat .planning/phases/11.2-remove-v1-folder-metadata/*-PLAN.md` — review plans
+- `/gsd:plan-phase 11.2 --research` — re-research first
+
+───────────────────────────────────────────────────────────────
+
+**Note:** All plan files + ROADMAP/STATE updates are staged but uncommitted (1Password signing unavailable). Commit from your terminal when ready.
