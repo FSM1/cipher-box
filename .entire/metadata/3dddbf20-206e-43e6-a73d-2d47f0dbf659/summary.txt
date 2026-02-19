@@ -1,0 +1,9 @@
+Pushed. Here's the summary:
+
+**Root cause:** Test 3.10 ("Upload file to subfolder after reload") failed because `navigateIntoFolder(imagesFolder)` timed out waiting for the breadcrumb to update. After the page reload in test 3.7, navigating into the images folder requires a cold IPNS resolve (workspace and documents were already resolved in test 3.8, but images wasn't). The 15s breadcrumb timeout was too tight for CI.
+
+**Fix:**
+- Increased `navigateIntoFolder` breadcrumb timeout from **15s to 30s** (matching the 30s content-load timeouts used elsewhere in post-reload tests)
+- Added `test.setTimeout(90000)` to test 3.10 since it does cold IPNS nav + upload + round-trip verification
+
+The previous CI run passed, confirming this is a flaky timing issue rather than a logic bug. The new run should be more resilient.
