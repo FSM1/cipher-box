@@ -1,0 +1,6 @@
+Done. Both CodeRabbit comments addressed:
+
+1. **`test.setTimeout(60000)` added to test 6.6.1** — matches sibling tests 6.6.2/6.6.3 that also wait on IPNS resolution
+2. **Anchored regex for button locators** — `'rm'` → `/^rm$/i`, `'dl'` → `/^dl$/i`, `'restore'` → `/^restore$/i` to prevent substring matches
+
+Committed as `3396fbe`, pushed, replied, and resolved both threads.

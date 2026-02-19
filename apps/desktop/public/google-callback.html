@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+  <style>body{background:#000;color:#006644;font-family:'JetBrains Mono',monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}</style>
+</head>
+<body>
+  <p>Completing sign-in...</p>
+  <script>
+    console.log('[Google Callback] Page loaded, hash:', window.location.hash ? 'present' : 'empty');
+    var hash = window.location.hash.substring(1);
+    var params = new URLSearchParams(hash);
+    var idToken = params.get('id_token');
+    var error = params.get('error');
+    var state = params.get('state');
+    // Use localStorage (shared across Tauri webviews) instead of sessionStorage (per-window)
+    var expectedState = localStorage.getItem('google-auth-state');
+    localStorage.removeItem('google-auth-state');
+    console.log('[Google Callback] state match:', state === expectedState, 'hasToken:', !!idToken, 'error:', error);
+    if (!error && state !== expectedState) {
+      error = 'state_mismatch';
+      idToken = null;
+    }
+    var result = JSON.stringify({
+      idToken: idToken,
+      error: error || (!idToken ? 'No ID token received' : null)
+    });
+    localStorage.setItem('google-auth-result', result);
+    console.log('[Google Callback] Result stored in localStorage, closing popup');
+    // window.close() may not work in Tauri webview — the Rust side cleans up oauth-popup windows
+    setTimeout(function() { try { window.close(); } catch(e) {} }, 300);
+  </script>
+</body>
+</html>
