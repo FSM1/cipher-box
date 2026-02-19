@@ -1,9 +1,23 @@
-The files are staged and lint-staged passed both times. The only issue is 1Password signing. Per the memory notes, unsigned commits from agents are acceptable. Let me ask you about this.
+All changes are staged. The commit is ready but 1Password signing keeps failing. You'll need to commit from your terminal where 1Password is available:
 
-The commit signing via 1Password is consistently failing with "failed to fill whole buffer". All files are correctly staged and lint-staged passes. Per our established workflow, unsigned commits from agent subprocesses are acceptable since PRs get squash-merged with GitHub's signature.
+```bash
+git commit -m "docs(planning): insert Phase 11.2 — Remove v1 Folder Metadata
 
-Would you like me to:
-1. Keep retrying (might be a transient 1Password issue)
-2. You commit it yourself from your terminal where 1Password is available
+Eliminate v1/v2 dual-schema code to fix cross-device format oscillation
+bug where desktop writes v1 and web re-saves as hybrid v2 that the
+desktop parser rejects, causing empty FUSE directories.
 
-The changes are all staged and ready — just needs `git commit`.
+Phase 11.2 makes v2 (FilePointer) the only format, removes ~500 lines
+of dual-schema types/dispatch/conversion, and adds per-file IPNS
+publishing to desktop FUSE.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
+```
+
+**What's staged:**
+- `.planning/ROADMAP.md` — Phase 11.2 entry in bullet list, details section, progress table, execution order
+- `.planning/STATE.md` — Updated current position, pending todos (8 now), roadmap evolution note, session continuity
+- `.planning/phases/11.2-remove-v1-folder-metadata/GOAL.md` — Full phase goal with scope, success criteria, key decisions
+- Todo moves: `fix-v2-metadata-version-mismatch` + `file-metadata-evolution-v2` from pending → done
+
+**Next step after commit:** Run `/gsd:plan-phase 11.2` to break down the execution plans.
