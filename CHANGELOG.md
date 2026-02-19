@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.1](https://github.com/FSM1/cipher-box/compare/v0.13.0...v0.13.1) (2026-02-19)
+
+
+### Bug Fixes
+
+* **web:** Implement lazy file size resolution from per-file IPNS metadata ([#163](https://github.com/FSM1/cipher-box/issues/163)) ([6197064](https://github.com/FSM1/cipher-box/commit/61970646d45f49af67167f811da2d2be4543223e))
+* **web:** navigate back to parent on subfolder load failure ([#166](https://github.com/FSM1/cipher-box/issues/166)) ([ec24fab](https://github.com/FSM1/cipher-box/commit/ec24fab24ba6bc9138b4ecbcbe436b274e80d7be))
+
 ## [0.13.0](https://github.com/FSM1/cipher-box/compare/v0.12.2...v0.13.0) (2026-02-19)
 
 
