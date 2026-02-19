@@ -1,0 +1,60 @@
+type ParentDirRowProps = {
+  /** Callback when row is activated (double-click or keyboard) to navigate up */
+  onActivate: () => void;
+};
+
+/**
+ * Parent directory navigation row.
+ *
+ * Displays [..] PARENT_DIR row as first item in file list for non-root folders.
+ * Double-clicking or pressing Enter/Space navigates up to parent folder.
+ *
+ * @example
+ * ```tsx
+ * function FileList({ showParentRow, onNavigateUp }) {
+ *   return (
+ *     <div className="file-list-body">
+ *       {showParentRow && <ParentDirRow onActivate={onNavigateUp} />}
+ *       {items.map(item => <FileListItem key={item.id} item={item} />)}
+ *     </div>
+ *   );
+ * }
+ * ```
+ */
+export function ParentDirRow({ onActivate }: ParentDirRowProps) {
+  return (
+    <div
+      className="file-list-item file-list-item--parent"
+      onDoubleClick={onActivate}
+      role="row"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          if (e.key === ' ') {
+            e.preventDefault();
+          }
+          onActivate();
+        }
+      }}
+      data-testid="parent-dir-row"
+    >
+      {/* Row 1: Icon + Name */}
+      <div className="file-list-item-row-top" role="gridcell">
+        <span className="file-list-item-icon" aria-hidden="true">
+          [..]
+        </span>
+        <span className="file-list-item-name">PARENT_DIR</span>
+      </div>
+
+      {/* Row 2: Empty size and date columns */}
+      <div className="file-list-item-row-bottom">
+        <span className="file-list-item-date" role="gridcell">
+          --
+        </span>
+        <span className="file-list-item-size" role="gridcell">
+          --
+        </span>
+      </div>
+    </div>
+  );
+}

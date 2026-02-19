@@ -1,0 +1,30 @@
+{
+  "name": "@cipherbox/desktop",
+  "version": "0.10.2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "vite": "vite"
+  },
+  "dependencies": {
+    "@cipherbox/crypto": "workspace:*",
+    "@noble/secp256k1": "^3.0.0",
+    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-deep-link": "^2.0.0",
+    "@tauri-apps/plugin-shell": "^2.0.0",
+    "@toruslabs/tss-dkls-lib": "^4.1.0",
+    "@web3auth/mpc-core-kit": "^3.5.0",
+    "bn.js": "^5.2.0",
+    "buffer": "^6.0.3",
+    "process": "^0.11.10"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/bn.js": "^5.1.6",
+    "typescript": "^5.7.0",
+    "vite": "^6.0.0"
+  }
+}

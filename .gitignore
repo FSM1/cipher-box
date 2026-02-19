@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment files
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test coverage
+coverage/
+
+# Playwright test results
+
+# Playwright screenshots
+.playwright-mcp/*.png
+
+# UAT screenshots
+/tc*.png
+/after-*.png
+
+# Temporary files
+temp/*
+tests/e2e/test-results/*

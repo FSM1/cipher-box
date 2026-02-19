@@ -1,0 +1,42 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsString,
+  IsNotEmpty,
+  IsIn,
+  ValidateIf,
+  IsHexadecimal,
+  Length,
+  MaxLength,
+} from 'class-validator';
+
+export class RespondApprovalDto {
+  @ApiProperty({
+    description: 'Approval action',
+    enum: ['approve', 'deny'],
+    example: 'approve',
+  })
+  @IsString()
+  @IsIn(['approve', 'deny'])
+  action!: 'approve' | 'deny';
+
+  @ApiPropertyOptional({
+    description: 'ECIES-encrypted factor key in hex (required when action is approve)',
+    example: '04abc123...',
+  })
+  @ValidateIf((o) => o.action === 'approve')
+  @IsString()
+  @IsNotEmpty()
+  @IsHexadecimal()
+  @MaxLength(1024, { message: 'encryptedFactorKey exceeds maximum expected size' })
+  encryptedFactorKey?: string;
+
+  @ApiProperty({
+    description: 'Device ID of the responding (approving/denying) device',
+    example: 'a1b2c3d4e5f6...',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @IsHexadecimal()
+  @Length(64, 64, { message: 'respondedByDeviceId must be a 64-char hex SHA-256 hash' })
+  respondedByDeviceId!: string;
+}
