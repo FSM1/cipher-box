@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 11.2 COMPLETE (Remove v1 Folder Metadata)
+**Current focus:** Milestone 2 -- Phase 13 COMPLETE (File Versioning)
 
 ## Current Position
 
-Phase: 11.2 (Remove v1 Folder Metadata)
-Plan: 3 of 3
+Phase: 13 (File Versioning)
+Plan: 5 of 5
 Status: Phase complete
-Last activity: 2026-02-19 -- Completed quick task 017: Desktop binary staging release
+Last activity: 2026-02-19 -- Completed 13-05-PLAN.md (Recovery Tool + Final Verification)
 
-Progress: [########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 116
+- Total plans completed: 121
 - Average duration: 5.4 min
-- Total execution time: 10.8 hours
+- Total execution time: 11.2 hours
 
 **By Phase (M1 summary):**
 
@@ -39,10 +39,11 @@ Progress: [########################] (M1 complete, M2 Phase 12 complete, Phase 1
 | M2 Phase 12.1   | 4/4   | 27 min  | 6.8 min  |
 | M2 Phase 11.1   | 7/7   | 36 min  | 5.1 min  |
 | M2 Phase 11.2   | 3/3   | 30 min  | 10.0 min |
+| M2 Phase 13     | 5/5   | 31 min  | 6.2 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 8m, 8m, 7m, 14m, 9m
+- Last 5 plans: 5m, 4m, 6m, 7m, 9m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -147,6 +148,18 @@ Recent decisions affecting current work:
 | file_ipns_private_key stored on InodeKind::File                   | 11.2-03   | Option<Zeroizing<Vec<u8>>> for IPNS signing; matches folder IPNS key pattern                                     |
 | build_folder_metadata skips files without file_meta_ipns_name     | 11.2-03   | Error log + continue instead of empty placeholder; create() always derives IPNS name                             |
 | Per-file IPNS publish reuses PublishCoordinator                   | 11.2-03   | Same monotonic sequence number management as folder publishes                                                    |
+| VersionEntry encryptionMode is required (not optional)            | 13-01     | Past versions always record explicit encryption mode; no default needed                                          |
+| versions array omitted when undefined/empty (not null/[])         | 13-01     | Clean JSON for non-versioned files; backward compatible                                                          |
+| shouldCreateVersion returns true for first version (no prior)     | 13-02     | First save always creates baseline version even without forceVersion                                             |
+| Text editor cooldown, web re-upload forceVersion                  | 13-02     | Text editor defaults to 15min cooldown; re-upload passes forceVersion: true when added                           |
+| prunedCids returned from service, caller handles unpinning        | 13-02     | Separation of concerns: service determines what to prune, caller does I/O                                        |
+| VERSION_COOLDOWN_MS=15min, MAX_VERSIONS_PER_FILE=10 in FUSE       | 13-03     | Desktop FUSE versioning constants match CONTEXT.md spec and web behavior                                         |
+| Old file CID preserved on FUSE update (not unpinned)              | 13-03     | Enables version history referencing pinned IPFS content; only pruned excess unpinned                             |
+| InodeKind::File extended with versions field                      | 13-03     | Carries version history from IPNS resolution through inode lifecycle to release()                                |
+| parentFolderId re-added to DetailsDialog for version operations   | 13-04     | Needed for useFolder restoreVersion/deleteVersion which require parent context                                   |
+| Version numbering: v1=oldest, vN=newest in display                | 13-04     | Intuitive for users; reversed from array order where index 0=newest                                              |
+| metadataRefresh counter for post-action IPNS re-resolution        | 13-04     | Simple useEffect dependency to force re-fetch after restore/delete                                               |
+| AES-CTR decrypt added to recovery tool for version support        | 13-05     | Versions may use CTR encryption mode; recovery tool needs both GCM and CTR decryption                            |
 
 ### Pending Todos
 
@@ -206,17 +219,17 @@ Recent decisions affecting current work:
 - Phase 12.4 (MFA + Cross-Device): COMPLETE -- all 5 plans done (bulletin board API, MFA hooks, enrollment wizard, cross-device approval, integration verification)
 - Phase 12.5 (MFA Polishing, UAT & E2E): COMPLETE -- all 3 plans done (SecurityTab wiring, wallet E2E tests, UAT final verification)
 - Phase 12.6 (Per-File IPNS Metadata): COMPLETE -- all 5 plans done (crypto primitives, batch publish backend, frontend service layer, hooks & components, recovery tool + docs)
+- Phase 13 (File Versioning): COMPLETE -- all 5 plans done (version entry types, creation service, desktop FUSE, version history UI, recovery tool + build verification)
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
 Last session: 2026-02-19
-Stopped at: Phase 11.2 verified (8/8 must-haves passed) and complete
+Stopped at: Phase 13 verified (5/5 must-haves passed) and complete
 Resume file: None
-Next: Run /gsd:discuss-phase 13 or /gsd:plan-phase 13 for File Versioning.
-Next: Phase 11.2 complete. Next phase TBD.
+Next: Run /gsd:discuss-phase 14 or /gsd:plan-phase 14 for User-to-User Sharing.
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-19 after completing 11.2-03 (per-file IPNS publish in FUSE create/release, Phase 11.2 complete)_
+_Last updated: 2026-02-19 after Phase 13 verification complete (5/5 must-haves passed, VER-01 through VER-05 marked Complete)_
