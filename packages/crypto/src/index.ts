@@ -86,16 +86,11 @@ export {
 export {
   encryptFolderMetadata,
   decryptFolderMetadata,
-  isV2Metadata,
   validateFolderMetadata,
   type FolderMetadata,
   type FolderChild,
   type FolderEntry,
-  type FileEntry,
   type EncryptedFolderMetadata,
-  type FolderMetadataV2,
-  type FolderChildV2,
-  type AnyFolderMetadata,
 } from './folder';
 
 // Per-file IPNS metadata types and encryption

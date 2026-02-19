@@ -8,7 +8,7 @@
 import { encryptAesGcm, decryptAesGcm } from '../aes';
 import { generateIv, bytesToHex, hexToBytes } from '../utils';
 import { CryptoError } from '../types';
-import type { FolderMetadata, FolderMetadataV2, EncryptedFolderMetadata } from './types';
+import type { FolderMetadata, EncryptedFolderMetadata } from './types';
 
 /**
  * [SECURITY: MEDIUM-08] Chunk-based base64 encoding to avoid call stack issues
@@ -25,28 +25,23 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
 }
 
 /**
- * Type guard: checks if folder metadata is v2 format.
- */
-export function isV2Metadata(m: FolderMetadata | FolderMetadataV2): m is FolderMetadataV2 {
-  return m.version === 'v2';
-}
-
-/**
  * [SECURITY: MEDIUM-07] Runtime validation for decrypted folder metadata.
- * Accepts both v1 and v2 schemas.
- * - v1 children: FolderEntry | FileEntry (with cid field)
+ * Accepts only v2 schema. Rejects v1 data.
  * - v2 children: FolderEntry | FilePointer (with fileMetaIpnsName field)
  */
-export function validateFolderMetadata(data: unknown): FolderMetadata | FolderMetadataV2 {
+export function validateFolderMetadata(data: unknown): FolderMetadata {
   if (typeof data !== 'object' || data === null) {
     throw new CryptoError('Invalid metadata format: not an object', 'DECRYPTION_FAILED');
   }
 
   const obj = data as Record<string, unknown>;
 
-  // Validate version field (v1 or v2)
-  if (obj.version !== 'v1' && obj.version !== 'v2') {
-    throw new CryptoError('Invalid metadata format: unsupported version', 'DECRYPTION_FAILED');
+  // Only v2 is accepted
+  if (obj.version !== 'v2') {
+    throw new CryptoError(
+      'Invalid metadata format: unsupported version (only v2 accepted)',
+      'DECRYPTION_FAILED'
+    );
   }
 
   // Validate children array
@@ -67,34 +62,30 @@ export function validateFolderMetadata(data: unknown): FolderMetadata | FolderMe
       throw new CryptoError('Invalid metadata format: missing id or name', 'DECRYPTION_FAILED');
     }
 
-    // v2 file children must have fileMetaIpnsName (FilePointer),
-    // v1 file children must have cid (FileEntry).
-    // Both shapes are valid; we just verify the required fields are present.
+    // v2 file children must have fileMetaIpnsName (FilePointer)
     if (entry.type === 'file') {
       const hasIpnsName = typeof entry.fileMetaIpnsName === 'string';
-      const hasCid = typeof entry.cid === 'string';
-      if (!hasIpnsName && !hasCid) {
+      if (!hasIpnsName) {
         throw new CryptoError(
-          'Invalid metadata format: file entry must have cid or fileMetaIpnsName',
+          'Invalid metadata format: file entry must have fileMetaIpnsName',
           'DECRYPTION_FAILED'
         );
       }
     }
   }
 
-  return data as FolderMetadata | FolderMetadataV2;
+  return data as FolderMetadata;
 }
 
 /**
  * Encrypts folder metadata with AES-256-GCM.
- * Accepts both v1 and v2 folder metadata formats.
  *
- * @param metadata - Plaintext folder metadata object (v1 or v2)
+ * @param metadata - Plaintext folder metadata object (v2)
  * @param folderKey - 32-byte AES key for this folder
  * @returns Encrypted metadata with IV (hex) and ciphertext (base64)
  */
 export async function encryptFolderMetadata(
-  metadata: FolderMetadata | FolderMetadataV2,
+  metadata: FolderMetadata,
   folderKey: Uint8Array
 ): Promise<EncryptedFolderMetadata> {
   // Generate random IV for this encryption
@@ -116,17 +107,17 @@ export async function encryptFolderMetadata(
 
 /**
  * Decrypts folder metadata encrypted with AES-256-GCM.
- * Returns either v1 or v2 metadata depending on the encrypted content.
+ * Returns v2 metadata only. Rejects v1 data.
  *
  * @param encrypted - Encrypted metadata with IV (hex) and ciphertext (base64)
  * @param folderKey - 32-byte AES key for this folder
- * @returns Decrypted folder metadata object (v1 or v2)
+ * @returns Decrypted folder metadata object (v2)
  * @throws CryptoError if decryption fails (wrong key, corrupted data, etc.)
  */
 export async function decryptFolderMetadata(
   encrypted: EncryptedFolderMetadata,
   folderKey: Uint8Array
-): Promise<FolderMetadata | FolderMetadataV2> {
+): Promise<FolderMetadata> {
   // Decode IV and ciphertext
   const iv = hexToBytes(encrypted.iv);
   const ciphertext = Uint8Array.from(atob(encrypted.data), (c) => c.charCodeAt(0));
