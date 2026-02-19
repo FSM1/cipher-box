@@ -9,20 +9,20 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 
 ## Current Position
 
-Phase: 11.2 (Remove v1 Folder Metadata) -- NOT STARTED
-Plan: 0 of TBD
-Status: Phase inserted, needs /gsd:plan-phase 11.2
-Last activity: 2026-02-19 -- Phase 11.2 inserted into roadmap (eliminate v1/v2 dual-schema)
+Phase: 11.2 (Remove v1 Folder Metadata)
+Plan: 1 of 3
+Status: In progress
+Last activity: 2026-02-19 -- Completed 11.2-01-PLAN.md (delete v1 types, rename v2 to canonical)
 
-Progress: [######################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE)
+Progress: [######################.] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 1/3)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 113
+- Total plans completed: 114
 - Average duration: 5.3 min
-- Total execution time: 10.3 hours
+- Total execution time: 10.4 hours
 
 **By Phase (M1 summary):**
 
@@ -41,7 +41,7 @@ Progress: [######################] (M1 complete, M2 Phase 12 complete, Phase 12.
 
 **Recent Trend:**
 
-- Last 5 plans: 8m, 2m, 4m, 8m, 8m
+- Last 5 plans: 2m, 4m, 8m, 8m, 7m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -139,6 +139,8 @@ Recent decisions affecting current work:
 | Keychain-backed persistent device ID with UUID v4                 | 11.1-06   | keyring crate with delete-before-write pattern to avoid macOS "already exists" error                             |
 | ECIES key exchange for desktop device approval (not plaintext)    | 11.1-05   | Matches web app pattern; ephemeral secp256k1 keypair + wrapKey/unwrapKey from @cipherbox/crypto                  |
 | Module-level JWT/token state for MFA flow (not localStorage)      | 11.1-05   | Sensitive tokens cleared on auth completion; avoids persisting temporary access tokens                           |
+| isFilePointer simplified to type discriminant only                | 11.2-01   | All file children are FilePointer; no need to check for fileMetaIpnsName presence                                |
+| validateFolderMetadata rejects v1 with CryptoError                | 11.2-01   | Strict enforcement: only v2 schema accepted, not silent v1 acceptance                                            |
 
 ### Pending Todos
 
@@ -202,11 +204,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-19
-Stopped at: Phase 11.2 inserted into roadmap
+Stopped at: Completed 11.2-01-PLAN.md
 Resume file: None
-Next: Run /gsd:plan-phase 11.2 to create execution plans.
+Next: Execute 11.2-02-PLAN.md (desktop Rust type cleanup)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-19 after inserting Phase 11.2 (Remove v1 Folder Metadata) into roadmap_
+_Last updated: 2026-02-19 after completing 11.2-01 (delete v1 types, rename v2 to canonical)_
