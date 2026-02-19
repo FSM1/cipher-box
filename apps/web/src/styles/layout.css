@@ -345,17 +345,4 @@
   .app-sidebar {
     display: none;
   }
-
-  /* Footer simplification for mobile */
-  .footer-center {
-    display: none;
-  }
-
-  .app-header {
-    padding: 12px 16px;
-  }
-
-  .app-footer {
-    padding: 8px 16px;
-  }
 }

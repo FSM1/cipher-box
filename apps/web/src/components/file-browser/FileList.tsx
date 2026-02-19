@@ -119,6 +119,8 @@ export function FileList({
         <div className="file-list-header-date" role="columnheader">
           [MODIFIED]
         </div>
+        {/* Empty header cell for mobile action column - hidden on desktop via CSS */}
+        <div className="file-list-header-actions" role="columnheader" aria-hidden="true" />
       </div>
 
       {/* Item rows */}
