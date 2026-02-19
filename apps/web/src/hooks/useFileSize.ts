@@ -24,6 +24,12 @@ const sizeCache = new Map<string, number>();
 const pendingRequests = new Map<string, Promise<number>>();
 
 /**
+ * Generation counter to prevent in-flight promises from repopulating cache
+ * after clearFileSizeCache() is called (e.g., on logout).
+ */
+let cacheGeneration = 0;
+
+/**
  * Resolve a file's size from its per-file IPNS metadata record.
  *
  * Returns the cached size if available, otherwise fetches from IPNS.
@@ -42,10 +48,15 @@ async function fetchFileSize(fileMetaIpnsName: string, folderKey: Uint8Array): P
   const pending = pendingRequests.get(fileMetaIpnsName);
   if (pending) return pending;
 
+  // Capture generation at call time to detect stale writes after cache clear
+  const gen = cacheGeneration;
+
   // Start new request
   const request = resolveFileMetadata(fileMetaIpnsName, folderKey)
     .then(({ metadata }) => {
-      sizeCache.set(fileMetaIpnsName, metadata.size);
+      if (cacheGeneration === gen) {
+        sizeCache.set(fileMetaIpnsName, metadata.size);
+      }
       pendingRequests.delete(fileMetaIpnsName);
       return metadata.size;
     })
@@ -127,6 +138,7 @@ export function useFileSize(
  * Call on logout to ensure no stale data persists across sessions.
  */
 export function clearFileSizeCache(): void {
+  cacheGeneration++;
   sizeCache.clear();
   pendingRequests.clear();
 }
