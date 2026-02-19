@@ -314,7 +314,16 @@ Plans:
 3. User can restore a previous version, which becomes the current version while preserving the version chain
 4. Version retention policy is enforced (configurable max versions per file) and excess versions are pruned automatically
 5. Storage consumed by retained versions counts against the user's 500 MiB quota
-   **Plans**: TBD
+
+**Plans:** 5 plans
+
+Plans:
+
+- [ ] 13-01-PLAN.md — Crypto types: VersionEntry type in TS + Rust, FileMetadata versions array, backward-compatible validator
+- [ ] 13-02-PLAN.md — Web versioning logic: updateFileMetadata with version push/prune, cooldown, stop unpinning old CIDs
+- [ ] 13-03-PLAN.md — Desktop FUSE versioning: release() version creation, 15-min cooldown, stop unpinning old CIDs
+- [ ] 13-04-PLAN.md — Version history UI: DetailsDialog version panel, download/restore/delete past versions
+- [ ] 13-05-PLAN.md — Recovery tool version support + full cross-platform build verification
 
 ### Phase 14: User-to-User Sharing
 
@@ -411,7 +420,7 @@ Parallel phases:
 | 12.6 Per-File IPNS Meta     | M2        | 5/5            | Complete    | 2026-02-17 |
 | 11.1 macOS Desktop Catch-Up | M2        | 7/7            | Complete    | 2026-02-17 |
 | 11.2 Remove v1 Folder Meta  | M2        | 3/3            | Complete    | 2026-02-19 |
-| 13. File Versioning         | M2        | 0/TBD          | Not started | -          |
+| 13. File Versioning         | M2        | 0/5            | Not started | -          |
 | 14. User-to-User Sharing    | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search   | M2        | 0/TBD          | Not started | -          |
 | 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
