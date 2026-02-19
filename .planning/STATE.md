@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 13 (File Versioning)
-Plan: 2 of 5
+Plan: 3 of 5
 Status: In progress
-Last activity: 2026-02-19 -- Completed 13-02-PLAN.md (Version Creation Service)
+Last activity: 2026-02-19 -- Completed 13-03-PLAN.md (Desktop FUSE Versioning)
 
-Progress: [########################.] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 2/5)
+Progress: [########################.] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 3/5)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 118
+- Total plans completed: 119
 - Average duration: 5.4 min
-- Total execution time: 10.9 hours
+- Total execution time: 11.0 hours
 
 **By Phase (M1 summary):**
 
@@ -39,11 +39,11 @@ Progress: [########################.] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 12.1   | 4/4   | 27 min  | 6.8 min  |
 | M2 Phase 11.1   | 7/7   | 36 min  | 5.1 min  |
 | M2 Phase 11.2   | 3/3   | 30 min  | 10.0 min |
-| M2 Phase 13     | 2/5   | 9 min   | 4.5 min  |
+| M2 Phase 13     | 3/5   | 15 min  | 5.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 7m, 14m, 9m, 5m, 4m
+- Last 5 plans: 14m, 9m, 5m, 4m, 6m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -153,6 +153,9 @@ Recent decisions affecting current work:
 | shouldCreateVersion returns true for first version (no prior)     | 13-02     | First save always creates baseline version even without forceVersion                                             |
 | Text editor cooldown, web re-upload forceVersion                  | 13-02     | Text editor defaults to 15min cooldown; re-upload passes forceVersion: true when added                           |
 | prunedCids returned from service, caller handles unpinning        | 13-02     | Separation of concerns: service determines what to prune, caller does I/O                                        |
+| VERSION_COOLDOWN_MS=15min, MAX_VERSIONS_PER_FILE=10 in FUSE       | 13-03     | Desktop FUSE versioning constants match CONTEXT.md spec and web behavior                                         |
+| Old file CID preserved on FUSE update (not unpinned)              | 13-03     | Enables version history referencing pinned IPFS content; only pruned excess unpinned                             |
+| InodeKind::File extended with versions field                      | 13-03     | Carries version history from IPNS resolution through inode lifecycle to release()                                |
 
 ### Pending Todos
 
@@ -217,11 +220,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-19
-Stopped at: Completed 13-02-PLAN.md (Version Creation Service)
+Stopped at: Completed 13-03-PLAN.md (Desktop FUSE Versioning)
 Resume file: None
-Next: Execute 13-03-PLAN.md (Version History UI)
+Next: Execute 13-04-PLAN.md (Version History UI)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-19 after completing 13-02 (Version creation service with cooldown and pruning)_
+_Last updated: 2026-02-19 after completing 13-03 (Desktop FUSE versioning with cooldown and pruning)_
