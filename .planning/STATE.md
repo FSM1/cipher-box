@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 11.1 complete (macOS Desktop Catch-Up)
+**Current focus:** Milestone 2 -- Phase 11.2 inserted (Remove v1 Folder Metadata)
 
 ## Current Position
 
-Phase: 11.1 (macOS Desktop Catch-Up) -- COMPLETE
-Plan: 7 of 7 planned
-Status: Phase complete, verified 10/10 must-haves
-Last activity: 2026-02-17 -- Phase 11.1 complete (all 7 plans executed, verified 10/10 must-haves)
+Phase: 11.2 (Remove v1 Folder Metadata) -- NOT STARTED
+Plan: 0 of TBD
+Status: Phase inserted, needs /gsd:plan-phase 11.2
+Last activity: 2026-02-19 -- Phase 11.2 inserted into roadmap (eliminate v1/v2 dual-schema)
 
 Progress: [######################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE)
 
@@ -142,16 +142,14 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-10 pending todo(s):
+8 pending todo(s):
 
 - `2026-02-07-web-worker-large-file-encryption.md` -- Offload large file encryption to Web Worker (area: ui)
 - `2026-02-14-bring-your-own-ipfs-node.md` -- Add bring-your-own IPFS node support (area: api)
-- `2026-02-14-file-metadata-evolution-v2.md` -- Split file metadata into per-file IPNS objects (area: crypto)
 - `2026-02-14-erc-1271-contract-wallet-authentication.md` -- Add ERC-1271 contract wallet authentication support (area: auth)
 - `2026-02-14-fix-orval-generated-client-any-warnings.md` -- Fix no-explicit-any warnings in generated API client (area: tooling)
 - `2026-02-15-security-review-short-term-fixes.md` -- Security review short-term fixes: H-01, H-06, H-07, M-01, M-04, M-06 (area: auth)
 - `2026-02-15-security-review-medium-term-fixes.md` -- Security review medium-term fixes: H-08, M-07, M-11 (area: auth)
-- `2026-02-18-fix-v2-metadata-version-mismatch.md` -- **URGENT:** Fix web app writing v2-tagged metadata with v1-style file entries (area: crypto)
 - `2026-02-18-remove-pinata-references-from-api.md` -- Remove Pinata references from API server (area: api)
 - `2026-02-18-fix-fuse-rename-on-smb-backend.md` -- Fix FUSE rename on SMB backend (area: desktop)
 
@@ -165,6 +163,7 @@ Recent decisions affecting current work:
 - Phase 12.3.1 inserted after Phase 12.3: Pre-Wipe Identity Cleanup — deterministic IPNS derivation, SHA-256 hashed identifiers for all auth methods, remove cross-method email auto-linking. Done before DB wipe to avoid migration code.
 - Phase 12.5 inserted after Phase 12.4: MFA Polishing, UAT & E2E Testing — polish auth flows, add wallet E2E with mock EIP-1193/6963 provider, fix bugs from CoreKit auth UAT
 - Phase 12.6 inserted after Phase 12.5: Per-File IPNS Metadata Split — split file metadata into per-file IPNS records before vault wipe (clean break, no dual-schema). Phase 12.1 (AES-CTR) moved to after 12.6.
+- Phase 11.2 inserted after Phase 11.1: Remove v1 Folder Metadata — eliminate v1/v2 dual-schema code, make v2 FilePointer canonical everywhere, add per-file IPNS publishing to desktop FUSE. Triggered by cross-device format oscillation bug (desktop writes v1, web re-saves as v2 hybrid, desktop rejects).
 
 ### Blockers/Concerns
 
@@ -202,12 +201,12 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-17
-Stopped at: Phase 11.1 complete (verified 10/10 must-haves)
+Last session: 2026-02-19
+Stopped at: Phase 11.2 inserted into roadmap
 Resume file: None
-Next: Phase 11.1 complete. Next phase TBD.
+Next: Run /gsd:plan-phase 11.2 to create execution plans.
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-17 after completing Phase 11.1 Plan 05 (MFA Challenge UI) - Phase 11.1 complete_
+_Last updated: 2026-02-19 after inserting Phase 11.2 (Remove v1 Folder Metadata) into roadmap_

@@ -56,6 +56,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
 - [x] **Phase 12.5: MFA Polishing, UAT & E2E Testing** - Polish auth flows, wallet E2E with mock provider, fix UAT bugs (INSERTED)
 - [x] **Phase 12.6: Per-File IPNS Metadata Split** - Split file metadata into per-file IPNS records, decouple content updates from folder publishes (INSERTED)
+- [ ] **Phase 11.2: Remove v1 Folder Metadata** - Eliminate v1/v2 dual-schema, make v2 FilePointer canonical, per-file IPNS in desktop FUSE (INSERTED)
 - [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
 - [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
@@ -276,6 +277,30 @@ Plans:
 - [x] 12.6-04-PLAN.md — Frontend hooks + components: useFolder/useFilePreview/useDropUpload v2, FileBrowser/TextEditor/DetailsDialog updates
 - [x] 12.6-05-PLAN.md — Recovery tool v2 support, vault export docs update, full build verification
 
+### Phase 11.2: Remove v1 Folder Metadata (INSERTED)
+
+**Goal**: Eliminate folder metadata v1/v2 dual-schema code -- make v2 (FilePointer) the only format, tighten validation to reject hybrid metadata, and implement per-file IPNS publishing in desktop FUSE
+**Depends on**: Phase 11.1 (macOS Desktop Catch-Up), Phase 12.6 (Per-File IPNS Metadata Split)
+**Requirements**: Data integrity, cross-device interop
+**Success Criteria** (what must be TRUE):
+
+1. Only v2 folder metadata (FilePointer children with fileMetaIpnsName) is written by all clients
+2. v1 folder metadata (inline FileEntry with cid/fileKeyEncrypted) is rejected by validators on all platforms
+3. All v1/v2 branching code removed: ~500 lines of dual-schema types, dispatch, and conversion
+4. Desktop FUSE create() derives file IPNS keypair and release() publishes per-file FileMetadata
+5. Desktop build_folder_metadata emits FilePointer (not FileEntry) -- cross-device format is consistent
+6. TypeScript crypto package exports canonical names (FolderMetadata, FolderChild) -- no V2 suffix
+7. Recovery tool (recovery.html) handles only v2 FilePointer path
+8. All tests pass: pnpm test + cargo test --features fuse
+
+**Plans:** 3 plans
+
+Plans:
+
+- [ ] 11.2-01-PLAN.md — TypeScript crypto types: delete v1, rename v2 to canonical, update web app imports
+- [ ] 11.2-02-PLAN.md — Rust desktop: delete v1 types, rename v2, rewrite build_folder_metadata to FilePointer
+- [ ] 11.2-03-PLAN.md — Per-file IPNS in FUSE create/release, recovery tool v2-only, cross-platform verification
+
 ### Phase 13: File Versioning
 
 **Goal**: Users can access and restore previous versions of their files
@@ -350,7 +375,7 @@ Plans:
 
 **Execution Order:**
 
-Sequential order: 12 -> 12.5 -> 12.6 -> 12.1 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
+Sequential order: 12 -> 12.5 -> 12.6 -> 12.1 -> 11.2 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
 
 Parallel phases:
 
@@ -385,6 +410,7 @@ Parallel phases:
 | 12.5 MFA Polish/UAT/E2E     | M2        | 3/3            | Complete    | 2026-02-16 |
 | 12.6 Per-File IPNS Meta     | M2        | 5/5            | Complete    | 2026-02-17 |
 | 11.1 macOS Desktop Catch-Up | M2        | 7/7            | Complete    | 2026-02-17 |
+| 11.2 Remove v1 Folder Meta  | M2        | 0/3            | Not started | -          |
 | 13. File Versioning         | M2        | 0/TBD          | Not started | -          |
 | 14. User-to-User Sharing    | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search   | M2        | 0/TBD          | Not started | -          |
