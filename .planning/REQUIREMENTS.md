@@ -124,11 +124,11 @@ Requirements for production release. Each maps to roadmap phases 12+.
 
 ### File Versioning
 
-- [ ] **VER-01**: System automatically retains previous file versions on update (old CIDs kept pinned)
-- [ ] **VER-02**: User can view version history for a file
-- [ ] **VER-03**: User can restore a previous version of a file
-- [ ] **VER-04**: Version retention policy enforced (max versions per file, configurable)
-- [ ] **VER-05**: Version storage counted against user quota
+- [x] **VER-01**: System automatically retains previous file versions on update (old CIDs kept pinned)
+- [x] **VER-02**: User can view version history for a file
+- [x] **VER-03**: User can restore a previous version of a file
+- [x] **VER-04**: Version retention policy enforced (max versions per file, configurable)
+- [x] **VER-05**: Version storage counted against user quota
 
 ### Advanced Sync
 
@@ -336,11 +336,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MFA-02      | Phase 12.4 | Complete |
 | MFA-03      | Phase 12.4 | Complete |
 | MFA-04      | Phase 12.4 | Complete |
-| VER-01      | Phase 13   | Pending  |
-| VER-02      | Phase 13   | Pending  |
-| VER-03      | Phase 13   | Pending  |
-| VER-04      | Phase 13   | Pending  |
-| VER-05      | Phase 13   | Pending  |
+| VER-01      | Phase 13   | Complete |
+| VER-02      | Phase 13   | Complete |
+| VER-03      | Phase 13   | Complete |
+| VER-04      | Phase 13   | Complete |
+| VER-05      | Phase 13   | Complete |
 | SHARE-01    | Phase 14   | Pending  |
 | SHARE-02    | Phase 14   | Pending  |
 | SHARE-03    | Phase 14   | Pending  |

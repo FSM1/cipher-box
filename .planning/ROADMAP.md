@@ -57,7 +57,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 12.5: MFA Polishing, UAT & E2E Testing** - Polish auth flows, wallet E2E with mock provider, fix UAT bugs (INSERTED)
 - [x] **Phase 12.6: Per-File IPNS Metadata Split** - Split file metadata into per-file IPNS records, decouple content updates from folder publishes (INSERTED)
 - [x] **Phase 11.2: Remove v1 Folder Metadata** - Eliminate v1/v2 dual-schema, make v2 FilePointer canonical, per-file IPNS in desktop FUSE (INSERTED)
-- [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
+- [x] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
 - [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
 - [ ] **Phase 16: Advanced Sync** - Conflict detection, offline queue, and idempotent replay
@@ -319,11 +319,11 @@ Plans:
 
 Plans:
 
-- [ ] 13-01-PLAN.md — Crypto types: VersionEntry type in TS + Rust, FileMetadata versions array, backward-compatible validator
-- [ ] 13-02-PLAN.md — Web versioning logic: updateFileMetadata with version push/prune, cooldown, stop unpinning old CIDs
-- [ ] 13-03-PLAN.md — Desktop FUSE versioning: release() version creation, 15-min cooldown, stop unpinning old CIDs
-- [ ] 13-04-PLAN.md — Version history UI: DetailsDialog version panel, download/restore/delete past versions
-- [ ] 13-05-PLAN.md — Recovery tool version support + full cross-platform build verification
+- [x] 13-01-PLAN.md — Crypto types: VersionEntry type in TS + Rust, FileMetadata versions array, backward-compatible validator
+- [x] 13-02-PLAN.md — Web versioning logic: updateFileMetadata with version push/prune, cooldown, stop unpinning old CIDs
+- [x] 13-03-PLAN.md — Desktop FUSE versioning: release() version creation, 15-min cooldown, stop unpinning old CIDs
+- [x] 13-04-PLAN.md — Version history UI: DetailsDialog version panel, download/restore/delete past versions
+- [x] 13-05-PLAN.md — Recovery tool version support + full cross-platform build verification
 
 ### Phase 14: User-to-User Sharing
 
@@ -420,7 +420,7 @@ Parallel phases:
 | 12.6 Per-File IPNS Meta     | M2        | 5/5            | Complete    | 2026-02-17 |
 | 11.1 macOS Desktop Catch-Up | M2        | 7/7            | Complete    | 2026-02-17 |
 | 11.2 Remove v1 Folder Meta  | M2        | 3/3            | Complete    | 2026-02-19 |
-| 13. File Versioning         | M2        | 0/5            | Not started | -          |
+| 13. File Versioning         | M2        | 5/5            | Complete    | 2026-02-19 |
 | 14. User-to-User Sharing    | M2        | 0/TBD          | Not started | -          |
 | 15. Link Sharing + Search   | M2        | 0/TBD          | Not started | -          |
 | 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
