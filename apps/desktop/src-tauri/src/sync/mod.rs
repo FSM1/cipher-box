@@ -157,7 +157,7 @@ impl SyncDaemon {
                 } else {
                     let _ = crate::tray::update_tray_status(
                         &self.app_handle,
-                        &crate::tray::TrayStatus::Error(e),
+                        &crate::tray::TrayStatus::Error(sanitize_error(&e)),
                     );
                 }
             }
@@ -219,6 +219,87 @@ impl SyncDaemon {
     pub fn write_queue_mut(&mut self) -> &mut WriteQueue {
         &mut self.write_queue
     }
+}
+
+/// Sanitize error messages before displaying in tray status or notifications.
+///
+/// Removes sensitive information that could leak implementation details:
+/// - Truncates after first newline or at 80 chars (strips API response bodies)
+/// - Replaces internal filesystem paths with `[path]`
+/// - Replaces long hex strings (>40 chars) that may be tokens with `[token]`
+fn sanitize_error(error: &str) -> String {
+    // Truncate at first newline or 80 chars, whichever is shorter
+    let truncated = error
+        .split('\n')
+        .next()
+        .unwrap_or(error);
+    let truncated = if truncated.len() > 80 {
+        // Find the last char boundary at or before byte 80
+        let mut boundary = 80;
+        while boundary > 0 && !truncated.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        format!("{}...", &truncated[..boundary])
+    } else {
+        truncated.to_string()
+    };
+
+    // Remove internal filesystem paths
+    let sanitized = regex_replace_paths(&truncated);
+
+    // Remove token-like hex strings (>40 hex chars)
+    regex_replace_tokens(&sanitized)
+}
+
+/// Replace filesystem paths like /Users/... or /home/... with [path].
+fn regex_replace_paths(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.char_indices().peekable();
+
+    while let Some((i, c)) = chars.next() {
+        if c == '/' && (input[i..].starts_with("/Users/") || input[i..].starts_with("/home/")) {
+            result.push_str("[path]");
+            // Skip until whitespace or end
+            while let Some(&(_, next_c)) = chars.peek() {
+                if next_c.is_whitespace() || next_c == '"' || next_c == '\'' {
+                    break;
+                }
+                chars.next();
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
+/// Replace long hex strings (>40 chars) with [token].
+fn regex_replace_tokens(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut hex_run = String::new();
+
+    for c in input.chars() {
+        if c.is_ascii_hexdigit() {
+            hex_run.push(c);
+        } else {
+            if hex_run.len() > 40 {
+                result.push_str("[token]");
+            } else {
+                result.push_str(&hex_run);
+            }
+            hex_run.clear();
+            result.push(c);
+        }
+    }
+
+    // Flush trailing hex run
+    if hex_run.len() > 40 {
+        result.push_str("[token]");
+    } else {
+        result.push_str(&hex_run);
+    }
+
+    result
 }
 
 /// Heuristic check for network-level errors vs application errors.

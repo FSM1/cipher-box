@@ -7,6 +7,8 @@
 use std::sync::Arc;
 use tauri::{Manager, State};
 
+use zeroize::Zeroizing;
+
 use crate::api::{auth, types};
 use crate::crypto;
 use crate::state::AppState;
@@ -44,15 +46,16 @@ pub async fn handle_auth_complete(
         return Err("Private key must be 32 bytes".to_string());
     }
 
-    // Derive public keys from private key
-    let public_key_bytes = derive_public_key(&private_key_bytes)?; // 65 bytes, uncompressed (for ECIES)
-    let compressed_public_key_hex = derive_compressed_public_key_hex(&private_key_bytes)?; // 33 bytes hex (for backend auth)
+    // Derive uncompressed public key from private key (65 bytes, 0x04 prefix)
+    // Used for both ECIES operations and backend auth (backend expects uncompressed)
+    let public_key_bytes = derive_public_key(&private_key_bytes)?;
+    let public_key_hex = hex::encode(&public_key_bytes); // 130 hex chars
 
-    // 2. Login with backend (requires compressed publicKey matching Web3Auth JWT)
+    // 2. Login with backend (requires uncompressed publicKey, 130 hex chars)
     let login_req = types::LoginRequest {
         id_token: id_token.clone(),
-        public_key: compressed_public_key_hex,
-        login_type: "social".to_string(),
+        public_key: public_key_hex,
+        login_type: "corekit".to_string(),
     };
 
     let resp = state
@@ -72,46 +75,80 @@ pub async fn handle_auth_complete(
         .await
         .map_err(|e| format!("Failed to parse login response: {}", e))?;
 
-    // 3. Store access token in API client
-    state.api.set_access_token(login_resp.access_token.clone()).await;
+    // Delegate to shared post-auth setup
+    complete_auth_setup(
+        &app,
+        &state,
+        login_resp.access_token,
+        login_resp.refresh_token,
+        Zeroizing::new(private_key_bytes),
+        public_key_bytes,
+        login_resp.is_new_user,
+        false,
+    )
+    .await
+}
 
-    // 4. Extract user ID from JWT claims (decode payload, read `sub`)
-    let user_id = extract_user_id_from_jwt(&login_resp.access_token)?;
+/// Shared post-auth setup used by both `handle_auth_complete` and `handle_test_login_complete`.
+///
+/// Stores tokens and keys, initializes/fetches vault, registers device, mounts FUSE,
+/// and hides the login window.
+async fn complete_auth_setup(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    access_token: String,
+    refresh_token: String,
+    private_key_bytes: Zeroizing<Vec<u8>>,
+    public_key_bytes: Vec<u8>,
+    is_new_user: bool,
+    skip_keychain: bool,
+) -> Result<(), String> {
+    // 1. Store access token in API client
+    state.api.set_access_token(access_token.clone()).await;
+
+    // 2. Extract user ID from JWT claims (decode payload, read `sub`)
+    let user_id = extract_user_id_from_jwt(&access_token)?;
     *state.user_id.write().await = Some(user_id.clone());
 
-    // 5. Store refresh token in Keychain
-    auth::store_refresh_token(&user_id, &login_resp.refresh_token)
-        .map_err(|e| format!("Keychain store failed: {}", e))?;
-    auth::store_user_id(&user_id)
-        .map_err(|e| format!("Keychain store user ID failed: {}", e))?;
+    // 3. Store refresh token in Keychain (skip in test-login mode to avoid popups)
+    if !skip_keychain {
+        auth::store_refresh_token(&user_id, &refresh_token)
+            .map_err(|e| format!("Keychain store failed: {}", e))?;
+        auth::store_user_id(&user_id)
+            .map_err(|e| format!("Keychain store user ID failed: {}", e))?;
+    } else {
+        log::info!("Skipping Keychain storage (test-login mode)");
+    }
 
-    // 6. Store keys in AppState
-    *state.private_key.write().await = Some(private_key_bytes.clone());
+    // 4. Store keys in AppState
+    *state.private_key.write().await = Some(private_key_bytes.to_vec());
     *state.public_key.write().await = Some(public_key_bytes.clone());
 
-    // 7. Initialize vault for new users, or fetch existing vault
+    // 5. Initialize vault for new users, or fetch existing vault
     //    Also handle the edge case where user exists but vault was deleted.
-    if login_resp.is_new_user {
+    if is_new_user {
         log::info!("New user detected, initializing vault");
-        initialize_vault(&state, &public_key_bytes).await?;
+        initialize_vault(state, &public_key_bytes).await?;
     }
-    match fetch_and_decrypt_vault(&state).await {
+    match fetch_and_decrypt_vault(state).await {
         Ok(()) => {}
-        Err(e) if e.contains("404") && !login_resp.is_new_user => {
+        Err(e) if e.contains("404") && !is_new_user => {
             log::warn!("Vault not found for existing user, re-initializing");
-            initialize_vault(&state, &public_key_bytes).await?;
-            fetch_and_decrypt_vault(&state).await?;
+            initialize_vault(state, &public_key_bytes).await?;
+            fetch_and_decrypt_vault(state).await?;
         }
         Err(e) => return Err(e),
     }
 
-    // 8. Mark as authenticated
+    // 6. Mark as authenticated
     *state.is_authenticated.write().await = true;
 
-    // 9. Mount FUSE filesystem (or just mark as synced if FUSE not enabled)
+    // 7. Mount FUSE filesystem (or just mark as synced if FUSE not enabled)
+    // NOTE: Device registry spawn moved AFTER mount to avoid concurrent HTTP
+    //       requests that cause reqwest connection pool starvation during pre-populate.
     #[cfg(not(feature = "fuse"))]
     {
-        let _ = crate::tray::update_tray_status(&app, &crate::tray::TrayStatus::Synced);
+        let _ = crate::tray::update_tray_status(app, &crate::tray::TrayStatus::Synced);
     }
     #[cfg(feature = "fuse")]
     {
@@ -156,7 +193,7 @@ pub async fn handle_auth_complete(
 
         let rt = tokio::runtime::Handle::current();
         match crate::fuse::mount_filesystem(
-            &state,
+            state,
             rt,
             private_key,
             public_key,
@@ -168,7 +205,7 @@ pub async fn handle_auth_complete(
         ).await {
             Ok(_handle) => {
                 *state.mount_status.write().await = crate::state::MountStatus::Mounted;
-                let _ = crate::tray::update_tray_status(&app, &crate::tray::TrayStatus::Synced);
+                let _ = crate::tray::update_tray_status(app, &crate::tray::TrayStatus::Synced);
                 log::info!("FUSE filesystem mounted at ~/CipherBox");
             }
             Err(e) => {
@@ -176,13 +213,41 @@ pub async fn handle_auth_complete(
                 *state.mount_status.write().await =
                     crate::state::MountStatus::Error(err_msg.clone());
                 let _ = crate::tray::update_tray_status(
-                    &app,
+                    app,
                     &crate::tray::TrayStatus::Error(err_msg.clone()),
                 );
                 log::error!("{}", err_msg);
                 // Don't fail auth -- user is authenticated but mount failed
             }
         }
+    }
+
+    // 8. Register device in encrypted registry (non-blocking, after mount)
+    {
+        let reg_api = state.api.clone();
+        let reg_private_key = Zeroizing::new(private_key_bytes.to_vec());
+        let reg_public_key = public_key_bytes.clone();
+        let reg_user_id = user_id.clone();
+        tokio::spawn(async move {
+            let pk_arr: [u8; 32] = match reg_private_key.as_slice().try_into() {
+                Ok(arr) => arr,
+                Err(_) => {
+                    log::warn!("Device registry: invalid private key length");
+                    return;
+                }
+            };
+            match crate::registry::register_device(
+                &reg_api,
+                &pk_arr,
+                &reg_public_key,
+                &reg_user_id,
+            )
+            .await
+            {
+                Ok(()) => log::info!("Device registry updated"),
+                Err(e) => log::warn!("Device registry update failed (non-blocking): {}", e),
+            }
+        });
     }
 
     // Close OAuth popup windows and hide the login webview
@@ -344,6 +409,68 @@ pub async fn start_sync_daemon(
     Ok(())
 }
 
+/// Get the dev-key if one was provided via CLI (debug builds only).
+///
+/// Returns `Some(hex_string)` if `--dev-key` was passed at startup, `None` otherwise.
+/// The webview can use this to skip Web3Auth login and call `handle_auth_complete`
+/// directly with a synthetic identity token or via the test-login endpoint.
+#[tauri::command]
+pub async fn get_dev_key(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    Ok(state.dev_key.read().await.clone())
+}
+
+/// Handle test-login authentication (debug builds only).
+///
+/// Called from the webview after a successful `POST /auth/test-login` response.
+/// Unlike `handle_auth_complete`, this skips the `/auth/login` POST because
+/// test-login already returns access + refresh tokens directly.
+///
+/// The private key comes from the test-login response (server-generated
+/// deterministic keypair), NOT from the CLI `--dev-key` argument.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub async fn handle_test_login_complete(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    access_token: String,
+    refresh_token: String,
+    private_key_hex: String,
+    is_new_user: bool,
+) -> Result<(), String> {
+    log::info!("Handling test-login auth completion (debug mode)");
+
+    // Update tray status: Mounting
+    let _ = crate::tray::update_tray_status(&app, &crate::tray::TrayStatus::Mounting);
+
+    // Convert private key hex to bytes
+    let pk_hex = if private_key_hex.starts_with("0x") {
+        &private_key_hex[2..]
+    } else {
+        &private_key_hex
+    };
+    let private_key_bytes =
+        hex::decode(pk_hex).map_err(|_| "Invalid private key hex from test-login".to_string())?;
+    if private_key_bytes.len() != 32 {
+        return Err("Private key must be 32 bytes".to_string());
+    }
+
+    // Derive public key from the test-login private key
+    let public_key_bytes = derive_public_key(&private_key_bytes)?;
+
+    // Delegate to shared post-auth setup (skips /auth/login POST and Keychain)
+    complete_auth_setup(
+        &app,
+        &state,
+        access_token,
+        refresh_token,
+        Zeroizing::new(private_key_bytes),
+        public_key_bytes,
+        is_new_user,
+        true, // skip Keychain — test-login re-authenticates each time
+    )
+    .await
+}
+
 /// Logout: invalidate session, clear Keychain, zero all sensitive keys.
 #[tauri::command]
 pub async fn logout(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
@@ -381,28 +508,34 @@ pub async fn logout(app: tauri::AppHandle, state: State<'_, AppState>) -> Result
 
 /// Initialize a new vault for a first-time user.
 ///
-/// Generates a root folder AES-256 key and an Ed25519 IPNS keypair,
-/// ECIES-wraps them with the user's secp256k1 public key, derives the IPNS name,
-/// and POSTs everything to `/vault/init`.
+/// Generates a root folder AES-256 key and derives a deterministic Ed25519 IPNS
+/// keypair via HKDF from the user's private key. ECIES-wraps them with the
+/// user's secp256k1 public key, and POSTs everything to `/vault/init`.
 async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Result<(), String> {
     // Generate root folder AES-256 key (32 random bytes)
     let root_folder_key = crypto::utils::generate_random_bytes(32);
 
-    // Generate root IPNS Ed25519 keypair
-    let (ipns_public_key, ipns_private_key) = crypto::ed25519::generate_ed25519_keypair();
+    // Derive IPNS keypair deterministically via HKDF from user's private key
+    let private_key = state
+        .private_key
+        .read()
+        .await
+        .as_ref()
+        .ok_or("Private key not available for vault IPNS derivation")?
+        .clone();
+    let private_key_arr: [u8; 32] = private_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| "Invalid private key length")?;
+    let (ipns_private_key, _ipns_public_key, root_ipns_name) =
+        crypto::hkdf::derive_vault_ipns_keypair(&private_key_arr)
+            .map_err(|e| format!("Vault IPNS derivation failed: {:?}", e))?;
 
     // ECIES-wrap keys with user's uncompressed secp256k1 public key
     let encrypted_root_folder_key = crypto::ecies::wrap_key(&root_folder_key, public_key)
         .map_err(|e| format!("Failed to wrap root folder key: {}", e))?;
     let encrypted_ipns_private_key = crypto::ecies::wrap_key(&ipns_private_key, public_key)
         .map_err(|e| format!("Failed to wrap IPNS private key: {}", e))?;
-
-    // Derive IPNS name from Ed25519 public key
-    let ipns_pub_array: [u8; 32] = ipns_public_key
-        .try_into()
-        .map_err(|_| "IPNS public key is not 32 bytes")?;
-    let root_ipns_name = crypto::ipns::derive_ipns_name(&ipns_pub_array)
-        .map_err(|e| format!("Failed to derive IPNS name: {}", e))?;
 
     // 1. Register vault with backend
     let init_req = types::InitVaultRequest {
@@ -455,7 +588,7 @@ async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Result<(), Str
     let initial_cid = crate::api::ipfs::upload_content(&state.api, &json_bytes).await?;
 
     // Create and sign IPNS record (sequence 0, 24h lifetime)
-    let ipns_key_arr: [u8; 32] = ipns_private_key
+    let ipns_key_arr: [u8; 32] = ipns_private_key.as_slice()
         .try_into()
         .map_err(|_| "Invalid IPNS private key length".to_string())?;
     let value = format!("/ipfs/{}", initial_cid);
@@ -530,6 +663,19 @@ async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), String> {
     let root_ipns_private_key =
         crypto::ecies::unwrap_key(&encrypted_root_ipns_private_key, &private_key)
             .map_err(|e| format!("Failed to decrypt root IPNS private key: {}", e))?;
+
+    // Verify stored IPNS key matches HKDF derivation (consistency check)
+    let private_key_arr: [u8; 32] = private_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| "Invalid private key length for HKDF check")?;
+    if let Ok((expected_ipns_key, _, _)) = crypto::hkdf::derive_vault_ipns_keypair(&private_key_arr) {
+        if root_ipns_private_key != *expected_ipns_key {
+            log::warn!("Vault IPNS key mismatch: stored key differs from HKDF derivation");
+            // Don't block - proceed with stored key for backward compatibility
+        }
+    }
+
     *state.root_ipns_private_key.write().await = Some(root_ipns_private_key);
 
     // Store IPNS name and TEE keys
@@ -580,17 +726,6 @@ fn derive_public_key(private_key: &[u8]) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Invalid secp256k1 private key: {:?}", e))?;
     let pk = ecies::PublicKey::from_secret_key(&sk);
     Ok(pk.serialize().to_vec()) // 65-byte uncompressed format
-}
-
-/// Derive a compressed secp256k1 public key (33 bytes) as hex string from a 32-byte private key.
-///
-/// Used for backend auth — Web3Auth JWT stores the compressed key format,
-/// so the login request must send compressed to pass the public key match check.
-fn derive_compressed_public_key_hex(private_key: &[u8]) -> Result<String, String> {
-    let sk = ecies::SecretKey::parse_slice(private_key)
-        .map_err(|e| format!("Invalid secp256k1 private key: {:?}", e))?;
-    let pk = ecies::PublicKey::from_secret_key(&sk);
-    Ok(hex::encode(pk.serialize_compressed())) // 33-byte compressed format
 }
 
 #[cfg(test)]

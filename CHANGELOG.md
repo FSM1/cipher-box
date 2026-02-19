@@ -2,110 +2,96 @@
 
 ## [0.10.2](https://github.com/FSM1/cipher-box/compare/v0.10.1...v0.10.2) (2026-02-18)
 
-
 ### Bug Fixes
 
-* **ci:** enable test-login on staging API ([#146](https://github.com/FSM1/cipher-box/issues/146)) ([63b0a69](https://github.com/FSM1/cipher-box/commit/63b0a69fa31ebc545a29c0b9e67611c323ae2425))
-* **web:** guard against undefined ipnsName in text editor and details dialog ([#145](https://github.com/FSM1/cipher-box/issues/145)) ([8105af9](https://github.com/FSM1/cipher-box/commit/8105af9b4c4666558d8e501228dee9d733b47536))
+- **ci:** enable test-login on staging API ([#146](https://github.com/FSM1/cipher-box/issues/146)) ([63b0a69](https://github.com/FSM1/cipher-box/commit/63b0a69fa31ebc545a29c0b9e67611c323ae2425))
+- **web:** guard against undefined ipnsName in text editor and details dialog ([#145](https://github.com/FSM1/cipher-box/issues/145)) ([8105af9](https://github.com/FSM1/cipher-box/commit/8105af9b4c4666558d8e501228dee9d733b47536))
 
 ## [0.10.1](https://github.com/FSM1/cipher-box/compare/v0.10.0...v0.10.1) (2026-02-18)
 
-
 ### Bug Fixes
 
-* **web:** align MFA enrollment banner with Pencil design ([#143](https://github.com/FSM1/cipher-box/issues/143)) ([24d5cd1](https://github.com/FSM1/cipher-box/commit/24d5cd1f705b12f5722f419abc74b936415215e6))
+- **web:** align MFA enrollment banner with Pencil design ([#143](https://github.com/FSM1/cipher-box/issues/143)) ([24d5cd1](https://github.com/FSM1/cipher-box/commit/24d5cd1f705b12f5722f419abc74b936415215e6))
 
 ## [0.10.0](https://github.com/FSM1/cipher-box/compare/v0.9.2...v0.10.0) (2026-02-18)
 
-
 ### Features
 
-* **api:** Add Prometheus metrics and Grafana dashboard for staging monitoring ([#141](https://github.com/FSM1/cipher-box/issues/141)) ([835d6c3](https://github.com/FSM1/cipher-box/commit/835d6c3b22182e73b3fe5828b9f3895249ef8f2a))
+- **api:** Add Prometheus metrics and Grafana dashboard for staging monitoring ([#141](https://github.com/FSM1/cipher-box/issues/141)) ([835d6c3](https://github.com/FSM1/cipher-box/commit/835d6c3b22182e73b3fe5828b9f3895249ef8f2a))
 
 ## [0.9.2](https://github.com/FSM1/cipher-box/compare/v0.9.1...v0.9.2) (2026-02-18)
 
-
 ### Bug Fixes
 
-* **web:** Display file encryption metadata in details dialog ([#139](https://github.com/FSM1/cipher-box/issues/139)) ([a06fb22](https://github.com/FSM1/cipher-box/commit/a06fb226481d781caf0cf5fef089085d35c72d9c))
+- **web:** Display file encryption metadata in details dialog ([#139](https://github.com/FSM1/cipher-box/issues/139)) ([a06fb22](https://github.com/FSM1/cipher-box/commit/a06fb226481d781caf0cf5fef089085d35c72d9c))
 
 ## [0.9.1](https://github.com/FSM1/cipher-box/compare/v0.9.0...v0.9.1) (2026-02-17)
 
-
 ### Bug Fixes
 
-* **auth:** google OAuth brave fallback, wallet SIWE, sync & UX fixes ([#137](https://github.com/FSM1/cipher-box/issues/137)) ([6e3bbde](https://github.com/FSM1/cipher-box/commit/6e3bbde322d91ae100445a8f94a366eb7841dfe4))
+- **auth:** google OAuth brave fallback, wallet SIWE, sync & UX fixes ([#137](https://github.com/FSM1/cipher-box/issues/137)) ([6e3bbde](https://github.com/FSM1/cipher-box/commit/6e3bbde322d91ae100445a8f94a366eb7841dfe4))
 
 ## [0.9.0](https://github.com/FSM1/cipher-box/compare/v0.8.0...v0.9.0) (2026-02-17)
 
-
 ### Features
 
-* **12.1:** AES-CTR streaming encryption for media files ([#135](https://github.com/FSM1/cipher-box/issues/135)) ([433ae35](https://github.com/FSM1/cipher-box/commit/433ae3550959e7dd75085f5b392091098d4a8a58))
-* **12.2:** Encrypted Device Registry ([#125](https://github.com/FSM1/cipher-box/issues/125)) ([f3e354e](https://github.com/FSM1/cipher-box/commit/f3e354ea14e1341b159438848f10072828ee38d3))
-* **12.3.1:** Pre-wipe identity cleanup ([#127](https://github.com/FSM1/cipher-box/issues/127)) ([6806153](https://github.com/FSM1/cipher-box/commit/6806153251e0b86b2da2901d75cb73e20b3c94f3))
-* **12.4:** MFA + Cross-Device Approval ([#128](https://github.com/FSM1/cipher-box/issues/128)) ([e9de010](https://github.com/FSM1/cipher-box/commit/e9de010759e22b36efd3ea1bb1604105c34fded1))
-* **12.5:** MFA polishing, UAT & E2E testing ([#131](https://github.com/FSM1/cipher-box/issues/131)) ([7bd4067](https://github.com/FSM1/cipher-box/commit/7bd4067b892ff708c39924d511887ece85ddd737))
-* **12.6:** per-file IPNS metadata split ([#133](https://github.com/FSM1/cipher-box/issues/133)) ([dee300a](https://github.com/FSM1/cipher-box/commit/dee300aa3fb68f54225fa6d573e915423fbe5a8c))
-* **12:** Core Kit Identity Provider Foundation ([#123](https://github.com/FSM1/cipher-box/issues/123)) ([a07cb26](https://github.com/FSM1/cipher-box/commit/a07cb266a3b92b0e3b4b2544c1f85e6e33c55df4))
-* **design:** add /design:sync skill for detecting UI drift ([#122](https://github.com/FSM1/cipher-box/issues/122)) ([c75b127](https://github.com/FSM1/cipher-box/commit/c75b127eb8add60befc303260eca20de78f6d3e1))
-* SIWE wallet login + unified identity (Phase 12.3) ([#126](https://github.com/FSM1/cipher-box/issues/126)) ([40e704b](https://github.com/FSM1/cipher-box/commit/40e704bb807bb0bde21a8715647809441297d096))
-* **web:** move multi-select action bar to bottom of file list ([#117](https://github.com/FSM1/cipher-box/issues/117)) ([a888781](https://github.com/FSM1/cipher-box/commit/a8887810c5df5a21f86cbc68651d4849feda5069))
-
+- **12.1:** AES-CTR streaming encryption for media files ([#135](https://github.com/FSM1/cipher-box/issues/135)) ([433ae35](https://github.com/FSM1/cipher-box/commit/433ae3550959e7dd75085f5b392091098d4a8a58))
+- **12.2:** Encrypted Device Registry ([#125](https://github.com/FSM1/cipher-box/issues/125)) ([f3e354e](https://github.com/FSM1/cipher-box/commit/f3e354ea14e1341b159438848f10072828ee38d3))
+- **12.3.1:** Pre-wipe identity cleanup ([#127](https://github.com/FSM1/cipher-box/issues/127)) ([6806153](https://github.com/FSM1/cipher-box/commit/6806153251e0b86b2da2901d75cb73e20b3c94f3))
+- **12.4:** MFA + Cross-Device Approval ([#128](https://github.com/FSM1/cipher-box/issues/128)) ([e9de010](https://github.com/FSM1/cipher-box/commit/e9de010759e22b36efd3ea1bb1604105c34fded1))
+- **12.5:** MFA polishing, UAT & E2E testing ([#131](https://github.com/FSM1/cipher-box/issues/131)) ([7bd4067](https://github.com/FSM1/cipher-box/commit/7bd4067b892ff708c39924d511887ece85ddd737))
+- **12.6:** per-file IPNS metadata split ([#133](https://github.com/FSM1/cipher-box/issues/133)) ([dee300a](https://github.com/FSM1/cipher-box/commit/dee300aa3fb68f54225fa6d573e915423fbe5a8c))
+- **12:** Core Kit Identity Provider Foundation ([#123](https://github.com/FSM1/cipher-box/issues/123)) ([a07cb26](https://github.com/FSM1/cipher-box/commit/a07cb266a3b92b0e3b4b2544c1f85e6e33c55df4))
+- **design:** add /design:sync skill for detecting UI drift ([#122](https://github.com/FSM1/cipher-box/issues/122)) ([c75b127](https://github.com/FSM1/cipher-box/commit/c75b127eb8add60befc303260eca20de78f6d3e1))
+- SIWE wallet login + unified identity (Phase 12.3) ([#126](https://github.com/FSM1/cipher-box/issues/126)) ([40e704b](https://github.com/FSM1/cipher-box/commit/40e704bb807bb0bde21a8715647809441297d096))
+- **web:** move multi-select action bar to bottom of file list ([#117](https://github.com/FSM1/cipher-box/issues/117)) ([a888781](https://github.com/FSM1/cipher-box/commit/a8887810c5df5a21f86cbc68651d4849feda5069))
 
 ### Bug Fixes
 
-* **auth:** resolve tab crash, JWKS persistence, and CoreKit auth UAT ([#130](https://github.com/FSM1/cipher-box/issues/130)) ([33a4667](https://github.com/FSM1/cipher-box/commit/33a466742690efe2d82e66ff6ad24b16971b118b))
-* multi-select action bar button visibility ([#120](https://github.com/FSM1/cipher-box/issues/120)) ([d0d41ed](https://github.com/FSM1/cipher-box/commit/d0d41edea98ce9c9bad27de256fbb499b67fa75f))
+- **auth:** resolve tab crash, JWKS persistence, and CoreKit auth UAT ([#130](https://github.com/FSM1/cipher-box/issues/130)) ([33a4667](https://github.com/FSM1/cipher-box/commit/33a466742690efe2d82e66ff6ad24b16971b118b))
+- multi-select action bar button visibility ([#120](https://github.com/FSM1/cipher-box/issues/120)) ([d0d41ed](https://github.com/FSM1/cipher-box/commit/d0d41edea98ce9c9bad27de256fbb499b67fa75f))
 
 ## [0.8.0](https://github.com/FSM1/cipher-box/compare/v0.7.4...v0.8.0) (2026-02-12)
 
-
 ### Features
 
-* Add multi-selection and batch operations to file browser ([#114](https://github.com/FSM1/cipher-box/issues/114)) ([c2fef51](https://github.com/FSM1/cipher-box/commit/c2fef510e8256107f1e9f5105f885d6930c71bd9))
-
+- Add multi-selection and batch operations to file browser ([#114](https://github.com/FSM1/cipher-box/issues/114)) ([c2fef51](https://github.com/FSM1/cipher-box/commit/c2fef510e8256107f1e9f5105f885d6930c71bd9))
 
 ### Bug Fixes
 
-* **docker:** add database name to postgres healthcheck ([#116](https://github.com/FSM1/cipher-box/issues/116)) ([3f58d46](https://github.com/FSM1/cipher-box/commit/3f58d46255a17463540645c6e1c0cbeda98e846d))
+- **docker:** add database name to postgres healthcheck ([#116](https://github.com/FSM1/cipher-box/issues/116)) ([3f58d46](https://github.com/FSM1/cipher-box/commit/3f58d46255a17463540645c6e1c0cbeda98e846d))
 
 ## [0.7.4](https://github.com/FSM1/cipher-box/compare/v0.7.3...v0.7.4) (2026-02-11)
 
-
 ### Bug Fixes
 
-* **web:** improve modal-close focus styling per PR review ([b1f5141](https://github.com/FSM1/cipher-box/commit/b1f5141190495550b6ea91121b3f49786537cd23))
-* **web:** replace double-outline focus style with thicker border ([#111](https://github.com/FSM1/cipher-box/issues/111)) ([b1f5141](https://github.com/FSM1/cipher-box/commit/b1f5141190495550b6ea91121b3f49786537cd23))
+- **web:** improve modal-close focus styling per PR review ([b1f5141](https://github.com/FSM1/cipher-box/commit/b1f5141190495550b6ea91121b3f49786537cd23))
+- **web:** replace double-outline focus style with thicker border ([#111](https://github.com/FSM1/cipher-box/issues/111)) ([b1f5141](https://github.com/FSM1/cipher-box/commit/b1f5141190495550b6ea91121b3f49786537cd23))
 
 ## [0.7.3](https://github.com/FSM1/cipher-box/compare/v0.7.2...v0.7.3) (2026-02-11)
 
-
 ### Bug Fixes
 
-* **web:** restore login footer with API status indicator ([#107](https://github.com/FSM1/cipher-box/issues/107)) ([3eaeb89](https://github.com/FSM1/cipher-box/commit/3eaeb8912f34de3d256837ec334d10780dd312c1))
+- **web:** restore login footer with API status indicator ([#107](https://github.com/FSM1/cipher-box/issues/107)) ([3eaeb89](https://github.com/FSM1/cipher-box/commit/3eaeb8912f34de3d256837ec334d10780dd312c1))
 
 ## [0.7.2](https://github.com/FSM1/cipher-box/compare/v0.7.1...v0.7.2) (2026-02-11)
 
-
 ### Bug Fixes
 
-* **web:** matrix rain effect visibility improvements ([#104](https://github.com/FSM1/cipher-box/issues/104)) ([e4ba8fb](https://github.com/FSM1/cipher-box/commit/e4ba8fb729fbed7ae72fac38b3d3c8fc80aa5f95))
+- **web:** matrix rain effect visibility improvements ([#104](https://github.com/FSM1/cipher-box/issues/104)) ([e4ba8fb](https://github.com/FSM1/cipher-box/commit/e4ba8fb729fbed7ae72fac38b3d3c8fc80aa5f95))
 
 ## [0.7.1](https://github.com/FSM1/cipher-box/compare/v0.7.0...v0.7.1) (2026-02-11)
 
-
 ### Bug Fixes
 
-* **web:** correct GitHub URL in app footer ([#102](https://github.com/FSM1/cipher-box/issues/102)) ([6531077](https://github.com/FSM1/cipher-box/commit/653107707f69d1f28e372662ce98bbef8a36c888))
+- **web:** correct GitHub URL in app footer ([#102](https://github.com/FSM1/cipher-box/issues/102)) ([6531077](https://github.com/FSM1/cipher-box/commit/653107707f69d1f28e372662ce98bbef8a36c888))
 
 ## [0.7.0](https://github.com/FSM1/cipher-box/compare/v0.6.0...v0.7.0) (2026-02-11)
 
-
 ### Features
 
-* add PDF, audio, and video file preview ([#100](https://github.com/FSM1/cipher-box/issues/100)) ([91da9b2](https://github.com/FSM1/cipher-box/commit/91da9b211ab7cd17d5bb6b397579e60414c520bc))
-* add vault export, recovery tool, and export format documentation (Phase 10) ([#98](https://github.com/FSM1/cipher-box/issues/98)) ([9e7fe8e](https://github.com/FSM1/cipher-box/commit/9e7fe8e05b5c6a20eba443917ec65259c943b9b3))
+- add PDF, audio, and video file preview ([#100](https://github.com/FSM1/cipher-box/issues/100)) ([91da9b2](https://github.com/FSM1/cipher-box/commit/91da9b211ab7cd17d5bb6b397579e60414c520bc))
+- add vault export, recovery tool, and export format documentation (Phase 10) ([#98](https://github.com/FSM1/cipher-box/issues/98)) ([9e7fe8e](https://github.com/FSM1/cipher-box/commit/9e7fe8e05b5c6a20eba443917ec65259c943b9b3))
 
 ## [0.6.0](https://github.com/FSM1/cipher-box/compare/v0.5.0...v0.6.0) (2026-02-11)
 

@@ -58,15 +58,15 @@ where
 pub struct PendingRefresh {
     pub ino: u64,
     pub ipns_name: String,
-    pub metadata: crate::crypto::folder::FolderMetadata,
+    pub metadata: crate::crypto::folder::AnyFolderMetadata,
     pub cid: String,
 }
 
 /// Pending content prefetch result sent from background tasks.
 #[cfg(feature = "fuse")]
-pub struct PendingContent {
-    pub cid: String,
-    pub data: Vec<u8>,
+pub enum PendingContent {
+    Success { cid: String, data: Vec<u8> },
+    Failure { cid: String },
 }
 
 /// Notification from a background upload thread that a file upload completed.
@@ -74,6 +74,18 @@ pub struct PendingContent {
 pub struct UploadComplete {
     pub ino: u64,
     pub new_cid: String,
+    pub parent_ino: u64,
+    pub old_file_cid: Option<String>,
+}
+
+/// Entry in the debounced publish queue.
+/// Tracks folders that need metadata published after file mutations.
+#[cfg(feature = "fuse")]
+struct PublishQueueEntry {
+    /// When the first mutation was queued (for debounce timing).
+    first_dirty: std::time::Instant,
+    /// Number of file uploads still in flight for this folder.
+    pending_uploads: usize,
 }
 
 /// Coordinates IPNS publish operations to prevent sequence number races
@@ -321,6 +333,9 @@ pub struct CipherBoxFS {
     pub upload_tx: std::sync::mpsc::Sender<UploadComplete>,
     /// Shared coordinator for IPNS publish sequencing and per-folder locking.
     pub publish_coordinator: Arc<PublishCoordinator>,
+    /// Debounced publish queue: folders needing metadata publish after mutations.
+    /// Publishes are coalesced and deferred until uploads settle.
+    publish_queue: HashMap<u64, PublishQueueEntry>,
 }
 
 #[cfg(feature = "fuse")]
@@ -436,6 +451,8 @@ impl CipherBoxFS {
                     iv,
                     size,
                     encryption_mode,
+                    file_meta_ipns_name,
+                    ..
                 } => {
                     let now_ms = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -465,6 +482,7 @@ impl CipherBoxFS {
                             created_at: if created_ms > 0 { created_ms } else { now_ms },
                             modified_at: if modified_ms > 0 { modified_ms } else { now_ms },
                             encryption_mode: encryption_mode.clone(),
+                            file_meta_ipns_name: file_meta_ipns_name.clone(),
                         },
                     ));
                 }
@@ -482,17 +500,15 @@ impl CipherBoxFS {
         Ok((metadata, folder_key, ipns_private_key, ipns_name, old_cid))
     }
 
-    /// Non-blocking metadata update: build metadata (CPU), then spawn
-    /// a background OS thread for encrypt + upload + IPNS publish.
-    /// Returns immediately — does NOT block the FUSE NFS thread.
+    /// Publish folder metadata immediately (no debounce).
+    /// Used for non-upload mutations (unlink, rmdir, rename) where the inode tree
+    /// is already in its final state and we want the IPNS record updated ASAP.
     pub fn update_folder_metadata(&mut self, folder_ino: u64) -> Result<(), String> {
+        // Mark folder as locally mutated to prevent background refreshes
+        self.mutated_folders.insert(folder_ino, std::time::Instant::now());
+        // Build metadata and publish immediately (no debounce needed)
         let (metadata, folder_key, ipns_private_key, ipns_name, old_cid) =
             self.build_folder_metadata(folder_ino)?;
-
-        // Mark folder as locally mutated — prevents background refreshes
-        // from overwriting local changes until IPNS publish propagates.
-        self.mutated_folders.insert(folder_ino, std::time::Instant::now());
-
         spawn_metadata_publish(
             self.api.clone(),
             self.rt.clone(),
@@ -503,11 +519,11 @@ impl CipherBoxFS {
             old_cid,
             self.publish_coordinator.clone(),
         );
-
         Ok(())
     }
 
     /// Drain completed upload notifications and update inode CIDs + caches.
+    /// Also flushes the debounced publish queue when uploads settle.
     pub fn drain_upload_completions(&mut self) {
         while let Ok(result) = self.upload_rx.try_recv() {
             log::debug!(
@@ -527,6 +543,82 @@ impl CipherBoxFS {
             if let Some(plaintext) = self.pending_content.remove(&result.ino) {
                 self.content_cache.set(&result.new_cid, plaintext);
             }
+            // Unpin old file CID in background
+            if let Some(old_cid) = result.old_file_cid {
+                let api = self.api.clone();
+                self.rt.spawn(async move {
+                    let _ = crate::api::ipfs::unpin_content(&api, &old_cid).await;
+                });
+            }
+            // Decrement pending upload count for this folder
+            if let Some(entry) = self.publish_queue.get_mut(&result.parent_ino) {
+                entry.pending_uploads = entry.pending_uploads.saturating_sub(1);
+            }
+        }
+        // Flush any publish queue entries that are ready
+        self.flush_publish_queue();
+    }
+
+    /// Queue a folder for debounced metadata publish.
+    /// Called after mutations (create, unlink, rmdir, rename) that change folder contents.
+    pub fn queue_publish(&mut self, folder_ino: u64, has_pending_upload: bool) {
+        let entry = self.publish_queue.entry(folder_ino).or_insert(PublishQueueEntry {
+            first_dirty: std::time::Instant::now(),
+            pending_uploads: 0,
+        });
+        if has_pending_upload {
+            entry.pending_uploads += 1;
+        }
+        // Mark folder as locally mutated to prevent background refreshes
+        self.mutated_folders.insert(folder_ino, std::time::Instant::now());
+    }
+
+    /// Flush publish queue entries that are ready.
+    /// Criteria: all uploads complete AND debounce period elapsed (1.5s),
+    /// OR safety valve: 10s since first change regardless of pending uploads.
+    fn flush_publish_queue(&mut self) {
+        let now = std::time::Instant::now();
+        let debounce = std::time::Duration::from_millis(1500);
+        let safety_valve = std::time::Duration::from_secs(10);
+
+        // Collect folders ready to publish
+        let ready: Vec<u64> = self.publish_queue.iter()
+            .filter(|(_, entry)| {
+                let elapsed = now.duration_since(entry.first_dirty);
+                if elapsed >= safety_valve {
+                    // Safety valve: force publish regardless of pending uploads
+                    if entry.pending_uploads > 0 {
+                        log::warn!(
+                            "Publish safety valve triggered with {} pending upload(s)",
+                            entry.pending_uploads
+                        );
+                    }
+                    return true;
+                }
+                entry.pending_uploads == 0 && elapsed >= debounce
+            })
+            .map(|(&ino, _)| ino)
+            .collect();
+
+        for folder_ino in ready {
+            self.publish_queue.remove(&folder_ino);
+            match self.build_folder_metadata(folder_ino) {
+                Ok((metadata, folder_key, ipns_private_key, ipns_name, old_cid)) => {
+                    spawn_metadata_publish(
+                        self.api.clone(),
+                        self.rt.clone(),
+                        metadata,
+                        folder_key,
+                        ipns_private_key,
+                        ipns_name,
+                        old_cid,
+                        self.publish_coordinator.clone(),
+                    );
+                }
+                Err(e) => {
+                    log::error!("Failed to build folder metadata for publish (ino {}): {}", folder_ino, e);
+                }
+            }
         }
     }
 
@@ -540,22 +632,86 @@ impl CipherBoxFS {
         self.mutated_folders.retain(|_, ts| *ts > cutoff);
 
         while let Ok(refresh) = self.refresh_rx.try_recv() {
-            // Skip stale refreshes for recently-mutated folders
-            if self.mutated_folders.contains_key(&refresh.ino) {
+            // Extract a v1 FolderMetadata for cache (or synthetic for v2)
+            let cache_metadata = match &refresh.metadata {
+                crate::crypto::folder::AnyFolderMetadata::V1(v1) => v1.clone(),
+                crate::crypto::folder::AnyFolderMetadata::V2(_) => {
+                    crate::crypto::folder::FolderMetadata {
+                        version: "v2".to_string(),
+                        children: vec![],
+                    }
+                }
+            };
+
+            // Skip stale refreshes for recently-mutated folders or folders
+            // with pending publishes (to prevent re-adding deleted/stale children)
+            if self.mutated_folders.contains_key(&refresh.ino)
+                || self.publish_queue.contains_key(&refresh.ino)
+            {
                 log::debug!(
-                    "refresh skipped for ino {} (locally mutated, waiting for IPNS propagation)",
+                    "refresh skipped for ino {} (locally mutated or publish pending)",
                     refresh.ino
                 );
                 // Still update cache so readdir doesn't re-fire refreshes
-                self.metadata_cache.set(&refresh.ipns_name, refresh.metadata, refresh.cid);
+                self.metadata_cache.set(&refresh.ipns_name, cache_metadata, refresh.cid);
                 continue;
             }
 
-            self.metadata_cache.set(&refresh.ipns_name, refresh.metadata.clone(), refresh.cid);
-            if let Err(e) = self.inodes.populate_folder(
-                refresh.ino, &refresh.metadata, &self.private_key,
+            self.metadata_cache.set(&refresh.ipns_name, cache_metadata, refresh.cid.clone());
+            // Background refresh: merge_only=true to preserve locally-created files
+            // that haven't been published to IPNS yet.
+            if let Err(e) = self.inodes.populate_folder_any(
+                refresh.ino, &refresh.metadata, &self.private_key, true,
             ) {
                 log::warn!("Drain refresh apply failed for ino {}: {}", refresh.ino, e);
+            }
+
+            // For v2 metadata, resolve FilePointers eagerly.
+            // TODO: This blocks the FUSE thread with O(N × timeout) latency for N
+            // unresolved FilePointers. Should be refactored to spawn async tasks via
+            // a file_pointer_tx/rx channel pair (like refresh_tx/rx) to avoid stalling
+            // the single NFS thread on network I/O.
+            if matches!(&refresh.metadata, crate::crypto::folder::AnyFolderMetadata::V2(_)) {
+                let unresolved = self.inodes.get_unresolved_file_pointers();
+                if !unresolved.is_empty() {
+                    // Get folder key for FilePointer resolution
+                    let folder_key = match self.inodes.get(refresh.ino) {
+                        Some(inode) => match &inode.kind {
+                            inode::InodeKind::Root { .. } => Some(self.root_folder_key.to_vec()),
+                            inode::InodeKind::Folder { folder_key, .. } => Some(folder_key.to_vec()),
+                            _ => None,
+                        },
+                        None => None,
+                    };
+                    if let Some(fk) = folder_key {
+                        let api = self.api.clone();
+                        let rt = self.rt.clone();
+                        for (ino, ipns_name) in &unresolved {
+                            let fk_arr: Result<[u8; 32], _> = fk.as_slice().try_into();
+                            if let Ok(fk_arr) = fk_arr {
+                                let resolve_result = block_with_timeout(&rt, async {
+                                    let resp = crate::api::ipns::resolve_ipns(&api, ipns_name).await?;
+                                    let bytes = crate::api::ipfs::fetch_content(&api, &resp.cid).await?;
+                                    Ok::<Vec<u8>, String>(bytes)
+                                });
+                                match resolve_result {
+                                    Ok(enc_bytes) => {
+                                        match operations::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk_arr) {
+                                            Ok(fm) => {
+                                                self.inodes.resolve_file_pointer(
+                                                    *ino, fm.cid, fm.file_key_encrypted,
+                                                    fm.file_iv, fm.size, fm.encryption_mode,
+                                                );
+                                            }
+                                            Err(e) => log::warn!("Drain FilePointer decrypt failed for ino {}: {}", ino, e),
+                                        }
+                                    }
+                                    Err(e) => log::warn!("Drain FilePointer resolve failed for ino {}: {}", ino, e),
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -563,9 +719,16 @@ impl CipherBoxFS {
     /// Drain background content prefetch results into the content cache (non-blocking).
     /// Called from read() and open() to apply results from async IPFS fetches.
     pub fn drain_content_prefetches(&mut self) {
-        while let Ok(content) = self.content_rx.try_recv() {
-            self.prefetching.remove(&content.cid);
-            self.content_cache.set(&content.cid, content.data);
+        while let Ok(msg) = self.content_rx.try_recv() {
+            match msg {
+                PendingContent::Success { cid, data } => {
+                    self.prefetching.remove(&cid);
+                    self.content_cache.set(&cid, data);
+                }
+                PendingContent::Failure { cid } => {
+                    self.prefetching.remove(&cid);
+                }
+            }
         }
     }
 }
@@ -689,10 +852,54 @@ pub async fn mount_filesystem(
     match fetch_result {
         Ok((encrypted_bytes, cid)) => {
             match operations::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &root_folder_key) {
-                Ok(metadata) => {
-                    metadata_cache.set(&root_ipns_name, metadata.clone(), cid);
-                    match inodes.populate_folder(inode::ROOT_INO, &metadata, &private_key) {
-                        Ok(()) => log::info!("Root folder pre-populated successfully"),
+                Ok(any_metadata) => {
+                    // Cache metadata for readdir staleness checks
+                    let cache_meta = match &any_metadata {
+                        crate::crypto::folder::AnyFolderMetadata::V1(v1) => v1.clone(),
+                        crate::crypto::folder::AnyFolderMetadata::V2(_) => {
+                            crate::crypto::folder::FolderMetadata {
+                                version: "v2".to_string(),
+                                children: vec![],
+                            }
+                        }
+                    };
+                    metadata_cache.set(&root_ipns_name, cache_meta, cid);
+
+                    // Populate inode table (dispatches v1/v2) — initial mount, full replace
+                    match inodes.populate_folder_any(inode::ROOT_INO, &any_metadata, &private_key, false) {
+                        Ok(()) => {
+                            log::info!("Root folder pre-populated successfully");
+
+                            // For v2 metadata, resolve FilePointers eagerly before mount
+                            let unresolved = inodes.get_unresolved_file_pointers();
+                            if !unresolved.is_empty() {
+                                log::info!("Resolving {} root FilePointer(s)...", unresolved.len());
+                                let root_folder_key_arr: Result<[u8; 32], _> = root_folder_key.as_slice().try_into();
+                                if let Ok(fk) = root_folder_key_arr {
+                                    for (fp_ino, fp_ipns) in &unresolved {
+                                        let fp_result: Result<Vec<u8>, String> = async {
+                                            let resp = crate::api::ipns::resolve_ipns(&state.api, fp_ipns).await?;
+                                            let bytes = crate::api::ipfs::fetch_content(&state.api, &resp.cid).await?;
+                                            Ok(bytes)
+                                        }.await;
+                                        match fp_result {
+                                            Ok(enc_bytes) => {
+                                                match operations::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk) {
+                                                    Ok(fm) => {
+                                                        inodes.resolve_file_pointer(
+                                                            *fp_ino, fm.cid, fm.file_key_encrypted,
+                                                            fm.file_iv, fm.size, fm.encryption_mode,
+                                                        );
+                                                    }
+                                                    Err(e) => log::warn!("Root FilePointer decrypt failed for ino {}: {}", fp_ino, e),
+                                                }
+                                            }
+                                            Err(e) => log::warn!("Root FilePointer resolve failed for ino {}: {}", fp_ino, e),
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         Err(e) => log::warn!("Root folder populate failed: {}", e),
                     }
 
@@ -723,10 +930,49 @@ pub async fn mount_filesystem(
                         match sub_result {
                             Ok((enc_bytes, sub_cid)) => {
                                 match operations::decrypt_metadata_from_ipfs_public(&enc_bytes, sub_key) {
-                                    Ok(sub_meta) => {
-                                        metadata_cache.set(sub_ipns, sub_meta.clone(), sub_cid);
-                                        match inodes.populate_folder(*sub_ino, &sub_meta, &private_key) {
-                                            Ok(()) => log::info!("Subfolder ino={} pre-populated ({} children)", sub_ino, sub_meta.children.len()),
+                                    Ok(sub_any_meta) => {
+                                        let sub_cache_meta = match &sub_any_meta {
+                                            crate::crypto::folder::AnyFolderMetadata::V1(v1) => v1.clone(),
+                                            crate::crypto::folder::AnyFolderMetadata::V2(_) => {
+                                                crate::crypto::folder::FolderMetadata {
+                                                    version: "v2".to_string(),
+                                                    children: vec![],
+                                                }
+                                            }
+                                        };
+                                        metadata_cache.set(sub_ipns, sub_cache_meta, sub_cid);
+                                        match inodes.populate_folder_any(*sub_ino, &sub_any_meta, &private_key, false) {
+                                            Ok(()) => {
+                                                log::info!("Subfolder ino={} pre-populated", sub_ino);
+                                                // Resolve FilePointers in subfolder
+                                                let sub_unresolved = inodes.get_unresolved_file_pointers();
+                                                if !sub_unresolved.is_empty() {
+                                                    let sk_arr: Result<[u8; 32], _> = sub_key.as_slice().try_into();
+                                                    if let Ok(sk) = sk_arr {
+                                                        for (fp_ino, fp_ipns) in &sub_unresolved {
+                                                            let fp_result: Result<Vec<u8>, String> = async {
+                                                                let resp = crate::api::ipns::resolve_ipns(&state.api, fp_ipns).await?;
+                                                                let bytes = crate::api::ipfs::fetch_content(&state.api, &resp.cid).await?;
+                                                                Ok(bytes)
+                                                            }.await;
+                                                            match fp_result {
+                                                                Ok(enc_bytes) => {
+                                                                    match operations::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &sk) {
+                                                                        Ok(fm) => {
+                                                                            inodes.resolve_file_pointer(
+                                                                                *fp_ino, fm.cid, fm.file_key_encrypted,
+                                                                                fm.file_iv, fm.size, fm.encryption_mode,
+                                                                            );
+                                                                        }
+                                                                        Err(e) => log::warn!("Sub FilePointer decrypt failed: {}", e),
+                                                                    }
+                                                                }
+                                                                Err(e) => log::warn!("Sub FilePointer resolve failed: {}", e),
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
                                             Err(e) => log::warn!("Subfolder ino={} populate failed: {}", sub_ino, e),
                                         }
                                     }
@@ -768,6 +1014,7 @@ pub async fn mount_filesystem(
         upload_tx,
         mutated_folders: HashMap::new(),
         publish_coordinator: Arc::new(PublishCoordinator::new()),
+        publish_queue: HashMap::new(),
     };
 
     let mount_path_clone = mount_path.clone();
@@ -776,11 +1023,16 @@ pub async fn mount_filesystem(
     // Note: AutoUnmount and DefaultPermissions removed for FUSE-T compatibility.
     // FUSE-T is NFS-based and does not support kernel-level permission checks
     // or fusermount3-based auto-unmount.
+    // FUSE-T mount options:
+    // - backend=smb: Use SMB instead of NFS backend. NFS has a known macOS kernel
+    //   bug where WRITE RPCs never reach the FUSE-T server for newly created files,
+    //   causing permanent process hangs. SMB backend avoids this entirely.
     let options = vec![
         MountOption::FSName("CipherBox".to_string()),
         MountOption::CUSTOM("volname=CipherBox".to_string()),
         MountOption::CUSTOM("noappledouble".to_string()),
         MountOption::CUSTOM("noapplexattr".to_string()),
+        MountOption::CUSTOM("backend=smb".to_string()),
         MountOption::RW,
     ];
 
