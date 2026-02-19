@@ -79,10 +79,14 @@ pub enum InodeKind {
         size: u64,
         /// Encryption mode ("GCM" for v1/standard, "CTR" for streaming media).
         encryption_mode: String,
-        /// Per-file IPNS name for FilePointer resolution (None for newly created files before IPNS publish).
+        /// Per-file IPNS name for FilePointer resolution (None for files loaded from remote metadata before IPNS resolve).
         file_meta_ipns_name: Option<String>,
         /// Whether per-file IPNS metadata has been resolved.
         file_meta_resolved: bool,
+        /// Decrypted Ed25519 IPNS private key for signing this file's IPNS record.
+        /// Only set for newly created files (derived via HKDF from user privateKey + fileId).
+        /// Wrapped in `Zeroizing` for automatic zeroization on drop.
+        file_ipns_private_key: Option<Zeroizing<Vec<u8>>>,
     },
 }
 
@@ -387,6 +391,7 @@ impl InodeTable {
                             encryption_mode: "GCM".to_string(),
                             file_meta_ipns_name: Some(file_pointer.file_meta_ipns_name.clone()),
                             file_meta_resolved: false,
+                            file_ipns_private_key: None,
                         }
                     };
 
@@ -487,6 +492,10 @@ impl InodeTable {
                     _ => None,
                 },
                 file_meta_resolved: true,
+                file_ipns_private_key: match &inode.kind {
+                    InodeKind::File { file_ipns_private_key, .. } => file_ipns_private_key.clone(),
+                    _ => None,
+                },
             };
             // Update attr size for GETATTR/READDIR
             inode.attr.size = size;
@@ -621,6 +630,7 @@ mod tests {
                 encryption_mode: "GCM".to_string(),
                 file_meta_ipns_name: None,
                 file_meta_resolved: true,
+                file_ipns_private_key: None,
             },
             attr: FileAttr {
                 ino,
@@ -701,6 +711,7 @@ mod tests {
             encryption_mode: "GCM".to_string(),
             file_meta_ipns_name: None,
             file_meta_resolved: true,
+            file_ipns_private_key: None,
         };
 
         match kind {

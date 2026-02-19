@@ -340,6 +340,18 @@ pub struct CipherBoxFS {
 
 #[cfg(feature = "fuse")]
 impl CipherBoxFS {
+    /// Get the decrypted folder key for a folder/root inode.
+    /// Returns None if the inode is not a folder or root.
+    pub fn get_folder_key(&self, folder_ino: u64) -> Option<Vec<u8>> {
+        self.inodes.get(folder_ino).and_then(|inode| {
+            match &inode.kind {
+                inode::InodeKind::Root { .. } => Some(self.root_folder_key.to_vec()),
+                inode::InodeKind::Folder { folder_key, .. } => Some(folder_key.to_vec()),
+                _ => None,
+            }
+        })
+    }
+
     /// Build a FolderMetadata struct from the current inode tree (CPU-only, no network I/O).
     /// Returns (metadata, folder_key, ipns_private_key, ipns_name, old_metadata_cid).
     pub fn build_folder_metadata(
@@ -467,16 +479,15 @@ impl CipherBoxFS {
                         .as_millis() as u64;
 
                     // FilePointer IPNS name is required for v2 metadata.
-                    // Newly created files (before IPNS publish) may have None -- use empty placeholder
-                    // and log a warning (Plan 03 addresses deriving IPNS in create()).
+                    // create() derives the IPNS name via HKDF, so this should always be Some.
                     let ipns_name = match file_meta_ipns_name {
-                        Some(name) => name.clone(),
-                        None => {
-                            log::warn!(
-                                "File '{}' (ino {}) has no fileMetaIpnsName -- using empty placeholder",
+                        Some(name) if !name.is_empty() => name.clone(),
+                        _ => {
+                            log::error!(
+                                "File '{}' (ino {}) has no fileMetaIpnsName -- this should not happen (create() derives IPNS keypair). Skipping file.",
                                 child.name, child_ino
                             );
-                            String::new()
+                            continue;
                         }
                     };
 
