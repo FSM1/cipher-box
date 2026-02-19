@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 11.2 inserted (Remove v1 Folder Metadata)
+**Current focus:** Milestone 2 -- Phase 11.2 COMPLETE (Remove v1 Folder Metadata)
 
 ## Current Position
 
 Phase: 11.2 (Remove v1 Folder Metadata)
-Plan: 2 of 3
-Status: In progress
-Last activity: 2026-02-19 -- Completed 11.2-02-PLAN.md (Rust desktop v2-only folder metadata)
+Plan: 3 of 3
+Status: Phase complete
+Last activity: 2026-02-19 -- Completed 11.2-03-PLAN.md (per-file IPNS publish in FUSE create/release)
 
-Progress: [######################.] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 2/3)
+Progress: [########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 115
+- Total plans completed: 116
 - Average duration: 5.4 min
-- Total execution time: 10.6 hours
+- Total execution time: 10.8 hours
 
 **By Phase (M1 summary):**
 
@@ -38,11 +38,11 @@ Progress: [######################.] (M1 complete, M2 Phase 12 complete, Phase 12
 | M2 Phase 12.6   | 5/5   | 29 min  | 5.8 min  |
 | M2 Phase 12.1   | 4/4   | 27 min  | 6.8 min  |
 | M2 Phase 11.1   | 7/7   | 36 min  | 5.1 min  |
-| M2 Phase 11.2   | 2/3   | 21 min  | 10.5 min |
+| M2 Phase 11.2   | 3/3   | 30 min  | 10.0 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 8m, 8m, 7m, 14m
+- Last 5 plans: 8m, 8m, 7m, 14m, 9m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -129,7 +129,7 @@ Recent decisions affecting current work:
 | FileMetadata encryptionMode serde default "GCM"                   | 11.1-01   | Matches TypeScript optional field behavior for backward compat                                                   |
 | sanitize_error uses char-walking (not regex crate)                | 11.1-02   | Avoids adding regex dependency for simple path/token replacement                                                 |
 | dev_key field always present in AppState (not cfg-gated)          | 11.1-02   | Simplifies struct; only CLI parsing is cfg(debug_assertions) gated                                               |
-| Keep v1 write-back format for build_folder_metadata               | 11.1-03   | Desktop doesn't create per-file IPNS records; web app handles both formats                                       |
+| Keep v1 write-back format for build_folder_metadata               | 11.1-03   | SUPERSEDED by 11.2: Desktop now creates per-file IPNS records and writes v2 format exclusively                   |
 | Synthetic v1 cache entries for v2 folders (version='v2')          | 11.1-03   | Preserves MetadataCache staleness-check API without storing AnyFolderMetadata                                    |
 | Eager FilePointer resolution before NFS mount                     | 11.1-03   | NFS caches READDIR aggressively; first response must be complete and correct                                     |
 | AnyFolderMetadata Clone/Debug + to_v1() for FUSE compat           | 11.1-04   | Converts v2 FilePointers to placeholder FileEntries for backward-compatible FUSE layer                           |
@@ -144,6 +144,9 @@ Recent decisions affecting current work:
 | validateFolderMetadata rejects v1 with CryptoError                | 11.2-01   | Strict enforcement: only v2 schema accepted, not silent v1 acceptance                                            |
 | decrypt_folder_metadata rejects non-v2 with version check         | 11.2-02   | Strict validation: parses JSON, checks version field is "v2", rejects anything else with DeserializationFailed   |
 | FilePointer with None ipns_name uses empty string placeholder     | 11.2-02   | Newly created files before IPNS publish use "" with warning log; Plan 03 addresses deriving IPNS in create()     |
+| file_ipns_private_key stored on InodeKind::File                   | 11.2-03   | Option<Zeroizing<Vec<u8>>> for IPNS signing; matches folder IPNS key pattern                                     |
+| build_folder_metadata skips files without file_meta_ipns_name     | 11.2-03   | Error log + continue instead of empty placeholder; create() always derives IPNS name                             |
+| Per-file IPNS publish reuses PublishCoordinator                   | 11.2-03   | Same monotonic sequence number management as folder publishes                                                    |
 
 ### Pending Todos
 
@@ -207,11 +210,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-19
-Stopped at: Completed 11.2-02-PLAN.md
+Stopped at: Completed 11.2-03-PLAN.md (Phase 11.2 complete)
 Resume file: None
-Next: Execute 11.2-03-PLAN.md (per-file IPNS publish in FUSE create/release)
+Next: Phase 11.2 complete. Next phase TBD.
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-19 after completing 11.2-02 (Rust desktop v2-only folder metadata)_
+_Last updated: 2026-02-19 after completing 11.2-03 (per-file IPNS publish in FUSE create/release, Phase 11.2 complete)_
