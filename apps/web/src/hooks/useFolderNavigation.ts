@@ -271,6 +271,7 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         // Without this navigation, the URL stays at /files/<uuid> with no
         // folder in the store, rendering a broken empty ~/root fallback.
         useFolderStore.getState().removeFolder(targetFolderId);
+        setIsLoading(false);
         latestNavTarget.current = parentId ?? 'root';
         if (parentId) {
           navigate(`/files/${parentId}`);

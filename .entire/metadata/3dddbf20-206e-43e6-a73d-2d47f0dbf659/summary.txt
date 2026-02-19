@@ -1,3 +1,6 @@
-PR created: https://github.com/FSM1/cipher-box/pull/166
+Pushed. The fix addresses the exact failure mode: after the first `navigateTo` fails, `setIsLoading(false)` was never called because `latestNavTarget.current` was already changed to the parent ID before the `finally` block ran. This left the "Loading..." overlay permanently visible, hiding the file list and preventing the retry from finding the folder row.
 
-Once this PR's E2E tests pass and it merges to main, the release PR #165 should be unblocked. The fix addresses the root cause: when subfolder loading fails, the app now navigates back to the parent folder instead of leaving the user stranded on a broken `/files/<uuid>` URL with an empty directory.
+Now the flow should be:
+1. Double-click images → `navigateTo` fails → catch: `removeFolder` + `setIsLoading(false)` + navigate to workspace
+2. Workspace renders children (including images folder row)
+3. Retry: `waitForItemToAppear('images-...')` succeeds → double-click images again → second attempt loads successfully
