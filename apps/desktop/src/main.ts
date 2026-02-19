@@ -17,6 +17,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import {
   initCoreKit,
+  getCoreKitStatus,
+  restoreSession,
   loginWithGoogle,
   requestEmailOtp,
   loginWithEmailOtp,
@@ -68,13 +70,12 @@ async function init(): Promise<void> {
   }
 
   // Step 2: Try silent refresh from Keychain
+  let silentRefreshOk = false;
   try {
     const refreshed: boolean = await invoke('try_silent_refresh');
     if (refreshed) {
       console.log('API session refreshed from Keychain');
-      // NOTE: Even with a refreshed API session, the private key is NOT
-      // available on cold start. We still need Core Kit login to get
-      // the private key for vault decryption.
+      silentRefreshOk = true;
     }
   } catch (err) {
     console.warn('Silent refresh failed:', err);
@@ -96,6 +97,31 @@ async function init(): Promise<void> {
       );
     }
     return;
+  }
+
+  // Step 3b: If Core Kit restored a previous session, try to use it
+  if (getCoreKitStatus() === 'LOGGED_IN') {
+    if (silentRefreshOk) {
+      // Both Core Kit session and API tokens are valid — restore directly
+      try {
+        if (appDiv) {
+          appDiv.innerHTML = loadingHtml('Restoring session...');
+        }
+        await restoreSession();
+        handleAuthSuccess(appDiv);
+        return;
+      } catch (err) {
+        console.warn('Session restore failed, falling back to login:', err);
+      }
+    }
+    // Core Kit has a session but API tokens are stale or restore failed —
+    // logout Core Kit to get a clean state for fresh login
+    console.log('Clearing stale Core Kit session before login');
+    try {
+      await logout();
+    } catch {
+      // Best-effort cleanup
+    }
   }
 
   // Step 4: Show login form

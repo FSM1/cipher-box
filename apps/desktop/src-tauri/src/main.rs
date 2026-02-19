@@ -124,6 +124,7 @@ fn main() {
             {
                 tauri::generate_handler![
                     commands::handle_auth_complete,
+                    commands::handle_session_restore,
                     commands::try_silent_refresh,
                     commands::logout,
                     commands::start_sync_daemon,
@@ -135,6 +136,7 @@ fn main() {
             {
                 tauri::generate_handler![
                     commands::handle_auth_complete,
+                    commands::handle_session_restore,
                     commands::try_silent_refresh,
                     commands::logout,
                     commands::start_sync_daemon,
