@@ -267,8 +267,17 @@ export function useFolderNavigation(): UseFolderNavigationReturn {
         console.error('Failed to load subfolder:', err);
         // Only clean up if this is still the latest navigation
         if (latestNavTarget.current !== targetFolderId) return;
-        // Remove the loading placeholder so the user can retry
+        // Remove the loading placeholder and navigate back to parent.
+        // Without this navigation, the URL stays at /files/<uuid> with no
+        // folder in the store, rendering a broken empty ~/root fallback.
         useFolderStore.getState().removeFolder(targetFolderId);
+        setIsLoading(false);
+        latestNavTarget.current = parentId ?? 'root';
+        if (parentId) {
+          navigate(`/files/${parentId}`);
+        } else {
+          navigate('/files');
+        }
       } finally {
         // Only clear loading if this is still the latest navigation
         if (latestNavTarget.current === targetFolderId) {

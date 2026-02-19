@@ -174,11 +174,23 @@ test.describe.serial('Full Workflow', () => {
    * Phase 6.3: Uses breadcrumb path to verify navigation (~/root/foldername format).
    */
   async function navigateIntoFolder(name: string): Promise<void> {
-    await fileList.doubleClickFolder(name);
-    // Wait for breadcrumb path to include the folder name.
-    // Post-reload navigation requires cold IPNS resolve which can be slow in CI.
-    await breadcrumbs.waitForPathToContain(name, { timeout: 30000 });
-    navigationStack.push(name);
+    // Retry once if navigation fails (transient IPNS resolution failures in CI
+    // cause the app to navigate back to parent; the folder row reappears and
+    // a second attempt usually succeeds).
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await fileList.doubleClickFolder(name);
+      try {
+        await breadcrumbs.waitForPathToContain(name, { timeout: 30000 });
+        navigationStack.push(name);
+        return;
+      } catch {
+        if (attempt === 1) throw new Error(`navigateIntoFolder("${name}") failed after 2 attempts`);
+        // Wait for the app to settle after a failed navigation (it navigates back to parent)
+        await page.waitForTimeout(2000);
+        // Verify the folder row is still visible before retrying
+        await fileList.waitForItemToAppear(name, { timeout: 10000 });
+      }
+    }
   }
 
   /**
