@@ -10,6 +10,8 @@ import {
   resolveFileMetadata,
   updateFileMetadata,
   shouldCreateVersion,
+  restoreVersion,
+  deleteVersion,
 } from '../services/file-metadata.service';
 import type { FolderNode } from '../stores/folder.store';
 import type { FolderEntry, FilePointer, FolderChild } from '@cipherbox/crypto';
@@ -865,6 +867,172 @@ export function useFolder() {
   );
 
   /**
+   * Restore a previous version of a file.
+   *
+   * Swaps the current content with a past version. The current content becomes
+   * a new version entry (non-destructive). Publishes updated IPNS record and
+   * unpins any pruned version CIDs.
+   *
+   * @param parentId - Parent folder ID ('root' or folder UUID)
+   * @param fileId - File ID (UUID)
+   * @param versionIndex - Index of version to restore (0 = newest past version)
+   */
+  const handleRestoreVersion = useCallback(
+    async (parentId: string, fileId: string, versionIndex: number): Promise<void> => {
+      setState({ isLoading: true, error: null });
+      try {
+        const folders = useFolderStore.getState().folders;
+        const vault = useVaultStore.getState();
+        const auth = useAuthStore.getState();
+
+        if (!auth.vaultKeypair) {
+          throw new Error('No ECIES keypair available - please log in again');
+        }
+
+        // Get parent folder state
+        const parentFolder =
+          parentId === 'root' ? getRootFolderState(vault, folders) : folders[parentId];
+
+        if (!parentFolder) {
+          throw new Error('Parent folder not found or vault not initialized');
+        }
+
+        // Find the FilePointer
+        const filePointer = parentFolder.children.find(
+          (c) => c.type === 'file' && c.id === fileId
+        ) as FilePointer | undefined;
+
+        if (!filePointer) {
+          throw new Error('File not found in folder');
+        }
+
+        // Resolve current file metadata from IPNS
+        const { metadata: currentMetadata } = await resolveFileMetadata(
+          filePointer.fileMetaIpnsName,
+          parentFolder.folderKey
+        );
+
+        // Call restoreVersion service function
+        const { ipnsRecord, prunedCids } = await restoreVersion({
+          fileId,
+          folderKey: parentFolder.folderKey,
+          userPrivateKey: auth.vaultKeypair.privateKey,
+          currentMetadata,
+          versionIndex,
+        });
+
+        // Publish the IPNS record (folder metadata untouched)
+        await folderService.replaceFileInFolder({
+          fileId,
+          fileIpnsRecord: ipnsRecord,
+          parentFolderState: parentFolder,
+        });
+
+        // Update local folder state (modifiedAt on FilePointer)
+        const updatedChildren = parentFolder.children.map((child) => {
+          if (child.type === 'file' && child.id === fileId) {
+            return { ...child, modifiedAt: Date.now() };
+          }
+          return child;
+        });
+        useFolderStore.getState().updateFolderChildren(parentId, updatedChildren);
+
+        // Unpin pruned version CIDs
+        for (const prunedCid of prunedCids) {
+          unpinFromIpfs(prunedCid).catch(() => {});
+        }
+
+        // Refresh quota
+        useQuotaStore.getState().fetchQuota();
+
+        setState({ isLoading: false, error: null });
+      } catch (err) {
+        const error = err instanceof Error ? err.message : 'Failed to restore version';
+        setState({ isLoading: false, error });
+        throw err;
+      }
+    },
+    []
+  );
+
+  /**
+   * Delete a specific past version from a file's version history.
+   *
+   * Removes the version from metadata, publishes updated IPNS record, and
+   * unpins the deleted version's CID.
+   *
+   * @param parentId - Parent folder ID ('root' or folder UUID)
+   * @param fileId - File ID (UUID)
+   * @param versionIndex - Index of version to delete (0 = newest past version)
+   */
+  const handleDeleteVersion = useCallback(
+    async (parentId: string, fileId: string, versionIndex: number): Promise<void> => {
+      setState({ isLoading: true, error: null });
+      try {
+        const folders = useFolderStore.getState().folders;
+        const vault = useVaultStore.getState();
+        const auth = useAuthStore.getState();
+
+        if (!auth.vaultKeypair) {
+          throw new Error('No ECIES keypair available - please log in again');
+        }
+
+        // Get parent folder state
+        const parentFolder =
+          parentId === 'root' ? getRootFolderState(vault, folders) : folders[parentId];
+
+        if (!parentFolder) {
+          throw new Error('Parent folder not found or vault not initialized');
+        }
+
+        // Find the FilePointer
+        const filePointer = parentFolder.children.find(
+          (c) => c.type === 'file' && c.id === fileId
+        ) as FilePointer | undefined;
+
+        if (!filePointer) {
+          throw new Error('File not found in folder');
+        }
+
+        // Resolve current file metadata from IPNS
+        const { metadata: currentMetadata } = await resolveFileMetadata(
+          filePointer.fileMetaIpnsName,
+          parentFolder.folderKey
+        );
+
+        // Call deleteVersion service function
+        const { ipnsRecord, deletedCid } = await deleteVersion({
+          fileId,
+          folderKey: parentFolder.folderKey,
+          userPrivateKey: auth.vaultKeypair.privateKey,
+          currentMetadata,
+          versionIndex,
+        });
+
+        // Publish the IPNS record (folder metadata untouched)
+        await folderService.replaceFileInFolder({
+          fileId,
+          fileIpnsRecord: ipnsRecord,
+          parentFolderState: parentFolder,
+        });
+
+        // Unpin deleted version CID
+        unpinFromIpfs(deletedCid).catch(() => {});
+
+        // Refresh quota
+        useQuotaStore.getState().fetchQuota();
+
+        setState({ isLoading: false, error: null });
+      } catch (err) {
+        const error = err instanceof Error ? err.message : 'Failed to delete version';
+        setState({ isLoading: false, error });
+        throw err;
+      }
+    },
+    []
+  );
+
+  /**
    * Clear error state.
    */
   const clearError = useCallback(() => {
@@ -885,6 +1053,8 @@ export function useFolder() {
     addFile: handleAddFile,
     addFiles: handleAddFiles,
     updateFile: handleUpdateFile,
+    restoreVersion: handleRestoreVersion,
+    deleteVersion: handleDeleteVersion,
 
     // Utilities
     clearError,

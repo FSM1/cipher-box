@@ -297,3 +297,171 @@ export async function updateFileMetadata(params: {
     prunedCids,
   };
 }
+
+/**
+ * Restore a previous version of a file.
+ * The current content becomes a new version entry, and the restored version's
+ * data becomes the current content. Non-destructive: version chain grows.
+ *
+ * @param params.fileId - File identifier (for IPNS keypair derivation)
+ * @param params.folderKey - Parent folder's decrypted AES-256 key
+ * @param params.userPrivateKey - User's secp256k1 private key
+ * @param params.currentMetadata - Current file metadata
+ * @param params.versionIndex - Index of version to restore (0 = newest past version)
+ * @returns Updated IPNS record payload and any pruned CIDs
+ */
+export async function restoreVersion(params: {
+  fileId: string;
+  folderKey: Uint8Array;
+  userPrivateKey: Uint8Array;
+  currentMetadata: FileMetadata;
+  versionIndex: number;
+}): Promise<{ ipnsRecord: FileIpnsRecordPayload; prunedCids: string[] }> {
+  const versions = params.currentMetadata.versions;
+  if (!versions || params.versionIndex < 0 || params.versionIndex >= versions.length) {
+    throw new Error('Invalid version index');
+  }
+
+  const versionToRestore = versions[params.versionIndex];
+
+  // Build a version entry from CURRENT metadata (it becomes a past version)
+  const currentAsVersion: VersionEntry = {
+    cid: params.currentMetadata.cid,
+    fileKeyEncrypted: params.currentMetadata.fileKeyEncrypted,
+    fileIv: params.currentMetadata.fileIv,
+    size: params.currentMetadata.size,
+    timestamp: Date.now(),
+    encryptionMode: params.currentMetadata.encryptionMode ?? 'GCM',
+  };
+
+  // Remove restored version from array, prepend current as new version entry
+  const remainingVersions = versions.filter((_, i) => i !== params.versionIndex);
+  const newVersions = [currentAsVersion, ...remainingVersions];
+
+  // Prune if exceeds max
+  const prunedVersions = newVersions.slice(0, MAX_VERSIONS_PER_FILE);
+  const prunedCids = newVersions.slice(MAX_VERSIONS_PER_FILE).map((v) => v.cid);
+
+  // Build updated metadata with restored version's data as current
+  const updatedMetadata: FileMetadata = {
+    ...params.currentMetadata,
+    cid: versionToRestore.cid,
+    fileKeyEncrypted: versionToRestore.fileKeyEncrypted,
+    fileIv: versionToRestore.fileIv,
+    size: versionToRestore.size,
+    encryptionMode: versionToRestore.encryptionMode,
+    versions: prunedVersions.length > 0 ? prunedVersions : undefined,
+    modifiedAt: Date.now(),
+  };
+
+  // Re-derive IPNS keypair
+  const ipnsKeypair = await deriveFileIpnsKeypair(params.userPrivateKey, params.fileId);
+
+  // Resolve current IPNS to get sequence number
+  const resolved = await resolveIpnsRecord(ipnsKeypair.ipnsName);
+  if (!resolved) {
+    throw new Error(
+      `Cannot restore version: existing IPNS record not found for ${ipnsKeypair.ipnsName}`
+    );
+  }
+  const newSeq = resolved.sequenceNumber + 1n;
+
+  // Encrypt updated metadata with folderKey
+  const encrypted = await encryptFileMetadata(updatedMetadata, params.folderKey);
+
+  // Upload to IPFS
+  const blob = new Blob([JSON.stringify(encrypted)], { type: 'application/json' });
+  const { cid: metadataCid } = await addToIpfs(blob);
+
+  // Create new IPNS record with incremented sequence number
+  const record = await createIpnsRecord(
+    ipnsKeypair.privateKey,
+    `/ipfs/${metadataCid}`,
+    newSeq,
+    IPNS_LIFETIME_MS
+  );
+
+  const recordBytes = marshalIpnsRecord(record);
+  const recordBase64 = uint8ToBase64(recordBytes);
+
+  return {
+    ipnsRecord: {
+      ipnsName: ipnsKeypair.ipnsName,
+      recordBase64,
+      metadataCid,
+    },
+    prunedCids,
+  };
+}
+
+/**
+ * Delete a specific past version from a file's version history.
+ * Updates the file's IPNS metadata without the deleted version.
+ *
+ * @param params.fileId - File identifier
+ * @param params.folderKey - Parent folder's decrypted AES-256 key
+ * @param params.userPrivateKey - User's secp256k1 private key
+ * @param params.currentMetadata - Current file metadata
+ * @param params.versionIndex - Index of version to delete
+ * @returns Updated IPNS record and CID to unpin
+ */
+export async function deleteVersion(params: {
+  fileId: string;
+  folderKey: Uint8Array;
+  userPrivateKey: Uint8Array;
+  currentMetadata: FileMetadata;
+  versionIndex: number;
+}): Promise<{ ipnsRecord: FileIpnsRecordPayload; deletedCid: string }> {
+  const versions = params.currentMetadata.versions;
+  if (!versions || params.versionIndex < 0 || params.versionIndex >= versions.length) {
+    throw new Error('Invalid version index');
+  }
+
+  const deletedCid = versions[params.versionIndex].cid;
+  const newVersions = versions.filter((_, i) => i !== params.versionIndex);
+
+  // Build updated metadata with filtered versions
+  const updatedMetadata: FileMetadata = {
+    ...params.currentMetadata,
+    versions: newVersions.length > 0 ? newVersions : undefined,
+  };
+
+  // Re-derive IPNS keypair
+  const ipnsKeypair = await deriveFileIpnsKeypair(params.userPrivateKey, params.fileId);
+
+  // Resolve current IPNS to get sequence number
+  const resolved = await resolveIpnsRecord(ipnsKeypair.ipnsName);
+  if (!resolved) {
+    throw new Error(
+      `Cannot delete version: existing IPNS record not found for ${ipnsKeypair.ipnsName}`
+    );
+  }
+  const newSeq = resolved.sequenceNumber + 1n;
+
+  // Encrypt updated metadata with folderKey
+  const encrypted = await encryptFileMetadata(updatedMetadata, params.folderKey);
+
+  // Upload to IPFS
+  const blob = new Blob([JSON.stringify(encrypted)], { type: 'application/json' });
+  const { cid: metadataCid } = await addToIpfs(blob);
+
+  // Create new IPNS record with incremented sequence number
+  const record = await createIpnsRecord(
+    ipnsKeypair.privateKey,
+    `/ipfs/${metadataCid}`,
+    newSeq,
+    IPNS_LIFETIME_MS
+  );
+
+  const recordBytes = marshalIpnsRecord(record);
+  const recordBase64 = uint8ToBase64(recordBytes);
+
+  return {
+    ipnsRecord: {
+      ipnsName: ipnsKeypair.ipnsName,
+      recordBase64,
+      metadataCid,
+    },
+    deletedCid,
+  };
+}
