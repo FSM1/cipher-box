@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.2](https://github.com/FSM1/cipher-box/compare/v0.13.1...v0.13.2) (2026-02-20)
+
+
+### Bug Fixes
+
+* **desktop:** wrap get_dev_key invoke in try/catch for release builds ([#167](https://github.com/FSM1/cipher-box/issues/167)) ([1699b5e](https://github.com/FSM1/cipher-box/commit/1699b5e73e60cb2a1c84dc61c86141def27c82d7))
+
 ## [0.13.1](https://github.com/FSM1/cipher-box/compare/v0.13.0...v0.13.1) (2026-02-19)
 
 
