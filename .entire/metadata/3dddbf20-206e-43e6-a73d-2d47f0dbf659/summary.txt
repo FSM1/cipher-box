@@ -1,3 +1,1 @@
-Pushed. The issue: in `main.rs` lines 135-144, the release build handler list doesn't include `get_dev_key` (it's debug-only). But the JS calls `await invoke('get_dev_key')` without a try/catch, so when Tauri rejects the promise, `init()` silently aborts and the webview stays stuck on "Initializing CipherBox..." forever.
-
-This fix won't be in the current staging DMG though — you'll need to merge this PR and cut a new staging tag to get a working desktop build.
+Done. PR #169: https://github.com/FSM1/cipher-box/pull/169

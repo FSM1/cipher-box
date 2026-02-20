@@ -1,0 +1,1 @@
+can we add a todo for the tauri app update. dont forget to switch to a fresh branch cause this one is merged already
