@@ -1,6 +1,3 @@
-Pushed. The fix addresses the exact failure mode: after the first `navigateTo` fails, `setIsLoading(false)` was never called because `latestNavTarget.current` was already changed to the parent ID before the `finally` block ran. This left the "Loading..." overlay permanently visible, hiding the file list and preventing the retry from finding the folder row.
+Pushed. The issue: in `main.rs` lines 135-144, the release build handler list doesn't include `get_dev_key` (it's debug-only). But the JS calls `await invoke('get_dev_key')` without a try/catch, so when Tauri rejects the promise, `init()` silently aborts and the webview stays stuck on "Initializing CipherBox..." forever.
 
-Now the flow should be:
-1. Double-click images → `navigateTo` fails → catch: `removeFolder` + `setIsLoading(false)` + navigate to workspace
-2. Workspace renders children (including images folder row)
-3. Retry: `waitForItemToAppear('images-...')` succeeds → double-click images again → second attempt loads successfully
+This fix won't be in the current staging DMG though — you'll need to merge this PR and cut a new staging tag to get a working desktop build.
