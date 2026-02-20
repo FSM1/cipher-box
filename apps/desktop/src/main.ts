@@ -48,8 +48,14 @@ async function init(): Promise<void> {
     appDiv.innerHTML = loadingHtml('Initializing CipherBox...');
   }
 
-  // Step 1: Check for dev-key mode (debug builds)
-  const devKey: string | null = await invoke('get_dev_key');
+  // Step 1: Check for dev-key mode (debug builds only — command not
+  // registered in release builds, so invoke will reject)
+  let devKey: string | null = null;
+  try {
+    devKey = await invoke('get_dev_key');
+  } catch {
+    // Expected in release builds where the command isn't registered
+  }
   if (devKey) {
     if (appDiv) {
       appDiv.innerHTML = loadingHtml('Dev mode: authenticating with provided key...');
