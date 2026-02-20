@@ -1,0 +1,7 @@
+Now rebuild the release and you'll be able to right-click → Inspect Element to see the console. That'll show us the actual Core Kit error.
+
+```bash
+pnpm --filter desktop tauri build
+```
+
+Though honestly, rather than waiting for a full rebuild just for debugging, we could also just improve the error logging in the catch block so it surfaces the real error. Want me to update the catch in `main.ts` to stringify the full error object regardless of type? That way even a non-Error rejection value would show up in the UI status text.

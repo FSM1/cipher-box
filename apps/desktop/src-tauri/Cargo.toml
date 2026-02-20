@@ -8,7 +8,7 @@ default = ["fuse"]
 fuse = ["dep:fuser", "dep:unicode-normalization"]
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "devtools"] }
 tauri-plugin-deep-link = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-shell = "2"
