@@ -44,6 +44,10 @@ type ContextMenuProps = {
   onBatchMove?: () => void;
   /** Callback for batch delete (multi-selection) */
   onBatchDelete?: () => void;
+  /** Read-only mode: hides Rename, Move, Delete, Edit, Share actions */
+  readOnly?: boolean;
+  /** Callback when hide is clicked (shared items -- removes from view) */
+  onHide?: () => void;
 };
 
 /**
@@ -75,6 +79,8 @@ export function ContextMenu({
   onBatchDownload,
   onBatchMove,
   onBatchDelete,
+  readOnly,
+  onHide,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement | null>(null);
   const isFile = item.type === 'file';
@@ -199,6 +205,11 @@ export function ContextMenu({
     onClose();
   };
 
+  const handleHide = () => {
+    onHide?.();
+    onClose();
+  };
+
   // Combine refs for menu
   const setMenuRef = (node: HTMLDivElement | null) => {
     menuRef.current = node;
@@ -308,19 +319,21 @@ export function ContextMenu({
               </button>
             )}
 
-            {/* Rename */}
-            <button
-              type="button"
-              className="context-menu-item"
-              onClick={handleRename}
-              role="menuitem"
-            >
-              <span className="context-menu-item-icon">&#9998;</span>
-              Rename
-            </button>
+            {/* Rename - hidden in readOnly mode */}
+            {!readOnly && (
+              <button
+                type="button"
+                className="context-menu-item"
+                onClick={handleRename}
+                role="menuitem"
+              >
+                <span className="context-menu-item-icon">&#9998;</span>
+                Rename
+              </button>
+            )}
 
-            {/* Move to... */}
-            {onMove && (
+            {/* Move to... - hidden in readOnly mode */}
+            {!readOnly && onMove && (
               <button
                 type="button"
                 className="context-menu-item"
@@ -332,8 +345,8 @@ export function ContextMenu({
               </button>
             )}
 
-            {/* Share */}
-            {onShare && (
+            {/* Share - hidden in readOnly mode */}
+            {!readOnly && onShare && (
               <button
                 type="button"
                 className="context-menu-item"
@@ -356,19 +369,34 @@ export function ContextMenu({
               Details
             </button>
 
-            {/* Divider before destructive action */}
-            <div className="context-menu-divider" role="separator" />
+            {/* Hide - shared items only */}
+            {readOnly && onHide && (
+              <button
+                type="button"
+                className="context-menu-item"
+                onClick={handleHide}
+                role="menuitem"
+              >
+                <span className="context-menu-item-icon">&#10005;</span>
+                Hide
+              </button>
+            )}
 
-            {/* Delete */}
-            <button
-              type="button"
-              className="context-menu-item context-menu-item--destructive"
-              onClick={handleDelete}
-              role="menuitem"
-            >
-              <span className="context-menu-item-icon">&#128465;</span>
-              Delete
-            </button>
+            {/* Divider before destructive action - only if delete is shown */}
+            {!readOnly && <div className="context-menu-divider" role="separator" />}
+
+            {/* Delete - hidden in readOnly mode */}
+            {!readOnly && (
+              <button
+                type="button"
+                className="context-menu-item context-menu-item--destructive"
+                onClick={handleDelete}
+                role="menuitem"
+              >
+                <span className="context-menu-item-icon">&#128465;</span>
+                Delete
+              </button>
+            )}
           </>
         )}
       </div>

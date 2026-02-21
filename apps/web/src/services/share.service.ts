@@ -19,8 +19,10 @@ import {
   sharesControllerHideShare,
 } from '../api/shares/shares';
 
+import { wrapKey, bytesToHex, hexToBytes } from '@cipherbox/crypto';
 import type { ReceivedShare, SentShare } from '../stores/share.store';
 import { useShareStore } from '../stores/share.store';
+import type { FolderNode } from '../stores/folder.store';
 
 /**
  * Fetch all active, non-hidden shares received by the current user.
@@ -198,4 +200,130 @@ export async function getSentSharesForItem(ipnsName: string): Promise<SentShare[
   }
 
   return shares.filter((s) => s.ipnsName === ipnsName);
+}
+
+// ---------------------------------------------------------------------------
+// Post-upload / post-create share key propagation
+// ---------------------------------------------------------------------------
+
+/**
+ * Ensure sent shares cache is fresh (fetched within last 30s).
+ * Returns the current sent shares array.
+ */
+async function ensureFreshSentShares(): Promise<SentShare[]> {
+  const store = useShareStore.getState();
+  if (store.lastFetchedAt && Date.now() - store.lastFetchedAt < 30_000) {
+    return store.sentShares;
+  }
+  const shares = await fetchSentShares();
+  useShareStore.getState().setSentShares(shares);
+  return shares;
+}
+
+/**
+ * Check if a folder (by IPNS name) has any active shares.
+ * Used to decide whether post-upload re-wrapping is needed.
+ */
+export async function hasActiveShares(folderIpnsName: string): Promise<boolean> {
+  const shares = await ensureFreshSentShares();
+  return shares.some((s) => s.ipnsName === folderIpnsName);
+}
+
+/**
+ * Find active shares that cover a given folder, including ancestor shares.
+ * A folder is "covered" if it or any of its ancestor folders is shared.
+ *
+ * Walks the ancestor chain and checks each folder's IPNS name against sent shares.
+ *
+ * @param folderIpnsName - IPNS name of the current folder
+ * @param folders - Current folder tree from the folder store
+ * @param currentFolderId - ID of the current folder in the tree
+ * @returns Array of sent shares covering this folder (may be from ancestor)
+ */
+export async function findCoveringShares(
+  folderIpnsName: string,
+  folders: Record<string, FolderNode>,
+  currentFolderId: string | null
+): Promise<SentShare[]> {
+  const shares = await ensureFreshSentShares();
+  if (shares.length === 0) return [];
+
+  // Collect all IPNS names from this folder up to root
+  const ipnsNames = new Set<string>();
+  ipnsNames.add(folderIpnsName);
+
+  let walkId = currentFolderId;
+  while (walkId) {
+    const node = folders[walkId];
+    if (!node) break;
+    ipnsNames.add(node.ipnsName);
+    walkId = node.parentId;
+  }
+
+  return shares.filter((s) => ipnsNames.has(s.ipnsName));
+}
+
+/**
+ * After adding a file or subfolder to a shared folder, re-wrap the new key
+ * for all existing share recipients.
+ *
+ * This is a fire-and-forget operation -- failures are logged but don't block
+ * the primary upload/create flow.
+ *
+ * @param params.folderIpnsName - IPNS name of the folder being modified
+ * @param params.folders - Current folder tree from the store
+ * @param params.currentFolderId - ID of the current folder in the tree
+ * @param params.newItems - New items whose keys need re-wrapping
+ */
+export async function reWrapForRecipients(params: {
+  folderIpnsName: string;
+  folders: Record<string, FolderNode>;
+  currentFolderId: string | null;
+  newItems: Array<{
+    keyType: 'file' | 'folder';
+    itemId: string;
+    plaintextKey: Uint8Array;
+  }>;
+}): Promise<void> {
+  const coveringShares = await findCoveringShares(
+    params.folderIpnsName,
+    params.folders,
+    params.currentFolderId
+  );
+
+  if (coveringShares.length === 0) return;
+
+  // For each share recipient, re-wrap all new item keys
+  for (const share of coveringShares) {
+    try {
+      const recipientPubKey = hexToBytes(
+        share.recipientPublicKey.startsWith('0x')
+          ? share.recipientPublicKey.slice(2)
+          : share.recipientPublicKey
+      );
+
+      const wrappedKeys: Array<{
+        keyType: 'file' | 'folder';
+        itemId: string;
+        encryptedKey: string;
+      }> = [];
+
+      for (const item of params.newItems) {
+        const wrapped = await wrapKey(item.plaintextKey, recipientPubKey);
+        wrappedKeys.push({
+          keyType: item.keyType,
+          itemId: item.itemId,
+          encryptedKey: bytesToHex(wrapped),
+        });
+      }
+
+      // Add the wrapped keys to this share via API
+      await addShareKeys(share.shareId, wrappedKeys);
+    } catch (err) {
+      console.warn(
+        `[share] Failed to re-wrap keys for recipient ${share.recipientPublicKey.slice(0, 10)}...:`,
+        err
+      );
+    }
+  }
 }
