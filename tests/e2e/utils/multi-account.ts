@@ -73,8 +73,17 @@ export async function closeTestAccounts(accounts: TestAccount[]): Promise<void> 
 
 /**
  * Navigate a test account's page to the shared files view.
+ * Always navigates away first to force a component remount and fresh data fetch.
  */
 export async function navigateToShared(account: TestAccount): Promise<void> {
+  // Navigate away first to ensure the SharedFileBrowser remounts and re-fetches
+  const currentUrl = account.page.url();
+  if (currentUrl.includes('/shared')) {
+    await account.page.evaluate(() => {
+      window.location.hash = '#/files';
+    });
+    await account.page.waitForURL('**/files', { timeout: 30000 });
+  }
   await account.page.evaluate(() => {
     window.location.hash = '#/shared';
   });
@@ -83,8 +92,16 @@ export async function navigateToShared(account: TestAccount): Promise<void> {
 
 /**
  * Navigate a test account's page to their own files.
+ * Always navigates away first to force a component remount and fresh data fetch.
  */
 export async function navigateToFiles(account: TestAccount): Promise<void> {
+  const currentUrl = account.page.url();
+  if (currentUrl.includes('/files')) {
+    await account.page.evaluate(() => {
+      window.location.hash = '#/shared';
+    });
+    await account.page.waitForURL('**/shared', { timeout: 30000 });
+  }
   await account.page.evaluate(() => {
     window.location.hash = '#/files';
   });
