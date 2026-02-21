@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "899fee325ca9",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-14-user-to-user-sharing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/phases/14-user-to-user-sharing/14-03-SUMMARY.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/89/9fee325ca9/0/metadata.json",
+      "transcript": "/89/9fee325ca9/0/full.jsonl",
+      "context": "/89/9fee325ca9/0/context.md",
+      "content_hash": "/89/9fee325ca9/0/content_hash.txt",
+      "prompt": "/89/9fee325ca9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 76803,
+    "cache_read_tokens": 5239366,
+    "output_tokens": 4517,
+    "api_call_count": 64
+  }
+}
