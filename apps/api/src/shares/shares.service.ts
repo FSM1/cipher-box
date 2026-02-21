@@ -30,8 +30,12 @@ export class SharesService {
    */
   async createShare(sharerId: string, dto: CreateShareDto): Promise<Share> {
     // Look up recipient by publicKey
+    // Strip 0x prefix if present — DB stores bare hex
+    const normalizedPubKey = dto.recipientPublicKey.startsWith('0x')
+      ? dto.recipientPublicKey.slice(2)
+      : dto.recipientPublicKey;
     const recipient = await this.userRepo.findOne({
-      where: { publicKey: dto.recipientPublicKey },
+      where: { publicKey: normalizedPubKey },
     });
 
     if (!recipient) {
@@ -244,8 +248,10 @@ export class SharesService {
    * Does not expose internal user IDs.
    */
   async lookupUserByPublicKey(publicKey: string): Promise<boolean> {
+    // Strip 0x prefix if present — DB stores bare hex
+    const normalizedKey = publicKey.startsWith('0x') ? publicKey.slice(2) : publicKey;
     const user = await this.userRepo.findOne({
-      where: { publicKey },
+      where: { publicKey: normalizedKey },
       select: ['id'],
     });
 

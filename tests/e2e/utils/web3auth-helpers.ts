@@ -331,7 +331,8 @@ export async function waitForAuthentication(page: Page): Promise<void> {
 /**
  * Extract the 0x04-prefixed public key hex from a TestAuthState.
  * This is the format needed for the ShareDialog recipient input.
+ * The test-login endpoint returns bare hex (04...) so we prepend 0x.
  */
 export function getPublicKeyHex(state: TestAuthState): string {
-  return state.publicKeyHex;
+  return state.publicKeyHex.startsWith('0x') ? state.publicKeyHex : '0x' + state.publicKeyHex;
 }
