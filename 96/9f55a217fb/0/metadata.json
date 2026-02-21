@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "969f55a217fb",
+  "session_id": "0ea9b4b6-40e9-407b-8bb5-a31903367d21",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-21T01:52:59.152543Z",
+  "branch": "docs/metadata-schema-evolution-protocol",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/quick/019-metadata-schema-evolution-protocol/019-PLAN.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "c62f3420094c",
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 76645,
+    "cache_read_tokens": 2789031,
+    "output_tokens": 4376,
+    "api_call_count": 32
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-21T01:52:57.512973Z",
+    "agent_lines": 392,
+    "human_added": 37,
+    "human_modified": 32,
+    "human_removed": 0,
+    "total_committed": 461,
+    "agent_percentage": 85.03253796095444
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/0ea9b4b6-40e9-407b-8bb5-a31903367d21.jsonl"
+}
