@@ -39,7 +39,7 @@ Switch file IPNS keys to randomly generated Ed25519 keypairs, matching the folde
 5. **Recovery tool**: Update to read IPNS private key from FilePointer (already traverses tree)
 6. **Desktop FUSE**: Update create()/release() to generate random keypair and store in metadata
 7. **Remove**: `deriveFileIpnsKeypair()` HKDF function and related derivation code
-8. **Schema**: This is a breaking change to FilePointer — requires version bump per METADATA_EVOLUTION_PROTOCOL.md
+8. **Schema**: Breaking change to FilePointer — exercise METADATA_EVOLUTION_PROTOCOL.md with dual-read migration (not clean-break)
 
 ### Schema change (FilePointer)
 
@@ -49,12 +49,14 @@ Switch file IPNS keys to randomly generated Ed25519 keypairs, matching the folde
    nameEncrypted: string;
    nameIv: string;
    fileMetaIpnsName: string;
-+  ipnsPrivateKeyEncrypted: string;  // ECIES(ipnsPrivateKey, ownerPublicKey)
++  ipnsPrivateKeyEncrypted?: string;  // ECIES(ipnsPrivateKey, ownerPublicKey) — optional for backward compat
    fileId: string;
    created: number;
    modified: number;
  }
 ```
+
+Field is **optional** in the type to support dual-read migration. When absent, clients fall back to HKDF derivation. All new writes include the field. After a sufficient migration window, the field can be made required and HKDF code removed.
 
 ### Post-completion checklist
 
@@ -62,8 +64,25 @@ Switch file IPNS keys to randomly generated Ed25519 keypairs, matching the folde
 - [ ] Update METADATA_SCHEMAS.md Section 14 (IPNS Key Derivation Summary) — remove file IPNS from the HKDF table, add to the "random" category alongside subfolder keys
 - [ ] Follow METADATA_EVOLUTION_PROTOCOL.md Section 4 checklist for the FilePointer schema change
 
+## Migration Strategy
+
+This is a **breaking schema change** to FilePointer (adding required `ipnsPrivateKeyEncrypted` field). Rather than relying on the clean-break window philosophy from Phase 12.3.1 (wipe DB, no migration), this task should exercise the **METADATA_EVOLUTION_PROTOCOL.md** properly:
+
+1. **Dual-read support**: New clients read both old FilePointers (no `ipnsPrivateKeyEncrypted`) and new ones. Old FilePointers fall back to HKDF derivation for the IPNS key.
+2. **Write-new-only**: All new/updated FilePointers include `ipnsPrivateKeyEncrypted` with a randomly generated keypair.
+3. **Lazy migration**: When an old FilePointer is encountered, the HKDF-derived key is re-wrapped and written back as `ipnsPrivateKeyEncrypted` on next folder metadata publish.
+4. **Recovery tool**: Must handle both formats (HKDF fallback when field is absent).
+5. **Desktop FUSE**: Same dual-read, write-new pattern as web.
+
+This approach validates that the evolution protocol works in practice for a real breaking change, building confidence before Phase 14 (sharing) introduces more complex schema extensions.
+
+### Why not clean-break again
+
+- Production data may exist by the time this runs — can't assume DB wipe
+- The evolution protocol was created specifically for this class of change
+- Exercising the protocol now (with a relatively simple migration) proves the process before harder migrations arrive
+
 ## Notes
 
-- This is a breaking schema change — should be done before any production data exists (same clean-break window philosophy as Phase 12.3.1)
 - Multi-writer IPNS (two users publishing to same IPNS name) still has the sequence number conflict problem — this todo doesn't solve that, but removes the key-distribution blocker
 - Consider doing this before Phase 14 (User-to-User Sharing) since sharing will benefit from file-level IPNS key handoff
