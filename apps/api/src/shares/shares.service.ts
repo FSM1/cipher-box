@@ -56,6 +56,20 @@ export class SharesService {
       throw new ConflictException('Share already exists for this item and recipient');
     }
 
+    // Clean up any revoked-but-not-yet-rotated records for this triple
+    // so the new share can be created without unique constraint conflicts
+    const revoked = await this.shareRepo.find({
+      where: {
+        sharerId,
+        recipientId: recipient.id,
+        ipnsName: dto.ipnsName,
+        revokedAt: Not(IsNull()),
+      },
+    });
+    if (revoked.length > 0) {
+      await this.shareRepo.remove(revoked);
+    }
+
     const share = this.shareRepo.create({
       sharerId,
       recipientId: recipient.id,
@@ -216,21 +230,17 @@ export class SharesService {
   }
 
   /**
-   * Look up a user by their secp256k1 public key.
-   * Used to verify recipient exists before sharing.
+   * Check if a user with the given secp256k1 public key exists.
+   * Used to verify recipient is registered before sharing.
+   * Does not expose internal user IDs.
    */
-  async lookupUserByPublicKey(
-    publicKey: string
-  ): Promise<{ userId: string; publicKey: string } | null> {
+  async lookupUserByPublicKey(publicKey: string): Promise<boolean> {
     const user = await this.userRepo.findOne({
       where: { publicKey },
+      select: ['id'],
     });
 
-    if (!user) {
-      return null;
-    }
-
-    return { userId: user.id, publicKey: user.publicKey };
+    return !!user;
   }
 
   /**

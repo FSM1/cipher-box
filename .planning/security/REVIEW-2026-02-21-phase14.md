@@ -519,11 +519,45 @@ describe('Lazy key rotation', () => {
 | P2       | M5: Silent re-wrapping failures                      | Surface non-blocking notification to sharer                      | MEDIUM |
 | P3       | L1-L4: Various low-priority items                    | See individual recommendations                                   | LOW    |
 
-## Next Steps
+## Resolution Status (2026-02-21)
 
-1. **Immediate (P0):** Fix H1 (file key re-wrapping) and H2 (DTO validation) before merging PR
-2. **Before merge (P1):** Fix H3 (user ID exposure) and H4 (unique constraint)
-3. **Post-merge (P2-P3):** Address medium/low items as tech debt in future phases
+### Fixed in this PR
+
+| Finding | Resolution                                                                                                                                                                                                                                                                                                                                                          | Commit              |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| **H1**  | Added file key re-wrapping to `collectChildKeys` in `ShareDialog.tsx`. Files now have their `fileKeyEncrypted` resolved, unwrapped, and re-wrapped for the recipient during folder sharing. Removed dead fallback code in `useSharedNavigation.ts` that tried to use owner-wrapped keys. Updated `countFolderChildren` to count all children for accurate progress. | security fix commit |
+| **H2**  | Added `@Matches`, `@MinLength`, `@MaxLength` decorators to all hex-encoded fields in `create-share.dto.ts`, `share-key.dto.ts`, `update-encrypted-key.dto.ts`. Added `@Matches` UUID pattern for `itemId`, `@Matches` for `recipientPublicKey` (secp256k1 format), `@Matches` + `@MaxLength` for `ipnsName`, `@MaxLength` for `itemName`.                           | security fix commit |
+| **H3**  | Changed `GET /shares/lookup` to return `{ exists: boolean }` instead of `{ userId, publicKey }`. Updated `shares.service.ts` (`lookupUserByPublicKey` returns `boolean`), `shares.controller.ts`, and `share.service.ts` on frontend.                                                                                                                               | security fix commit |
+| **H4**  | Removed `@Unique` decorator from `share.entity.ts`. Created migration `1740300000000-SharesPartialUniqueIndex` with partial unique index `WHERE revoked_at IS NULL`. Updated `createShare` to clean up revoked records for the same triple before inserting.                                                                                                        | security fix commit |
+| **M2**  | Added JSDoc documenting the zeroing contract on `reWrapForRecipients`: callers are responsible for zeroing `plaintextKey` arrays.                                                                                                                                                                                                                                   | security fix commit |
+| **M3**  | Added `folderKey.fill(0)` and nav stack key zeroing in `navigateToRoot` and `navigateUp` in `useSharedNavigation.ts`.                                                                                                                                                                                                                                               | security fix commit |
+| **M4**  | Added 60-second TTL to `shareKeysCache` in `useSharedNavigation.ts`. Stale entries expire on next access.                                                                                                                                                                                                                                                           | security fix commit |
+| **L3**  | Addressed by H2 -- hex validation on DTOs prevents `Buffer.from` silent truncation.                                                                                                                                                                                                                                                                                 | via H2              |
+
+### Tests Added
+
+- 7 new test cases in `packages/crypto/src/__tests__/rewrap.test.ts` (11 total, up from 4):
+  - Corrupted ciphertext detection (GCM auth tag tamper)
+  - Unique ciphertexts per recipient (key isolation)
+  - Unique ciphertexts per invocation (ephemeral key non-reuse)
+  - Cross-recipient key isolation (Charlie can't unwrap Bob's key)
+  - Large key handling (64 bytes)
+  - Truncated private key rejection
+  - Error message does not leak key material (generic errors only)
+
+### Deferred (tracked in `.planning/todos/pending/2026-02-21-phase14-security-review-deferred.md`)
+
+| Finding | Reason                                                                                                                     |
+| ------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **M1**  | Encrypting `itemName` requires schema change and more complex client-side handling. Documented as known privacy trade-off. |
+| **M5**  | Surfacing non-blocking notifications for failed re-wrapping requires toast/notification system not yet built.              |
+| **L1**  | Lookup endpoint 200/404 distinction is by design (required for sharing flow). Mitigated by auth + ThrottlerGuard.          |
+| **L2**  | `newFolderKey` not zeroed in `executeLazyRotation` -- key is actively in use (stored in folder store).                     |
+| **L4**  | No pagination on share listing endpoints. Low priority until user scale warrants it.                                       |
+
+### Updated Risk Level
+
+**Risk Level:** LOW (down from HIGH -- all P0/P1 issues resolved, remaining items are medium-term hardening)
 
 ---
 

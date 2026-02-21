@@ -96,9 +96,15 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     }>
   >([]);
 
-  // Cache share keys per shareId to avoid refetching
+  // Cache share keys per shareId with TTL to avoid refetching
   const shareKeysCache = useRef<
-    Map<string, Array<{ keyType: 'file' | 'folder'; itemId: string; encryptedKey: string }>>
+    Map<
+      string,
+      {
+        keys: Array<{ keyType: 'file' | 'folder'; itemId: string; encryptedKey: string }>;
+        fetchedAt: number;
+      }
+    >
   >(new Map());
 
   /**
@@ -141,15 +147,20 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     };
   }, []);
 
+  /** Cache TTL for share keys (60 seconds). */
+  const SHARE_KEYS_CACHE_TTL = 60_000;
+
   /**
-   * Get share keys for a share, with caching.
+   * Get share keys for a share, with TTL-based caching.
    */
   const getShareKeys = useCallback(async (shareId: string) => {
     const cached = shareKeysCache.current.get(shareId);
-    if (cached) return cached;
+    if (cached && Date.now() - cached.fetchedAt < SHARE_KEYS_CACHE_TTL) {
+      return cached.keys;
+    }
 
     const keys = await fetchShareKeys(shareId);
-    shareKeysCache.current.set(shareId, keys);
+    shareKeysCache.current.set(shareId, { keys, fetchedAt: Date.now() });
     return keys;
   }, []);
 
@@ -289,6 +300,8 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
    */
   const navigateUp = useCallback(() => {
     if (navStackRef.current.length > 0) {
+      // Zero current folder key before replacing
+      if (folderKey) folderKey.fill(0);
       // Pop from nav stack
       const prev = navStackRef.current.pop()!;
       setFolderChildren(prev.children);
@@ -298,12 +311,19 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       // Back to top-level list
       navigateToRoot();
     }
-  }, [currentView]);
+  }, [currentView, folderKey]);
 
   /**
    * Navigate back to the top-level shared list.
+   * Zeroes all decrypted folder keys from memory before clearing state.
    */
   const navigateToRoot = useCallback(() => {
+    // Zero current folder key
+    if (folderKey) folderKey.fill(0);
+    // Zero all nav stack folder keys
+    for (const entry of navStackRef.current) {
+      entry.folderKey.fill(0);
+    }
     setCurrentView('list');
     setCurrentShareId(null);
     setFolderChildren([]);
@@ -311,7 +331,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     setBreadcrumbs([]);
     navStackRef.current = [];
     setError(null);
-  }, []);
+  }, [folderKey]);
 
   /**
    * Download a shared file from the top-level list.
@@ -394,35 +414,22 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         // Look for a re-wrapped file key in share_keys
         const fileKeyRecord = keys.find((k) => k.keyType === 'file' && k.itemId === item.id);
 
-        let plaintext: Uint8Array;
-
-        if (fileKeyRecord) {
-          // Use re-wrapped file key from share_keys
-          // downloadFile handles unwrapping internally via wrappedKey + privateKey
-          plaintext = await downloadFile(
-            {
-              cid: fileMeta.cid,
-              iv: fileMeta.fileIv,
-              wrappedKey: fileKeyRecord.encryptedKey,
-              originalName: item.name,
-              encryptionMode: fileMeta.encryptionMode,
-            },
-            auth.vaultKeypair.privateKey
-          );
-        } else {
-          // Fallback: use the fileKeyEncrypted from metadata
-          // This works when the file key is wrapped with recipient's key
-          plaintext = await downloadFile(
-            {
-              cid: fileMeta.cid,
-              iv: fileMeta.fileIv,
-              wrappedKey: fileMeta.fileKeyEncrypted,
-              originalName: item.name,
-              encryptionMode: fileMeta.encryptionMode,
-            },
-            auth.vaultKeypair.privateKey
-          );
+        if (!fileKeyRecord) {
+          throw new Error('No re-wrapped file key available for this file');
         }
+
+        // Use re-wrapped file key from share_keys
+        // downloadFile handles unwrapping internally via wrappedKey + privateKey
+        const plaintext = await downloadFile(
+          {
+            cid: fileMeta.cid,
+            iv: fileMeta.fileIv,
+            wrappedKey: fileKeyRecord.encryptedKey,
+            originalName: item.name,
+            encryptionMode: fileMeta.encryptionMode,
+          },
+          auth.vaultKeypair.privateKey
+        );
 
         downloadStore.setDecrypting();
         triggerBrowserDownload(plaintext, item.name);

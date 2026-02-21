@@ -64,10 +64,18 @@ function truncateKey(key: string): string {
 
 /**
  * Collect all descendant keys from a folder for sharing.
- * Traverses subfolders depth-first, re-wrapping each key for the recipient.
+ * Traverses subfolders depth-first, re-wrapping each file and subfolder key
+ * for the recipient.
+ *
+ * @param children - Children of the current folder
+ * @param folderKey - Decrypted AES key of the current folder (for resolving file metadata)
+ * @param ownerPrivateKey - Owner's secp256k1 private key for unwrapping ECIES keys
+ * @param recipientPubKeyBytes - Recipient's uncompressed secp256k1 public key
+ * @param onProgress - Callback for progress tracking
  */
 async function collectChildKeys(
   children: FolderChild[],
+  folderKey: Uint8Array,
   ownerPrivateKey: Uint8Array,
   recipientPubKeyBytes: Uint8Array,
   onProgress: (wrapped: number) => void
@@ -78,22 +86,25 @@ async function collectChildKeys(
   for (const child of children) {
     if (child.type === 'file') {
       const fp = child as FilePointer;
-      // File children: no separate key to wrap at folder level.
-      // The file's fileKeyEncrypted is wrapped for the owner inside file metadata.
-      // For sharing, we skip individual file keys at folder level since
-      // the recipient gets the folderKey which decrypts file metadata.
-      // The fileKeyEncrypted inside the file metadata is wrapped for the owner.
-      // We need to re-wrap the file's own key for the recipient.
-      // But we don't have a separate file key at this level -- the folderKey
-      // decrypts the file metadata which contains the fileKeyEncrypted.
-      // The recipient can use the shared folderKey to decrypt file metadata
-      // and then needs the file's ECIES key unwrapped with their own key.
-      // Actually, the fileKeyEncrypted is wrapped for the OWNER's publicKey.
-      // The recipient needs it re-wrapped for THEIR publicKey.
-      // So we DO need to resolve each file's metadata and re-wrap fileKeyEncrypted.
-      void fp;
-      // This is handled by the top-level flow -- file sharing wraps the single file key.
-      // For folder sharing, individual file re-wrapping is done below.
+      // Resolve file metadata to get fileKeyEncrypted, then re-wrap for recipient
+      try {
+        const { metadata: fileMeta } = await resolveFileMetadata(fp.fileMetaIpnsName, folderKey);
+        const reWrappedFileKey = await reWrapEncryptedKey(
+          fileMeta.fileKeyEncrypted,
+          ownerPrivateKey,
+          recipientPubKeyBytes
+        );
+        childKeys.push({
+          keyType: 'file' as ChildKeyDto['keyType'],
+          itemId: fp.id,
+          encryptedKey: reWrappedFileKey,
+        });
+        wrapped++;
+        onProgress(wrapped);
+      } catch (err) {
+        console.error(`Failed to re-wrap file key for ${fp.name}:`, err);
+        // Continue with other children
+      }
     } else {
       const folder = child as FolderEntry;
       // Re-wrap the subfolder's folderKey for the recipient
@@ -127,6 +138,7 @@ async function collectChildKeys(
 
           const subKeys = await collectChildKeys(
             metadata.children,
+            folderKeyBytes,
             ownerPrivateKey,
             recipientPubKeyBytes,
             (subWrapped) => {
@@ -161,10 +173,11 @@ async function reWrapEncryptedKey(
 }
 
 /**
- * Count total items in a folder tree for progress tracking.
+ * Count total items in a folder for progress tracking.
+ * Includes both files and subfolders since all need key re-wrapping.
  */
 function countFolderChildren(children: FolderChild[]): number {
-  return children.filter((c) => c.type === 'folder').length;
+  return children.length;
 }
 
 /**
@@ -329,6 +342,7 @@ export function ShareDialog({
 
           childKeys = await collectChildKeys(
             metadata.children,
+            itemFolderKey,
             ownerPrivateKey,
             recipientPubKeyBytes,
             (wrapped) => setProgress({ current: wrapped, total: totalSubfolders })

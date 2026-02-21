@@ -8,13 +8,13 @@ import {
   OneToMany,
   JoinColumn,
   Index,
-  Unique,
 } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
 import { ShareKey } from './share-key.entity';
 
+// Unique constraint is a partial index (WHERE revoked_at IS NULL) created via migration.
+// This allows revoked records to coexist with new active shares for the same triple.
 @Entity('shares')
-@Unique(['sharerId', 'recipientId', 'ipnsName'])
 export class Share {
   @PrimaryGeneratedColumn('uuid')
   id!: string;

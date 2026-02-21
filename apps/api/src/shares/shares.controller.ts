@@ -141,14 +141,12 @@ export class SharesController {
   @ApiResponse({ status: 200, description: 'User found' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  async lookupUser(
-    @Query('publicKey') publicKey: string
-  ): Promise<{ userId: string; publicKey: string }> {
-    const result = await this.sharesService.lookupUserByPublicKey(publicKey);
-    if (!result) {
+  async lookupUser(@Query('publicKey') publicKey: string): Promise<{ exists: boolean }> {
+    const exists = await this.sharesService.lookupUserByPublicKey(publicKey);
+    if (!exists) {
       throw new NotFoundException('User not found');
     }
-    return result;
+    return { exists: true };
   }
 
   @Get('pending-rotations')

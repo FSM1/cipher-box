@@ -82,23 +82,18 @@ export async function fetchSentShares(): Promise<SentShare[]> {
 }
 
 /**
- * Look up a CipherBox user by their secp256k1 public key.
- * Returns null if no user is found (404).
+ * Check if a CipherBox user exists with the given secp256k1 public key.
+ * Returns false if no user is found (404).
  *
  * @param publicKeyHex - Uncompressed secp256k1 public key (0x04... format)
  */
-export async function lookupUser(
-  publicKeyHex: string
-): Promise<{ userId: string; publicKey: string } | null> {
+export async function lookupUser(publicKeyHex: string): Promise<boolean> {
   try {
-    const result = (await sharesControllerLookupUser({ publicKey: publicKeyHex })) as unknown as {
-      userId: string;
-      publicKey: string;
-    };
-    return result;
+    await sharesControllerLookupUser({ publicKey: publicKeyHex });
+    return true;
   } catch {
     // 404 = user not found
-    return null;
+    return false;
   }
 }
 
@@ -272,6 +267,11 @@ export async function findCoveringShares(
  *
  * This is a fire-and-forget operation -- failures are logged but don't block
  * the primary upload/create flow.
+ *
+ * IMPORTANT: Callers are responsible for zeroing `newItems[*].plaintextKey`
+ * after this function completes. This function does NOT zero the keys because
+ * some callers (e.g., subfolder creation) keep the key alive in the store.
+ * Use a `finally` block to ensure zeroing even on errors.
  *
  * @param params.folderIpnsName - IPNS name of the folder being modified
  * @param params.folders - Current folder tree from the store
