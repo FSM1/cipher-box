@@ -1,0 +1,806 @@
+<objective>
+Execute all plans in a phase using wave-based parallel execution.
+
+Orchestrator stays lean: discover plans, analyze dependencies, group into waves, spawn subagents, collect results. Each subagent loads the full execute-plan context and handles its own plan.
+
+Context budget: ~15% orchestrator, 100% fresh per subagent.
+</objective>
+
+<execution_context>
+@./.claude/get-shit-done/references/ui-brand.md
+@./.claude/get-shit-done/workflows/execute-phase.md
+</execution_context>
+
+<context>
+Phase: 14
+
+**Flags:**
+
+- `--gaps-only` — Execute only gap closure plans (plans with `gap_closure: true` in frontmatter). Use after verify-work creates fix plans.
+
+@.planning/ROADMAP.md
+@.planning/STATE.md
+</context>
+
+<process>
+1. **Validate phase exists**
+   - Find phase directory matching argument
+   - Count PLAN.md files
+   - Error if no plans found
+
+2. **Discover plans**
+   - List all \*-PLAN.md files in phase directory
+   - Check which have \*-SUMMARY.md (already complete)
+   - If `--gaps-only`: filter to only plans with `gap_closure: true`
+   - Build list of incomplete plans
+
+3. **Group by wave**
+   - Read `wave` from each plan's frontmatter
+   - Group plans by wave number
+   - Report wave structure to user
+
+4. **Execute waves**
+   For each wave in order:
+   - Spawn `gsd-executor` for each plan in wave (parallel Task calls)
+   - Wait for completion (Task blocks)
+   - Verify SUMMARYs created
+   - Proceed to next wave
+
+5. **Aggregate results**
+   - Collect summaries from all plans
+   - Report phase completion status
+
+6. **Commit any orchestrator corrections**
+   Check for uncommitted changes before verification:
+
+   ```bash
+   git status --porcelain
+   ```
+
+   **If changes exist:** Orchestrator made corrections between executor completions. Commit them:
+
+   ```bash
+   git add -u && git commit -m "fix({phase}): orchestrator corrections"
+   ```
+
+   **If clean:** Continue to verification.
+
+7. **Verify phase goal**
+   - Spawn `gsd-verifier` subagent with phase directory and goal
+   - Verifier checks must_haves against actual codebase (not SUMMARY claims)
+   - Creates VERIFICATION.md with detailed report
+   - Route by status:
+     - `passed` → continue to step 8
+     - `human_needed` → present items, get approval or feedback
+     - `gaps_found` → present gaps, offer `/gsd:plan-phase {X} --gaps`
+
+8. **Design sync check (UI phases only)**
+   - Detect UI phase using keyword heuristic on phase name/goal
+   - Only if UI phase AND `designs/*.pen` exists
+   - Ask: "UI phase complete. Sync design file to match implementation?" → Yes / Skip
+   - If yes: run `/design:sync` defaulting to "update design to match code"
+   - Non-blocking — phase completion continues regardless
+
+9. **Update roadmap and state**
+   - Update ROADMAP.md, STATE.md
+
+10. **Update requirements**
+    Mark phase requirements as Complete:
+    - Read ROADMAP.md, find this phase's `Requirements:` line (e.g., "AUTH-01, AUTH-02")
+    - Read REQUIREMENTS.md traceability table
+    - For each REQ-ID in this phase: change Status from "Pending" to "Complete"
+    - Write updated REQUIREMENTS.md
+    - Skip if: REQUIREMENTS.md doesn't exist, or phase has no Requirements line
+
+11. **Commit phase completion**
+    Bundle all phase metadata updates in one commit:
+    - Stage: `git add .planning/ROADMAP.md .planning/STATE.md`
+    - Stage REQUIREMENTS.md if updated: `git add .planning/REQUIREMENTS.md`
+    - Commit: `docs({phase}): complete {phase-name} phase`
+
+12. **Offer next steps** - Route to next action (see `<offer_next>`)
+    </process>
+
+<offer_next>
+Output this markdown directly (not as a code block). Route based on status:
+
+| Status                 | Route                                              |
+| ---------------------- | -------------------------------------------------- |
+| `gaps_found`           | Route C (gap closure)                              |
+| `human_needed`         | Present checklist, then re-route based on approval |
+| `passed` + more phases | Route A (next phase)                               |
+| `passed` + last phase  | Route B (milestone complete)                       |
+
+---
+
+**Route A: Phase verified, more phases remain**
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GSD ► PHASE {Z} COMPLETE ✓
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Phase {Z}: {Name}**
+
+{Y} plans executed
+Goal verified ✓
+
+───────────────────────────────────────────────────────────────
+
+## ▶ Next Up
+
+**Phase {Z+1}: {Name}** — {Goal from ROADMAP.md}
+
+/gsd:discuss-phase {Z+1} — gather context and clarify approach
+
+<sub>/clear first → fresh context window</sub>
+
+───────────────────────────────────────────────────────────────
+
+**Also available:**
+
+- /gsd:plan-phase {Z+1} — skip discussion, plan directly
+- /gsd:verify-work {Z} — manual acceptance testing before continuing
+
+───────────────────────────────────────────────────────────────
+
+---
+
+**Route B: Phase verified, milestone complete**
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GSD ► MILESTONE COMPLETE 🎉
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**v1.0**
+
+{N} phases completed
+All phase goals verified ✓
+
+───────────────────────────────────────────────────────────────
+
+## ▶ Next Up
+
+**Audit milestone** — verify requirements, cross-phase integration, E2E flows
+
+/gsd:audit-milestone
+
+<sub>/clear first → fresh context window</sub>
+
+───────────────────────────────────────────────────────────────
+
+**Also available:**
+
+- /gsd:verify-work — manual acceptance testing
+- /gsd:complete-milestone — skip audit, archive directly
+
+───────────────────────────────────────────────────────────────
+
+---
+
+**Route C: Gaps found — need additional planning**
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GSD ► PHASE {Z} GAPS FOUND ⚠
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Phase {Z}: {Name}**
+
+Score: {N}/{M} must-haves verified
+Report: .planning/phases/{phase_dir}/{phase}-VERIFICATION.md
+
+### What's Missing
+
+{Extract gap summaries from VERIFICATION.md}
+
+───────────────────────────────────────────────────────────────
+
+## ▶ Next Up
+
+**Plan gap closure** — create additional plans to complete the phase
+
+/gsd:plan-phase {Z} --gaps
+
+<sub>/clear first → fresh context window</sub>
+
+───────────────────────────────────────────────────────────────
+
+**Also available:**
+
+- cat .planning/phases/{phase_dir}/{phase}-VERIFICATION.md — see full report
+- /gsd:verify-work {Z} — manual testing before planning
+
+───────────────────────────────────────────────────────────────
+
+---
+
+After user runs /gsd:plan-phase {Z} --gaps:
+
+1. Planner reads VERIFICATION.md gaps
+2. Creates plans 04, 05, etc. to close gaps
+3. User runs /gsd:execute-phase {Z} again
+4. Execute-phase runs incomplete plans (04, 05...)
+5. Verifier runs again → loop until passed
+   </offer_next>
+
+<wave_execution>
+**Parallel spawning:**
+
+Spawn all plans in a wave with a single message containing multiple Task calls:
+
+```
+Task(prompt="Execute plan at {plan_01_path}\n\nPlan: @{plan_01_path}\nProject state: @.planning/STATE.md", subagent_type="gsd-executor")
+Task(prompt="Execute plan at {plan_02_path}\n\nPlan: @{plan_02_path}\nProject state: @.planning/STATE.md", subagent_type="gsd-executor")
+Task(prompt="Execute plan at {plan_03_path}\n\nPlan: @{plan_03_path}\nProject state: @.planning/STATE.md", subagent_type="gsd-executor")
+```
+
+All three run in parallel. Task tool blocks until all complete.
+
+**No polling.** No background agents. No TaskOutput loops.
+</wave_execution>
+
+<checkpoint_handling>
+Plans with `autonomous: false` have checkpoints. The execute-phase.md workflow handles the full checkpoint flow:
+
+- Subagent pauses at checkpoint, returns structured state
+- Orchestrator presents to user, collects response
+- Spawns fresh continuation agent (not resume)
+
+See `@./.claude/get-shit-done/workflows/execute-phase.md` step `checkpoint_handling` for complete details.
+</checkpoint_handling>
+
+<deviation_rules>
+During execution, handle discoveries automatically:
+
+1. **Auto-fix bugs** - Fix immediately, document in Summary
+2. **Auto-add critical** - Security/correctness gaps, add and document
+3. **Auto-fix blockers** - Can't proceed without fix, do it and document
+4. **Ask about architectural** - Major structural changes, stop and ask user
+
+Only rule 4 requires user intervention.
+</deviation_rules>
+
+<commit_rules>
+**Per-Task Commits:**
+
+After each task completes:
+
+1. Stage only files modified by that task
+2. Commit with format: `{type}({phase}-{plan}): {task-name}`
+3. Types: feat, fix, test, refactor, perf, chore
+4. Record commit hash for SUMMARY.md
+
+**Plan Metadata Commit:**
+
+After all tasks in a plan complete:
+
+1. Stage plan artifacts only: PLAN.md, SUMMARY.md
+2. Commit with format: `docs({phase}-{plan}): complete [plan-name] plan`
+3. NO code files (already committed per-task)
+
+**Phase Completion Commit:**
+
+After all plans in phase complete (step 7):
+
+1. Stage: ROADMAP.md, STATE.md, REQUIREMENTS.md (if updated), VERIFICATION.md
+2. Commit with format: `docs({phase}): complete {phase-name} phase`
+3. Bundles all phase-level state updates in one commit
+
+**NEVER use:**
+
+- `git add .`
+- `git add -A`
+- `git add src/` or any broad directory
+
+**Always stage files individually.**
+</commit_rules>
+
+<success_criteria>
+
+- [ ] All incomplete plans in phase executed
+- [ ] Each plan has SUMMARY.md
+- [ ] Phase goal verified (must_haves checked against codebase)
+- [ ] VERIFICATION.md created in phase directory
+- [ ] STATE.md reflects phase completion
+- [ ] ROADMAP.md updated
+- [ ] REQUIREMENTS.md updated (phase requirements marked Complete)
+- [ ] User informed of next steps
+      </success_criteria>
+
+---
+
+resume please
+
+---
+
+<objective>
+Detect drift between Pencil design files (`designs/*.pen`) and CSS/TSX implementation. Report discrepancies and offer to fix them — either updating the design to match code or vice versa.
+
+Modes:
+
+- **No args:** Check files changed on current branch vs main. Interactive — asks resolution direction.
+- **`check`:** Same scope as no-args but report-only. No modifications.
+- **`PR#`:** Check files changed in a specific PR. Report-only.
+
+This skill lives outside `gsd/` to survive GSD updates.
+</objective>
+
+<execution_context>
+@designs/DESIGN.md
+</execution_context>
+
+<context>
+Arguments: 
+
+@designs/DESIGN.md
+</context>
+
+<process>
+
+### Step 1: Pre-flight
+
+Check that design infrastructure exists:
+
+```bash
+DESIGN_FILE=$(ls designs/*.pen 2>/dev/null | head -1)
+if [ -z "$DESIGN_FILE" ]; then
+  echo "No .pen file found in designs/. Nothing to sync."
+  exit 0
+fi
+
+DESIGN_DOC="designs/DESIGN.md"
+if [ ! -f "$DESIGN_DOC" ]; then
+  echo "Warning: designs/DESIGN.md not found. Token resolution will be limited."
+fi
+```
+
+Check Pencil MCP availability by attempting a read:
+
+```typescript
+const editorState = await mcp__pencil__get_editor_state({ include_schema: false });
+// If this fails, Pencil MCP is unavailable
+```
+
+If Pencil MCP is unavailable, report and exit:
+
+```text
+Pencil MCP not available. Cannot read design file.
+Run this command with the Pencil editor open.
+```
+
+---
+
+### Step 2: Identify changed UI files
+
+Parse `` to determine mode and scope:
+
+**No args (default):**
+
+```bash
+# Files changed on current branch vs main
+CHANGED_CSS=$(git diff --name-only main...HEAD -- '*.css' 2>/dev/null)
+CHANGED_TSX=$(git diff --name-only main...HEAD -- '*.tsx' 2>/dev/null)
+MODE="interactive"
+```
+
+**`check`:**
+
+```bash
+CHANGED_CSS=$(git diff --name-only main...HEAD -- '*.css' 2>/dev/null)
+CHANGED_TSX=$(git diff --name-only main...HEAD -- '*.tsx' 2>/dev/null)
+MODE="report-only"
+```
+
+**`PR#` (e.g., `42`):**
+
+```bash
+PR_NUM=$(echo "" | grep -oE '[0-9]+')
+CHANGED_CSS=$(gh pr diff $PR_NUM --name-only | grep '\.css$')
+CHANGED_TSX=$(gh pr diff $PR_NUM --name-only | grep '\.tsx$')
+MODE="report-only"
+```
+
+Combine and deduplicate:
+
+```bash
+CHANGED_UI_FILES=$(echo "$CHANGED_CSS
+$CHANGED_TSX" | sort -u | grep -v '^$')
+```
+
+If no UI files changed:
+
+```text
+No CSS/TSX files changed on this branch. Nothing to sync.
+```
+
+Exit cleanly.
+
+Report scope:
+
+```text
+## Design Sync
+
+Mode: ${MODE}
+Design file: ${DESIGN_FILE}
+Changed UI files: ${count}
+
+${list of files}
+```
+
+---
+
+### Step 3: Build CSS-to-design-frame mapping
+
+Map each changed file to its corresponding design frame using three-tier resolution:
+
+#### Tier 1: Parse DESIGN.md component hierarchy
+
+Read `designs/DESIGN.md` and extract the component hierarchy section. Match CSS file names (e.g., `FileList.css` -> `fileListContainer`) to frame IDs listed in the hierarchy.
+
+```bash
+# Extract frame IDs and names from DESIGN.md
+grep -E '^\s*(├──|└──|│)' designs/DESIGN.md
+```
+
+Build mapping table from component names to Pencil frame IDs.
+
+#### Tier 2: Pencil name-pattern search
+
+For unmapped files, search by name pattern:
+
+```typescript
+// Search for frames matching the component name
+const results = await mcp__pencil__batch_get({
+  filePath: DESIGN_FILE,
+  patterns: [{ name: componentNameRegex }],
+  searchDepth: 3,
+  readDepth: 1,
+});
+```
+
+#### Tier 3: TSX import tracing
+
+For still-unmapped CSS files, read the corresponding TSX file to find which component imports the CSS, then match that component name to a design frame.
+
+```bash
+# Find which TSX imports this CSS
+grep -rl "import.*$(basename $CSS_FILE)" apps/web/src/ --include='*.tsx'
+```
+
+Build final mapping:
+
+```text
+| CSS File | Component | Design Frame | Frame ID | Status |
+|----------|-----------|--------------|----------|--------|
+| FileList.css | FileList | fileListContainer | A87rp | mapped |
+| SelectionBar.css | SelectionActionBar | ? | ? | unmapped |
+```
+
+Report unmapped components — these may need new design frames.
+
+---
+
+### Step 4: Extract implementation values
+
+For each changed CSS file:
+
+1. Read the CSS file content
+2. Extract property declarations (color, background, padding, margin, gap, font-size, font-weight, border, etc.)
+3. Resolve `var()` references against the root CSS variables:
+
+```bash
+# Read root CSS variables
+grep -E '--[a-z-]+\s*:' apps/web/src/index.css
+```
+
+Build a property map per component:
+
+```json
+{
+  "FileList": {
+    "background": "#000000",
+    "color": "#00D084",
+    "padding": "10px 24px",
+    "border": "1px solid #003322",
+    "font-size": "12px"
+  }
+}
+```
+
+Include file:line references for each property.
+
+---
+
+### Step 5: Extract design values
+
+For each mapped design frame:
+
+```typescript
+const frameData = await mcp__pencil__batch_get({
+  filePath: DESIGN_FILE,
+  nodeIds: [frameId],
+  readDepth: 2,
+  resolveVariables: true,
+});
+```
+
+Extract equivalent properties from the Pencil node data:
+
+- `fill` -> background-color
+- `textColor` / child text nodes -> color
+- `padding` -> padding
+- `gap` -> gap
+- `fontSize`, `fontWeight` -> font-size, font-weight
+- `stroke` -> border
+- `cornerRadius` -> border-radius
+- `layout` -> display/flex-direction
+
+Build a matching property map per component from the design data.
+
+---
+
+### Step 6: Compare with normalization
+
+Compare implementation values against design values with format normalization:
+
+**Color normalization:**
+
+- Convert all colors to lowercase hex: `rgb(0, 208, 132)` -> `#00d084`
+- Handle alpha: `rgba(0, 208, 132, 0.4)` -> `#00d08466`
+- Normalize shorthand: `#000` -> `#000000`
+
+**Spacing normalization:**
+
+- Expand shorthand: `padding: 10px` -> `10px 10px 10px 10px`
+- Pencil `padding` (single number) -> `Npx Npx Npx Npx`
+- Pencil `paddingTop/Right/Bottom/Left` -> individual sides
+
+**Layout normalization:**
+
+- Pencil `layout: "vertical"` -> CSS `flex-direction: column`
+- Pencil `layout: "horizontal"` -> CSS `flex-direction: row`
+- Pencil `gap: N` -> CSS `gap: Npx`
+
+**Border normalization:**
+
+- Pencil `stroke` + `strokeThickness` -> CSS `border: Npx solid color`
+- Directional borders (border-left only) vs all-sides
+
+For each property, classify as:
+
+- **Match** — values equivalent after normalization
+- **Mismatch** — values differ
+- **Code-only** — property exists in CSS but not in design
+- **Design-only** — property exists in design but not in CSS
+
+---
+
+### Step 7: Generate discrepancy report
+
+Build a report table:
+
+```markdown
+## Discrepancy Report
+
+**Branch:** $(git branch --show-current)
+**Design file:** ${DESIGN_FILE}
+**Checked:** ${count} components, ${total_props} properties
+
+### Mismatches
+
+| Component | Property | Design Value | Code Value | File:Line       |
+| --------- | -------- | ------------ | ---------- | --------------- |
+| FileList  | padding  | 12px         | 10px 24px  | FileList.css:15 |
+| Header    | color    | #00D084      | #00d084    | Header.css:8    |
+
+### Code-only properties (no design equivalent)
+
+| Component    | Property   | Value                | File:Line           |
+| ------------ | ---------- | -------------------- | ------------------- |
+| SelectionBar | background | rgba(0,208,132,0.15) | SelectionBar.css:22 |
+
+### Unmapped components
+
+| CSS File         | Reason                         |
+| ---------------- | ------------------------------ |
+| NewComponent.css | No matching design frame found |
+
+### Summary
+
+- **Matched:** X properties
+- **Mismatched:** Y properties
+- **Code-only:** Z properties
+- **Unmapped:** W components
+```
+
+If `MODE == "report-only"` (check or PR#): display report and exit.
+
+If `MODE == "interactive"` and no mismatches: display "All synced!" and exit.
+
+---
+
+### Step 8: Ask resolution direction
+
+Only runs in interactive mode with mismatches found:
+
+```text
+AskUserQuestion(
+  header: "Resolution",
+  question: "Found ${mismatch_count} discrepancies. How should they be resolved?",
+  options: [
+    { label: "Update design (Recommended)", description: "Update Pencil design frames to match current CSS implementation" },
+    { label: "Update code", description: "Update CSS files to match Pencil design values" },
+    { label: "Review individually", description: "Go through each mismatch and choose direction" },
+    { label: "Skip", description: "Just show the report, don't change anything" }
+  ],
+  multiSelect: false
+)
+```
+
+If "Skip": exit with report only.
+
+---
+
+### Step 9: Apply changes
+
+**If "Update design to match code":**
+
+For each mismatch, build `batch_design` operations:
+
+```typescript
+// Update design frame properties to match CSS
+await mcp__pencil__batch_design({
+  filePath: DESIGN_FILE,
+  operations: `
+U("${frameId}", { fill: "${cssBackgroundColor}" })
+U("${frameId}/textNode", { textColor: "${cssColor}" })
+`,
+});
+```
+
+After applying changes, take screenshots to verify:
+
+```typescript
+await mcp__pencil__get_screenshot({
+  filePath: DESIGN_FILE,
+  nodeId: frameId,
+});
+```
+
+**If "Update code to match design":**
+
+For each mismatch, use Edit tool to update CSS values:
+
+```text
+Edit(file_path, old_value, new_value)
+```
+
+**If "Review individually":**
+
+For each mismatch, present:
+
+```text
+${component}.${property}
+  Design: ${designValue}
+  Code:   ${codeValue} (${file}:${line})
+
+-> Use design value / Use code value / Skip
+```
+
+Apply chosen direction for each.
+
+**After all changes:**
+
+Update `designs/DESIGN.md` if design tokens changed (color values, spacing, etc.).
+
+---
+
+### Step 10: Summary
+
+Display what was changed:
+
+```markdown
+## Design Sync Complete
+
+**Direction:** ${direction}
+**Updated:** ${count} properties
+
+### Changes Applied
+
+| Component | Property | Old  | New       | Target |
+| --------- | -------- | ---- | --------- | ------ |
+| FileList  | padding  | 12px | 10px 24px | design |
+
+${if design was modified:}
+**Reminder:** Save the Pencil file to persist design changes.
+Changes are in-memory only until saved from the Pencil editor.
+```
+
+</process>
+
+<edge_cases>
+
+**Missing design frame:**
+When a CSS component has no corresponding design frame, offer to create a placeholder:
+
+```text
+Component "SelectionActionBar" has no design frame.
+-> Create placeholder frame / Skip
+```
+
+If creating: insert a labeled frame in the design file with basic properties from CSS.
+
+**Deleted component:**
+When a design frame references a component whose CSS/TSX was deleted:
+
+```text
+Design frame "oldComponent" (ID: abc123) has no corresponding implementation.
+This may be a stale design element.
+-> Flag for removal / Skip
+```
+
+**CSS variable chains:**
+Resolve full chain before comparison:
+
+```css
+--color-primary: #00d084;
+--btn-bg: var(--color-primary);
+.button {
+  background: var(--btn-bg);
+} /* resolves to #00D084 */
+```
+
+**Pencil MCP unavailable:**
+Exit gracefully with instructions:
+
+```text
+Pencil MCP not available. To run design sync:
+1. Open designs/cipher-box-design.pen in Pencil editor
+2. Re-run /design:sync
+```
+
+**No .pen file:**
+Exit immediately -- not an error, just nothing to sync.
+
+</edge_cases>
+
+<ui_keyword_heuristic>
+
+<!-- SYNC: This heuristic appears in 4 locations. Keep all in sync:
+  1. .claude/commands/gsd/quick.md:105
+  2. .claude/get-shit-done/workflows/discuss-phase.md:505
+  3. .claude/commands/design/sync.md (this file, used in post-task hooks)
+  4. .claude/get-shit-done/workflows/execute-phase.md (design_sync_check step)
+-->
+
+The following regex detects UI-related task descriptions:
+
+```bash
+echo "$DESCRIPTION" | grep -iqE "ui|ux|style|restyle|design|layout|component|page|view|screen|display|button|form|modal|dialog|popover|tooltip|toast|dropdown|sidebar|header|footer|nav|menu|card|list|table|grid|icon|badge|avatar|breadcrumb|tab|color|font|typography|spacing|padding|margin|responsive|mobile|css|visual|appearance|interface|frontend|dashboard|browser|drag|drop|dnd|hover|focus|animation|transition|overlay|scroll|carousel|interaction|gesture|click|swipe|resize|collapse|expand|accordion|input|checkbox|radio|select|slider|toggle|switch|picker|upload|panel|drawer|toolbar|statusbar|banner|alert|notification|snackbar|thumbnail|preview|placeholder|skeleton|spinner|progress|loading"
+```
+
+</ui_keyword_heuristic>
+
+<success_criteria>
+
+- [ ] Design file exists and Pencil MCP is available
+- [ ] Changed UI files identified from git diff
+- [ ] CSS files mapped to design frames (3-tier resolution)
+- [ ] Implementation values extracted with var() resolution
+- [ ] Design values extracted via Pencil MCP
+- [ ] Values compared with format normalization
+- [ ] Discrepancy report generated with file:line references
+- [ ] Resolution direction chosen (interactive mode) or report displayed (check/PR mode)
+- [ ] Changes applied correctly to design or code
+- [ ] Pencil save reminder displayed if design was modified
+      </success_criteria>
+
+---
+
+<task-notification>
+<task-id>b533812</task-id>
+<tool-use-id>toolu_01LKR9rrWCLr8GdKhNnHCk5D</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Final metadata commit for plan 14-03" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
