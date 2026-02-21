@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "6ef1cf2733da",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-14-user-to-user-sharing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/scripts/generate-openapi.ts",
+    "apps/api/src/app.module.ts",
+    "apps/api/src/shares/shares.controller.ts",
+    "apps/api/src/shares/shares.module.ts",
+    "apps/web/src/api/models/addShareKeysDto.ts",
+    "apps/web/src/api/models/childKeyDto.ts",
+    "apps/web/src/api/models/childKeyDtoKeyType.ts",
+    "apps/web/src/api/models/createShareDto.ts",
+    "apps/web/src/api/models/createShareDtoItemType.ts",
+    "apps/web/src/api/models/index.ts",
+    "apps/web/src/api/models/shareKeyEntryDto.ts",
+    "apps/web/src/api/models/shareKeyEntryDtoKeyType.ts",
+    "apps/web/src/api/models/sharesControllerLookupUserParams.ts",
+    "apps/web/src/api/shares/shares.ts",
+    "packages/api-client/openapi.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6e/f1cf2733da/0/metadata.json",
+      "transcript": "/6e/f1cf2733da/0/full.jsonl",
+      "context": "/6e/f1cf2733da/0/context.md",
+      "content_hash": "/6e/f1cf2733da/0/content_hash.txt",
+      "prompt": "/6e/f1cf2733da/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 76803,
+    "cache_read_tokens": 5239366,
+    "output_tokens": 4517,
+    "api_call_count": 64
+  }
+}
