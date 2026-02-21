@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "771434b7d415",
+  "session_id": "e67c9434-d786-4a14-9574-9cbec3568087",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-21T22:09:19.821931Z",
+  "branch": "feat/phase-14-user-to-user-sharing",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/e2e/utils/multi-account.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "3fcd84d64938",
+  "checkpoint_transcript_start": 591,
+  "transcript_lines_at_start": 591,
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 23625,
+    "cache_read_tokens": 2579821,
+    "output_tokens": 3226,
+    "api_call_count": 22
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-21T22:09:18.728736Z",
+    "agent_lines": 0,
+    "human_added": 17,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 17,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/e67c9434-d786-4a14-9574-9cbec3568087.jsonl"
+}
