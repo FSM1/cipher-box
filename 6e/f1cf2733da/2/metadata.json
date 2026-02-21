@@ -1,0 +1,48 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "6ef1cf2733da",
+  "session_id": "71b7117f-ca1c-40de-8568-13f90d557d57",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-21T14:23:48.664767Z",
+  "branch": "feat/phase-14-user-to-user-sharing",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/app.module.ts",
+    "apps/api/src/shares/shares.controller.ts",
+    "apps/web/src/api/models/childKeyDtoKeyType.ts",
+    "apps/web/src/api/models/addShareKeysDto.ts",
+    "apps/web/src/api/models/childKeyDto.ts",
+    "apps/web/src/api/models/createShareDto.ts",
+    "apps/web/src/api/models/index.ts",
+    "apps/web/src/api/models/shareKeyEntryDtoKeyType.ts",
+    "apps/web/src/api/models/sharesControllerLookupUserParams.ts",
+    "packages/api-client/openapi.json",
+    "apps/web/src/api/models/createShareDtoItemType.ts",
+    "apps/web/src/api/models/shareKeyEntryDto.ts",
+    "apps/web/src/api/shares/shares.ts",
+    "apps/api/src/shares/shares.module.ts",
+    "apps/api/scripts/generate-openapi.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "cc894201d06b",
+  "transcript_identifier_at_start": "90d68105-cee8-4bd5-bdcf-cd3568e66a3c",
+  "checkpoint_transcript_start": 1137,
+  "transcript_lines_at_start": 1137,
+  "token_usage": {
+    "input_tokens": 156,
+    "cache_creation_tokens": 240891,
+    "cache_read_tokens": 16117775,
+    "output_tokens": 26992,
+    "api_call_count": 134
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-21T14:23:46.190749Z",
+    "agent_lines": 0,
+    "human_added": 1595,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1595,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/71b7117f-ca1c-40de-8568-13f90d557d57.jsonl"
+}
