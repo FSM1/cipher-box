@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "0da54a18fcd7",
+  "session_id": "a883dc43-6921-4a5f-a0f8-0cefeadaa102",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-21T05:14:24.912662Z",
+  "branch": "feat/random-file-ipns-keys",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/hooks/useFolder.ts",
+    "apps/web/src/services/file-metadata.service.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "cf249cb986ae",
+  "checkpoint_transcript_start": 577,
+  "transcript_lines_at_start": 577,
+  "token_usage": {
+    "input_tokens": 5,
+    "cache_creation_tokens": 686,
+    "cache_read_tokens": 496312,
+    "output_tokens": 72,
+    "api_call_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-21T05:14:23.66241Z",
+    "agent_lines": 0,
+    "human_added": 44,
+    "human_modified": 35,
+    "human_removed": 0,
+    "total_committed": 44,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/a883dc43-6921-4a5f-a0f8-0cefeadaa102.jsonl"
+}
