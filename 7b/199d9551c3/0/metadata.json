@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "7b199d9551c3",
+  "session_id": "9e4910ab-95a9-4a30-a85e-4677017bfaf0",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-21T00:17:37.290106Z",
+  "branch": "chore/close-orval-any-todo",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/run-migrations.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ba84a6f3b34c",
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 23058,
+    "cache_read_tokens": 349667,
+    "output_tokens": 537,
+    "api_call_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-21T00:17:36.766578Z",
+    "agent_lines": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "agent_percentage": 100
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/9e4910ab-95a9-4a30-a85e-4677017bfaf0.jsonl"
+}

@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "7b199d9551c3",
+  "strategy": "manual-commit",
+  "branch": "chore/close-orval-any-todo",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/run-migrations.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7b/199d9551c3/0/metadata.json",
+      "transcript": "/7b/199d9551c3/0/full.jsonl",
+      "context": "/7b/199d9551c3/0/context.md",
+      "content_hash": "/7b/199d9551c3/0/content_hash.txt",
+      "prompt": "/7b/199d9551c3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 23058,
+    "cache_read_tokens": 349667,
+    "output_tokens": 537,
+    "api_call_count": 8
+  }
+}
