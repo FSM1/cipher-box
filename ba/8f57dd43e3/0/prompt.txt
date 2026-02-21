@@ -1,0 +1,615 @@
+<bash-input>entire status</bash-input>
+
+---
+
+<bash-stdout>Enabled (manual-commit)
+
+Active Sessions:
+  /Users/michael/Code/cipher-box (chore/add-auto-update-todo)
+    [Claude Code] 39dea4e   started 3d ago, active 3d ago
+      "ok lets push the fixes we have up"
+    [Claude Code] 24c1ea0   started 6d ago, active 6d ago
+      "can you execute the test plan for this phase in a headed ..."
+
+A newer version of Entire CLI is available: v0.4.5 (current: 0.4.4)
+Run 'curl -fsSL https://entire.io/install.sh | bash' to update.</bash-stdout><bash-stderr></bash-stderr>
+
+---
+
+<bash-input>curl -fsSL https://entire.io/install.sh | bash</bash-input>
+
+---
+
+<bash-stdout>==> Installing Entire CLI...
+==> Detected platform: darwin/arm64
+==> Fetching latest version...
+==> Installing version: 0.4.5
+==> Downloading entire_darwin_arm64.tar.gz...
+==> Downloading checksums...
+==> Verifying checksum...
+==> Checksum verified
+==> Extracting...
+==> Installing to /Users/michael/.local/bin...
+==> Directory ready
+==> Entire CLI installed to /Users/michael/.local/bin/entire
+==> Running post-install actions...
+✓ Shell completion already configured in /Users/michael/.zshrc</bash-stdout><bash-stderr></bash-stderr>
+
+---
+
+<bash-input>entire status</bash-input>
+
+---
+
+<bash-stdout>Enabled (manual-commit)
+
+Active Sessions:
+  /Users/michael/Code/cipher-box (chore/add-auto-update-todo)
+    [Claude Code] 39dea4e   started 3d ago, active 3d ago
+      "ok lets push the fixes we have up"
+    [Claude Code] 24c1ea0   started 6d ago, active 6d ago
+      "can you execute the test plan for this phase in a headed ..."</bash-stdout><bash-stderr></bash-stderr>
+
+---
+
+how do I commit all the latest entire.io checkpoints for this repository?
+
+---
+
+<objective>
+Check project progress, summarize recent work and what's ahead, then intelligently route to the next action - either executing an existing plan or creating the next one.
+
+Provides situational awareness before continuing work.
+</objective>
+
+
+<process>
+
+<step name="verify">
+**Verify planning structure exists:**
+
+If no `.planning/` directory:
+
+```
+No planning structure found.
+
+Run /gsd:new-project to start a new project.
+```
+
+Exit.
+
+If missing STATE.md: suggest `/gsd:new-project`.
+
+**If ROADMAP.md missing but PROJECT.md exists:**
+
+This means a milestone was completed and archived. Go to **Route F** (between milestones).
+
+If missing both ROADMAP.md and PROJECT.md: suggest `/gsd:new-project`.
+</step>
+
+<step name="load">
+**Load full project context:**
+
+- Read `.planning/STATE.md` for living memory (position, decisions, issues)
+- Read `.planning/ROADMAP.md` for phase structure and objectives
+- Read `.planning/PROJECT.md` for current state (What This Is, Core Value, Requirements)
+  </step>
+
+<step name="recent">
+**Gather recent work context:**
+
+- Find the 2-3 most recent SUMMARY.md files
+- Extract from each: what was accomplished, key decisions, any issues logged
+- This shows "what we've been working on"
+  </step>
+
+<step name="position">
+**Parse current position:**
+
+- From STATE.md: current phase, plan number, status
+- Calculate: total plans, completed plans, remaining plans
+- Note any blockers or concerns
+- Check for CONTEXT.md: For phases without PLAN.md files, check if `{phase}-CONTEXT.md` exists in phase directory
+- Count pending todos: `ls .planning/todos/pending/*.md 2>/dev/null | wc -l`
+- Check for active debug sessions: `ls .planning/debug/*.md 2>/dev/null | grep -v resolved | wc -l`
+  </step>
+
+<step name="report">
+**Present rich status report:**
+
+```
+# [Project Name]
+
+**Progress:** [████████░░] 8/10 plans complete
+
+## Recent Work
+- [Phase X, Plan Y]: [what was accomplished - 1 line]
+- [Phase X, Plan Z]: [what was accomplished - 1 line]
+
+## Current Position
+Phase [N] of [total]: [phase-name]
+Plan [M] of [phase-total]: [status]
+CONTEXT: [✓ if CONTEXT.md exists | - if not]
+
+## Key Decisions Made
+- [decision 1 from STATE.md]
+- [decision 2]
+
+## Blockers/Concerns
+- [any blockers or concerns from STATE.md]
+
+## Pending Todos
+- [count] pending — /gsd:check-todos to review
+
+## Active Debug Sessions
+- [count] active — /gsd:debug to continue
+(Only show this section if count > 0)
+
+## What's Next
+[Next phase/plan objective from ROADMAP]
+```
+
+</step>
+
+<step name="route">
+**Determine next action based on verified counts.**
+
+**Step 1: Count plans, summaries, and issues in current phase**
+
+List files in the current phase directory:
+
+```bash
+ls -1 .planning/phases/[current-phase-dir]/*-PLAN.md 2>/dev/null | wc -l
+ls -1 .planning/phases/[current-phase-dir]/*-SUMMARY.md 2>/dev/null | wc -l
+ls -1 .planning/phases/[current-phase-dir]/*-UAT.md 2>/dev/null | wc -l
+```
+
+State: "This phase has {X} plans, {Y} summaries."
+
+**Step 1.5: Check for unaddressed UAT gaps**
+
+Check for UAT.md files with status "diagnosed" (has gaps needing fixes).
+
+```bash
+# Check for diagnosed UAT with gaps
+grep -l "status: diagnosed" .planning/phases/[current-phase-dir]/*-UAT.md 2>/dev/null
+```
+
+Track:
+- `uat_with_gaps`: UAT.md files with status "diagnosed" (gaps need fixing)
+
+**Step 2: Route based on counts**
+
+| Condition | Meaning | Action |
+|-----------|---------|--------|
+| uat_with_gaps > 0 | UAT gaps need fix plans | Go to **Route E** |
+| summaries < plans | Unexecuted plans exist | Go to **Route A** |
+| summaries = plans AND plans > 0 | Phase complete | Go to Step 3 |
+| plans = 0 | Phase not yet planned | Go to **Route B** |
+
+---
+
+**Route A: Unexecuted plan exists**
+
+Find the first PLAN.md without matching SUMMARY.md.
+Read its `<objective>` section.
+
+```
+---
+
+## ▶ Next Up
+
+**{phase}-{plan}: [Plan Name]** — [objective summary from PLAN.md]
+
+`/gsd:execute-phase {phase}`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+```
+
+---
+
+**Route B: Phase needs planning**
+
+Check if `{phase}-CONTEXT.md` exists in phase directory.
+
+**If CONTEXT.md exists:**
+
+```
+---
+
+## ▶ Next Up
+
+**Phase {N}: {Name}** — {Goal from ROADMAP.md}
+<sub>✓ Context gathered, ready to plan</sub>
+
+`/gsd:plan-phase {phase-number}`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+```
+
+**If CONTEXT.md does NOT exist:**
+
+```
+---
+
+## ▶ Next Up
+
+**Phase {N}: {Name}** — {Goal from ROADMAP.md}
+
+`/gsd:discuss-phase {phase}` — gather context and clarify approach
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:plan-phase {phase}` — skip discussion, plan directly
+- `/gsd:list-phase-assumptions {phase}` — see Claude's assumptions
+
+---
+```
+
+---
+
+**Route E: UAT gaps need fix plans**
+
+UAT.md exists with gaps (diagnosed issues). User needs to plan fixes.
+
+```
+---
+
+## ⚠ UAT Gaps Found
+
+**{phase}-UAT.md** has {N} gaps requiring fixes.
+
+`/gsd:plan-phase {phase} --gaps`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:execute-phase {phase}` — execute phase plans
+- `/gsd:verify-work {phase}` — run more UAT testing
+
+---
+```
+
+---
+
+**Step 3: Check milestone status (only when phase complete)**
+
+Read ROADMAP.md and identify:
+1. Current phase number
+2. All phase numbers in the current milestone section
+
+Count total phases and identify the highest phase number.
+
+State: "Current phase is {X}. Milestone has {N} phases (highest: {Y})."
+
+**Route based on milestone status:**
+
+| Condition | Meaning | Action |
+|-----------|---------|--------|
+| current phase < highest phase | More phases remain | Go to **Route C** |
+| current phase = highest phase | Milestone complete | Go to **Route D** |
+
+---
+
+**Route C: Phase complete, more phases remain**
+
+Read ROADMAP.md to get the next phase's name and goal.
+
+```
+---
+
+## ✓ Phase {Z} Complete
+
+## ▶ Next Up
+
+**Phase {Z+1}: {Name}** — {Goal from ROADMAP.md}
+
+`/gsd:discuss-phase {Z+1}` — gather context and clarify approach
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:plan-phase {Z+1}` — skip discussion, plan directly
+- `/gsd:verify-work {Z}` — user acceptance test before continuing
+
+---
+```
+
+---
+
+**Route D: Milestone complete**
+
+```
+---
+
+## 🎉 Milestone Complete
+
+All {N} phases finished!
+
+## ▶ Next Up
+
+**Complete Milestone** — archive and prepare for next
+
+`/gsd:complete-milestone`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:verify-work` — user acceptance test before completing milestone
+
+---
+```
+
+---
+
+**Route F: Between milestones (ROADMAP.md missing, PROJECT.md exists)**
+
+A milestone was completed and archived. Ready to start the next milestone cycle.
+
+Read MILESTONES.md to find the last completed milestone version.
+
+```
+---
+
+## ✓ Milestone v{X.Y} Complete
+
+Ready to plan the next milestone.
+
+## ▶ Next Up
+
+**Start Next Milestone** — questioning → research → requirements → roadmap
+
+`/gsd:new-milestone`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+```
+
+</step>
+
+<step name="edge_cases">
+**Handle edge cases:**
+
+- Phase complete but next phase not planned → offer `/gsd:plan-phase [next]`
+- All work complete → offer milestone completion
+- Blockers present → highlight before offering to continue
+- Handoff file exists → mention it, offer `/gsd:resume-work`
+  </step>
+
+</process>
+
+<success_criteria>
+
+- [ ] Rich context provided (recent work, decisions, issues)
+- [ ] Current position clear with visual progress
+- [ ] What's next clearly explained
+- [ ] Smart routing: /gsd:execute-phase if plans exist, /gsd:plan-phase if not
+- [ ] User confirms before any action
+- [ ] Seamless handoff to appropriate gsd command
+      </success_criteria>
+
+---
+
+<objective>
+List all pending todos, allow selection, load full context for the selected todo, and route to appropriate action.
+
+Enables reviewing captured ideas and deciding what to work on next.
+</objective>
+
+<context>
+@.planning/STATE.md
+@.planning/ROADMAP.md
+</context>
+
+<process>
+
+<step name="check_exist">
+```bash
+TODO_COUNT=$(ls .planning/todos/pending/*.md 2>/dev/null | wc -l | tr -d ' ')
+echo "Pending todos: $TODO_COUNT"
+```
+
+If count is 0:
+```
+No pending todos.
+
+Todos are captured during work sessions with /gsd:add-todo.
+
+---
+
+Would you like to:
+
+1. Continue with current phase (/gsd:progress)
+2. Add a todo now (/gsd:add-todo)
+```
+
+Exit.
+</step>
+
+<step name="parse_filter">
+Check for area filter in arguments:
+- `/gsd:check-todos` → show all
+- `/gsd:check-todos api` → filter to area:api only
+</step>
+
+<step name="list_todos">
+```bash
+for file in .planning/todos/pending/*.md; do
+  created=$(grep "^created:" "$file" | cut -d' ' -f2)
+  title=$(grep "^title:" "$file" | cut -d':' -f2- | xargs)
+  area=$(grep "^area:" "$file" | cut -d' ' -f2)
+  echo "$created|$title|$area|$file"
+done | sort
+```
+
+Apply area filter if specified. Display as numbered list:
+
+```
+Pending Todos:
+
+1. Add auth token refresh (api, 2d ago)
+2. Fix modal z-index issue (ui, 1d ago)
+3. Refactor database connection pool (database, 5h ago)
+
+---
+
+Reply with a number to view details, or:
+- `/gsd:check-todos [area]` to filter by area
+- `q` to exit
+```
+
+Format age as relative time.
+</step>
+
+<step name="handle_selection">
+Wait for user to reply with a number.
+
+If valid: load selected todo, proceed.
+If invalid: "Invalid selection. Reply with a number (1-[N]) or `q` to exit."
+</step>
+
+<step name="load_context">
+Read the todo file completely. Display:
+
+```
+## [title]
+
+**Area:** [area]
+**Created:** [date] ([relative time] ago)
+**Files:** [list or "None"]
+
+### Problem
+[problem section content]
+
+### Solution
+[solution section content]
+```
+
+If `files` field has entries, read and briefly summarize each.
+</step>
+
+<step name="check_roadmap">
+```bash
+ls .planning/ROADMAP.md 2>/dev/null && echo "Roadmap exists"
+```
+
+If roadmap exists:
+1. Check if todo's area matches an upcoming phase
+2. Check if todo's files overlap with a phase's scope
+3. Note any match for action options
+</step>
+
+<step name="offer_actions">
+**If todo maps to a roadmap phase:**
+
+Use AskUserQuestion:
+- header: "Action"
+- question: "This todo relates to Phase [N]: [name]. What would you like to do?"
+- options:
+  - "Work on it now" — move to done, start working
+  - "Add to phase plan" — include when planning Phase [N]
+  - "Brainstorm approach" — think through before deciding
+  - "Put it back" — return to list
+
+**If no roadmap match:**
+
+Use AskUserQuestion:
+- header: "Action"
+- question: "What would you like to do with this todo?"
+- options:
+  - "Work on it now" — move to done, start working
+  - "Create a phase" — /gsd:add-phase with this scope
+  - "Brainstorm approach" — think through before deciding
+  - "Put it back" — return to list
+</step>
+
+<step name="execute_action">
+**Work on it now:**
+```bash
+mv ".planning/todos/pending/[filename]" ".planning/todos/done/"
+```
+Update STATE.md todo count. Present problem/solution context. Begin work or ask how to proceed.
+
+**Add to phase plan:**
+Note todo reference in phase planning notes. Keep in pending. Return to list or exit.
+
+**Create a phase:**
+Display: `/gsd:add-phase [description from todo]`
+Keep in pending. User runs command in fresh context.
+
+**Brainstorm approach:**
+Keep in pending. Start discussion about problem and approaches.
+
+**Put it back:**
+Return to list_todos step.
+</step>
+
+<step name="update_state">
+After any action that changes todo count:
+
+```bash
+ls .planning/todos/pending/*.md 2>/dev/null | wc -l
+```
+
+Update STATE.md "### Pending Todos" section if exists.
+</step>
+
+<step name="git_commit">
+If todo was moved to done/, commit the change:
+
+```bash
+git add .planning/todos/done/[filename]
+git rm --cached .planning/todos/pending/[filename] 2>/dev/null || true
+[ -f .planning/STATE.md ] && git add .planning/STATE.md
+git commit -m "$(cat <<'EOF'
+docs: start work on todo - [title]
+
+Moved to done/, beginning implementation.
+EOF
+)"
+```
+
+Confirm: "Committed: docs: start work on todo - [title]"
+</step>
+
+</process>
+
+<output>
+- Moved todo to `.planning/todos/done/` (if "Work on it now")
+- Updated `.planning/STATE.md` (if todo count changed)
+</output>
+
+<anti_patterns>
+- Don't delete todos — move to done/ when work begins
+- Don't start work without moving to done/ first
+- Don't create plans from this command — route to /gsd:plan-phase or /gsd:add-phase
+</anti_patterns>
+
+<success_criteria>
+- [ ] All pending todos listed with title, area, age
+- [ ] Area filter applied if specified
+- [ ] Selected todo's full context loaded
+- [ ] Roadmap context checked for phase match
+- [ ] Appropriate actions offered
+- [ ] Selected action executed
+- [ ] STATE.md updated if todo count changed
+- [ ] Changes committed to git (if todo moved to done/)
+</success_criteria>
+
+---
+
+ok can we handle #4 quickly?
