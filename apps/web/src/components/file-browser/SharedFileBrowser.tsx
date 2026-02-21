@@ -83,9 +83,8 @@ function isFilePointer(item: FolderChild): item is FilePointer {
  */
 function truncatePubkey(pubkey: string): string {
   if (pubkey.length <= 12) return pubkey;
-  const prefix = pubkey.startsWith('0x') ? pubkey.slice(0, 6) : pubkey.slice(0, 4);
-  const suffix = pubkey.slice(-4);
-  return `${prefix}...${suffix}`;
+  const hex = pubkey.startsWith('0x') ? pubkey.slice(2) : pubkey;
+  return `0x${hex.slice(0, 4)}...${hex.slice(-4)}`;
 }
 
 /**
