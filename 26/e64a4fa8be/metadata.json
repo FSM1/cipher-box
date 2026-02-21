@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "26e64a4fa8be",
+  "strategy": "manual-commit",
+  "branch": "feat/random-file-ipns-keys",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/crypto/tests.rs",
+    "apps/desktop/src-tauri/src/fuse/inode.rs",
+    "apps/desktop/src-tauri/src/fuse/mod.rs",
+    "apps/desktop/src-tauri/src/fuse/operations.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/26/e64a4fa8be/0/metadata.json",
+      "transcript": "/26/e64a4fa8be/0/full.jsonl",
+      "context": "/26/e64a4fa8be/0/context.md",
+      "content_hash": "/26/e64a4fa8be/0/content_hash.txt",
+      "prompt": "/26/e64a4fa8be/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 15,
+    "cache_creation_tokens": 39503,
+    "cache_read_tokens": 618563,
+    "output_tokens": 982,
+    "api_call_count": 10
+  }
+}
