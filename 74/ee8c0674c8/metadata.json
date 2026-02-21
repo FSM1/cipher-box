@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "74ee8c0674c8",
+  "strategy": "manual-commit",
+  "branch": "docs/metadata-schema-evolution-protocol",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/quick/019-metadata-schema-evolution-protocol/019-SUMMARY.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/74/ee8c0674c8/0/metadata.json",
+      "transcript": "/74/ee8c0674c8/0/full.jsonl",
+      "context": "/74/ee8c0674c8/0/context.md",
+      "content_hash": "/74/ee8c0674c8/0/content_hash.txt",
+      "prompt": "/74/ee8c0674c8/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 13,
+    "cache_creation_tokens": 44944,
+    "cache_read_tokens": 514500,
+    "output_tokens": 2369,
+    "api_call_count": 9
+  }
+}
