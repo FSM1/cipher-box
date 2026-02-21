@@ -3,7 +3,7 @@
   "checkpoint_id": "899fee325ca9",
   "strategy": "manual-commit",
   "branch": "feat/phase-14-user-to-user-sharing",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     ".planning/STATE.md",
     ".planning/phases/14-user-to-user-sharing/14-03-SUMMARY.md"
@@ -36,13 +36,20 @@
       "context": "/89/9fee325ca9/3/context.md",
       "content_hash": "/89/9fee325ca9/3/content_hash.txt",
       "prompt": "/89/9fee325ca9/3/prompt.txt"
+    },
+    {
+      "metadata": "/89/9fee325ca9/4/metadata.json",
+      "transcript": "/89/9fee325ca9/4/full.jsonl",
+      "context": "/89/9fee325ca9/4/context.md",
+      "content_hash": "/89/9fee325ca9/4/content_hash.txt",
+      "prompt": "/89/9fee325ca9/4/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 237,
-    "cache_creation_tokens": 357197,
-    "cache_read_tokens": 21975704,
-    "output_tokens": 32491,
-    "api_call_count": 208
+    "input_tokens": 303,
+    "cache_creation_tokens": 424898,
+    "cache_read_tokens": 25415119,
+    "output_tokens": 36245,
+    "api_call_count": 251
   }
 }
