@@ -5,7 +5,12 @@
   "branch": "feat/phase-14-user-to-user-sharing",
   "checkpoints_count": 1,
   "files_touched": [
-    "apps/web/src/hooks/useFolder.ts"
+    "apps/web/src/components/file-browser/ContextMenu.tsx",
+    "apps/web/src/components/file-browser/SharedFileBrowser.tsx",
+    "apps/web/src/hooks/useFolder.ts",
+    "apps/web/src/hooks/useSharedNavigation.ts",
+    "apps/web/src/services/share.service.ts",
+    "apps/web/src/styles/shared-browser.css"
   ],
   "sessions": [
     {
@@ -14,13 +19,20 @@
       "context": "/69/f086a8c326/0/context.md",
       "content_hash": "/69/f086a8c326/0/content_hash.txt",
       "prompt": "/69/f086a8c326/0/prompt.txt"
+    },
+    {
+      "metadata": "/69/f086a8c326/1/metadata.json",
+      "transcript": "/69/f086a8c326/1/full.jsonl",
+      "context": "/69/f086a8c326/1/context.md",
+      "content_hash": "/69/f086a8c326/1/content_hash.txt",
+      "prompt": "/69/f086a8c326/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 66,
-    "cache_creation_tokens": 76803,
-    "cache_read_tokens": 5239366,
-    "output_tokens": 4517,
-    "api_call_count": 64
+    "input_tokens": 81,
+    "cache_creation_tokens": 116306,
+    "cache_read_tokens": 5857929,
+    "output_tokens": 5499,
+    "api_call_count": 74
   }
 }
