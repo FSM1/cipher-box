@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "9c367ec4d286",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-14-user-to-user-sharing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/crypto/src/__tests__/rewrap.test.ts",
+    "packages/crypto/src/ecies/index.ts",
+    "packages/crypto/src/ecies/rewrap.ts",
+    "packages/crypto/src/index.ts",
+    "packages/crypto/src/types.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9c/367ec4d286/0/metadata.json",
+      "transcript": "/9c/367ec4d286/0/full.jsonl",
+      "context": "/9c/367ec4d286/0/context.md",
+      "content_hash": "/9c/367ec4d286/0/content_hash.txt",
+      "prompt": "/9c/367ec4d286/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 76803,
+    "cache_read_tokens": 5239366,
+    "output_tokens": 4517,
+    "api_call_count": 64
+  }
+}
