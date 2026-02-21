@@ -65,7 +65,7 @@ export { encryptAesGcm, decryptAesGcm, sealAesGcm, unsealAesGcm } from './aes';
 export { encryptAesCtr, decryptAesCtr, decryptAesCtrRange } from './aes';
 
 // ECIES secp256k1 key wrapping
-export { wrapKey, unwrapKey } from './ecies';
+export { wrapKey, unwrapKey, reWrapKey } from './ecies';
 
 // Ed25519 signing for IPNS
 export { generateEd25519Keypair, type Ed25519Keypair } from './ed25519';
