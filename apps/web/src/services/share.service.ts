@@ -17,9 +17,12 @@ import {
   sharesControllerAddShareKeys,
   sharesControllerRevokeShare,
   sharesControllerHideShare,
+  sharesControllerGetPendingRotations,
+  sharesControllerUpdateShareEncryptedKey,
+  sharesControllerCompleteRotation,
 } from '../api/shares/shares';
 
-import { wrapKey, bytesToHex, hexToBytes } from '@cipherbox/crypto';
+import { wrapKey, bytesToHex, hexToBytes, generateRandomBytes } from '@cipherbox/crypto';
 import type { ReceivedShare, SentShare } from '../stores/share.store';
 import { useShareStore } from '../stores/share.store';
 import type { FolderNode } from '../stores/folder.store';
@@ -326,4 +329,139 @@ export async function reWrapForRecipients(params: {
       );
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Lazy key rotation after revocation
+// ---------------------------------------------------------------------------
+
+/** A revoked share pending key rotation. */
+export type PendingRotation = {
+  shareId: string;
+  recipientPublicKey: string;
+  itemType: 'folder' | 'file';
+  ipnsName: string;
+  itemName: string;
+  revokedAt: string;
+};
+
+/**
+ * Fetch revoked shares that are pending key rotation from the server.
+ * These are shares where revokedAt is set but the share has not been hard-deleted.
+ */
+export async function fetchPendingRotations(): Promise<PendingRotation[]> {
+  const response = (await sharesControllerGetPendingRotations()) as unknown as Array<{
+    shareId: string;
+    recipientPublicKey: string;
+    itemType: string;
+    ipnsName: string;
+    itemName: string;
+    revokedAt: string;
+  }>;
+
+  return response.map((r) => ({
+    shareId: r.shareId,
+    recipientPublicKey: r.recipientPublicKey,
+    itemType: r.itemType as 'folder' | 'file',
+    ipnsName: r.ipnsName,
+    itemName: r.itemName,
+    revokedAt: r.revokedAt,
+  }));
+}
+
+/**
+ * Check if a folder has pending rotations (revoked shares awaiting key rotation).
+ * Called before any folder modification.
+ *
+ * @param folderIpnsName - IPNS name of the folder being modified
+ * @returns true if there are revoked shares for this folder that need rotation
+ */
+export async function checkPendingRotation(folderIpnsName: string): Promise<boolean> {
+  const pendingRotations = await fetchPendingRotations();
+  return pendingRotations.some((r) => r.ipnsName === folderIpnsName);
+}
+
+/**
+ * Update the encrypted key on a share record after lazy key rotation.
+ * Re-wraps the new folder key for a remaining (non-revoked) recipient.
+ */
+export async function updateShareKey(shareId: string, encryptedKey: string): Promise<void> {
+  await sharesControllerUpdateShareEncryptedKey(shareId, { encryptedKey });
+}
+
+/**
+ * Hard-delete a revoked share after rotation is complete.
+ */
+export async function completeShareRotation(shareId: string): Promise<void> {
+  await sharesControllerCompleteRotation(shareId);
+}
+
+/**
+ * Execute lazy key rotation for a folder.
+ * Called when a folder modification is about to happen and pending rotations exist.
+ *
+ * Protocol:
+ * 1. Generate new random folderKey
+ * 2. Re-wrap new folderKey for each REMAINING (non-revoked) active recipient
+ * 3. Update remaining shares with the new encrypted key
+ * 4. Hard-delete revoked share records (rotation complete)
+ * 5. Invalidate share cache
+ *
+ * NOTE: The actual folder metadata re-encryption (decrypt with old key, re-encrypt
+ * with new key, re-publish IPNS) is handled by the caller (folder.service.ts)
+ * since it has access to the folder's IPNS private key and publishing infrastructure.
+ *
+ * @returns The new folderKey for the caller to use
+ */
+export async function executeLazyRotation(params: {
+  folderIpnsName: string;
+  oldFolderKey: Uint8Array;
+  ownerPublicKey: Uint8Array;
+}): Promise<{ newFolderKey: Uint8Array }> {
+  // 1. Generate new random 32-byte folderKey
+  const newFolderKey = generateRandomBytes(32);
+
+  // 2. Fetch pending rotations and active shares for this folder
+  const [pendingRotations, activeSentShares] = await Promise.all([
+    fetchPendingRotations(),
+    getSentSharesForItem(params.folderIpnsName),
+  ]);
+
+  const revokedForFolder = pendingRotations.filter((r) => r.ipnsName === params.folderIpnsName);
+  const revokedShareIds = new Set(revokedForFolder.map((r) => r.shareId));
+
+  // Active shares that are NOT revoked -- these recipients keep access
+  const remainingShares = activeSentShares.filter((s) => !revokedShareIds.has(s.shareId));
+
+  // 3. Re-wrap new folderKey for each remaining recipient
+  for (const share of remainingShares) {
+    try {
+      const recipientPubKey = hexToBytes(
+        share.recipientPublicKey.startsWith('0x')
+          ? share.recipientPublicKey.slice(2)
+          : share.recipientPublicKey
+      );
+      const wrapped = await wrapKey(newFolderKey, recipientPubKey);
+      await updateShareKey(share.shareId, bytesToHex(wrapped));
+    } catch (err) {
+      console.warn(
+        `[share] Failed to update share key for remaining recipient ${share.recipientPublicKey.slice(0, 10)}...:`,
+        err
+      );
+    }
+  }
+
+  // 4. Hard-delete all revoked shares for this folder
+  for (const revoked of revokedForFolder) {
+    try {
+      await completeShareRotation(revoked.shareId);
+    } catch (err) {
+      console.warn(`[share] Failed to complete rotation for share ${revoked.shareId}:`, err);
+    }
+  }
+
+  // 5. Invalidate the sent shares cache so next check fetches fresh state
+  useShareStore.getState().setSentShares([]);
+
+  return { newFolderKey };
 }
