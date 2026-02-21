@@ -58,7 +58,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 12.6: Per-File IPNS Metadata Split** - Split file metadata into per-file IPNS records, decouple content updates from folder publishes (INSERTED)
 - [x] **Phase 11.2: Remove v1 Folder Metadata** - Eliminate v1/v2 dual-schema, make v2 FilePointer canonical, per-file IPNS in desktop FUSE (INSERTED)
 - [x] **Phase 13: File Versioning** - Automatic version retention with history view and restore
-- [ ] **Phase 14: User-to-User Sharing** - Read-only folder and file sharing with ECIES key re-wrapping
+- [x] **Phase 14: User-to-User Sharing** - Read-only folder and file sharing with ECIES key re-wrapping
 - [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
 - [ ] **Phase 16: Advanced Sync** - Conflict detection, offline queue, and idempotent replay
 - [ ] **Phase 17: AWS Nitro TEE** - Nitro enclave as fallback TEE provider for IPNS republishing
@@ -343,12 +343,12 @@ Plans:
 
 Plans:
 
-- [ ] 14-01-PLAN.md — Crypto reWrapKey utility + Share/ShareKey TypeORM entities
-- [ ] 14-02-PLAN.md — Backend shares module (service, controller, 8 endpoints, DTOs) + API client regen
-- [ ] 14-03-PLAN.md — Frontend share store + share service + Settings public key display
-- [ ] 14-04-PLAN.md — ShareDialog modal + context menu Share action + FileBrowser wiring
-- [ ] 14-05-PLAN.md — "Shared with me" browsing (route, SharedFileBrowser, read-only enforcement, shared download)
-- [ ] 14-06-PLAN.md — Post-upload share key propagation + revocation + lazy key rotation
+- [x] 14-01-PLAN.md — Crypto reWrapKey utility + Share/ShareKey TypeORM entities
+- [x] 14-02-PLAN.md — Backend shares module (service, controller, 8 endpoints, DTOs) + API client regen
+- [x] 14-03-PLAN.md — Frontend share store + share service + Settings public key display
+- [x] 14-04-PLAN.md — ShareDialog modal + context menu Share action + FileBrowser wiring
+- [x] 14-05-PLAN.md — "Shared with me" browsing (route, SharedFileBrowser, read-only enforcement, shared download)
+- [x] 14-06-PLAN.md — Post-upload share key propagation + revocation + lazy key rotation
 
 ### Phase 15: Link Sharing and Search
 
@@ -431,7 +431,7 @@ Parallel phases:
 | 11.1 macOS Desktop Catch-Up | M2        | 7/7            | Complete    | 2026-02-17 |
 | 11.2 Remove v1 Folder Meta  | M2        | 3/3            | Complete    | 2026-02-19 |
 | 13. File Versioning         | M2        | 5/5            | Complete    | 2026-02-19 |
-| 14. User-to-User Sharing    | M2        | 0/6            | Not started | -          |
+| 14. User-to-User Sharing    | M2        | 6/6            | Complete    | 2026-02-21 |
 | 15. Link Sharing + Search   | M2        | 0/TBD          | Not started | -          |
 | 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
 | 11. Cross-Platform Desktop  | M2        | 0/TBD          | Not started | -          |

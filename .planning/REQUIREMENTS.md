@@ -101,11 +101,11 @@ Requirements for production release. Each maps to roadmap phases 12+.
 
 ### File Sharing
 
-- [ ] **SHARE-01**: User can share a folder (read-only) with another CipherBox user via ECIES key re-wrapping
-- [ ] **SHARE-02**: User can invite a recipient by email or public key
-- [ ] **SHARE-03**: Recipient can accept or decline a share invitation
-- [ ] **SHARE-04**: User can revoke a share (triggers folder key rotation for remaining recipients)
-- [ ] **SHARE-05**: User can view "Shared with me" folders in file browser
+- [x] **SHARE-01**: User can share a folder (read-only) with another CipherBox user via ECIES key re-wrapping
+- [x] **SHARE-02**: User can share with a recipient by pasting their secp256k1 public key (rescoped: public key only, no email invite)
+- [x] **SHARE-03**: Share takes effect instantly on public key paste (rescoped: no accept/decline — instant share by design)
+- [x] **SHARE-04**: User can revoke a share (triggers lazy folder key rotation on next modification)
+- [x] **SHARE-05**: User can view "Shared with me" folders in file browser at ~/shared
 - [ ] **SHARE-06**: User can generate a shareable link for a file (decryption key in URL fragment only)
 - [ ] **SHARE-07**: Recipient can download shared file via link without a CipherBox account
 
@@ -341,11 +341,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | VER-03      | Phase 13   | Complete |
 | VER-04      | Phase 13   | Complete |
 | VER-05      | Phase 13   | Complete |
-| SHARE-01    | Phase 14   | Pending  |
-| SHARE-02    | Phase 14   | Pending  |
-| SHARE-03    | Phase 14   | Pending  |
-| SHARE-04    | Phase 14   | Pending  |
-| SHARE-05    | Phase 14   | Pending  |
+| SHARE-01    | Phase 14   | Complete |
+| SHARE-02    | Phase 14   | Complete |
+| SHARE-03    | Phase 14   | Complete |
+| SHARE-04    | Phase 14   | Complete |
+| SHARE-05    | Phase 14   | Complete |
 | SHARE-06    | Phase 15   | Pending  |
 | SHARE-07    | Phase 15   | Pending  |
 | SRCH-01     | Phase 15   | Pending  |
