@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from 'vitest';
 import * as secp256k1 from '@noble/secp256k1';
-import { deriveFileIpnsKeypair } from '../file/derive-ipns';
+import { deriveFileIpnsKeypair, generateFileIpnsKeypair } from '../file/derive-ipns';
 import { encryptFileMetadata, decryptFileMetadata } from '../file/metadata';
 import {
   encryptFolderMetadata,
@@ -126,6 +126,29 @@ describe('deriveFileIpnsKeypair', () => {
     const result = await deriveFileIpnsKeypair(privateKey, FILE_ID_1);
 
     expect(result.ipnsName).toMatch(/^(k51|bafzaa)/);
+  });
+});
+
+// ─── generateFileIpnsKeypair ───────────────────────────────────────
+
+describe('generateFileIpnsKeypair', () => {
+  it('returns valid Ed25519 keypair and IPNS name', async () => {
+    const result = await generateFileIpnsKeypair();
+
+    expect(result.privateKey).toBeInstanceOf(Uint8Array);
+    expect(result.publicKey).toBeInstanceOf(Uint8Array);
+    expect(result.privateKey.length).toBe(32);
+    expect(result.publicKey.length).toBe(32);
+    expect(result.ipnsName).toMatch(/^(k51|bafzaa)/);
+  });
+
+  it('two calls produce different keypairs (randomness)', async () => {
+    const result1 = await generateFileIpnsKeypair();
+    const result2 = await generateFileIpnsKeypair();
+
+    expect(result1.ipnsName).not.toBe(result2.ipnsName);
+    expect(result1.privateKey).not.toEqual(result2.privateKey);
+    expect(result1.publicKey).not.toEqual(result2.publicKey);
   });
 });
 
@@ -290,6 +313,47 @@ describe('validateFolderMetadata (v2)', () => {
     expect(result.children[0].type).toBe('folder');
     expect(result.children[1].type).toBe('file');
     expect(result.children[2].type).toBe('file');
+  });
+
+  it('v2 metadata with FilePointer containing ipnsPrivateKeyEncrypted validates correctly', () => {
+    const data = {
+      version: 'v2',
+      children: [
+        {
+          type: 'file',
+          id: 'file-uuid-migrated',
+          name: 'migrated.pdf',
+          fileMetaIpnsName: 'k51qzi5uqu5dh9jhgjfghjdfgh',
+          ipnsPrivateKeyEncrypted: 'deadbeefcafebabe1234',
+          createdAt: 1706054400000,
+          modifiedAt: 1706140800000,
+        },
+      ],
+    };
+
+    const result = validateFolderMetadata(data);
+    expect(result.version).toBe('v2');
+    expect(result.children).toHaveLength(1);
+    expect(result.children[0].type).toBe('file');
+  });
+
+  it('v2 metadata rejects FilePointer with non-string ipnsPrivateKeyEncrypted', () => {
+    const data = {
+      version: 'v2',
+      children: [
+        {
+          type: 'file',
+          id: 'file-uuid-bad',
+          name: 'bad.pdf',
+          fileMetaIpnsName: 'k51qzi5uqu5dh9jhgjfghjdfgh',
+          ipnsPrivateKeyEncrypted: 12345,
+          createdAt: 1706054400000,
+          modifiedAt: 1706140800000,
+        },
+      ],
+    };
+
+    expect(() => validateFolderMetadata(data)).toThrow('ipnsPrivateKeyEncrypted must be a string');
   });
 
   it('v2 metadata encrypts and decrypts correctly', async () => {

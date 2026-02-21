@@ -62,6 +62,10 @@ export type FilePointer = {
   name: string;
   /** IPNS name of the file's own metadata record */
   fileMetaIpnsName: string;
+  /** Hex-encoded ECIES-wrapped Ed25519 private key for signing this file's IPNS record.
+   *  Present for files created after the random-key migration. Absent for legacy files
+   *  whose IPNS key is derived deterministically via HKDF. */
+  ipnsPrivateKeyEncrypted?: string;
   /** Creation timestamp (Unix ms) */
   createdAt: number;
   /** Last modification timestamp (Unix ms) */

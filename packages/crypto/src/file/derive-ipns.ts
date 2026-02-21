@@ -19,6 +19,7 @@
 import { deriveKey } from '../keys/derive';
 import * as ed from '@noble/ed25519';
 import { deriveIpnsName } from '../ipns/derive-name';
+import { generateEd25519Keypair } from '../ed25519/keygen';
 import { CryptoError } from '../types';
 import { SECP256K1_PRIVATE_KEY_SIZE } from '../constants';
 
@@ -76,6 +77,30 @@ export async function deriveFileIpnsKeypair(
   return {
     privateKey: ed25519Seed,
     publicKey: ed25519PublicKey,
+    ipnsName,
+  };
+}
+
+/**
+ * Generate a random Ed25519 IPNS keypair for a new file.
+ *
+ * Unlike `deriveFileIpnsKeypair`, this produces a non-deterministic keypair.
+ * The private key must be ECIES-wrapped and stored in the FilePointer so it
+ * can be recovered from folder metadata.
+ *
+ * @returns Ed25519 keypair and IPNS name for the file's metadata record
+ */
+export async function generateFileIpnsKeypair(): Promise<{
+  privateKey: Uint8Array;
+  publicKey: Uint8Array;
+  ipnsName: string;
+}> {
+  const keypair = generateEd25519Keypair();
+  const ipnsName = await deriveIpnsName(keypair.publicKey);
+
+  return {
+    privateKey: keypair.privateKey,
+    publicKey: keypair.publicKey,
     ipnsName,
   };
 }

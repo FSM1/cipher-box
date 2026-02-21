@@ -7,8 +7,8 @@
 // Types
 export type { FileMetadata, FilePointer, EncryptedFileMetadata, VersionEntry } from './types';
 
-// IPNS keypair derivation
-export { deriveFileIpnsKeypair } from './derive-ipns';
+// IPNS keypair derivation / generation
+export { deriveFileIpnsKeypair, generateFileIpnsKeypair } from './derive-ipns';
 
 // Metadata encryption functions
 export { encryptFileMetadata, decryptFileMetadata, validateFileMetadata } from './metadata';

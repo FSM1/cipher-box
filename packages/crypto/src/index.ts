@@ -96,6 +96,7 @@ export {
 // Per-file IPNS metadata types and encryption
 export {
   deriveFileIpnsKeypair,
+  generateFileIpnsKeypair,
   encryptFileMetadata,
   decryptFileMetadata,
   validateFileMetadata,
