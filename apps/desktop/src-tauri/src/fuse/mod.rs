@@ -462,6 +462,7 @@ impl CipherBoxFS {
                 inode::InodeKind::File {
                     file_meta_ipns_name,
                     file_ipns_private_key,
+                    file_ipns_key_encrypted_hex,
                     ..
                 } => {
                     let now_ms = std::time::SystemTime::now()
@@ -494,8 +495,10 @@ impl CipherBoxFS {
                         }
                     };
 
-                    // ECIES-wrap the file IPNS private key with user's public key if available
-                    let ipns_key_encrypted = if let Some(key) = file_ipns_private_key {
+                    // Use cached ECIES-wrapped hex if available; only re-wrap if cache is empty
+                    let ipns_key_encrypted = if let Some(hex) = file_ipns_key_encrypted_hex {
+                        Some(hex.clone())
+                    } else if let Some(key) = file_ipns_private_key {
                         match crate::crypto::ecies::wrap_key(key, &self.public_key) {
                             Ok(wrapped) => Some(hex::encode(&wrapped)),
                             Err(e) => {

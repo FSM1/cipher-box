@@ -159,6 +159,9 @@ export async function createFileMetadata(params: {
     keyEpoch = teeKeys.currentEpoch;
   }
 
+  // Zero the private key now that wrapping, signing, and TEE enrollment are done
+  ipnsKeypair.privateKey.fill(0);
+
   return {
     fileMetaIpnsName: ipnsKeypair.ipnsName,
     ipnsRecord: {

@@ -71,15 +71,17 @@ export function validateFolderMetadata(data: unknown): FolderMetadata {
           'DECRYPTION_FAILED'
         );
       }
-      // Optional: ipnsPrivateKeyEncrypted must be a string if present
-      if (
-        entry.ipnsPrivateKeyEncrypted !== undefined &&
-        typeof entry.ipnsPrivateKeyEncrypted !== 'string'
-      ) {
-        throw new CryptoError(
-          'Invalid metadata format: ipnsPrivateKeyEncrypted must be a string',
-          'DECRYPTION_FAILED'
-        );
+      // Optional: ipnsPrivateKeyEncrypted must be a non-empty hex string if present
+      if (entry.ipnsPrivateKeyEncrypted !== undefined) {
+        if (
+          typeof entry.ipnsPrivateKeyEncrypted !== 'string' ||
+          entry.ipnsPrivateKeyEncrypted.length < 64
+        ) {
+          throw new CryptoError(
+            'Invalid metadata format: ipnsPrivateKeyEncrypted must be a hex string (min 64 chars)',
+            'DECRYPTION_FAILED'
+          );
+        }
       }
     }
   }

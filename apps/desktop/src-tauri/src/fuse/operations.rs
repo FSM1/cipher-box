@@ -980,7 +980,16 @@ mod implementation {
                 }
             };
 
-            // Create inode with empty CID (not yet uploaded) and derived IPNS name
+            // ECIES-wrap the IPNS private key eagerly so we cache it for metadata publish
+            let ipns_key_encrypted_hex = match crate::crypto::ecies::wrap_key(&file_ipns_private_key, &self.public_key) {
+                Ok(wrapped) => Some(hex::encode(&wrapped)),
+                Err(e) => {
+                    log::warn!("create: failed to ECIES-wrap IPNS key: {}. Will re-wrap on publish.", e);
+                    None
+                }
+            };
+
+            // Create inode with empty CID (not yet uploaded) and random IPNS keypair
             let inode = InodeData {
                 ino,
                 parent_ino: parent,
@@ -993,7 +1002,8 @@ mod implementation {
                     encryption_mode: "GCM".to_string(),
                     file_meta_ipns_name: Some(file_ipns_name),
                     file_meta_resolved: true,
-                    file_ipns_private_key: Some(zeroize::Zeroizing::new(file_ipns_private_key.to_vec())),
+                    file_ipns_private_key: Some(zeroize::Zeroizing::new(file_ipns_private_key)),
+                    file_ipns_key_encrypted_hex: ipns_key_encrypted_hex,
                     versions: None,
                 },
                 attr,
@@ -1581,6 +1591,10 @@ mod implementation {
                             .cloned();
 
                         if let Some(inode) = self.inodes.get_mut(ino) {
+                            let cached_hex = match &inode.kind {
+                                InodeKind::File { file_ipns_key_encrypted_hex, .. } => file_ipns_key_encrypted_hex.clone(),
+                                _ => None,
+                            };
                             inode.kind = InodeKind::File {
                                 cid: String::new(),
                                 encrypted_file_key: encrypted_file_key_hex.clone(),
@@ -1590,6 +1604,7 @@ mod implementation {
                                 file_meta_ipns_name: file_meta_ipns_name.clone(),
                                 file_meta_resolved: true,
                                 file_ipns_private_key: file_ipns_private_key.clone(),
+                                file_ipns_key_encrypted_hex: cached_hex,
                                 versions: versions_for_meta.clone(),
                             };
                             inode.attr.size = file_size;

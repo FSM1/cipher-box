@@ -324,7 +324,8 @@ describe('validateFolderMetadata (v2)', () => {
           id: 'file-uuid-migrated',
           name: 'migrated.pdf',
           fileMetaIpnsName: 'k51qzi5uqu5dh9jhgjfghjdfgh',
-          ipnsPrivateKeyEncrypted: 'deadbeefcafebabe1234',
+          ipnsPrivateKeyEncrypted:
+            'deadbeefcafebabe1234567890abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
           createdAt: 1706054400000,
           modifiedAt: 1706140800000,
         },
@@ -353,7 +354,30 @@ describe('validateFolderMetadata (v2)', () => {
       ],
     };
 
-    expect(() => validateFolderMetadata(data)).toThrow('ipnsPrivateKeyEncrypted must be a string');
+    expect(() => validateFolderMetadata(data)).toThrow(
+      'ipnsPrivateKeyEncrypted must be a hex string'
+    );
+  });
+
+  it('v2 metadata rejects FilePointer with too-short ipnsPrivateKeyEncrypted', () => {
+    const data = {
+      version: 'v2',
+      children: [
+        {
+          type: 'file',
+          id: 'file-uuid-short',
+          name: 'short.pdf',
+          fileMetaIpnsName: 'k51qzi5uqu5dh9jhgjfghjdfgh',
+          ipnsPrivateKeyEncrypted: 'abcd',
+          createdAt: 1706054400000,
+          modifiedAt: 1706140800000,
+        },
+      ],
+    };
+
+    expect(() => validateFolderMetadata(data)).toThrow(
+      'ipnsPrivateKeyEncrypted must be a hex string'
+    );
   });
 
   it('v2 metadata encrypts and decrypts correctly', async () => {

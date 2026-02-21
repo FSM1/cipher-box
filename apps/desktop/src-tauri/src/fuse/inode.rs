@@ -84,9 +84,13 @@ pub enum InodeKind {
         /// Whether per-file IPNS metadata has been resolved.
         file_meta_resolved: bool,
         /// Decrypted Ed25519 IPNS private key for signing this file's IPNS record.
-        /// Only set for newly created files (derived via HKDF from user privateKey + fileId).
+        /// For new files: generated randomly, ECIES-wrapped in FilePointer.
+        /// For legacy files: derived via HKDF from user privateKey + fileId.
         /// Wrapped in `Zeroizing` for automatic zeroization on drop.
         file_ipns_private_key: Option<Zeroizing<Vec<u8>>>,
+        /// Cached hex-encoded ECIES-wrapped IPNS private key for FilePointer serialization.
+        /// Avoids redundant ECIES wrapping on every metadata publish.
+        file_ipns_key_encrypted_hex: Option<String>,
         /// Past versions of this file (newest first). None if no version history.
         versions: Option<Vec<crate::crypto::folder::VersionEntry>>,
     },
@@ -385,7 +389,8 @@ impl InodeTable {
                     let kind = if let Some(existing_kind) = existing_kind {
                         existing_kind
                     } else {
-                        // Decrypt file IPNS private key from FilePointer if available
+                        // Decrypt file IPNS private key from FilePointer if available,
+                        // falling back to HKDF derivation for legacy files.
                         let file_ipns_key = if let Some(ref encrypted_hex) = file_pointer.ipns_private_key_encrypted {
                             match hex::decode(encrypted_hex) {
                                 Ok(encrypted_bytes) => {
@@ -393,7 +398,7 @@ impl InodeTable {
                                         Ok(key) => Some(Zeroizing::new(key)),
                                         Err(e) => {
                                             log::warn!(
-                                                "File '{}': failed to decrypt ipnsPrivateKeyEncrypted: {}. Will use HKDF fallback.",
+                                                "File '{}': failed to decrypt ipnsPrivateKeyEncrypted: {}. Falling back to HKDF.",
                                                 file_pointer.name, e
                                             );
                                             None
@@ -402,16 +407,46 @@ impl InodeTable {
                                 }
                                 Err(e) => {
                                     log::warn!(
-                                        "File '{}': invalid ipnsPrivateKeyEncrypted hex: {}. Will use HKDF fallback.",
+                                        "File '{}': invalid ipnsPrivateKeyEncrypted hex: {}. Falling back to HKDF.",
                                         file_pointer.name, e
                                     );
                                     None
                                 }
                             }
                         } else {
-                            // Legacy FilePointer: no encrypted key, HKDF derivation will happen on demand
                             None
                         };
+
+                        // HKDF fallback for legacy FilePointers or ECIES decryption failures
+                        let file_ipns_key = if file_ipns_key.is_some() {
+                            file_ipns_key
+                        } else if let Ok(pk_arr) = <[u8; 32]>::try_from(private_key) {
+                            match crypto::hkdf::derive_file_ipns_keypair(&pk_arr, &file_pointer.id) {
+                                Ok((derived_key, _, _)) => {
+                                    log::debug!(
+                                        "File '{}': derived IPNS key via HKDF fallback.",
+                                        file_pointer.name
+                                    );
+                                    Some(derived_key)
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "File '{}': HKDF fallback also failed: {}. File IPNS updates will be unavailable.",
+                                        file_pointer.name, e
+                                    );
+                                    None
+                                }
+                            }
+                        } else {
+                            log::warn!(
+                                "File '{}': private key is not 32 bytes, cannot derive HKDF fallback.",
+                                file_pointer.name
+                            );
+                            None
+                        };
+
+                        // Cache the ECIES-wrapped hex to avoid re-wrapping on every publish
+                        let cached_encrypted_hex = file_pointer.ipns_private_key_encrypted.clone();
 
                         InodeKind::File {
                             cid: String::new(),
@@ -422,6 +457,7 @@ impl InodeTable {
                             file_meta_ipns_name: Some(file_pointer.file_meta_ipns_name.clone()),
                             file_meta_resolved: false,
                             file_ipns_private_key: file_ipns_key,
+                            file_ipns_key_encrypted_hex: cached_encrypted_hex,
                             versions: None,
                         }
                     };
@@ -526,6 +562,10 @@ impl InodeTable {
                 file_meta_resolved: true,
                 file_ipns_private_key: match &inode.kind {
                     InodeKind::File { file_ipns_private_key, .. } => file_ipns_private_key.clone(),
+                    _ => None,
+                },
+                file_ipns_key_encrypted_hex: match &inode.kind {
+                    InodeKind::File { file_ipns_key_encrypted_hex, .. } => file_ipns_key_encrypted_hex.clone(),
                     _ => None,
                 },
                 versions,
@@ -664,6 +704,7 @@ mod tests {
                 file_meta_ipns_name: None,
                 file_meta_resolved: true,
                 file_ipns_private_key: None,
+                file_ipns_key_encrypted_hex: None,
                 versions: None,
             },
             attr: FileAttr {
@@ -746,6 +787,7 @@ mod tests {
             file_meta_ipns_name: None,
             file_meta_resolved: true,
             file_ipns_private_key: None,
+            file_ipns_key_encrypted_hex: None,
             versions: None,
         };
 
