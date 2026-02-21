@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsHexadecimal, Length, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsHexadecimal, Length, MaxLength, Matches } from 'class-validator';
 
 export class CreateApprovalDto {
   @ApiProperty({
@@ -19,6 +19,9 @@ export class CreateApprovalDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(100)
+  @Matches(/^[\w\s\-().]+$/, {
+    message: 'deviceName contains invalid characters',
+  })
   deviceName!: string;
 
   @ApiProperty({
