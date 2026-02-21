@@ -66,6 +66,7 @@ export * from './unlinkMethodDto';
 export * from './unlinkMethodResponseDto';
 export * from './unpinDto';
 export * from './unpinResponseDto';
+export * from './updateEncryptedKeyDto';
 export * from './uploadResponseDto';
 export * from './vaultExportDto';
 export * from './vaultExportDtoDerivationInfo';

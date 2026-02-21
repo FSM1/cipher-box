@@ -934,3 +934,86 @@ export async function fetchAndDecryptMetadata(
 
   return metadata;
 }
+
+// ---------------------------------------------------------------------------
+// Lazy key rotation integration
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a folder has pending key rotations and execute rotation if needed.
+ *
+ * Called before folder modifications to ensure the folderKey is rotated
+ * after a share has been revoked. This implements lazy rotation: the key
+ * is only rotated when the sharer next modifies the folder.
+ *
+ * If rotation occurs:
+ * 1. A new random folderKey is generated
+ * 2. The folder metadata is re-encrypted with the new key
+ * 3. The new key is re-wrapped for all remaining (non-revoked) share recipients
+ * 4. Revoked share records are hard-deleted
+ * 5. The new folderKey is returned for the caller to use
+ *
+ * If no rotation is needed, the original folderKey is returned unchanged.
+ *
+ * NOTE: The parent folder's folderKeyEncrypted for this child is NOT updated
+ * here. The parent metadata update (re-wrapping the new folderKey with the
+ * owner's public key) is handled by the caller since it has access to the
+ * parent folder context. The caller must update the parent folder's children
+ * array with the new folderKeyEncrypted for this folder entry.
+ *
+ * @param params.folderNode - The folder node being modified
+ * @returns The folderKey to use (new if rotated, original if not)
+ */
+export async function checkAndRotateIfNeeded(params: {
+  folderNode: FolderNode;
+}): Promise<{ folderKey: Uint8Array; rotated: boolean }> {
+  // Lazy import to avoid circular dependency at module evaluation time
+  const { checkPendingRotation, executeLazyRotation } = await import('./share.service');
+
+  const { folderNode } = params;
+
+  // 1. Check if any revoked shares are pending rotation for this folder
+  const hasPending = await checkPendingRotation(folderNode.ipnsName);
+  if (!hasPending) {
+    return { folderKey: folderNode.folderKey, rotated: false };
+  }
+
+  const auth = useAuthStore.getState();
+  if (!auth.vaultKeypair) {
+    // Cannot rotate without owner's keypair -- skip rotation, use existing key
+    console.warn('[share] Cannot perform lazy rotation: no vault keypair available');
+    return { folderKey: folderNode.folderKey, rotated: false };
+  }
+
+  // 2. Execute lazy rotation: generates new key, re-wraps for remaining recipients,
+  //    hard-deletes revoked share records
+  const { newFolderKey } = await executeLazyRotation({
+    folderIpnsName: folderNode.ipnsName,
+    oldFolderKey: folderNode.folderKey,
+    ownerPublicKey: auth.vaultKeypair.publicKey,
+  });
+
+  // 3. Re-encrypt folder metadata with the new key
+  //    Resolve current IPNS -> fetch encrypted metadata -> decrypt with old key -> re-encrypt with new key
+  const resolved = await resolveIpnsRecord(folderNode.ipnsName);
+  if (resolved) {
+    const currentMetadata = await fetchAndDecryptMetadata(resolved.cid, folderNode.folderKey);
+
+    // Re-encrypt and publish with new key
+    await updateFolderMetadata({
+      folderId: folderNode.id,
+      children: currentMetadata.children ?? [],
+      folderKey: newFolderKey,
+      ipnsPrivateKey: folderNode.ipnsPrivateKey,
+      ipnsName: folderNode.ipnsName,
+      sequenceNumber: folderNode.sequenceNumber,
+    });
+  }
+
+  // 4. Re-wrap new folderKey in parent metadata
+  //    The parent needs its child's folderKeyEncrypted updated.
+  //    This is done by the caller since they have access to the parent folder.
+  //    We just return the new key and the rotated flag.
+
+  return { folderKey: newFolderKey, rotated: true };
+}

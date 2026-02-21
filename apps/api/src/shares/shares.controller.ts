@@ -20,6 +20,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SharesService } from './shares.service';
 import { CreateShareDto } from './dto/create-share.dto';
 import { AddShareKeysDto } from './dto/share-key.dto';
+import { UpdateEncryptedKeyDto } from './dto/update-encrypted-key.dto';
 
 interface RequestWithUser extends Request {
   user: {
@@ -275,9 +276,9 @@ export class SharesController {
   async updateShareEncryptedKey(
     @Request() req: RequestWithUser,
     @Param('shareId', ParseUUIDPipe) shareId: string,
-    @Body() body: { encryptedKey: string }
+    @Body() dto: UpdateEncryptedKeyDto
   ): Promise<void> {
-    await this.sharesService.updateShareEncryptedKey(shareId, req.user.id, body.encryptedKey);
+    await this.sharesService.updateShareEncryptedKey(shareId, req.user.id, dto.encryptedKey);
   }
 
   @Delete(':shareId/complete-rotation')

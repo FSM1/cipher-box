@@ -21,7 +21,12 @@ import type {
   UseQueryResult,
 } from '@tanstack/react-query';
 
-import type { AddShareKeysDto, CreateShareDto, SharesControllerLookupUserParams } from '../models';
+import type {
+  AddShareKeysDto,
+  CreateShareDto,
+  SharesControllerLookupUserParams,
+  UpdateEncryptedKeyDto,
+} from '../models';
 
 import { customInstance } from '../custom-instance';
 
@@ -946,8 +951,16 @@ export const useSharesControllerHideShare = <TError = void, TContext = unknown>(
  * Update the encrypted key on an existing share after lazy key rotation. Only the sharer can update the key.
  * @summary Update share encrypted key
  */
-export const sharesControllerUpdateShareEncryptedKey = (shareId: string) => {
-  return customInstance<void>({ url: `/shares/${shareId}/encrypted-key`, method: 'PATCH' });
+export const sharesControllerUpdateShareEncryptedKey = (
+  shareId: string,
+  updateEncryptedKeyDto: UpdateEncryptedKeyDto
+) => {
+  return customInstance<void>({
+    url: `/shares/${shareId}/encrypted-key`,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    data: updateEncryptedKeyDto,
+  });
 };
 
 export const getSharesControllerUpdateShareEncryptedKeyMutationOptions = <
@@ -957,13 +970,13 @@ export const getSharesControllerUpdateShareEncryptedKeyMutationOptions = <
   mutation?: UseMutationOptions<
     Awaited<ReturnType<typeof sharesControllerUpdateShareEncryptedKey>>,
     TError,
-    { shareId: string },
+    { shareId: string; data: UpdateEncryptedKeyDto },
     TContext
   >;
 }): UseMutationOptions<
   Awaited<ReturnType<typeof sharesControllerUpdateShareEncryptedKey>>,
   TError,
-  { shareId: string },
+  { shareId: string; data: UpdateEncryptedKeyDto },
   TContext
 > => {
   const mutationKey = ['sharesControllerUpdateShareEncryptedKey'];
@@ -975,11 +988,11 @@ export const getSharesControllerUpdateShareEncryptedKeyMutationOptions = <
 
   const mutationFn: MutationFunction<
     Awaited<ReturnType<typeof sharesControllerUpdateShareEncryptedKey>>,
-    { shareId: string }
+    { shareId: string; data: UpdateEncryptedKeyDto }
   > = (props) => {
-    const { shareId } = props ?? {};
+    const { shareId, data } = props ?? {};
 
-    return sharesControllerUpdateShareEncryptedKey(shareId);
+    return sharesControllerUpdateShareEncryptedKey(shareId, data);
   };
 
   return { mutationFn, ...mutationOptions };
@@ -988,7 +1001,7 @@ export const getSharesControllerUpdateShareEncryptedKeyMutationOptions = <
 export type SharesControllerUpdateShareEncryptedKeyMutationResult = NonNullable<
   Awaited<ReturnType<typeof sharesControllerUpdateShareEncryptedKey>>
 >;
-
+export type SharesControllerUpdateShareEncryptedKeyMutationBody = UpdateEncryptedKeyDto;
 export type SharesControllerUpdateShareEncryptedKeyMutationError = void;
 
 /**
@@ -999,7 +1012,7 @@ export const useSharesControllerUpdateShareEncryptedKey = <TError = void, TConte
     mutation?: UseMutationOptions<
       Awaited<ReturnType<typeof sharesControllerUpdateShareEncryptedKey>>,
       TError,
-      { shareId: string },
+      { shareId: string; data: UpdateEncryptedKeyDto },
       TContext
     >;
   },
@@ -1007,7 +1020,7 @@ export const useSharesControllerUpdateShareEncryptedKey = <TError = void, TConte
 ): UseMutationResult<
   Awaited<ReturnType<typeof sharesControllerUpdateShareEncryptedKey>>,
   TError,
-  { shareId: string },
+  { shareId: string; data: UpdateEncryptedKeyDto },
   TContext
 > => {
   const mutationOptions = getSharesControllerUpdateShareEncryptedKeyMutationOptions(options);

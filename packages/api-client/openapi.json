@@ -1391,6 +1391,16 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEncryptedKeyDto"
+              }
+            }
+          }
+        },
         "responses": {
           "204": {
             "description": "Encrypted key updated"
@@ -2370,6 +2380,16 @@
           }
         },
         "required": ["keys"]
+      },
+      "UpdateEncryptedKeyDto": {
+        "type": "object",
+        "properties": {
+          "encryptedKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of the new key wrapped for recipient"
+          }
+        },
+        "required": ["encryptedKey"]
       }
     }
   }
