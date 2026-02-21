@@ -391,15 +391,16 @@ impl InodeTable {
                         existing_kind
                     } else {
                         // Decrypt file IPNS private key from FilePointer if available,
-                        // falling back to HKDF derivation for legacy files.
+                        // falling back to HKDF derivation for legacy files only.
+                        let has_encrypted_key = file_pointer.ipns_private_key_encrypted.is_some();
                         let file_ipns_key = if let Some(ref encrypted_hex) = file_pointer.ipns_private_key_encrypted {
                             match hex::decode(encrypted_hex) {
                                 Ok(encrypted_bytes) => {
                                     match crypto::ecies::unwrap_key(&encrypted_bytes, private_key) {
                                         Ok(key) => Some(Zeroizing::new(key)),
                                         Err(e) => {
-                                            log::warn!(
-                                                "File '{}': failed to decrypt ipnsPrivateKeyEncrypted: {}. Falling back to HKDF.",
+                                            log::error!(
+                                                "File '{}': failed to decrypt ipnsPrivateKeyEncrypted: {}. Cannot use HKDF for random-key files.",
                                                 file_pointer.name, e
                                             );
                                             None
@@ -407,8 +408,8 @@ impl InodeTable {
                                     }
                                 }
                                 Err(e) => {
-                                    log::warn!(
-                                        "File '{}': invalid ipnsPrivateKeyEncrypted hex: {}. Falling back to HKDF.",
+                                    log::error!(
+                                        "File '{}': invalid ipnsPrivateKeyEncrypted hex: {}. Cannot use HKDF for random-key files.",
                                         file_pointer.name, e
                                     );
                                     None
@@ -418,31 +419,37 @@ impl InodeTable {
                             None
                         };
 
-                        // HKDF fallback for legacy FilePointers or ECIES decryption failures
+                        // HKDF fallback ONLY for legacy FilePointers (no encrypted key present).
+                        // If ipnsPrivateKeyEncrypted was present but decryption failed, HKDF would
+                        // produce a key that doesn't match the file's random IPNS name.
                         let file_ipns_key = if file_ipns_key.is_some() {
                             file_ipns_key
-                        } else if let Ok(pk_arr) = <[u8; 32]>::try_from(private_key) {
-                            match crypto::hkdf::derive_file_ipns_keypair(&pk_arr, &file_pointer.id) {
-                                Ok((derived_key, _, _)) => {
-                                    log::debug!(
-                                        "File '{}': derived IPNS key via HKDF fallback.",
-                                        file_pointer.name
-                                    );
-                                    Some(derived_key)
+                        } else if !has_encrypted_key {
+                            if let Ok(pk_arr) = <[u8; 32]>::try_from(private_key) {
+                                match crypto::hkdf::derive_file_ipns_keypair(&pk_arr, &file_pointer.id) {
+                                    Ok((derived_key, _, _)) => {
+                                        log::debug!(
+                                            "File '{}': derived IPNS key via HKDF fallback (legacy file).",
+                                            file_pointer.name
+                                        );
+                                        Some(derived_key)
+                                    }
+                                    Err(e) => {
+                                        log::warn!(
+                                            "File '{}': HKDF fallback also failed: {}. File IPNS updates will be unavailable.",
+                                            file_pointer.name, e
+                                        );
+                                        None
+                                    }
                                 }
-                                Err(e) => {
-                                    log::warn!(
-                                        "File '{}': HKDF fallback also failed: {}. File IPNS updates will be unavailable.",
-                                        file_pointer.name, e
-                                    );
-                                    None
-                                }
+                            } else {
+                                log::warn!(
+                                    "File '{}': private key is not 32 bytes, cannot derive HKDF fallback.",
+                                    file_pointer.name
+                                );
+                                None
                             }
                         } else {
-                            log::warn!(
-                                "File '{}': private key is not 32 bytes, cannot derive HKDF fallback.",
-                                file_pointer.name
-                            );
                             None
                         };
 
