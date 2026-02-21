@@ -908,7 +908,7 @@ mod implementation {
         /// The file isn't uploaded until release() -- it exists only locally.
         fn create(
             &mut self,
-            req: &Request<'_>,
+            _req: &Request<'_>,
             parent: u64,
             name: &OsStr,
             _mode: u32,
@@ -942,8 +942,11 @@ mod implementation {
             // Allocate new inode
             let ino = self.inodes.allocate_ino();
             let now = SystemTime::now();
-            let uid = req.uid();
-            let gid = req.gid();
+            // Use process UID/GID (not req.uid/gid) for consistency with root
+            // inode and populate_folder. Under FUSE-T SMB, req.uid() may differ
+            // from the mounting user, causing permission mismatches.
+            let uid = unsafe { libc::getuid() };
+            let gid = unsafe { libc::getgid() };
 
             let attr = FileAttr {
                 ino,
@@ -1794,7 +1797,7 @@ mod implementation {
         /// and updates the parent folder metadata.
         fn mkdir(
             &mut self,
-            req: &Request<'_>,
+            _req: &Request<'_>,
             parent: u64,
             name: &OsStr,
             _mode: u32,
@@ -1850,8 +1853,10 @@ mod implementation {
                 // Allocate inode and create InodeData (locally, no network I/O)
                 let ino = self.inodes.allocate_ino();
                 let now = SystemTime::now();
-                let uid = req.uid();
-                let gid = req.gid();
+                // Use process UID/GID for consistency with root inode and
+                // populate_folder (avoids SMB UID mismatch).
+                let uid = unsafe { libc::getuid() };
+                let gid = unsafe { libc::getgid() };
 
                 let attr = FileAttr {
                     ino,
@@ -2336,43 +2341,26 @@ mod implementation {
 
         /// Check file access permissions.
         ///
-        /// Enforces owner-only access based on inode permission bits.
+        /// Always grants access if the inode exists. CipherBox is a single-user
+        /// encrypted vault where client-side encryption is the access control
+        /// boundary — POSIX permission checks add no security value. Strict
+        /// UID/permission checking also breaks the FUSE-T SMB backend because
+        /// the SMB server proxies requests under a different UID than the
+        /// mounting user, causing `access(W_OK)` to fail and blocking rename.
         fn access(
             &mut self,
-            req: &Request<'_>,
+            _req: &Request<'_>,
             ino: u64,
             mask: i32,
             reply: ReplyEmpty,
         ) {
-            let Some(inode) = self.inodes.get(ino) else {
+            if self.inodes.get(ino).is_none() {
                 reply.error(libc::ENOENT);
                 return;
-            };
-
-            // F_OK: just check existence
-            if mask == libc::F_OK {
-                reply.ok();
-                return;
             }
 
-            let attr = &inode.attr;
-            // Owner-only check: only the mounting user should access files
-            if req.uid() != attr.uid {
-                reply.error(libc::EACCES);
-                return;
-            }
-
-            let owner_bits = (attr.perm >> 6) & 0o7;
-            let mut granted = true;
-            if mask & libc::R_OK != 0 && owner_bits & 0o4 == 0 { granted = false; }
-            if mask & libc::W_OK != 0 && owner_bits & 0o2 == 0 { granted = false; }
-            if mask & libc::X_OK != 0 && owner_bits & 0o1 == 0 { granted = false; }
-
-            if granted {
-                reply.ok();
-            } else {
-                reply.error(libc::EACCES);
-            }
+            log::trace!("access: ino={} mask={:#o} -> OK", ino, mask);
+            reply.ok();
         }
 
         /// Get extended attribute value.
