@@ -3,7 +3,7 @@
   "checkpoint_id": "9948cc3c8fe5",
   "strategy": "manual-commit",
   "branch": "feat/phase-14-user-to-user-sharing",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "apps/api/src/shares/dto/create-share.dto.ts",
     "apps/api/src/shares/dto/index.ts",
@@ -38,13 +38,20 @@
       "context": "/99/48cc3c8fe5/3/context.md",
       "content_hash": "/99/48cc3c8fe5/3/content_hash.txt",
       "prompt": "/99/48cc3c8fe5/3/prompt.txt"
+    },
+    {
+      "metadata": "/99/48cc3c8fe5/4/metadata.json",
+      "transcript": "/99/48cc3c8fe5/4/full.jsonl",
+      "context": "/99/48cc3c8fe5/4/context.md",
+      "content_hash": "/99/48cc3c8fe5/4/content_hash.txt",
+      "prompt": "/99/48cc3c8fe5/4/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 319,
-    "cache_creation_tokens": 493628,
-    "cache_read_tokens": 31398445,
-    "output_tokens": 39988,
-    "api_call_count": 281
+    "input_tokens": 325,
+    "cache_creation_tokens": 575671,
+    "cache_read_tokens": 31477735,
+    "output_tokens": 39996,
+    "api_call_count": 284
   }
 }
