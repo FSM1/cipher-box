@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "69f086a8c326",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-14-user-to-user-sharing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useFolder.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/69/f086a8c326/0/metadata.json",
+      "transcript": "/69/f086a8c326/0/full.jsonl",
+      "context": "/69/f086a8c326/0/context.md",
+      "content_hash": "/69/f086a8c326/0/content_hash.txt",
+      "prompt": "/69/f086a8c326/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 76803,
+    "cache_read_tokens": 5239366,
+    "output_tokens": 4517,
+    "api_call_count": 64
+  }
+}
