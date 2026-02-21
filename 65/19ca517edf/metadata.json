@@ -3,7 +3,7 @@
   "checkpoint_id": "6519ca517edf",
   "strategy": "manual-commit",
   "branch": "feat/phase-14-user-to-user-sharing",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "apps/api/src/shares/shares.service.ts",
     "tests/e2e/utils/web3auth-helpers.ts"
@@ -36,13 +36,20 @@
       "context": "/65/19ca517edf/3/context.md",
       "content_hash": "/65/19ca517edf/3/content_hash.txt",
       "prompt": "/65/19ca517edf/3/prompt.txt"
+    },
+    {
+      "metadata": "/65/19ca517edf/4/metadata.json",
+      "transcript": "/65/19ca517edf/4/full.jsonl",
+      "context": "/65/19ca517edf/4/context.md",
+      "content_hash": "/65/19ca517edf/4/content_hash.txt",
+      "prompt": "/65/19ca517edf/4/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 4473,
-    "cache_creation_tokens": 317026,
-    "cache_read_tokens": 19263332,
-    "output_tokens": 27713,
-    "api_call_count": 212
+    "input_tokens": 4502,
+    "cache_creation_tokens": 505925,
+    "cache_read_tokens": 23323596,
+    "output_tokens": 30106,
+    "api_call_count": 241
   }
 }
