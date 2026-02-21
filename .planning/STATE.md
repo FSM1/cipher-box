@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 14 (User-to-User Sharing)
-Plan: 1 of 6
+Plan: 2 of 6
 Status: In progress
-Last activity: 2026-02-21 -- Completed 14-01-PLAN.md (Crypto Foundation & Share Entities)
+Last activity: 2026-02-21 -- Completed 14-02-PLAN.md (Shares Module, Service & Controller)
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 1/6)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 2/6)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 122
+- Total plans completed: 123
 - Average duration: 5.4 min
-- Total execution time: 11.3 hours
+- Total execution time: 11.4 hours
 
 **By Phase (M1 summary):**
 
@@ -40,11 +40,11 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 11.1   | 7/7   | 36 min  | 5.1 min  |
 | M2 Phase 11.2   | 3/3   | 30 min  | 10.0 min |
 | M2 Phase 13     | 5/5   | 31 min  | 6.2 min  |
-| M2 Phase 14     | 1/6   | 7 min   | 7.0 min  |
+| M2 Phase 14     | 2/6   | 13 min  | 6.5 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 6m, 7m, 9m, 7m
+- Last 5 plans: 6m, 7m, 9m, 7m, 6m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -164,6 +164,9 @@ Recent decisions affecting current work:
 | KEY_REWRAP_FAILED added to CryptoErrorCode                        | 14-01     | Specific error code for ECIES re-wrapping failures in sharing flows                                              |
 | itemName stored as plaintext in share record                      | 14-01     | Minimal privacy impact per RESEARCH.md; server already knows user IDs                                            |
 | revokedAt soft-delete for lazy key rotation                       | 14-01     | Avoids separate tracking table; revoked shares marked then hard-deleted after rotation                           |
+| OpenAPI generator needs manual controller registration            | 14-02     | generate-openapi.ts uses lightweight module; new controllers must be added with mock providers                   |
+| Lookup endpoint under /shares/lookup (not /users/lookup)          | 14-02     | Keeps all sharing-related endpoints under shares controller for API cohesion                                     |
+| Buffer-to-hex serialization in controller response mapping        | 14-02     | Service layer works with raw TypeORM Buffers; controller converts to hex for API responses                       |
 
 ### Pending Todos
 
@@ -215,7 +218,7 @@ Recent decisions affecting current work:
 ### Research Flags
 
 - Phase 11 (Desktop): NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse), Windows virtual drive (WinFsp/Dokany), Tauri cross-compilation
-- Phase 14 (Sharing): COMPLETE -- research done, 6 plans created, execution in progress (1/6)
+- Phase 14 (Sharing): COMPLETE -- research done, 6 plans created, execution in progress (2/6)
 - Phase 15 (Link Sharing): NEEDS `/gsd:research-phase` -- unauthenticated web viewer security
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
@@ -231,11 +234,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed 14-01-PLAN.md (Crypto Foundation & Share Entities)
+Stopped at: Completed 14-02-PLAN.md (Shares Module, Service & Controller)
 Resume file: None
-Next: Execute 14-02-PLAN.md (Shares Module, Service & Controller)
+Next: Execute 14-03-PLAN.md (Share Dialog & Context Menu)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-21 after completing 14-01-PLAN.md (Crypto Foundation & Share Entities)_
+_Last updated: 2026-02-21 after completing 14-02-PLAN.md (Shares Module, Service & Controller)_
