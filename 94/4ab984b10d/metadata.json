@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "944ab984b10d",
+  "strategy": "manual-commit",
+  "branch": "fix/device-registry-publickey-validator",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/todos/done/2026-02-21-device-registry-publickey-validator-bug.md",
+    "docs/METADATA_SCHEMAS.md",
+    "packages/crypto/src/__tests__/registry.test.ts",
+    "packages/crypto/src/registry/schema.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/94/4ab984b10d/0/metadata.json",
+      "transcript": "/94/4ab984b10d/0/full.jsonl",
+      "context": "/94/4ab984b10d/0/context.md",
+      "content_hash": "/94/4ab984b10d/0/content_hash.txt",
+      "prompt": "/94/4ab984b10d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 111,
+    "cache_creation_tokens": 107916,
+    "cache_read_tokens": 9800242,
+    "output_tokens": 9146,
+    "api_call_count": 87
+  }
+}
