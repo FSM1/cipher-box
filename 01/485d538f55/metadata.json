@@ -3,7 +3,7 @@
   "checkpoint_id": "01485d538f55",
   "strategy": "manual-commit",
   "branch": "fix/fuse-rename-smb",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     ".planning/STATE.md",
     ".planning/todos/done/2026-02-18-fix-fuse-rename-on-smb-backend.md"
@@ -15,13 +15,20 @@
       "context": "/01/485d538f55/0/context.md",
       "content_hash": "/01/485d538f55/0/content_hash.txt",
       "prompt": "/01/485d538f55/0/prompt.txt"
+    },
+    {
+      "metadata": "/01/485d538f55/1/metadata.json",
+      "transcript": "/01/485d538f55/1/full.jsonl",
+      "context": "/01/485d538f55/1/context.md",
+      "content_hash": "/01/485d538f55/1/content_hash.txt",
+      "prompt": "/01/485d538f55/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 15,
-    "cache_creation_tokens": 38785,
-    "cache_read_tokens": 743603,
-    "output_tokens": 821,
-    "api_call_count": 12
+    "input_tokens": 144,
+    "cache_creation_tokens": 154560,
+    "cache_read_tokens": 12881130,
+    "output_tokens": 11892,
+    "api_call_count": 129
   }
 }
