@@ -59,7 +59,7 @@ describe('VaultService', () => {
     createdAt: new Date('2026-01-20T12:00:00.000Z'),
     initializedAt: null,
     updatedAt: new Date('2026-01-20T12:00:00.000Z'),
-    owner: {} as any,
+    owner: {} as unknown as User,
   };
 
   const testInitVaultDto: InitVaultDto = {
