@@ -144,6 +144,15 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     loadShares();
     return () => {
       cancelled = true;
+      // Zero all decrypted folder keys on unmount
+      setFolderKey((prev) => {
+        if (prev) prev.fill(0);
+        return null;
+      });
+      for (const entry of navStackRef.current) {
+        entry.folderKey.fill(0);
+      }
+      navStackRef.current = [];
     };
   }, []);
 
@@ -212,6 +221,8 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           navStackRef.current = [];
         } else {
           // For files, trigger download directly
+          // itemKey is the parent folder key; downloadSharedFileFromShare unwraps its own copy
+          itemKey.fill(0);
           await downloadSharedFileFromShare(share, auth.vaultKeypair.privateKey);
         }
       } catch (err) {
@@ -352,17 +363,21 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       // Unwrap the parent folder key from the share record
       const parentFolderKey = await unwrapKey(hexToBytes(share.encryptedKey), privateKey);
 
-      // Resolve file IPNS metadata and decrypt with parent folder key
-      const resolved = await resolveIpnsRecord(share.ipnsName);
-      if (!resolved) {
-        throw new Error('File metadata IPNS not found');
-      }
+      let fileMeta: Awaited<ReturnType<typeof decryptFileMetadata>>;
+      try {
+        // Resolve file IPNS metadata and decrypt with parent folder key
+        const resolved = await resolveIpnsRecord(share.ipnsName);
+        if (!resolved) {
+          throw new Error('File metadata IPNS not found');
+        }
 
-      const encryptedBytes = await fetchFromIpfs(resolved.cid);
-      const encryptedJson = new TextDecoder().decode(encryptedBytes);
-      const encrypted: EncryptedFileMetadata = JSON.parse(encryptedJson);
-      const fileMeta = await decryptFileMetadata(encrypted, parentFolderKey);
-      parentFolderKey.fill(0);
+        const encryptedBytes = await fetchFromIpfs(resolved.cid);
+        const encryptedJson = new TextDecoder().decode(encryptedBytes);
+        const encrypted: EncryptedFileMetadata = JSON.parse(encryptedJson);
+        fileMeta = await decryptFileMetadata(encrypted, parentFolderKey);
+      } finally {
+        parentFolderKey.fill(0);
+      }
 
       // Get the re-wrapped file key from share_keys
       const keys = await fetchShareKeys(share.shareId);

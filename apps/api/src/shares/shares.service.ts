@@ -281,6 +281,10 @@ export class SharesService {
       throw new ForbiddenException('Only the sharer can complete rotation');
     }
 
+    if (!share.revokedAt) {
+      throw new ConflictException('Cannot complete rotation for a non-revoked share');
+    }
+
     // CASCADE will remove all associated ShareKey records
     await this.shareRepo.remove(share);
   }

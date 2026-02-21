@@ -424,6 +424,7 @@ export async function executeLazyRotation(params: {
   }
 
   if (reWrapFailures.length > 0) {
+    newFolderKey.fill(0);
     throw new Error(
       `Key rotation failed: could not re-wrap key for ${reWrapFailures.length} recipient(s). ` +
         'Aborting to prevent inconsistent state.'

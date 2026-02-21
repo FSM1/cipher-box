@@ -10,8 +10,6 @@ import type { CreateShareResponseDtoItemType } from './createShareResponseDtoIte
 export interface CreateShareResponseDto {
   /** UUID of the created share */
   shareId: string;
-  /** UUID of the recipient user */
-  recipientId: string;
   itemType: CreateShareResponseDtoItemType;
   /** IPNS name of the shared item */
   ipnsName: string;

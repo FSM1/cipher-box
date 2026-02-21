@@ -169,9 +169,12 @@ async function reWrapEncryptedKey(
   recipientPubKey: Uint8Array
 ): Promise<string> {
   const plainKey = await unwrapKey(hexToBytes(encryptedKeyHex), ownerPrivateKey);
-  const rewrapped = await wrapKey(plainKey, recipientPubKey);
-  plainKey.fill(0);
-  return bytesToHex(rewrapped);
+  try {
+    const rewrapped = await wrapKey(plainKey, recipientPubKey);
+    return bytesToHex(rewrapped);
+  } finally {
+    plainKey.fill(0);
+  }
 }
 
 /**
@@ -333,33 +336,34 @@ export function ShareDialog({
           ownerPrivateKey
         );
 
-        // Wrap the folder key for the recipient
-        const wrappedForRecipient = await wrapKey(itemFolderKey, recipientPubKeyBytes);
-        encryptedKey = bytesToHex(wrappedForRecipient);
+        try {
+          // Wrap the folder key for the recipient
+          const wrappedForRecipient = await wrapKey(itemFolderKey, recipientPubKeyBytes);
+          encryptedKey = bytesToHex(wrappedForRecipient);
 
-        // Now traverse children and re-wrap descendant keys
-        // First, resolve folder metadata to get children
-        const resolved = await resolveIpnsRecord(folderEntry.ipnsName);
-        if (resolved) {
-          const encryptedBytes = await fetchFromIpfs(resolved.cid);
-          const encryptedJson = new TextDecoder().decode(encryptedBytes);
-          const encrypted = JSON.parse(encryptedJson);
-          const metadata = await decryptFolderMetadata(encrypted, itemFolderKey);
+          // Now traverse children and re-wrap descendant keys
+          // First, resolve folder metadata to get children
+          const resolved = await resolveIpnsRecord(folderEntry.ipnsName);
+          if (resolved) {
+            const encryptedBytes = await fetchFromIpfs(resolved.cid);
+            const encryptedJson = new TextDecoder().decode(encryptedBytes);
+            const encrypted = JSON.parse(encryptedJson);
+            const metadata = await decryptFolderMetadata(encrypted, itemFolderKey);
 
-          const totalSubfolders = countFolderChildren(metadata.children);
-          setProgress({ current: 0, total: totalSubfolders });
+            const totalSubfolders = countFolderChildren(metadata.children);
+            setProgress({ current: 0, total: totalSubfolders });
 
-          childKeys = await collectChildKeys(
-            metadata.children,
-            itemFolderKey,
-            ownerPrivateKey,
-            recipientPubKeyBytes,
-            (wrapped) => setProgress({ current: wrapped, total: totalSubfolders })
-          );
+            childKeys = await collectChildKeys(
+              metadata.children,
+              itemFolderKey,
+              ownerPrivateKey,
+              recipientPubKeyBytes,
+              (wrapped) => setProgress({ current: wrapped, total: totalSubfolders })
+            );
+          }
+        } finally {
+          itemFolderKey.fill(0);
         }
-
-        // Zero the folder key
-        itemFolderKey.fill(0);
       } else {
         // File sharing: wrap parent folder key for recipient (needed to decrypt file metadata),
         // and re-wrap the file key as a child key entry

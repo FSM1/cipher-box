@@ -4,9 +4,6 @@ export class CreateShareResponseDto {
   @ApiProperty({ description: 'UUID of the created share' })
   shareId!: string;
 
-  @ApiProperty({ description: 'UUID of the recipient user' })
-  recipientId!: string;
-
   @ApiProperty({ enum: ['folder', 'file'] })
   itemType!: string;
 

@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { SharesController } from './shares.controller';
 import { SharesService } from './shares.service';
@@ -96,8 +96,8 @@ describe('SharesController', () => {
       const result = await controller.createShare(mockReq, dto);
 
       expect(result.shareId).toBe(shareId);
-      expect(result.recipientId).toBe(recipientId);
       expect(result.encryptedKey).toBe(testEncryptedKey);
+      expect((result as any).recipientId).toBeUndefined();
       expect(result.itemType).toBe('folder');
       expect(result.ipnsName).toBe('k51qzi5uqu5dg12345');
       expect(result.itemName).toBe('My Folder');
@@ -146,7 +146,8 @@ describe('SharesController', () => {
     it('should return exists true when user found', async () => {
       mockSharesService.lookupUserByPublicKey.mockResolvedValue(true);
 
-      const result = await controller.lookupUser(recipientPublicKey);
+      const validKey = '0x04' + 'ab'.repeat(64);
+      const result = await controller.lookupUser(validKey);
 
       expect(result).toEqual({ exists: true });
     });
@@ -154,8 +155,15 @@ describe('SharesController', () => {
     it('should throw NotFoundException when user not found', async () => {
       mockSharesService.lookupUserByPublicKey.mockResolvedValue(false);
 
-      await expect(controller.lookupUser(recipientPublicKey)).rejects.toThrow(NotFoundException);
-      await expect(controller.lookupUser(recipientPublicKey)).rejects.toThrow('User not found');
+      const validKey = '0x04' + 'ab'.repeat(64);
+      await expect(controller.lookupUser(validKey)).rejects.toThrow(NotFoundException);
+      await expect(controller.lookupUser(validKey)).rejects.toThrow('User not found');
+    });
+
+    it('should throw BadRequestException for invalid public key format', async () => {
+      await expect(controller.lookupUser('not-a-key')).rejects.toThrow(BadRequestException);
+      await expect(controller.lookupUser('0x04short')).rejects.toThrow(BadRequestException);
+      await expect(controller.lookupUser('')).rejects.toThrow(BadRequestException);
     });
   });
 

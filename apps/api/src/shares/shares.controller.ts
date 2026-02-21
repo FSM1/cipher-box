@@ -13,6 +13,7 @@ import {
   HttpCode,
   HttpStatus,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { ThrottlerGuard } from '@nestjs/throttler';
@@ -58,7 +59,6 @@ export class SharesController {
     @Body() dto: CreateShareDto
   ): Promise<{
     shareId: string;
-    recipientId: string;
     itemType: string;
     ipnsName: string;
     itemName: string;
@@ -68,7 +68,6 @@ export class SharesController {
     const share = await this.sharesService.createShare(req.user.id, dto);
     return {
       shareId: share.id,
-      recipientId: share.recipientId,
       itemType: share.itemType,
       ipnsName: share.ipnsName,
       itemName: share.itemName,
@@ -153,6 +152,12 @@ export class SharesController {
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 404, description: 'User not found' })
   async lookupUser(@Query('publicKey') publicKey: string): Promise<{ exists: boolean }> {
+    if (!publicKey || !/^0x04[0-9a-fA-F]{128}$/.test(publicKey)) {
+      throw new BadRequestException(
+        'Invalid public key format. Expected uncompressed secp256k1 key: 0x04 + 128 hex chars'
+      );
+    }
+
     const exists = await this.sharesService.lookupUserByPublicKey(publicKey);
     if (!exists) {
       throw new NotFoundException('User not found');
@@ -304,7 +309,9 @@ export class SharesController {
   })
   @ApiResponse({ status: 204, description: 'Share hard-deleted after rotation' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Only the sharer can complete rotation' })
   @ApiResponse({ status: 404, description: 'Share not found' })
+  @ApiResponse({ status: 409, description: 'Share has not been revoked' })
   async completeRotation(
     @Request() req: RequestWithUser,
     @Param('shareId', ParseUUIDPipe) shareId: string

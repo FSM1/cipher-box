@@ -512,13 +512,15 @@ describe('SharesService', () => {
   });
 
   describe('completeRotation', () => {
-    it('should hard-delete the share', async () => {
-      mockShareRepo.findOne.mockResolvedValue(mockShare);
-      mockShareRepo.remove.mockResolvedValue(mockShare);
+    const revokedShare = { ...mockShare, revokedAt: new Date() };
+
+    it('should hard-delete a revoked share', async () => {
+      mockShareRepo.findOne.mockResolvedValue(revokedShare);
+      mockShareRepo.remove.mockResolvedValue(revokedShare);
 
       await service.completeRotation(shareId, sharerId);
 
-      expect(mockShareRepo.remove).toHaveBeenCalledWith(mockShare);
+      expect(mockShareRepo.remove).toHaveBeenCalledWith(revokedShare);
     });
 
     it('should throw NotFoundException when share not found', async () => {
@@ -528,13 +530,22 @@ describe('SharesService', () => {
     });
 
     it('should throw ForbiddenException when user is not sharer', async () => {
-      mockShareRepo.findOne.mockResolvedValue(mockShare);
+      mockShareRepo.findOne.mockResolvedValue(revokedShare);
 
       await expect(service.completeRotation(shareId, recipientId)).rejects.toThrow(
         ForbiddenException
       );
       await expect(service.completeRotation(shareId, recipientId)).rejects.toThrow(
         'Only the sharer can complete rotation'
+      );
+    });
+
+    it('should throw ConflictException when share is not revoked', async () => {
+      mockShareRepo.findOne.mockResolvedValue(mockShare); // revokedAt is null
+
+      await expect(service.completeRotation(shareId, sharerId)).rejects.toThrow(ConflictException);
+      await expect(service.completeRotation(shareId, sharerId)).rejects.toThrow(
+        'Cannot complete rotation for a non-revoked share'
       );
     });
   });

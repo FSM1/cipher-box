@@ -1018,7 +1018,7 @@ export async function checkAndRotateIfNeeded(params: {
     folderKey: newFolderKey,
     ipnsPrivateKey: folderNode.ipnsPrivateKey,
     ipnsName: folderNode.ipnsName,
-    sequenceNumber: folderNode.sequenceNumber,
+    sequenceNumber: resolved.sequenceNumber,
   });
 
   // 4. Re-wrap new folderKey in parent metadata
