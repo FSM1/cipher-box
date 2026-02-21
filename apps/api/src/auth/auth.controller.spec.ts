@@ -355,7 +355,7 @@ describe('AuthController', () => {
 
       authService.logout.mockResolvedValue({ success: true });
 
-      await controller.logout(mockRequest as any, mockResponse);
+      await controller.logout(mockRequest, mockResponse);
 
       expect(mockResponse.clearCookie).toHaveBeenCalledWith('refresh_token', { path: '/auth' });
     });
@@ -368,7 +368,7 @@ describe('AuthController', () => {
 
       authService.logout.mockResolvedValue({ success: true });
 
-      await controller.logout(mockRequest as any, mockResponse);
+      await controller.logout(mockRequest, mockResponse);
 
       expect(authService.logout).toHaveBeenCalledWith('user-uuid-123');
     });
@@ -381,7 +381,7 @@ describe('AuthController', () => {
 
       authService.logout.mockResolvedValue({ success: true });
 
-      const result = await controller.logout(mockRequest as any, mockResponse);
+      const result = await controller.logout(mockRequest, mockResponse);
 
       expect(result).toEqual({ success: true });
     });
@@ -396,7 +396,7 @@ describe('AuthController', () => {
 
       authService.logout.mockResolvedValue({ success: true });
 
-      await controller.logout(mockRequest as any, mockResponse);
+      await controller.logout(mockRequest, mockResponse);
 
       expect(mockResponse.clearCookie).not.toHaveBeenCalled();
     });
@@ -409,7 +409,7 @@ describe('AuthController', () => {
 
       authService.logout.mockResolvedValue({ success: true });
 
-      const result = await controller.logout(mockRequest as any, mockResponse);
+      const result = await controller.logout(mockRequest, mockResponse);
 
       expect(authService.logout).toHaveBeenCalledWith('user-uuid-123');
       expect(result).toEqual({ success: true });
@@ -434,7 +434,7 @@ describe('AuthController', () => {
 
       authService.getLinkedMethods.mockResolvedValue(mockMethods);
 
-      await controller.getMethods(mockRequest as any);
+      await controller.getMethods(mockRequest);
 
       expect(authService.getLinkedMethods).toHaveBeenCalledWith('user-uuid-123');
     });
@@ -463,7 +463,7 @@ describe('AuthController', () => {
 
       authService.getLinkedMethods.mockResolvedValue(mockMethods);
 
-      const result = await controller.getMethods(mockRequest as any);
+      const result = await controller.getMethods(mockRequest);
 
       expect(result).toEqual(mockMethods);
       expect(result).toHaveLength(2);
@@ -493,7 +493,7 @@ describe('AuthController', () => {
 
       authService.linkMethod.mockResolvedValue(mockMethods);
 
-      await controller.linkMethod(mockRequest as any, linkDto);
+      await controller.linkMethod(mockRequest, linkDto);
 
       expect(authService.linkMethod).toHaveBeenCalledWith('user-uuid-123', linkDto);
     });
@@ -522,7 +522,7 @@ describe('AuthController', () => {
 
       authService.linkMethod.mockResolvedValue(mockMethods);
 
-      const result = await controller.linkMethod(mockRequest as any, linkDto);
+      const result = await controller.linkMethod(mockRequest, linkDto);
 
       expect(result).toEqual(mockMethods);
     });
@@ -538,7 +538,7 @@ describe('AuthController', () => {
 
       authService.unlinkMethod.mockResolvedValue(undefined);
 
-      await controller.unlinkMethod(mockRequest as any, unlinkDto);
+      await controller.unlinkMethod(mockRequest, unlinkDto);
 
       expect(authService.unlinkMethod).toHaveBeenCalledWith('user-uuid-123', 'method-to-unlink');
     });
@@ -552,7 +552,7 @@ describe('AuthController', () => {
 
       authService.unlinkMethod.mockResolvedValue(undefined);
 
-      const result = await controller.unlinkMethod(mockRequest as any, unlinkDto);
+      const result = await controller.unlinkMethod(mockRequest, unlinkDto);
 
       expect(result).toEqual({ success: true });
     });
