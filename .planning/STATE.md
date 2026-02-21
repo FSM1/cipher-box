@@ -163,7 +163,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-7 pending todo(s):
+8 pending todo(s):
 
 - `2026-02-07-web-worker-large-file-encryption.md` -- Offload large file encryption to Web Worker (area: ui)
 - `2026-02-14-bring-your-own-ipfs-node.md` -- Add bring-your-own IPFS node support (area: api)
@@ -172,6 +172,7 @@ Recent decisions affecting current work:
 - `2026-02-20-desktop-auto-update.md` -- Add auto-update to desktop app via Tauri updater plugin (area: desktop)
 - `2026-02-21-move-root-folder-key-to-ipfs.md` -- Move rootFolderKey to IPFS vault record, eliminate server-side key storage (area: crypto)
 - `2026-02-21-ipns-resolution-alternatives.md` -- Investigate alternatives to delegated-ipfs.dev for IPNS resolution (area: api)
+- `2026-02-21-device-registry-publickey-validator-bug.md` -- Fix DeviceEntry publicKey validator length check (130 → 64 hex chars) (area: crypto)
 
 ### Roadmap Evolution
 
