@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "6abe57e9ad35",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-14-user-to-user-sharing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/security/REVIEW-2026-02-21-phase14.md",
+    ".planning/todos/pending/2026-02-21-phase14-security-review-deferred.md",
+    "apps/api/src/migrations/1740300000000-SharesPartialUniqueIndex.ts",
+    "apps/api/src/shares/dto/create-share.dto.ts",
+    "apps/api/src/shares/dto/share-key.dto.ts",
+    "apps/api/src/shares/dto/update-encrypted-key.dto.ts",
+    "apps/api/src/shares/entities/share.entity.ts",
+    "apps/api/src/shares/shares.controller.ts",
+    "apps/api/src/shares/shares.service.ts",
+    "apps/web/src/components/file-browser/ShareDialog.tsx",
+    "apps/web/src/hooks/useSharedNavigation.ts",
+    "apps/web/src/services/share.service.ts",
+    "packages/crypto/src/__tests__/rewrap.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6a/be57e9ad35/0/metadata.json",
+      "transcript": "/6a/be57e9ad35/0/full.jsonl",
+      "context": "/6a/be57e9ad35/0/context.md",
+      "content_hash": "/6a/be57e9ad35/0/content_hash.txt",
+      "prompt": "/6a/be57e9ad35/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 76803,
+    "cache_read_tokens": 5239366,
+    "output_tokens": 4517,
+    "api_call_count": 64
+  }
+}
