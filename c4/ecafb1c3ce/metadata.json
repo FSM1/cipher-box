@@ -1,0 +1,47 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "c4ecafb1c3ce",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-14-user-to-user-sharing",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/shares/dto/index.ts",
+    "apps/api/src/shares/dto/share-response.dto.ts",
+    "apps/api/src/shares/shares.controller.ts",
+    "apps/api/src/shares/shares.service.ts",
+    "apps/web/src/api/models/createShareResponseDto.ts",
+    "apps/web/src/api/models/createShareResponseDtoItemType.ts",
+    "apps/web/src/api/models/index.ts",
+    "apps/web/src/api/models/pendingRotationResponseDto.ts",
+    "apps/web/src/api/models/pendingRotationResponseDtoItemType.ts",
+    "apps/web/src/api/models/receivedShareResponseDto.ts",
+    "apps/web/src/api/models/receivedShareResponseDtoItemType.ts",
+    "apps/web/src/api/models/sentShareResponseDto.ts",
+    "apps/web/src/api/models/sentShareResponseDtoItemType.ts",
+    "apps/web/src/api/models/shareKeyResponseDto.ts",
+    "apps/web/src/api/models/shareKeyResponseDtoKeyType.ts",
+    "apps/web/src/api/shares/shares.ts",
+    "apps/web/src/components/file-browser/ShareDialog.tsx",
+    "apps/web/src/hooks/useFolder.ts",
+    "apps/web/src/hooks/useSharedNavigation.ts",
+    "apps/web/src/services/folder.service.ts",
+    "apps/web/src/services/share.service.ts",
+    "packages/api-client/openapi.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c4/ecafb1c3ce/0/metadata.json",
+      "transcript": "/c4/ecafb1c3ce/0/full.jsonl",
+      "context": "/c4/ecafb1c3ce/0/context.md",
+      "content_hash": "/c4/ecafb1c3ce/0/content_hash.txt",
+      "prompt": "/c4/ecafb1c3ce/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 80,
+    "cache_creation_tokens": 90655,
+    "cache_read_tokens": 7006015,
+    "output_tokens": 9069,
+    "api_call_count": 78
+  }
+}
