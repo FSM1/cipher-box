@@ -15,6 +15,7 @@ import { IpnsModule } from './ipns/ipns.module';
 import { TeeModule } from './tee/tee.module';
 import { RepublishModule } from './republish/republish.module';
 import { DeviceApprovalModule } from './device-approval/device-approval.module';
+import { SharesModule } from './shares/shares.module';
 import { User } from './auth/entities/user.entity';
 import { RefreshToken } from './auth/entities/refresh-token.entity';
 import { AuthMethod } from './auth/entities/auth-method.entity';
@@ -24,6 +25,7 @@ import { TeeKeyState } from './tee/tee-key-state.entity';
 import { TeeKeyRotationLog } from './tee/tee-key-rotation-log.entity';
 import { IpnsRepublishSchedule } from './republish/republish-schedule.entity';
 import { DeviceApproval } from './device-approval/device-approval.entity';
+import { Share, ShareKey } from './shares/entities';
 
 @Module({
   imports: [
@@ -75,6 +77,8 @@ import { DeviceApproval } from './device-approval/device-approval.entity';
           TeeKeyRotationLog,
           IpnsRepublishSchedule,
           DeviceApproval,
+          Share,
+          ShareKey,
         ],
         synchronize: ['development', 'test'].includes(
           configService.get<string>('NODE_ENV', 'development')
@@ -95,6 +99,7 @@ import { DeviceApproval } from './device-approval/device-approval.entity';
     TeeModule,
     RepublishModule,
     DeviceApprovalModule,
+    SharesModule,
   ],
   controllers: [AppController],
   providers: [

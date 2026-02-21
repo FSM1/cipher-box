@@ -6,11 +6,16 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './addShareKeysDto';
 export * from './authMethodResponseDto';
 export * from './authMethodResponseDtoType';
 export * from './batchPublishIpnsDto';
 export * from './batchPublishIpnsResponseDto';
+export * from './childKeyDto';
+export * from './childKeyDtoKeyType';
 export * from './createApprovalDto';
+export * from './createShareDto';
+export * from './createShareDtoItemType';
 export * from './derivationInfoDto';
 export * from './derivationInfoDtoDerivationVersion';
 export * from './derivationInfoDtoMethod';
@@ -48,6 +53,9 @@ export * from './respondApprovalDto';
 export * from './respondApprovalDtoAction';
 export * from './sendOtpDto';
 export * from './sendOtpResponseDto';
+export * from './shareKeyEntryDto';
+export * from './shareKeyEntryDtoKeyType';
+export * from './sharesControllerLookupUserParams';
 export * from './teeKeysDto';
 export * from './teeKeysDtoPreviousEpoch';
 export * from './teeKeysDtoPreviousPublicKey';
