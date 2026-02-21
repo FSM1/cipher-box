@@ -3,7 +3,7 @@
   "checkpoint_id": "ddd3dce423f5",
   "strategy": "manual-commit",
   "branch": "feat/random-file-ipns-keys",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     ".planning/STATE.md",
     ".planning/todos/done/2026-02-21-random-file-ipns-keys.md"
@@ -15,13 +15,20 @@
       "context": "/dd/d3dce423f5/0/context.md",
       "content_hash": "/dd/d3dce423f5/0/content_hash.txt",
       "prompt": "/dd/d3dce423f5/0/prompt.txt"
+    },
+    {
+      "metadata": "/dd/d3dce423f5/1/metadata.json",
+      "transcript": "/dd/d3dce423f5/1/full.jsonl",
+      "context": "/dd/d3dce423f5/1/context.md",
+      "content_hash": "/dd/d3dce423f5/1/content_hash.txt",
+      "prompt": "/dd/d3dce423f5/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 15,
-    "cache_creation_tokens": 39503,
-    "cache_read_tokens": 618563,
-    "output_tokens": 982,
-    "api_call_count": 10
+    "input_tokens": 81,
+    "cache_creation_tokens": 107204,
+    "cache_read_tokens": 4057978,
+    "output_tokens": 4736,
+    "api_call_count": 53
   }
 }
