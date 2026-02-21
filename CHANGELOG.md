@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.13.3](https://github.com/FSM1/cipher-box/compare/v0.13.2...v0.13.3) (2026-02-21)
+
+
+### Bug Fixes
+
+* **api,crypto:** address 6 security review findings ([#172](https://github.com/FSM1/cipher-box/issues/172)) ([d222bd0](https://github.com/FSM1/cipher-box/commit/d222bd0b323d582575d0ec6e0639bf96893d8d5b))
+* **api,crypto:** address 6 security review findings (H-01, H-06, H-07, M-01, M-04, M-06) ([d222bd0](https://github.com/FSM1/cipher-box/commit/d222bd0b323d582575d0ec6e0639bf96893d8d5b))
+* **desktop:** allow FUSE rename on SMB backend ([#174](https://github.com/FSM1/cipher-box/issues/174)) ([049ac7b](https://github.com/FSM1/cipher-box/commit/049ac7baede7ff1e6bce56f50653afb9c90dda83))
+
 ## [0.13.2](https://github.com/FSM1/cipher-box/compare/v0.13.1...v0.13.2) (2026-02-20)
 
 
