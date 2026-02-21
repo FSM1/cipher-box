@@ -49,13 +49,20 @@
       "context": "/fb/d4105f9c83/5/context.md",
       "content_hash": "/fb/d4105f9c83/5/content_hash.txt",
       "prompt": "/fb/d4105f9c83/5/prompt.txt"
+    },
+    {
+      "metadata": "/fb/d4105f9c83/6/metadata.json",
+      "transcript": "/fb/d4105f9c83/6/full.jsonl",
+      "context": "/fb/d4105f9c83/6/context.md",
+      "content_hash": "/fb/d4105f9c83/6/content_hash.txt",
+      "prompt": "/fb/d4105f9c83/6/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 438,
-    "cache_creation_tokens": 662771,
-    "cache_read_tokens": 38789051,
-    "output_tokens": 48589,
-    "api_call_count": 368
+    "input_tokens": 461,
+    "cache_creation_tokens": 725402,
+    "cache_read_tokens": 39857627,
+    "output_tokens": 50541,
+    "api_call_count": 384
   }
 }
