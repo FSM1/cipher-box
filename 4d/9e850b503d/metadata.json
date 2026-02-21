@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "4d9e850b503d",
+  "strategy": "manual-commit",
+  "branch": "chore/add-todo-random-file-ipns-keys",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/todos/pending/2026-02-21-random-file-ipns-keys.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4d/9e850b503d/0/metadata.json",
+      "transcript": "/4d/9e850b503d/0/full.jsonl",
+      "context": "/4d/9e850b503d/0/context.md",
+      "content_hash": "/4d/9e850b503d/0/content_hash.txt",
+      "prompt": "/4d/9e850b503d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 27,
+    "cache_creation_tokens": 5479,
+    "cache_read_tokens": 1398686,
+    "output_tokens": 1989,
+    "api_call_count": 15
+  }
+}
