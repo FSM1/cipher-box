@@ -59,10 +59,6 @@ module.exports = {
       lines: 90,
       branches: 77, // DI constructor params (4 injections) + default param create uncoverable branch markers
     },
-    '**/ipfs/providers/pinata.provider.ts': {
-      lines: 85,
-      branches: 80,
-    },
     '**/ipfs/providers/local.provider.ts': {
       lines: 85,
       branches: 80,
