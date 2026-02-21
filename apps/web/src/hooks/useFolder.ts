@@ -12,6 +12,7 @@ import {
   shouldCreateVersion,
   restoreVersion,
   deleteVersion,
+  getFileIpnsPrivateKey,
 } from '../services/file-metadata.service';
 import type { FolderNode } from '../stores/folder.store';
 import type { FolderEntry, FilePointer, FolderChild } from '@cipherbox/crypto';
@@ -637,7 +638,7 @@ export function useFolder() {
 
         // 1. Generate fileId and create per-file IPNS metadata
         const fileId = crypto.randomUUID();
-        const { ipnsRecord } = await createFileMetadata({
+        const { ipnsRecord, ipnsPrivateKeyEncrypted } = await createFileMetadata({
           fileId,
           cid: fileData.cid,
           fileKeyEncrypted: fileData.wrappedKey,
@@ -645,7 +646,7 @@ export function useFolder() {
           size: fileData.originalSize,
           mimeType: fileData.mimeType ?? 'application/octet-stream',
           folderKey: parentFolder.folderKey,
-          userPrivateKey: auth.vaultKeypair.privateKey,
+          userPublicKey: auth.vaultKeypair.publicKey,
           encryptionMode: fileData.encryptionMode,
         });
 
@@ -655,6 +656,7 @@ export function useFolder() {
           fileId,
           name: fileData.originalName,
           fileIpnsRecord: ipnsRecord,
+          ipnsPrivateKeyEncrypted,
         });
 
         // 3. Update local state with new child and sequence number
@@ -719,7 +721,7 @@ export function useFolder() {
         const filesWithRecords = await Promise.all(
           filesData.map(async (f) => {
             const fileId = crypto.randomUUID();
-            const { ipnsRecord } = await createFileMetadata({
+            const { ipnsRecord, ipnsPrivateKeyEncrypted } = await createFileMetadata({
               fileId,
               cid: f.cid,
               fileKeyEncrypted: f.wrappedKey,
@@ -727,10 +729,15 @@ export function useFolder() {
               size: f.originalSize,
               mimeType: f.mimeType ?? 'application/octet-stream',
               folderKey: parentFolder.folderKey,
-              userPrivateKey: auth.vaultKeypair!.privateKey,
+              userPublicKey: auth.vaultKeypair!.publicKey,
               encryptionMode: f.encryptionMode,
             });
-            return { fileId, name: f.originalName, fileIpnsRecord: ipnsRecord };
+            return {
+              fileId,
+              name: f.originalName,
+              fileIpnsRecord: ipnsRecord,
+              ipnsPrivateKeyEncrypted,
+            };
           })
         );
 
@@ -811,14 +818,20 @@ export function useFolder() {
           parentFolder.folderKey
         );
 
-        // 3. Determine whether to create a version entry
+        // 3. Decrypt the file IPNS private key from FilePointer (or HKDF fallback)
+        const fileIpnsPrivateKey = await getFileIpnsPrivateKey(
+          filePointer,
+          auth.vaultKeypair.privateKey
+        );
+
+        // 4. Determine whether to create a version entry
         const createVersion = shouldCreateVersion(currentMetadata, fileData.forceVersion ?? false);
 
-        // 4. Update file metadata and publish new IPNS record
+        // 5. Update file metadata and publish new IPNS record
         const { ipnsRecord, prunedCids } = await updateFileMetadata({
-          fileId: fileData.fileId,
+          fileIpnsPrivateKey,
+          fileMetaIpnsName: filePointer.fileMetaIpnsName,
           folderKey: parentFolder.folderKey,
-          userPrivateKey: auth.vaultKeypair.privateKey,
           currentMetadata,
           updates: {
             cid: fileData.newCid,
@@ -912,11 +925,17 @@ export function useFolder() {
           parentFolder.folderKey
         );
 
+        // Decrypt the file IPNS private key from FilePointer (or HKDF fallback)
+        const fileIpnsPrivateKey = await getFileIpnsPrivateKey(
+          filePointer,
+          auth.vaultKeypair.privateKey
+        );
+
         // Call restoreVersion service function
         const { ipnsRecord, prunedCids } = await restoreVersion({
-          fileId,
+          fileIpnsPrivateKey,
+          fileMetaIpnsName: filePointer.fileMetaIpnsName,
           folderKey: parentFolder.folderKey,
-          userPrivateKey: auth.vaultKeypair.privateKey,
           currentMetadata,
           versionIndex,
         });
@@ -1000,11 +1019,17 @@ export function useFolder() {
           parentFolder.folderKey
         );
 
+        // Decrypt the file IPNS private key from FilePointer (or HKDF fallback)
+        const fileIpnsPrivateKey = await getFileIpnsPrivateKey(
+          filePointer,
+          auth.vaultKeypair.privateKey
+        );
+
         // Call deleteVersion service function
         const { ipnsRecord, deletedCid } = await deleteVersion({
-          fileId,
+          fileIpnsPrivateKey,
+          fileMetaIpnsName: filePointer.fileMetaIpnsName,
           folderKey: parentFolder.folderKey,
-          userPrivateKey: auth.vaultKeypair.privateKey,
           currentMetadata,
           versionIndex,
         });
