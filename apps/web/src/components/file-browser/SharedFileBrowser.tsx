@@ -117,6 +117,7 @@ export function SharedFileBrowser() {
     currentView,
     sharedItems,
     folderChildren,
+    currentShareId,
     folderKey,
     breadcrumbs,
     isLoading,
@@ -517,6 +518,7 @@ export function SharedFileBrowser() {
             : null
         }
         folderKey={folderKey}
+        shareId={currentShareId}
       />
 
       {/* PDF preview dialog */}
@@ -529,6 +531,7 @@ export function SharedFileBrowser() {
             : null
         }
         folderKey={folderKey}
+        shareId={currentShareId}
       />
 
       {/* Audio player dialog */}
@@ -541,6 +544,7 @@ export function SharedFileBrowser() {
             : null
         }
         folderKey={folderKey}
+        shareId={currentShareId}
       />
 
       {/* Video player dialog */}
@@ -553,6 +557,7 @@ export function SharedFileBrowser() {
             : null
         }
         folderKey={folderKey}
+        shareId={currentShareId}
       />
     </div>
   );

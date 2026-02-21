@@ -48,7 +48,7 @@ export const customInstance = async <T>(config: {
   // Responses with no body (204 No Content, 201 with void return, etc.)
   // Read as text first to avoid JSON parse error on empty bodies
   const text = await response.text();
-  if (!text) {
+  if (!text.trim()) {
     return undefined as T;
   }
   return JSON.parse(text);

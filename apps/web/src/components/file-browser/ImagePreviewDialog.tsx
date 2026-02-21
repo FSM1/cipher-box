@@ -1,9 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
 import type { FilePointer } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
-import { useAuthStore } from '../../stores/auth.store';
-import { downloadFileFromIpns } from '../../services/download.service';
-import { triggerBrowserDownload } from '../../services/download.service';
+import { useFilePreview } from '../../hooks/useFilePreview';
 import '../../styles/image-preview-dialog.css';
 
 type ImagePreviewDialogProps = {
@@ -12,6 +9,8 @@ type ImagePreviewDialogProps = {
   item: FilePointer | null;
   /** Parent folder's decrypted AES-256 key (needed to decrypt file metadata) */
   folderKey: Uint8Array | null;
+  /** Share ID when previewing from a shared folder — uses re-wrapped file keys */
+  shareId?: string | null;
 };
 
 /** Map common image extensions to MIME types. */
@@ -41,78 +40,22 @@ function getMimeType(filename: string): string {
  * Downloads the encrypted file from IPFS, decrypts it, and displays
  * the image using an object URL. Includes a download button.
  */
-export function ImagePreviewDialog({ open, onClose, item, folderKey }: ImagePreviewDialogProps) {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
-  const [decryptedData, setDecryptedData] = useState<Uint8Array | null>(null);
+export function ImagePreviewDialog({
+  open,
+  onClose,
+  item,
+  folderKey,
+  shareId,
+}: ImagePreviewDialogProps) {
+  const mimeType = item ? getMimeType(item.name) : 'application/octet-stream';
 
-  // Load and decrypt image when dialog opens
-  useEffect(() => {
-    if (!open || !item) {
-      // Clean up object URL when closing
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
-      setObjectUrl(null);
-      setDecryptedData(null);
-      setError(null);
-      setLoading(false);
-      return;
-    }
-
-    if (!folderKey) {
-      setError('Folder key not available');
-      return;
-    }
-
-    let cancelled = false;
-    let url: string | null = null;
-    setLoading(true);
-    setError(null);
-
-    (async () => {
-      try {
-        const auth = useAuthStore.getState();
-        if (!auth.vaultKeypair) {
-          throw new Error('No keypair available - please log in again');
-        }
-
-        const plaintext = await downloadFileFromIpns({
-          fileMetaIpnsName: item.fileMetaIpnsName,
-          folderKey: folderKey!,
-          privateKey: auth.vaultKeypair.privateKey,
-          fileName: item.name,
-        });
-
-        if (cancelled) return;
-
-        const mime = getMimeType(item.name);
-        const blob = new Blob([plaintext as BlobPart], { type: mime });
-        url = URL.createObjectURL(blob);
-
-        setDecryptedData(plaintext);
-        setObjectUrl(url);
-        setLoading(false);
-      } catch (err) {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : 'Failed to load image');
-        setLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      if (url) {
-        URL.revokeObjectURL(url);
-      }
-    };
-  }, [open, item, folderKey]);
-
-  const handleDownload = useCallback(() => {
-    if (!decryptedData || !item) return;
-    triggerBrowserDownload(decryptedData, item.name, getMimeType(item.name));
-  }, [decryptedData, item]);
+  const { loading, error, objectUrl, handleDownload } = useFilePreview({
+    open,
+    item,
+    mimeType,
+    folderKey,
+    shareId,
+  });
 
   if (!item) return null;
 
