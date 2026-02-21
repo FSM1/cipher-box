@@ -1,0 +1,5 @@
+ok can you go through all the various coderabbit comments and mark the resolved ones as such. There are also some new unaddressed comments from more recent commits
+
+---
+
+yeah please fix all 11 issues
