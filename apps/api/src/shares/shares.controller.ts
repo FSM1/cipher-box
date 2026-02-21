@@ -150,6 +150,36 @@ export class SharesController {
     return result;
   }
 
+  @Get('pending-rotations')
+  @ApiOperation({
+    summary: 'Get pending rotations',
+    description:
+      'Get shares that have been revoked but not yet key-rotated. ' +
+      'Used by the client to detect lazy rotation needs before folder modification.',
+  })
+  @ApiResponse({ status: 200, description: 'List of revoked shares pending rotation' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async getPendingRotations(@Request() req: RequestWithUser): Promise<
+    Array<{
+      shareId: string;
+      recipientPublicKey: string;
+      itemType: string;
+      ipnsName: string;
+      itemName: string;
+      revokedAt: Date;
+    }>
+  > {
+    const shares = await this.sharesService.getPendingRotations(req.user.id);
+    return shares.map((s) => ({
+      shareId: s.id,
+      recipientPublicKey: s.recipient.publicKey,
+      itemType: s.itemType,
+      ipnsName: s.ipnsName,
+      itemName: s.itemName,
+      revokedAt: s.revokedAt!,
+    }));
+  }
+
   @Get(':shareId/keys')
   @ApiOperation({
     summary: 'Get share keys',
@@ -228,5 +258,43 @@ export class SharesController {
     @Param('shareId', ParseUUIDPipe) shareId: string
   ): Promise<void> {
     await this.sharesService.hideShare(shareId, req.user.id);
+  }
+
+  @Patch(':shareId/encrypted-key')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Update share encrypted key',
+    description:
+      'Update the encrypted key on an existing share after lazy key rotation. ' +
+      'Only the sharer can update the key.',
+  })
+  @ApiResponse({ status: 204, description: 'Encrypted key updated' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 403, description: 'Only the sharer can update' })
+  @ApiResponse({ status: 404, description: 'Share not found' })
+  async updateShareEncryptedKey(
+    @Request() req: RequestWithUser,
+    @Param('shareId', ParseUUIDPipe) shareId: string,
+    @Body() body: { encryptedKey: string }
+  ): Promise<void> {
+    await this.sharesService.updateShareEncryptedKey(shareId, req.user.id, body.encryptedKey);
+  }
+
+  @Delete(':shareId/complete-rotation')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Complete key rotation',
+    description:
+      'Hard-delete a revoked share after the sharer has rotated the folder key. ' +
+      'Called after the client performs lazy key rotation.',
+  })
+  @ApiResponse({ status: 204, description: 'Share hard-deleted after rotation' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  @ApiResponse({ status: 404, description: 'Share not found' })
+  async completeRotation(
+    @Request() req: RequestWithUser,
+    @Param('shareId', ParseUUIDPipe) shareId: string
+  ): Promise<void> {
+    await this.sharesService.completeRotation(shareId, req.user.id);
   }
 }

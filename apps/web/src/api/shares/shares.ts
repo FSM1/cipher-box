@@ -464,6 +464,137 @@ export function useSharesControllerLookupUser<
 }
 
 /**
+ * Get shares that have been revoked but not yet key-rotated. Used by the client to detect lazy rotation needs before folder modification.
+ * @summary Get pending rotations
+ */
+export const sharesControllerGetPendingRotations = (signal?: AbortSignal) => {
+  return customInstance<void>({ url: `/shares/pending-rotations`, method: 'GET', signal });
+};
+
+export const getSharesControllerGetPendingRotationsQueryKey = () => {
+  return [`/shares/pending-rotations`] as const;
+};
+
+export const getSharesControllerGetPendingRotationsQueryOptions = <
+  TData = Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>,
+  TError = void,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>, TError, TData>
+  >;
+}) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getSharesControllerGetPendingRotationsQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>> = ({
+    signal,
+  }) => sharesControllerGetPendingRotations(signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type SharesControllerGetPendingRotationsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>
+>;
+export type SharesControllerGetPendingRotationsQueryError = void;
+
+export function useSharesControllerGetPendingRotations<
+  TData = Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>,
+  TError = void,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>,
+          TError,
+          Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>
+        >,
+        'initialData'
+      >;
+  },
+  queryClient?: QueryClient
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useSharesControllerGetPendingRotations<
+  TData = Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>,
+  TError = void,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>,
+          TError,
+          Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>
+        >,
+        'initialData'
+      >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useSharesControllerGetPendingRotations<
+  TData = Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>,
+  TError = void,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>,
+        TError,
+        TData
+      >
+    >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary Get pending rotations
+ */
+
+export function useSharesControllerGetPendingRotations<
+  TData = Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>,
+  TError = void,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof sharesControllerGetPendingRotations>>,
+        TError,
+        TData
+      >
+    >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getSharesControllerGetPendingRotationsQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  query.queryKey = queryOptions.queryKey;
+
+  return query;
+}
+
+/**
  * Get all re-wrapped child keys for a share. Accessible by sharer or recipient.
  * @summary Get share keys
  */
@@ -808,6 +939,150 @@ export const useSharesControllerHideShare = <TError = void, TContext = unknown>(
   TContext
 > => {
   const mutationOptions = getSharesControllerHideShareMutationOptions(options);
+
+  return useMutation(mutationOptions, queryClient);
+};
+/**
+ * Update the encrypted key on an existing share after lazy key rotation. Only the sharer can update the key.
+ * @summary Update share encrypted key
+ */
+export const sharesControllerUpdateShareEncryptedKey = (shareId: string) => {
+  return customInstance<void>({ url: `/shares/${shareId}/encrypted-key`, method: 'PATCH' });
+};
+
+export const getSharesControllerUpdateShareEncryptedKeyMutationOptions = <
+  TError = void,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sharesControllerUpdateShareEncryptedKey>>,
+    TError,
+    { shareId: string },
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof sharesControllerUpdateShareEncryptedKey>>,
+  TError,
+  { shareId: string },
+  TContext
+> => {
+  const mutationKey = ['sharesControllerUpdateShareEncryptedKey'];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof sharesControllerUpdateShareEncryptedKey>>,
+    { shareId: string }
+  > = (props) => {
+    const { shareId } = props ?? {};
+
+    return sharesControllerUpdateShareEncryptedKey(shareId);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SharesControllerUpdateShareEncryptedKeyMutationResult = NonNullable<
+  Awaited<ReturnType<typeof sharesControllerUpdateShareEncryptedKey>>
+>;
+
+export type SharesControllerUpdateShareEncryptedKeyMutationError = void;
+
+/**
+ * @summary Update share encrypted key
+ */
+export const useSharesControllerUpdateShareEncryptedKey = <TError = void, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof sharesControllerUpdateShareEncryptedKey>>,
+      TError,
+      { shareId: string },
+      TContext
+    >;
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof sharesControllerUpdateShareEncryptedKey>>,
+  TError,
+  { shareId: string },
+  TContext
+> => {
+  const mutationOptions = getSharesControllerUpdateShareEncryptedKeyMutationOptions(options);
+
+  return useMutation(mutationOptions, queryClient);
+};
+/**
+ * Hard-delete a revoked share after the sharer has rotated the folder key. Called after the client performs lazy key rotation.
+ * @summary Complete key rotation
+ */
+export const sharesControllerCompleteRotation = (shareId: string) => {
+  return customInstance<void>({ url: `/shares/${shareId}/complete-rotation`, method: 'DELETE' });
+};
+
+export const getSharesControllerCompleteRotationMutationOptions = <
+  TError = void,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof sharesControllerCompleteRotation>>,
+    TError,
+    { shareId: string },
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof sharesControllerCompleteRotation>>,
+  TError,
+  { shareId: string },
+  TContext
+> => {
+  const mutationKey = ['sharesControllerCompleteRotation'];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof sharesControllerCompleteRotation>>,
+    { shareId: string }
+  > = (props) => {
+    const { shareId } = props ?? {};
+
+    return sharesControllerCompleteRotation(shareId);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SharesControllerCompleteRotationMutationResult = NonNullable<
+  Awaited<ReturnType<typeof sharesControllerCompleteRotation>>
+>;
+
+export type SharesControllerCompleteRotationMutationError = void;
+
+/**
+ * @summary Complete key rotation
+ */
+export const useSharesControllerCompleteRotation = <TError = void, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof sharesControllerCompleteRotation>>,
+      TError,
+      { shareId: string },
+      TContext
+    >;
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof sharesControllerCompleteRotation>>,
+  TError,
+  { shareId: string },
+  TContext
+> => {
+  const mutationOptions = getSharesControllerCompleteRotationMutationOptions(options);
 
   return useMutation(mutationOptions, queryClient);
 };

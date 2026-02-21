@@ -249,15 +249,43 @@ export class SharesService {
 
   /**
    * Hard-delete a share and all associated keys after rotation is complete.
+   * Only the sharer can complete the rotation.
    */
-  async completeRotation(shareId: string): Promise<void> {
+  async completeRotation(shareId: string, sharerId: string): Promise<void> {
     const share = await this.shareRepo.findOne({ where: { id: shareId } });
 
     if (!share) {
       throw new NotFoundException('Share not found');
     }
 
+    if (share.sharerId !== sharerId) {
+      throw new ForbiddenException('Only the sharer can complete rotation');
+    }
+
     // CASCADE will remove all associated ShareKey records
     await this.shareRepo.remove(share);
+  }
+
+  /**
+   * Update the encrypted key on an existing share.
+   * Used after lazy key rotation to re-wrap the new folder key for remaining recipients.
+   */
+  async updateShareEncryptedKey(
+    shareId: string,
+    sharerId: string,
+    encryptedKey: string
+  ): Promise<void> {
+    const share = await this.shareRepo.findOne({ where: { id: shareId } });
+
+    if (!share) {
+      throw new NotFoundException('Share not found');
+    }
+
+    if (share.sharerId !== sharerId) {
+      throw new ForbiddenException('Only the sharer can update share keys');
+    }
+
+    share.encryptedKey = Buffer.from(encryptedKey, 'hex');
+    await this.shareRepo.save(share);
   }
 }

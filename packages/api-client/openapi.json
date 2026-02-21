@@ -1199,6 +1199,28 @@
         "tags": ["shares"]
       }
     },
+    "/shares/pending-rotations": {
+      "get": {
+        "description": "Get shares that have been revoked but not yet key-rotated. Used by the client to detect lazy rotation needs before folder modification.",
+        "operationId": "SharesController_getPendingRotations",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "List of revoked shares pending rotation"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get pending rotations",
+        "tags": ["shares"]
+      }
+    },
     "/shares/{shareId}/keys": {
       "get": {
         "description": "Get all re-wrapped child keys for a share. Accessible by sharer or recipient.",
@@ -1352,6 +1374,77 @@
           }
         ],
         "summary": "Hide a share",
+        "tags": ["shares"]
+      }
+    },
+    "/shares/{shareId}/encrypted-key": {
+      "patch": {
+        "description": "Update the encrypted key on an existing share after lazy key rotation. Only the sharer can update the key.",
+        "operationId": "SharesController_updateShareEncryptedKey",
+        "parameters": [
+          {
+            "name": "shareId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Encrypted key updated"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Only the sharer can update"
+          },
+          "404": {
+            "description": "Share not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update share encrypted key",
+        "tags": ["shares"]
+      }
+    },
+    "/shares/{shareId}/complete-rotation": {
+      "delete": {
+        "description": "Hard-delete a revoked share after the sharer has rotated the folder key. Called after the client performs lazy key rotation.",
+        "operationId": "SharesController_completeRotation",
+        "parameters": [
+          {
+            "name": "shareId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Share hard-deleted after rotation"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Share not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Complete key rotation",
         "tags": ["shares"]
       }
     },
