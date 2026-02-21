@@ -3,7 +3,7 @@
   "checkpoint_id": "6f96d356a6f4",
   "strategy": "manual-commit",
   "branch": "feat/phase-14-user-to-user-sharing",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "apps/web/src/api/custom-instance.ts",
     "apps/web/src/components/file-browser/AudioPlayerDialog.tsx",
@@ -69,13 +69,20 @@
       "context": "/6f/96d356a6f4/7/context.md",
       "content_hash": "/6f/96d356a6f4/7/content_hash.txt",
       "prompt": "/6f/96d356a6f4/7/prompt.txt"
+    },
+    {
+      "metadata": "/6f/96d356a6f4/8/metadata.json",
+      "transcript": "/6f/96d356a6f4/8/full.jsonl",
+      "context": "/6f/96d356a6f4/8/context.md",
+      "content_hash": "/6f/96d356a6f4/8/content_hash.txt",
+      "prompt": "/6f/96d356a6f4/8/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 4714,
-    "cache_creation_tokens": 1084882,
-    "cache_read_tokens": 39629437,
-    "output_tokens": 49173,
-    "api_call_count": 427
+    "input_tokens": 5009,
+    "cache_creation_tokens": 1650134,
+    "cache_read_tokens": 71916501,
+    "output_tokens": 63203,
+    "api_call_count": 702
   }
 }

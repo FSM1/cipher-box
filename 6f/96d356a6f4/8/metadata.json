@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "6f96d356a6f4",
+  "session_id": "f585e6e9-7dc1-4135-a4dc-9021adb21c96",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-21T23:44:34.201539Z",
+  "branch": "feat/phase-14-user-to-user-sharing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/api/custom-instance.ts",
+    "apps/web/src/components/file-browser/AudioPlayerDialog.tsx",
+    "apps/web/src/components/file-browser/ImagePreviewDialog.tsx",
+    "apps/web/src/components/file-browser/PdfPreviewDialog.tsx",
+    "apps/web/src/components/file-browser/SharedFileBrowser.tsx",
+    "apps/web/src/components/file-browser/VideoPlayerDialog.tsx",
+    "apps/web/src/hooks/useFilePreview.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "5d154806b76b",
+  "transcript_identifier_at_start": "b5d09883-e979-4e92-9f60-ee0671fc99e8",
+  "token_usage": {
+    "input_tokens": 295,
+    "cache_creation_tokens": 565252,
+    "cache_read_tokens": 32287064,
+    "output_tokens": 14030,
+    "api_call_count": 275
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-21T23:44:32.606096Z",
+    "agent_lines": 0,
+    "human_added": 14,
+    "human_modified": 87,
+    "human_removed": 0,
+    "total_committed": 14,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/f585e6e9-7dc1-4135-a4dc-9021adb21c96.jsonl"
+}
