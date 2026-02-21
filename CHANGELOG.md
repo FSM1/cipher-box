@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.4](https://github.com/FSM1/cipher-box/compare/v0.13.3...v0.13.4) (2026-02-21)
+
+
+### Bug Fixes
+
+* **crypto:** correct DeviceEntry publicKey validator from 130 to 64 hex chars ([f5be3cb](https://github.com/FSM1/cipher-box/commit/f5be3cb54889626ef36073d99d263f567679bef3))
+* **crypto:** correct DeviceEntry publicKey validator length ([#178](https://github.com/FSM1/cipher-box/issues/178)) ([f5be3cb](https://github.com/FSM1/cipher-box/commit/f5be3cb54889626ef36073d99d263f567679bef3))
+
 ## [0.13.3](https://github.com/FSM1/cipher-box/compare/v0.13.2...v0.13.3) (2026-02-21)
 
 
