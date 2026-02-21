@@ -1,0 +1,868 @@
+Implement the following plan:
+
+# Plan: Switch File IPNS Keys from Deterministic HKDF to Random
+
+## Context
+
+File IPNS keys are currently derived deterministically via `HKDF(privateKey, "cipherbox-file-ipns-v1-{fileId}")`, while folder IPNS keys are randomly generated Ed25519 keypairs stored encrypted in parent metadata. The deterministic design was justified by "self-sovereign recovery" but this is incorrect — recovery already traverses the folder tree to discover files via `fileMetaIpnsName`, never deriving IPNS names independently. The asymmetry also blocks future per-file write-sharing (Phase 14). This change exercises the Metadata Evolution Protocol for the first time with a real dual-read migration.
+
+## Approach
+
+Add optional `ipnsPrivateKeyEncrypted` field to `FilePointer` (ECIES-wrapped Ed25519 private key). New files get random keypairs; old files fall back to HKDF derivation. Lazy migration writes the encrypted key on next folder metadata publish. No version bump needed (additive optional field per evolution protocol).
+
+## Step 1: TypeScript Crypto Package
+
+### `packages/crypto/src/file/types.ts`
+- Add `ipnsPrivateKeyEncrypted?: string` to `FilePointer` type (hex-encoded ECIES ciphertext)
+
+### `packages/crypto/src/file/derive-ipns.ts`
+- Keep `deriveFileIpnsKeypair()` for backward compat (migration reads)
+- Add `generateFileIpnsKeypair()`: random Ed25519 keypair + IPNS name (mirrors folder pattern using `generateEd25519Keypair()` from `src/ed25519/keygen.ts` + `ed25519PublicKeyToIpnsName()` from `src/ipns/derive-name.ts`)
+
+### `packages/crypto/src/file/index.ts`
+- Export new `generateFileIpnsKeypair`
+
+### `packages/crypto/src/folder/metadata.ts`
+- Update FilePointer validation: accept optional `ipnsPrivateKeyEncrypted` (string if present)
+
+### `packages/crypto/src/__tests__/file-ipns.test.ts`
+- Add tests for `generateFileIpnsKeypair()`: randomness (two calls differ), valid IPNS name format
+- Keep existing `deriveFileIpnsKeypair()` tests (still needed for migration)
+
+## Step 2: Web App Services
+
+### `apps/web/src/services/file-metadata.service.ts`
+
+**`createFileMetadata()`** (line ~86):
+- Replace `deriveFileIpnsKeypair(userPrivateKey, fileId)` with `generateFileIpnsKeypair()`
+- Return `ipnsPrivateKeyEncrypted` (ECIES-wrapped with `userPublicKey`) alongside existing return values
+- Caller stores encrypted key in FilePointer
+
+**`updateFileMetadata()`** (line ~261):
+- Add `ipnsPrivateKey: Uint8Array` parameter (caller decrypts from FilePointer)
+- Replace `deriveFileIpnsKeypair()` call with passed-in key
+- Derive IPNS name from public key (or accept it as param)
+
+**`restoreVersion()`** (line ~358) and **`deleteVersion()`** (line ~430):
+- Same pattern: accept `ipnsPrivateKey` parameter instead of deriving
+
+### Add helper: `getFileIpnsPrivateKey()`
+In file-metadata.service.ts or a shared util:
+```typescript
+async function getFileIpnsPrivateKey(
+  filePointer: FilePointer,
+  userPrivateKey: Uint8Array,
+): Promise<Uint8Array> {
+  if (filePointer.ipnsPrivateKeyEncrypted) {
+    return unwrapKey(hexToBytes(filePointer.ipnsPrivateKeyEncrypted), userPrivateKey);
+  }
+  // Fallback: HKDF derivation for old FilePointers
+  const derived = await deriveFileIpnsKeypair(userPrivateKey, filePointer.id);
+  return derived.privateKey;
+}
+```
+
+### `apps/web/src/services/folder.service.ts`
+
+**`addFileToFolder()` / `addFilesToFolder()`**:
+- Include `ipnsPrivateKeyEncrypted` in new FilePointer objects (passed from createFileMetadata return)
+
+**Lazy migration on folder publish**:
+- Add `migrateFilePointers()` helper: for each FilePointer without `ipnsPrivateKeyEncrypted`, derive via HKDF + wrap with ECIES + add field
+- Call during any folder metadata publish that rebuilds children (add, remove, rename, move)
+- This gradually migrates all actively-used folders
+
+## Step 3: Web App Hooks
+
+### `apps/web/src/hooks/useFolder.ts`
+
+**`handleAddFiles()`** (~line 687):
+- `createFileMetadata()` now returns `ipnsPrivateKeyEncrypted` — pass it to `addFilesToFolder()`
+
+**`handleUpdateFile()`** (~line 769):
+- Look up FilePointer from current folder state
+- Call `getFileIpnsPrivateKey()` to decrypt/derive the IPNS private key
+- Pass to `updateFileMetadata()`
+
+**`handleRestoreVersion()` / `handleDeleteVersion()`**:
+- Same pattern: get FilePointer, decrypt IPNS key, pass to service
+
+## Step 4: Desktop Rust
+
+### `apps/desktop/src-tauri/src/crypto/folder.rs`
+- Add `ipns_private_key_encrypted: Option<String>` to `FilePointer` struct (with `#[serde(skip_serializing_if = "Option::is_none")]`)
+
+### `apps/desktop/src-tauri/src/fuse/operations.rs`
+
+**`create()`** (~line 969):
+- Replace `derive_file_ipns_keypair()` with random Ed25519 keypair generation
+- Store random private key in inode's `file_ipns_private_key` field (already exists)
+
+**`build_folder_metadata()`** in `apps/desktop/src-tauri/src/fuse/mod.rs`:
+- When building FilePointer for each file child:
+  - If `file_ipns_private_key` is available: ECIES-wrap with user's public key, set `ipns_private_key_encrypted`
+  - If not available (loaded from remote, pre-migration): omit field (old format preserved until file is written)
+
+**`populate_folder()`**:
+- When loading FilePointers from remote metadata:
+  - If `ipns_private_key_encrypted` present: decrypt with ECIES, store in inode's `file_ipns_private_key`
+  - If absent: derive via HKDF (existing behavior, backward compat)
+
+### `apps/desktop/src-tauri/src/crypto/hkdf.rs`
+- Keep `derive_file_ipns_keypair()` for backward compat
+
+### Random Ed25519 keygen in Rust
+- Use `ed25519_dalek::SigningKey::generate(&mut OsRng)` (already available via ed25519-dalek crate)
+- Or check if there's an existing keygen utility in the desktop crypto module
+
+## Step 5: Recovery Tool
+
+### `apps/web/public/recovery.html`
+- Minimal change: recovery tool reads `fileMetaIpnsName` from FilePointer directly (never uses private key for publishing)
+- Keep existing `deriveFileIpnsName()` function as dead code (harmless, already unused)
+- No functional changes needed — recovery is read-only
+
+## Step 6: Documentation & Protocol Checklist
+
+### `docs/METADATA_SCHEMAS.md`
+- Add `ipnsPrivateKeyEncrypted` to FilePointer field table (optional, hex-encoded ECIES ciphertext)
+- Update Section 14 (IPNS Key Derivation Summary): move file IPNS from HKDF table to "random" category alongside subfolder keys, note HKDF fallback for migration
+
+### Post-completion (per todo checklist)
+- Update STATE.md decision notes
+- Follow METADATA_EVOLUTION_PROTOCOL.md Section 4 checklist
+
+## Verification
+
+1. `pnpm --filter @cipherbox/crypto test` — crypto package tests pass (new + existing)
+2. `pnpm --filter web build` — web app builds cleanly
+3. `cd apps/desktop/src-tauri && cargo test --features fuse` — Rust tests pass
+4. `cd apps/desktop/src-tauri && cargo build` — desktop builds
+5. Manual: upload a file → verify FilePointer in folder metadata has `ipnsPrivateKeyEncrypted`
+6. Manual: verify old files (without field) still resolve correctly via HKDF fallback
+
+## Files Modified
+
+| File | Change |
+|------|--------|
+| `packages/crypto/src/file/types.ts` | Add optional field to FilePointer |
+| `packages/crypto/src/file/derive-ipns.ts` | Add `generateFileIpnsKeypair()` |
+| `packages/crypto/src/file/index.ts` | Export new function |
+| `packages/crypto/src/folder/metadata.ts` | Update validation |
+| `packages/crypto/src/__tests__/file-ipns.test.ts` | Add generation tests |
+| `apps/web/src/services/file-metadata.service.ts` | Use random keypair, accept key param |
+| `apps/web/src/services/folder.service.ts` | Store encrypted key, lazy migration |
+| `apps/web/src/hooks/useFolder.ts` | Decrypt key from FilePointer, pass to services |
+| `apps/desktop/src-tauri/src/crypto/folder.rs` | Add optional field to Rust FilePointer |
+| `apps/desktop/src-tauri/src/fuse/operations.rs` | Random keygen in create() |
+| `apps/desktop/src-tauri/src/fuse/mod.rs` | Build/populate with encrypted key |
+| `docs/METADATA_SCHEMAS.md` | Document new field + update IPNS summary |
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.REDACTED.jsonl
+
+---
+
+<task-notification>
+<task-id>bcb7520</task-id>
+<tool-use-id>toolu_01AoYEucZ3SyHZkiJG8wL7uA</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/bcb7520.output</output-file>
+<status>completed</status>
+<summary>Background command "Run crypto package tests" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/bcb7520.output
+
+---
+
+<task-notification>
+<task-id>bd18806</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Run crypto package tests" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. The user provided a detailed plan to switch file IPNS keys from deterministic HKDF to random Ed25519 keypairs in the CipherBox project. The plan had 6 steps covering crypto package, web services, web hooks, desktop Rust, documentation, and verification.
+
+2. I read all the relevant files first to understand the codebase structure:
+   - `packages/crypto/src/file/types.ts` - FilePointer type definition
+   - `packages/crypto/src/file/derive-ipns.ts` - HKDF derivation function
+   - `packages/crypto/src/file/index.ts` - exports
+   - `packages/crypto/src/folder/metadata.ts` - folder metadata validation
+   - `packages/crypto/src/__tests__/file-ipns.test.ts` - existing tests
+   - `apps/web/src/services/file-metadata.service.ts` - file metadata CRUD
+   - `apps/web/src/services/folder.service.ts` - folder operations
+   - `apps/web/src/hooks/useFolder.ts` - React hook for folder operations
+   - `packages/crypto/src/ed25519/keygen.ts` - Ed25519 keygen utility
+   - `packages/crypto/src/ipns/derive-name.ts` - IPNS name derivation
+   - `apps/desktop/src-tauri/src/crypto/folder.rs` - Rust FilePointer struct
+   - `apps/desktop/src-tauri/src/fuse/operations.rs` - FUSE create() with HKDF
+   - `apps/desktop/src-tauri/src/fuse/mod.rs` - build_folder_metadata()
+   - `apps/desktop/src-tauri/src/fuse/inode.rs` - populate_folder()
+   - `apps/desktop/src-tauri/src/crypto/hkdf.rs` - Rust HKDF derivation
+
+3. I created 6 tasks to track progress.
+
+4. Step 1 (crypto package): 
+   - Added `ipnsPrivateKeyEncrypted?: string` to FilePointer type
+   - Created `generateFileIpnsKeypair()` function using `generateEd25519Keypair()` + `deriveIpnsName()`
+   - Updated exports in file/index.ts and root index.ts
+   - Updated folder metadata validation to accept optional `ipnsPrivateKeyEncrypted`
+   - Added tests for randomness and validation
+   - All 229 tests passed
+   - Committed as `9f5a3c761`
+
+5. Step 2 (web services):
+   - Rewrote `createFileMetadata()` to use `generateFileIpnsKeypair()` instead of `deriveFileIpnsKeypair()`, changed param from `userPrivateKey` to `userPublicKey`, returns `ipnsPrivateKeyEncrypted`
+   - Added `getFileIpnsPrivateKey()` helper that decrypts from FilePointer or falls back to HKDF
+   - Changed `updateFileMetadata()` params: removed `fileId`/`userPrivateKey`, added `fileIpnsPrivateKey`/`fileMetaIpnsName`
+   - Same pattern for `restoreVersion()` and `deleteVersion()`
+   - Updated `addFileToFolder()` and `addFilesToFolder()` to accept and store `ipnsPrivateKeyEncrypted`
+   - Committed as `b347af86c`
+
+6. User mid-task message: "can you commit changes to each section atomically?" - I acknowledged and started committing per step.
+
+7. Step 3 (useFolder hook):
+   - Updated imports to include `getFileIpnsPrivateKey`
+   - `handleAddFile`/`handleAddFiles`: pass `userPublicKey` instead of `userPrivateKey`, forward `ipnsPrivateKeyEncrypted`
+   - `handleUpdateFile`: decrypt IPNS key via `getFileIpnsPrivateKey(filePointer, auth.vaultKeypair.privateKey)`, pass to `updateFileMetadata`
+   - Same for `handleRestoreVersion` and `handleDeleteVersion`
+   - Committed as `65dbf0f72`
+
+8. Step 4 (desktop Rust):
+   - Added `ipns_private_key_encrypted: Option<String>` to Rust FilePointer with serde annotations
+   - Changed `create()` in operations.rs from HKDF to `ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng)`
+   - Updated `build_folder_metadata()` in mod.rs to ECIES-wrap file IPNS key into FilePointer
+   - Updated `populate_folder()` in inode.rs to decrypt `ipns_private_key_encrypted` when present
+   - Committed as `4db4e0ded`
+
+9. Step 5 (docs):
+   - Updated FilePointer table in Section 7 with new field
+   - Reorganized Section 14 into HKDF-derived and Random keypairs subsections
+   - Updated FileMetadata storage note
+   - Committed as `f6b2c8772`
+
+10. Step 6 (verification):
+    - Crypto tests: 229/229 pass
+    - Web build: initially failed because crypto package needed rebuild first
+    - After `pnpm --filter @cipherbox/crypto build`, web build succeeded
+    - Desktop build: succeeded (only pre-existing warnings)
+
+Error encountered: Web build failed with TypeScript errors because the crypto package's built output (dist/) was stale. Fixed by running `pnpm --filter @cipherbox/crypto build` before `pnpm --filter web build`.
+
+All 6 tasks completed. 5 atomic commits on `feat/random-file-ipns-keys`.
+
+Summary:
+1. Primary Request and Intent:
+   The user requested implementation of a detailed plan to switch file IPNS keys from deterministic HKDF derivation to random Ed25519 keypairs in CipherBox. The plan adds an optional `ipnsPrivateKeyEncrypted` field to `FilePointer` (ECIES-wrapped Ed25519 private key). New files get random keypairs; old files fall back to HKDF derivation. Lazy migration writes the encrypted key on next folder metadata publish. No version bump needed (additive optional field per the metadata evolution protocol). The user also explicitly requested atomic commits per section.
+
+2. Key Technical Concepts:
+   - **HKDF-SHA256 derivation**: Deterministic Ed25519 keypair from secp256k1 privateKey + fileId (legacy approach being replaced)
+   - **Random Ed25519 keypair generation**: Using `generateEd25519Keypair()` (TS) / `SigningKey::generate(&mut OsRng)` (Rust)
+   - **ECIES key wrapping**: Encrypting the IPNS private key with user's secp256k1 public key for storage in FilePointer
+   - **IPNS name derivation**: CIDv1 with libp2p-key codec from Ed25519 public key
+   - **Dual-read migration**: New files use random keys stored in `ipnsPrivateKeyEncrypted`; legacy files fall back to HKDF derivation when the field is absent
+   - **Metadata Evolution Protocol**: Additive optional field = no version bump required
+   - **TEE enrollment**: IPNS private keys also wrapped with TEE public key for republishing
+
+3. Files and Code Sections:
+
+   - **`packages/crypto/src/file/types.ts`**
+     - Core type definition for FilePointer
+     - Added `ipnsPrivateKeyEncrypted?: string` field
+     ```typescript
+     export type FilePointer = {
+       type: 'file';
+       id: string;
+       name: string;
+       fileMetaIpnsName: string;
+       /** Hex-encoded ECIES-wrapped Ed25519 private key for signing this file's IPNS record. */
+       ipnsPrivateKeyEncrypted?: string;
+       createdAt: number;
+       modifiedAt: number;
+     };
+     ```
+
+   - **`packages/crypto/src/file/derive-ipns.ts`**
+     - Added `generateFileIpnsKeypair()` alongside existing `deriveFileIpnsKeypair()`
+     - Added import for `generateEd25519Keypair` from `../ed25519/keygen`
+     ```typescript
+     export async function generateFileIpnsKeypair(): Promise<{
+       privateKey: Uint8Array;
+       publicKey: Uint8Array;
+       ipnsName: string;
+     }> {
+       const keypair = generateEd25519Keypair();
+       const ipnsName = await deriveIpnsName(keypair.publicKey);
+       return { privateKey: keypair.privateKey, publicKey: keypair.publicKey, ipnsName };
+     }
+     ```
+
+   - **`packages/crypto/src/file/index.ts`**
+     - Updated exports: `export { deriveFileIpnsKeypair, generateFileIpnsKeypair } from './derive-ipns';`
+
+   - **`packages/crypto/src/index.ts`**
+     - Added `generateFileIpnsKeypair` to the re-exports from `'./file'`
+
+   - **`packages/crypto/src/folder/metadata.ts`**
+     - Added validation for optional `ipnsPrivateKeyEncrypted` on file entries (must be string if present)
+     ```typescript
+     if (entry.ipnsPrivateKeyEncrypted !== undefined &&
+         typeof entry.ipnsPrivateKeyEncrypted !== 'string') {
+       throw new CryptoError('Invalid metadata format: ipnsPrivateKeyEncrypted must be a string', 'DECRYPTION_FAILED');
+     }
+     ```
+
+   - **`packages/crypto/src/__tests__/file-ipns.test.ts`**
+     - Added `generateFileIpnsKeypair` tests (valid keypair, randomness)
+     - Added validation tests for `ipnsPrivateKeyEncrypted` (accepts string, rejects non-string)
+
+   - **`apps/web/src/services/file-metadata.service.ts`**
+     - Major rewrite: `createFileMetadata()` now uses `generateFileIpnsKeypair()` + `userPublicKey` (not `userPrivateKey`), returns `ipnsPrivateKeyEncrypted`
+     - Added `getFileIpnsPrivateKey()` helper:
+     ```typescript
+     export async function getFileIpnsPrivateKey(
+       filePointer: FilePointer, userPrivateKey: Uint8Array
+     ): Promise<Uint8Array> {
+       if (filePointer.ipnsPrivateKeyEncrypted) {
+         return unwrapKey(hexToBytes(filePointer.ipnsPrivateKeyEncrypted), userPrivateKey);
+       }
+       const derived = await deriveFileIpnsKeypair(userPrivateKey, filePointer.id);
+       return derived.privateKey;
+     }
+     ```
+     - `updateFileMetadata()`, `restoreVersion()`, `deleteVersion()` now accept `fileIpnsPrivateKey: Uint8Array` + `fileMetaIpnsName: string` instead of `fileId`/`userPrivateKey`
+
+   - **`apps/web/src/services/folder.service.ts`**
+     - `addFileToFolder()` now accepts `ipnsPrivateKeyEncrypted: string` param and stores it in FilePointer
+     - `addFilesToFolder()` same: each file entry includes `ipnsPrivateKeyEncrypted`
+
+   - **`apps/web/src/hooks/useFolder.ts`**
+     - Added `getFileIpnsPrivateKey` import
+     - `handleAddFile`/`handleAddFiles`: pass `userPublicKey` to `createFileMetadata`, forward `ipnsPrivateKeyEncrypted` to folder service
+     - `handleUpdateFile`: calls `getFileIpnsPrivateKey(filePointer, auth.vaultKeypair.privateKey)` then passes key to `updateFileMetadata`
+     - `handleRestoreVersion`/`handleDeleteVersion`: same pattern with `getFileIpnsPrivateKey`
+
+   - **`apps/desktop/src-tauri/src/crypto/folder.rs`**
+     - Added optional field to Rust FilePointer:
+     ```rust
+     #[serde(skip_serializing_if = "Option::is_none")]
+     #[serde(default)]
+     pub ipns_private_key_encrypted: Option<String>,
+     ```
+
+   - **`apps/desktop/src-tauri/src/fuse/operations.rs`**
+     - `create()` replaced HKDF derivation with random Ed25519 keygen:
+     ```rust
+     let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+     let verifying_key = signing_key.verifying_key();
+     let file_ipns_private_key = signing_key.to_bytes().to_vec();
+     let file_ipns_public_key_bytes: [u8; 32] = verifying_key.to_bytes();
+     let file_ipns_name = crate::crypto::ipns::derive_ipns_name(&file_ipns_public_key_bytes)?;
+     ```
+
+   - **`apps/desktop/src-tauri/src/fuse/mod.rs`**
+     - `build_folder_metadata()`: ECIES-wraps file IPNS private key into FilePointer's `ipns_private_key_encrypted` field when the key is available in the inode
+
+   - **`apps/desktop/src-tauri/src/fuse/inode.rs`**
+     - `populate_folder()`: decrypts `ipns_private_key_encrypted` from remote FilePointer metadata via ECIES when present, stores in inode's `file_ipns_private_key`; falls back to None for legacy files
+
+   - **`docs/METADATA_SCHEMAS.md`**
+     - Section 7 (FilePointer): added `ipnsPrivateKeyEncrypted` field to table, documented migration strategy
+     - Section 8 (FileMetadata): updated storage note for dual-source IPNS keys
+     - Section 14: reorganized into "HKDF-derived" and "Random Ed25519 keypairs" subsections
+
+4. Errors and fixes:
+   - **Web build TypeScript errors**: After committing crypto package changes, running `pnpm --filter web build` failed with 5 TS errors: `generateFileIpnsKeypair` not found, `ipnsPrivateKeyEncrypted` not on FilePointer type. Root cause: the crypto package's compiled output (dist/) was stale. Fix: ran `pnpm --filter @cipherbox/crypto build` first, then web build succeeded.
+
+5. Problem Solving:
+   - Successfully implemented dual-read migration pattern: new files get random IPNS keys stored encrypted in FilePointer; legacy files fall back to HKDF derivation
+   - Maintained backward compatibility across TypeScript and Rust implementations
+   - The `getFileIpnsPrivateKey()` helper centralizes the fallback logic in one place
+   - All 229 crypto tests pass, web and desktop builds succeed
+
+6. All user messages:
+   - "Implement the following plan: [detailed plan for switching file IPNS keys from HKDF to random]"
+   - "can you commit changes to each section atomically?"
+   - (Two task notification messages about background tasks completing - not actionable requests)
+
+7. Pending Tasks:
+   - None. All 6 steps completed and committed. The implementation is ready for PR creation.
+
+8. Current Work:
+   All implementation work is complete. The branch `feat/random-file-ipns-keys` has 5 atomic commits (plus 1 pre-existing docs commit):
+   - `9f5a3c761` - feat(crypto): add generateFileIpnsKeypair and ipnsPrivateKeyEncrypted to FilePointer
+   - `b347af86c` - feat(web): switch file IPNS creation to random keypair, accept key in updates
+   - `65dbf0f72` - feat(web): wire random IPNS keys through useFolder hook
+   - `4db4e0ded` - feat(desktop): switch file IPNS keys from HKDF to random in Rust
+   - `f6b2c8772` - docs: update METADATA_SCHEMAS for ipnsPrivateKeyEncrypted and random IPNS keys
+
+   Verification passed: crypto tests 229/229, web build clean, desktop cargo build clean.
+
+9. Optional Next Step:
+   The user has not explicitly requested PR creation or any further work. The implementation is complete and verified. If the user wishes to proceed, the next logical step would be creating a PR for the `feat/random-file-ipns-keys` branch, but this should be confirmed with the user first.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.REDACTED.jsonl
+
+---
+
+<task-notification>
+<task-id>b2620ef</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Build web app" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<task-notification>
+<task-id>b9e783c</task-id>
+<tool-use-id>toolu_01Twq3uBvdoLTQ3bXiS6v1tV</tool-use-id>
+<output-file>REDACTED.output</output-file>
+<status>completed</status>
+<summary>Background command "Build desktop app" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: REDACTED.output
+
+---
+
+<objective>
+
+Review produced code through the lens of a cryptography and security testing expert. This command evaluates cryptographic implementations, validates security assumptions, and generates comprehensive test cases and edge cases.
+
+**This command is NOT overwritten by GSD updates.**
+
+**Use when:**
+- After implementing cryptographic features
+- Before merging security-critical code
+- When you want test case ideas for crypto operations
+- To validate security assumptions in the design
+
+**Creates:**
+- `.planning/security/REVIEW-[timestamp].md` — Security review report
+- Test case suggestions (inline or as file)
+
+</objective>
+
+<execution_context>
+
+## Project Security Rules
+
+Reference the project's CLAUDE.md security rules:
+- Never store privateKey in localStorage/sessionStorage
+- Never log sensitive keys
+- Never send unencrypted keys to server
+- Always use ECIES for key wrapping
+- Always use AES-256-GCM for content encryption
+- Server NEVER has access to plaintext or unencrypted keys
+- Always encrypt ipnsPrivateKey with TEE public key before sending
+- TEE decrypts IPNS keys in hardware only, signs, and immediately discards
+
+## Cryptographic Standards
+
+| Algorithm | Use Case | Notes |
+|-----------|----------|-------|
+| AES-256-GCM | Content encryption | Authenticated encryption required |
+| ECIES | Key wrapping | For asymmetric key transport |
+| Web Crypto API | Browser crypto | No polyfills or JS implementations |
+| Uint8Array | Binary data | Never strings for crypto data |
+
+</execution_context>
+
+<process>
+
+## Phase 1: Scope Definition
+
+Use AskUserQuestion:
+- header: "Review Scope"
+- question: "What should I review?"
+- multiSelect: false
+- options:
+  - "Specific files" — I'll provide file paths or patterns
+  - "Recent changes" — Review uncommitted or recent commits
+  - "Phase code" — Review code from a specific GSD phase
+  - "Full crypto audit" — Comprehensive review of all crypto-related code
+
+**If "Specific files":** Ask for file paths/patterns
+**If "Recent changes":** Run `git diff` and `git diff --cached` to identify changed files
+**If "Phase code":** Ask which phase, then read the phase's PLAN.md to identify relevant files
+**If "Full crypto audit":** Search for crypto-related patterns across codebase
+
+## Phase 2: Code Discovery
+
+Based on scope, identify files to review:
+
+```bash
+# Find crypto-related files
+grep -r -l "encrypt\|decrypt\|crypto\|Crypto\|cipher\|AES\|ECIES\|privateKey\|publicKey" --include="*.ts" --include="*.js" . | grep -v node_modules | grep -v ".test."
+```
+
+Also search for:
+- Key management code
+- Authentication/authorization
+- Data serialization of sensitive data
+- API endpoints handling secrets
+- Storage operations for keys
+
+## Phase 3: Security Analysis
+
+For each file/section, analyze through these lenses:
+
+### 3.1 Cryptographic Correctness
+
+- [ ] Correct algorithm usage (AES-256-GCM, not AES-CBC without MAC)
+- [ ] Proper IV/nonce generation (crypto.getRandomValues, never predictable)
+- [ ] IV/nonce never reused with same key
+- [ ] Authenticated encryption used (GCM, not just encryption)
+- [ ] Key sizes appropriate (256-bit for AES, appropriate curves for EC)
+- [ ] No deprecated algorithms (MD5, SHA1 for security, DES, RC4)
+
+### 3.2 Key Management
+
+- [ ] Keys derived using proper KDF (not just hashing)
+- [ ] Keys never logged or exposed in errors
+- [ ] Keys cleared from memory after use
+- [ ] Key hierarchy follows spec (rootFolderKey → folderKey → fileKey)
+- [ ] Key wrapping uses ECIES as specified
+- [ ] No hardcoded keys or secrets
+
+### 3.3 Trust Boundaries
+
+- [ ] Client-side encryption before any server transmission
+- [ ] Server never receives plaintext keys
+- [ ] TEE boundaries respected (encrypted IPNS keys only)
+- [ ] No trust assumptions on server for key material
+
+### 3.4 Implementation Safety
+
+- [ ] Using Web Crypto API (not crypto-js or similar)
+- [ ] Uint8Array for all binary data
+- [ ] Constant-time comparison for authentication tokens
+- [ ] No sensitive data in error messages
+- [ ] No sensitive data in logs
+- [ ] Proper error handling (no silent failures in crypto)
+
+### 3.5 Data Flow Security
+
+- [ ] Sensitive data encrypted at rest
+- [ ] Sensitive data encrypted in transit
+- [ ] No sensitive data in URLs or query params
+- [ ] No sensitive data in localStorage/sessionStorage (except encrypted)
+- [ ] Metadata leakage minimized
+
+## Phase 4: Generate Test Cases
+
+For each crypto operation found, generate test cases:
+
+### Positive Test Cases
+- Normal operation with valid inputs
+- Boundary conditions (empty data, max size data)
+- Different key types/sizes
+
+### Negative Test Cases
+- Invalid key format
+- Corrupted ciphertext
+- Wrong key for decryption
+- Tampered authenticated data (GCM tag modification)
+- Truncated ciphertext
+
+### Edge Cases
+- Empty plaintext encryption
+- Very large data encryption (chunking behavior)
+- Unicode/binary data handling
+- Concurrent encryption operations
+- Key rotation scenarios
+- Re-encryption with new keys
+
+### Attack Scenarios
+- Replay attacks (nonce reuse detection)
+- Padding oracle (if applicable)
+- Timing attacks (constant-time operations)
+- Key confusion attacks
+- Downgrade attacks
+
+## Phase 5: Generate Report
+
+Create `.planning/security/` directory if needed:
+
+```bash
+mkdir -p .planning/security
+```
+
+Write review report to `.planning/security/REVIEW-[timestamp].md`:
+
+```markdown
+# Security Review Report
+
+**Date:** [timestamp]
+**Scope:** [what was reviewed]
+**Reviewer:** Claude (security:review command)
+
+## Executive Summary
+
+[2-3 sentences on overall security posture]
+
+**Risk Level:** [LOW/MEDIUM/HIGH/CRITICAL]
+
+## Files Reviewed
+
+| File | Crypto Operations | Risk Level |
+|------|-------------------|------------|
+| [file] | [operations] | [level] |
+
+## Findings
+
+### Critical Issues
+
+[Issues that must be fixed before deployment]
+
+### High Priority
+
+[Issues that should be fixed soon]
+
+### Medium Priority
+
+[Issues that represent technical debt]
+
+### Low Priority / Recommendations
+
+[Nice-to-haves and best practices]
+
+## Detailed Analysis
+
+### [File/Component Name]
+
+**What it does:**
+[Brief description]
+
+**Crypto operations:**
+- [operation 1]
+- [operation 2]
+
+**Issues found:**
+
+1. **[Issue Title]**
+   - **Severity:** [CRITICAL/HIGH/MEDIUM/LOW]
+   - **Location:** [file:line]
+   - **Description:** [what's wrong]
+   - **Impact:** [what could happen]
+   - **Recommendation:** [how to fix]
+   - **Reference:** [standard/best practice]
+
+**Positive observations:**
+- [what's done well]
+
+---
+
+[Continue for each file/component]
+
+## Test Cases
+
+### [Feature/Component]
+
+#### Unit Tests
+
+```typescript
+describe('[component] security', () => {
+  // Positive cases
+  it('should [expected behavior]', () => {
+    // Test suggestion
+  });
+
+  // Negative cases
+  it('should reject [invalid input]', () => {
+    // Test suggestion
+  });
+
+  // Edge cases
+  it('should handle [edge case]', () => {
+    // Test suggestion
+  });
+});
+```
+
+#### Integration Tests
+
+- [ ] [Test scenario 1]
+- [ ] [Test scenario 2]
+
+#### Attack Scenarios to Test
+
+- [ ] [Attack scenario 1] — [how to test]
+- [ ] [Attack scenario 2] — [how to test]
+
+## Compliance Checklist
+
+Based on project security rules:
+
+- [ ] No privateKey in localStorage/sessionStorage
+- [ ] No sensitive keys logged
+- [ ] No unencrypted keys sent to server
+- [ ] ECIES used for key wrapping
+- [ ] AES-256-GCM used for content encryption
+- [ ] Server has zero knowledge of plaintext
+- [ ] IPNS keys encrypted with TEE public key
+
+## Recommendations Summary
+
+| Priority | Recommendation | Effort |
+|----------|----------------|--------|
+| [P0/P1/P2] | [recommendation] | [LOW/MEDIUM/HIGH] |
+
+## Next Steps
+
+1. [Immediate action]
+2. [Short-term action]
+3. [Long-term consideration]
+
+---
+*Generated by security:review command*
+*This review is automated guidance, not a substitute for professional security audit*
+```
+
+## Phase 6: Present Results
+
+Display summary inline:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ SECURITY REVIEW COMPLETE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Scope:** [what was reviewed]
+**Risk Level:** [overall risk]
+
+## Summary
+
+| Severity | Count |
+|----------|-------|
+| Critical | [n] |
+| High | [n] |
+| Medium | [n] |
+| Low | [n] |
+
+## Top Issues
+
+1. [Most critical issue]
+2. [Second issue]
+3. [Third issue]
+
+## Test Cases Generated
+
+[n] test case suggestions across [m] categories
+
+**Full report:** `.planning/security/REVIEW-[timestamp].md`
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+Use AskUserQuestion:
+- header: "Next"
+- question: "What would you like to do?"
+- options:
+  - "View full report" — Display the complete review
+  - "Generate test file" — Create a test file with suggested cases
+  - "Fix critical issues" — Start addressing critical findings
+  - "Done" — End review
+
+</process>
+
+<vulnerability_patterns>
+
+## Common Crypto Vulnerabilities to Check
+
+### Nonce/IV Reuse
+```typescript
+// BAD: Reusing IV
+const iv = new Uint8Array(12); // zeros!
+// GOOD: Random IV each time
+const iv = crypto.getRandomValues(new Uint8Array(12));
+```
+
+### Missing Authentication
+```typescript
+// BAD: AES-CBC without MAC
+// GOOD: AES-GCM (authenticated)
+```
+
+### Weak Key Derivation
+```typescript
+// BAD: Simple hash
+const key = await crypto.subtle.digest('SHA-256', password);
+// GOOD: PBKDF2/Argon2 with iterations
+```
+
+### Timing Attacks
+```typescript
+// BAD: Early return on mismatch
+if (a[i] !== b[i]) return false;
+// GOOD: Constant-time comparison
+```
+
+### Key in Logs/Errors
+```typescript
+// BAD
+console.log('Key:', key);
+throw new Error(`Failed with key ${key}`);
+// GOOD
+console.log('Key operation failed');
+throw new Error('Decryption failed');
+```
+
+### Predictable Randomness
+```typescript
+// BAD
+Math.random()
+// GOOD
+crypto.getRandomValues()
+```
+
+</vulnerability_patterns>
+
+<success_criteria>
+
+- [ ] Scope defined and files identified
+- [ ] All crypto operations catalogued
+- [ ] Each operation checked against security criteria
+- [ ] Issues categorized by severity
+- [ ] Test cases generated for each crypto operation
+- [ ] Report written to `.planning/security/`
+- [ ] Summary presented to user
+- [ ] Next steps offered
+
+**Quality indicators:**
+- Findings are specific (file:line, not vague)
+- Test cases are implementable (actual code suggestions)
+- Recommendations include HOW to fix, not just WHAT's wrong
+- False positives acknowledged where uncertain
+
+</success_criteria>
+
+
+ARGUMENTS: of the changes in this PR
+
+---
+
+ok fix all crit, high and medium issues. Also log a todo for LOW-01
+
+---
+
+[Request interrupted by user]
+
+---
+
+ok fix all crit, high and medium issues. Also log a gsd todo for LOW-01
+
+---
+
+the security review should be updated with this info and committed .
