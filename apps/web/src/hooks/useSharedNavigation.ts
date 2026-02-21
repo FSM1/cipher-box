@@ -65,6 +65,7 @@ type UseSharedNavigationReturn = {
   navigateToSubfolder: (folderId: string, folderName: string) => Promise<void>;
   navigateUp: () => void;
   navigateToRoot: () => void;
+  navigateToBreadcrumb: (crumbIndex: number) => void;
   downloadSharedFile: (item: FilePointer) => Promise<void>;
   hideSharedItem: (shareId: string) => Promise<void>;
 };
@@ -200,25 +201,31 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
         );
 
         if (share.itemType === 'folder') {
-          // Resolve folder IPNS to get metadata
-          const resolved = await resolveIpnsRecord(share.ipnsName);
-          if (!resolved) {
-            throw new Error('Could not resolve shared folder IPNS');
+          let folderKeyStored = false;
+          try {
+            // Resolve folder IPNS to get metadata
+            const resolved = await resolveIpnsRecord(share.ipnsName);
+            if (!resolved) {
+              throw new Error('Could not resolve shared folder IPNS');
+            }
+
+            // Fetch and decrypt folder metadata
+            const encryptedBytes = await fetchFromIpfs(resolved.cid);
+            const encryptedJson = new TextDecoder().decode(encryptedBytes);
+            const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
+            const metadata = await decryptFolderMetadata(encrypted, itemKey);
+
+            // Set folder state
+            setCurrentView('folder');
+            setCurrentShareId(shareId);
+            setFolderChildren(metadata.children ?? []);
+            setFolderKey(itemKey);
+            folderKeyStored = true;
+            setBreadcrumbs([{ id: shareId, name: share.itemName }]);
+            navStackRef.current = [];
+          } finally {
+            if (!folderKeyStored) itemKey.fill(0);
           }
-
-          // Fetch and decrypt folder metadata
-          const encryptedBytes = await fetchFromIpfs(resolved.cid);
-          const encryptedJson = new TextDecoder().decode(encryptedBytes);
-          const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
-          const metadata = await decryptFolderMetadata(encrypted, itemKey);
-
-          // Set folder state
-          setCurrentView('folder');
-          setCurrentShareId(shareId);
-          setFolderChildren(metadata.children ?? []);
-          setFolderKey(itemKey);
-          setBreadcrumbs([{ id: shareId, name: share.itemName }]);
-          navStackRef.current = [];
         } else {
           // For files, trigger download directly
           // itemKey is the parent folder key; downloadSharedFileFromShare unwraps its own copy
@@ -313,24 +320,6 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
   );
 
   /**
-   * Navigate up one level.
-   */
-  const navigateUp = useCallback(() => {
-    if (navStackRef.current.length > 0) {
-      // Zero current folder key before replacing
-      if (folderKey) folderKey.fill(0);
-      // Pop from nav stack
-      const prev = navStackRef.current.pop()!;
-      setFolderChildren(prev.children);
-      setFolderKey(prev.folderKey);
-      setBreadcrumbs((crumbs) => crumbs.slice(0, -1));
-    } else if (currentView === 'folder') {
-      // Back to top-level list
-      navigateToRoot();
-    }
-  }, [currentView, folderKey]);
-
-  /**
    * Navigate back to the top-level shared list.
    * Zeroes all decrypted folder keys from memory before clearing state.
    */
@@ -349,6 +338,50 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     navStackRef.current = [];
     setError(null);
   }, [folderKey]);
+
+  /**
+   * Navigate up one level.
+   */
+  const navigateUp = useCallback(() => {
+    if (navStackRef.current.length > 0) {
+      // Zero current folder key before replacing
+      if (folderKey) folderKey.fill(0);
+      // Pop from nav stack
+      const prev = navStackRef.current.pop()!;
+      setFolderChildren(prev.children);
+      setFolderKey(prev.folderKey);
+      setBreadcrumbs((crumbs) => crumbs.slice(0, -1));
+    } else if (currentView === 'folder') {
+      // Back to top-level list
+      navigateToRoot();
+    }
+  }, [currentView, folderKey, navigateToRoot]);
+
+  /**
+   * Navigate directly to a breadcrumb level, zeroing all intermediate keys.
+   * More efficient than calling navigateUp() in a loop.
+   */
+  const navigateToBreadcrumb = useCallback(
+    (crumbIndex: number) => {
+      const popsNeeded = breadcrumbs.length - 1 - crumbIndex;
+      if (popsNeeded <= 0) return;
+      // Zero the current folder key
+      if (folderKey) folderKey.fill(0);
+      // Zero and discard all intermediate keys
+      for (let i = 0; i < popsNeeded - 1; i++) {
+        const entry = navStackRef.current.pop();
+        if (entry) entry.folderKey.fill(0);
+      }
+      // Restore the target level
+      const target = navStackRef.current.pop();
+      if (target) {
+        setFolderChildren(target.children);
+        setFolderKey(target.folderKey);
+        setBreadcrumbs((crumbs) => crumbs.slice(0, crumbIndex + 1));
+      }
+    },
+    [breadcrumbs, folderKey]
+  );
 
   /**
    * Download a shared file from the top-level list.
@@ -501,6 +534,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     navigateToSubfolder,
     navigateUp,
     navigateToRoot,
+    navigateToBreadcrumb,
     downloadSharedFile,
     hideSharedItem,
   };

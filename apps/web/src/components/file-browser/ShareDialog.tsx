@@ -178,14 +178,6 @@ async function reWrapEncryptedKey(
 }
 
 /**
- * Count total items in a folder for progress tracking.
- * Includes both files and subfolders since all need key re-wrapping.
- */
-function countFolderChildren(children: FolderChild[]): number {
-  return children.length;
-}
-
-/**
  * Share dialog modal for creating and managing shares.
  *
  * Allows users to:
@@ -304,8 +296,13 @@ export function ShareDialog({
     try {
       // Verify recipient is a registered user
       await sharesControllerLookupUser({ publicKey: key });
-    } catch {
-      setError('user not found');
+    } catch (err: unknown) {
+      const status = (err as { status?: number }).status;
+      if (status === 404) {
+        setError('user not found');
+      } else {
+        setError('lookup failed, please try again');
+      }
       setIsSharing(false);
       return;
     }
@@ -352,15 +349,14 @@ export function ShareDialog({
             const encrypted = JSON.parse(encryptedJson);
             const metadata = await decryptFolderMetadata(encrypted, itemFolderKey);
 
-            const totalSubfolders = countFolderChildren(metadata.children);
-            setProgress({ current: 0, total: totalSubfolders });
+            setProgress({ current: 0, total: 0 });
 
             childKeys = await collectChildKeys(
               metadata.children,
               itemFolderKey,
               ownerPrivateKey,
               recipientPubKeyBytes,
-              (wrapped) => setProgress({ current: wrapped, total: totalSubfolders })
+              (wrapped) => setProgress({ current: wrapped, total: 0 })
             );
           }
         } finally {
@@ -508,16 +504,7 @@ export function ShareDialog({
           {/* Progress indicator for folder sharing */}
           {progress && (
             <div className="share-progress" role="status" aria-live="polite">
-              {'> '}re-wrapping keys... {progress.current}/{progress.total}
-              <div className="share-progress-bar">
-                <div
-                  className="share-progress-fill"
-                  style={{
-                    width:
-                      progress.total > 0 ? `${(progress.current / progress.total) * 100}%` : '0%',
-                  }}
-                />
-              </div>
+              {'> '}re-wrapping keys... {progress.current}
             </div>
           )}
         </div>

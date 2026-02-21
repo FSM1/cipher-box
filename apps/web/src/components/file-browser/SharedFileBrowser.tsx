@@ -125,6 +125,7 @@ export function SharedFileBrowser() {
     navigateToSubfolder,
     navigateUp,
     navigateToRoot,
+    navigateToBreadcrumb,
     downloadSharedFile,
     hideSharedItem,
   } = useSharedNavigation();
@@ -174,8 +175,16 @@ export function SharedFileBrowser() {
   const handleDownload = useCallback(async () => {
     const item = contextMenu.item;
     if (!item || !isFilePointer(item)) return;
+
+    // In list view, context menu download needs to use navigateToShare
+    // because downloadSharedFile requires currentShareId/folderKey (null in list view)
+    if (currentView === 'list' && contextShareId) {
+      await navigateToShare(contextShareId);
+      return;
+    }
+
     await downloadSharedFile(item);
-  }, [contextMenu.item, downloadSharedFile]);
+  }, [contextMenu.item, downloadSharedFile, currentView, contextShareId, navigateToShare]);
 
   const handleDetailsClick = useCallback(() => {
     if (contextMenu.item) {
@@ -360,15 +369,7 @@ export function SharedFileBrowser() {
                   <button
                     type="button"
                     className="breadcrumb-item"
-                    onClick={() => {
-                      // Navigate to this breadcrumb level
-                      const crumbIndex = breadcrumbs.indexOf(crumb);
-                      // Pop nav stack to this level
-                      const popsNeeded = breadcrumbs.length - 1 - crumbIndex;
-                      for (let i = 0; i < popsNeeded; i++) {
-                        navigateUp();
-                      }
-                    }}
+                    onClick={() => navigateToBreadcrumb(breadcrumbs.indexOf(crumb))}
                   >
                     {crumb.name.toLowerCase()}
                   </button>
@@ -464,7 +465,7 @@ export function SharedFileBrowser() {
       )}
 
       {/* Empty folder */}
-      {!isLoading && !hasChildren && (
+      {!isLoading && !hasChildren && !error && (
         <div className="empty-state" data-testid="shared-empty-folder">
           <div className="empty-state-content">
             <pre className="empty-state-ascii" aria-hidden="true">
