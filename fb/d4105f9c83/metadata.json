@@ -14,13 +14,20 @@
       "context": "/fb/d4105f9c83/0/context.md",
       "content_hash": "/fb/d4105f9c83/0/content_hash.txt",
       "prompt": "/fb/d4105f9c83/0/prompt.txt"
+    },
+    {
+      "metadata": "/fb/d4105f9c83/1/metadata.json",
+      "transcript": "/fb/d4105f9c83/1/full.jsonl",
+      "context": "/fb/d4105f9c83/1/context.md",
+      "content_hash": "/fb/d4105f9c83/1/content_hash.txt",
+      "prompt": "/fb/d4105f9c83/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 66,
-    "cache_creation_tokens": 76803,
-    "cache_read_tokens": 5239366,
-    "output_tokens": 4517,
-    "api_call_count": 64
+    "input_tokens": 119,
+    "cache_creation_tokens": 178245,
+    "cache_read_tokens": 9190557,
+    "output_tokens": 9364,
+    "api_call_count": 108
   }
 }
