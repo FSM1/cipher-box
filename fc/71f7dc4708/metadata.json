@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "fc71f7dc4708",
+  "strategy": "manual-commit",
+  "branch": "feat/random-file-ipns-keys",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/todos/pending/2026-02-21-lazy-migration-legacy-file-pointers.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fc/71f7dc4708/0/metadata.json",
+      "transcript": "/fc/71f7dc4708/0/full.jsonl",
+      "context": "/fc/71f7dc4708/0/context.md",
+      "content_hash": "/fc/71f7dc4708/0/content_hash.txt",
+      "prompt": "/fc/71f7dc4708/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 15,
+    "cache_creation_tokens": 39503,
+    "cache_read_tokens": 618563,
+    "output_tokens": 982,
+    "api_call_count": 10
+  }
+}
