@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "0da54a18fcd7",
+  "strategy": "manual-commit",
+  "branch": "feat/random-file-ipns-keys",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/fuse/inode.rs",
+    "apps/desktop/src-tauri/src/fuse/operations.rs",
+    "apps/web/src/hooks/useFolder.ts",
+    "apps/web/src/services/file-metadata.service.ts",
+    "packages/crypto/src/file/derive-ipns.ts",
+    "packages/crypto/src/folder/metadata.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0d/a54a18fcd7/0/metadata.json",
+      "transcript": "/0d/a54a18fcd7/0/full.jsonl",
+      "context": "/0d/a54a18fcd7/0/context.md",
+      "content_hash": "/0d/a54a18fcd7/0/content_hash.txt",
+      "prompt": "/0d/a54a18fcd7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 61625,
+    "cache_read_tokens": 3080116,
+    "output_tokens": 3740,
+    "api_call_count": 42
+  }
+}
