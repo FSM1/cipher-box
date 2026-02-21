@@ -106,9 +106,8 @@ jobs:
           echo "TEST_LOGIN_SECRET=e2e-test-secret-ci-only" >> apps/api/.env
 
       - name: Run E2E tests
-        # Only running full-workflow.spec.ts - archived tests in tests/archive/ used storage-state
-        # approach that doesn't work reliably with Web3Auth session management
-        run: pnpm --filter @cipherbox/e2e test tests/full-workflow.spec.ts
+        # Run all tests in the tests/ directory (archived tests live in tests/archive/)
+        run: pnpm --filter @cipherbox/e2e test
         env:
           CI: true
           # Database configuration
