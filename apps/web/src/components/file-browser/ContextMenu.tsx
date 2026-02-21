@@ -32,6 +32,8 @@ type ContextMenuProps = {
   onRename: () => void;
   /** Callback when move is clicked */
   onMove?: () => void;
+  /** Callback when share is clicked */
+  onShare?: () => void;
   /** Callback when delete is clicked */
   onDelete: () => void;
   /** Callback when details is clicked */
@@ -67,6 +69,7 @@ export function ContextMenu({
   onPreview,
   onRename,
   onMove,
+  onShare,
   onDelete,
   onDetails,
   onBatchDownload,
@@ -163,6 +166,11 @@ export function ContextMenu({
 
   const handleMove = () => {
     onMove?.();
+    onClose();
+  };
+
+  const handleShare = () => {
+    onShare?.();
     onClose();
   };
 
@@ -321,6 +329,19 @@ export function ContextMenu({
               >
                 <span className="context-menu-item-icon">&#8594;</span>
                 Move to...
+              </button>
+            )}
+
+            {/* Share */}
+            {onShare && (
+              <button
+                type="button"
+                className="context-menu-item"
+                onClick={handleShare}
+                role="menuitem"
+              >
+                <span className="context-menu-item-icon">@</span>
+                Share
               </button>
             )}
 
