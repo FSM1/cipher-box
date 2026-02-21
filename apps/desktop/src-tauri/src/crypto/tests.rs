@@ -439,6 +439,7 @@ fn folder_metadata_encrypt_decrypt_roundtrip() {
                 id: "file-001".to_string(),
                 name: "test.txt".to_string(),
                 file_meta_ipns_name: "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx".to_string(),
+                ipns_private_key_encrypted: None,
                 created_at: 1700000000000,
                 modified_at: 1700000000000,
             }),
@@ -514,6 +515,7 @@ fn file_pointer_camel_case_serialization() {
         id: "fp-001".to_string(),
         name: "test.mp4".to_string(),
         file_meta_ipns_name: "k51abc".to_string(),
+        ipns_private_key_encrypted: None,
         created_at: 1000,
         modified_at: 2000,
     };
@@ -522,6 +524,58 @@ fn file_pointer_camel_case_serialization() {
     assert!(json.contains("fileMetaIpnsName"), "Must use camelCase: fileMetaIpnsName");
     assert!(json.contains("createdAt"), "Must use camelCase: createdAt");
     assert!(!json.contains("file_meta_ipns_name"), "Should NOT contain snake_case");
+}
+
+#[test]
+fn file_pointer_without_ipns_key_encrypted_backward_compat() {
+    // Pre-v0.14.0 format: FilePointer without ipnsPrivateKeyEncrypted
+    let json = r#"{
+        "type": "file",
+        "id": "file-legacy",
+        "name": "old-file.txt",
+        "fileMetaIpnsName": "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx",
+        "createdAt": 1700000000000,
+        "modifiedAt": 1700000000000
+    }"#;
+    let fp: FilePointer = serde_json::from_str(json).unwrap();
+    assert_eq!(fp.id, "file-legacy");
+    assert!(fp.ipns_private_key_encrypted.is_none(), "Legacy files lack encrypted IPNS key");
+}
+
+#[test]
+fn file_pointer_with_ipns_key_encrypted_roundtrip() {
+    // v0.14.0+ format: FilePointer with ipnsPrivateKeyEncrypted
+    let json = r#"{
+        "type": "file",
+        "id": "file-new",
+        "name": "new-file.txt",
+        "fileMetaIpnsName": "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx",
+        "ipnsPrivateKeyEncrypted": "04abcdef1234567890",
+        "createdAt": 1700000000000,
+        "modifiedAt": 1700000000000
+    }"#;
+    let fp: FilePointer = serde_json::from_str(json).unwrap();
+    assert_eq!(fp.ipns_private_key_encrypted.as_deref(), Some("04abcdef1234567890"));
+
+    // Re-serialize and verify field is present
+    let re_serialized = serde_json::to_string(&fp).unwrap();
+    assert!(re_serialized.contains("ipnsPrivateKeyEncrypted"));
+    assert!(re_serialized.contains("04abcdef1234567890"));
+}
+
+#[test]
+fn file_pointer_none_ipns_key_omitted_from_json() {
+    // When ipnsPrivateKeyEncrypted is None, it should be omitted from JSON
+    let fp = FilePointer {
+        id: "fp-002".to_string(),
+        name: "test.txt".to_string(),
+        file_meta_ipns_name: "k51abc".to_string(),
+        ipns_private_key_encrypted: None,
+        created_at: 1000,
+        modified_at: 2000,
+    };
+    let json = serde_json::to_string(&fp).unwrap();
+    assert!(!json.contains("ipnsPrivateKeyEncrypted"), "None should be omitted via skip_serializing_if");
 }
 
 #[test]

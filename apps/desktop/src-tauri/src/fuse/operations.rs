@@ -218,7 +218,7 @@ mod implementation {
 
         // Populate inode table with children.
         // First load for this folder -- replace mode (merge_only=false).
-        fs.inodes.populate_folder(ino, &metadata, &private_key, false)?;
+        fs.inodes.populate_folder(ino, &metadata, &private_key, &fs.public_key, false)?;
 
         // Resolve unresolved FilePointers eagerly
         let unresolved = fs.inodes.get_unresolved_file_pointers();

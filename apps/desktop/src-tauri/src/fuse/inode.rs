@@ -243,6 +243,7 @@ impl InodeTable {
         parent_ino: u64,
         metadata: &FolderMetadata,
         private_key: &[u8],
+        public_key: &[u8],
         merge_only: bool,
     ) -> Result<(), String> {
         let uid = unsafe { libc::getuid() };
@@ -445,8 +446,31 @@ impl InodeTable {
                             None
                         };
 
-                        // Cache the ECIES-wrapped hex to avoid re-wrapping on every publish
-                        let cached_encrypted_hex = file_pointer.ipns_private_key_encrypted.clone();
+                        // Cache the ECIES-wrapped hex for build_folder_metadata.
+                        // For legacy files (HKDF fallback), wrap the derived key now so
+                        // the next folder publish persists it — lazy migration to random keys.
+                        let cached_encrypted_hex = if file_pointer.ipns_private_key_encrypted.is_some() {
+                            file_pointer.ipns_private_key_encrypted.clone()
+                        } else if let Some(ref key) = file_ipns_key {
+                            match crypto::ecies::wrap_key(key, public_key) {
+                                Ok(wrapped) => {
+                                    log::info!(
+                                        "File '{}': wrapped HKDF-derived IPNS key for lazy migration.",
+                                        file_pointer.name
+                                    );
+                                    Some(hex::encode(&wrapped))
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "File '{}': failed to wrap HKDF key for migration: {}. Will re-wrap on publish.",
+                                        file_pointer.name, e
+                                    );
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        };
 
                         InodeKind::File {
                             cid: String::new(),
@@ -812,15 +836,18 @@ mod tests {
                     id: "file-1".to_string(),
                     name: "hello.txt".to_string(),
                     file_meta_ipns_name: "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx".to_string(),
+                    ipns_private_key_encrypted: None,
                     created_at: 1700000000000,
                     modified_at: 1700000000000,
                 }),
             ],
         };
 
-        // For FilePointer children, populate_folder doesn't need ECIES decryption
-        let private_key = vec![0u8; 32]; // unused for FilePointers
-        let result = table.populate_folder(ROOT_INO, &metadata, &private_key, false);
+        // For FilePointer children without ipnsPrivateKeyEncrypted, HKDF derivation
+        // is used. Public key is needed for wrapping during lazy migration.
+        let private_key = vec![0u8; 32];
+        let public_key = vec![0u8; 33]; // dummy compressed public key
+        let result = table.populate_folder(ROOT_INO, &metadata, &private_key, &public_key, false);
         assert!(result.is_ok());
 
         // Root should have 1 child
