@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/FSM1/cipher-box/compare/v0.13.4...v0.14.0) (2026-02-21)
+
+
+### Features
+
+* switch file IPNS keys from deterministic HKDF to random ([#181](https://github.com/FSM1/cipher-box/issues/181)) ([7f01f98](https://github.com/FSM1/cipher-box/commit/7f01f9823e4f0f1bef180f5da7a927c97592c6e9))
+
 ## [0.13.4](https://github.com/FSM1/cipher-box/compare/v0.13.3...v0.13.4) (2026-02-21)
 
 
