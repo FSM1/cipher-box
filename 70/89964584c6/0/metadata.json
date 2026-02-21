@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "7089964584c6",
+  "session_id": "9e4910ab-95a9-4a30-a85e-4677017bfaf0",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-21T00:41:41.693272Z",
+  "branch": "fix/security-review-short-term",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/auth/auth.service.ts",
+    "packages/crypto/src/registry/encrypt.ts",
+    "packages/crypto/src/registry/schema.ts",
+    "apps/api/src/device-approval/device-approval.service.ts",
+    "apps/api/src/device-approval/dto/create-approval.dto.ts",
+    "packages/crypto/src/__tests__/registry.test.ts",
+    "apps/api/src/auth/auth.service.spec.ts",
+    "apps/api/src/device-approval/device-approval.service.spec.ts",
+    "apps/api/src/migrations/1740200000000-AddAuthMethodsUniqueConstraint.ts",
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "7bbc0a364a52",
+  "checkpoint_transcript_start": 211,
+  "transcript_lines_at_start": 211,
+  "token_usage": {
+    "input_tokens": 76,
+    "cache_creation_tokens": 51282,
+    "cache_read_tokens": 8612044,
+    "output_tokens": 7481,
+    "api_call_count": 71
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-21T00:41:40.846939Z",
+    "agent_lines": 141,
+    "human_added": 32,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 173,
+    "agent_percentage": 81.5028901734104
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/9e4910ab-95a9-4a30-a85e-4677017bfaf0.jsonl"
+}
