@@ -28,13 +28,13 @@ function generateTestKeypair(): { publicKey: Uint8Array; privateKey: Uint8Array 
 function createTestRegistry(deviceCount = 1): DeviceRegistry {
   const now = Date.now();
   const devices = Array.from({ length: deviceCount }, (_, i) => ({
-    deviceId: `device${i}_${'a'.repeat(56)}`,
-    publicKey: `pubkey${i}_${'b'.repeat(56)}`,
+    deviceId: `${i.toString(16).padStart(2, '0')}${'a'.repeat(62)}`,
+    publicKey: `04${'b'.repeat(128)}`,
     name: `Test Device ${i}`,
     platform: 'web' as const,
     appVersion: '0.2.0',
     deviceModel: 'Chrome 123',
-    ipHash: `iphash${i}_${'c'.repeat(56)}`,
+    ipHash: `${i.toString(16).padStart(2, '0')}${'c'.repeat(62)}`,
     status: i === 0 ? ('authorized' as const) : ('pending' as const),
     createdAt: now - i * 1000,
     lastSeenAt: now,

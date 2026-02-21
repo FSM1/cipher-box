@@ -450,27 +450,28 @@ export class AuthService implements OnModuleDestroy {
    * Cannot unlink the last remaining auth method.
    */
   async unlinkMethod(userId: string, methodId: string): Promise<void> {
-    // 1. Find the method by id and userId
-    const method = await this.authMethodRepository.findOne({
-      where: { id: methodId, userId },
+    await this.authMethodRepository.manager.transaction(async (manager) => {
+      // 1. Lock all auth methods for this user to prevent concurrent unlinks
+      const methods = await manager
+        .createQueryBuilder(AuthMethod, 'am')
+        .setLock('pessimistic_write')
+        .where('am.userId = :userId', { userId })
+        .getMany();
+
+      // 2. Find the target method
+      const method = methods.find((m) => m.id === methodId);
+      if (!method) {
+        throw new BadRequestException('Auth method not found');
+      }
+
+      // 3. Cannot unlink if only 1 method remains
+      if (methods.length <= 1) {
+        throw new BadRequestException('Cannot unlink your last auth method');
+      }
+
+      // 4. Delete the method
+      await manager.remove(method);
     });
-
-    if (!method) {
-      throw new BadRequestException('Auth method not found');
-    }
-
-    // 2. Count remaining methods for user
-    const methodCount = await this.authMethodRepository.count({
-      where: { userId },
-    });
-
-    // 3. Cannot unlink if only 1 method remains
-    if (methodCount <= 1) {
-      throw new BadRequestException('Cannot unlink your last auth method');
-    }
-
-    // 4. Delete the method
-    await this.authMethodRepository.remove(method);
   }
 
   /**

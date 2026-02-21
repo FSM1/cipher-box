@@ -8,6 +8,9 @@ import { RespondApprovalDto } from './dto/respond-approval.dto';
 /** Approval request TTL: 5 minutes */
 const TTL_MS = 5 * 60 * 1000;
 
+/** Maximum concurrent pending approval requests per user */
+const MAX_PENDING_REQUESTS = 5;
+
 @Injectable()
 export class DeviceApprovalService {
   constructor(
@@ -20,6 +23,20 @@ export class DeviceApprovalService {
    * Sets expiresAt to 5 minutes from now.
    */
   async createRequest(userId: string, dto: CreateApprovalDto): Promise<{ requestId: string }> {
+    const pendingCount = await this.repo.count({
+      where: {
+        userId,
+        status: 'pending' as const,
+        expiresAt: MoreThan(new Date()),
+      },
+    });
+
+    if (pendingCount >= MAX_PENDING_REQUESTS) {
+      throw new BadRequestException(
+        `Maximum of ${MAX_PENDING_REQUESTS} pending approval requests allowed`
+      );
+    }
+
     const approval = this.repo.create({
       userId,
       deviceId: dto.deviceId,

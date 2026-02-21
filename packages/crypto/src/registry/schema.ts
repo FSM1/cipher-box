@@ -11,6 +11,7 @@ import type { DeviceRegistry, DeviceAuthStatus, DevicePlatform } from './types';
 
 const VALID_STATUSES: DeviceAuthStatus[] = ['pending', 'authorized', 'revoked'];
 const VALID_PLATFORMS: DevicePlatform[] = ['web', 'macos', 'linux', 'windows'];
+const HEX_REGEX = /^[0-9a-fA-F]+$/;
 
 /**
  * Validate a parsed JSON object as a DeviceRegistry.
@@ -81,6 +82,33 @@ function validateDeviceEntry(data: unknown): void {
     if (typeof entry[field] !== 'string') {
       throw new CryptoError('Invalid registry format', 'DECRYPTION_FAILED');
     }
+  }
+
+  // Hex format + length validation for cryptographic fields
+  const deviceId = entry.deviceId as string;
+  if (deviceId.length !== 64 || !HEX_REGEX.test(deviceId)) {
+    throw new CryptoError('Invalid registry format', 'DECRYPTION_FAILED');
+  }
+
+  const publicKey = entry.publicKey as string;
+  if (publicKey.length !== 130 || !HEX_REGEX.test(publicKey)) {
+    throw new CryptoError('Invalid registry format', 'DECRYPTION_FAILED');
+  }
+
+  const ipHash = entry.ipHash as string;
+  if (ipHash.length !== 64 || !HEX_REGEX.test(ipHash)) {
+    throw new CryptoError('Invalid registry format', 'DECRYPTION_FAILED');
+  }
+
+  // Max length for free-text fields
+  if ((entry.name as string).length > 200) {
+    throw new CryptoError('Invalid registry format', 'DECRYPTION_FAILED');
+  }
+  if ((entry.appVersion as string).length > 50) {
+    throw new CryptoError('Invalid registry format', 'DECRYPTION_FAILED');
+  }
+  if ((entry.deviceModel as string).length > 200) {
+    throw new CryptoError('Invalid registry format', 'DECRYPTION_FAILED');
   }
 
   // Validate status is a known value

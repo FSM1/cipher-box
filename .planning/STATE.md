@@ -163,14 +163,12 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-8 pending todo(s):
+6 pending todo(s):
 
 - `2026-02-07-web-worker-large-file-encryption.md` -- Offload large file encryption to Web Worker (area: ui)
 - `2026-02-14-bring-your-own-ipfs-node.md` -- Add bring-your-own IPFS node support (area: api)
 - `2026-02-14-erc-1271-contract-wallet-authentication.md` -- Add ERC-1271 contract wallet authentication support (area: auth)
-- `2026-02-15-security-review-short-term-fixes.md` -- Security review short-term fixes: H-01, H-06, H-07, M-01, M-04, M-06 (area: auth)
 - `2026-02-15-security-review-medium-term-fixes.md` -- Security review medium-term fixes: H-08, M-07, M-11 (area: auth)
-- `2026-02-18-remove-pinata-references-from-api.md` -- Remove Pinata references from API server (area: api)
 - `2026-02-18-fix-fuse-rename-on-smb-backend.md` -- Fix FUSE rename on SMB backend (area: desktop)
 - `2026-02-20-desktop-auto-update.md` -- Add auto-update to desktop app via Tauri updater plugin (area: desktop)
 
