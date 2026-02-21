@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "cca0f37c1a45",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-14-user-to-user-sharing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/e2e.yml",
+    "tests/e2e/page-objects/dialogs/index.ts",
+    "tests/e2e/page-objects/dialogs/share-dialog.page.ts",
+    "tests/e2e/page-objects/file-browser/context-menu.page.ts",
+    "tests/e2e/page-objects/file-browser/index.ts",
+    "tests/e2e/page-objects/file-browser/shared-file-browser.page.ts",
+    "tests/e2e/page-objects/index.ts",
+    "tests/e2e/tests/sharing-workflow.spec.ts",
+    "tests/e2e/utils/multi-account.ts",
+    "tests/e2e/utils/web3auth-helpers.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/cc/a0f37c1a45/0/metadata.json",
+      "transcript": "/cc/a0f37c1a45/0/full.jsonl",
+      "context": "/cc/a0f37c1a45/0/context.md",
+      "content_hash": "/cc/a0f37c1a45/0/content_hash.txt",
+      "prompt": "/cc/a0f37c1a45/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 88,
+    "cache_creation_tokens": 94260,
+    "cache_read_tokens": 7973447,
+    "output_tokens": 10019,
+    "api_call_count": 86
+  }
+}
