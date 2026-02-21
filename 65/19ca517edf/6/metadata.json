@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "6519ca517edf",
+  "session_id": "e67c9434-d786-4a14-9574-9cbec3568087",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-21T21:29:13.623694Z",
+  "branch": "feat/phase-14-user-to-user-sharing",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/shares/shares.service.ts",
+    "tests/e2e/utils/web3auth-helpers.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "a33d933d308d",
+  "token_usage": {
+    "input_tokens": 5,
+    "cache_creation_tokens": 43542,
+    "cache_read_tokens": 85026,
+    "output_tokens": 223,
+    "api_call_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-21T21:29:13.015833Z",
+    "agent_lines": 10,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 10,
+    "agent_percentage": 100
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/e67c9434-d786-4a14-9574-9cbec3568087.jsonl"
+}
