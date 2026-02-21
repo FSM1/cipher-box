@@ -461,6 +461,8 @@ impl CipherBoxFS {
                 }
                 inode::InodeKind::File {
                     file_meta_ipns_name,
+                    file_ipns_private_key,
+                    file_ipns_key_encrypted_hex,
                     ..
                 } => {
                     let now_ms = std::time::SystemTime::now()
@@ -481,16 +483,34 @@ impl CipherBoxFS {
                         .as_millis() as u64;
 
                     // FilePointer IPNS name is required for v2 metadata.
-                    // create() derives the IPNS name via HKDF, so this should always be Some.
+                    // create() generates a random IPNS keypair, so this should always be Some.
                     let ipns_name = match file_meta_ipns_name {
                         Some(name) if !name.is_empty() => name.clone(),
                         _ => {
                             log::error!(
-                                "File '{}' (ino {}) has no fileMetaIpnsName -- this should not happen (create() derives IPNS keypair). Skipping file.",
+                                "File '{}' (ino {}) has no fileMetaIpnsName -- this should not happen (create() generates IPNS keypair). Skipping file.",
                                 child.name, child_ino
                             );
                             continue;
                         }
+                    };
+
+                    // Use cached ECIES-wrapped hex if available; only re-wrap if cache is empty
+                    let ipns_key_encrypted = if let Some(hex) = file_ipns_key_encrypted_hex {
+                        Some(hex.clone())
+                    } else if let Some(key) = file_ipns_private_key {
+                        match crate::crypto::ecies::wrap_key(key, &self.public_key) {
+                            Ok(wrapped) => Some(hex::encode(&wrapped)),
+                            Err(e) => {
+                                log::warn!(
+                                    "File '{}' (ino {}): failed to wrap IPNS key: {}. Omitting ipnsPrivateKeyEncrypted.",
+                                    child.name, child_ino, e
+                                );
+                                None
+                            }
+                        }
+                    } else {
+                        None
                     };
 
                     metadata_children.push(crate::crypto::folder::FolderChild::File(
@@ -498,6 +518,7 @@ impl CipherBoxFS {
                             id: uuid_from_ino(child_ino),
                             name: child.name.clone(),
                             file_meta_ipns_name: ipns_name,
+                            ipns_private_key_encrypted: ipns_key_encrypted,
                             created_at: if created_ms > 0 { created_ms } else { now_ms },
                             modified_at: if modified_ms > 0 { modified_ms } else { now_ms },
                         },
@@ -669,7 +690,7 @@ impl CipherBoxFS {
             // Background refresh: merge_only=true to preserve locally-created files
             // that haven't been published to IPNS yet.
             if let Err(e) = self.inodes.populate_folder(
-                refresh.ino, &refresh.metadata, &self.private_key, true,
+                refresh.ino, &refresh.metadata, &self.private_key, &self.public_key, true,
             ) {
                 log::warn!("Drain refresh apply failed for ino {}: {}", refresh.ino, e);
             }
@@ -864,7 +885,7 @@ pub async fn mount_filesystem(
                     metadata_cache.set(&root_ipns_name, metadata.clone(), cid);
 
                     // Populate inode table -- initial mount, full replace
-                    match inodes.populate_folder(inode::ROOT_INO, &metadata, &private_key, false) {
+                    match inodes.populate_folder(inode::ROOT_INO, &metadata, &private_key, &public_key, false) {
                         Ok(()) => {
                             log::info!("Root folder pre-populated successfully");
 
@@ -931,7 +952,7 @@ pub async fn mount_filesystem(
                                 match operations::decrypt_metadata_from_ipfs_public(&enc_bytes, sub_key) {
                                     Ok(sub_metadata) => {
                                         metadata_cache.set(sub_ipns, sub_metadata.clone(), sub_cid);
-                                        match inodes.populate_folder(*sub_ino, &sub_metadata, &private_key, false) {
+                                        match inodes.populate_folder(*sub_ino, &sub_metadata, &private_key, &public_key, false) {
                                             Ok(()) => {
                                                 log::info!("Subfolder ino={} pre-populated", sub_ino);
                                                 // Resolve FilePointers in subfolder

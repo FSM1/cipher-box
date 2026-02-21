@@ -160,25 +160,28 @@ A subfolder child within folder metadata. Contains ECIES-wrapped keys for access
 
 A slim file reference within v2 folder metadata. Points to a file's own IPNS record instead of embedding file data inline.
 
-| Field              | Type   | Encoding | Required | Description                                                    |
-| ------------------ | ------ | -------- | -------- | -------------------------------------------------------------- |
-| `type`             | string | --       | Yes      | Always `"file"`                                                |
-| `id`               | string | UUID     | Yes      | Unique file identifier (used in HKDF derivation for file IPNS) |
-| `name`             | string | --       | Yes      | File name (plaintext; entire metadata blob is encrypted)       |
-| `fileMetaIpnsName` | string | base36   | Yes      | IPNS name of the file's own metadata record                    |
-| `createdAt`        | number | --       | Yes      | Unix timestamp in milliseconds                                 |
-| `modifiedAt`       | number | --       | Yes      | Unix timestamp in milliseconds                                 |
+| Field                     | Type   | Encoding | Required | Description                                                                      |
+| ------------------------- | ------ | -------- | -------- | -------------------------------------------------------------------------------- |
+| `type`                    | string | --       | Yes      | Always `"file"`                                                                  |
+| `id`                      | string | UUID     | Yes      | Unique file identifier                                                           |
+| `name`                    | string | --       | Yes      | File name (plaintext; entire metadata blob is encrypted)                         |
+| `fileMetaIpnsName`        | string | base36   | Yes      | IPNS name of the file's own metadata record                                      |
+| `ipnsPrivateKeyEncrypted` | string | hex      | No       | ECIES-wrapped Ed25519 private key for IPNS signing. Absent for legacy HKDF files |
+| `createdAt`               | number | --       | Yes      | Unix timestamp in milliseconds                                                   |
+| `modifiedAt`              | number | --       | Yes      | Unix timestamp in milliseconds                                                   |
 
 **Not independently encrypted** -- lives inside the parent `FolderMetadata` blob.
+
+**`ipnsPrivateKeyEncrypted` migration:** New files store a randomly generated Ed25519 IPNS private key, ECIES-wrapped with the vault owner's public key. Legacy files (created before v0.14.0) lack this field; their IPNS keys are derived via HKDF from `privateKey + fileId`. Consumers must check for this field and fall back to HKDF derivation when absent. Lazy migration writes the encrypted key on next folder metadata publish.
 
 **Key distinction from v1 FileEntry:** FilePointer does not contain `cid`, `fileKeyEncrypted`, `fileIv`, `encryptionMode`, or `size`. All file crypto material is in the per-file `FileMetadata` record, enabling file content updates without touching folder metadata.
 
 **Source files:**
 
-- TS: `packages/crypto/src/file/types.ts:57-69`
-- Rust: `apps/desktop/src-tauri/src/crypto/folder.rs:50-63`
+- TS: `packages/crypto/src/file/types.ts:57-73`
+- Rust: `apps/desktop/src-tauri/src/crypto/folder.rs:50-70`
 
-**Version history:** Added in Phase 12.6 (replaced inline `FileEntry` in v2 folders).
+**Version history:** Added in Phase 12.6 (replaced inline `FileEntry` in v2 folders). `ipnsPrivateKeyEncrypted` added in v0.14.0 (random IPNS key migration).
 
 ---
 
@@ -203,7 +206,7 @@ Per-file metadata stored in a file's own IPNS record. Contains all crypto materi
 
 **Encryption:** AES-256-GCM with the parent folder's `folderKey` (not the file's own key). This means anyone who can read the folder can also read file metadata and decrypt the file.
 
-**Storage:** IPFS (as JSON envelope `{iv, data}`), addressed via the file's own IPNS name. The IPNS name is deterministically derived from the user's `privateKey` + `fileId` via HKDF (see [Section 14](#14-ipns-key-derivation-summary)).
+**Storage:** IPFS (as JSON envelope `{iv, data}`), addressed via the file's own IPNS name. For new files, the IPNS keypair is randomly generated and stored in the parent's `FilePointer.ipnsPrivateKeyEncrypted`. For legacy files, it is derived via HKDF from `privateKey + fileId` (see [Section 14](#14-ipns-key-derivation-summary)).
 
 **Source files:**
 
@@ -396,13 +399,18 @@ TypeScript and Rust implementations must produce identical JSON for the same log
 
 ## 14. IPNS Key Derivation Summary
 
-CipherBox uses HKDF-SHA256 to derive deterministic Ed25519 IPNS keypairs from the user's secp256k1 private key. All derivations share the same salt but use different HKDF info strings for domain separation.
+CipherBox uses two strategies for Ed25519 IPNS keypairs:
+
+### HKDF-derived (deterministic)
+
+Used for the root vault and device registry where discoverability from the private key alone is required.
 
 | Purpose              | Salt           | HKDF Info                           | Source File                                   |
 | -------------------- | -------------- | ----------------------------------- | --------------------------------------------- |
 | Root vault IPNS      | `CipherBox-v1` | `cipherbox-vault-ipns-v1`           | `packages/crypto/src/vault/derive-ipns.ts`    |
 | Device registry IPNS | `CipherBox-v1` | `cipherbox-device-registry-ipns-v1` | `packages/crypto/src/registry/derive-ipns.ts` |
-| Per-file IPNS        | `CipherBox-v1` | `cipherbox-file-ipns-v1:{fileId}`   | `packages/crypto/src/file/derive-ipns.ts`     |
+
+**Legacy: Per-file IPNS (HKDF fallback):** Files created before v0.14.0 use `cipherbox-file-ipns-v1:{fileId}` as the HKDF info string. This derivation path is retained for backward compatibility and used when `FilePointer.ipnsPrivateKeyEncrypted` is absent.
 
 **Derivation path:**
 
@@ -413,9 +421,16 @@ secp256k1 privateKey (32 bytes)
   -> IPNS name (CIDv1 with libp2p-key codec + identity multihash)
 ```
 
-**Subfolder IPNS keys:** Subfolders use randomly generated Ed25519 keypairs, not HKDF-derived. The keypair is ECIES-wrapped with the vault owner's public key and stored in the parent folder's `FolderEntry.ipnsPrivateKeyEncrypted` field.
+### Random Ed25519 keypairs
 
-**Per-file IPNS validation:** The `fileId` used in the HKDF info string must be at least 10 characters (enforced by the derivation function). This ensures UUID-length identifiers and prevents accidental short strings in the derivation material.
+Used for subfolders and new files. The private key is ECIES-wrapped with the vault owner's public key and stored in the parent folder's metadata.
+
+| Purpose       | Storage Location                      | Source File                               |
+| ------------- | ------------------------------------- | ----------------------------------------- |
+| Subfolder     | `FolderEntry.ipnsPrivateKeyEncrypted` | `packages/crypto/src/ed25519/keygen.ts`   |
+| Per-file IPNS | `FilePointer.ipnsPrivateKeyEncrypted` | `packages/crypto/src/file/derive-ipns.ts` |
+
+**Migration:** Legacy files without `ipnsPrivateKeyEncrypted` fall back to HKDF derivation. Lazy migration writes the encrypted key when folder metadata is next published. Recovery traverses the folder tree via `fileMetaIpnsName` and never derives IPNS names independently, so the random-key approach is safe.
 
 ---
 

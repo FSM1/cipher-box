@@ -84,9 +84,13 @@ pub enum InodeKind {
         /// Whether per-file IPNS metadata has been resolved.
         file_meta_resolved: bool,
         /// Decrypted Ed25519 IPNS private key for signing this file's IPNS record.
-        /// Only set for newly created files (derived via HKDF from user privateKey + fileId).
+        /// For new files: generated randomly, ECIES-wrapped in FilePointer.
+        /// For legacy files: derived via HKDF from user privateKey + fileId.
         /// Wrapped in `Zeroizing` for automatic zeroization on drop.
         file_ipns_private_key: Option<Zeroizing<Vec<u8>>>,
+        /// Cached hex-encoded ECIES-wrapped IPNS private key for FilePointer serialization.
+        /// Avoids redundant ECIES wrapping on every metadata publish.
+        file_ipns_key_encrypted_hex: Option<String>,
         /// Past versions of this file (newest first). None if no version history.
         versions: Option<Vec<crate::crypto::folder::VersionEntry>>,
     },
@@ -239,6 +243,7 @@ impl InodeTable {
         parent_ino: u64,
         metadata: &FolderMetadata,
         private_key: &[u8],
+        public_key: &[u8],
         merge_only: bool,
     ) -> Result<(), String> {
         let uid = unsafe { libc::getuid() };
@@ -385,6 +390,95 @@ impl InodeTable {
                     let kind = if let Some(existing_kind) = existing_kind {
                         existing_kind
                     } else {
+                        // Decrypt file IPNS private key from FilePointer if available,
+                        // falling back to HKDF derivation for legacy files only.
+                        let has_encrypted_key = file_pointer.ipns_private_key_encrypted.is_some();
+                        let file_ipns_key = if let Some(ref encrypted_hex) = file_pointer.ipns_private_key_encrypted {
+                            match hex::decode(encrypted_hex) {
+                                Ok(encrypted_bytes) => {
+                                    match crypto::ecies::unwrap_key(&encrypted_bytes, private_key) {
+                                        Ok(key) => Some(Zeroizing::new(key)),
+                                        Err(e) => {
+                                            log::error!(
+                                                "File '{}': failed to decrypt ipnsPrivateKeyEncrypted: {}. Cannot use HKDF for random-key files.",
+                                                file_pointer.name, e
+                                            );
+                                            None
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    log::error!(
+                                        "File '{}': invalid ipnsPrivateKeyEncrypted hex: {}. Cannot use HKDF for random-key files.",
+                                        file_pointer.name, e
+                                    );
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        };
+
+                        // HKDF fallback ONLY for legacy FilePointers (no encrypted key present).
+                        // If ipnsPrivateKeyEncrypted was present but decryption failed, HKDF would
+                        // produce a key that doesn't match the file's random IPNS name.
+                        let file_ipns_key = if file_ipns_key.is_some() {
+                            file_ipns_key
+                        } else if !has_encrypted_key {
+                            if let Ok(pk_arr) = <[u8; 32]>::try_from(private_key) {
+                                match crypto::hkdf::derive_file_ipns_keypair(&pk_arr, &file_pointer.id) {
+                                    Ok((derived_key, _, _)) => {
+                                        log::debug!(
+                                            "File '{}': derived IPNS key via HKDF fallback (legacy file).",
+                                            file_pointer.name
+                                        );
+                                        Some(derived_key)
+                                    }
+                                    Err(e) => {
+                                        log::warn!(
+                                            "File '{}': HKDF fallback also failed: {}. File IPNS updates will be unavailable.",
+                                            file_pointer.name, e
+                                        );
+                                        None
+                                    }
+                                }
+                            } else {
+                                log::warn!(
+                                    "File '{}': private key is not 32 bytes, cannot derive HKDF fallback.",
+                                    file_pointer.name
+                                );
+                                None
+                            }
+                        } else {
+                            None
+                        };
+
+                        // Cache the ECIES-wrapped hex for build_folder_metadata.
+                        // For legacy files (HKDF fallback), wrap the derived key now so
+                        // the next folder publish persists it — lazy migration to random keys.
+                        let cached_encrypted_hex = if file_pointer.ipns_private_key_encrypted.is_some() {
+                            file_pointer.ipns_private_key_encrypted.clone()
+                        } else if let Some(ref key) = file_ipns_key {
+                            match crypto::ecies::wrap_key(key, public_key) {
+                                Ok(wrapped) => {
+                                    log::info!(
+                                        "File '{}': wrapped HKDF-derived IPNS key for lazy migration.",
+                                        file_pointer.name
+                                    );
+                                    Some(hex::encode(&wrapped))
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "File '{}': failed to wrap HKDF key for migration: {}. Will re-wrap on publish.",
+                                        file_pointer.name, e
+                                    );
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        };
+
                         InodeKind::File {
                             cid: String::new(),
                             encrypted_file_key: String::new(),
@@ -393,7 +487,8 @@ impl InodeTable {
                             encryption_mode: "GCM".to_string(),
                             file_meta_ipns_name: Some(file_pointer.file_meta_ipns_name.clone()),
                             file_meta_resolved: false,
-                            file_ipns_private_key: None,
+                            file_ipns_private_key: file_ipns_key,
+                            file_ipns_key_encrypted_hex: cached_encrypted_hex,
                             versions: None,
                         }
                     };
@@ -498,6 +593,10 @@ impl InodeTable {
                 file_meta_resolved: true,
                 file_ipns_private_key: match &inode.kind {
                     InodeKind::File { file_ipns_private_key, .. } => file_ipns_private_key.clone(),
+                    _ => None,
+                },
+                file_ipns_key_encrypted_hex: match &inode.kind {
+                    InodeKind::File { file_ipns_key_encrypted_hex, .. } => file_ipns_key_encrypted_hex.clone(),
                     _ => None,
                 },
                 versions,
@@ -636,6 +735,7 @@ mod tests {
                 file_meta_ipns_name: None,
                 file_meta_resolved: true,
                 file_ipns_private_key: None,
+                file_ipns_key_encrypted_hex: None,
                 versions: None,
             },
             attr: FileAttr {
@@ -718,6 +818,7 @@ mod tests {
             file_meta_ipns_name: None,
             file_meta_resolved: true,
             file_ipns_private_key: None,
+            file_ipns_key_encrypted_hex: None,
             versions: None,
         };
 
@@ -742,15 +843,18 @@ mod tests {
                     id: "file-1".to_string(),
                     name: "hello.txt".to_string(),
                     file_meta_ipns_name: "k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx".to_string(),
+                    ipns_private_key_encrypted: None,
                     created_at: 1700000000000,
                     modified_at: 1700000000000,
                 }),
             ],
         };
 
-        // For FilePointer children, populate_folder doesn't need ECIES decryption
-        let private_key = vec![0u8; 32]; // unused for FilePointers
-        let result = table.populate_folder(ROOT_INO, &metadata, &private_key, false);
+        // For FilePointer children without ipnsPrivateKeyEncrypted, HKDF derivation
+        // is used. Public key is needed for wrapping during lazy migration.
+        let private_key = vec![0u8; 32];
+        let public_key = vec![0u8; 33]; // dummy compressed public key
+        let result = table.populate_folder(ROOT_INO, &metadata, &private_key, &public_key, false);
         assert!(result.is_ok());
 
         // Root should have 1 child
@@ -761,12 +865,14 @@ mod tests {
         let child = table.get(child_ino).unwrap();
         assert_eq!(child.name, "hello.txt");
         match &child.kind {
-            InodeKind::File { file_meta_ipns_name, file_meta_resolved, .. } => {
+            InodeKind::File { file_meta_ipns_name, file_meta_resolved, file_ipns_key_encrypted_hex, file_ipns_private_key, .. } => {
                 assert_eq!(
                     file_meta_ipns_name.as_deref(),
                     Some("k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx")
                 );
                 assert!(!file_meta_resolved, "FilePointer should not be resolved yet");
+                assert!(file_ipns_key_encrypted_hex.is_none(), "Legacy FilePointer should have no cached encrypted hex");
+                assert!(file_ipns_private_key.is_none(), "Legacy FilePointer with zeroed key should have no derived private key");
             }
             _ => panic!("Expected File kind"),
         }

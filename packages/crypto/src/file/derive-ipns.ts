@@ -1,10 +1,17 @@
 /**
- * @cipherbox/crypto - File IPNS Key Derivation
+ * @cipherbox/crypto - File IPNS Key Management
  *
- * Derives a deterministic Ed25519 IPNS keypair for a specific file
- * from the user's secp256k1 privateKey + fileId using HKDF-SHA256.
+ * Two strategies for per-file IPNS keypairs:
  *
- * Derivation path:
+ * 1. Deterministic (legacy): `deriveFileIpnsKeypair` derives an Ed25519 keypair
+ *    from the user's secp256k1 privateKey + fileId via HKDF-SHA256. Used for
+ *    files created before random key migration.
+ *
+ * 2. Random (new files): `generateFileIpnsKeypair` generates a fresh Ed25519
+ *    keypair via CSPRNG. The private key is ECIES-wrapped and stored in the
+ *    parent folder's FilePointer so it can be recovered from any device.
+ *
+ * Deterministic derivation path:
  *   secp256k1 privateKey (32 bytes)
  *     -> HKDF-SHA256(salt="CipherBox-v1", info="cipherbox-file-ipns-v1:{fileId}")
  *     -> 32-byte Ed25519 seed
@@ -19,6 +26,7 @@
 import { deriveKey } from '../keys/derive';
 import * as ed from '@noble/ed25519';
 import { deriveIpnsName } from '../ipns/derive-name';
+import { generateEd25519Keypair } from '../ed25519/keygen';
 import { CryptoError } from '../types';
 import { SECP256K1_PRIVATE_KEY_SIZE } from '../constants';
 
@@ -76,6 +84,30 @@ export async function deriveFileIpnsKeypair(
   return {
     privateKey: ed25519Seed,
     publicKey: ed25519PublicKey,
+    ipnsName,
+  };
+}
+
+/**
+ * Generate a random Ed25519 IPNS keypair for a new file.
+ *
+ * Unlike `deriveFileIpnsKeypair`, this produces a non-deterministic keypair.
+ * The private key must be ECIES-wrapped and stored in the FilePointer so it
+ * can be recovered from folder metadata.
+ *
+ * @returns Ed25519 keypair and IPNS name for the file's metadata record
+ */
+export async function generateFileIpnsKeypair(): Promise<{
+  privateKey: Uint8Array;
+  publicKey: Uint8Array;
+  ipnsName: string;
+}> {
+  const keypair = generateEd25519Keypair();
+  const ipnsName = await deriveIpnsName(keypair.publicKey);
+
+  return {
+    privateKey: keypair.privateKey,
+    publicKey: keypair.publicKey,
     ipnsName,
   };
 }

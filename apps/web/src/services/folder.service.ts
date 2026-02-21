@@ -515,6 +515,7 @@ export async function addFileToFolder(params: {
   fileId: string;
   name: string;
   fileIpnsRecord: FileIpnsRecordPayload;
+  ipnsPrivateKeyEncrypted: string;
 }): Promise<{ filePointer: FilePointer; newSequenceNumber: bigint }> {
   // 1. Check for name collision
   const nameExists = params.parentFolderState.children.some((c) => c.name === params.name);
@@ -522,13 +523,14 @@ export async function addFileToFolder(params: {
     throw new Error('A file with this name already exists');
   }
 
-  // 2. Create FilePointer (slim reference to per-file IPNS record)
+  // 2. Create FilePointer (slim reference to per-file IPNS record + wrapped key)
   const now = Date.now();
   const filePointer: FilePointer = {
     type: 'file',
     id: params.fileId,
     name: params.name,
     fileMetaIpnsName: params.fileIpnsRecord.ipnsName,
+    ipnsPrivateKeyEncrypted: params.ipnsPrivateKeyEncrypted,
     createdAt: now,
     modifiedAt: now,
   };
@@ -579,6 +581,7 @@ export async function addFilesToFolder(params: {
     fileId: string;
     name: string;
     fileIpnsRecord: FileIpnsRecordPayload;
+    ipnsPrivateKeyEncrypted: string;
   }>;
 }): Promise<{ filePointers: FilePointer[]; newSequenceNumber: bigint }> {
   // 1. Build a set of existing child names for collision detection
@@ -599,6 +602,7 @@ export async function addFilesToFolder(params: {
       id: file.fileId,
       name: file.name,
       fileMetaIpnsName: file.fileIpnsRecord.ipnsName,
+      ipnsPrivateKeyEncrypted: file.ipnsPrivateKeyEncrypted,
       createdAt: now,
       modifiedAt: now,
     };

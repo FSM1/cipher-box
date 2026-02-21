@@ -8,6 +8,7 @@
 import { encryptAesGcm, decryptAesGcm } from '../aes';
 import { generateIv, bytesToHex, hexToBytes } from '../utils';
 import { CryptoError } from '../types';
+import { ECIES_MIN_CIPHERTEXT_SIZE } from '../constants';
 import type { FolderMetadata, EncryptedFolderMetadata } from './types';
 
 /**
@@ -70,6 +71,18 @@ export function validateFolderMetadata(data: unknown): FolderMetadata {
           'Invalid metadata format: file entry must have fileMetaIpnsName',
           'DECRYPTION_FAILED'
         );
+      }
+      // Optional: ipnsPrivateKeyEncrypted must be a hex string long enough to hold ECIES output
+      if (entry.ipnsPrivateKeyEncrypted !== undefined) {
+        if (
+          typeof entry.ipnsPrivateKeyEncrypted !== 'string' ||
+          entry.ipnsPrivateKeyEncrypted.length < ECIES_MIN_CIPHERTEXT_SIZE * 2
+        ) {
+          throw new CryptoError(
+            `Invalid metadata format: ipnsPrivateKeyEncrypted must be a hex string (min ${ECIES_MIN_CIPHERTEXT_SIZE * 2} chars)`,
+            'DECRYPTION_FAILED'
+          );
+        }
       }
     }
   }
