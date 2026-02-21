@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "92e5c6093780",
+  "strategy": "manual-commit",
+  "branch": "fix/fuse-rename-smb",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/desktop/CLAUDE.md",
+    "apps/desktop/src-tauri/src/fuse/operations.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/92/e5c6093780/0/metadata.json",
+      "transcript": "/92/e5c6093780/0/full.jsonl",
+      "context": "/92/e5c6093780/0/context.md",
+      "content_hash": "/92/e5c6093780/0/content_hash.txt",
+      "prompt": "/92/e5c6093780/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 347,
+    "cache_creation_tokens": 67300,
+    "cache_read_tokens": 2219862,
+    "output_tokens": 1912,
+    "api_call_count": 30
+  }
+}
