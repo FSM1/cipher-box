@@ -56,6 +56,12 @@ pub struct FilePointer {
     pub name: String,
     /// IPNS name of the file's own metadata record.
     pub file_meta_ipns_name: String,
+    /// Hex-encoded ECIES-wrapped Ed25519 private key for signing this file's IPNS record.
+    /// Present for files created after the random-key migration. Absent for legacy files
+    /// whose IPNS key is derived deterministically via HKDF.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub ipns_private_key_encrypted: Option<String>,
     /// Creation timestamp (Unix ms).
     pub created_at: u64,
     /// Last modification timestamp (Unix ms).

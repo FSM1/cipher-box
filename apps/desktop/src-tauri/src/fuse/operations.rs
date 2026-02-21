@@ -966,25 +966,19 @@ mod implementation {
                 flags: 0,
             };
 
-            // Derive file IPNS keypair from user privateKey + fileId via HKDF
-            let file_id = crate::fuse::uuid_from_ino(ino);
-            let private_key_arr: [u8; 32] = match self.private_key.as_slice().try_into() {
-                Ok(arr) => arr,
-                Err(_) => {
-                    log::error!("create: invalid private key length for HKDF derivation");
+            // Generate random Ed25519 IPNS keypair for this file
+            let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+            let verifying_key = signing_key.verifying_key();
+            let file_ipns_private_key = signing_key.to_bytes().to_vec();
+            let file_ipns_public_key_bytes: [u8; 32] = verifying_key.to_bytes();
+            let file_ipns_name = match crate::crypto::ipns::derive_ipns_name(&file_ipns_public_key_bytes) {
+                Ok(name) => name,
+                Err(e) => {
+                    log::error!("create: IPNS name derivation from random keypair failed: {}", e);
                     reply.error(libc::EIO);
                     return;
                 }
             };
-            let (file_ipns_private_key, _file_ipns_public_key, file_ipns_name) =
-                match crate::crypto::hkdf::derive_file_ipns_keypair(&private_key_arr, &file_id) {
-                    Ok(result) => result,
-                    Err(e) => {
-                        log::error!("create: HKDF file IPNS derivation failed: {}", e);
-                        reply.error(libc::EIO);
-                        return;
-                    }
-                };
 
             // Create inode with empty CID (not yet uploaded) and derived IPNS name
             let inode = InodeData {

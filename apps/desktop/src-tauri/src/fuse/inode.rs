@@ -385,6 +385,34 @@ impl InodeTable {
                     let kind = if let Some(existing_kind) = existing_kind {
                         existing_kind
                     } else {
+                        // Decrypt file IPNS private key from FilePointer if available
+                        let file_ipns_key = if let Some(ref encrypted_hex) = file_pointer.ipns_private_key_encrypted {
+                            match hex::decode(encrypted_hex) {
+                                Ok(encrypted_bytes) => {
+                                    match crypto::ecies::unwrap_key(&encrypted_bytes, private_key) {
+                                        Ok(key) => Some(Zeroizing::new(key)),
+                                        Err(e) => {
+                                            log::warn!(
+                                                "File '{}': failed to decrypt ipnsPrivateKeyEncrypted: {}. Will use HKDF fallback.",
+                                                file_pointer.name, e
+                                            );
+                                            None
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "File '{}': invalid ipnsPrivateKeyEncrypted hex: {}. Will use HKDF fallback.",
+                                        file_pointer.name, e
+                                    );
+                                    None
+                                }
+                            }
+                        } else {
+                            // Legacy FilePointer: no encrypted key, HKDF derivation will happen on demand
+                            None
+                        };
+
                         InodeKind::File {
                             cid: String::new(),
                             encrypted_file_key: String::new(),
@@ -393,7 +421,7 @@ impl InodeTable {
                             encryption_mode: "GCM".to_string(),
                             file_meta_ipns_name: Some(file_pointer.file_meta_ipns_name.clone()),
                             file_meta_resolved: false,
-                            file_ipns_private_key: None,
+                            file_ipns_private_key: file_ipns_key,
                             versions: None,
                         }
                     };

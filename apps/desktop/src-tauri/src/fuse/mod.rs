@@ -461,6 +461,7 @@ impl CipherBoxFS {
                 }
                 inode::InodeKind::File {
                     file_meta_ipns_name,
+                    file_ipns_private_key,
                     ..
                 } => {
                     let now_ms = std::time::SystemTime::now()
@@ -481,16 +482,32 @@ impl CipherBoxFS {
                         .as_millis() as u64;
 
                     // FilePointer IPNS name is required for v2 metadata.
-                    // create() derives the IPNS name via HKDF, so this should always be Some.
+                    // create() generates a random IPNS keypair, so this should always be Some.
                     let ipns_name = match file_meta_ipns_name {
                         Some(name) if !name.is_empty() => name.clone(),
                         _ => {
                             log::error!(
-                                "File '{}' (ino {}) has no fileMetaIpnsName -- this should not happen (create() derives IPNS keypair). Skipping file.",
+                                "File '{}' (ino {}) has no fileMetaIpnsName -- this should not happen (create() generates IPNS keypair). Skipping file.",
                                 child.name, child_ino
                             );
                             continue;
                         }
+                    };
+
+                    // ECIES-wrap the file IPNS private key with user's public key if available
+                    let ipns_key_encrypted = if let Some(key) = file_ipns_private_key {
+                        match crate::crypto::ecies::wrap_key(key, &self.public_key) {
+                            Ok(wrapped) => Some(hex::encode(&wrapped)),
+                            Err(e) => {
+                                log::warn!(
+                                    "File '{}' (ino {}): failed to wrap IPNS key: {}. Omitting ipnsPrivateKeyEncrypted.",
+                                    child.name, child_ino, e
+                                );
+                                None
+                            }
+                        }
+                    } else {
+                        None
                     };
 
                     metadata_children.push(crate::crypto::folder::FolderChild::File(
@@ -498,6 +515,7 @@ impl CipherBoxFS {
                             id: uuid_from_ino(child_ino),
                             name: child.name.clone(),
                             file_meta_ipns_name: ipns_name,
+                            ipns_private_key_encrypted: ipns_key_encrypted,
                             created_at: if created_ms > 0 { created_ms } else { now_ms },
                             modified_at: if modified_ms > 0 { modified_ms } else { now_ms },
                         },
