@@ -819,10 +819,12 @@ export function useFolder() {
         );
 
         // 3. Decrypt the file IPNS private key from FilePointer (or HKDF fallback)
-        const fileIpnsPrivateKey = await getFileIpnsPrivateKey(
-          filePointer,
-          auth.vaultKeypair.privateKey
-        );
+        const { privateKey: fileIpnsPrivateKey, migratedIpnsPrivateKeyEncrypted } =
+          await getFileIpnsPrivateKey(
+            filePointer,
+            auth.vaultKeypair.privateKey,
+            auth.vaultKeypair.publicKey
+          );
 
         // 4. Determine whether to create a version entry
         const createVersion = shouldCreateVersion(currentMetadata, fileData.forceVersion ?? false);
@@ -849,16 +851,41 @@ export function useFolder() {
           parentFolderState: parentFolder,
         });
 
-        // 6. Update local state -- only touch modifiedAt on the FilePointer
+        // 6. Update local state -- touch modifiedAt and persist migrated IPNS key if applicable
         const updatedChildren = parentFolder.children.map((child) => {
           if (child.type === 'file' && child.id === fileData.fileId) {
-            return { ...child, modifiedAt: Date.now() };
+            return {
+              ...child,
+              modifiedAt: Date.now(),
+              ...(migratedIpnsPrivateKeyEncrypted
+                ? { ipnsPrivateKeyEncrypted: migratedIpnsPrivateKeyEncrypted }
+                : {}),
+            };
           }
           return child;
         });
 
         const store = useFolderStore.getState();
         store.updateFolderChildren(parentId, updatedChildren);
+
+        // 6b. Lazy migration: persist wrapped IPNS key to folder metadata on IPFS
+        if (migratedIpnsPrivateKeyEncrypted) {
+          folderService
+            .updateFolderMetadata({
+              folderId: parentFolder.id,
+              children: updatedChildren,
+              folderKey: parentFolder.folderKey,
+              ipnsPrivateKey: parentFolder.ipnsPrivateKey,
+              ipnsName: parentFolder.ipnsName,
+              sequenceNumber: parentFolder.sequenceNumber,
+            })
+            .then(({ newSequenceNumber }) => {
+              useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
+            })
+            .catch((err) => {
+              console.warn('Lazy IPNS key migration: folder re-publish failed, will retry:', err);
+            });
+        }
 
         // 7. Only unpin CIDs of pruned versions (excess beyond max 10)
         // Old CIDs stay pinned as version history (VER-01)
@@ -926,10 +953,12 @@ export function useFolder() {
         );
 
         // Decrypt the file IPNS private key from FilePointer (or HKDF fallback)
-        const fileIpnsPrivateKey = await getFileIpnsPrivateKey(
-          filePointer,
-          auth.vaultKeypair.privateKey
-        );
+        const { privateKey: fileIpnsPrivateKey, migratedIpnsPrivateKeyEncrypted } =
+          await getFileIpnsPrivateKey(
+            filePointer,
+            auth.vaultKeypair.privateKey,
+            auth.vaultKeypair.publicKey
+          );
 
         // Call restoreVersion service function
         const { ipnsRecord, prunedCids } = await restoreVersion({
@@ -947,14 +976,39 @@ export function useFolder() {
           parentFolderState: parentFolder,
         });
 
-        // Update local folder state (modifiedAt on FilePointer)
+        // Update local folder state (modifiedAt and migrated IPNS key on FilePointer)
         const updatedChildren = parentFolder.children.map((child) => {
           if (child.type === 'file' && child.id === fileId) {
-            return { ...child, modifiedAt: Date.now() };
+            return {
+              ...child,
+              modifiedAt: Date.now(),
+              ...(migratedIpnsPrivateKeyEncrypted
+                ? { ipnsPrivateKeyEncrypted: migratedIpnsPrivateKeyEncrypted }
+                : {}),
+            };
           }
           return child;
         });
         useFolderStore.getState().updateFolderChildren(parentId, updatedChildren);
+
+        // Lazy migration: persist wrapped IPNS key to folder metadata on IPFS
+        if (migratedIpnsPrivateKeyEncrypted) {
+          folderService
+            .updateFolderMetadata({
+              folderId: parentFolder.id,
+              children: updatedChildren,
+              folderKey: parentFolder.folderKey,
+              ipnsPrivateKey: parentFolder.ipnsPrivateKey,
+              ipnsName: parentFolder.ipnsName,
+              sequenceNumber: parentFolder.sequenceNumber,
+            })
+            .then(({ newSequenceNumber }) => {
+              useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
+            })
+            .catch((err) => {
+              console.warn('Lazy IPNS key migration: folder re-publish failed, will retry:', err);
+            });
+        }
 
         // Unpin pruned version CIDs
         for (const prunedCid of prunedCids) {
@@ -1020,10 +1074,12 @@ export function useFolder() {
         );
 
         // Decrypt the file IPNS private key from FilePointer (or HKDF fallback)
-        const fileIpnsPrivateKey = await getFileIpnsPrivateKey(
-          filePointer,
-          auth.vaultKeypair.privateKey
-        );
+        const { privateKey: fileIpnsPrivateKey, migratedIpnsPrivateKeyEncrypted } =
+          await getFileIpnsPrivateKey(
+            filePointer,
+            auth.vaultKeypair.privateKey,
+            auth.vaultKeypair.publicKey
+          );
 
         // Call deleteVersion service function
         const { ipnsRecord, deletedCid } = await deleteVersion({
@@ -1040,6 +1096,33 @@ export function useFolder() {
           fileIpnsRecord: ipnsRecord,
           parentFolderState: parentFolder,
         });
+
+        // Lazy migration: persist wrapped IPNS key to folder metadata on IPFS
+        if (migratedIpnsPrivateKeyEncrypted) {
+          const updatedChildren = parentFolder.children.map((child) => {
+            if (child.type === 'file' && child.id === fileId) {
+              return { ...child, ipnsPrivateKeyEncrypted: migratedIpnsPrivateKeyEncrypted };
+            }
+            return child;
+          });
+          useFolderStore.getState().updateFolderChildren(parentId, updatedChildren);
+
+          folderService
+            .updateFolderMetadata({
+              folderId: parentFolder.id,
+              children: updatedChildren,
+              folderKey: parentFolder.folderKey,
+              ipnsPrivateKey: parentFolder.ipnsPrivateKey,
+              ipnsName: parentFolder.ipnsName,
+              sequenceNumber: parentFolder.sequenceNumber,
+            })
+            .then(({ newSequenceNumber }) => {
+              useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
+            })
+            .catch((err) => {
+              console.warn('Lazy IPNS key migration: folder re-publish failed, will retry:', err);
+            });
+        }
 
         // Unpin deleted version CID
         unpinFromIpfs(deletedCid).catch(() => {});

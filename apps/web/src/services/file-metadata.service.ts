@@ -57,20 +57,38 @@ export type FileIpnsRecordPayload = {
  * Retrieve the IPNS private key for a file, decrypting from the FilePointer
  * if available, or falling back to HKDF derivation for legacy files.
  *
+ * When HKDF fallback is used and userPublicKey is provided, the derived key
+ * is ECIES-wrapped for lazy migration: the caller should persist the wrapped
+ * key in the FilePointer and re-publish folder metadata.
+ *
  * @param filePointer - FilePointer containing optional encrypted IPNS key
  * @param userPrivateKey - User's secp256k1 private key (for ECIES unwrap or HKDF fallback)
- * @returns Decrypted Ed25519 IPNS private key
+ * @param userPublicKey - User's secp256k1 public key (for wrapping during lazy migration)
+ * @returns Decrypted Ed25519 IPNS private key, plus migration data if HKDF fallback was used
  */
 export async function getFileIpnsPrivateKey(
   filePointer: FilePointer,
-  userPrivateKey: Uint8Array
-): Promise<Uint8Array> {
+  userPrivateKey: Uint8Array,
+  userPublicKey?: Uint8Array
+): Promise<{ privateKey: Uint8Array; migratedIpnsPrivateKeyEncrypted?: string }> {
   if (filePointer.ipnsPrivateKeyEncrypted) {
-    return unwrapKey(hexToBytes(filePointer.ipnsPrivateKeyEncrypted), userPrivateKey);
+    const privateKey = await unwrapKey(
+      hexToBytes(filePointer.ipnsPrivateKeyEncrypted),
+      userPrivateKey
+    );
+    return { privateKey };
   }
   // Fallback: HKDF derivation for legacy FilePointers without encrypted key
   const derived = await deriveFileIpnsKeypair(userPrivateKey, filePointer.id);
-  return derived.privateKey;
+
+  // Wrap derived key for lazy migration if public key is available
+  let migratedIpnsPrivateKeyEncrypted: string | undefined;
+  if (userPublicKey) {
+    const wrapped = await wrapKey(derived.privateKey, userPublicKey);
+    migratedIpnsPrivateKeyEncrypted = bytesToHex(wrapped);
+  }
+
+  return { privateKey: derived.privateKey, migratedIpnsPrivateKeyEncrypted };
 }
 
 /**
