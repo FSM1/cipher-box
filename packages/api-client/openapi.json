@@ -1099,7 +1099,14 @@
         },
         "responses": {
           "201": {
-            "description": "Share created"
+            "description": "Share created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateShareResponseDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized"
@@ -1127,7 +1134,17 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "List of received shares"
+            "description": "List of received shares",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReceivedShareResponseDto"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized"
@@ -1149,7 +1166,17 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "List of sent shares"
+            "description": "List of sent shares",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SentShareResponseDto"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized"
@@ -1206,7 +1233,17 @@
         "parameters": [],
         "responses": {
           "200": {
-            "description": "List of revoked shares pending rotation"
+            "description": "List of revoked shares pending rotation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PendingRotationResponseDto"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized"
@@ -1237,7 +1274,17 @@
         ],
         "responses": {
           "200": {
-            "description": "List of share keys"
+            "description": "List of share keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ShareKeyResponseDto"
+                  }
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized"
@@ -2348,6 +2395,174 @@
           }
         },
         "required": ["recipientPublicKey", "itemType", "ipnsName", "itemName", "encryptedKey"]
+      },
+      "CreateShareResponseDto": {
+        "type": "object",
+        "properties": {
+          "shareId": {
+            "type": "string",
+            "description": "UUID of the created share"
+          },
+          "recipientId": {
+            "type": "string",
+            "description": "UUID of the recipient user"
+          },
+          "itemType": {
+            "type": "string",
+            "enum": ["folder", "file"]
+          },
+          "ipnsName": {
+            "type": "string",
+            "description": "IPNS name of the shared item"
+          },
+          "itemName": {
+            "type": "string",
+            "description": "Display name of the shared item"
+          },
+          "encryptedKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES-wrapped key for recipient"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "description": "When the share was created"
+          }
+        },
+        "required": [
+          "shareId",
+          "recipientId",
+          "itemType",
+          "ipnsName",
+          "itemName",
+          "encryptedKey",
+          "createdAt"
+        ]
+      },
+      "ReceivedShareResponseDto": {
+        "type": "object",
+        "properties": {
+          "shareId": {
+            "type": "string"
+          },
+          "sharerPublicKey": {
+            "type": "string",
+            "description": "Sharer secp256k1 public key (0x04...)"
+          },
+          "itemType": {
+            "type": "string",
+            "enum": ["folder", "file"]
+          },
+          "ipnsName": {
+            "type": "string"
+          },
+          "itemName": {
+            "type": "string"
+          },
+          "encryptedKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES-wrapped key for recipient"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "shareId",
+          "sharerPublicKey",
+          "itemType",
+          "ipnsName",
+          "itemName",
+          "encryptedKey",
+          "createdAt"
+        ]
+      },
+      "SentShareResponseDto": {
+        "type": "object",
+        "properties": {
+          "shareId": {
+            "type": "string"
+          },
+          "recipientPublicKey": {
+            "type": "string",
+            "description": "Recipient secp256k1 public key (0x04...)"
+          },
+          "itemType": {
+            "type": "string",
+            "enum": ["folder", "file"]
+          },
+          "ipnsName": {
+            "type": "string"
+          },
+          "itemName": {
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "shareId",
+          "recipientPublicKey",
+          "itemType",
+          "ipnsName",
+          "itemName",
+          "createdAt"
+        ]
+      },
+      "PendingRotationResponseDto": {
+        "type": "object",
+        "properties": {
+          "shareId": {
+            "type": "string"
+          },
+          "recipientPublicKey": {
+            "type": "string",
+            "description": "Recipient secp256k1 public key (0x04...)"
+          },
+          "itemType": {
+            "type": "string",
+            "enum": ["folder", "file"]
+          },
+          "ipnsName": {
+            "type": "string"
+          },
+          "itemName": {
+            "type": "string"
+          },
+          "revokedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "shareId",
+          "recipientPublicKey",
+          "itemType",
+          "ipnsName",
+          "itemName",
+          "revokedAt"
+        ]
+      },
+      "ShareKeyResponseDto": {
+        "type": "object",
+        "properties": {
+          "keyType": {
+            "type": "string",
+            "enum": ["file", "folder"]
+          },
+          "itemId": {
+            "type": "string",
+            "description": "UUID of the file or folder"
+          },
+          "encryptedKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES-wrapped key for recipient"
+          }
+        },
+        "required": ["keyType", "itemId", "encryptedKey"]
       },
       "ShareKeyEntryDto": {
         "type": "object",

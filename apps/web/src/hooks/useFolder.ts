@@ -793,15 +793,15 @@ export function useFolder() {
 
         // 4. Post-upload: re-wrap file keys for share recipients (fire-and-forget)
         (async () => {
+          const newItems: Array<{
+            keyType: 'file' | 'folder';
+            itemId: string;
+            plaintextKey: Uint8Array;
+          }> = [];
           try {
             const authState = useAuthStore.getState();
             if (!authState.vaultKeypair) return;
             const privateKey = authState.vaultKeypair.privateKey;
-            const newItems: Array<{
-              keyType: 'file' | 'folder';
-              itemId: string;
-              plaintextKey: Uint8Array;
-            }> = [];
             for (let i = 0; i < filesData.length; i++) {
               const fileKey = await unwrapKey(hexToBytes(filesData[i].wrappedKey), privateKey);
               newItems.push({
@@ -810,20 +810,18 @@ export function useFolder() {
                 plaintextKey: fileKey,
               });
             }
-            try {
-              await reWrapForRecipients({
-                folderIpnsName: parentFolder.ipnsName,
-                folders: useFolderStore.getState().folders,
-                currentFolderId: parentFolder.id,
-                newItems,
-              });
-            } finally {
-              for (const item of newItems) {
-                item.plaintextKey.fill(0);
-              }
-            }
+            await reWrapForRecipients({
+              folderIpnsName: parentFolder.ipnsName,
+              folders: useFolderStore.getState().folders,
+              currentFolderId: parentFolder.id,
+              newItems,
+            });
           } catch (err) {
             console.warn('[share] Post-upload batch file re-wrapping failed:', err);
+          } finally {
+            for (const item of newItems) {
+              item.plaintextKey.fill(0);
+            }
           }
         })();
 

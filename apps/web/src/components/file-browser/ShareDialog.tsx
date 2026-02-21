@@ -129,24 +129,26 @@ async function collectChildKeys(
             hexToBytes(folder.folderKeyEncrypted),
             ownerPrivateKey
           );
-          const encryptedBytes = await fetchFromIpfs(resolved.cid);
-          const encryptedJson = new TextDecoder().decode(encryptedBytes);
-          const encrypted = JSON.parse(encryptedJson);
-          const metadata = await decryptFolderMetadata(encrypted, folderKeyBytes);
-          // Zero the folder key
-          folderKeyBytes.fill(0);
+          try {
+            const encryptedBytes = await fetchFromIpfs(resolved.cid);
+            const encryptedJson = new TextDecoder().decode(encryptedBytes);
+            const encrypted = JSON.parse(encryptedJson);
+            const metadata = await decryptFolderMetadata(encrypted, folderKeyBytes);
 
-          const subKeys = await collectChildKeys(
-            metadata.children,
-            folderKeyBytes,
-            ownerPrivateKey,
-            recipientPubKeyBytes,
-            (subWrapped) => {
-              onProgress(wrapped + subWrapped);
-            }
-          );
-          wrapped += subKeys.length;
-          childKeys.push(...subKeys);
+            const subKeys = await collectChildKeys(
+              metadata.children,
+              folderKeyBytes,
+              ownerPrivateKey,
+              recipientPubKeyBytes,
+              (subWrapped) => {
+                onProgress(wrapped + subWrapped);
+              }
+            );
+            wrapped += subKeys.length;
+            childKeys.push(...subKeys);
+          } finally {
+            folderKeyBytes.fill(0);
+          }
         }
       } catch (err) {
         console.error(`Failed to traverse subfolder ${folder.name}:`, err);
@@ -232,9 +234,16 @@ export function ShareDialog({
       .then((shares) => {
         if (cancelled) return;
         // Filter to shares for this specific item (by ipnsName)
-        const itemShares = (shares as unknown as SentShare[]).filter(
-          (s) => s.ipnsName === ipnsName
-        );
+        const itemShares: SentShare[] = shares
+          .filter((s) => s.ipnsName === ipnsName)
+          .map((s) => ({
+            shareId: s.shareId,
+            recipientPublicKey: s.recipientPublicKey,
+            itemType: s.itemType as 'folder' | 'file',
+            ipnsName: s.ipnsName,
+            itemName: s.itemName,
+            createdAt: String(s.createdAt),
+          }));
         setRecipients(itemShares);
       })
       .catch((err) => {
@@ -352,32 +361,39 @@ export function ShareDialog({
         // Zero the folder key
         itemFolderKey.fill(0);
       } else {
-        // File sharing: resolve file metadata, unwrap file key, re-wrap for recipient
+        // File sharing: wrap parent folder key for recipient (needed to decrypt file metadata),
+        // and re-wrap the file key as a child key entry
         const filePointer = item as FilePointer;
 
+        // encryptedKey = parent folder key wrapped for recipient
+        const wrappedFolderKey = await wrapKey(folderKey, recipientPubKeyBytes);
+        encryptedKey = bytesToHex(wrappedFolderKey);
+
+        // Re-wrap the file key for the recipient and store as child key
         const { metadata: fileMeta } = await resolveFileMetadata(
           filePointer.fileMetaIpnsName,
           folderKey
         );
-
-        // The fileKeyEncrypted is wrapped for the owner -- re-wrap for recipient
-        encryptedKey = await reWrapEncryptedKey(
+        const reWrappedFileKey = await reWrapEncryptedKey(
           fileMeta.fileKeyEncrypted,
           ownerPrivateKey,
           recipientPubKeyBytes
         );
+        childKeys = [
+          { keyType: 'file' as const, itemId: filePointer.id, encryptedKey: reWrappedFileKey },
+        ];
       }
 
       // Create the share via API
       const itemType: CreateShareDtoItemType = item.type === 'folder' ? 'folder' : 'file';
-      const result = (await sharesControllerCreateShare({
+      const result = await sharesControllerCreateShare({
         recipientPublicKey: key,
         itemType,
         ipnsName,
         itemName: item.name,
         encryptedKey,
         childKeys: childKeys && childKeys.length > 0 ? childKeys : undefined,
-      })) as unknown as { shareId: string; recipientPublicKey?: string; createdAt: string };
+      });
 
       // Update recipients list
       setRecipients((prev) => [

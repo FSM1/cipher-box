@@ -996,19 +996,30 @@ export async function checkAndRotateIfNeeded(params: {
   // 3. Re-encrypt folder metadata with the new key
   //    Resolve current IPNS -> fetch encrypted metadata -> decrypt with old key -> re-encrypt with new key
   const resolved = await resolveIpnsRecord(folderNode.ipnsName);
-  if (resolved) {
-    const currentMetadata = await fetchAndDecryptMetadata(resolved.cid, folderNode.folderKey);
-
-    // Re-encrypt and publish with new key
-    await updateFolderMetadata({
-      folderId: folderNode.id,
-      children: currentMetadata.children ?? [],
-      folderKey: newFolderKey,
-      ipnsPrivateKey: folderNode.ipnsPrivateKey,
-      ipnsName: folderNode.ipnsName,
-      sequenceNumber: folderNode.sequenceNumber,
-    });
+  if (!resolved) {
+    // IPNS resolution failed after rotation was committed (share keys already re-wrapped,
+    // revoked shares hard-deleted). Metadata is still encrypted with the old key.
+    // Throw so the caller doesn't proceed with the new key in an inconsistent state.
+    console.error(
+      `[share] IPNS resolution failed after lazy rotation for ${folderNode.ipnsName}. ` +
+        'Share keys were updated but metadata was not re-encrypted.'
+    );
+    throw new Error(
+      'Key rotation failed: could not resolve folder IPNS for metadata re-encryption'
+    );
   }
+
+  const currentMetadata = await fetchAndDecryptMetadata(resolved.cid, folderNode.folderKey);
+
+  // Re-encrypt and publish with new key
+  await updateFolderMetadata({
+    folderId: folderNode.id,
+    children: currentMetadata.children ?? [],
+    folderKey: newFolderKey,
+    ipnsPrivateKey: folderNode.ipnsPrivateKey,
+    ipnsName: folderNode.ipnsName,
+    sequenceNumber: folderNode.sequenceNumber,
+  });
 
   // 4. Re-wrap new folderKey in parent metadata
   //    The parent needs its child's folderKeyEncrypted updated.

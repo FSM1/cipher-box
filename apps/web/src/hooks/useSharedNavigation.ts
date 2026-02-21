@@ -335,6 +335,8 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
 
   /**
    * Download a shared file from the top-level list.
+   * The share's encryptedKey wraps the parent folder key (needed to decrypt file metadata).
+   * The actual file key is stored as a child key in share_keys.
    */
   async function downloadSharedFileFromShare(
     share: ReceivedShare,
@@ -347,10 +349,10 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
     try {
       downloadStore.startDownload(share.itemName);
 
-      // Unwrap the file's folder key (the encryptedKey in share record wraps the parent folderKey)
+      // Unwrap the parent folder key from the share record
       const parentFolderKey = await unwrapKey(hexToBytes(share.encryptedKey), privateKey);
 
-      // Resolve file IPNS metadata
+      // Resolve file IPNS metadata and decrypt with parent folder key
       const resolved = await resolveIpnsRecord(share.ipnsName);
       if (!resolved) {
         throw new Error('File metadata IPNS not found');
@@ -360,13 +362,21 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       const encryptedJson = new TextDecoder().decode(encryptedBytes);
       const encrypted: EncryptedFileMetadata = JSON.parse(encryptedJson);
       const fileMeta = await decryptFileMetadata(encrypted, parentFolderKey);
+      parentFolderKey.fill(0);
 
-      // Download and decrypt the actual file content
+      // Get the re-wrapped file key from share_keys
+      const keys = await fetchShareKeys(share.shareId);
+      const fileKeyRecord = keys.find((k) => k.keyType === 'file');
+      if (!fileKeyRecord) {
+        throw new Error('No re-wrapped file key available for this file');
+      }
+
+      // Download and decrypt using the re-wrapped file key
       const plaintext = await downloadFile(
         {
           cid: fileMeta.cid,
           iv: fileMeta.fileIv,
-          wrappedKey: fileMeta.fileKeyEncrypted,
+          wrappedKey: fileKeyRecord.encryptedKey,
           originalName: share.itemName,
           encryptionMode: fileMeta.encryptionMode,
         },

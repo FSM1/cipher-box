@@ -24,6 +24,11 @@ import type {
 import type {
   AddShareKeysDto,
   CreateShareDto,
+  CreateShareResponseDto,
+  PendingRotationResponseDto,
+  ReceivedShareResponseDto,
+  SentShareResponseDto,
+  ShareKeyResponseDto,
   SharesControllerLookupUserParams,
   UpdateEncryptedKeyDto,
 } from '../models';
@@ -38,7 +43,7 @@ export const sharesControllerCreateShare = (
   createShareDto: CreateShareDto,
   signal?: AbortSignal
 ) => {
-  return customInstance<void>({
+  return customInstance<CreateShareResponseDto>({
     url: `/shares`,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -116,7 +121,11 @@ export const useSharesControllerCreateShare = <TError = void, TContext = unknown
  * @summary List received shares
  */
 export const sharesControllerGetReceivedShares = (signal?: AbortSignal) => {
-  return customInstance<void>({ url: `/shares/received`, method: 'GET', signal });
+  return customInstance<ReceivedShareResponseDto[]>({
+    url: `/shares/received`,
+    method: 'GET',
+    signal,
+  });
 };
 
 export const getSharesControllerGetReceivedSharesQueryKey = () => {
@@ -231,7 +240,7 @@ export function useSharesControllerGetReceivedShares<
  * @summary List sent shares
  */
 export const sharesControllerGetSentShares = (signal?: AbortSignal) => {
-  return customInstance<void>({ url: `/shares/sent`, method: 'GET', signal });
+  return customInstance<SentShareResponseDto[]>({ url: `/shares/sent`, method: 'GET', signal });
 };
 
 export const getSharesControllerGetSentSharesQueryKey = () => {
@@ -473,7 +482,11 @@ export function useSharesControllerLookupUser<
  * @summary Get pending rotations
  */
 export const sharesControllerGetPendingRotations = (signal?: AbortSignal) => {
-  return customInstance<void>({ url: `/shares/pending-rotations`, method: 'GET', signal });
+  return customInstance<PendingRotationResponseDto[]>({
+    url: `/shares/pending-rotations`,
+    method: 'GET',
+    signal,
+  });
 };
 
 export const getSharesControllerGetPendingRotationsQueryKey = () => {
@@ -604,7 +617,11 @@ export function useSharesControllerGetPendingRotations<
  * @summary Get share keys
  */
 export const sharesControllerGetShareKeys = (shareId: string, signal?: AbortSignal) => {
-  return customInstance<void>({ url: `/shares/${shareId}/keys`, method: 'GET', signal });
+  return customInstance<ShareKeyResponseDto[]>({
+    url: `/shares/${shareId}/keys`,
+    method: 'GET',
+    signal,
+  });
 };
 
 export const getSharesControllerGetShareKeysQueryKey = (shareId?: string) => {

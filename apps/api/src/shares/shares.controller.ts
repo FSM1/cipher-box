@@ -21,6 +21,13 @@ import { SharesService } from './shares.service';
 import { CreateShareDto } from './dto/create-share.dto';
 import { AddShareKeysDto } from './dto/share-key.dto';
 import { UpdateEncryptedKeyDto } from './dto/update-encrypted-key.dto';
+import {
+  CreateShareResponseDto,
+  ReceivedShareResponseDto,
+  SentShareResponseDto,
+  PendingRotationResponseDto,
+  ShareKeyResponseDto,
+} from './dto/share-response.dto';
 
 interface RequestWithUser extends Request {
   user: {
@@ -42,7 +49,7 @@ export class SharesController {
       'Share an encrypted folder or file with another user. ' +
       'The encryptedKey is the item key re-wrapped for the recipient via ECIES.',
   })
-  @ApiResponse({ status: 201, description: 'Share created' })
+  @ApiResponse({ status: 201, description: 'Share created', type: CreateShareResponseDto })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 404, description: 'Recipient not found' })
   @ApiResponse({ status: 409, description: 'Share already exists or self-share' })
@@ -75,7 +82,11 @@ export class SharesController {
     summary: 'List received shares',
     description: 'Get all active, non-hidden shares received by the authenticated user.',
   })
-  @ApiResponse({ status: 200, description: 'List of received shares' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of received shares',
+    type: [ReceivedShareResponseDto],
+  })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getReceivedShares(@Request() req: RequestWithUser): Promise<
     Array<{
@@ -105,7 +116,7 @@ export class SharesController {
     summary: 'List sent shares',
     description: 'Get all active shares created by the authenticated user.',
   })
-  @ApiResponse({ status: 200, description: 'List of sent shares' })
+  @ApiResponse({ status: 200, description: 'List of sent shares', type: [SentShareResponseDto] })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getSentShares(@Request() req: RequestWithUser): Promise<
     Array<{
@@ -156,7 +167,11 @@ export class SharesController {
       'Get shares that have been revoked but not yet key-rotated. ' +
       'Used by the client to detect lazy rotation needs before folder modification.',
   })
-  @ApiResponse({ status: 200, description: 'List of revoked shares pending rotation' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of revoked shares pending rotation',
+    type: [PendingRotationResponseDto],
+  })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getPendingRotations(@Request() req: RequestWithUser): Promise<
     Array<{
@@ -184,7 +199,7 @@ export class SharesController {
     summary: 'Get share keys',
     description: 'Get all re-wrapped child keys for a share. Accessible by sharer or recipient.',
   })
-  @ApiResponse({ status: 200, description: 'List of share keys' })
+  @ApiResponse({ status: 200, description: 'List of share keys', type: [ShareKeyResponseDto] })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 403, description: 'Not authorized to access this share' })
   @ApiResponse({ status: 404, description: 'Share not found' })

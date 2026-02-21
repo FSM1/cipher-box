@@ -81,7 +81,16 @@ export class SharesService {
       revokedAt: null,
     });
 
-    const savedShare = await this.shareRepo.save(share);
+    let savedShare: typeof share;
+    try {
+      savedShare = await this.shareRepo.save(share);
+    } catch (err: unknown) {
+      // Handle race condition: concurrent createShare for the same triple
+      if (err instanceof Error && err.message?.includes('duplicate key')) {
+        throw new ConflictException('Share already exists for this item and recipient');
+      }
+      throw err;
+    }
 
     // Create child keys if provided
     if (dto.childKeys && dto.childKeys.length > 0) {

@@ -32,27 +32,17 @@ import type { FolderNode } from '../stores/folder.store';
  * Updates the share store with the results.
  */
 export async function fetchReceivedShares(): Promise<ReceivedShare[]> {
-  const response = (await sharesControllerGetReceivedShares()) as unknown as Array<{
-    shareId: string;
-    sharerPublicKey: string;
-    itemType: string;
-    ipnsName: string;
-    itemName: string;
-    encryptedKey: string;
-    createdAt: string;
-  }>;
+  const response = await sharesControllerGetReceivedShares();
 
-  const shares: ReceivedShare[] = response.map((s) => ({
+  return response.map((s) => ({
     shareId: s.shareId,
     sharerPublicKey: s.sharerPublicKey,
     itemType: s.itemType as 'folder' | 'file',
     ipnsName: s.ipnsName,
     itemName: s.itemName,
     encryptedKey: s.encryptedKey,
-    createdAt: s.createdAt,
+    createdAt: String(s.createdAt),
   }));
-
-  return shares;
 }
 
 /**
@@ -60,25 +50,16 @@ export async function fetchReceivedShares(): Promise<ReceivedShare[]> {
  * Updates the share store with the results.
  */
 export async function fetchSentShares(): Promise<SentShare[]> {
-  const response = (await sharesControllerGetSentShares()) as unknown as Array<{
-    shareId: string;
-    recipientPublicKey: string;
-    itemType: string;
-    ipnsName: string;
-    itemName: string;
-    createdAt: string;
-  }>;
+  const response = await sharesControllerGetSentShares();
 
-  const shares: SentShare[] = response.map((s) => ({
+  return response.map((s) => ({
     shareId: s.shareId,
     recipientPublicKey: s.recipientPublicKey,
     itemType: s.itemType as 'folder' | 'file',
     ipnsName: s.ipnsName,
     itemName: s.itemName,
-    createdAt: s.createdAt,
+    createdAt: String(s.createdAt),
   }));
-
-  return shares;
 }
 
 /**
@@ -91,9 +72,17 @@ export async function lookupUser(publicKeyHex: string): Promise<boolean> {
   try {
     await sharesControllerLookupUser({ publicKey: publicKeyHex });
     return true;
-  } catch {
-    // 404 = user not found
-    return false;
+  } catch (err: unknown) {
+    // Only treat 404 as "user not found"; re-throw network/server errors
+    if (
+      err &&
+      typeof err === 'object' &&
+      'status' in err &&
+      (err as { status: number }).status === 404
+    ) {
+      return false;
+    }
+    throw err;
   }
 }
 
@@ -115,7 +104,7 @@ export async function createShare(params: {
   encryptedKey: string;
   childKeys?: Array<{ keyType: 'file' | 'folder'; itemId: string; encryptedKey: string }>;
 }): Promise<{ shareId: string }> {
-  const response = (await sharesControllerCreateShare({
+  const response = await sharesControllerCreateShare({
     recipientPublicKey: params.recipientPublicKey,
     itemType: params.itemType,
     ipnsName: params.ipnsName,
@@ -126,7 +115,7 @@ export async function createShare(params: {
       itemId: k.itemId,
       encryptedKey: k.encryptedKey,
     })),
-  })) as unknown as { shareId: string };
+  });
 
   return { shareId: response.shareId };
 }
@@ -153,11 +142,7 @@ export async function hideShare(shareId: string): Promise<void> {
 export async function fetchShareKeys(
   shareId: string
 ): Promise<Array<{ keyType: 'file' | 'folder'; itemId: string; encryptedKey: string }>> {
-  const response = (await sharesControllerGetShareKeys(shareId)) as unknown as Array<{
-    keyType: string;
-    itemId: string;
-    encryptedKey: string;
-  }>;
+  const response = await sharesControllerGetShareKeys(shareId);
 
   return response.map((k) => ({
     keyType: k.keyType as 'file' | 'folder',
@@ -188,15 +173,7 @@ export async function addShareKeys(
  * Uses the store cache if available and fresh.
  */
 export async function getSentSharesForItem(ipnsName: string): Promise<SentShare[]> {
-  const store = useShareStore.getState();
-
-  // Use cached sent shares if available (fetched within last 30s)
-  let shares = store.sentShares;
-  if (!store.lastFetchedAt || Date.now() - store.lastFetchedAt > 30_000) {
-    shares = await fetchSentShares();
-    useShareStore.getState().setSentShares(shares);
-  }
-
+  const shares = await ensureFreshSentShares();
   return shares.filter((s) => s.ipnsName === ipnsName);
 }
 
@@ -350,14 +327,7 @@ export type PendingRotation = {
  * These are shares where revokedAt is set but the share has not been hard-deleted.
  */
 export async function fetchPendingRotations(): Promise<PendingRotation[]> {
-  const response = (await sharesControllerGetPendingRotations()) as unknown as Array<{
-    shareId: string;
-    recipientPublicKey: string;
-    itemType: string;
-    ipnsName: string;
-    itemName: string;
-    revokedAt: string;
-  }>;
+  const response = await sharesControllerGetPendingRotations();
 
   return response.map((r) => ({
     shareId: r.shareId,
@@ -365,7 +335,7 @@ export async function fetchPendingRotations(): Promise<PendingRotation[]> {
     itemType: r.itemType as 'folder' | 'file',
     ipnsName: r.ipnsName,
     itemName: r.itemName,
-    revokedAt: r.revokedAt,
+    revokedAt: String(r.revokedAt),
   }));
 }
 
@@ -434,6 +404,7 @@ export async function executeLazyRotation(params: {
   const remainingShares = activeSentShares.filter((s) => !revokedShareIds.has(s.shareId));
 
   // 3. Re-wrap new folderKey for each remaining recipient
+  const reWrapFailures: string[] = [];
   for (const share of remainingShares) {
     try {
       const recipientPubKey = hexToBytes(
@@ -448,7 +419,15 @@ export async function executeLazyRotation(params: {
         `[share] Failed to update share key for remaining recipient ${share.recipientPublicKey.slice(0, 10)}...:`,
         err
       );
+      reWrapFailures.push(share.shareId);
     }
+  }
+
+  if (reWrapFailures.length > 0) {
+    throw new Error(
+      `Key rotation failed: could not re-wrap key for ${reWrapFailures.length} recipient(s). ` +
+        'Aborting to prevent inconsistent state.'
+    );
   }
 
   // 4. Hard-delete all revoked shares for this folder
