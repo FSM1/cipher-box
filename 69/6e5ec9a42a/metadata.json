@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "696e5ec9a42a",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-14-user-to-user-sharing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/components/file-browser/ContextMenu.tsx",
+    "apps/web/src/components/file-browser/FileBrowser.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/69/6e5ec9a42a/0/metadata.json",
+      "transcript": "/69/6e5ec9a42a/0/full.jsonl",
+      "context": "/69/6e5ec9a42a/0/context.md",
+      "content_hash": "/69/6e5ec9a42a/0/content_hash.txt",
+      "prompt": "/69/6e5ec9a42a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 66,
+    "cache_creation_tokens": 76803,
+    "cache_read_tokens": 5239366,
+    "output_tokens": 4517,
+    "api_call_count": 64
+  }
+}
