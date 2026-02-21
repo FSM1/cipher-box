@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "ff17c1fa1c2e",
+  "strategy": "manual-commit",
+  "branch": "chore/add-todo-device-registry-validator",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/todos/pending/2026-02-21-device-registry-publickey-validator-bug.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ff/17c1fa1c2e/0/metadata.json",
+      "transcript": "/ff/17c1fa1c2e/0/full.jsonl",
+      "context": "/ff/17c1fa1c2e/0/context.md",
+      "content_hash": "/ff/17c1fa1c2e/0/content_hash.txt",
+      "prompt": "/ff/17c1fa1c2e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 98,
+    "cache_creation_tokens": 103869,
+    "cache_read_tokens": 8269061,
+    "output_tokens": 8532,
+    "api_call_count": 76
+  }
+}
