@@ -273,7 +273,19 @@ test.describe.serial('Sharing Workflow', () => {
 
     // Find and open the shared folder
     await bobSharedBrowser.waitForSharedItem(sharedFolderName, { timeout: 15000 });
-    await bobSharedBrowser.navigateIntoFolder(sharedFolderName);
+
+    // Click the shared item and wait — IPNS resolution can be slow on first access
+    await bobSharedBrowser.openSharedItem(sharedFolderName);
+    await bob.page.waitForTimeout(3000);
+
+    // If IPNS resolution failed on first try, retry once
+    const parentDirVisible = await bobSharedBrowser.parentDirRow().isVisible();
+    if (!parentDirVisible) {
+      await navigateToShared(bob);
+      await bobSharedBrowser.waitForLoaded({ timeout: 30000 });
+      await bobSharedBrowser.waitForSharedItem(sharedFolderName, { timeout: 15000 });
+      await bobSharedBrowser.navigateIntoFolder(sharedFolderName);
+    }
 
     // Should see folder contents: the file and subfolder
     const itemNames = await bobSharedBrowser.getFolderItemNames();
@@ -390,6 +402,9 @@ test.describe.serial('Sharing Workflow', () => {
   });
 
   test('7.2 Charlie sees the newly added file', async () => {
+    // Wait briefly for any background operations from 7.1 to settle
+    await charlie.page.waitForTimeout(2000);
+
     // Navigate Charlie into the shared folder to check for the new file
     await navigateToShared(charlie);
     await charlieSharedBrowser.waitForLoaded({ timeout: 30000 });

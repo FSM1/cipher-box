@@ -194,7 +194,9 @@ export class SharedFileBrowserPage {
    * Navigate back to the shared root by clicking "shared" in breadcrumbs.
    */
   async navigateToRoot(): Promise<void> {
-    await this.breadcrumbs().locator('button', { hasText: 'shared' }).click();
+    await this.breadcrumbs()
+      .locator('button', { hasText: /^shared$/ })
+      .click();
   }
 
   /**

@@ -203,6 +203,7 @@ export function ShareDialog({
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const [recipients, setRecipients] = useState<SentShare[]>([]);
   const [recipientsLoading, setRecipientsLoading] = useState(false);
+  const [recipientsFetched, setRecipientsFetched] = useState(false);
   const [confirmRevokeId, setConfirmRevokeId] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
 
@@ -221,6 +222,7 @@ export function ShareDialog({
       setRevokingId(null);
       setRecipients([]);
       setRecipientsLoading(false);
+      setRecipientsFetched(false);
       return;
     }
 
@@ -248,7 +250,10 @@ export function ShareDialog({
         console.error('Failed to fetch sent shares:', err);
       })
       .finally(() => {
-        if (!cancelled) setRecipientsLoading(false);
+        if (!cancelled) {
+          setRecipientsLoading(false);
+          setRecipientsFetched(true);
+        }
       });
 
     return () => {
@@ -513,7 +518,7 @@ export function ShareDialog({
         <div className="share-recipients-section">
           <div className="share-recipients-header">{'// recipients'}</div>
 
-          {recipientsLoading ? (
+          {recipientsLoading || !recipientsFetched ? (
             <div className="share-recipients-loading">loading...</div>
           ) : recipients.length === 0 ? (
             <div className="share-recipients-empty">no recipients yet</div>

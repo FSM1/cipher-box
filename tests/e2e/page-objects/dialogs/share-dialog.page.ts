@@ -200,11 +200,16 @@ export class ShareDialogPage {
 
   /**
    * Wait for recipients to finish loading.
+   * Waits for actual content (recipient rows or empty state) to appear.
    */
   async waitForRecipientsLoaded(): Promise<void> {
-    // waitFor({ state: 'hidden' }) resolves immediately when the element is
-    // absent, so no catch is needed for the "already finished" case.
-    await this.recipientsLoading().waitFor({ state: 'hidden', timeout: 10000 });
+    // The component shows loading until the first fetch completes,
+    // then shows either recipient rows or "no recipients yet".
+    // Wait for either of these definitive states.
+    await this.page
+      .locator('.share-recipient, .share-recipients-empty')
+      .first()
+      .waitFor({ state: 'visible', timeout: 10000 });
   }
 
   /**
