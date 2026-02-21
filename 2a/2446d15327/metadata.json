@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "2a2446d15327",
+  "strategy": "manual-commit",
+  "branch": "chore/add-todos-ipns-vault",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/todos/pending/2026-02-21-ipns-resolution-alternatives.md",
+    ".planning/todos/pending/2026-02-21-move-root-folder-key-to-ipfs.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2a/2446d15327/0/metadata.json",
+      "transcript": "/2a/2446d15327/0/full.jsonl",
+      "context": "/2a/2446d15327/0/context.md",
+      "content_hash": "/2a/2446d15327/0/content_hash.txt",
+      "prompt": "/2a/2446d15327/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 72,
+    "cache_creation_tokens": 93201,
+    "cache_read_tokens": 5643243,
+    "output_tokens": 6362,
+    "api_call_count": 56
+  }
+}
