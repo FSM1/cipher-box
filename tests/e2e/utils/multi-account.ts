@@ -44,7 +44,7 @@ export async function createTestAccount(
 }
 
 /**
- * Create multiple test accounts in parallel.
+ * Create multiple test accounts sequentially.
  * All accounts share the same runId for test isolation.
  */
 export async function createTestAccounts(

@@ -27,12 +27,17 @@ export const TEST_CREDENTIALS = {
 /**
  * Serializable auth state for a test account.
  * Arrays are used because Uint8Array can't cross the page.evaluate boundary.
+ *
+ * @security Contains raw ECDSA private key material (`privateKeyArr`).
+ * Never pass this object to console.log(), JSON.stringify(), or any
+ * persistent storage — treat it the same as a plaintext private key.
  */
 export interface TestAuthState {
   accessToken: string;
   email: string;
   publicKeyHex: string;
   publicKeyArr: number[];
+  /** @security Raw ECDSA secp256k1 private key — never log or serialize. */
   privateKeyArr: number[];
   rootFolderKeyArr: number[];
   rootIpnsPublicKeyArr: number[];

@@ -30,7 +30,7 @@ describe('SharesController', () => {
   const recipientPublicKey = '04' + 'ab'.repeat(64);
   const testEncryptedKey = 'cc'.repeat(64);
 
-  const mockReq = { user: { id: userId } } as any;
+  const mockReq: { user: { id: string } } = { user: { id: userId } };
 
   const mockShare: Share = {
     id: shareId,
@@ -97,7 +97,7 @@ describe('SharesController', () => {
 
       expect(result.shareId).toBe(shareId);
       expect(result.encryptedKey).toBe(testEncryptedKey);
-      expect((result as any).recipientId).toBeUndefined();
+      expect('recipientId' in result).toBe(false);
       expect(result.itemType).toBe('folder');
       expect(result.ipnsName).toBe('k51qzi5uqu5dg12345');
       expect(result.itemName).toBe('My Folder');

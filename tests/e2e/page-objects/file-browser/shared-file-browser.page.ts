@@ -91,7 +91,9 @@ export class SharedFileBrowserPage {
    * Get a folder item row by name (inside a shared folder).
    */
   getFolderItem(name: string): Locator {
-    return this.page.locator('.file-list-row:not(.file-list-row--parent)', { hasText: name });
+    return this.page.locator('.file-list-row:not(.file-list-row--parent):not(.shared-list-row)', {
+      hasText: name,
+    });
   }
 
   /**

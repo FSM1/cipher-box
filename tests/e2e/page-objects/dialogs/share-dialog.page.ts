@@ -13,7 +13,7 @@ export class ShareDialogPage {
    * Get the share dialog modal (identified by title starting with "SHARE:").
    */
   dialog(): Locator {
-    return this.page.locator('.modal-overlay .modal-content', { hasText: /SHARE:/ });
+    return this.page.locator('.modal-container', { hasText: /SHARE:/ });
   }
 
   /**
@@ -137,7 +137,7 @@ export class ShareDialogPage {
    */
   async waitForProgressComplete(options?: { timeout?: number }): Promise<void> {
     // Wait for progress to appear first
-    await this.progressIndicator().waitFor({ state: 'visible', timeout: 10000 });
+    await this.progressIndicator().waitFor({ state: 'visible', ...options });
     // Then wait for it to disappear (sharing complete)
     await this.progressIndicator().waitFor({ state: 'hidden', ...options });
   }
@@ -202,12 +202,9 @@ export class ShareDialogPage {
    * Wait for recipients to finish loading.
    */
   async waitForRecipientsLoaded(): Promise<void> {
-    // Wait for loading state to disappear
-    await this.recipientsLoading()
-      .waitFor({ state: 'hidden', timeout: 10000 })
-      .catch(() => {
-        // Loading may have already finished
-      });
+    // waitFor({ state: 'hidden' }) resolves immediately when the element is
+    // absent, so no catch is needed for the "already finished" case.
+    await this.recipientsLoading().waitFor({ state: 'hidden', timeout: 10000 });
   }
 
   /**

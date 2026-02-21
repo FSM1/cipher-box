@@ -261,41 +261,47 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
           hexToBytes(keyRecord.encryptedKey),
           auth.vaultKeypair.privateKey
         );
+        let subfolderKeyStored = false;
 
-        // Find the subfolder entry to get its IPNS name
-        const folderEntry = folderChildren.find(
-          (c): c is FolderEntry => c.type === 'folder' && c.id === folderId
-        );
-        if (!folderEntry) {
-          throw new Error('Subfolder not found in current children');
+        try {
+          // Find the subfolder entry to get its IPNS name
+          const folderEntry = folderChildren.find(
+            (c): c is FolderEntry => c.type === 'folder' && c.id === folderId
+          );
+          if (!folderEntry) {
+            throw new Error('Subfolder not found in current children');
+          }
+
+          // Resolve subfolder IPNS
+          const resolved = await resolveIpnsRecord(folderEntry.ipnsName);
+          if (!resolved) {
+            throw new Error('Could not resolve subfolder IPNS');
+          }
+
+          // Fetch and decrypt subfolder metadata
+          const encryptedBytes = await fetchFromIpfs(resolved.cid);
+          const encryptedJson = new TextDecoder().decode(encryptedBytes);
+          const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
+          const metadata = await decryptFolderMetadata(encrypted, subfolderKey);
+
+          // Push current state to nav stack
+          if (folderKey) {
+            navStackRef.current.push({
+              folderId: breadcrumbs[breadcrumbs.length - 1]?.id ?? '',
+              folderName: breadcrumbs[breadcrumbs.length - 1]?.name ?? '',
+              children: folderChildren,
+              folderKey,
+            });
+          }
+
+          // Update state
+          setFolderChildren(metadata.children ?? []);
+          setFolderKey(subfolderKey);
+          subfolderKeyStored = true;
+          setBreadcrumbs((prev) => [...prev, { id: folderId, name: folderName }]);
+        } finally {
+          if (!subfolderKeyStored) subfolderKey.fill(0);
         }
-
-        // Resolve subfolder IPNS
-        const resolved = await resolveIpnsRecord(folderEntry.ipnsName);
-        if (!resolved) {
-          throw new Error('Could not resolve subfolder IPNS');
-        }
-
-        // Fetch and decrypt subfolder metadata
-        const encryptedBytes = await fetchFromIpfs(resolved.cid);
-        const encryptedJson = new TextDecoder().decode(encryptedBytes);
-        const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
-        const metadata = await decryptFolderMetadata(encrypted, subfolderKey);
-
-        // Push current state to nav stack
-        if (folderKey) {
-          navStackRef.current.push({
-            folderId: breadcrumbs[breadcrumbs.length - 1]?.id ?? '',
-            folderName: breadcrumbs[breadcrumbs.length - 1]?.name ?? '',
-            children: folderChildren,
-            folderKey,
-          });
-        }
-
-        // Update state
-        setFolderChildren(metadata.children ?? []);
-        setFolderKey(subfolderKey);
-        setBreadcrumbs((prev) => [...prev, { id: folderId, name: folderName }]);
       } catch (err) {
         console.error('Failed to navigate to subfolder:', err);
         setError('Failed to open subfolder');

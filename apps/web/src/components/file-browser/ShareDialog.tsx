@@ -227,6 +227,8 @@ export function ShareDialog({
       setProgress(null);
       setConfirmRevokeId(null);
       setRevokingId(null);
+      setRecipients([]);
+      setRecipientsLoading(false);
       return;
     }
 
