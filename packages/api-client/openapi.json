@@ -499,7 +499,7 @@
     },
     "/ipfs/unpin": {
       "post": {
-        "description": "Remove a pinned file from IPFS via Pinata using its CID.",
+        "description": "Remove a pinned file from IPFS using its CID.",
         "operationId": "IpfsController_unpin",
         "parameters": [],
         "requestBody": {
