@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 13 COMPLETE (File Versioning)
+**Current focus:** Milestone 2 -- Phase 14 IN PROGRESS (User-to-User Sharing)
 
 ## Current Position
 
-Phase: 13 (File Versioning)
-Plan: 5 of 5
-Status: Phase complete
-Last activity: 2026-02-21 -- Completed quick task 019 (Metadata Schema Evolution Protocol)
+Phase: 14 (User-to-User Sharing)
+Plan: 1 of 6
+Status: In progress
+Last activity: 2026-02-21 -- Completed 14-01-PLAN.md (Crypto Foundation & Share Entities)
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 1/6)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 121
+- Total plans completed: 122
 - Average duration: 5.4 min
-- Total execution time: 11.2 hours
+- Total execution time: 11.3 hours
 
 **By Phase (M1 summary):**
 
@@ -40,10 +40,11 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 11.1   | 7/7   | 36 min  | 5.1 min  |
 | M2 Phase 11.2   | 3/3   | 30 min  | 10.0 min |
 | M2 Phase 13     | 5/5   | 31 min  | 6.2 min  |
+| M2 Phase 14     | 1/6   | 7 min   | 7.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 5m, 4m, 6m, 7m, 9m
+- Last 5 plans: 4m, 6m, 7m, 9m, 7m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -160,6 +161,9 @@ Recent decisions affecting current work:
 | Version numbering: v1=oldest, vN=newest in display                | 13-04     | Intuitive for users; reversed from array order where index 0=newest                                              |
 | metadataRefresh counter for post-action IPNS re-resolution        | 13-04     | Simple useEffect dependency to force re-fetch after restore/delete                                               |
 | AES-CTR decrypt added to recovery tool for version support        | 13-05     | Versions may use CTR encryption mode; recovery tool needs both GCM and CTR decryption                            |
+| KEY_REWRAP_FAILED added to CryptoErrorCode                        | 14-01     | Specific error code for ECIES re-wrapping failures in sharing flows                                              |
+| itemName stored as plaintext in share record                      | 14-01     | Minimal privacy impact per RESEARCH.md; server already knows user IDs                                            |
+| revokedAt soft-delete for lazy key rotation                       | 14-01     | Avoids separate tracking table; revoked shares marked then hard-deleted after rotation                           |
 
 ### Pending Todos
 
@@ -190,7 +194,7 @@ Recent decisions affecting current work:
 
 - Web3Auth custom JWT verifier: requires Growth Plan for production (free on devnet). Verify pricing before committing.
 - CipherBox as identity SPOF: backend is trust anchor for auth. Mitigated by encrypted key export + IPFS device registry. One-way door — verifierId scheme is permanent.
-- Versioning + Sharing interaction: When shared folder has version history, should recipient see all versions? Decide during Phase 14 planning.
+- Versioning + Sharing interaction: RESOLVED -- Recipients see only current version (per RESEARCH.md recommendation). Version history not shared in Phase 14.
 
 ### Quick Tasks Completed
 
@@ -211,7 +215,7 @@ Recent decisions affecting current work:
 ### Research Flags
 
 - Phase 11 (Desktop): NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse), Windows virtual drive (WinFsp/Dokany), Tauri cross-compilation
-- Phase 14 (Sharing): NEEDS `/gsd:research-phase` -- revocation key rotation protocol
+- Phase 14 (Sharing): COMPLETE -- research done, 6 plans created, execution in progress (1/6)
 - Phase 15 (Link Sharing): NEEDS `/gsd:research-phase` -- unauthenticated web viewer security
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
@@ -227,11 +231,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-21
-Stopped at: Completed quick task 019: Metadata Schema Evolution Protocol
+Stopped at: Completed 14-01-PLAN.md (Crypto Foundation & Share Entities)
 Resume file: None
-Next: Run /gsd:discuss-phase 14 or /gsd:plan-phase 14 for User-to-User Sharing.
+Next: Execute 14-02-PLAN.md (Shares Module, Service & Controller)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-21 after completing quick task 019 (Metadata Schema Evolution Protocol)_
+_Last updated: 2026-02-21 after completing 14-01-PLAN.md (Crypto Foundation & Share Entities)_
