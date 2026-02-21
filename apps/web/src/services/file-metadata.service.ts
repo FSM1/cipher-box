@@ -65,6 +65,7 @@ export type FileIpnsRecordPayload = {
  * @param userPrivateKey - User's secp256k1 private key (for ECIES unwrap or HKDF fallback)
  * @param userPublicKey - User's secp256k1 public key (for wrapping during lazy migration)
  * @returns Decrypted Ed25519 IPNS private key, plus migration data if HKDF fallback was used
+ * @remarks The caller is responsible for zeroing `privateKey` with `.fill(0)` after use.
  */
 export async function getFileIpnsPrivateKey(
   filePointer: FilePointer,

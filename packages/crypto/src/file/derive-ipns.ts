@@ -1,10 +1,17 @@
 /**
- * @cipherbox/crypto - File IPNS Key Derivation
+ * @cipherbox/crypto - File IPNS Key Management
  *
- * Derives a deterministic Ed25519 IPNS keypair for a specific file
- * from the user's secp256k1 privateKey + fileId using HKDF-SHA256.
+ * Two strategies for per-file IPNS keypairs:
  *
- * Derivation path:
+ * 1. Deterministic (legacy): `deriveFileIpnsKeypair` derives an Ed25519 keypair
+ *    from the user's secp256k1 privateKey + fileId via HKDF-SHA256. Used for
+ *    files created before random key migration.
+ *
+ * 2. Random (new files): `generateFileIpnsKeypair` generates a fresh Ed25519
+ *    keypair via CSPRNG. The private key is ECIES-wrapped and stored in the
+ *    parent folder's FilePointer so it can be recovered from any device.
+ *
+ * Deterministic derivation path:
  *   secp256k1 privateKey (32 bytes)
  *     -> HKDF-SHA256(salt="CipherBox-v1", info="cipherbox-file-ipns-v1:{fileId}")
  *     -> 32-byte Ed25519 seed

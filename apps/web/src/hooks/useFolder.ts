@@ -14,6 +14,7 @@ import {
   deleteVersion,
   getFileIpnsPrivateKey,
 } from '../services/file-metadata.service';
+import type { FileIpnsRecordPayload } from '../services/file-metadata.service';
 import type { FolderNode } from '../stores/folder.store';
 import type { FolderEntry, FilePointer, FolderChild } from '@cipherbox/crypto';
 
@@ -718,6 +719,7 @@ export function useFolder() {
         }
 
         // 1. Create per-file IPNS metadata for each file
+        const userPublicKey = auth.vaultKeypair.publicKey;
         const filesWithRecords = await Promise.all(
           filesData.map(async (f) => {
             const fileId = crypto.randomUUID();
@@ -729,7 +731,7 @@ export function useFolder() {
               size: f.originalSize,
               mimeType: f.mimeType ?? 'application/octet-stream',
               folderKey: parentFolder.folderKey,
-              userPublicKey: auth.vaultKeypair!.publicKey,
+              userPublicKey,
               encryptionMode: f.encryptionMode,
             });
             return {
@@ -829,29 +831,35 @@ export function useFolder() {
         // 4. Determine whether to create a version entry
         const createVersion = shouldCreateVersion(currentMetadata, fileData.forceVersion ?? false);
 
-        // 5. Update file metadata and publish new IPNS record
-        const { ipnsRecord, prunedCids } = await updateFileMetadata({
-          fileIpnsPrivateKey,
-          fileMetaIpnsName: filePointer.fileMetaIpnsName,
-          folderKey: parentFolder.folderKey,
-          currentMetadata,
-          updates: {
-            cid: fileData.newCid,
-            fileKeyEncrypted: fileData.newFileKeyEncrypted,
-            fileIv: fileData.newFileIv,
-            size: fileData.newSize,
-          },
-          createVersion,
-        });
+        let ipnsRecord: FileIpnsRecordPayload;
+        let prunedCids: string[];
+        try {
+          // 5. Update file metadata and publish new IPNS record
+          ({ ipnsRecord, prunedCids } = await updateFileMetadata({
+            fileIpnsPrivateKey,
+            fileMetaIpnsName: filePointer.fileMetaIpnsName,
+            folderKey: parentFolder.folderKey,
+            currentMetadata,
+            updates: {
+              cid: fileData.newCid,
+              fileKeyEncrypted: fileData.newFileKeyEncrypted,
+              fileIv: fileData.newFileIv,
+              size: fileData.newSize,
+            },
+            createVersion,
+          }));
+        } finally {
+          fileIpnsPrivateKey.fill(0);
+        }
 
-        // 5. Publish only the file IPNS record (folder metadata untouched!)
+        // 6. Publish only the file IPNS record (folder metadata untouched!)
         await folderService.replaceFileInFolder({
           fileId: fileData.fileId,
           fileIpnsRecord: ipnsRecord,
           parentFolderState: parentFolder,
         });
 
-        // 6. Update local state -- touch modifiedAt and persist migrated IPNS key if applicable
+        // 7. Update local state -- touch modifiedAt and persist migrated IPNS key if applicable
         const updatedChildren = parentFolder.children.map((child) => {
           if (child.type === 'file' && child.id === fileData.fileId) {
             return {
@@ -868,7 +876,7 @@ export function useFolder() {
         const store = useFolderStore.getState();
         store.updateFolderChildren(parentId, updatedChildren);
 
-        // 6b. Lazy migration: persist wrapped IPNS key to folder metadata on IPFS
+        // 7b. Lazy migration: persist wrapped IPNS key to folder metadata on IPFS
         if (migratedIpnsPrivateKeyEncrypted) {
           folderService
             .updateFolderMetadata({
@@ -887,7 +895,7 @@ export function useFolder() {
             });
         }
 
-        // 7. Only unpin CIDs of pruned versions (excess beyond max 10)
+        // 8. Only unpin CIDs of pruned versions (excess beyond max 10)
         // Old CIDs stay pinned as version history (VER-01)
         for (const prunedCid of prunedCids) {
           unpinFromIpfs(prunedCid).catch(() => {});
@@ -960,14 +968,20 @@ export function useFolder() {
             auth.vaultKeypair.publicKey
           );
 
-        // Call restoreVersion service function
-        const { ipnsRecord, prunedCids } = await restoreVersion({
-          fileIpnsPrivateKey,
-          fileMetaIpnsName: filePointer.fileMetaIpnsName,
-          folderKey: parentFolder.folderKey,
-          currentMetadata,
-          versionIndex,
-        });
+        let ipnsRecord: FileIpnsRecordPayload;
+        let prunedCids: string[];
+        try {
+          // Call restoreVersion service function
+          ({ ipnsRecord, prunedCids } = await restoreVersion({
+            fileIpnsPrivateKey,
+            fileMetaIpnsName: filePointer.fileMetaIpnsName,
+            folderKey: parentFolder.folderKey,
+            currentMetadata,
+            versionIndex,
+          }));
+        } finally {
+          fileIpnsPrivateKey.fill(0);
+        }
 
         // Publish the IPNS record (folder metadata untouched)
         await folderService.replaceFileInFolder({
@@ -1081,14 +1095,20 @@ export function useFolder() {
             auth.vaultKeypair.publicKey
           );
 
-        // Call deleteVersion service function
-        const { ipnsRecord, deletedCid } = await deleteVersion({
-          fileIpnsPrivateKey,
-          fileMetaIpnsName: filePointer.fileMetaIpnsName,
-          folderKey: parentFolder.folderKey,
-          currentMetadata,
-          versionIndex,
-        });
+        let ipnsRecord: FileIpnsRecordPayload;
+        let deletedCid: string;
+        try {
+          // Call deleteVersion service function
+          ({ ipnsRecord, deletedCid } = await deleteVersion({
+            fileIpnsPrivateKey,
+            fileMetaIpnsName: filePointer.fileMetaIpnsName,
+            folderKey: parentFolder.folderKey,
+            currentMetadata,
+            versionIndex,
+          }));
+        } finally {
+          fileIpnsPrivateKey.fill(0);
+        }
 
         // Publish the IPNS record (folder metadata untouched)
         await folderService.replaceFileInFolder({

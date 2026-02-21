@@ -980,12 +980,14 @@ mod implementation {
                 }
             };
 
-            // ECIES-wrap the IPNS private key eagerly so we cache it for metadata publish
+            // ECIES-wrap the IPNS private key — this is fatal for random keys since
+            // losing the wrapped key means the IPNS keypair is unrecoverable
             let ipns_key_encrypted_hex = match crate::crypto::ecies::wrap_key(&file_ipns_private_key, &self.public_key) {
                 Ok(wrapped) => Some(hex::encode(&wrapped)),
                 Err(e) => {
-                    log::warn!("create: failed to ECIES-wrap IPNS key: {}. Will re-wrap on publish.", e);
-                    None
+                    log::error!("create: failed to ECIES-wrap IPNS key: {}. Cannot proceed without wrapped key.", e);
+                    reply.error(libc::EIO);
+                    return;
                 }
             };
 

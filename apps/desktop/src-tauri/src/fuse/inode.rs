@@ -858,12 +858,14 @@ mod tests {
         let child = table.get(child_ino).unwrap();
         assert_eq!(child.name, "hello.txt");
         match &child.kind {
-            InodeKind::File { file_meta_ipns_name, file_meta_resolved, .. } => {
+            InodeKind::File { file_meta_ipns_name, file_meta_resolved, file_ipns_key_encrypted_hex, file_ipns_private_key, .. } => {
                 assert_eq!(
                     file_meta_ipns_name.as_deref(),
                     Some("k51qzi5uqu5dljtg5upm7x7ugan9lql3ewyknv4r4mhhkwzn8n7cnbd1unfwgx")
                 );
                 assert!(!file_meta_resolved, "FilePointer should not be resolved yet");
+                assert!(file_ipns_key_encrypted_hex.is_none(), "Legacy FilePointer should have no cached encrypted hex");
+                assert!(file_ipns_private_key.is_none(), "Legacy FilePointer with zeroed key should have no derived private key");
             }
             _ => panic!("Expected File kind"),
         }
