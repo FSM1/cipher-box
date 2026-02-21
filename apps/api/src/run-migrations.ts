@@ -45,7 +45,7 @@ async function run() {
     console.error(
       'Migration failed:',
       err.name || 'UnknownError',
-      err.message?.replace(/(?:host|password|user(?:name)?)=[^\s;,]+/gi, '$&=***') || ''
+      err.message?.replace(/((?:host|password|user(?:name)?)=)[^\s;,]+/gi, '$1***') || ''
     );
     process.exit(1);
   }
