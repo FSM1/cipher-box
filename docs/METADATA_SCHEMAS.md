@@ -337,7 +337,7 @@ An individual device record within the `DeviceRegistry`. Tracks authentication s
 | Field         | Type                                             | Encoding | Required | Description                                                |
 | ------------- | ------------------------------------------------ | -------- | -------- | ---------------------------------------------------------- |
 | `deviceId`    | string                                           | hex      | Yes      | SHA-256 hash of device's Ed25519 public key (64 hex chars) |
-| `publicKey`   | string                                           | hex      | Yes      | Device's Ed25519 public key, uncompressed (130 hex chars)  |
+| `publicKey`   | string                                           | hex      | Yes      | Device's Ed25519 public key (64 hex chars)                 |
 | `name`        | string                                           | --       | Yes      | Human-readable device name (max 200 chars)                 |
 | `platform`    | `'web'` \| `'macos'` \| `'linux'` \| `'windows'` | --       | Yes      | Platform identifier                                        |
 | `appVersion`  | string                                           | --       | Yes      | Application version string (max 50 chars)                  |

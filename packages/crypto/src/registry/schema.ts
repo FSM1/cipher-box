@@ -91,7 +91,7 @@ function validateDeviceEntry(data: unknown): void {
   }
 
   const publicKey = entry.publicKey as string;
-  if (publicKey.length !== 130 || !HEX_REGEX.test(publicKey)) {
+  if (publicKey.length !== 64 || !HEX_REGEX.test(publicKey)) {
     throw new CryptoError('Invalid registry format', 'DECRYPTION_FAILED');
   }
 

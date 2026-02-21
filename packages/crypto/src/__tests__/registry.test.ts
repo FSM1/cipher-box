@@ -29,7 +29,7 @@ function createTestRegistry(deviceCount = 1): DeviceRegistry {
   const now = Date.now();
   const devices = Array.from({ length: deviceCount }, (_, i) => ({
     deviceId: `${i.toString(16).padStart(2, '0')}${'a'.repeat(62)}`,
-    publicKey: `04${'b'.repeat(128)}`,
+    publicKey: `${'b'.repeat(64)}`,
     name: `Test Device ${i}`,
     platform: 'web' as const,
     appVersion: '0.2.0',
