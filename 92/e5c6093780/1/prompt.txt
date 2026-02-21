@@ -1,0 +1,80 @@
+Implement the following plan:
+
+# Fix FUSE Rename on SMB Backend
+
+## Context
+
+File rename (`mv`) fails with EPERM on the FUSE-T SMB backend. The macOS SMB client calls `access(W_OK)` on the parent directory before attempting rename. Our `access()` callback compares `req.uid()` against `attr.uid` — under SMB, these can differ because FUSE-T's internal SMB server proxies the request. When `access()` returns EACCES, the SMB client gives up with EPERM and our `rename()` callback is never reached.
+
+Secondary issue: UID assignment is inconsistent — root/populated inodes use `getuid()` while `create()`/`mkdir()` use `req.uid()`, which can differ under SMB.
+
+Since this is a single-user encrypted vault (encryption IS the access control), strict POSIX permission checks add no security value and actively break SMB.
+
+## Changes
+
+### 1. Simplify `access()` — always grant access
+**File:** `apps/desktop/src-tauri/src/fuse/operations.rs:2340-2376`
+
+Replace strict UID + permission-bit checking with existence check + unconditional OK. Add trace-level log and doc comment explaining rationale.
+
+### 2. Fix UID consistency in `create()`
+**File:** `apps/desktop/src-tauri/src/fuse/operations.rs:945-946`
+
+Change `req.uid()`/`req.gid()` to `libc::getuid()`/`libc::getgid()` — matches root inode and `populate_folder()` patterns.
+
+### 3. Fix UID consistency in `mkdir()`
+**File:** `apps/desktop/src-tauri/src/fuse/operations.rs:1853-1854`
+
+Same change as #2.
+
+### 4. Promote rename log to info level
+**File:** `apps/desktop/src-tauri/src/fuse/operations.rs:2132`
+
+Change `log::debug!` to `log::info!` so rename operations are visible during testing without `RUST_LOG=debug`.
+
+### 5. Update CLAUDE.md known limitations
+**File:** `apps/desktop/CLAUDE.md`
+
+Remove "Open issue" note, replace with "Fixed" note explaining the fix.
+
+## Verification
+
+1. Build desktop app, run with `--dev-key` mode
+2. Create a file: `echo "test" > ~/CipherBox/testfile.txt`
+3. Rename it: `mv ~/CipherBox/testfile.txt ~/CipherBox/renamed.txt`
+4. Cross-folder move: `mkdir ~/CipherBox/sub && mv ~/CipherBox/renamed.txt ~/CipherBox/sub/`
+5. Confirm `rename:` info log appears (proves `access()` no longer blocks)
+6. Run `cargo test --features fuse` for unit tests
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.REDACTED.jsonl
+
+---
+
+ok, but all verification can be done automatically with the --dev-key flag
+
+---
+
+<task-notification>
+<task-id>be72a6b</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/be72a6b.output</output-file>
+<status>completed</status>
+<summary>Background command "Start desktop app with dev-key for FUSE testing" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/be72a6b.output
+
+---
+
+Im just referring to the logging that was modified for debugging this issue
+
+---
+
+<task-notification>
+<task-id>b35ae24</task-id>
+<tool-use-id>toolu_01LQuTUf2v7QM8Zkzn2To8Hx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/b35ae24.output</output-file>
+<status>failed</status>
+<summary>Background command "Clean up test files and unmount" failed with exit code 1</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/b35ae24.output
