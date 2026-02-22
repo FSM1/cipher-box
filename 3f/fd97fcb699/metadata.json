@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "3ffd97fcb699",
+  "strategy": "manual-commit",
+  "branch": "docs/phase-14-architecture-tradeoff",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/14-user-to-user-sharing/14-CONTEXT.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3f/fd97fcb699/0/metadata.json",
+      "transcript": "/3f/fd97fcb699/0/full.jsonl",
+      "context": "/3f/fd97fcb699/0/context.md",
+      "content_hash": "/3f/fd97fcb699/0/content_hash.txt",
+      "prompt": "/3f/fd97fcb699/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 37828,
+    "cache_read_tokens": 1234311,
+    "output_tokens": 3374,
+    "api_call_count": 22
+  }
+}
