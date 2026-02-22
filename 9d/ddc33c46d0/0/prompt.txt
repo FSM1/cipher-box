@@ -1,0 +1,125 @@
+Have there been any file or folder metadata schema changes to deliver this phase? if so have all schema migration guidelines been followed? @docs/METADATA_EVOLUTION_PROTOCOL.md
+
+---
+
+MMy original thinking was actually leveraging the existing ipns/ipfs metadata structure to record the readers: [], and eventually writers:[] objects: {pubKey: 0x, encryptedRootKey: 0x, ....}
+
+obviously this structure would be pervasive in the whole ipns/ipfs tree.
+
+---
+
+I think its worthwhile noting this down in the planning as a known trade-off of the current approach, and a possible solution, but obviously with significant trade-offs. 
+
+I honestly feel that the revocation risk is quite low, since sharing is only available in browser. users are unlikely to back up the encryptedFolderKey, and even then decrypting content would require the files not to have changed, and the entire hierarchy of keys saved. Please correct me if I am wrong here.
+
+---
+
+ok can we get back to main?
+
+---
+
+ok lets get that docs update done in a separate branch, and create a pr for it.
+
+once youre done with that, it seems like there was a problem running the migration during the staging deployment. you can check the logs on Github or ssh in to the server to figure that one out. Please dont just push through the migrations by executing them directly on the server. Fix the actual problem of migrations not running correctly from the CD pipeline.
+
+---
+
+<task-notification>
+<task-id>aef9ffc</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<status>completed</status>
+<summary>Agent "Investigate staging migration failure" completed</summary>
+<result>I now have complete understanding of the issue. Here is my research report.
+
+---
+
+## Migration Failure Research Report
+
+### What Error Occurred
+
+The deployment of **v0.15.0-staging-rc-1** failed at **2026-02-22T01:16:13Z** during the "Deploy services" step of the `deploy-staging.yml` workflow (invoked via the `tag-staging.yml` workflow). The exact error:
+
+```
+Migration failed: QueryFailedError relation "shares" does not exist
+query failed:
+      CREATE UNIQUE INDEX "UQ_shares_active_triple"
+      ON "shares" ("sharer_id", "recipient_id", "ipns_name")
+      WHERE "revoked_at" IS NULL
+
+error: error: relation "shares" does not exist
+Migration "SharesPartialUniqueIndex1740300000000" failed, error: relation "shares" does not exist
+```
+
+GitHub Actions run ID: **22267865086** (Tag Staging Release workflow)
+
+### Where in the Pipeline It Failed
+
+The failure occurred in the **"Deploy services"** step of the `deploy-vps` job in `/Users/michael/Code/cipher-box/.github/workflows/deploy-staging.yml` (lines 286-287):
+
+```yaml
+docker compose -f docker-compose.staging.yml run --rm \
+  api node dist/run-migrations.js
+```
+
+The migration runner (`/Users/michael/Code/cipher-box/apps/api/src/run-migrations.ts`) initialized the DataSource, found a pending migration (`SharesPartialUniqueIndex1740300000000`), attempted to run it, and the second SQL statement in the migration's `up()` method failed because the `shares` table does not exist in the staging PostgreSQL database.
+
+### Root Cause
+
+The root cause is a **missing table-creation migration for the `shares` and `share_keys` tables**.
+
+Here is the chain of events:
+
+1. **Phase 14** (commit `84a232db4`, PR #183) added the `Share` entity (`/Users/michael/Code/cipher-box/apps/api/src/shares/entities/share.entity.ts`) and `ShareKey` entity (`/Users/michael/Code/cipher-box/apps/api/src/shares/entities/share-key.entity.ts`), which map to the `shares` and `share_keys` PostgreSQL tables.
+
+2. In **development and test** environments, `synchronize: true` is enabled (line 83-85 of `/Users/michael/Code/cipher-box/apps/api/src/app.module.ts`):
+   ```typescript
+   synchronize: ['development', 'test'].includes(
+     configService.get<string>('NODE_ENV', 'development')
+   ),
+   ```
+   This means TypeORM automatically creates/updates tables from entity definitions in dev/test. The `shares` and `share_keys` tables are auto-created in those environments.
+
+3. In **staging** (NODE_ENV=staging), `synchronize: false`, so tables must be created explicitly via migrations.
+
+4. The baseline migration (`/Users/michael/Code/cipher-box/apps/api/src/migrations/1700000000000-FullSchema.ts`) was written for the Phase 9.1 schema and creates **9 tables**: `users`, `refresh_tokens`, `auth_methods`, `vaults`, `pinned_cids`, `folder_ipns`, `tee_key_state`, `tee_key_rotation_log`, `ipns_republish_schedule`. It does **not** include `shares` or `share_keys`.
+
+5. A later migration (`1740000000000-AddDeviceApprovals.ts`) correctly handled this pattern by including `CREATE TABLE IF NOT EXISTS "device_approvals"` for the device_approvals table that was also previously only created via synchronize.
+
+6. Phase 14 added only the `SharesPartialUniqueIndex` migration (`REDACTED.ts`), which **modifies** the `shares` table (drops a unique constraint, creates a partial unique index). But it never creates the `shares` or `share_keys` tables.
+
+7. When the migration runner executed on staging, it found `SharesPartialUniqueIndex1740300000000` as a pending migration, attempted to run it, and the `CREATE UNIQUE INDEX` on the non-existent `shares` table failed with `relation "shares" does not exist`.
+
+### Why Previous Staging Deploys Succeeded
+
+The v0.14.0 staging deploy (run ID 22251787428) succeeded because the `SharesPartialUniqueIndex` migration did not exist in that release. It was first introduced in v0.15.0 (which includes the Phase 14 PR #183).
+
+### Recommended Fix
+
+Add a new migration file with a timestamp **before** `1740300000000` (e.g., `1740250000000-AddSharesTables.ts`) that creates both the `shares` and `share_keys` tables with all their columns, indexes, and foreign keys. This migration should:
+
+1. Use `CREATE TABLE IF NOT EXISTS` for idempotency (matching the pattern used in `1740000000000-AddDeviceApprovals.ts`)
+2. Create the `shares` table with all columns from the `Share` entity: `id`, `sharer_id`, `recipient_id`, `item_type`, `ipns_name`, `item_name`, `encrypted_key`, `hidden_by_recipient`, `revoked_at`, `created_at`, `updated_at`
+3. Create the `share_keys` table with all columns from the `ShareKey` entity: `id`, `share_id`, `key_type`, `item_id`, `encrypted_key`, `created_at`
+4. Create the foreign keys (`shares.sharer_id` -> `users.id`, `shares.recipient_id` -> `users.id`, `share_keys.share_id` -> `shares.id`) with `ON DELETE CASCADE`
+5. Create the indexes defined by `@Index()` decorators on both entities
+6. Create the unique constraint on `share_keys` (`share_id`, `key_type`, `item_id`)
+7. Create the initial absolute unique constraint on `shares` (`sharer_id`, `recipient_id`, `ipns_name`) that the subsequent `SharesPartialUniqueIndex` migration expects to find and replace
+
+Alternatively, the `FullSchema` migration could be updated to include the `shares` and `share_keys` tables, but since that migration has already run on staging, adding a separate migration file is the cleaner approach.
+
+After adding the migration, the `FullSchema` migration should also be updated to include the `shares` and `share_keys` tables for future fresh database initializations (new environments), so the full schema baseline remains a single migration.</result>
+<usage><total_tokens>80617</total_tokens><tool_uses>44</tool_uses><duration_ms>204837</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/aef9ffc.output
+
+---
+
+ok can we please log a @.learnings/README.md entry and also make sure to memorize the setup and ensure this never repeats again.
+
+---
+
+hmmm, the docs branch, pr 185 is somehow failing CI e2e tests. its one of the recently added sharing tests, so possibly jsut a flakey test.
+
+---
+
+ok there seem to be some valid comments from coderabbit on the migration pr. Let me know if you agree.

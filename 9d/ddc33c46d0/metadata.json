@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "9dddc33c46d0",
+  "strategy": "manual-commit",
+  "branch": "fix/staging-shares-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/migrations/1700000000000-FullSchema.ts",
+    "apps/api/src/migrations/1740250000000-AddSharesTables.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9d/ddc33c46d0/0/metadata.json",
+      "transcript": "/9d/ddc33c46d0/0/full.jsonl",
+      "context": "/9d/ddc33c46d0/0/context.md",
+      "content_hash": "/9d/ddc33c46d0/0/content_hash.txt",
+      "prompt": "/9d/ddc33c46d0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 77,
+    "cache_creation_tokens": 71475,
+    "cache_read_tokens": 4222170,
+    "output_tokens": 7751,
+    "api_call_count": 57
+  }
+}
