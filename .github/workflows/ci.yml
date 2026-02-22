@@ -204,3 +204,69 @@ jobs:
 
       - name: Build packages (excluding desktop)
         run: pnpm --filter @cipherbox/crypto --filter @cipherbox/api --filter @cipherbox/web build
+
+  cargo-check-windows:
+    name: Cargo Check (Windows)
+    needs: [lint]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install WinFsp
+        shell: powershell
+        run: |
+          $url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
+          $out = "winfsp.msi"
+          Invoke-WebRequest -Uri $url -OutFile $out
+          Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Cargo check with winfsp feature
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features winfsp
+
+  build-desktop-windows:
+    name: Build Windows Desktop
+    needs: [lint, typecheck]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install WinFsp
+        shell: powershell
+        run: |
+          # Download WinFsp MSI for both system install and NSIS bundling
+          $url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
+          $resourceDir = "${{ github.workspace }}/apps/desktop/src-tauri/resources"
+          $out = "$resourceDir/winfsp-2.1.25156.msi"
+          New-Item -ItemType Directory -Force -Path $resourceDir
+          Invoke-WebRequest -Uri $url -OutFile $out
+          # Install WinFsp system-wide for winfsp-sys build linking
+          Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Windows desktop
+        run: pnpm --filter desktop tauri build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ""
