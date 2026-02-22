@@ -3,7 +3,7 @@
   "checkpoint_id": "4740cf2db694",
   "strategy": "manual-commit",
   "branch": "feat/phase-15-link-sharing",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     ".planning/ROADMAP.md",
     ".planning/phases/15-link-sharing/15-01-PLAN.md",
@@ -17,13 +17,20 @@
       "context": "/47/40cf2db694/0/context.md",
       "content_hash": "/47/40cf2db694/0/content_hash.txt",
       "prompt": "/47/40cf2db694/0/prompt.txt"
+    },
+    {
+      "metadata": "/47/40cf2db694/1/metadata.json",
+      "transcript": "/47/40cf2db694/1/full.jsonl",
+      "context": "/47/40cf2db694/1/context.md",
+      "content_hash": "/47/40cf2db694/1/content_hash.txt",
+      "prompt": "/47/40cf2db694/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 4,
-    "cache_creation_tokens": 13431,
-    "cache_read_tokens": 168969,
-    "output_tokens": 1226,
-    "api_call_count": 2
+    "input_tokens": 98,
+    "cache_creation_tokens": 343033,
+    "cache_read_tokens": 8170289,
+    "output_tokens": 12462,
+    "api_call_count": 80
   }
 }
