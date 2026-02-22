@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "7ba1991528fc",
+  "strategy": "manual-commit",
+  "branch": "docs/crdt-ipns-inbox-research",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/14-user-to-user-sharing/14-CONTEXT.md",
+    ".planning/todos/pending/2026-02-22-crdt-ipns-inbox-sharing.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7b/a1991528fc/0/metadata.json",
+      "transcript": "/7b/a1991528fc/0/full.jsonl",
+      "context": "/7b/a1991528fc/0/context.md",
+      "content_hash": "/7b/a1991528fc/0/content_hash.txt",
+      "prompt": "/7b/a1991528fc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 84,
+    "cache_creation_tokens": 68590,
+    "cache_read_tokens": 4972366,
+    "output_tokens": 3711,
+    "api_call_count": 66
+  }
+}

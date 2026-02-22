@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "7ba1991528fc",
+  "session_id": "14255944-5b59-48f2-a75c-0025d518c7ea",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-22T03:16:14.216437Z",
+  "branch": "docs/crdt-ipns-inbox-research",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/14-user-to-user-sharing/14-CONTEXT.md",
+    ".planning/todos/pending/2026-02-22-crdt-ipns-inbox-sharing.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ff79d7a7bb5b",
+  "transcript_identifier_at_start": "c07c8da7-ece6-4451-aa9b-4816a9ceffdf",
+  "token_usage": {
+    "input_tokens": 84,
+    "cache_creation_tokens": 68590,
+    "cache_read_tokens": 4972366,
+    "output_tokens": 3711,
+    "api_call_count": 66
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-22T03:16:13.202357Z",
+    "agent_lines": 0,
+    "human_added": 18,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 18,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/14255944-5b59-48f2-a75c-0025d518c7ea.jsonl"
+}
