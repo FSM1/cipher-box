@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "b7c0a6854937",
+  "session_id": "1cd4e81e-c965-4804-bcb3-528cd9728724",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-22T01:41:58.335596Z",
+  "branch": "fix/staging-shares-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/migrations/1740250000000-AddSharesTables.ts",
+    "apps/api/src/migrations/1700000000000-FullSchema.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "547fb0351862",
+  "transcript_identifier_at_start": "66cb32cf-4b5a-419b-8036-d988beda5234",
+  "token_usage": {
+    "input_tokens": 50,
+    "cache_creation_tokens": 53427,
+    "cache_read_tokens": 2455200,
+    "output_tokens": 5721,
+    "api_call_count": 38
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-22T01:41:57.352531Z",
+    "agent_lines": 0,
+    "human_added": 139,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 139,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/1cd4e81e-c965-4804-bcb3-528cd9728724.jsonl"
+}
