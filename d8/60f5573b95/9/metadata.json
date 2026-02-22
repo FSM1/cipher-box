@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "d860f5573b95",
+  "session_id": "f7594e2b-a01a-4dde-b65e-7fd0625e8c42",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-22T00:22:44.729962Z",
+  "branch": "feat/phase-14-user-to-user-sharing",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+    "tests/e2e/page-objects/file-browser/context-menu.page.ts",
+    "tests/e2e/tests/sharing-workflow.spec.ts",
+    "tests/e2e/utils/test-files.ts",
+    "apps/web/src/components/file-browser/SharedFileBrowser.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "d51fe952d0e2",
+  "checkpoint_transcript_start": 978,
+  "transcript_lines_at_start": 978,
+  "token_usage": {
+    "input_tokens": 190,
+    "cache_creation_tokens": 238806,
+    "cache_read_tokens": 13037301,
+    "output_tokens": 19405,
+    "api_call_count": 110
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-22T00:22:43.767618Z",
+    "agent_lines": 371,
+    "human_added": 69,
+    "human_modified": 37,
+    "human_removed": 0,
+    "total_committed": 477,
+    "agent_percentage": 77.77777777777779
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/f7594e2b-a01a-4dde-b65e-7fd0625e8c42.jsonl"
+}
