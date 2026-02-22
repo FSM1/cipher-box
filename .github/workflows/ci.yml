@@ -237,7 +237,7 @@ jobs:
 
   build-desktop-windows:
     name: Build Windows Desktop
-    needs: [lint, typecheck]
+    needs: [cargo-check-windows, typecheck]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

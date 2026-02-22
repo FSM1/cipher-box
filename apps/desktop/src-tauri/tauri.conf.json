@@ -30,11 +30,11 @@
     },
     "windows": {
       "digestAlgorithm": "sha256",
-      "timestampUrl": "http://timestamp.comodoca.com"
-    },
-    "nsis": {
-      "installMode": "both",
-      "installerHooks": "windows/installer-hooks.nsh"
+      "timestampUrl": "http://timestamp.comodoca.com",
+      "nsis": {
+        "installMode": "both",
+        "installerHooks": "windows/installer-hooks.nsh"
+      }
     }
   },
   "plugins": {
