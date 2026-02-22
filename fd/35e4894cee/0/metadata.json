@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "fd35e4894cee",
+  "session_id": "1cd4e81e-c965-4804-bcb3-528cd9728724",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-22T02:21:41.731993Z",
+  "branch": "fix/staging-shares-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/todos/pending/2026-02-22-disable-synchronize-true-all-envs.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "a850be8d6732",
+  "transcript_identifier_at_start": "66cb32cf-4b5a-419b-8036-d988beda5234",
+  "token_usage": {
+    "input_tokens": 85,
+    "cache_creation_tokens": 83701,
+    "cache_read_tokens": 4858410,
+    "output_tokens": 7994,
+    "api_call_count": 63
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-22T02:21:40.930622Z",
+    "agent_lines": 0,
+    "human_added": 25,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 25,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/1cd4e81e-c965-4804-bcb3-528cd9728724.jsonl"
+}

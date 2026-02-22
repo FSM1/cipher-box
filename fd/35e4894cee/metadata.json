@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "fd35e4894cee",
+  "strategy": "manual-commit",
+  "branch": "fix/staging-shares-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/todos/pending/2026-02-22-disable-synchronize-true-all-envs.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fd/35e4894cee/0/metadata.json",
+      "transcript": "/fd/35e4894cee/0/full.jsonl",
+      "context": "/fd/35e4894cee/0/context.md",
+      "content_hash": "/fd/35e4894cee/0/content_hash.txt",
+      "prompt": "/fd/35e4894cee/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 85,
+    "cache_creation_tokens": 83701,
+    "cache_read_tokens": 4858410,
+    "output_tokens": 7994,
+    "api_call_count": 63
+  }
+}
