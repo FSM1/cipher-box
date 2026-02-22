@@ -24,7 +24,7 @@ use crate::crypto::folder::{FolderChild, FolderMetadata};
 /// On Windows, WinFsp also benefits from consistent name normalization for
 /// case-preserving lookups.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
-fn normalize_name(name: &str) -> String {
+pub(crate) fn normalize_name(name: &str) -> String {
     // unicode-normalization is a dependency of the fuse feature.
     // On Windows (winfsp feature), NFC normalization is still desirable but the
     // unicode-normalization crate is not included -- return name as-is for now.
