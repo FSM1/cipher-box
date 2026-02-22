@@ -46,8 +46,9 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 
 **Milestone Goal:** Elevate the staging MVP into a production-ready encrypted storage platform with sharing, search, MFA, file versioning, cross-platform desktop, and TEE failover.
 
-- [ ] **Phase 11: Windows Desktop** - Windows desktop app with WinFsp virtual filesystem (Tauri + NSIS installer) -- can run in parallel
+- [x] **Phase 11: Windows Desktop** - Windows desktop app with WinFsp virtual filesystem (Tauri + NSIS installer)
 - [x] **Phase 11.1: macOS Desktop Catch-Up** - Close all desktop gaps from Phases 12-12.6 before cross-platform expansion (INSERTED)
+- [ ] **Phase 11.3: Linux Desktop** - Linux desktop app with libfuse FUSE mount (Tauri + AppImage/deb) (INSERTED)
 - [x] **Phase 12: Core Kit Identity Provider Foundation** - Replace PnP Modal SDK with MPC Core Kit, CipherBox as identity provider
 - [x] **Phase 12.1: AES-CTR Streaming Encryption** - AES-256-CTR for media files with byte-range decryption and in-browser playback (INSERTED)
 - [x] **Phase 12.2: Encrypted Device Registry** - Encrypted device metadata on IPFS for cross-device infrastructure (INSERTED)
@@ -92,9 +93,22 @@ See `.planning/milestones/m3/ROADMAP.md` for full M3 phase details.
 **Plans:** 3 plans
 
 Plans:
-- [ ] 11-01-PLAN.md — Platform abstraction layer: FileAttrs struct, cross-platform inode/cache/file_handle, Cargo.toml winfsp dep, build.rs delayload
-- [ ] 11-02-PLAN.md — WinFsp FileSystemContext implementation: all callbacks, Windows mount/unmount, path resolution, platform special file filter
-- [ ] 11-03-PLAN.md — Platform branching (main.rs, tray, commands) + Tauri NSIS packaging with WinFsp bundling + CI Windows build job
+- [x] 11-01-PLAN.md — Platform abstraction layer: FileAttrs struct, cross-platform inode/cache/file_handle, Cargo.toml winfsp dep, build.rs delayload
+- [x] 11-02-PLAN.md — WinFsp FileSystemContext implementation: all callbacks, Windows mount/unmount, path resolution, platform special file filter
+- [x] 11-03-PLAN.md — Platform branching (main.rs, tray, commands) + Tauri NSIS packaging with WinFsp bundling + CI Windows build job
+
+### Phase 11.3: Linux Desktop (INSERTED)
+
+**Goal**: CipherBox desktop app runs on Linux with native FUSE filesystem integration via libfuse, full feature parity with macOS and Windows (system tray, credential storage, background sync, auto-start, headless mode)
+**Depends on**: Phase 11 (Windows Desktop — platform abstraction layer reused), Phase 11.1 (macOS catch-up), Phase 11.2 (v1 removal)
+**Requirements**: PLAT-01
+**Research flag**: NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse) packaging differences from macOS fuser, AppImage/deb packaging, Linux system tray (libappindicator vs StatusNotifierItem), Linux keyring (Secret Service API), CI Linux runner requirements
+**Success Criteria** (what must be TRUE):
+
+1. Linux user can install CipherBox via AppImage or .deb, log in, and access a FUSE mount at ~/CipherBox
+2. Background sync, system tray, and keyring storage work on Linux (parity with macOS/Windows)
+3. CI builds and packages Linux desktop app (adds to existing macOS + Windows matrix)
+   **Plans**: TBD
 
 ### Phase 12: Core Kit Identity Provider Foundation
 
@@ -405,6 +419,7 @@ Sequential order: 12 -> 12.5 -> 12.6 -> 12.1 -> 11.2 -> 13 -> 14 -> 15 -> 16 -> 
 Parallel phases:
 
 - Phase 11 (Windows Desktop) can run in parallel with any M2 phase (depends only on Phase 9/M1).
+- Phase 11.3 (Linux Desktop) can run in parallel with any M2 phase (depends on Phase 11 for platform abstraction).
 - Phase 17 (AWS Nitro TEE) can optionally execute in parallel with Phases 14-16 (depends on Phase 12).
 
 | Phase                       | Milestone | Plans Complete | Status      | Completed  |
@@ -440,7 +455,8 @@ Parallel phases:
 | 14. User-to-User Sharing    | M2        | 6/6            | Complete    | 2026-02-21 |
 | 15. Link Sharing + Search   | M2        | 0/TBD          | Not started | -          |
 | 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
-| 11. Windows Desktop         | M2        | 0/3            | Not started | -          |
+| 11. Windows Desktop         | M2        | 3/3            | Complete    | 2026-02-22 |
+| 11.3 Linux Desktop          | M2        | 0/TBD          | Not started | -          |
 | 17. AWS Nitro TEE           | M2        | 0/TBD          | Not started | -          |
 | 18. Billing Infrastructure  | M3        | 0/TBD          | Not started | -          |
 | 19. Team Accounts           | M3        | 0/TBD          | Not started | -          |
