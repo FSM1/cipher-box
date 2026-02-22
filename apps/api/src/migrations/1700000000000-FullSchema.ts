@@ -12,9 +12,10 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *   automatically — you must manually insert a row into the `migrations` table to mark it
  *   as applied, or only run migrations against fresh databases.
  *
- * Tables created (9):
+ * Tables created (11):
  *   users, refresh_tokens, auth_methods, vaults, pinned_cids,
- *   folder_ipns, tee_key_state, tee_key_rotation_log, ipns_republish_schedule
+ *   folder_ipns, tee_key_state, tee_key_rotation_log, ipns_republish_schedule,
+ *   shares, share_keys
  */
 export class FullSchema1700000000000 implements MigrationInterface {
   name = 'FullSchema1700000000000';
@@ -230,10 +231,61 @@ export class FullSchema1700000000000 implements MigrationInterface {
     await queryRunner.query(
       `CREATE INDEX "IDX_ipns_republish_status_next" ON "ipns_republish_schedule" ("status", "next_republish_at")`
     );
+
+    // ──────────────────────────────────────────────
+    // 10. shares (Phase 14 — user-to-user sharing)
+    // ──────────────────────────────────────────────
+    await queryRunner.query(`
+      CREATE TABLE "shares" (
+        "id"                    uuid NOT NULL DEFAULT uuid_generate_v4(),
+        "sharer_id"             uuid NOT NULL,
+        "recipient_id"          uuid NOT NULL,
+        "item_type"             varchar(10) NOT NULL,
+        "ipns_name"             varchar(255) NOT NULL,
+        "item_name"             varchar(255) NOT NULL,
+        "encrypted_key"         bytea NOT NULL,
+        "hidden_by_recipient"   boolean NOT NULL DEFAULT false,
+        "revoked_at"            TIMESTAMP,
+        "created_at"            TIMESTAMP NOT NULL DEFAULT now(),
+        "updated_at"            TIMESTAMP NOT NULL DEFAULT now(),
+        CONSTRAINT "PK_shares" PRIMARY KEY ("id"),
+        CONSTRAINT "FK_shares_sharer" FOREIGN KEY ("sharer_id")
+          REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+        CONSTRAINT "FK_shares_recipient" FOREIGN KEY ("recipient_id")
+          REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE NO ACTION
+      )
+    `);
+
+    await queryRunner.query(`CREATE INDEX "IDX_shares_sharer_id" ON "shares" ("sharer_id")`);
+    await queryRunner.query(`CREATE INDEX "IDX_shares_recipient_id" ON "shares" ("recipient_id")`);
+    await queryRunner.query(`CREATE INDEX "IDX_shares_ipns_name" ON "shares" ("ipns_name")`);
+
+    // ──────────────────────────────────────────────
+    // 11. share_keys (Phase 14 — per-file/subfolder keys)
+    // ──────────────────────────────────────────────
+    await queryRunner.query(`
+      CREATE TABLE "share_keys" (
+        "id"              uuid NOT NULL DEFAULT uuid_generate_v4(),
+        "share_id"        uuid NOT NULL,
+        "key_type"        varchar(10) NOT NULL,
+        "item_id"         varchar(255) NOT NULL,
+        "encrypted_key"   bytea NOT NULL,
+        "created_at"      TIMESTAMP NOT NULL DEFAULT now(),
+        CONSTRAINT "PK_share_keys" PRIMARY KEY ("id"),
+        CONSTRAINT "UQ_share_keys_share_type_item" UNIQUE ("share_id", "key_type", "item_id"),
+        CONSTRAINT "FK_share_keys_share" FOREIGN KEY ("share_id")
+          REFERENCES "shares" ("id") ON DELETE CASCADE ON UPDATE NO ACTION
+      )
+    `);
+
+    await queryRunner.query(`CREATE INDEX "IDX_share_keys_share_id" ON "share_keys" ("share_id")`);
+    await queryRunner.query(`CREATE INDEX "IDX_share_keys_item_id" ON "share_keys" ("item_id")`);
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
     // Drop tables in reverse dependency order (children before parents)
+    await queryRunner.query(`DROP TABLE IF EXISTS "share_keys" CASCADE`);
+    await queryRunner.query(`DROP TABLE IF EXISTS "shares" CASCADE`);
     await queryRunner.query(`DROP TABLE IF EXISTS "ipns_republish_schedule" CASCADE`);
     await queryRunner.query(`DROP TABLE IF EXISTS "tee_key_rotation_log" CASCADE`);
     await queryRunner.query(`DROP TABLE IF EXISTS "tee_key_state" CASCADE`);
