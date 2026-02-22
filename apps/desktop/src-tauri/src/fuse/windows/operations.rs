@@ -21,7 +21,6 @@ pub(crate) mod implementation {
         WideNameInfo,
     };
     use widestring::{U16CStr, U16CString};
-    use windows::Win32::Storage::FileSystem::{FILE_ACCESS_RIGHTS, FILE_FLAGS_AND_ATTRIBUTES};
     use winfsp::FspError;
 
     use crate::fuse::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
@@ -653,7 +652,7 @@ pub(crate) mod implementation {
             // Use a permissive default security descriptor.
             // CipherBox is single-user, encryption is the real access control.
             Ok(FileSecurity {
-                attributes: FILE_FLAGS_AND_ATTRIBUTES(info.file_attributes),
+                attributes: info.file_attributes,
                 reparse: false,
                 sz_security_descriptor: 0,
             })
@@ -664,7 +663,7 @@ pub(crate) mod implementation {
             &self,
             file_name: &U16CStr,
             create_options: u32,
-            granted_access: FILE_ACCESS_RIGHTS,
+            granted_access: u32,
             file_info: &mut OpenFileInfo,
         ) -> Result<Self::FileContext, FspError> {
             let path = file_name.to_string_lossy();
@@ -1267,19 +1266,21 @@ pub(crate) mod implementation {
                 }
             }
 
-            // Check content cache
-            if let Some(cached) = fs.content_cache.get(&cid) {
+            // Check content cache -- clone to release immutable borrow before
+            // mutably borrowing open_files below.
+            let cached_owned = fs.content_cache.get(&cid).map(|c| c.to_vec());
+            if let Some(cached_owned) = cached_owned {
                 let start = offset as usize;
-                if start >= cached.len() {
+                if start >= cached_owned.len() {
                     return Ok(0);
                 }
-                let end = std::cmp::min(start + buffer.len(), cached.len());
+                let end = std::cmp::min(start + buffer.len(), cached_owned.len());
                 let len = end - start;
-                buffer[..len].copy_from_slice(&cached[start..end]);
+                buffer[..len].copy_from_slice(&cached_owned[start..end]);
 
                 // Store in handle for subsequent reads
                 if let Some(handle) = fs.open_files.get_mut(&fh) {
-                    handle.cached_content = Some(cached.to_vec());
+                    handle.cached_content = Some(cached_owned);
                 }
                 return Ok(len as u32);
             }
@@ -1441,7 +1442,7 @@ pub(crate) mod implementation {
         fn set_basic_info(
             &self,
             context: &Self::FileContext,
-            _file_attributes: FILE_FLAGS_AND_ATTRIBUTES,
+            _file_attributes: u32,
             creation_time: u64,
             last_access_time: u64,
             last_write_time: u64,
@@ -1733,9 +1734,9 @@ pub(crate) mod implementation {
 
                 let mut dir_info = DirInfo::new();
                 *dir_info.file_info_mut() = entry_info.clone();
-                dir_info.set_name(entry_name);
-                match dir_info.write(buffer, bytes_written as usize) {
-                    Some(new_offset) => bytes_written = new_offset as u32,
+                dir_info.set_name_cstr(entry_name);
+                match dir_info.append_to_buffer(&mut buffer[bytes_written as usize..]) {
+                    Some(written) => bytes_written += written as u32,
                     None => break, // buffer full
                 }
             }
@@ -1818,8 +1819,8 @@ pub(crate) mod implementation {
             &self,
             file_name: &U16CStr,
             create_options: u32,
-            _granted_access: FILE_ACCESS_RIGHTS,
-            _file_attributes: FILE_FLAGS_AND_ATTRIBUTES,
+            _granted_access: u32,
+            _file_attributes: u32,
             _security_descriptor: Option<&[c_void]>,
             _allocation_size: u64,
             _extra_buffer: Option<&[u8]>,
