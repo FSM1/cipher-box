@@ -183,7 +183,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-8 pending todo(s):
+10 pending todo(s):
 
 - `2026-02-07-web-worker-large-file-encryption.md` -- Offload large file encryption to Web Worker (area: ui)
 - `2026-02-14-bring-your-own-ipfs-node.md` -- Add bring-your-own IPFS node support (area: api)
@@ -193,6 +193,8 @@ Recent decisions affecting current work:
 - `2026-02-21-move-root-folder-key-to-ipfs.md` -- Move rootFolderKey to IPFS vault record, eliminate server-side key storage (area: crypto)
 - `2026-02-21-ipns-resolution-alternatives.md` -- Investigate alternatives to delegated-ipfs.dev for IPNS resolution (area: api)
 - `2026-02-21-desktop-tee-enrollment-for-new-files.md` -- Desktop TEE enrollment for new files (area: desktop)
+- `2026-02-21-phase14-security-review-deferred.md` -- Phase 14 security review: deferred findings M1, M5, L1, L4 (area: shares)
+- `2026-02-22-disable-synchronize-true-all-envs.md` -- Disable synchronize:true in dev and CI to surface missing migrations (area: api)
 
 ### Roadmap Evolution
 
