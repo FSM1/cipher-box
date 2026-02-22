@@ -220,6 +220,10 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile $out
           Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
 
+      - name: Create WinFsp MSI placeholder for resource glob
+        shell: powershell
+        run: New-Item -ItemType File -Force -Path "apps/desktop/src-tauri/resources/winfsp-placeholder.msi"
+
       - name: Install Rust toolchain
         run: rustup default stable
 
