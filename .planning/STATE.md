@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 11 Windows Desktop (Plan 02 complete)
+**Current focus:** Milestone 2 -- Phase 11 Windows Desktop COMPLETE (all 3 plans done)
 
 ## Current Position
 
 Phase: 11-windows-desktop (Windows Desktop)
-Plan: 2 of 3
-Status: In progress
-Last activity: 2026-02-22 -- Completed 11-02-PLAN.md (WinFsp Operations Implementation)
+Plan: 3 of 3
+Status: Phase complete
+Last activity: 2026-02-22 -- Completed 11-03-PLAN.md (NSIS Installer & CI Windows Build)
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 2/3)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 129
+- Total plans completed: 130
 - Average duration: 5.5 min
-- Total execution time: 12.4 hours
+- Total execution time: 12.5 hours
 
 **By Phase (M1 summary):**
 
@@ -41,12 +41,12 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 11.2   | 3/3   | 30 min  | 10.0 min |
 | M2 Phase 13     | 5/5   | 31 min  | 6.2 min  |
 | M2 Phase 14     | 6/6   | 42 min  | 7.0 min  |
-| M2 Phase 11     | 2/3   | 30 min  | 15.0 min |
+| M2 Phase 11     | 3/3   | 35 min  | 11.7 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 5m, 8m, 8m, 14m, 16m
-- Trend: Elevated (cross-platform WinFsp implementation requires careful API translation)
+- Last 5 plans: 8m, 8m, 14m, 16m, 5m
+- Trend: Normalizing (final Windows plan was config/CI changes, no complex API translation)
 
 Updated after each plan completion.
 
@@ -189,6 +189,10 @@ Recent decisions affecting current work:
 | OnceLock<AtomicBool> stop signal for WinFsp unmount                    | 11-02     | Avoids storing FileSystemHost globally; stop flag coordinates shutdown across threads                                |
 | WinFsp creates mount directory (no pre-create)                         | 11-02     | WinFsp uses reparse point for mount; pre-existing directory causes mount failure                                    |
 | Platform dispatch via cfg re-exports in fuse/mod.rs                    | 11-02     | Same function names (mount_filesystem/unmount_filesystem) resolve to correct impl via feature flags                 |
+| WinFsp runtime detection via winreg at startup                         | 11-03     | Registry check + DLL existence verification; notification if missing, app still launches                            |
+| NSIS ExecWait for WinFsp MSI install (not nsExec)                      | 11-03     | Simpler exit code handling; MSI installed silently with INSTALLLEVEL=1000                                           |
+| WinFsp MSI downloaded in CI, not committed to git                      | 11-03     | Binary files not suitable for source control; CI downloads from official GitHub release                             |
+| cfg(any(fuse, winfsp)) in entry point files                            | 11-03     | Compound feature gate enables same mount/unmount code paths on both platforms                                       |
 
 ### Pending Todos
 
@@ -259,11 +263,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 11-02-PLAN.md (WinFsp Operations Implementation)
+Stopped at: Completed 11-03-PLAN.md (NSIS Installer & CI Windows Build) -- Phase 11 COMPLETE
 Resume file: None
-Next: Execute 11-03-PLAN.md (NSIS Installer & CI Windows Build)
+Next: Next phase TBD (Phase 11.3 Linux Desktop needs research, or Phase 15/16/17)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-22 after Phase 11 Plan 02 (WinFsp Operations Implementation) complete_
+_Last updated: 2026-02-22 after Phase 11 Plan 03 (NSIS Installer & CI Windows Build) complete -- Phase 11 COMPLETE_
