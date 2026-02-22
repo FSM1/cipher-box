@@ -1732,7 +1732,7 @@ pub(crate) mod implementation {
                     continue;
                 }
 
-                let mut dir_info = DirInfo::new();
+                let mut dir_info = DirInfo::<255>::new();
                 *dir_info.file_info_mut() = entry_info.clone();
                 let _ = dir_info.set_name_cstr(entry_name);
                 if !dir_info.append_to_buffer(buffer, &mut bytes_written) {
