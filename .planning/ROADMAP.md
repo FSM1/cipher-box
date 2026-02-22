@@ -392,15 +392,22 @@ Plans:
 
 ### Phase 15: Link Sharing
 
-**Goal**: Users can share individual files via link with non-users, where the decryption key lives in the URL fragment only (never sent to server)
+**Goal**: Users can share files and folders via invite links where the decryption key lives in the URL fragment only (never sent to server). Recipients must authenticate (invite model) and the share is auto-claimed using Phase 14 infrastructure.
 **Depends on**: Phase 14
 **Requirements**: SHARE-06, SHARE-07
-**Research flag**: NEEDS `/gsd:research-phase` -- unauthenticated web viewer is a new security surface (standalone page, no auth, client-side decryption)
+**Research flag**: COMPLETE -- ephemeral key bridge pattern, HashRouter fragment handling, unauthenticated endpoint design researched
 **Success Criteria** (what must be TRUE):
 
 1. User can generate a shareable link for a file where the decryption key is in the URL fragment only (never sent to server)
-2. Recipient can open the link in a browser and download the decrypted file without a CipherBox account
-   **Plans**: TBD
+2. Recipient can open the link, log in or create an account, and the share is auto-claimed (appears in "Shared with me")
+
+**Plans:** 3 plans
+
+Plans:
+
+- [ ] 15-01-PLAN.md — Backend: ShareInvite entity, migration, DTOs, InvitesController, service methods, module registration
+- [ ] 15-02-PLAN.md — API client regen + frontend invite service with ephemeral key bridge crypto
+- [ ] 15-03-PLAN.md — ShareDialog tabbed UI (Direct Share | Invite Link) + InvitePage landing page + route + build verification
 
 ### Phase 15.1: Client-Side Search (INSERTED)
 
@@ -484,7 +491,7 @@ Parallel phases:
 | 11.2 Remove v1 Folder Meta  | M2        | 3/3            | Complete    | 2026-02-19 |
 | 13. File Versioning         | M2        | 5/5            | Complete    | 2026-02-19 |
 | 14. User-to-User Sharing    | M2        | 6/6            | Complete    | 2026-02-21 |
-| 15. Link Sharing            | M2        | 0/TBD          | Not started | -          |
+| 15. Link Sharing            | M2        | 0/3            | Not started | -          |
 | 15.1 Client-Side Search     | M2        | 0/TBD          | Not started | -          |
 | 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
 | 11. Windows Desktop         | M2        | 3/3            | Complete    | 2026-02-22 |
