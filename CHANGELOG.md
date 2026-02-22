@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/FSM1/cipher-box/compare/v0.14.0...v0.15.0) (2026-02-22)
+
+
+### Features
+
+* **14:** user-to-user encrypted sharing ([#183](https://github.com/FSM1/cipher-box/issues/183)) ([84a232d](https://github.com/FSM1/cipher-box/commit/84a232db4faf6fbfb3a354cdf847e75583073851))
+
 ## [0.14.0](https://github.com/FSM1/cipher-box/compare/v0.13.4...v0.14.0) (2026-02-21)
 
 
