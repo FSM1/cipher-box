@@ -5,6 +5,7 @@ area: architecture
 related:
   - .planning/todos/pending/2026-02-21-ipns-resolution-alternatives.md
   - .planning/phases/14-user-to-user-sharing/14-CONTEXT.md
+  - .planning/todos/pending/2026-02-21-move-root-folder-key-to-ipfs.md
 ---
 
 ## Summary

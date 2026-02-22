@@ -134,6 +134,7 @@ Key insight: every centralized workaround we add (DB-cached CIDs, shares table, 
 Open challenges: write-access control on publicly-derivable IPNS addresses, revocation semantics, and IPNS reliability (a prerequisite regardless of approach).
 
 **See:** `.planning/todos/pending/2026-02-22-crdt-ipns-inbox-sharing.md` for full research scope.
+**See also:** `.planning/todos/pending/2026-02-21-ipns-resolution-alternatives.md` for IPNS reliability investigation paths that gate this approach.
 
 ### Decision
 
