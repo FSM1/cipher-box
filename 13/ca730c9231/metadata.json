@@ -3,9 +3,10 @@
   "checkpoint_id": "13ca730c9231",
   "strategy": "manual-commit",
   "branch": "fix/staging-shares-migration",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     ".learnings/2026-02-22-staging-migration-missing-create-table.md",
+    "apps/api/src/migrations/1700000000000-FullSchema.ts",
     "docs/DATABASE_EVOLUTION_PROTOCOL.md"
   ],
   "sessions": [
@@ -15,13 +16,20 @@
       "context": "/13/ca730c9231/0/context.md",
       "content_hash": "/13/ca730c9231/0/content_hash.txt",
       "prompt": "/13/ca730c9231/0/prompt.txt"
+    },
+    {
+      "metadata": "/13/ca730c9231/1/metadata.json",
+      "transcript": "/13/ca730c9231/1/full.jsonl",
+      "context": "/13/ca730c9231/1/context.md",
+      "content_hash": "/13/ca730c9231/1/content_hash.txt",
+      "prompt": "/13/ca730c9231/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 24,
-    "cache_creation_tokens": 31186,
-    "cache_read_tokens": 1056118,
-    "output_tokens": 818,
-    "api_call_count": 20
+    "input_tokens": 109,
+    "cache_creation_tokens": 114887,
+    "cache_read_tokens": 5914528,
+    "output_tokens": 8812,
+    "api_call_count": 83
   }
 }
