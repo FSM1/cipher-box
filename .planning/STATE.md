@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 11 Windows Desktop (Plan 01 complete)
+**Current focus:** Milestone 2 -- Phase 11 Windows Desktop (Plan 02 complete)
 
 ## Current Position
 
 Phase: 11-windows-desktop (Windows Desktop)
-Plan: 1 of 3
+Plan: 2 of 3
 Status: In progress
-Last activity: 2026-02-22 -- Completed 11-01-PLAN.md (Platform Abstraction Layer)
+Last activity: 2026-02-22 -- Completed 11-02-PLAN.md (WinFsp Operations Implementation)
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 1/3)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 2/3)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 128
+- Total plans completed: 129
 - Average duration: 5.5 min
-- Total execution time: 12.1 hours
+- Total execution time: 12.4 hours
 
 **By Phase (M1 summary):**
 
@@ -41,12 +41,12 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 11.2   | 3/3   | 30 min  | 10.0 min |
 | M2 Phase 13     | 5/5   | 31 min  | 6.2 min  |
 | M2 Phase 14     | 6/6   | 42 min  | 7.0 min  |
-| M2 Phase 11     | 1/3   | 14 min  | 14.0 min |
+| M2 Phase 11     | 2/3   | 30 min  | 15.0 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 6m, 5m, 8m, 8m, 14m
-- Trend: Elevated (cross-platform abstraction requires careful code review)
+- Last 5 plans: 5m, 8m, 8m, 14m, 16m
+- Trend: Elevated (cross-platform WinFsp implementation requires careful API translation)
 
 Updated after each plan completion.
 
@@ -184,6 +184,11 @@ Recent decisions affecting current work:
 | FileAttrs with to_fuse_attr() boundary conversion                      | 11-01     | Core uses platform-agnostic FileAttrs; uid/gid injected at operations layer, not stored in shared structs           |
 | AccessMode enum replaces libc POSIX flags                              | 11-01     | Platform-independent ReadOnly/WriteOnly/ReadWrite instead of O_RDONLY/O_WRONLY/O_RDWR                               |
 | cfg(any(fuse, winfsp)) for shared filesystem code                      | 11-01     | Shared types available to both platforms; mount/unmount remain feature-specific                                      |
+| Self-contained decrypt functions per platform module                    | 11-02     | Windows module has own decrypt_metadata_from_ipfs; fuse::operations gated to fuse-only, can't be cross-referenced   |
+| Arc<Mutex<CipherBoxFS>> for WinFsp interior mutability                 | 11-02     | WinFsp callbacks receive &self; Mutex wraps shared state for safe mutation from any thread                          |
+| OnceLock<AtomicBool> stop signal for WinFsp unmount                    | 11-02     | Avoids storing FileSystemHost globally; stop flag coordinates shutdown across threads                                |
+| WinFsp creates mount directory (no pre-create)                         | 11-02     | WinFsp uses reparse point for mount; pre-existing directory causes mount failure                                    |
+| Platform dispatch via cfg re-exports in fuse/mod.rs                    | 11-02     | Same function names (mount_filesystem/unmount_filesystem) resolve to correct impl via feature flags                 |
 
 ### Pending Todos
 
@@ -254,11 +259,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-22
-Stopped at: Completed 11-01-PLAN.md (Platform Abstraction Layer)
+Stopped at: Completed 11-02-PLAN.md (WinFsp Operations Implementation)
 Resume file: None
-Next: Execute 11-02-PLAN.md (WinFsp Operations Implementation)
+Next: Execute 11-03-PLAN.md (NSIS Installer & CI Windows Build)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-22 after Phase 11 Plan 01 (Platform Abstraction Layer) complete_
+_Last updated: 2026-02-22 after Phase 11 Plan 02 (WinFsp Operations Implementation) complete_
