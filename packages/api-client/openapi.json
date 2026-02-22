@@ -1082,6 +1082,435 @@
         "tags": ["device-approval"]
       }
     },
+    "/shares": {
+      "post": {
+        "description": "Share an encrypted folder or file with another user. The encryptedKey is the item key re-wrapped for the recipient via ECIES.",
+        "operationId": "SharesController_createShare",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateShareDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Share created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateShareResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Recipient not found"
+          },
+          "409": {
+            "description": "Share already exists or self-share"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create a share",
+        "tags": ["shares"]
+      }
+    },
+    "/shares/received": {
+      "get": {
+        "description": "Get all active, non-hidden shares received by the authenticated user.",
+        "operationId": "SharesController_getReceivedShares",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "List of received shares",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReceivedShareResponseDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List received shares",
+        "tags": ["shares"]
+      }
+    },
+    "/shares/sent": {
+      "get": {
+        "description": "Get all active shares created by the authenticated user.",
+        "operationId": "SharesController_getSentShares",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "List of sent shares",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SentShareResponseDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List sent shares",
+        "tags": ["shares"]
+      }
+    },
+    "/shares/lookup": {
+      "get": {
+        "description": "Verify a public key belongs to a registered CipherBox user.",
+        "operationId": "SharesController_lookupUser",
+        "parameters": [
+          {
+            "name": "publicKey",
+            "required": true,
+            "in": "query",
+            "description": "Uncompressed secp256k1 public key (0x04...)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User found"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "User not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Look up user by public key",
+        "tags": ["shares"]
+      }
+    },
+    "/shares/pending-rotations": {
+      "get": {
+        "description": "Get shares that have been revoked but not yet key-rotated. Used by the client to detect lazy rotation needs before folder modification.",
+        "operationId": "SharesController_getPendingRotations",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "List of revoked shares pending rotation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PendingRotationResponseDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get pending rotations",
+        "tags": ["shares"]
+      }
+    },
+    "/shares/{shareId}/keys": {
+      "get": {
+        "description": "Get all re-wrapped child keys for a share. Accessible by sharer or recipient.",
+        "operationId": "SharesController_getShareKeys",
+        "parameters": [
+          {
+            "name": "shareId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of share keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ShareKeyResponseDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Not authorized to access this share"
+          },
+          "404": {
+            "description": "Share not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get share keys",
+        "tags": ["shares"]
+      },
+      "post": {
+        "description": "Add re-wrapped child keys to an existing share. Only the sharer can add keys.",
+        "operationId": "SharesController_addShareKeys",
+        "parameters": [
+          {
+            "name": "shareId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddShareKeysDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Keys added"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Only the sharer can add keys"
+          },
+          "404": {
+            "description": "Share not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Add share keys",
+        "tags": ["shares"]
+      }
+    },
+    "/shares/{shareId}": {
+      "delete": {
+        "description": "Soft-delete a share by setting revokedAt. Only the sharer can revoke. Keys are kept for lazy rotation.",
+        "operationId": "SharesController_revokeShare",
+        "parameters": [
+          {
+            "name": "shareId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Share revoked"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Only the sharer can revoke"
+          },
+          "404": {
+            "description": "Share not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Revoke a share",
+        "tags": ["shares"]
+      }
+    },
+    "/shares/{shareId}/hide": {
+      "patch": {
+        "description": "Mark a share as hidden by the recipient. Only the recipient can hide.",
+        "operationId": "SharesController_hideShare",
+        "parameters": [
+          {
+            "name": "shareId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Share hidden"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Only the recipient can hide"
+          },
+          "404": {
+            "description": "Share not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Hide a share",
+        "tags": ["shares"]
+      }
+    },
+    "/shares/{shareId}/encrypted-key": {
+      "patch": {
+        "description": "Update the encrypted key on an existing share after lazy key rotation. Only the sharer can update the key.",
+        "operationId": "SharesController_updateShareEncryptedKey",
+        "parameters": [
+          {
+            "name": "shareId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEncryptedKeyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Encrypted key updated"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Only the sharer can update"
+          },
+          "404": {
+            "description": "Share not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update share encrypted key",
+        "tags": ["shares"]
+      }
+    },
+    "/shares/{shareId}/complete-rotation": {
+      "delete": {
+        "description": "Hard-delete a revoked share after the sharer has rotated the folder key. Called after the client performs lazy key rotation.",
+        "operationId": "SharesController_completeRotation",
+        "parameters": [
+          {
+            "name": "shareId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Share hard-deleted after rotation"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Only the sharer can complete rotation"
+          },
+          "404": {
+            "description": "Share not found"
+          },
+          "409": {
+            "description": "Share has not been revoked"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Complete key rotation",
+        "tags": ["shares"]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "HealthController_check",
@@ -1167,6 +1596,10 @@
     {
       "name": "device-approval",
       "description": "Cross-device approval endpoints"
+    },
+    {
+      "name": "shares",
+      "description": "User-to-user sharing endpoints"
     }
   ],
   "servers": [],
@@ -1914,6 +2347,258 @@
           }
         },
         "required": ["action", "respondedByDeviceId"]
+      },
+      "ChildKeyDto": {
+        "type": "object",
+        "properties": {
+          "keyType": {
+            "type": "string",
+            "description": "Type of key: file or folder",
+            "enum": ["file", "folder"]
+          },
+          "itemId": {
+            "type": "string",
+            "description": "UUID of the file or subfolder"
+          },
+          "encryptedKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of the key wrapped for recipient"
+          }
+        },
+        "required": ["keyType", "itemId", "encryptedKey"]
+      },
+      "CreateShareDto": {
+        "type": "object",
+        "properties": {
+          "recipientPublicKey": {
+            "type": "string",
+            "description": "Recipient secp256k1 public key (uncompressed, 0x04... format)",
+            "example": "04abc123..."
+          },
+          "itemType": {
+            "type": "string",
+            "description": "Type of shared item",
+            "enum": ["folder", "file"]
+          },
+          "ipnsName": {
+            "type": "string",
+            "description": "IPNS name (k51...) of the shared item"
+          },
+          "itemName": {
+            "type": "string",
+            "description": "Display name of the shared item"
+          },
+          "encryptedKey": {
+            "type": "string",
+            "description": "Hex-encoded root key wrapped for recipient via ECIES"
+          },
+          "childKeys": {
+            "description": "Re-wrapped descendant keys (subfolder/file keys)",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChildKeyDto"
+            }
+          }
+        },
+        "required": ["recipientPublicKey", "itemType", "ipnsName", "itemName", "encryptedKey"]
+      },
+      "CreateShareResponseDto": {
+        "type": "object",
+        "properties": {
+          "shareId": {
+            "type": "string",
+            "description": "UUID of the created share"
+          },
+          "itemType": {
+            "type": "string",
+            "enum": ["folder", "file"]
+          },
+          "ipnsName": {
+            "type": "string",
+            "description": "IPNS name of the shared item"
+          },
+          "itemName": {
+            "type": "string",
+            "description": "Display name of the shared item"
+          },
+          "encryptedKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES-wrapped key for recipient"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "description": "When the share was created"
+          }
+        },
+        "required": ["shareId", "itemType", "ipnsName", "itemName", "encryptedKey", "createdAt"]
+      },
+      "ReceivedShareResponseDto": {
+        "type": "object",
+        "properties": {
+          "shareId": {
+            "type": "string"
+          },
+          "sharerPublicKey": {
+            "type": "string",
+            "description": "Sharer secp256k1 public key (0x04...)"
+          },
+          "itemType": {
+            "type": "string",
+            "enum": ["folder", "file"]
+          },
+          "ipnsName": {
+            "type": "string"
+          },
+          "itemName": {
+            "type": "string"
+          },
+          "encryptedKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES-wrapped key for recipient"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "shareId",
+          "sharerPublicKey",
+          "itemType",
+          "ipnsName",
+          "itemName",
+          "encryptedKey",
+          "createdAt"
+        ]
+      },
+      "SentShareResponseDto": {
+        "type": "object",
+        "properties": {
+          "shareId": {
+            "type": "string"
+          },
+          "recipientPublicKey": {
+            "type": "string",
+            "description": "Recipient secp256k1 public key (0x04...)"
+          },
+          "itemType": {
+            "type": "string",
+            "enum": ["folder", "file"]
+          },
+          "ipnsName": {
+            "type": "string"
+          },
+          "itemName": {
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "shareId",
+          "recipientPublicKey",
+          "itemType",
+          "ipnsName",
+          "itemName",
+          "createdAt"
+        ]
+      },
+      "PendingRotationResponseDto": {
+        "type": "object",
+        "properties": {
+          "shareId": {
+            "type": "string"
+          },
+          "recipientPublicKey": {
+            "type": "string",
+            "description": "Recipient secp256k1 public key (0x04...)"
+          },
+          "itemType": {
+            "type": "string",
+            "enum": ["folder", "file"]
+          },
+          "ipnsName": {
+            "type": "string"
+          },
+          "itemName": {
+            "type": "string"
+          },
+          "revokedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "shareId",
+          "recipientPublicKey",
+          "itemType",
+          "ipnsName",
+          "itemName",
+          "revokedAt"
+        ]
+      },
+      "ShareKeyResponseDto": {
+        "type": "object",
+        "properties": {
+          "keyType": {
+            "type": "string",
+            "enum": ["file", "folder"]
+          },
+          "itemId": {
+            "type": "string",
+            "description": "UUID of the file or folder"
+          },
+          "encryptedKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES-wrapped key for recipient"
+          }
+        },
+        "required": ["keyType", "itemId", "encryptedKey"]
+      },
+      "ShareKeyEntryDto": {
+        "type": "object",
+        "properties": {
+          "keyType": {
+            "type": "string",
+            "description": "Type of key: file or folder",
+            "enum": ["file", "folder"]
+          },
+          "itemId": {
+            "type": "string",
+            "description": "UUID of the file or subfolder"
+          },
+          "encryptedKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of the key wrapped for recipient"
+          }
+        },
+        "required": ["keyType", "itemId", "encryptedKey"]
+      },
+      "AddShareKeysDto": {
+        "type": "object",
+        "properties": {
+          "keys": {
+            "description": "Array of re-wrapped keys to add to the share",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShareKeyEntryDto"
+            }
+          }
+        },
+        "required": ["keys"]
+      },
+      "UpdateEncryptedKeyDto": {
+        "type": "object",
+        "properties": {
+          "encryptedKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of the new key wrapped for recipient"
+          }
+        },
+        "required": ["encryptedKey"]
       }
     }
   }

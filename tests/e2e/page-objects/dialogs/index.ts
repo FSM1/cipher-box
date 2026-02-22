@@ -6,3 +6,4 @@ export { CreateFolderDialogPage } from './create-folder-dialog.page';
 export { RenameDialogPage } from './rename-dialog.page';
 export { MoveDialogPage } from './move-dialog.page';
 export { TextEditorDialogPage } from './text-editor-dialog.page';
+export { ShareDialogPage } from './share-dialog.page';

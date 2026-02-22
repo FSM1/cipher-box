@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { FilePointer } from '@cipherbox/crypto';
 import { useAuthStore } from '../stores/auth.store';
-import { downloadFileFromIpns, triggerBrowserDownload } from '../services/download.service';
+import {
+  downloadFile,
+  downloadFileFromIpns,
+  triggerBrowserDownload,
+} from '../services/download.service';
+import { resolveFileMetadata } from '../services/file-metadata.service';
+import { fetchShareKeys } from '../services/share.service';
 
 type UseFilePreviewOptions = {
   open: boolean;
@@ -9,6 +15,8 @@ type UseFilePreviewOptions = {
   mimeType: string;
   /** Parent folder's decrypted AES-256 key (needed to decrypt file metadata) */
   folderKey: Uint8Array | null;
+  /** Share ID when previewing from a shared folder — uses re-wrapped file keys */
+  shareId?: string | null;
 };
 
 type UseFilePreviewReturn = {
@@ -25,12 +33,16 @@ type UseFilePreviewReturn = {
  * Encapsulates the IPNS-resolve-download-decrypt-blob-URL lifecycle used by
  * PDF, audio, video, and image preview dialogs. Creates an object
  * URL from the decrypted file content and revokes it on close.
+ *
+ * When `shareId` is provided, fetches re-wrapped file keys from share_keys
+ * instead of using the owner-encrypted key from file metadata.
  */
 export function useFilePreview({
   open,
   item,
   mimeType,
   folderKey,
+  shareId,
 }: UseFilePreviewOptions): UseFilePreviewReturn {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,12 +80,39 @@ export function useFilePreview({
           throw new Error('No keypair available - please log in again');
         }
 
-        const plaintext = await downloadFileFromIpns({
-          fileMetaIpnsName: item.fileMetaIpnsName,
-          folderKey: folderKey!,
-          privateKey: auth.vaultKeypair.privateKey,
-          fileName: item.name,
-        });
+        let plaintext: Uint8Array;
+
+        if (shareId) {
+          // Shared file path: use re-wrapped file key from share_keys
+          const [{ metadata: fileMeta }, keys] = await Promise.all([
+            resolveFileMetadata(item.fileMetaIpnsName, folderKey!),
+            fetchShareKeys(shareId),
+          ]);
+
+          const fileKeyRecord = keys.find((k) => k.keyType === 'file' && k.itemId === item.id);
+          if (!fileKeyRecord) {
+            throw new Error('No re-wrapped file key available for this file');
+          }
+
+          plaintext = await downloadFile(
+            {
+              cid: fileMeta.cid,
+              iv: fileMeta.fileIv,
+              wrappedKey: fileKeyRecord.encryptedKey,
+              originalName: item.name,
+              encryptionMode: fileMeta.encryptionMode,
+            },
+            auth.vaultKeypair.privateKey
+          );
+        } else {
+          // Owner path: use file key from metadata directly
+          plaintext = await downloadFileFromIpns({
+            fileMetaIpnsName: item.fileMetaIpnsName,
+            folderKey: folderKey!,
+            privateKey: auth.vaultKeypair.privateKey,
+            fileName: item.name,
+          });
+        }
 
         if (cancelled) return;
 
@@ -96,7 +135,7 @@ export function useFilePreview({
         URL.revokeObjectURL(url);
       }
     };
-  }, [open, item, folderKey, mimeType]);
+  }, [open, item, folderKey, mimeType, shareId]);
 
   const handleDownload = useCallback(() => {
     if (!decryptedData || !item) return;

@@ -7,7 +7,7 @@ import {
   type DragEvent,
   type MouseEvent,
 } from 'react';
-import type { FolderChild, FilePointer } from '@cipherbox/crypto';
+import type { FolderChild, FilePointer, FolderEntry } from '@cipherbox/crypto';
 import { useFolderNavigation } from '../../hooks/useFolderNavigation';
 import { useFolder } from '../../hooks/useFolder';
 import { useFileDownload } from '../../hooks/useFileDownload';
@@ -28,6 +28,7 @@ import { RenameDialog } from './RenameDialog';
 import { CreateFolderDialog } from './CreateFolderDialog';
 import { MoveDialog } from './MoveDialog';
 import { DetailsDialog } from './DetailsDialog';
+import { ShareDialog } from './ShareDialog';
 import { UploadZone } from './UploadZone';
 import { TextEditorDialog } from './TextEditorDialog';
 import { ImagePreviewDialog } from './ImagePreviewDialog';
@@ -447,6 +448,7 @@ export function FileBrowser() {
     item: null,
   });
   const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false);
+  const [shareItem, setShareItem] = useState<FolderChild | null>(null);
 
   // Clear selection when navigating to a new folder
   const handleNavigate = useCallback(
@@ -617,6 +619,13 @@ export function FileBrowser() {
   const handleDetailsClick = useCallback(() => {
     if (contextMenu.item) {
       setDetailsDialog({ open: true, item: contextMenu.item });
+    }
+  }, [contextMenu.item]);
+
+  // Open share dialog
+  const handleShareClick = useCallback(() => {
+    if (contextMenu.item) {
+      setShareItem(contextMenu.item);
     }
   }, [contextMenu.item]);
 
@@ -799,6 +808,10 @@ export function FileBrowser() {
     setDetailsDialog({ open: false, item: null });
   }, []);
 
+  const closeShareDialog = useCallback(() => {
+    setShareItem(null);
+  }, []);
+
   const closeEditorDialog = useCallback(() => {
     setEditorDialog({ open: false, item: null });
   }, []);
@@ -971,6 +984,7 @@ export function FileBrowser() {
           }
           onRename={handleRenameClick}
           onMove={handleMoveClick}
+          onShare={handleShareClick}
           onDelete={handleDeleteClick}
           onDetails={handleDetailsClick}
           onBatchDownload={
@@ -1031,6 +1045,22 @@ export function FileBrowser() {
         folderKey={currentFolder?.folderKey ?? null}
         parentFolderId={currentFolderId}
       />
+
+      {/* Share dialog */}
+      {shareItem && currentFolder && (
+        <ShareDialog
+          isOpen={!!shareItem}
+          onClose={closeShareDialog}
+          item={shareItem}
+          folderKey={currentFolder.folderKey}
+          ipnsName={
+            shareItem.type === 'folder'
+              ? (shareItem as FolderEntry).ipnsName
+              : (shareItem as FilePointer).fileMetaIpnsName
+          }
+          parentFolderId={currentFolderId}
+        />
+      )}
 
       {/* Text editor dialog */}
       <TextEditorDialog

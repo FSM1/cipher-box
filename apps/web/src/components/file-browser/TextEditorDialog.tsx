@@ -3,7 +3,13 @@ import type { FilePointer } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useAuthStore } from '../../stores/auth.store';
 import { useFolder } from '../../hooks/useFolder';
-import { downloadFileFromIpns } from '../../services/download.service';
+import {
+  downloadFile,
+  downloadFileFromIpns,
+  triggerBrowserDownload,
+} from '../../services/download.service';
+import { resolveFileMetadata } from '../../services/file-metadata.service';
+import { fetchShareKeys } from '../../services/share.service';
 import { encryptFile } from '../../services/file-crypto.service';
 import { addToIpfs } from '../../lib/api/ipfs';
 import '../../styles/text-editor-dialog.css';
@@ -15,13 +21,17 @@ type TextEditorDialogProps = {
   parentFolderId: string;
   /** Parent folder's decrypted AES-256 key (needed to decrypt file metadata) */
   folderKey: Uint8Array | null;
+  /** When true, textarea is read-only and save is hidden */
+  readOnly?: boolean;
+  /** Share ID when viewing from a shared folder — uses re-wrapped file keys */
+  shareId?: string | null;
 };
 
 /**
- * Modal dialog for editing text files in-browser.
+ * Modal dialog for viewing/editing text files in-browser.
  *
- * Full crypto round-trip: download -> decrypt -> edit -> encrypt -> re-upload
- * -> update folder metadata -> unpin old CID.
+ * In edit mode (default): full crypto round-trip with save.
+ * In read-only mode: decrypt and display only (used for shared files).
  */
 export function TextEditorDialog({
   open,
@@ -29,6 +39,8 @@ export function TextEditorDialog({
   item,
   parentFolderId,
   folderKey,
+  readOnly,
+  shareId,
 }: TextEditorDialogProps) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -76,12 +88,39 @@ export function TextEditorDialog({
           throw new Error('No keypair available - please log in again');
         }
 
-        const plaintext = await downloadFileFromIpns({
-          fileMetaIpnsName: item.fileMetaIpnsName,
-          folderKey: folderKey!,
-          privateKey: auth.vaultKeypair.privateKey,
-          fileName: item.name,
-        });
+        let plaintext: Uint8Array;
+
+        if (shareId) {
+          // Shared file path: use re-wrapped file key from share_keys
+          const [{ metadata: fileMeta }, keys] = await Promise.all([
+            resolveFileMetadata(item.fileMetaIpnsName, folderKey!),
+            fetchShareKeys(shareId),
+          ]);
+
+          const fileKeyRecord = keys.find((k) => k.keyType === 'file' && k.itemId === item.id);
+          if (!fileKeyRecord) {
+            throw new Error('No re-wrapped file key available for this file');
+          }
+
+          plaintext = await downloadFile(
+            {
+              cid: fileMeta.cid,
+              iv: fileMeta.fileIv,
+              wrappedKey: fileKeyRecord.encryptedKey,
+              originalName: item.name,
+              encryptionMode: fileMeta.encryptionMode,
+            },
+            auth.vaultKeypair.privateKey
+          );
+        } else {
+          // Owner path: use file key from metadata directly
+          plaintext = await downloadFileFromIpns({
+            fileMetaIpnsName: item.fileMetaIpnsName,
+            folderKey: folderKey!,
+            privateKey: auth.vaultKeypair.privateKey,
+            fileName: item.name,
+          });
+        }
 
         if (cancelled) return;
 
@@ -90,10 +129,12 @@ export function TextEditorDialog({
         setOriginalContent(text);
         setLoading(false);
 
-        // Focus textarea after content loads
-        requestAnimationFrame(() => {
-          textareaRef.current?.focus();
-        });
+        // Focus textarea after content loads (only in edit mode)
+        if (!readOnly) {
+          requestAnimationFrame(() => {
+            textareaRef.current?.focus();
+          });
+        }
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : 'Failed to load file');
@@ -104,7 +145,7 @@ export function TextEditorDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, item, folderKey]);
+  }, [open, item, folderKey, shareId, readOnly]);
 
   const handleSave = useCallback(async () => {
     if (!item || !isDirty) return;
@@ -148,9 +189,9 @@ export function TextEditorDialog({
     }
   }, [item, content, isDirty, parentFolderId, updateFile, onClose]);
 
-  // Handle Ctrl/Cmd+S to save
+  // Handle Ctrl/Cmd+S to save (edit mode only)
   useEffect(() => {
-    if (!open) return;
+    if (!open || readOnly) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
@@ -163,11 +204,17 @@ export function TextEditorDialog({
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [open, isDirty, saving, loading, handleSave]);
+  }, [open, readOnly, isDirty, saving, loading, handleSave]);
+
+  const handleDownload = useCallback(() => {
+    if (!item || !content) return;
+    const encoded = new TextEncoder().encode(content);
+    triggerBrowserDownload(encoded, item.name, 'text/plain');
+  }, [item, content]);
 
   if (!item) return null;
 
-  const title = `Edit: ${item.name}`;
+  const title = readOnly ? `View: ${item.name}` : `Edit: ${item.name}`;
   const isDisabled = saving || loading;
 
   return (
@@ -185,8 +232,9 @@ export function TextEditorDialog({
             ref={textareaRef}
             className="text-editor-textarea"
             value={content}
-            onChange={(e) => setContent(e.target.value)}
+            onChange={readOnly ? undefined : (e) => setContent(e.target.value)}
             disabled={isDisabled}
+            readOnly={readOnly}
             spellCheck={false}
             aria-label={`Content of ${item.name}`}
           />
@@ -195,6 +243,7 @@ export function TextEditorDialog({
               {'// '}
               {lineCount} {lineCount === 1 ? 'line' : 'lines'}
               {' | utf-8'}
+              {readOnly ? ' | read-only' : ''}
               {isDirty ? ' | modified' : ''}
             </span>
           </div>
@@ -205,22 +254,43 @@ export function TextEditorDialog({
             </div>
           )}
           <div className="text-editor-footer">
-            <button
-              type="button"
-              className="dialog-button dialog-button--secondary"
-              onClick={onClose}
-              disabled={isDisabled}
-            >
-              cancel
-            </button>
-            <button
-              type="button"
-              className="dialog-button dialog-button--primary"
-              onClick={handleSave}
-              disabled={isDisabled || !isDirty}
-            >
-              {saving ? 'encrypting...' : '--save'}
-            </button>
+            {readOnly ? (
+              <>
+                <button
+                  type="button"
+                  className="dialog-button dialog-button--secondary"
+                  onClick={handleDownload}
+                >
+                  --download
+                </button>
+                <button
+                  type="button"
+                  className="dialog-button dialog-button--primary"
+                  onClick={onClose}
+                >
+                  close
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="dialog-button dialog-button--secondary"
+                  onClick={onClose}
+                  disabled={isDisabled}
+                >
+                  cancel
+                </button>
+                <button
+                  type="button"
+                  className="dialog-button dialog-button--primary"
+                  onClick={handleSave}
+                  disabled={isDisabled || !isDirty}
+                >
+                  {saving ? 'encrypting...' : '--save'}
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}

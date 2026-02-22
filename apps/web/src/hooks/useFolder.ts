@@ -5,6 +5,7 @@ import { useAuthStore } from '../stores/auth.store';
 import { unpinFromIpfs } from '../lib/api/ipfs';
 import { useQuotaStore } from '../stores/quota.store';
 import * as folderService from '../services/folder.service';
+import { reWrapForRecipients } from '../services/share.service';
 import {
   createFileMetadata,
   resolveFileMetadata,
@@ -17,6 +18,7 @@ import {
 import type { FileIpnsRecordPayload } from '../services/file-metadata.service';
 import type { FolderNode } from '../stores/folder.store';
 import type { FolderEntry, FilePointer, FolderChild } from '@cipherbox/crypto';
+import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 
 /** Maximum folder nesting depth per FOLD-03 */
 const MAX_FOLDER_DEPTH = 20;
@@ -195,6 +197,16 @@ export function useFolder() {
           ipnsPrivateKey,
         };
         useFolderStore.getState().setFolder(newFolderNode);
+
+        // Post-create: re-wrap new subfolder key for share recipients (fire-and-forget)
+        reWrapForRecipients({
+          folderIpnsName: parentFolder.ipnsName,
+          folders: useFolderStore.getState().folders,
+          currentFolderId: parentFolder.id,
+          newItems: [{ keyType: 'folder', itemId: folder.id, plaintextKey: folderKey }],
+        }).catch((err) => {
+          console.warn('[share] Post-create subfolder re-wrapping failed:', err);
+        });
 
         setState({ isLoading: false, error: null });
         return folder;
@@ -666,6 +678,31 @@ export function useFolder() {
         store.updateFolderChildren(parentId, updatedChildren);
         store.updateFolderSequence(parentId, newSequenceNumber);
 
+        // 4. Post-upload: re-wrap file key for share recipients (fire-and-forget)
+        // Unwrap the fileKey from the owner-wrapped key, then delegate to reWrapForRecipients
+        (async () => {
+          try {
+            const authState = useAuthStore.getState();
+            if (!authState.vaultKeypair) return;
+            const fileKey = await unwrapKey(
+              hexToBytes(fileData.wrappedKey),
+              authState.vaultKeypair.privateKey
+            );
+            try {
+              await reWrapForRecipients({
+                folderIpnsName: parentFolder.ipnsName,
+                folders: useFolderStore.getState().folders,
+                currentFolderId: parentFolder.id,
+                newItems: [{ keyType: 'file', itemId: fileId, plaintextKey: fileKey }],
+              });
+            } finally {
+              fileKey.fill(0);
+            }
+          } catch (err) {
+            console.warn('[share] Post-upload file re-wrapping failed:', err);
+          }
+        })();
+
         setState({ isLoading: false, error: null });
         return filePointer;
       } catch (err) {
@@ -753,6 +790,40 @@ export function useFolder() {
         const store = useFolderStore.getState();
         store.updateFolderChildren(parentId, [...parentFolder.children, ...filePointers]);
         store.updateFolderSequence(parentId, newSequenceNumber);
+
+        // 4. Post-upload: re-wrap file keys for share recipients (fire-and-forget)
+        (async () => {
+          const newItems: Array<{
+            keyType: 'file' | 'folder';
+            itemId: string;
+            plaintextKey: Uint8Array;
+          }> = [];
+          try {
+            const authState = useAuthStore.getState();
+            if (!authState.vaultKeypair) return;
+            const privateKey = authState.vaultKeypair.privateKey;
+            for (let i = 0; i < filesData.length; i++) {
+              const fileKey = await unwrapKey(hexToBytes(filesData[i].wrappedKey), privateKey);
+              newItems.push({
+                keyType: 'file',
+                itemId: filesWithRecords[i].fileId,
+                plaintextKey: fileKey,
+              });
+            }
+            await reWrapForRecipients({
+              folderIpnsName: parentFolder.ipnsName,
+              folders: useFolderStore.getState().folders,
+              currentFolderId: parentFolder.id,
+              newItems,
+            });
+          } catch (err) {
+            console.warn('[share] Post-upload batch file re-wrapping failed:', err);
+          } finally {
+            for (const item of newItems) {
+              item.plaintextKey.fill(0);
+            }
+          }
+        })();
 
         setState({ isLoading: false, error: null });
         return filePointers;

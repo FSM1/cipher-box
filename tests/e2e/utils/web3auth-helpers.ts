@@ -25,21 +25,33 @@ export const TEST_CREDENTIALS = {
 };
 
 /**
- * Cached auth state from test-login endpoint.
- * Used to re-inject state after page reload (since test-login bypasses
- * Core Kit, there's no persistent session to restore from).
+ * Serializable auth state for a test account.
+ * Arrays are used because Uint8Array can't cross the page.evaluate boundary.
+ *
+ * @security Contains raw ECDSA private key material (`privateKeyArr`).
+ * Never pass this object to console.log(), JSON.stringify(), or any
+ * persistent storage — treat it the same as a plaintext private key.
  */
-let cachedTestAuthState: {
+export interface TestAuthState {
   accessToken: string;
   email: string;
+  publicKeyHex: string;
   publicKeyArr: number[];
+  /** @security Raw ECDSA secp256k1 private key — never log or serialize. */
   privateKeyArr: number[];
   rootFolderKeyArr: number[];
   rootIpnsPublicKeyArr: number[];
   rootIpnsPrivateKeyArr: number[];
   rootIpnsName: string;
   vaultId: string;
-} | null = null;
+}
+
+/**
+ * Cached auth state from test-login endpoint (singleton for backward compat).
+ * Used to re-inject state after page reload (since test-login bypasses
+ * Core Kit, there's no persistent session to restore from).
+ */
+let cachedTestAuthState: TestAuthState | null = null;
 
 /**
  * Performs email login through CipherBox's custom login UI.
@@ -56,7 +68,8 @@ let cachedTestAuthState: {
 export async function loginViaEmail(page: Page, email: string, otp?: string): Promise<void> {
   // Use test-login endpoint when available (bypasses Core Kit completely)
   if (process.env.TEST_LOGIN_SECRET) {
-    await loginViaTestEndpoint(page, email);
+    const state = await loginViaTestEndpoint(page, email);
+    cachedTestAuthState = state;
     return;
   }
 
@@ -93,14 +106,15 @@ export async function loginViaEmail(page: Page, email: string, otp?: string): Pr
 /**
  * Test-login endpoint flow that bypasses Core Kit entirely.
  *
- * 1. Calls POST /auth/test-login → tokens + deterministic secp256k1 keypair
+ * 1. Calls POST /auth/test-login -> tokens + deterministic secp256k1 keypair
  * 2. Handles vault init/load using @cipherbox/crypto in Node.js
  * 3. Injects all state into Zustand stores via page.evaluate
  * 4. Navigates to /files
  *
- * This is completely independent of Web3Auth infrastructure.
+ * Returns the auth state so callers can manage per-account state
+ * (e.g., for multi-account sharing tests).
  */
-async function loginViaTestEndpoint(page: Page, email: string): Promise<void> {
+export async function loginViaTestEndpoint(page: Page, email: string): Promise<TestAuthState> {
   const apiBase = process.env.API_BASE_URL || 'http://localhost:3000';
   const secret = process.env.TEST_LOGIN_SECRET!;
 
@@ -174,10 +188,10 @@ async function loginViaTestEndpoint(page: Page, email: string): Promise<void> {
   // Derive IPNS public key from private key (deterministic Ed25519 derivation)
   const rootIpnsPublicKey = await ed.getPublicKeyAsync(rootIpnsPrivateKey);
 
-  // Cache state for re-injection after page reloads
-  cachedTestAuthState = {
+  const authState: TestAuthState = {
     accessToken,
     email,
+    publicKeyHex,
     publicKeyArr: Array.from(publicKey),
     privateKeyArr: Array.from(privateKey),
     rootFolderKeyArr: Array.from(rootFolderKey),
@@ -204,33 +218,34 @@ async function loginViaTestEndpoint(page: Page, email: string): Promise<void> {
   // 3. Navigate to app so we can inject state into Zustand stores
   await page.goto('/');
 
-  await injectTestAuthState(page);
+  await injectAuthState(page, authState);
 
   // 5. Navigate to files page via hash router (no full reload — preserves Zustand state)
   await page.evaluate(() => {
     window.location.hash = '#/files';
   });
   await page.waitForURL('**/files', { timeout: 30000 });
+
+  return authState;
 }
 
 /**
- * Inject cached test auth state into Zustand stores.
- * Used both during initial login and after page reloads.
+ * Inject auth state into Zustand stores on a page.
+ * Works with both the singleton cache (backward compat) and explicit state (multi-account).
  */
-async function injectTestAuthState(page: Page): Promise<void> {
-  if (!cachedTestAuthState) {
-    throw new Error('No cached test auth state — call loginViaEmail first');
-  }
-
+export async function injectAuthState(page: Page, state: TestAuthState): Promise<void> {
   // Wait for the app to load and expose stores (dev mode only)
-  await page.waitForFunction(() => !!(window as Record<string, unknown>).__ZUSTAND_STORES, {
-    timeout: 15000,
-  });
+  await page.waitForFunction(
+    () => !!(window as unknown as Record<string, unknown>).__ZUSTAND_STORES,
+    {
+      timeout: 15000,
+    }
+  );
 
   // Inject auth + vault state into Zustand stores
   // Arrays are used because Uint8Array can't be serialized across page.evaluate boundary
   await page.evaluate((data) => {
-    const stores = (window as Record<string, unknown>).__ZUSTAND_STORES as {
+    const stores = (window as unknown as Record<string, unknown>).__ZUSTAND_STORES as {
       auth: { setState: (s: Record<string, unknown>) => void };
       vault: { getState: () => { setVaultKeys: (k: Record<string, unknown>) => void } };
     };
@@ -255,7 +270,7 @@ async function injectTestAuthState(page: Page): Promise<void> {
       rootIpnsName: data.rootIpnsName,
       vaultId: data.vaultId,
     });
-  }, cachedTestAuthState);
+  }, state);
 }
 
 /**
@@ -268,10 +283,18 @@ async function injectTestAuthState(page: Page): Promise<void> {
  * Call this after page.reload() in tests that use the test-login flow.
  * For tests using the real Core Kit flow, this is a no-op (Core Kit
  * auto-restores its session).
+ *
+ * Accepts explicit state for multi-account tests. Falls back to
+ * singleton cache for backward compat with existing tests.
  */
-export async function reinjectTestAuthAfterReload(page: Page): Promise<void> {
+export async function reinjectTestAuthAfterReload(
+  page: Page,
+  state?: TestAuthState
+): Promise<void> {
+  const authState = state ?? cachedTestAuthState;
+
   // If not using test-login, Core Kit handles session restore
-  if (!process.env.TEST_LOGIN_SECRET || !cachedTestAuthState) return;
+  if (!process.env.TEST_LOGIN_SECRET || !authState) return;
 
   // Try to refresh the access token via the cookie
   const apiBase = process.env.API_BASE_URL || 'http://localhost:3000';
@@ -279,11 +302,11 @@ export async function reinjectTestAuthAfterReload(page: Page): Promise<void> {
 
   if (refreshResponse.ok()) {
     const { accessToken, email } = await refreshResponse.json();
-    cachedTestAuthState.accessToken = accessToken;
-    if (email) cachedTestAuthState.email = email;
+    authState.accessToken = accessToken;
+    if (email) authState.email = email;
   }
 
-  await injectTestAuthState(page);
+  await injectAuthState(page, authState);
 
   // Navigate to files via hash router
   await page.evaluate(() => {
@@ -308,4 +331,13 @@ export async function waitForAuthentication(page: Page): Promise<void> {
   // Wait for user menu to appear (indicator of authenticated state)
   // Phase 6.3: Logout moved to UserMenu dropdown
   await page.waitForSelector('[data-testid="user-menu"]', { timeout: 15000 });
+}
+
+/**
+ * Extract the 0x04-prefixed public key hex from a TestAuthState.
+ * This is the format needed for the ShareDialog recipient input.
+ * The test-login endpoint returns bare hex (04...) so we prepend 0x.
+ */
+export function getPublicKeyHex(state: TestAuthState): string {
+  return state.publicKeyHex.startsWith('0x') ? state.publicKeyHex : '0x' + state.publicKeyHex;
 }

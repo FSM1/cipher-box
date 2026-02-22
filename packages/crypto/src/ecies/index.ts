@@ -7,3 +7,4 @@
 
 export { wrapKey } from './encrypt';
 export { unwrapKey } from './decrypt';
+export { reWrapKey } from './rewrap';

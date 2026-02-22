@@ -1,4 +1,4 @@
-import { writeFileSync, unlinkSync, existsSync } from 'fs';
+import { writeFileSync, copyFileSync, unlinkSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -9,6 +9,10 @@ const __dirname = dirname(__filename);
 /**
  * Utilities for creating and managing test files.
  * Files are created in tests/e2e/fixtures/files/ and tracked for cleanup.
+ *
+ * Static fixtures (test-image.png, test-document.pdf, test-file.txt)
+ * are committed to the repo. Generated files use unique names and are
+ * cleaned up after each test run.
  */
 
 const FIXTURES_DIR = resolve(__dirname, '../fixtures/files');
@@ -77,6 +81,30 @@ export function createTestBinaryFile(sizeKb: number, name?: string): TestBinaryF
     name: fileName,
     path: filePath,
     sizeKb,
+  };
+}
+
+/**
+ * Creates a test image file by copying the static PNG fixture.
+ * The fixture is a valid 1x1 green PNG (69 bytes).
+ * File is tracked for cleanup.
+ *
+ * @param name - Optional file name (defaults to test-image-{timestamp}.png)
+ * @returns Object with file name and absolute path
+ */
+export function createTestImageFile(name?: string): TestBinaryFile {
+  const timestamp = Date.now();
+  const fileName = name || `test-image-${timestamp}.png`;
+  const filePath = resolve(FIXTURES_DIR, fileName);
+  const fixturePath = resolve(FIXTURES_DIR, 'test-image.png');
+
+  copyFileSync(fixturePath, filePath);
+  createdFiles.push(filePath);
+
+  return {
+    name: fileName,
+    path: filePath,
+    sizeKb: 0,
   };
 }
 

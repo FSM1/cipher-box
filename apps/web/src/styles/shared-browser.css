@@ -1,0 +1,71 @@
+/**
+ * Shared browser styles -- "Shared with me" view
+ *
+ * Extends file-browser.css with shared-specific elements:
+ * - [RO] badge for read-only indicators
+ * - SHARED BY column for truncated pubkeys
+ * - Error state styling
+ */
+
+/* Read-only badge */
+.shared-ro-badge {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--color-text-dim);
+  margin-left: var(--spacing-xs);
+  opacity: 0.7;
+  user-select: none;
+}
+
+/* Shared by column */
+.shared-by-cell {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-green-primary);
+  opacity: 0.8;
+  min-width: 120px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Header for shared by column */
+.file-list-header-shared-by {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--color-text-dim);
+  opacity: 0.6;
+  min-width: 120px;
+  max-width: 160px;
+  padding: 0 var(--spacing-sm);
+}
+
+/* Shared list row */
+.shared-list-row {
+  cursor: pointer;
+}
+
+.shared-list-row:hover {
+  background: rgb(0 255 128 / 5%);
+}
+
+.shared-list-row:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: -1px;
+}
+
+/* Error state */
+.shared-error {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  color: var(--color-red, #ef4444);
+  padding: var(--spacing-md) var(--spacing-lg);
+  text-align: center;
+  opacity: 0.9;
+}
+
+/* Shared browser container overrides */
+.shared-browser .file-browser-toolbar {
+  border-bottom: 1px solid rgb(0 255 128 / 10%);
+}

@@ -32,6 +32,10 @@ import { IpnsController } from '../src/ipns/ipns.controller';
 import { IpnsService } from '../src/ipns/ipns.service';
 import { DeviceApprovalController } from '../src/device-approval/device-approval.controller';
 import { DeviceApprovalService } from '../src/device-approval/device-approval.service';
+import { SharesController } from '../src/shares/shares.controller';
+import { SharesService } from '../src/shares/shares.service';
+import { Share } from '../src/shares/entities/share.entity';
+import { ShareKey } from '../src/shares/entities/share-key.entity';
 import { MetricsService } from '../src/metrics/metrics.service';
 import { User } from '../src/auth/entities/user.entity';
 import { AuthMethod } from '../src/auth/entities/auth-method.entity';
@@ -52,6 +56,16 @@ const mockAuthMethodRepository = {
 
 const mockRefreshTokenRepository = {
   provide: getRepositoryToken(RefreshToken),
+  useValue: {},
+};
+
+const mockShareRepository = {
+  provide: getRepositoryToken(Share),
+  useValue: {},
+};
+
+const mockShareKeyRepository = {
+  provide: getRepositoryToken(ShareKey),
   useValue: {},
 };
 
@@ -79,6 +93,7 @@ const mockConfigService = {
     VaultController,
     IpnsController,
     DeviceApprovalController,
+    SharesController,
   ],
   providers: [
     AppService,
@@ -127,12 +142,18 @@ const mockConfigService = {
       useValue: {},
     },
     {
+      provide: SharesService,
+      useValue: {},
+    },
+    {
       provide: MetricsService,
       useValue: {},
     },
     mockRepository,
     mockAuthMethodRepository,
     mockRefreshTokenRepository,
+    mockShareRepository,
+    mockShareKeyRepository,
     mockJwtService,
     mockConfigService,
   ],
@@ -159,6 +180,7 @@ async function generateOpenApiSpec() {
     .addTag('IPFS', 'IPFS relay endpoints')
     .addTag('IPNS', 'IPNS relay endpoints')
     .addTag('device-approval', 'Cross-device approval endpoints')
+    .addTag('shares', 'User-to-user sharing endpoints')
     .build();
 
   // Create document from the app
