@@ -8,6 +8,8 @@
 //! The operations module requires the `fuse` feature (macOS) or `winfsp` feature (Windows).
 
 pub mod cache;
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub mod decrypt;
 pub mod file_handle;
 pub mod inode;
 #[cfg(feature = "fuse")]
@@ -735,7 +737,7 @@ impl CipherBoxFS {
                             });
                             match resolve_result {
                                 Ok(enc_bytes) => {
-                                    match operations::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk_arr) {
+                                    match decrypt::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk_arr) {
                                         Ok(fm) => {
                                             self.inodes.resolve_file_pointer(
                                                 *ino, fm.cid, fm.file_key_encrypted,
@@ -890,7 +892,7 @@ pub async fn mount_filesystem(
     }.await;
     match fetch_result {
         Ok((encrypted_bytes, cid)) => {
-            match operations::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &root_folder_key) {
+            match decrypt::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &root_folder_key) {
                 Ok(metadata) => {
                     // Cache metadata directly for readdir staleness checks
                     metadata_cache.set(&root_ipns_name, metadata.clone(), cid);
@@ -914,7 +916,7 @@ pub async fn mount_filesystem(
                                         }.await;
                                         match fp_result {
                                             Ok(enc_bytes) => {
-                                                match operations::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk) {
+                                                match decrypt::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk) {
                                                     Ok(fm) => {
                                                         inodes.resolve_file_pointer(
                                                             *fp_ino, fm.cid, fm.file_key_encrypted,
@@ -960,7 +962,7 @@ pub async fn mount_filesystem(
                         }.await;
                         match sub_result {
                             Ok((enc_bytes, sub_cid)) => {
-                                match operations::decrypt_metadata_from_ipfs_public(&enc_bytes, sub_key) {
+                                match decrypt::decrypt_metadata_from_ipfs_public(&enc_bytes, sub_key) {
                                     Ok(sub_metadata) => {
                                         metadata_cache.set(sub_ipns, sub_metadata.clone(), sub_cid);
                                         match inodes.populate_folder(*sub_ino, &sub_metadata, &private_key, &public_key, false) {
@@ -979,7 +981,7 @@ pub async fn mount_filesystem(
                                                             }.await;
                                                             match fp_result {
                                                                 Ok(enc_bytes) => {
-                                                                    match operations::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &sk) {
+                                                                    match decrypt::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &sk) {
                                                                         Ok(fm) => {
                                                                             inodes.resolve_file_pointer(
                                                                                 *fp_ino, fm.cid, fm.file_key_encrypted,
