@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/FSM1/cipher-box/compare/v0.15.0...v0.15.1) (2026-02-22)
+
+
+### Bug Fixes
+
+* **api:** add missing migration to create shares tables ([#186](https://github.com/FSM1/cipher-box/issues/186)) ([26c9d9c](https://github.com/FSM1/cipher-box/commit/26c9d9c8dfb91dca65ace15212fc78a30da5e788))
+
 ## [0.15.0](https://github.com/FSM1/cipher-box/compare/v0.14.0...v0.15.0) (2026-02-22)
 
 
