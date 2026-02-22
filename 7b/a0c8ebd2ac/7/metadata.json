@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "7ba0c8ebd2ac",
+  "session_id": "f585e6e9-7dc1-4135-a4dc-9021adb21c96",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-22T00:36:44.522074Z",
+  "branch": "feat/phase-14-user-to-user-sharing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/components/file-browser/ShareDialog.tsx",
+    "tests/e2e/tests/sharing-workflow.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "a807071316bb",
+  "transcript_identifier_at_start": "b5d09883-e979-4e92-9f60-ee0671fc99e8",
+  "token_usage": {
+    "input_tokens": 538,
+    "cache_creation_tokens": 858809,
+    "cache_read_tokens": 59903566,
+    "output_tokens": 44820,
+    "api_call_count": 506
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/f585e6e9-7dc1-4135-a4dc-9021adb21c96.jsonl"
+}

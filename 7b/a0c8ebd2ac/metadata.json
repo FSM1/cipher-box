@@ -3,7 +3,7 @@
   "checkpoint_id": "7ba0c8ebd2ac",
   "strategy": "manual-commit",
   "branch": "feat/phase-14-user-to-user-sharing",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "apps/web/src/components/file-browser/ShareDialog.tsx",
     "apps/web/src/services/share.service.ts",
@@ -59,13 +59,20 @@
       "context": "/7b/a0c8ebd2ac/6/context.md",
       "content_hash": "/7b/a0c8ebd2ac/6/content_hash.txt",
       "prompt": "/7b/a0c8ebd2ac/6/prompt.txt"
+    },
+    {
+      "metadata": "/7b/a0c8ebd2ac/7/metadata.json",
+      "transcript": "/7b/a0c8ebd2ac/7/full.jsonl",
+      "context": "/7b/a0c8ebd2ac/7/context.md",
+      "content_hash": "/7b/a0c8ebd2ac/7/content_hash.txt",
+      "prompt": "/7b/a0c8ebd2ac/7/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 4631,
-    "cache_creation_tokens": 955846,
-    "cache_read_tokens": 33270278,
-    "output_tokens": 40300,
-    "api_call_count": 354
+    "input_tokens": 5169,
+    "cache_creation_tokens": 1814655,
+    "cache_read_tokens": 93173844,
+    "output_tokens": 85120,
+    "api_call_count": 860
   }
 }
