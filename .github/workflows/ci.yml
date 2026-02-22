@@ -220,11 +220,17 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile $out
           Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust toolchain
+        run: rustup default stable
 
-      - uses: swatinem/rust-cache@v2
+      - uses: actions/cache@v4
         with:
-          workspaces: apps/desktop/src-tauri
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: windows-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: windows-cargo-
 
       - name: Cargo check with winfsp feature
         run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features winfsp
@@ -239,20 +245,12 @@ jobs:
       - name: Install WinFsp
         shell: powershell
         run: |
-          # Download WinFsp MSI for both system install and NSIS bundling
           $url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
           $resourceDir = "${{ github.workspace }}/apps/desktop/src-tauri/resources"
           $out = "$resourceDir/winfsp-2.1.25156.msi"
           New-Item -ItemType Directory -Force -Path $resourceDir
           Invoke-WebRequest -Uri $url -OutFile $out
-          # Install WinFsp system-wide for winfsp-sys build linking
           Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: swatinem/rust-cache@v2
-        with:
-          workspaces: apps/desktop/src-tauri
 
       - uses: pnpm/action-setup@v4
         with:
@@ -266,7 +264,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Windows desktop
-        run: pnpm --filter desktop tauri build
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ""
+      - name: Build crypto package
+        run: pnpm --filter @cipherbox/crypto build
+
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          args: --features winfsp
