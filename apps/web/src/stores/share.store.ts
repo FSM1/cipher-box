@@ -33,7 +33,8 @@ type ShareState = {
   sentShares: SentShare[];
   isLoadingReceived: boolean;
   isLoadingSent: boolean;
-  lastFetchedAt: number | null;
+  lastReceivedFetchedAt: number | null;
+  lastSentFetchedAt: number | null;
 
   // Actions
   setReceivedShares: (shares: ReceivedShare[]) => void;
@@ -60,14 +61,15 @@ export const useShareStore = create<ShareState>((set) => ({
   sentShares: [],
   isLoadingReceived: false,
   isLoadingSent: false,
-  lastFetchedAt: null,
+  lastReceivedFetchedAt: null,
+  lastSentFetchedAt: null,
 
   // Actions
   setReceivedShares: (shares) =>
-    set({ receivedShares: shares, isLoadingReceived: false, lastFetchedAt: Date.now() }),
+    set({ receivedShares: shares, isLoadingReceived: false, lastReceivedFetchedAt: Date.now() }),
 
   setSentShares: (shares) =>
-    set({ sentShares: shares, isLoadingSent: false, lastFetchedAt: Date.now() }),
+    set({ sentShares: shares, isLoadingSent: false, lastSentFetchedAt: Date.now() }),
 
   setLoadingReceived: (loading) => set({ isLoadingReceived: loading }),
 
@@ -94,6 +96,7 @@ export const useShareStore = create<ShareState>((set) => ({
       sentShares: [],
       isLoadingReceived: false,
       isLoadingSent: false,
-      lastFetchedAt: null,
+      lastReceivedFetchedAt: null,
+      lastSentFetchedAt: null,
     }),
 }));

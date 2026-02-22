@@ -21,6 +21,7 @@ import { resolveIpnsRecord } from '../../services/ipns.service';
 import { fetchFromIpfs } from '../../lib/api/ipfs';
 import type { CreateShareDtoItemType } from '../../api/models/createShareDtoItemType';
 import type { ChildKeyDto } from '../../api/models/childKeyDto';
+import { useShareStore } from '../../stores/share.store';
 import '../../styles/share-dialog.css';
 
 type ShareDialogProps = {
@@ -402,18 +403,17 @@ export function ShareDialog({
         childKeys: childKeys && childKeys.length > 0 ? childKeys : undefined,
       });
 
-      // Update recipients list
-      setRecipients((prev) => [
-        ...prev,
-        {
-          shareId: result.shareId,
-          recipientPublicKey: key,
-          itemType: item.type,
-          ipnsName,
-          itemName: item.name,
-          createdAt: new Date().toISOString(),
-        },
-      ]);
+      // Update local recipients list and global store (for re-wrapping cache)
+      const newShare = {
+        shareId: result.shareId,
+        recipientPublicKey: key,
+        itemType: item.type as 'folder' | 'file',
+        ipnsName,
+        itemName: item.name,
+        createdAt: new Date().toISOString(),
+      };
+      setRecipients((prev) => [...prev, newShare]);
+      useShareStore.getState().addSentShare(newShare);
 
       setSuccess(`shared with ${truncateKey(key)}`);
       setPubKeyInput('');
@@ -434,6 +434,7 @@ export function ShareDialog({
     try {
       await sharesControllerRevokeShare(shareId);
       setRecipients((prev) => prev.filter((r) => r.shareId !== shareId));
+      useShareStore.getState().removeSentShare(shareId);
     } catch (err) {
       console.error('Revoke failed:', err);
       setError('revoke failed');

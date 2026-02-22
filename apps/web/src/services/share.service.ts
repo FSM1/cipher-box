@@ -187,7 +187,7 @@ export async function getSentSharesForItem(ipnsName: string): Promise<SentShare[
  */
 async function ensureFreshSentShares(): Promise<SentShare[]> {
   const store = useShareStore.getState();
-  if (store.lastFetchedAt && Date.now() - store.lastFetchedAt < 30_000) {
+  if (store.lastSentFetchedAt && Date.now() - store.lastSentFetchedAt < 30_000) {
     return store.sentShares;
   }
   const shares = await fetchSentShares();

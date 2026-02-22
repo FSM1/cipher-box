@@ -426,6 +426,42 @@ test.describe.serial('Sharing Workflow', () => {
     await charlieSharedBrowser.navigateToRoot();
   });
 
+  test('7.3 Charlie can preview the post-share file (re-wrapping verification)', async () => {
+    // This test verifies the re-wrapping fix: files uploaded AFTER sharing
+    // must have their keys re-wrapped for recipients. Without the fix,
+    // Charlie would see "No re-wrapped file key available" error.
+    await navigateToShared(charlie);
+    await charlieSharedBrowser.waitForLoaded({ timeout: 30000 });
+    await charlieSharedBrowser.navigateIntoFolder(sharedFolderName);
+
+    // Wait for the post-share file to be visible
+    await charlieSharedBrowser
+      .getFolderItem(postShareFileName)
+      .waitFor({ state: 'visible', timeout: 15000 });
+
+    // Right-click and preview the text file
+    await charlieSharedBrowser.rightClickFolderItem(postShareFileName);
+    const charlieContextMenu = new ContextMenuPage(charlie.page);
+    await charlieContextMenu.waitForOpen();
+    await charlieContextMenu.clickPreview();
+
+    // The text editor dialog should open in read-only mode
+    const editorDialog = charlie.page.locator('.text-editor-modal');
+    await editorDialog.waitFor({ state: 'visible', timeout: 30000 });
+
+    // Verify the content loaded (not an error message)
+    const textarea = charlie.page.locator('.text-editor-textarea');
+    await textarea.waitFor({ state: 'visible', timeout: 15000 });
+    const content = await textarea.inputValue();
+    expect(content).toContain('added after the share');
+
+    // Close the dialog
+    await charlie.page.locator('.text-editor-modal .modal-close').click();
+    await editorDialog.waitFor({ state: 'hidden' });
+
+    await charlieSharedBrowser.navigateToRoot();
+  });
+
   // ============================================
   // Phase 8: Error Cases
   // ============================================
