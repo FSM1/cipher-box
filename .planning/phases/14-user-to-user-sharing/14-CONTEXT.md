@@ -78,6 +78,57 @@ Users can share encrypted folders and individual files with other CipherBox user
 
 </specifics>
 
+<trade-offs>
+## Architecture Trade-Off: Server-Side vs Metadata-Embedded Sharing
+
+### Current Approach: Server-Side Share Records
+
+Phase 14 stores sharing state in PostgreSQL (`shares` and `share_keys` tables). The server holds ECIES-wrapped keys per recipient. IPFS metadata schemas (FolderMetadata, FileMetadata) are unchanged.
+
+**Consequence:** The server knows the sharing graph — who shared what with whom — but never sees plaintext keys or content.
+
+### Alternative: Metadata-Embedded ACLs
+
+The original design consideration was embedding `readers`/`writers` arrays directly in IPFS metadata:
+
+```
+readers?: Array<{ pubKey: string; encryptedFolderKey: string }>
+```
+
+This would be pervasive across the entire IPNS/IPFS tree. From a schema evolution perspective, this is a clean additive change (optional field, defaults to `undefined`, no version bump needed per the Evolution Protocol).
+
+**Advantages:**
+
+- Server has zero knowledge of the sharing graph — not just content, but relationships
+- Sharing metadata is self-contained and travels with the encrypted data
+- No server dependency for access control verification
+
+**Disadvantages:**
+
+- Sharing a folder requires re-publishing metadata for every node in the subtree (N IPNS publishes for N items)
+- Concurrent shares from multiple devices create metadata write conflicts
+- Metadata size grows ~130 bytes per reader per node (65-byte pubkey + ~65-byte ECIES ciphertext)
+- Revocation requires tree-wide re-keying to achieve cryptographic revocation
+
+### Revocation Risk Assessment
+
+Cryptographic revocation (re-keying on revoke) is not implemented in either approach. Both rely on access-control revocation only — removing the ability to fetch new keys, not invalidating already-obtained keys.
+
+The practical risk of this is low because:
+
+1. Recipients receive file keys as non-extractable Web Crypto `CryptoKey` objects in-browser — not raw bytes
+2. Deliberate key extraction would require intercepting the ECIES-wrapped key from the API response AND retaining the recipient's private key AND the content CID
+3. After any content update, old CIDs point to stale content and old keys no longer decrypt the current version
+4. Old CIDs are unpinned on Pinata when content updates, so they are eventually garbage collected
+
+This risk profile is identical in both approaches — during the authorized access window, the recipient's browser holds plaintext keys in memory regardless of where the ACL lives.
+
+### Decision
+
+Server-side approach chosen for Phase 14 (read-only sharing). The metadata-embedded approach remains viable for a future "fully decentralized sharing" phase if hiding the social graph from the server becomes a requirement.
+
+</trade-offs>
+
 <deferred>
 ## Deferred Ideas
 
