@@ -332,7 +332,7 @@ export function SharedFileBrowser() {
         )}
 
         {/* Empty state */}
-        {!isLoading && sharedItems.length === 0 && (
+        {!isLoading && sharedItems.length === 0 && !error && (
           <div className="empty-state" data-testid="shared-empty-state">
             <div className="empty-state-content">
               <pre className="empty-state-ascii" aria-hidden="true">
@@ -505,14 +505,13 @@ export function SharedFileBrowser() {
               className="file-list-row file-list-row--parent"
               role="row"
               tabIndex={0}
-              onClick={navigateUp}
+              onDoubleClick={navigateUp}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault();
                   navigateUp();
                 }
               }}
-              onDoubleClick={navigateUp}
             >
               <div className="file-list-cell file-list-cell-name" role="gridcell">
                 <span className="file-icon">{'<-'}</span>
@@ -531,11 +530,6 @@ export function SharedFileBrowser() {
               <SharedFolderRow
                 key={item.id}
                 item={item}
-                onOpen={() => {
-                  if (item.type === 'folder') {
-                    navigateToSubfolder(item.id, item.name);
-                  }
-                }}
                 onContextMenu={(e) => handleContextMenu(e, item)}
                 onDoubleClick={() => {
                   if (item.type === 'folder') {
@@ -686,7 +680,6 @@ function SharedListRow({
       className="file-list-row shared-list-row"
       role="row"
       tabIndex={0}
-      onClick={onOpen}
       onDoubleClick={onOpen}
       onContextMenu={(e) => {
         e.preventDefault();
@@ -722,12 +715,10 @@ function SharedListRow({
  */
 function SharedFolderRow({
   item,
-  onOpen,
   onContextMenu,
   onDoubleClick,
 }: {
   item: FolderChild;
-  onOpen: () => void;
   onContextMenu: (e: MouseEvent) => void;
   onDoubleClick: () => void;
 }) {
@@ -740,7 +731,6 @@ function SharedFolderRow({
       className="file-list-row"
       role="row"
       tabIndex={0}
-      onClick={onOpen}
       onDoubleClick={onDoubleClick}
       onContextMenu={(e) => {
         e.preventDefault();

@@ -139,10 +139,10 @@ export class SharedFileBrowserPage {
   }
 
   /**
-   * Click a shared item to open it (navigate into folder or download file).
+   * Double-click a shared item to open it (navigate into folder or download file).
    */
   async openSharedItem(name: string): Promise<void> {
-    await this.getSharedItem(name).click();
+    await this.getSharedItem(name).dblclick();
   }
 
   /**
@@ -184,10 +184,10 @@ export class SharedFileBrowserPage {
   }
 
   /**
-   * Navigate up to parent (click [..] PARENT_DIR).
+   * Navigate up to parent (double-click [..] PARENT_DIR).
    */
   async navigateUp(): Promise<void> {
-    await this.parentDirRow().click();
+    await this.parentDirRow().dblclick();
   }
 
   /**

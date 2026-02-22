@@ -1,4 +1,4 @@
-import { writeFileSync, unlinkSync, existsSync } from 'fs';
+import { writeFileSync, copyFileSync, unlinkSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -9,6 +9,10 @@ const __dirname = dirname(__filename);
 /**
  * Utilities for creating and managing test files.
  * Files are created in tests/e2e/fixtures/files/ and tracked for cleanup.
+ *
+ * Static fixtures (test-image.png, test-document.pdf, test-file.txt)
+ * are committed to the repo. Generated files use unique names and are
+ * cleaned up after each test run.
  */
 
 const FIXTURES_DIR = resolve(__dirname, '../fixtures/files');
@@ -81,7 +85,8 @@ export function createTestBinaryFile(sizeKb: number, name?: string): TestBinaryF
 }
 
 /**
- * Creates a minimal valid PNG test image (1x1 pixel, green).
+ * Creates a test image file by copying the static PNG fixture.
+ * The fixture is a valid 1x1 green PNG (69 bytes).
  * File is tracked for cleanup.
  *
  * @param name - Optional file name (defaults to test-image-{timestamp}.png)
@@ -91,82 +96,9 @@ export function createTestImageFile(name?: string): TestBinaryFile {
   const timestamp = Date.now();
   const fileName = name || `test-image-${timestamp}.png`;
   const filePath = resolve(FIXTURES_DIR, fileName);
+  const fixturePath = resolve(FIXTURES_DIR, 'test-image.png');
 
-  // Minimal valid 1x1 green PNG (67 bytes)
-  const png = Buffer.from([
-    0x89,
-    0x50,
-    0x4e,
-    0x47,
-    0x0d,
-    0x0a,
-    0x1a,
-    0x0a, // PNG signature
-    0x00,
-    0x00,
-    0x00,
-    0x0d,
-    0x49,
-    0x48,
-    0x44,
-    0x52, // IHDR chunk
-    0x00,
-    0x00,
-    0x00,
-    0x01,
-    0x00,
-    0x00,
-    0x00,
-    0x01, // 1x1
-    0x08,
-    0x02,
-    0x00,
-    0x00,
-    0x00,
-    0x90,
-    0x77,
-    0x53, // 8-bit RGB
-    0xde,
-    0x00,
-    0x00,
-    0x00,
-    0x0c,
-    0x49,
-    0x44,
-    0x41, // IDAT chunk
-    0x54,
-    0x08,
-    0xd7,
-    0x63,
-    0x60,
-    0xf8,
-    0xcf,
-    0xc0, // deflate data
-    0x00,
-    0x00,
-    0x00,
-    0x02,
-    0x00,
-    0x01,
-    0xe2,
-    0x21, // CRC
-    0xbc,
-    0x33,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x49,
-    0x45, // IEND chunk
-    0x4e,
-    0x44,
-    0xae,
-    0x42,
-    0x60,
-    0x82,
-  ]);
-
-  writeFileSync(filePath, png);
+  copyFileSync(fixturePath, filePath);
   createdFiles.push(filePath);
 
   return {
