@@ -24,6 +24,10 @@ CipherBox relies on `delegated-ipfs.dev` for IPNS resolution (both server-side a
 - **Direct CID caching:** Continue the current DB-cached CID pattern but make it the primary path, with IPNS as background refresh only
 - **DNSLink:** Use DNS TXT records as an alternative IPNS resolution mechanism for the root vault
 
+## Relationship to CRDT-based sharing research
+
+Solving IPNS reliability is a prerequisite for the CRDT-based IPNS inbox approach to serverless share discovery. If IPNS becomes reliable, the same CRDT-over-IPNS pattern could replace centralized workarounds across folder sync, sharing, and device registry. See `.planning/todos/pending/2026-02-22-crdt-ipns-inbox-sharing.md`.
+
 ## Success criteria
 
 - Identify at least one alternative that provides sub-2s resolution latency and >99.5% availability
