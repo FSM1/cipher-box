@@ -693,7 +693,7 @@ pub(crate) mod implementation {
 
             // File: determine read vs write
             // FILE_WRITE_DATA = 0x0002, FILE_APPEND_DATA = 0x0004
-            let is_write = (granted_access.0 & 0x0006) != 0;
+            let is_write = (granted_access & 0x0006) != 0;
 
             if is_write {
                 // Get file info for content pre-population
@@ -1734,10 +1734,9 @@ pub(crate) mod implementation {
 
                 let mut dir_info = DirInfo::new();
                 *dir_info.file_info_mut() = entry_info.clone();
-                dir_info.set_name_cstr(entry_name);
-                match dir_info.append_to_buffer(&mut buffer[bytes_written as usize..]) {
-                    Some(written) => bytes_written += written as u32,
-                    None => break, // buffer full
+                let _ = dir_info.set_name_cstr(entry_name);
+                if !dir_info.append_to_buffer(buffer, &mut bytes_written) {
+                    break; // buffer full
                 }
             }
 
