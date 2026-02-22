@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "13ca730c9231",
+  "strategy": "manual-commit",
+  "branch": "fix/staging-shares-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".learnings/2026-02-22-staging-migration-missing-create-table.md",
+    "docs/DATABASE_EVOLUTION_PROTOCOL.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/13/ca730c9231/0/metadata.json",
+      "transcript": "/13/ca730c9231/0/full.jsonl",
+      "context": "/13/ca730c9231/0/context.md",
+      "content_hash": "/13/ca730c9231/0/content_hash.txt",
+      "prompt": "/13/ca730c9231/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 31186,
+    "cache_read_tokens": 1056118,
+    "output_tokens": 818,
+    "api_call_count": 20
+  }
+}
