@@ -4,7 +4,7 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * Full schema baseline migration for CipherBox.
  *
  * Creates ALL tables from scratch for fresh database initialization (staging/production).
- * This migration captures the complete schema state as of Phase 9.1.
+ * This migration captures the complete schema state as of Phase 14 (includes sharing tables).
  *
  * Timestamp 1700000000000 ensures this runs BEFORE any incremental migrations.
  * For fresh databases: this creates everything; incremental migrations are idempotent (IF NOT EXISTS).

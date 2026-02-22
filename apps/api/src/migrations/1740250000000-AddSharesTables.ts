@@ -81,6 +81,10 @@ export class AddSharesTables1740250000000 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
+    // On staging/production this migration created both tables, so dropping them here is correct.
+    // On fresh databases, FullSchema (1700000000000) created these tables and this migration
+    // only added indexes. Reverting only this migration on a fresh DB will drop FullSchema-owned
+    // tables; ensure FullSchema is also reverted to maintain consistency.
     await queryRunner.query(`DROP TABLE IF EXISTS "share_keys" CASCADE`);
     await queryRunner.query(`DROP TABLE IF EXISTS "shares" CASCADE`);
   }
