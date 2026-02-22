@@ -3,7 +3,7 @@
   "checkpoint_id": "d860f5573b95",
   "strategy": "manual-commit",
   "branch": "feat/phase-14-user-to-user-sharing",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "apps/web/src/components/file-browser/SharedFileBrowser.tsx",
     "apps/web/src/components/file-browser/TextEditorDialog.tsx",
@@ -67,13 +67,20 @@
       "context": "/d8/60f5573b95/7/context.md",
       "content_hash": "/d8/60f5573b95/7/content_hash.txt",
       "prompt": "/d8/60f5573b95/7/prompt.txt"
+    },
+    {
+      "metadata": "/d8/60f5573b95/8/metadata.json",
+      "transcript": "/d8/60f5573b95/8/full.jsonl",
+      "context": "/d8/60f5573b95/8/context.md",
+      "content_hash": "/d8/60f5573b95/8/content_hash.txt",
+      "prompt": "/d8/60f5573b95/8/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 4714,
-    "cache_creation_tokens": 1084882,
-    "cache_read_tokens": 39629437,
-    "output_tokens": 49173,
-    "api_call_count": 427
+    "input_tokens": 5148,
+    "cache_creation_tokens": 1883315,
+    "cache_read_tokens": 88219119,
+    "output_tokens": 85492,
+    "api_call_count": 829
   }
 }
