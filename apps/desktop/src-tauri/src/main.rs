@@ -13,6 +13,28 @@ mod tray;
 use tauri::{Manager, WindowEvent};
 use state::AppState;
 
+/// Check if WinFsp filesystem driver is installed on Windows.
+///
+/// Queries the Windows Registry (HKLM\SOFTWARE\WinFsp) for the install directory
+/// and verifies the winfsp-x64.dll exists at the expected path.
+/// Returns true if WinFsp is installed and the DLL is present.
+#[cfg(target_os = "windows")]
+fn check_winfsp_installed() -> bool {
+    use winreg::enums::*;
+    use winreg::RegKey;
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    match hklm.open_subkey("SOFTWARE\\WinFsp") {
+        Ok(key) => match key.get_value::<String, _>("InstallDir") {
+            Ok(dir) => {
+                let dll_path = std::path::Path::new(&dir).join("bin").join("winfsp-x64.dll");
+                dll_path.exists()
+            }
+            Err(_) => false,
+        },
+        Err(_) => false,
+    }
+}
+
 /// CLI arguments for debug builds only.
 /// Allows bypassing Web3Auth login with a hex-encoded secp256k1 private key.
 #[cfg(debug_assertions)]
@@ -59,6 +81,8 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_autostart::init(
+            // MacosLauncher param is macOS-specific; on Windows the plugin
+            // uses Registry HKCU\...\Run automatically (param is ignored).
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
@@ -69,6 +93,26 @@ fn main() {
             // Hide dock icon -- menu bar only (pure background utility)
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            // Check WinFsp runtime is available on Windows
+            #[cfg(target_os = "windows")]
+            {
+                if !check_winfsp_installed() {
+                    log::error!("WinFsp not found. Virtual filesystem will not be available.");
+                    // Show a dialog warning the user. The app can still launch
+                    // (tray, settings work) but mount will fail gracefully.
+                    use tauri_plugin_notification::NotificationExt;
+                    let _ = app.notification()
+                        .builder()
+                        .title("CipherBox - WinFsp Not Found")
+                        .body(
+                            "WinFsp filesystem driver is not installed. CipherBox requires \
+                             WinFsp to mount your encrypted vault. Please reinstall CipherBox \
+                             or install WinFsp manually from https://winfsp.dev"
+                        )
+                        .show();
+                }
+            }
 
             // Build the system tray menu bar icon
             let handle = app.handle().clone();

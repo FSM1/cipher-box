@@ -143,14 +143,14 @@ async fn complete_auth_setup(
     // 6. Mark as authenticated
     *state.is_authenticated.write().await = true;
 
-    // 7. Mount FUSE filesystem (or just mark as synced if FUSE not enabled)
+    // 7. Mount filesystem (or just mark as synced if no filesystem feature enabled)
     // NOTE: Device registry spawn moved AFTER mount to avoid concurrent HTTP
     //       requests that cause reqwest connection pool starvation during pre-populate.
-    #[cfg(not(feature = "fuse"))]
+    #[cfg(not(any(feature = "fuse", feature = "winfsp")))]
     {
         let _ = crate::tray::update_tray_status(app, &crate::tray::TrayStatus::Synced);
     }
-    #[cfg(feature = "fuse")]
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
     {
         *state.mount_status.write().await = crate::state::MountStatus::Mounting;
         let private_key = state
@@ -158,28 +158,28 @@ async fn complete_auth_setup(
             .read()
             .await
             .as_ref()
-            .ok_or("Private key not available for FUSE mount")?
+            .ok_or("Private key not available for filesystem mount")?
             .clone();
         let public_key = state
             .public_key
             .read()
             .await
             .as_ref()
-            .ok_or("Public key not available for FUSE mount")?
+            .ok_or("Public key not available for filesystem mount")?
             .clone();
         let root_folder_key = state
             .root_folder_key
             .read()
             .await
             .as_ref()
-            .ok_or("Root folder key not available for FUSE mount")?
+            .ok_or("Root folder key not available for filesystem mount")?
             .clone();
         let root_ipns_name = state
             .root_ipns_name
             .read()
             .await
             .as_ref()
-            .ok_or("Root IPNS name not available for FUSE mount")?
+            .ok_or("Root IPNS name not available for filesystem mount")?
             .clone();
         let root_ipns_private_key = state.root_ipns_private_key.read().await.clone();
 
@@ -206,10 +206,10 @@ async fn complete_auth_setup(
             Ok(_handle) => {
                 *state.mount_status.write().await = crate::state::MountStatus::Mounted;
                 let _ = crate::tray::update_tray_status(app, &crate::tray::TrayStatus::Synced);
-                log::info!("FUSE filesystem mounted at ~/CipherBox");
+                log::info!("Filesystem mounted at ~/CipherBox");
             }
             Err(e) => {
-                let err_msg = format!("FUSE mount failed: {}", e);
+                let err_msg = format!("Filesystem mount failed: {}", e);
                 *state.mount_status.write().await =
                     crate::state::MountStatus::Error(err_msg.clone());
                 let _ = crate::tray::update_tray_status(
@@ -532,11 +532,11 @@ pub async fn handle_test_login_complete(
 pub async fn logout(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     log::info!("Logging out");
 
-    // Unmount FUSE filesystem before clearing keys
-    #[cfg(feature = "fuse")]
+    // Unmount filesystem before clearing keys
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
     {
         if let Err(e) = crate::fuse::unmount_filesystem() {
-            log::warn!("FUSE unmount failed (will continue logout): {}", e);
+            log::warn!("Filesystem unmount failed (will continue logout): {}", e);
         }
         *state.mount_status.write().await = crate::state::MountStatus::Unmounted;
     }
