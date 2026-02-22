@@ -6,7 +6,7 @@ edition = "2021"
 [features]
 default = ["fuse"]
 fuse = ["dep:fuser", "dep:unicode-normalization"]
-winfsp = ["dep:winfsp", "dep:widestring"]
+winfsp = ["dep:winfsp", "dep:widestring", "dep:windows"]
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
@@ -46,6 +46,7 @@ dotenvy = "0.15"
 unicode-normalization = { version = "0.1.25", optional = true }
 winfsp = { version = "0.12", optional = true }
 widestring = { version = "1", optional = true }
+windows = { version = "0.58", features = ["Win32_Storage_FileSystem"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

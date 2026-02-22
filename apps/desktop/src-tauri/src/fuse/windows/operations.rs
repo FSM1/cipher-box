@@ -18,13 +18,25 @@ pub(crate) mod implementation {
 
     use winfsp::filesystem::{
         DirInfo, DirMarker, FileInfo, FileSystemContext, FileSecurity, OpenFileInfo,
+        WideNameInfo,
     };
     use widestring::{U16CStr, U16CString};
+    use windows::Win32::Storage::FileSystem::{FILE_ACCESS_RIGHTS, FILE_FLAGS_AND_ATTRIBUTES};
     use winfsp::FspError;
 
     use crate::fuse::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
     use crate::fuse::file_handle::OpenFileHandle;
     use crate::fuse::CipherBoxFS;
+
+    // ── NTSTATUS error helpers ─────────────────────────────────────────
+    // FspError::IO cannot be used in const context since ErrorKind may not be
+    // const-constructible, so we use inline functions.
+    fn status_object_name_not_found() -> FspError { FspError::NTSTATUS(0xC0000034_u32 as i32) }
+    fn status_invalid_parameter() -> FspError { FspError::NTSTATUS(0xC000000D_u32 as i32) }
+    fn status_object_name_collision() -> FspError { FspError::NTSTATUS(0xC0000035_u32 as i32) }
+    fn status_directory_not_empty() -> FspError { FspError::NTSTATUS(0xC0000101_u32 as i32) }
+    fn status_invalid_handle() -> FspError { FspError::NTSTATUS(0xC0000008_u32 as i32) }
+    fn status_io_device_error() -> FspError { FspError::IO(std::io::ErrorKind::Other) }
 
     /// Total storage quota in bytes (500 MiB).
     const QUOTA_BYTES: u64 = 500 * 1024 * 1024;
@@ -617,7 +629,7 @@ pub(crate) mod implementation {
             &self,
             file_name: &U16CStr,
             security_descriptor: Option<&mut [c_void]>,
-            find_reparse_point: impl FnOnce(&U16CStr) -> Option<FileInfo>,
+            find_reparse_point: impl FnOnce(&U16CStr) -> Option<FileSecurity>,
         ) -> Result<FileSecurity, FspError> {
             let path = file_name.to_string_lossy();
             let fs = self.inner.lock().unwrap();
@@ -625,23 +637,23 @@ pub(crate) mod implementation {
             // Check for Windows special files
             let name_only = path.rsplit('\\').next().unwrap_or(&path);
             if is_windows_special(name_only) {
-                return Err(FspError::OBJECT_NAME_NOT_FOUND);
+                return Err(status_object_name_not_found());
             }
 
             let (ino, _parent_ino) = resolve_path(&fs, &path)
-                .ok_or(FspError::OBJECT_NAME_NOT_FOUND)?;
+                .ok_or(status_object_name_not_found())?;
 
             let inode = fs
                 .inodes
                 .get(ino)
-                .ok_or(FspError::OBJECT_NAME_NOT_FOUND)?;
+                .ok_or(status_object_name_not_found())?;
 
             let info = fill_file_info(&inode.attr);
 
             // Use a permissive default security descriptor.
             // CipherBox is single-user, encryption is the real access control.
             Ok(FileSecurity {
-                attributes: info.file_attributes,
+                attributes: FILE_FLAGS_AND_ATTRIBUTES(info.file_attributes),
                 reparse: false,
                 sz_security_descriptor: 0,
             })
@@ -652,7 +664,7 @@ pub(crate) mod implementation {
             &self,
             file_name: &U16CStr,
             create_options: u32,
-            granted_access: u32,
+            granted_access: FILE_ACCESS_RIGHTS,
             file_info: &mut OpenFileInfo,
         ) -> Result<Self::FileContext, FspError> {
             let path = file_name.to_string_lossy();
@@ -663,17 +675,16 @@ pub(crate) mod implementation {
             fs.drain_content_prefetches();
 
             let (ino, _parent_ino) = resolve_path(&fs, &path)
-                .ok_or(FspError::OBJECT_NAME_NOT_FOUND)?;
+                .ok_or(status_object_name_not_found())?;
 
             let inode = fs
                 .inodes
                 .get(ino)
-                .ok_or(FspError::OBJECT_NAME_NOT_FOUND)?;
+                .ok_or(status_object_name_not_found())?;
             let is_dir = inode.attr.is_dir;
 
             // Populate file_info with attributes
-            let fi = fill_file_info(&inode.attr);
-            file_info.set_file_info(fi);
+            *file_info.as_mut() = fill_file_info(&inode.attr);
 
             if is_dir {
                 // Directory: just return a handle
@@ -683,7 +694,7 @@ pub(crate) mod implementation {
 
             // File: determine read vs write
             // FILE_WRITE_DATA = 0x0002, FILE_APPEND_DATA = 0x0004
-            let is_write = (granted_access & 0x0006) != 0;
+            let is_write = (granted_access.0 & 0x0006) != 0;
 
             if is_write {
                 // Get file info for content pre-population
@@ -702,7 +713,7 @@ pub(crate) mod implementation {
                             encryption_mode.clone(),
                         ),
                         _ => {
-                            return Err(FspError::INVALID_PARAMETER);
+                            return Err(status_invalid_parameter());
                         }
                     };
 
@@ -724,7 +735,7 @@ pub(crate) mod implementation {
                                     "Failed to fetch content for write-open: {}",
                                     e
                                 );
-                                return Err(FspError::IO_DEVICE_ERROR);
+                                return Err(status_io_device_error());
                             }
                         }
                     }
@@ -748,7 +759,7 @@ pub(crate) mod implementation {
                     }
                     Err(e) => {
                         log::error!("Failed to create write handle: {}", e);
-                        Err(FspError::IO_DEVICE_ERROR)
+                        Err(status_io_device_error())
                     }
                 }
             } else {
@@ -768,7 +779,7 @@ pub(crate) mod implementation {
                             encryption_mode.clone(),
                         ),
                         _ => {
-                            return Err(FspError::INVALID_PARAMETER);
+                            return Err(status_invalid_parameter());
                         }
                     };
 
@@ -1195,11 +1206,11 @@ pub(crate) mod implementation {
                             }
                             Err(e) => {
                                 log::error!("Temp file read failed: {}", e);
-                                return Err(FspError::IO_DEVICE_ERROR);
+                                return Err(status_io_device_error());
                             }
                         }
                     }
-                    None => return Err(FspError::INVALID_HANDLE),
+                    None => return Err(status_invalid_handle()),
                 }
             }
 
@@ -1219,9 +1230,9 @@ pub(crate) mod implementation {
                             iv.clone(),
                             encryption_mode.clone(),
                         ),
-                        _ => return Err(FspError::INVALID_PARAMETER),
+                        _ => return Err(status_invalid_parameter()),
                     },
-                    None => return Err(FspError::OBJECT_NAME_NOT_FOUND),
+                    None => return Err(status_object_name_not_found()),
                 }
             };
 
@@ -1354,7 +1365,7 @@ pub(crate) mod implementation {
                 }
             }
 
-            Err(FspError::IO_DEVICE_ERROR)
+            Err(status_io_device_error())
         }
 
         // -- write --
@@ -1373,7 +1384,7 @@ pub(crate) mod implementation {
 
             let handle = match fs.open_files.get_mut(&fh) {
                 Some(h) => h,
-                None => return Err(FspError::INVALID_HANDLE),
+                None => return Err(status_invalid_handle()),
             };
 
             match handle.write_at(offset as i64, buffer) {
@@ -1397,7 +1408,7 @@ pub(crate) mod implementation {
                         fh,
                         e
                     );
-                    Err(FspError::IO_DEVICE_ERROR)
+                    Err(status_io_device_error())
                 }
             }
         }
@@ -1405,7 +1416,7 @@ pub(crate) mod implementation {
         // -- flush --
         fn flush(
             &self,
-            _context: &Self::FileContext,
+            _context: Option<&Self::FileContext>,
             _file_info: &mut FileInfo,
         ) -> Result<(), FspError> {
             Ok(())
@@ -1421,7 +1432,7 @@ pub(crate) mod implementation {
             let inode = fs
                 .inodes
                 .get(context.ino)
-                .ok_or(FspError::OBJECT_NAME_NOT_FOUND)?;
+                .ok_or(status_object_name_not_found())?;
             *file_info = fill_file_info(&inode.attr);
             Ok(())
         }
@@ -1430,7 +1441,7 @@ pub(crate) mod implementation {
         fn set_basic_info(
             &self,
             context: &Self::FileContext,
-            file_attributes: u32,
+            _file_attributes: FILE_FLAGS_AND_ATTRIBUTES,
             creation_time: u64,
             last_access_time: u64,
             last_write_time: u64,
@@ -1472,7 +1483,7 @@ pub(crate) mod implementation {
                     if handle.temp_path.is_some() {
                         handle
                             .truncate(new_size)
-                            .map_err(|_| FspError::IO_DEVICE_ERROR)?;
+                            .map_err(|_| status_io_device_error())?;
                         handle.dirty = true;
                     }
                 }
@@ -1582,7 +1593,7 @@ pub(crate) mod implementation {
             let inode = fs
                 .inodes
                 .get(ino)
-                .ok_or(FspError::OBJECT_NAME_NOT_FOUND)?;
+                .ok_or(status_object_name_not_found())?;
 
             // Check if metadata is stale and fire background refresh
             let stale_info: Option<(String, zeroize::Zeroizing<Vec<u8>>)> =
@@ -1695,23 +1706,36 @@ pub(crate) mod implementation {
 
             // Write entries into buffer, respecting the marker (resume point).
             // DirMarker wraps the name of the last entry from the previous call.
-            // Skip entries up to and including the marker, then write subsequent entries.
-            let mut past_marker = !marker.is_set();
+            // If marker.is_none(), this is the first call -- return all entries.
+            // Otherwise, skip entries up to and including the marker name.
+            let mut past_marker = marker.is_none();
             let mut bytes_written: u32 = 0;
 
             for (entry_name, entry_info) in &entries {
                 if !past_marker {
-                    if marker.is_match(entry_name) {
+                    // Compare entry name with marker to find resume point.
+                    let entry_str = entry_name.to_string_lossy();
+                    let is_match = if marker.is_current() {
+                        entry_str == "."
+                    } else if marker.is_parent() {
+                        entry_str == ".."
+                    } else if let Some(marker_cstr) = marker.inner_as_cstr() {
+                        // Compare using string lossy conversion
+                        entry_str == marker_cstr.to_string_lossy()
+                    } else {
+                        false
+                    };
+                    if is_match {
                         past_marker = true;
                     }
                     continue;
                 }
 
                 let mut dir_info = DirInfo::new();
-                dir_info.set_file_info(entry_info.clone());
+                *dir_info.file_info_mut() = entry_info.clone();
                 dir_info.set_name(entry_name);
                 match dir_info.write(buffer, bytes_written as usize) {
-                    Some(n) => bytes_written += n as u32,
+                    Some(new_offset) => bytes_written = new_offset as u32,
                     None => break, // buffer full
                 }
             }
@@ -1794,9 +1818,9 @@ pub(crate) mod implementation {
             &self,
             file_name: &U16CStr,
             create_options: u32,
-            _granted_access: u32,
-            _file_attributes: u32,
-            _security_descriptor: Option<&[u8]>,
+            _granted_access: FILE_ACCESS_RIGHTS,
+            _file_attributes: FILE_FLAGS_AND_ATTRIBUTES,
+            _security_descriptor: Option<&[c_void]>,
             _allocation_size: u64,
             _extra_buffer: Option<&[u8]>,
             _extra_buffer_is_reparse_point: bool,
@@ -1806,19 +1830,19 @@ pub(crate) mod implementation {
             let (parent_path, name) = split_path(&path);
 
             if name.is_empty() {
-                return Err(FspError::INVALID_PARAMETER);
+                return Err(status_invalid_parameter());
             }
 
             // Reject Windows special files
             if is_windows_special(name) {
-                return Err(FspError::OBJECT_NAME_NOT_FOUND);
+                return Err(status_object_name_not_found());
             }
 
             let mut fs = self.inner.lock().unwrap();
 
             // Resolve parent
             let (parent_ino, _) = resolve_path(&fs, parent_path)
-                .ok_or(FspError::OBJECT_NAME_NOT_FOUND)?;
+                .ok_or(status_object_name_not_found())?;
 
             // Check parent is a directory
             let parent_is_dir = fs.inodes.get(parent_ino).map(|inode| {
@@ -1828,7 +1852,7 @@ pub(crate) mod implementation {
                 )
             });
             if parent_is_dir != Some(true) {
-                return Err(FspError::OBJECT_NAME_NOT_FOUND);
+                return Err(status_object_name_not_found());
             }
 
             // FILE_DIRECTORY_FILE = 0x00000001
@@ -2099,7 +2123,7 @@ pub(crate) mod implementation {
 
                 match result {
                     Ok((attr, ino)) => {
-                        file_info.set_file_info(fill_file_info(&attr));
+                        *file_info.as_mut() = fill_file_info(&attr);
                         let fh =
                             fs.next_fh.fetch_add(1, Ordering::SeqCst);
                         Ok(WinFspFileContext {
@@ -2110,7 +2134,7 @@ pub(crate) mod implementation {
                     }
                     Err(e) => {
                         log::error!("create dir failed: {}", e);
-                        Err(FspError::IO_DEVICE_ERROR)
+                        Err(status_io_device_error())
                     }
                 }
             } else {
@@ -2150,7 +2174,7 @@ pub(crate) mod implementation {
                                 "create: IPNS name derivation failed: {}",
                                 e
                             );
-                            return Err(FspError::IO_DEVICE_ERROR);
+                            return Err(status_io_device_error());
                         }
                     };
 
@@ -2165,7 +2189,7 @@ pub(crate) mod implementation {
                                 "create: failed to ECIES-wrap IPNS key: {}",
                                 e
                             );
-                            return Err(FspError::IO_DEVICE_ERROR);
+                            return Err(status_io_device_error());
                         }
                     };
 
@@ -2219,14 +2243,14 @@ pub(crate) mod implementation {
                             e
                         );
                         fs.inodes.remove(ino);
-                        return Err(FspError::IO_DEVICE_ERROR);
+                        return Err(status_io_device_error());
                     }
                 }
 
                 fs.mutated_folders
                     .insert(parent_ino, std::time::Instant::now());
 
-                file_info.set_file_info(fill_file_info(&attr));
+                *file_info.as_mut() = fill_file_info(&attr);
                 Ok(WinFspFileContext {
                     fh,
                     ino,
@@ -2249,18 +2273,18 @@ pub(crate) mod implementation {
             let mut fs = self.inner.lock().unwrap();
 
             let (source_ino, old_parent_ino) = resolve_path(&fs, &old_path)
-                .ok_or(FspError::OBJECT_NAME_NOT_FOUND)?;
+                .ok_or(status_object_name_not_found())?;
 
             let (new_parent_path, new_name) = split_path(&new_path);
             let (new_parent_ino, _) = resolve_path(&fs, new_parent_path)
-                .ok_or(FspError::OBJECT_NAME_NOT_FOUND)?;
+                .ok_or(status_object_name_not_found())?;
 
             // Handle existing destination
             if let Some(dest_ino) =
                 fs.inodes.find_child(new_parent_ino, new_name)
             {
                 if !replace_if_exists {
-                    return Err(FspError::OBJECT_NAME_COLLISION);
+                    return Err(status_object_name_collision());
                 }
                 // Check if destination is a non-empty directory
                 if let Some(dest_inode) = fs.inodes.get(dest_ino) {
@@ -2270,7 +2294,7 @@ pub(crate) mod implementation {
                             {
                                 if !children.is_empty() {
                                     return Err(
-                                        FspError::DIRECTORY_NOT_EMPTY,
+                                        status_directory_not_empty(),
                                     );
                                 }
                             }
