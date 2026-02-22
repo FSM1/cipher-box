@@ -10,6 +10,15 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use zeroize::Zeroize;
 
+/// Platform-agnostic access mode for open file handles.
+/// Replaces POSIX O_RDONLY / O_WRONLY / O_RDWR flags that depend on libc.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AccessMode {
+    ReadOnly,
+    WriteOnly,
+    ReadWrite,
+}
+
 /// Open file handle tracking active reads and writes.
 ///
 /// For read-only opens, only `cached_content` is populated.
@@ -18,8 +27,8 @@ use zeroize::Zeroize;
 pub struct OpenFileHandle {
     /// Inode number of the open file.
     pub ino: u64,
-    /// Open flags (O_RDONLY, O_WRONLY, O_RDWR).
-    pub flags: i32,
+    /// Platform-agnostic access mode.
+    pub access_mode: AccessMode,
     /// Path to temp file used for write buffering (None for read-only opens).
     pub temp_path: Option<PathBuf>,
     /// Whether the file has been modified since open.
@@ -32,10 +41,10 @@ pub struct OpenFileHandle {
 
 impl OpenFileHandle {
     /// Create a read-only file handle. No temp file, not dirty.
-    pub fn new_read(ino: u64, flags: i32) -> Self {
+    pub fn new_read(ino: u64) -> Self {
         Self {
             ino,
-            flags,
+            access_mode: AccessMode::ReadOnly,
             temp_path: None,
             dirty: false,
             cached_content: None,
@@ -49,7 +58,6 @@ impl OpenFileHandle {
     /// the temp file is pre-populated with the decrypted content.
     pub fn new_write(
         ino: u64,
-        flags: i32,
         temp_dir: &Path,
         existing_content: Option<&[u8]>,
     ) -> Result<Self, String> {
@@ -85,7 +93,7 @@ impl OpenFileHandle {
 
         Ok(Self {
             ino,
-            flags,
+            access_mode: AccessMode::ReadWrite,
             temp_path: Some(temp_path),
             dirty: false,
             cached_content: None,
@@ -224,8 +232,9 @@ mod tests {
 
     #[test]
     fn test_new_read_handle() {
-        let handle = OpenFileHandle::new_read(42, libc::O_RDONLY);
+        let handle = OpenFileHandle::new_read(42);
         assert_eq!(handle.ino, 42);
+        assert_eq!(handle.access_mode, AccessMode::ReadOnly);
         assert!(!handle.dirty);
         assert!(handle.temp_path.is_none());
         assert!(handle.cached_content.is_none());
@@ -234,9 +243,10 @@ mod tests {
     #[test]
     fn test_new_write_handle_empty() {
         let temp_dir = std::env::temp_dir().join("cipherbox-test-write-empty");
-        let handle = OpenFileHandle::new_write(5, libc::O_WRONLY, &temp_dir, None).unwrap();
+        let handle = OpenFileHandle::new_write(5, &temp_dir, None).unwrap();
 
         assert_eq!(handle.ino, 5);
+        assert_eq!(handle.access_mode, AccessMode::ReadWrite);
         assert!(!handle.dirty);
         assert!(handle.temp_path.is_some());
         assert_eq!(handle.original_size, 0);
@@ -255,7 +265,7 @@ mod tests {
         let temp_dir = std::env::temp_dir().join("cipherbox-test-write-content");
         let content = b"Hello, CipherBox!";
         let handle =
-            OpenFileHandle::new_write(10, libc::O_RDWR, &temp_dir, Some(content)).unwrap();
+            OpenFileHandle::new_write(10, &temp_dir, Some(content)).unwrap();
 
         assert_eq!(handle.original_size, content.len() as u64);
 
@@ -272,7 +282,6 @@ mod tests {
         let temp_dir = std::env::temp_dir().join("cipherbox-test-write-read");
         let mut handle = OpenFileHandle::new_write(
             15,
-            libc::O_RDWR,
             &temp_dir,
             Some(b"Hello World"),
         )
@@ -300,7 +309,7 @@ mod tests {
         let temp_dir = std::env::temp_dir().join("cipherbox-test-get-size");
         let content = b"12345678901234567890"; // 20 bytes
         let handle =
-            OpenFileHandle::new_write(20, libc::O_WRONLY, &temp_dir, Some(content)).unwrap();
+            OpenFileHandle::new_write(20, &temp_dir, Some(content)).unwrap();
 
         assert_eq!(handle.get_size().unwrap(), 20);
 
@@ -313,7 +322,7 @@ mod tests {
         let temp_dir = std::env::temp_dir().join("cipherbox-test-truncate");
         let content = b"Hello World!";
         let handle =
-            OpenFileHandle::new_write(25, libc::O_WRONLY, &temp_dir, Some(content)).unwrap();
+            OpenFileHandle::new_write(25, &temp_dir, Some(content)).unwrap();
 
         assert_eq!(handle.get_size().unwrap(), 12);
 
@@ -331,7 +340,7 @@ mod tests {
     fn test_cleanup_removes_temp_file() {
         let temp_dir = std::env::temp_dir().join("cipherbox-test-cleanup");
         let handle =
-            OpenFileHandle::new_write(30, libc::O_WRONLY, &temp_dir, Some(b"test")).unwrap();
+            OpenFileHandle::new_write(30, &temp_dir, Some(b"test")).unwrap();
 
         let temp_path = handle.temp_path.clone().unwrap();
         assert!(temp_path.exists());
