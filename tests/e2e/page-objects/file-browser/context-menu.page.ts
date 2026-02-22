@@ -122,6 +122,20 @@ export class ContextMenuPage {
   }
 
   /**
+   * Get the Preview menu option (image, PDF, audio, video, text files).
+   */
+  previewOption(): Locator {
+    return this.menu().locator('button[role="menuitem"]', { hasText: 'Preview' });
+  }
+
+  /**
+   * Click the Preview option to open the preview dialog.
+   */
+  async clickPreview(): Promise<void> {
+    await this.previewOption().click();
+  }
+
+  /**
    * Get the Share menu option.
    */
   shareOption(): Locator {

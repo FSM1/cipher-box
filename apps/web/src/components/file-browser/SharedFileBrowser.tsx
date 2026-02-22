@@ -18,7 +18,77 @@ import { ImagePreviewDialog } from './ImagePreviewDialog';
 import { PdfPreviewDialog } from './PdfPreviewDialog';
 import { AudioPlayerDialog } from './AudioPlayerDialog';
 import { VideoPlayerDialog } from './VideoPlayerDialog';
+import { TextEditorDialog } from './TextEditorDialog';
 import '../../styles/shared-browser.css';
+
+/** Extensions recognized as text-editable files. */
+const TEXT_EXTENSIONS = new Set([
+  '.txt',
+  '.md',
+  '.json',
+  '.yaml',
+  '.yml',
+  '.toml',
+  '.xml',
+  '.csv',
+  '.log',
+  '.env',
+  '.sh',
+  '.bash',
+  '.zsh',
+  '.fish',
+  '.ps1',
+  '.bat',
+  '.cmd',
+  '.ini',
+  '.cfg',
+  '.conf',
+  '.html',
+  '.htm',
+  '.css',
+  '.scss',
+  '.less',
+  '.js',
+  '.mjs',
+  '.cjs',
+  '.ts',
+  '.mts',
+  '.cts',
+  '.jsx',
+  '.tsx',
+  '.py',
+  '.rb',
+  '.rs',
+  '.go',
+  '.java',
+  '.c',
+  '.cpp',
+  '.h',
+  '.hpp',
+  '.sql',
+  '.graphql',
+  '.gitignore',
+  '.editorconfig',
+]);
+
+/** Well-known extensionless text filenames. */
+const TEXT_FILENAMES = new Set([
+  'dockerfile',
+  'makefile',
+  'rakefile',
+  'gemfile',
+  'procfile',
+  'vagrantfile',
+]);
+
+function isTextFile(name: string): boolean {
+  const lower = name.toLowerCase();
+  if (TEXT_EXTENSIONS.has(lower)) return true;
+  if (TEXT_FILENAMES.has(lower)) return true;
+  const lastDot = lower.lastIndexOf('.');
+  if (lastDot === -1) return false;
+  return TEXT_EXTENSIONS.has(lower.slice(lastDot));
+}
 
 /** Extensions recognized as previewable image files. */
 const IMAGE_EXTENSIONS = new Set([
@@ -71,7 +141,13 @@ function isVideoFile(name: string): boolean {
 }
 
 function isPreviewableFile(name: string): boolean {
-  return isImageFile(name) || isPdfFile(name) || isAudioFile(name) || isVideoFile(name);
+  return (
+    isImageFile(name) ||
+    isPdfFile(name) ||
+    isAudioFile(name) ||
+    isVideoFile(name) ||
+    isTextFile(name)
+  );
 }
 
 function isFilePointer(item: FolderChild): item is FilePointer {
@@ -135,6 +211,7 @@ export function SharedFileBrowser() {
 
   // Dialog states
   const [detailsDialog, setDetailsDialog] = useState<DialogState>({ open: false, item: null });
+  const [editorDialog, setEditorDialog] = useState<DialogState>({ open: false, item: null });
   const [imagePreviewDialog, setImagePreviewDialog] = useState<DialogState>({
     open: false,
     item: null,
@@ -193,11 +270,19 @@ export function SharedFileBrowser() {
     }
   }, [contextMenu.item]);
 
+  const handleEditClick = useCallback(() => {
+    if (contextMenu.item) {
+      setEditorDialog({ open: true, item: contextMenu.item });
+    }
+  }, [contextMenu.item]);
+
   const handlePreviewClick = useCallback(() => {
     const item = contextMenu.item;
     if (!item || !isFilePointer(item)) return;
     const name = item.name;
-    if (isImageFile(name)) {
+    if (isTextFile(name)) {
+      setEditorDialog({ open: true, item });
+    } else if (isImageFile(name)) {
       setImagePreviewDialog({ open: true, item });
     } else if (isPdfFile(name)) {
       setPdfPreviewDialog({ open: true, item });
@@ -487,6 +572,11 @@ export function SharedFileBrowser() {
           selectedCount={1}
           onClose={contextMenu.hide}
           onDownload={contextMenu.item.type === 'file' ? handleDownload : undefined}
+          onEdit={
+            contextMenu.item.type === 'file' && isTextFile(contextMenu.item.name)
+              ? handleEditClick
+              : undefined
+          }
           onPreview={
             contextMenu.item.type === 'file' && isPreviewableFile(contextMenu.item.name)
               ? handlePreviewClick
@@ -506,6 +596,17 @@ export function SharedFileBrowser() {
         item={detailsDialog.item}
         folderKey={folderKey}
         parentFolderId=""
+      />
+
+      {/* Text viewer dialog (read-only) */}
+      <TextEditorDialog
+        open={editorDialog.open}
+        onClose={() => setEditorDialog({ open: false, item: null })}
+        item={editorDialog.item && isFilePointer(editorDialog.item) ? editorDialog.item : null}
+        parentFolderId=""
+        folderKey={folderKey}
+        readOnly
+        shareId={currentShareId}
       />
 
       {/* Image preview dialog */}

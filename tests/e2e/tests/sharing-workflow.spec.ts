@@ -6,7 +6,7 @@ import {
   navigateToFiles,
   type TestAccount,
 } from '../utils/multi-account';
-import { createTestTextFile, cleanupTestFiles } from '../utils/test-files';
+import { createTestTextFile, createTestImageFile, cleanupTestFiles } from '../utils/test-files';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
 import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';
 import { ContextMenuPage } from '../page-objects/file-browser/context-menu.page';
@@ -69,6 +69,9 @@ test.describe.serial('Sharing Workflow', () => {
   // Post-share file (added after share is created)
   const postShareFileName = `added-after-share-${runId}.txt`;
   const postShareFileContent = 'This file was added after the share was created';
+
+  // Preview test files (image in shared folder)
+  const sharedImageName = `test-image-${runId}.png`;
 
   // Helper to truncate a public key for matching in the UI
   function truncateKey(key: string): string {
@@ -186,9 +189,14 @@ test.describe.serial('Sharing Workflow', () => {
     await aliceCreateFolder(sharedFolderName);
     expect(await aliceFileList.isItemVisible(sharedFolderName)).toBe(true);
 
-    // Navigate into it and add a file
+    // Navigate into it and add a file + an image
     await aliceNavigateIntoFolder(sharedFolderName);
     await aliceUploadFile(folderFile1Name, 'File inside shared folder');
+
+    // Upload a PNG image (needed for shared preview test in Phase 11)
+    const testImage = createTestImageFile(sharedImageName);
+    await aliceUploadZone.uploadFile(testImage.path);
+    await aliceFileList.waitForItemToAppear(sharedImageName, { timeout: 30000 });
 
     // Create subfolder
     await aliceCreateFolder(subFolderName);
@@ -517,5 +525,154 @@ test.describe.serial('Sharing Workflow', () => {
     const itemNames = await bobSharedBrowser.getSharedItemNames();
     const hasFolderShare = itemNames.some((n) => n.includes(sharedFolderName));
     expect(hasFolderShare).toBe(true);
+  });
+
+  // ============================================
+  // Phase 11: Shared File Previews
+  // ============================================
+
+  test('11.1 Bob can see the image in the shared folder', async () => {
+    // The image was uploaded in test 2.2 before sharing, so share keys exist.
+    // Bob should be able to see it in the shared folder view.
+    await navigateToShared(bob);
+    await bobSharedBrowser.waitForLoaded({ timeout: 30000 });
+
+    // Navigate into the shared folder
+    await bobSharedBrowser.waitForSharedItem(sharedFolderName, { timeout: 15000 });
+    await bobSharedBrowser.openSharedItem(sharedFolderName);
+    await bob.page.waitForTimeout(3000);
+
+    // Check if we navigated successfully
+    const parentVisible = await bobSharedBrowser.parentDirRow().isVisible();
+    if (!parentVisible) {
+      await bobSharedBrowser.openSharedItem(sharedFolderName);
+      await bobSharedBrowser.parentDirRow().waitFor({ state: 'visible', timeout: 30000 });
+    }
+
+    // Verify the image file is visible
+    await bobSharedBrowser.getFolderItem(sharedImageName).waitFor({
+      state: 'visible',
+      timeout: 15000,
+    });
+  });
+
+  test('11.2 Bob previews a text file in the shared folder', async () => {
+    // Bob is already inside the shared folder from test 11.1
+    // Right-click the text file and open context menu
+    await bobSharedBrowser.rightClickFolderItem(folderFile1Name);
+    await bobContextMenu.waitForOpen();
+
+    // Verify Preview option is available for text files
+    const options = await bobContextMenu.getVisibleOptions();
+    expect(options).toContain('Preview');
+
+    // Click Preview to open text viewer
+    await bobContextMenu.clickPreview();
+
+    // Wait for the text editor modal to appear
+    const modal = bob.page.locator('.text-editor-modal');
+    await modal.waitFor({ state: 'visible', timeout: 30000 });
+
+    // Verify it opened in read-only mode
+    const title = await bob.page.locator('.modal-title').textContent();
+    expect(title).toContain('View:');
+
+    // Wait for decryption to complete (loading state to disappear)
+    await bob.page.locator('.text-editor-loading').waitFor({ state: 'hidden', timeout: 30000 });
+
+    // Verify textarea is read-only
+    const textarea = bob.page.locator('.text-editor-textarea');
+    await textarea.waitFor({ state: 'visible' });
+    const isReadOnly = await textarea.getAttribute('readonly');
+    expect(isReadOnly).not.toBeNull();
+
+    // Verify the status bar shows read-only
+    const statusText = await bob.page.locator('.text-editor-status').textContent();
+    expect(statusText).toContain('read-only');
+
+    // Verify the content was decrypted (textarea has some text)
+    const content = await textarea.inputValue();
+    expect(content.length).toBeGreaterThan(0);
+
+    // Close the dialog
+    await bob.page.locator('.dialog-button--primary', { hasText: 'close' }).click();
+    await modal.waitFor({ state: 'hidden' });
+  });
+
+  test('11.3 Bob previews an image in the shared folder', async () => {
+    // Bob is already inside the shared folder from test 11.1
+    // The image was uploaded before sharing (test 2.2), so share keys exist.
+    await bobSharedBrowser.getFolderItem(sharedImageName).waitFor({
+      state: 'visible',
+      timeout: 15000,
+    });
+
+    // Right-click the image file
+    await bobSharedBrowser.rightClickFolderItem(sharedImageName);
+    await bobContextMenu.waitForOpen();
+
+    // Verify Preview option is available
+    const options = await bobContextMenu.getVisibleOptions();
+    expect(options).toContain('Preview');
+
+    // Click Preview to open image preview
+    await bobContextMenu.clickPreview();
+
+    // Wait for the image preview modal to appear
+    const modal = bob.page.locator('.image-preview-modal');
+    await modal.waitFor({ state: 'visible', timeout: 30000 });
+
+    // Wait for decryption to complete (loading or error state)
+    await bob.page
+      .locator('.image-preview-img, .image-preview-error')
+      .first()
+      .waitFor({ state: 'visible', timeout: 30000 });
+
+    // Verify the image element is rendered (not an error)
+    const img = bob.page.locator('.image-preview-img');
+    expect(await img.isVisible()).toBe(true);
+
+    // Verify the image has a valid src (blob URL)
+    const src = await img.getAttribute('src');
+    expect(src).toContain('blob:');
+
+    // Close the dialog
+    await bob.page.locator('.modal-close').click();
+    await modal.waitFor({ state: 'hidden' });
+  });
+
+  test('11.4 Shared text file context menu shows View not Edit', async () => {
+    // Bob should still be inside the shared folder
+    await bobSharedBrowser.getFolderItem(folderFile1Name).waitFor({
+      state: 'visible',
+      timeout: 15000,
+    });
+
+    // Right-click the text file
+    await bobSharedBrowser.rightClickFolderItem(folderFile1Name);
+    await bobContextMenu.waitForOpen();
+
+    // In read-only mode, Edit menu item should be present (opens read-only viewer)
+    // but Rename and Delete should NOT be present
+    const options = await bobContextMenu.getVisibleOptions();
+    expect(options).toContain('Edit');
+    expect(options).toContain('Preview');
+    expect(options).toContain('Download');
+    expect(options).not.toContain('Rename');
+    expect(options).not.toContain('Delete');
+
+    // Click Edit to open the read-only text viewer
+    await bobContextMenu.clickEdit();
+
+    const modal = bob.page.locator('.text-editor-modal');
+    await modal.waitFor({ state: 'visible', timeout: 30000 });
+
+    // Verify read-only title
+    const title = await bob.page.locator('.modal-title').textContent();
+    expect(title).toContain('View:');
+
+    // Close
+    await bob.page.locator('.dialog-button--primary', { hasText: 'close' }).click();
+    await modal.waitFor({ state: 'hidden' });
   });
 });
