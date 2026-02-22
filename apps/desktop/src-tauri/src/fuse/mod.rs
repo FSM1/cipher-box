@@ -12,6 +12,15 @@ pub mod file_handle;
 pub mod inode;
 #[cfg(feature = "fuse")]
 pub mod operations;
+#[cfg(feature = "winfsp")]
+pub mod windows;
+
+// Re-export Windows mount/unmount so callers can use crate::fuse::mount_filesystem
+// with the same function name regardless of platform (only one feature active per build).
+#[cfg(feature = "winfsp")]
+pub use windows::mount_filesystem;
+#[cfg(feature = "winfsp")]
+pub use windows::unmount_filesystem;
 
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 use std::collections::HashMap;

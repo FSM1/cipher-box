@@ -10,7 +10,7 @@
 //! this by walking the inode table component-by-component from the root.
 
 #[cfg(feature = "winfsp")]
-mod implementation {
+pub(crate) mod implementation {
     use std::sync::atomic::Ordering;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
