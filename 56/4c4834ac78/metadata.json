@@ -3,7 +3,7 @@
   "checkpoint_id": "564c4834ac78",
   "strategy": "manual-commit",
   "branch": "fix/staging-shares-migration",
-  "checkpoints_count": 1,
+  "checkpoints_count": 4,
   "files_touched": [
     "docs/DATABASE_EVOLUTION_PROTOCOL.md"
   ],
@@ -14,13 +14,20 @@
       "context": "/56/4c4834ac78/0/context.md",
       "content_hash": "/56/4c4834ac78/0/content_hash.txt",
       "prompt": "/56/4c4834ac78/0/prompt.txt"
+    },
+    {
+      "metadata": "/56/4c4834ac78/1/metadata.json",
+      "transcript": "/56/4c4834ac78/1/full.jsonl",
+      "context": "/56/4c4834ac78/1/context.md",
+      "content_hash": "/56/4c4834ac78/1/content_hash.txt",
+      "prompt": "/56/4c4834ac78/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 85,
-    "cache_creation_tokens": 83701,
-    "cache_read_tokens": 4858410,
-    "output_tokens": 7994,
-    "api_call_count": 63
+    "input_tokens": 502,
+    "cache_creation_tokens": 146682,
+    "cache_read_tokens": 7997749,
+    "output_tokens": 12998,
+    "api_call_count": 104
   }
 }

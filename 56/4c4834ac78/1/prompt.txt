@@ -1,0 +1,64 @@
+Implement the following plan:
+
+# Plan: Database Schema Evolution Protocol
+
+## Context
+
+Phase 14 exposed a gap: new TypeORM entities were added without a corresponding `CREATE TABLE` migration, breaking the staging deploy. The IPFS metadata side has a formal evolution protocol (`docs/METADATA_EVOLUTION_PROTOCOL.md`) but there's no equivalent for the PostgreSQL database schema. This doc will formalize the rules, conventions, and checklist for database migrations to prevent the same class of error from recurring.
+
+## Approach
+
+Create `docs/DATABASE_EVOLUTION_PROTOCOL.md` mirroring the structure of the metadata evolution protocol but adapted for relational database concerns (TypeORM entities, migrations, synchronize behavior, CD pipeline).
+
+## File
+
+- **Create:** `docs/DATABASE_EVOLUTION_PROTOCOL.md`
+
+## Structure (mirrors metadata protocol)
+
+1. **Purpose** — Why this doc exists (synchronize:true masks missing migrations, staging/prod rely exclusively on explicit migrations)
+2. **Guiding Principles** — Idempotency, ordering, entity-migration parity, FullSchema baseline maintenance
+3. **Change Classification** — Additive (new table, new nullable column, new index) vs Destructive (drop table, drop column, type change, rename)
+4. **Evolution Checklist** — The actionable section developers use during implementation:
+   - Before implementation (classify change, check dependencies)
+   - Entity changes (TypeORM decorator updates)
+   - Migration file (naming, timestamp, idempotency patterns)
+   - FullSchema baseline update
+   - CD pipeline verification
+   - Downstream checks (API client regen, desktop app if applicable)
+5. **Naming & Timestamp Conventions** — File naming, class naming, index/constraint naming prefixes
+6. **Current Schema Reference** — Table of all 11 tables with purpose, FK relationships, key indices
+7. **Environment Behavior Matrix** — How dev/test/staging/production handle schema changes differently
+8. **Dangerous Patterns** — synchronize:true masking gaps, migration ordering assumptions, down() ownership conflicts
+9. **Historical Incidents** — The Phase 14 shares table incident as a documented case study
+10. **References** — Links to migration files, entity files, deploy workflow, run-migrations.ts
+
+## Key content points
+
+- Every `@Entity()` MUST have a `CREATE TABLE` migration — synchronize cannot be relied upon
+- All DDL statements use `IF NOT EXISTS` / `IF EXISTS` for idempotency
+- FullSchema baseline must always reflect the complete current schema
+- Migration timestamp must be earlier than any migration that modifies the same table
+- The `down()` method must document ownership when tables are created in both FullSchema and incremental migrations
+- Include the actual file paths and patterns from the codebase (not generic advice)
+
+## Verification
+
+- Review the doc for accuracy against actual migration files
+- Ensure all 11 current tables are documented
+- Cross-reference with the metadata evolution protocol for structural consistency
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.REDACTED.jsonl
+
+---
+
+ok can you fix the device_approvals gap identified? Will this require a staging reset to fix?
+
+---
+
+but the fresh install will always run all the available migrations, why would you repeat creating the table in the full schema if it will be created in the dedicated migration?
+
+---
+
+ok push all this up and lets get it merged.

@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "564c4834ac78",
+  "session_id": "c621c551-bbcb-42d6-84b9-a00ab6ce4681",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-22T02:16:40.14703Z",
+  "branch": "fix/staging-shares-migration",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "docs/DATABASE_EVOLUTION_PROTOCOL.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f6b22c0714c7",
+  "token_usage": {
+    "input_tokens": 417,
+    "cache_creation_tokens": 62981,
+    "cache_read_tokens": 3139339,
+    "output_tokens": 5004,
+    "api_call_count": 41
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-22T02:16:39.709575Z",
+    "agent_lines": 293,
+    "human_added": 2,
+    "human_modified": 45,
+    "human_removed": 0,
+    "total_committed": 340,
+    "agent_percentage": 86.1764705882353
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/c621c551-bbcb-42d6-84b9-a00ab6ce4681.jsonl"
+}
