@@ -444,7 +444,7 @@ mod mount_impl {
             .case_preserved_names(true);
 
         let mut host = winfsp::host::FileSystemHost::new(
-            winfsp::host::FileSystemParams::new(volume_params),
+            winfsp::host::FileSystemParams::default_params(volume_params),
             context,
         )
         .map_err(|e| format!("Failed to create WinFsp host: {:?}", e))?;

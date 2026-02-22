@@ -11,16 +11,16 @@
 
 #[cfg(feature = "winfsp")]
 pub(crate) mod implementation {
+    use std::ffi::c_void;
     use std::sync::atomic::Ordering;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use winfsp::filesystem::{
-        DirBuffer, DirInfo, FileInfo, FileSystemContext, FileSecurity,
+        DirInfo, DirMarker, FileInfo, FileSystemContext, FileSecurity, OpenFileInfo,
     };
-    use winfsp::host::OpenFileInfo;
     use widestring::{U16CStr, U16CString};
-    use winfsp::error::FspError;
+    use winfsp::FspError;
 
     use crate::fuse::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
     use crate::fuse::file_handle::OpenFileHandle;
@@ -591,7 +591,10 @@ pub(crate) mod implementation {
         type FileContext = WinFspFileContext;
 
         // -- get_volume_info --
-        fn get_volume_info(&self) -> Result<winfsp::filesystem::VolumeInfo, FspError> {
+        fn get_volume_info(
+            &self,
+            volume_info: &mut winfsp::filesystem::VolumeInfo,
+        ) -> Result<(), FspError> {
             let fs = self.inner.lock().unwrap();
             let used_bytes: u64 = fs
                 .inodes
@@ -603,20 +606,20 @@ pub(crate) mod implementation {
                 })
                 .sum();
 
-            let mut vi = winfsp::filesystem::VolumeInfo::default();
-            vi.total_size = QUOTA_BYTES;
-            vi.free_size = QUOTA_BYTES.saturating_sub(used_bytes);
-            Ok(vi)
+            volume_info.total_size = QUOTA_BYTES;
+            volume_info.free_size = QUOTA_BYTES.saturating_sub(used_bytes);
+            Ok(())
         }
 
         // -- get_security_by_name --
         // Combines lookup + getattr. Return file attributes and security descriptor.
-        fn get_security_by_name<P: AsRef<U16CStr>>(
+        fn get_security_by_name(
             &self,
-            file_name: P,
-            find_reparse_point: impl Fn(&U16CStr) -> Option<FileInfo>,
+            file_name: &U16CStr,
+            security_descriptor: Option<&mut [c_void]>,
+            find_reparse_point: impl FnOnce(&U16CStr) -> Option<FileInfo>,
         ) -> Result<FileSecurity, FspError> {
-            let path = file_name.as_ref().to_string_lossy();
+            let path = file_name.to_string_lossy();
             let fs = self.inner.lock().unwrap();
 
             // Check for Windows special files
@@ -645,14 +648,14 @@ pub(crate) mod implementation {
         }
 
         // -- open --
-        fn open<P: AsRef<U16CStr>>(
+        fn open(
             &self,
-            file_name: P,
+            file_name: &U16CStr,
             create_options: u32,
             granted_access: u32,
             file_info: &mut OpenFileInfo,
         ) -> Result<Self::FileContext, FspError> {
-            let path = file_name.as_ref().to_string_lossy();
+            let path = file_name.to_string_lossy();
             let mut fs = self.inner.lock().unwrap();
 
             // Drain pending completions
@@ -1362,6 +1365,7 @@ pub(crate) mod implementation {
             offset: u64,
             _write_to_end_of_file: bool,
             _constrained_io: bool,
+            file_info: &mut FileInfo,
         ) -> Result<u32, FspError> {
             let mut fs = self.inner.lock().unwrap();
             let fh = context.fh;
@@ -1382,6 +1386,7 @@ pub(crate) mod implementation {
                             inode.attr.blocks = (new_end + 511) / 512;
                         }
                         inode.attr.mtime = SystemTime::now();
+                        *file_info = fill_file_info(&inode.attr);
                     }
                     Ok(written as u32)
                 }
@@ -1410,13 +1415,15 @@ pub(crate) mod implementation {
         fn get_file_info(
             &self,
             context: &Self::FileContext,
-        ) -> Result<FileInfo, FspError> {
+            file_info: &mut FileInfo,
+        ) -> Result<(), FspError> {
             let fs = self.inner.lock().unwrap();
             let inode = fs
                 .inodes
                 .get(context.ino)
                 .ok_or(FspError::OBJECT_NAME_NOT_FOUND)?;
-            Ok(fill_file_info(&inode.attr))
+            *file_info = fill_file_info(&inode.attr);
+            Ok(())
         }
 
         // -- set_basic_info --
@@ -1494,7 +1501,7 @@ pub(crate) mod implementation {
         // is set, this is the actual delete (equivalent to unlink/rmdir).
         fn cleanup(
             &self,
-            context: &mut Self::FileContext,
+            context: &Self::FileContext,
             _file_name: Option<&U16CStr>,
             flags: u32,
         ) {
@@ -1562,9 +1569,9 @@ pub(crate) mod implementation {
             &self,
             context: &Self::FileContext,
             _pattern: Option<&U16CStr>,
-            marker: DirBuffer,
-            cb: impl FnMut(DirInfo) -> bool,
-        ) -> Result<(), FspError> {
+            marker: DirMarker,
+            buffer: &mut [u8],
+        ) -> Result<u32, FspError> {
             let mut fs = self.inner.lock().unwrap();
             let ino = context.ino;
 
@@ -1594,7 +1601,7 @@ pub(crate) mod implementation {
                         folder_key,
                         ..
                     } => {
-                        if fs.metadata_cache.get(ipns_name).is_none() {
+                        if fs.metadata_cache.get(&ipns_name).is_none() {
                             Some((ipns_name.clone(), folder_key.clone()))
                         } else {
                             None
@@ -1659,28 +1666,18 @@ pub(crate) mod implementation {
             let parent_ino = inode.parent_ino;
             let children = inode.children.clone().unwrap_or_default();
 
-            // Collect entries
-            let mut cb = cb;
+            // Collect all directory entries into a Vec
+            let mut entries: Vec<(U16CString, FileInfo)> = Vec::new();
 
             // "." entry
-            let mut dot_info = DirInfo::default();
-            dot_info.file_info = fill_file_info(&inode.attr);
             if let Ok(name) = U16CString::from_str(".") {
-                dot_info.set_file_name(&name);
-                if !cb(dot_info) {
-                    return Ok(());
-                }
+                entries.push((name, fill_file_info(&inode.attr)));
             }
 
             // ".." entry
             if let Some(parent) = fs.inodes.get(parent_ino) {
-                let mut dotdot_info = DirInfo::default();
-                dotdot_info.file_info = fill_file_info(&parent.attr);
                 if let Ok(name) = U16CString::from_str("..") {
-                    dotdot_info.set_file_name(&name);
-                    if !cb(dotdot_info) {
-                        return Ok(());
-                    }
+                    entries.push((name, fill_file_info(&parent.attr)));
                 }
             }
 
@@ -1690,14 +1687,32 @@ pub(crate) mod implementation {
                     if is_windows_special(&child.name) {
                         continue;
                     }
-                    let mut entry = DirInfo::default();
-                    entry.file_info = fill_file_info(&child.attr);
                     if let Ok(name) = U16CString::from_str(&child.name) {
-                        entry.set_file_name(&name);
-                        if !cb(entry) {
-                            break;
-                        }
+                        entries.push((name, fill_file_info(&child.attr)));
                     }
+                }
+            }
+
+            // Write entries into buffer, respecting the marker (resume point).
+            // DirMarker wraps the name of the last entry from the previous call.
+            // Skip entries up to and including the marker, then write subsequent entries.
+            let mut past_marker = !marker.is_set();
+            let mut bytes_written: u32 = 0;
+
+            for (entry_name, entry_info) in &entries {
+                if !past_marker {
+                    if marker.is_match(entry_name) {
+                        past_marker = true;
+                    }
+                    continue;
+                }
+
+                let mut dir_info = DirInfo::new();
+                dir_info.set_file_info(entry_info.clone());
+                dir_info.set_name(entry_name);
+                match dir_info.write(buffer, bytes_written as usize) {
+                    Some(n) => bytes_written += n as u32,
+                    None => break, // buffer full
                 }
             }
 
@@ -1771,13 +1786,13 @@ pub(crate) mod implementation {
                 }
             }
 
-            Ok(())
+            Ok(bytes_written)
         }
 
         // -- create --
-        fn create<P: AsRef<U16CStr>>(
+        fn create(
             &self,
-            file_name: P,
+            file_name: &U16CStr,
             create_options: u32,
             _granted_access: u32,
             _file_attributes: u32,
@@ -1787,7 +1802,7 @@ pub(crate) mod implementation {
             _extra_buffer_is_reparse_point: bool,
             file_info: &mut OpenFileInfo,
         ) -> Result<Self::FileContext, FspError> {
-            let path = file_name.as_ref().to_string_lossy();
+            let path = file_name.to_string_lossy();
             let (parent_path, name) = split_path(&path);
 
             if name.is_empty() {
@@ -2221,15 +2236,15 @@ pub(crate) mod implementation {
         }
 
         // -- rename --
-        fn rename<P: AsRef<U16CStr>>(
+        fn rename(
             &self,
             _context: &Self::FileContext,
-            file_name: P,
-            new_file_name: P,
+            file_name: &U16CStr,
+            new_file_name: &U16CStr,
             replace_if_exists: bool,
         ) -> Result<(), FspError> {
-            let old_path = file_name.as_ref().to_string_lossy();
-            let new_path = new_file_name.as_ref().to_string_lossy();
+            let old_path = file_name.to_string_lossy();
+            let new_path = new_file_name.to_string_lossy();
 
             let mut fs = self.inner.lock().unwrap();
 
@@ -2365,10 +2380,10 @@ pub(crate) mod implementation {
         }
 
         // -- set_delete --
-        fn set_delete<P: AsRef<U16CStr>>(
+        fn set_delete(
             &self,
-            _context: &mut Self::FileContext,
-            _file_name: P,
+            _context: &Self::FileContext,
+            _file_name: &U16CStr,
             _delete_file: bool,
         ) -> Result<(), FspError> {
             // Mark for deletion. Actual deletion happens in cleanup().
