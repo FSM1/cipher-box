@@ -63,7 +63,7 @@ Changes that extend the schema without altering existing structures. These are s
 
 - New columns MUST be nullable or have a `DEFAULT` value (existing rows cannot retroactively provide a value)
 - Use `IF NOT EXISTS` / column-existence checks for idempotency
-- Update FullSchema baseline to include the new structure
+- **Do not** update FullSchema for new tables; the incremental migration's `IF NOT EXISTS` DDL runs safely on both fresh and existing databases (see Guiding Principle 4 and Section 9.2)
 - No application downtime required
 
 ### 3.2 Destructive (Breaking) Changes
@@ -151,7 +151,7 @@ Complete this checklist for every database schema change. This is the most impor
 
 **Timestamp:** Use a Unix timestamp in milliseconds. Choose a value that:
 
-- Is later than all existing migration timestamps
+- Is later than all existing migration timestamps, **unless** backfilling a prerequisite (e.g., a missing `CREATE TABLE`) for an already-merged migration — in that case, choose a gap timestamp earlier than the dependent migration but later than all migrations that precede it
 - Is earlier than any planned follow-up migration that depends on this one
 - For `CREATE TABLE` migrations: must be earlier than any migration that modifies the same table
 
@@ -308,8 +308,8 @@ public async down(queryRunner: QueryRunner): Promise<void> {
 **Resolution:**
 
 1. Created `1740250000000-AddSharesTables.ts` with `CREATE TABLE IF NOT EXISTS` for both tables (timestamp before the index migration)
-2. Updated `1700000000000-FullSchema.ts` to include both tables in the baseline
-3. Documented the incident in `.learnings/` and added the TypeORM migration discipline rule to `MEMORY.md`
+2. Documented the incident in `.learnings/` and added the TypeORM migration discipline rule to `MEMORY.md`
+3. Note: FullSchema was **not** updated — it is a point-in-time snapshot (see Guiding Principle 4 and Section 9.2)
 
 **Lesson:** `synchronize: true` in dev/test is invisible safety net that masks missing migrations. Every new `@Entity()` requires a corresponding `CREATE TABLE` migration.
 

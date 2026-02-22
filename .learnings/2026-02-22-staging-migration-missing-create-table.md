@@ -12,7 +12,7 @@
 - **A migration that modifies a table is not sufficient** — you also need a migration that creates the table. Phase 14 added `SharesPartialUniqueIndex` (modifies `shares` unique constraint) but never added a migration to create `shares` and `share_keys`.
 - **The pattern already existed in the codebase.** `1740000000000-AddDeviceApprovals.ts` correctly handled this exact scenario — it was added retroactively for a table that had been auto-created by synchronize. Phase 14 should have followed the same pattern.
 - **Migration timestamp ordering matters.** The create-table migration must have a timestamp earlier than any migration that modifies the table. Used `1740250000000` (before `1740300000000`).
-- **FullSchema baseline must also be updated.** The incremental migration fixes existing staging, but fresh databases initialized from the FullSchema baseline would also be missing the tables. Both need updating.
+- **FullSchema baseline does NOT need updating.** It is a point-in-time snapshot. Fresh databases run FullSchema first, then all incremental migrations in timestamp order. The incremental migration's `CREATE TABLE IF NOT EXISTS` handles creation on fresh databases too.
 
 ## What Would Have Helped
 
