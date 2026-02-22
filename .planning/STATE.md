@@ -221,6 +221,7 @@ Recent decisions affecting current work:
 - Phase 12.6 inserted after Phase 12.5: Per-File IPNS Metadata Split — split file metadata into per-file IPNS records before vault wipe (clean break, no dual-schema). Phase 12.1 (AES-CTR) moved to after 12.6.
 - Phase 11.4 inserted after Phase 11.3: Cross-Platform E2E Testing — validate each desktop client (Windows, macOS, Linux) against the API/web client on each platform's CI runner with natively installed Postgres + IPFS. Proves encryption compatibility, sync correctness, and data integrity across all platforms.
 - Phase 11.2 inserted after Phase 11.1: Remove v1 Folder Metadata — eliminate v1/v2 dual-schema code, make v2 FilePointer canonical everywhere, add per-file IPNS publishing to desktop FUSE. Triggered by cross-device format oscillation bug (desktop writes v1, web re-saves as v2 hybrid, desktop rejects).
+- Phase 15 split: "Link Sharing and Search" split into Phase 15 (Link Sharing) and Phase 15.1 (Client-Side Search). Independent features with different security surfaces.
 
 ### Blockers/Concerns
 
@@ -251,6 +252,7 @@ Recent decisions affecting current work:
 - Phase 11.4 (Cross-Platform E2E): NEEDS `/gsd:research-phase` -- Native Postgres/IPFS on macOS + Windows CI runners (no Docker), Tauri command-level testing without GUI, CI matrix strategy for shared test suite across 3 platforms
 - Phase 14 (Sharing): COMPLETE -- research done, 6 plans created, all 6 executed
 - Phase 15 (Link Sharing): NEEDS `/gsd:research-phase` -- unauthenticated web viewer security
+- Phase 15.1 (Client-Side Search): Standard patterns -- minisearch + idb (per research), skip research
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
 - Phase 12.1 (AES-CTR Streaming): COMPLETE -- all 4 plans done (CTR crypto primitives, streaming upload pipeline, service worker decrypt proxy, media playback integration)
@@ -267,7 +269,7 @@ Recent decisions affecting current work:
 Last session: 2026-02-22
 Stopped at: Phase 11 (Windows Desktop) complete and verified (4/4 must-haves passed)
 Resume file: None
-Next: Phase 11.3 (Linux Desktop) needs /gsd:research-phase, or Phase 15 (Link Sharing + Search) needs /gsd:discuss-phase
+Next: Run /gsd:plan-phase 15 for Link Sharing (invite links).
 
 ---
 
