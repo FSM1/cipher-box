@@ -123,9 +123,22 @@ The practical risk of this is low because:
 
 This risk profile is identical in both approaches — during the authorized access window, the recipient's browser holds plaintext keys in memory regardless of where the ACL lives.
 
+### Third Option: CRDT-Based IPNS Inbox (Post-Phase 14 Research)
+
+A third approach emerged from post-Phase 14 discussion: derive a deterministic IPNS "inbox" per recipient (via HKDF of their public key) and use CRDTs as the content model to handle concurrent writes from multiple sharers without conflict.
+
+This reframes the problem: instead of working around IPNS write conflicts per-feature (folder sync, sharing, device registry), solve conflict-free state as a horizontal concern using CRDTs (G-Set/OR-Set). The same pattern would benefit folder metadata sync, not just sharing.
+
+Key insight: every centralized workaround we add (DB-cached CIDs, shares table, pinned_cids) individually makes sense but collectively erodes the serverless premise. Fixing IPNS conflict resolution once — via CRDTs — would unblock all features simultaneously.
+
+Open challenges: write-access control on publicly-derivable IPNS addresses, revocation semantics, and IPNS reliability (a prerequisite regardless of approach).
+
+**See:** `.planning/todos/pending/2026-02-22-crdt-ipns-inbox-sharing.md` for full research scope.
+**See also:** `.planning/todos/pending/2026-02-21-ipns-resolution-alternatives.md` for IPNS reliability investigation paths that gate this approach.
+
 ### Decision
 
-Server-side approach chosen for Phase 14 (read-only sharing). The metadata-embedded approach remains viable for a future "fully decentralized sharing" phase if hiding the social graph from the server becomes a requirement.
+Server-side approach chosen for Phase 14 (read-only sharing). The metadata-embedded approach remains viable for a future "fully decentralized sharing" phase if hiding the social graph from the server becomes a requirement. The CRDT-based IPNS inbox is a promising third option pending research into IPNS reliability and CRDT feasibility.
 
 </trade-offs>
 
