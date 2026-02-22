@@ -1,0 +1,249 @@
+Implement the following plan:
+
+# Plan: Database Schema Evolution Protocol
+
+## Context
+
+Phase 14 exposed a gap: new TypeORM entities were added without a corresponding `CREATE TABLE` migration, breaking the staging deploy. The IPFS metadata side has a formal evolution protocol (`docs/METADATA_EVOLUTION_PROTOCOL.md`) but there's no equivalent for the PostgreSQL database schema. This doc will formalize the rules, conventions, and checklist for database migrations to prevent the same class of error from recurring.
+
+## Approach
+
+Create `docs/DATABASE_EVOLUTION_PROTOCOL.md` mirroring the structure of the metadata evolution protocol but adapted for relational database concerns (TypeORM entities, migrations, synchronize behavior, CD pipeline).
+
+## File
+
+- **Create:** `docs/DATABASE_EVOLUTION_PROTOCOL.md`
+
+## Structure (mirrors metadata protocol)
+
+1. **Purpose** — Why this doc exists (synchronize:true masks missing migrations, staging/prod rely exclusively on explicit migrations)
+2. **Guiding Principles** — Idempotency, ordering, entity-migration parity, FullSchema baseline maintenance
+3. **Change Classification** — Additive (new table, new nullable column, new index) vs Destructive (drop table, drop column, type change, rename)
+4. **Evolution Checklist** — The actionable section developers use during implementation:
+   - Before implementation (classify change, check dependencies)
+   - Entity changes (TypeORM decorator updates)
+   - Migration file (naming, timestamp, idempotency patterns)
+   - FullSchema baseline update
+   - CD pipeline verification
+   - Downstream checks (API client regen, desktop app if applicable)
+5. **Naming & Timestamp Conventions** — File naming, class naming, index/constraint naming prefixes
+6. **Current Schema Reference** — Table of all 11 tables with purpose, FK relationships, key indices
+7. **Environment Behavior Matrix** — How dev/test/staging/production handle schema changes differently
+8. **Dangerous Patterns** — synchronize:true masking gaps, migration ordering assumptions, down() ownership conflicts
+9. **Historical Incidents** — The Phase 14 shares table incident as a documented case study
+10. **References** — Links to migration files, entity files, deploy workflow, run-migrations.ts
+
+## Key content points
+
+- Every `@Entity()` MUST have a `CREATE TABLE` migration — synchronize cannot be relied upon
+- All DDL statements use `IF NOT EXISTS` / `IF EXISTS` for idempotency
+- FullSchema baseline must always reflect the complete current schema
+- Migration timestamp must be earlier than any migration that modifies the same table
+- The `down()` method must document ownership when tables are created in both FullSchema and incremental migrations
+- Include the actual file paths and patterns from the codebase (not generic advice)
+
+## Verification
+
+- Review the doc for accuracy against actual migration files
+- Ensure all 11 current tables are documented
+- Cross-reference with the metadata evolution protocol for structural consistency
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.REDACTED.jsonl
+
+---
+
+ok can you fix the device_approvals gap identified? Will this require a staging reset to fix?
+
+---
+
+but the fresh install will always run all the available migrations, why would you repeat creating the table in the full schema if it will be created in the dedicated migration?
+
+---
+
+ok push all this up and lets get it merged.
+
+---
+
+also what are thoughts on updating the dev and ci env to also use synchronize: false. this will surface issues with the missing migrations early enough in the dev process to prevent a whole lot of problems
+
+---
+
+i think lets add a gsd todo for this
+
+---
+
+<objective>
+Capture an idea, task, or issue that surfaces during a GSD session as a structured todo for later work.
+
+Enables "thought → capture → continue" flow without losing context or derailing current work.
+</objective>
+
+<context>
+@.planning/STATE.md
+</context>
+
+<process>
+
+<step name="ensure_directory">
+```bash
+mkdir -p .planning/todos/pending .planning/todos/done
+```
+</step>
+
+<step name="check_existing_areas">
+```bash
+ls .planning/todos/pending/*.md 2>/dev/null | xargs -I {} grep "^area:" {} 2>/dev/null | cut -d' ' -f2 | sort -u
+```
+
+Note existing areas for consistency in infer_area step.
+</step>
+
+<step name="extract_content">
+**With arguments:** Use as the title/focus.
+- `/gsd:add-todo Add auth token refresh` → title = "Add auth token refresh"
+
+**Without arguments:** Analyze recent conversation to extract:
+- The specific problem, idea, or task discussed
+- Relevant file paths mentioned
+- Technical details (error messages, line numbers, constraints)
+
+Formulate:
+- `title`: 3-10 word descriptive title (action verb preferred)
+- `problem`: What's wrong or why this is needed
+- `solution`: Approach hints or "TBD" if just an idea
+- `files`: Relevant paths with line numbers from conversation
+</step>
+
+<step name="infer_area">
+Infer area from file paths:
+
+| Path pattern | Area |
+|--------------|------|
+| `src/api/*`, `api/*` | `api` |
+| `src/components/*`, `src/ui/*` | `ui` |
+| `src/auth/*`, `auth/*` | `auth` |
+| `src/db/*`, `database/*` | `database` |
+| `tests/*`, `__tests__/*` | `testing` |
+| `docs/*` | `docs` |
+| `.planning/*` | `planning` |
+| `scripts/*`, `bin/*` | `tooling` |
+| No files or unclear | `general` |
+
+Use existing area from step 2 if similar match exists.
+</step>
+
+<step name="check_duplicates">
+```bash
+grep -l -i "[key words from title]" .planning/todos/pending/*.md 2>/dev/null
+```
+
+If potential duplicate found:
+1. Read the existing todo
+2. Compare scope
+
+If overlapping, use AskUserQuestion:
+- header: "Duplicate?"
+- question: "Similar todo exists: [title]. What would you like to do?"
+- options:
+  - "Skip" — keep existing todo
+  - "Replace" — update existing with new context
+  - "Add anyway" — create as separate todo
+</step>
+
+<step name="create_file">
+```bash
+timestamp=$(date "+%Y-%m-%dT%H:%M")
+date_prefix=$(date "+%Y-%m-%d")
+```
+
+Generate slug from title (lowercase, hyphens, no special chars).
+
+Write to `.planning/todos/pending/${date_prefix}-${slug}.md`:
+
+```markdown
+---
+created: [timestamp]
+title: [title]
+area: [area]
+files:
+  - [file:lines]
+---
+
+## Problem
+
+[problem description - enough context for future Claude to understand weeks later]
+
+## Solution
+
+[approach hints or "TBD"]
+```
+</step>
+
+<step name="update_state">
+If `.planning/STATE.md` exists:
+
+1. Count todos: `ls .planning/todos/pending/*.md 2>/dev/null | wc -l`
+2. Update "### Pending Todos" under "## Accumulated Context"
+</step>
+
+<step name="git_commit">
+Commit the todo and any updated state:
+
+```bash
+git add .planning/todos/pending/[filename]
+[ -f .planning/STATE.md ] && git add .planning/STATE.md
+git commit -m "$(cat <<'EOF'
+docs: capture todo - [title]
+
+Area: [area]
+EOF
+)"
+```
+
+Confirm: "Committed: docs: capture todo - [title]"
+</step>
+
+<step name="confirm">
+```
+Todo saved: .planning/todos/pending/[filename]
+
+  [title]
+  Area: [area]
+  Files: [count] referenced
+
+---
+
+Would you like to:
+
+1. Continue with current work
+2. Add another todo
+3. View all todos (/gsd:check-todos)
+```
+</step>
+
+</process>
+
+<output>
+- `.planning/todos/pending/[date]-[slug].md`
+- Updated `.planning/STATE.md` (if exists)
+</output>
+
+<anti_patterns>
+- Don't create todos for work in current plan (that's deviation rule territory)
+- Don't create elaborate solution sections — captures ideas, not plans
+- Don't block on missing information — "TBD" is fine
+</anti_patterns>
+
+<success_criteria>
+- [ ] Directory structure exists
+- [ ] Todo file created with valid frontmatter
+- [ ] Problem section has enough context for future Claude
+- [ ] No duplicates (checked and resolved)
+- [ ] Area consistent with existing todos
+- [ ] STATE.md updated if exists
+- [ ] Todo and state committed to git
+</success_criteria>
+
+
+ARGUMENTS: Disable synchronize:true in dev and CI environments to surface missing migrations early. Change app.module.ts to set synchronize: false for all environments. Update test setup to run migrations instead of relying on auto-sync. Add a dev convenience script (pnpm --filter api migrate:dev) for smooth DX. Existing dev databases will need a one-time reset.
