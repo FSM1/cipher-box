@@ -720,8 +720,13 @@ function getGoogleCredential(): Promise<string> {
     localStorage.setItem('google-auth-state', state);
 
     console.log('[Google Auth] Opening OAuth popup...');
-    // Open Google OAuth in a popup — Tauri's on_new_window handler creates the webview
-    window.open(authUrl, '_blank', 'width=500,height=700');
+    // Create the OAuth popup via Tauri IPC command. This bypasses window.open()
+    // which is unreliable on Windows WebView2 (NewWindowRequested may silently fail).
+    invoke('open_oauth_popup', { url: authUrl }).catch((err) => {
+      console.error('[Google Auth] Failed to open popup:', err);
+      cleanup();
+      reject(new Error(`Failed to open OAuth popup: ${err}`));
+    });
 
     const cleanup = () => {
       clearInterval(pollStorage);

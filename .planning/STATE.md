@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 14 COMPLETE (User-to-User Sharing)
+**Current focus:** Milestone 2 -- Phase 11 Windows Desktop COMPLETE (all 3 plans done)
 
 ## Current Position
 
-Phase: 14 (User-to-User Sharing)
-Plan: 6 of 6
+Phase: 11-windows-desktop (Windows Desktop)
+Plan: 3 of 3
 Status: Phase complete
-Last activity: 2026-02-21 -- Completed 14-06-PLAN.md (Post-Upload Re-Wrapping & Lazy Key Rotation)
+Last activity: 2026-02-22 -- Completed 11-03-PLAN.md (NSIS Installer & CI Windows Build)
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 127
-- Average duration: 5.4 min
-- Total execution time: 11.9 hours
+- Total plans completed: 130
+- Average duration: 5.5 min
+- Total execution time: 12.5 hours
 
 **By Phase (M1 summary):**
 
@@ -41,11 +41,12 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 11.2   | 3/3   | 30 min  | 10.0 min |
 | M2 Phase 13     | 5/5   | 31 min  | 6.2 min  |
 | M2 Phase 14     | 6/6   | 42 min  | 7.0 min  |
+| M2 Phase 11     | 3/3   | 35 min  | 11.7 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 7m, 6m, 5m, 8m, 8m
-- Trend: Stable
+- Last 5 plans: 8m, 8m, 14m, 16m, 5m
+- Trend: Normalizing (final Windows plan was config/CI changes, no complex API translation)
 
 Updated after each plan completion.
 
@@ -180,6 +181,18 @@ Recent decisions affecting current work:
 | Dynamic import() for checkAndRotateIfNeeded circular dep               | 14-06     | share.service imports folder.store; folder.service importing share.service creates circular; dynamic import() defers |
 | Lazy rotation defers parent metadata update to caller                  | 14-06     | checkAndRotateIfNeeded returns new key + rotated flag; caller handles parent folderKeyEncrypted update               |
 | Post-upload re-wrapping is fire-and-forget                             | 14-06     | Non-blocking: failures logged but never delay upload completion UI                                                   |
+| FileAttrs with to_fuse_attr() boundary conversion                      | 11-01     | Core uses platform-agnostic FileAttrs; uid/gid injected at operations layer, not stored in shared structs           |
+| AccessMode enum replaces libc POSIX flags                              | 11-01     | Platform-independent ReadOnly/WriteOnly/ReadWrite instead of O_RDONLY/O_WRONLY/O_RDWR                               |
+| cfg(any(fuse, winfsp)) for shared filesystem code                      | 11-01     | Shared types available to both platforms; mount/unmount remain feature-specific                                      |
+| Self-contained decrypt functions per platform module                    | 11-02     | Windows module has own decrypt_metadata_from_ipfs; fuse::operations gated to fuse-only, can't be cross-referenced   |
+| Arc<Mutex<CipherBoxFS>> for WinFsp interior mutability                 | 11-02     | WinFsp callbacks receive &self; Mutex wraps shared state for safe mutation from any thread                          |
+| OnceLock<AtomicBool> stop signal for WinFsp unmount                    | 11-02     | Avoids storing FileSystemHost globally; stop flag coordinates shutdown across threads                                |
+| WinFsp creates mount directory (no pre-create)                         | 11-02     | WinFsp uses reparse point for mount; pre-existing directory causes mount failure                                    |
+| Platform dispatch via cfg re-exports in fuse/mod.rs                    | 11-02     | Same function names (mount_filesystem/unmount_filesystem) resolve to correct impl via feature flags                 |
+| WinFsp runtime detection via winreg at startup                         | 11-03     | Registry check + DLL existence verification; notification if missing, app still launches                            |
+| NSIS ExecWait for WinFsp MSI install (not nsExec)                      | 11-03     | Simpler exit code handling; MSI installed silently with INSTALLLEVEL=1000                                           |
+| WinFsp MSI downloaded in CI, not committed to git                      | 11-03     | Binary files not suitable for source control; CI downloads from official GitHub release                             |
+| cfg(any(fuse, winfsp)) in entry point files                            | 11-03     | Compound feature gate enables same mount/unmount code paths on both platforms                                       |
 
 ### Pending Todos
 
@@ -232,7 +245,8 @@ Recent decisions affecting current work:
 
 ### Research Flags
 
-- Phase 11 (Desktop): NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse), Windows virtual drive (WinFsp/Dokany), Tauri cross-compilation
+- Phase 11 (Windows Desktop): COMPLETE -- WinFsp Rust crate, platform abstraction, NSIS installer hooks, CI Windows runner researched
+- Phase 11.3 (Linux Desktop): NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse) packaging, AppImage/deb, Linux system tray, Linux keyring, CI Linux runner
 - Phase 14 (Sharing): COMPLETE -- research done, 6 plans created, all 6 executed
 - Phase 15 (Link Sharing): NEEDS `/gsd:research-phase` -- unauthenticated web viewer security
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
@@ -248,12 +262,12 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-21
-Stopped at: Phase 14 complete and verified (5/5 must-haves passed)
+Last session: 2026-02-22
+Stopped at: Phase 11 (Windows Desktop) complete and verified (4/4 must-haves passed)
 Resume file: None
-Next: Run /gsd:discuss-phase 15 or /gsd:plan-phase 15 for Link Sharing + Search.
+Next: Phase 11.3 (Linux Desktop) needs /gsd:research-phase, or Phase 15 (Link Sharing + Search) needs /gsd:discuss-phase
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-21 after Phase 14 (User-to-User Sharing) complete — verified, requirements marked Complete_
+_Last updated: 2026-02-22 after Phase 11 (Windows Desktop) complete — verified, PLAT-02 marked Complete_

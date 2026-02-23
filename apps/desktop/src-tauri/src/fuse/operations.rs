@@ -9,7 +9,7 @@
 #[cfg(feature = "fuse")]
 mod implementation {
     use fuser::{
-        FileAttr, FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
+        FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
         ReplyEntry, ReplyEmpty, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request,
     };
     use std::ffi::OsStr;
@@ -18,7 +18,7 @@ mod implementation {
 
     use crate::fuse::CipherBoxFS;
     use crate::fuse::file_handle::OpenFileHandle;
-    use crate::fuse::inode::{InodeData, InodeKind, ROOT_INO, BLOCK_SIZE};
+    use crate::fuse::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO, BLOCK_SIZE};
 
     /// TTL for FUSE attribute/entry cache replies on files.
     /// Longer TTL = fewer kernel callbacks = less FUSE-T NFS thread contention.
@@ -30,9 +30,19 @@ mod implementation {
     /// which triggers readdir cache invalidation.
     const DIR_TTL: Duration = Duration::from_secs(0);
 
-    /// Pick the right TTL based on file type.
-    fn ttl_for(kind: FileType) -> Duration {
-        if kind == FileType::Directory { DIR_TTL } else { FILE_TTL }
+    /// Pick the right TTL based on whether the inode is a directory.
+    fn ttl_for_is_dir(is_dir: bool) -> Duration {
+        if is_dir { DIR_TTL } else { FILE_TTL }
+    }
+
+    /// Get the current process UID (macOS only, used for FUSE attribute replies).
+    fn current_uid() -> u32 {
+        unsafe { libc::getuid() }
+    }
+
+    /// Get the current process GID (macOS only, used for FUSE attribute replies).
+    fn current_gid() -> u32 {
+        unsafe { libc::getgid() }
     }
 
     /// Total storage quota in bytes (500 MiB).
@@ -545,7 +555,7 @@ mod implementation {
             // Returning ENOENT for ".." causes the NFS client to disconnect.
             if name_str == "." {
                 if let Some(inode) = self.inodes.get(parent) {
-                    reply.entry(&ttl_for(inode.attr.kind), &inode.attr, 0);
+                    reply.entry(&ttl_for_is_dir(inode.attr.is_dir), &inode.attr.to_fuse_attr(current_uid(), current_gid()), 0);
                     return;
                 }
             }
@@ -554,7 +564,7 @@ mod implementation {
                     .map(|i| i.parent_ino)
                     .unwrap_or(1); // root's parent is itself
                 if let Some(inode) = self.inodes.get(parent_ino) {
-                    reply.entry(&ttl_for(inode.attr.kind), &inode.attr, 0);
+                    reply.entry(&ttl_for_is_dir(inode.attr.is_dir), &inode.attr.to_fuse_attr(current_uid(), current_gid()), 0);
                     return;
                 }
             }
@@ -631,7 +641,7 @@ mod implementation {
             // Now look up the child
             if let Some(child_ino) = self.inodes.find_child(parent, name_str) {
                 if let Some(inode) = self.inodes.get(child_ino) {
-                    reply.entry(&ttl_for(inode.attr.kind), &inode.attr, 0);
+                    reply.entry(&ttl_for_is_dir(inode.attr.is_dir), &inode.attr.to_fuse_attr(current_uid(), current_gid()), 0);
                     return;
                 }
             }
@@ -650,7 +660,7 @@ mod implementation {
             self.drain_upload_completions();
 
             if let Some(inode) = self.inodes.get(ino) {
-                reply.attr(&ttl_for(inode.attr.kind), &inode.attr);
+                reply.attr(&ttl_for_is_dir(inode.attr.is_dir), &inode.attr.to_fuse_attr(current_uid(), current_gid()));
             } else {
                 reply.error(libc::ENOENT);
             }
@@ -705,14 +715,14 @@ mod implementation {
                         *s = new_size;
                     }
 
-                    reply.attr(&ttl_for(inode.attr.kind), &inode.attr);
+                    reply.attr(&ttl_for_is_dir(inode.attr.is_dir), &inode.attr.to_fuse_attr(current_uid(), current_gid()));
                     return;
                 }
             }
 
             // For other setattr calls, just return current attributes
             if let Some(inode) = self.inodes.get(ino) {
-                reply.attr(&ttl_for(inode.attr.kind), &inode.attr);
+                reply.attr(&ttl_for_is_dir(inode.attr.is_dir), &inode.attr.to_fuse_attr(current_uid(), current_gid()));
             } else {
                 reply.error(libc::ENOENT);
             }
@@ -942,13 +952,8 @@ mod implementation {
             // Allocate new inode
             let ino = self.inodes.allocate_ino();
             let now = SystemTime::now();
-            // Use process UID/GID (not req.uid/gid) for consistency with root
-            // inode and populate_folder. Under FUSE-T SMB, req.uid() may differ
-            // from the mounting user, causing permission mismatches.
-            let uid = unsafe { libc::getuid() };
-            let gid = unsafe { libc::getgid() };
 
-            let attr = FileAttr {
+            let attr = FileAttrs {
                 ino,
                 size: 0,
                 blocks: 0,
@@ -956,15 +961,11 @@ mod implementation {
                 mtime: now,
                 ctime: now,
                 crtime: now,
-                kind: FileType::RegularFile,
+                is_dir: false,
                 perm: 0o644,
                 nlink: 1,
-                uid,
-                gid,
-                rdev: 0,
-                blksize: BLOCK_SIZE,
-                flags: 0,
             };
+            let fuse_attr = attr.to_fuse_attr(current_uid(), current_gid());
 
             // Generate random Ed25519 IPNS keypair for this file
             let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
@@ -1025,7 +1026,7 @@ mod implementation {
 
             // Create writable file handle with temp file
             let fh = self.next_fh.fetch_add(1, Ordering::SeqCst);
-            match OpenFileHandle::new_write(ino, flags, &self.temp_dir, None) {
+            match OpenFileHandle::new_write(ino, &self.temp_dir, None) {
                 Ok(handle) => {
                     self.open_files.insert(fh, handle);
                 }
@@ -1043,7 +1044,7 @@ mod implementation {
             self.mutated_folders.insert(parent, std::time::Instant::now());
 
             log::debug!("create: {} in parent {} -> ino {} fh {}", name_str, parent, ino, fh);
-            reply.created(&FILE_TTL, &attr, 0, fh, 0);
+            reply.created(&FILE_TTL, &fuse_attr, 0, fh, 0);
         }
 
         /// Open a file for reading or writing.
@@ -1102,7 +1103,6 @@ mod implementation {
                 let fh = self.next_fh.fetch_add(1, Ordering::SeqCst);
                 match OpenFileHandle::new_write(
                     ino,
-                    flags,
                     &self.temp_dir,
                     existing_content.as_deref(),
                 ) {
@@ -1177,7 +1177,7 @@ mod implementation {
                 }
 
                 let fh = self.next_fh.fetch_add(1, Ordering::SeqCst);
-                self.open_files.insert(fh, OpenFileHandle::new_read(ino, flags));
+                self.open_files.insert(fh, OpenFileHandle::new_read(ino));
                 reply.opened(fh, 0);
             }
         }
@@ -1840,7 +1840,7 @@ mod implementation {
 
             log::debug!("mkdir: {} in parent {}", name_str, parent);
 
-            let result = (|| -> Result<FileAttr, String> {
+            let result = (|| -> Result<fuser::FileAttr, String> {
                 // Generate new folder key (32 random bytes)
                 let folder_key = crate::crypto::utils::generate_file_key();
 
@@ -1864,12 +1864,8 @@ mod implementation {
                 // Allocate inode and create InodeData (locally, no network I/O)
                 let ino = self.inodes.allocate_ino();
                 let now = SystemTime::now();
-                // Use process UID/GID for consistency with root inode and
-                // populate_folder (avoids SMB UID mismatch).
-                let uid = unsafe { libc::getuid() };
-                let gid = unsafe { libc::getgid() };
 
-                let attr = FileAttr {
+                let attr = FileAttrs {
                     ino,
                     size: 0,
                     blocks: 0,
@@ -1877,15 +1873,11 @@ mod implementation {
                     mtime: now,
                     ctime: now,
                     crtime: now,
-                    kind: FileType::Directory,
+                    is_dir: true,
                     perm: 0o755,
                     nlink: 2,
-                    uid,
-                    gid,
-                    rdev: 0,
-                    blksize: BLOCK_SIZE,
-                    flags: 0,
                 };
+                let fuse_attr = attr.to_fuse_attr(current_uid(), current_gid());
 
                 let inode = InodeData {
                     ino,
@@ -2035,12 +2027,12 @@ mod implementation {
                     }
                 });
 
-                Ok(attr)
+                Ok(fuse_attr)
             })();
 
             match result {
-                Ok(attr) => {
-                    reply.entry(&DIR_TTL, &attr, 0);
+                Ok(fuse_attr) => {
+                    reply.entry(&DIR_TTL, &fuse_attr, 0);
                 }
                 Err(e) => {
                     log::error!("mkdir failed: {}", e);
@@ -2450,7 +2442,7 @@ mod implementation {
 
 /// Public wrapper for decrypt_metadata_from_ipfs, used by mod.rs for pre-population.
 /// Returns FolderMetadata (v2 only). Rejects non-v2 metadata.
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub fn decrypt_metadata_from_ipfs_public(
     encrypted_bytes: &[u8],
     folder_key: &[u8],
@@ -2490,7 +2482,7 @@ pub fn decrypt_metadata_from_ipfs_public(
 }
 
 /// Public wrapper for decrypt_file_metadata_from_ipfs, used by mod.rs for FilePointer resolution.
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub fn decrypt_file_metadata_from_ipfs_public(
     encrypted_bytes: &[u8],
     folder_key: &[u8; 32],

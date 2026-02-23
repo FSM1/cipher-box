@@ -6,15 +6,16 @@ edition = "2021"
 [features]
 default = ["fuse"]
 fuse = ["dep:fuser", "dep:unicode-normalization"]
+winfsp = ["dep:winfsp", "dep:widestring"]
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "image-ico"] }
 tauri-plugin-deep-link = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"
 fuser = { version = "0.16", default-features = false, features = ["libfuse"], optional = true }
-keyring = { version = "3", features = ["apple-native"] }
+keyring = { version = "3", features = ["apple-native", "windows-native"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
@@ -32,7 +33,6 @@ base64 = "0.22"
 dirs = "5"
 log = "0.4"
 env_logger = "0.11"
-libc = "0.2"
 thiserror = "2"
 zeroize = { version = "1", features = ["derive"] }
 prost = "0.13"
@@ -44,6 +44,17 @@ clap = { version = "4", features = ["derive"] }
 hostname = "0.4"
 dotenvy = "0.15"
 unicode-normalization = { version = "0.1.25", optional = true }
+winfsp = { version = "0.12", optional = true }
+widestring = { version = "1", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.build-dependencies]
+winfsp = "0.12"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

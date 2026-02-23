@@ -5,9 +5,6 @@
 //! Each folder inode stores its decrypted IPNS private key for write operations.
 
 #[cfg(feature = "fuse")]
-use fuser::FileAttr;
-
-#[cfg(feature = "fuse")]
 use fuser::FileType;
 
 use std::collections::HashMap;
@@ -23,10 +20,24 @@ use crate::crypto::folder::{FolderChild, FolderMetadata};
 /// macOS NFS client may send names in either NFC or NFD form; FUSE-T's go-nfsv4
 /// may also re-normalize. By normalizing to NFC on both storage and lookup,
 /// we avoid mismatches with accented characters (e.g., `e` vs `e` + combining grave).
-#[cfg(feature = "fuse")]
-fn normalize_name(name: &str) -> String {
-    use unicode_normalization::UnicodeNormalization;
-    name.nfc().collect()
+///
+/// On Windows, WinFsp sends callbacks with arbitrary casing (often uppercased)
+/// for case-insensitive volumes. We fold to lowercase for consistent HashMap
+/// key matching while preserving original casing in InodeData.name.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub(crate) fn normalize_name(name: &str) -> String {
+    // unicode-normalization is a dependency of the fuse feature.
+    // On Windows (winfsp feature), fold to lowercase for case-insensitive matching.
+    // WinFsp's case-insensitive lookup is the user-mode filesystem's responsibility.
+    #[cfg(feature = "fuse")]
+    {
+        use unicode_normalization::UnicodeNormalization;
+        name.nfc().collect()
+    }
+    #[cfg(all(feature = "winfsp", not(feature = "fuse")))]
+    {
+        name.to_lowercase()
+    }
 }
 
 /// Root inode number (standard FUSE convention).
@@ -34,6 +45,54 @@ pub const ROOT_INO: u64 = 1;
 
 /// Default block size for statfs reporting.
 pub const BLOCK_SIZE: u32 = 4096;
+
+// ── FileAttrs ────────────────────────────────────────────────────────────────
+
+/// Platform-agnostic file attributes.
+/// Converted to `fuser::FileAttr` on macOS and `winfsp::filesystem::FileInfo` on Windows
+/// at the operations layer boundary.
+#[derive(Debug, Clone)]
+pub struct FileAttrs {
+    pub ino: u64,
+    pub size: u64,
+    pub blocks: u64,
+    pub atime: SystemTime,
+    pub mtime: SystemTime,
+    pub ctime: SystemTime,
+    pub crtime: SystemTime,
+    pub is_dir: bool,
+    pub perm: u16,
+    pub nlink: u32,
+}
+
+#[cfg(feature = "fuse")]
+impl FileAttrs {
+    /// Convert to fuser::FileAttr for macOS FUSE replies.
+    /// uid/gid are injected from the operations layer (libc::getuid()/getgid()).
+    pub fn to_fuse_attr(&self, uid: u32, gid: u32) -> fuser::FileAttr {
+        fuser::FileAttr {
+            ino: self.ino,
+            size: self.size,
+            blocks: self.blocks,
+            atime: self.atime,
+            mtime: self.mtime,
+            ctime: self.ctime,
+            crtime: self.crtime,
+            kind: if self.is_dir {
+                FileType::Directory
+            } else {
+                FileType::RegularFile
+            },
+            perm: self.perm,
+            nlink: self.nlink,
+            uid,
+            gid,
+            rdev: 0,
+            blksize: BLOCK_SIZE,
+            flags: 0,
+        }
+    }
+}
 
 // ── InodeKind ─────────────────────────────────────────────────────────────────
 
@@ -109,9 +168,8 @@ pub struct InodeData {
     pub name: String,
     /// Type-specific data (Root/Folder/File).
     pub kind: InodeKind,
-    /// FUSE file attributes (size, timestamps, permissions).
-    #[cfg(feature = "fuse")]
-    pub attr: FileAttr,
+    /// Platform-agnostic file attributes (size, timestamps, permissions).
+    pub attr: FileAttrs,
     /// Child inode numbers (for directories only).
     pub children: Option<Vec<u64>>,
 }
@@ -133,10 +191,10 @@ pub struct InodeTable {
 
 impl InodeTable {
     /// Create a new inode table with a root inode (ino=1).
-    #[cfg(feature = "fuse")]
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
     pub fn new() -> Self {
         let now = SystemTime::now();
-        let root_attr = FileAttr {
+        let root_attr = FileAttrs {
             ino: ROOT_INO,
             size: 0,
             blocks: 0,
@@ -144,14 +202,9 @@ impl InodeTable {
             mtime: now,
             ctime: now,
             crtime: now,
-            kind: FileType::Directory,
+            is_dir: true,
             perm: 0o755,
             nlink: 2,
-            uid: unsafe { libc::getuid() },
-            gid: unsafe { libc::getgid() },
-            rdev: 0,
-            blksize: BLOCK_SIZE,
-            flags: 0,
         };
 
         let root = InodeData {
@@ -183,6 +236,7 @@ impl InodeTable {
 
     /// Insert an inode into the table and update the name lookup index.
     /// Name is normalized to NFC for consistent lookup across Unicode forms.
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
     pub fn insert(&mut self, data: InodeData) {
         let key = (data.parent_ino, normalize_name(&data.name));
         self.name_to_ino.insert(key, data.ino);
@@ -201,6 +255,7 @@ impl InodeTable {
 
     /// Find a child inode by parent inode + child name.
     /// Name is normalized to NFC for consistent lookup across Unicode forms.
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
     pub fn find_child(&self, parent_ino: u64, name: &str) -> Option<u64> {
         self.name_to_ino
             .get(&(parent_ino, normalize_name(name)))
@@ -209,6 +264,7 @@ impl InodeTable {
 
     /// Remove an inode from the table and clean up the name lookup.
     #[allow(dead_code)]
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
     pub fn remove(&mut self, ino: u64) {
         if let Some(data) = self.inodes.remove(&ino) {
             self.name_to_ino
@@ -237,7 +293,7 @@ impl InodeTable {
     /// present in the remote metadata are preserved. This prevents background
     /// IPNS refreshes from wiping files whose publish hasn't propagated yet.
     /// When false (initial mount), children not in metadata are removed.
-    #[cfg(feature = "fuse")]
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
     pub fn populate_folder(
         &mut self,
         parent_ino: u64,
@@ -246,9 +302,6 @@ impl InodeTable {
         public_key: &[u8],
         merge_only: bool,
     ) -> Result<(), String> {
-        let uid = unsafe { libc::getuid() };
-        let gid = unsafe { libc::getgid() };
-
         // Build set of new child names for detecting removals
         let new_names: std::collections::HashSet<String> = metadata.children.iter().map(|c| {
             match c {
@@ -328,7 +381,7 @@ impl InodeTable {
                         (Some(vec![]), false)
                     };
 
-                    let attr = FileAttr {
+                    let attr = FileAttrs {
                         ino,
                         size: 0,
                         blocks: 0,
@@ -336,14 +389,9 @@ impl InodeTable {
                         mtime: modified,
                         ctime: modified,
                         crtime: created,
-                        kind: FileType::Directory,
+                        is_dir: true,
                         perm: 0o755,
                         nlink: 2,
-                        uid,
-                        gid,
-                        rdev: 0,
-                        blksize: BLOCK_SIZE,
-                        flags: 0,
                     };
 
                     let inode = InodeData {
@@ -499,7 +547,7 @@ impl InodeTable {
                         _ => 0,
                     };
 
-                    let attr = FileAttr {
+                    let attr = FileAttrs {
                         ino,
                         size: display_size,
                         blocks: (display_size + 511) / 512,
@@ -507,14 +555,9 @@ impl InodeTable {
                         mtime: modified,
                         ctime: modified,
                         crtime: created,
-                        kind: FileType::RegularFile,
+                        is_dir: false,
                         perm: 0o644,
                         nlink: 1,
-                        uid,
-                        gid,
-                        rdev: 0,
-                        blksize: BLOCK_SIZE,
-                        flags: 0,
                     };
 
                     let inode = InodeData {
@@ -568,7 +611,7 @@ impl InodeTable {
     /// Update a FilePointer inode with resolved metadata (CID, key, IV, size, mode, versions).
     ///
     /// Called after per-file IPNS resolution succeeds. Updates the inode in place.
-    #[cfg(feature = "fuse")]
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
     pub fn resolve_file_pointer(
         &mut self,
         ino: u64,
@@ -609,7 +652,7 @@ impl InodeTable {
 
     /// Get all unresolved FilePointer inodes (for batch IPNS resolution).
     /// Returns Vec of (ino, file_meta_ipns_name).
-    #[cfg(feature = "fuse")]
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
     pub fn get_unresolved_file_pointers(&self) -> Vec<(u64, String)> {
         self.inodes.values().filter_map(|inode| {
             match &inode.kind {
@@ -622,9 +665,28 @@ impl InodeTable {
             }
         }).collect()
     }
+
+    /// Get unresolved FilePointer inodes scoped to a specific parent folder.
+    /// Avoids retrying root-level or other-folder pointers with the wrong folder key.
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
+    pub fn get_unresolved_file_pointers_for_parent(&self, parent_ino: u64) -> Vec<(u64, String)> {
+        self.inodes.values().filter_map(|inode| {
+            if inode.parent_ino != parent_ino {
+                return None;
+            }
+            match &inode.kind {
+                InodeKind::File {
+                    file_meta_ipns_name: Some(ipns_name),
+                    file_meta_resolved: false,
+                    ..
+                } => Some((inode.ino, ipns_name.clone())),
+                _ => None,
+            }
+        }).collect()
+    }
 }
 
-#[cfg(all(test, feature = "fuse"))]
+#[cfg(all(test, any(feature = "fuse", feature = "winfsp")))]
 mod tests {
     use super::*;
 
@@ -654,8 +716,6 @@ mod tests {
         let ino = table.allocate_ino();
 
         let now = SystemTime::now();
-        let uid = unsafe { libc::getuid() };
-        let gid = unsafe { libc::getgid() };
 
         let data = InodeData {
             ino,
@@ -668,7 +728,7 @@ mod tests {
                 ipns_private_key: Some(Zeroizing::new(vec![0u8; 32])),
                 children_loaded: false,
             },
-            attr: FileAttr {
+            attr: FileAttrs {
                 ino,
                 size: 0,
                 blocks: 0,
@@ -676,14 +736,9 @@ mod tests {
                 mtime: now,
                 ctime: now,
                 crtime: now,
-                kind: FileType::Directory,
+                is_dir: true,
                 perm: 0o755,
                 nlink: 2,
-                uid,
-                gid,
-                rdev: 0,
-                blksize: BLOCK_SIZE,
-                flags: 0,
             },
             children: Some(vec![]),
         };
@@ -712,8 +767,6 @@ mod tests {
         let ino = table.allocate_ino();
 
         let now = SystemTime::now();
-        let uid = unsafe { libc::getuid() };
-        let gid = unsafe { libc::getgid() };
 
         // Add child to root's children
         if let Some(root) = table.get_mut(ROOT_INO) {
@@ -738,7 +791,7 @@ mod tests {
                 file_ipns_key_encrypted_hex: None,
                 versions: None,
             },
-            attr: FileAttr {
+            attr: FileAttrs {
                 ino,
                 size: 1024,
                 blocks: 2,
@@ -746,14 +799,9 @@ mod tests {
                 mtime: now,
                 ctime: now,
                 crtime: now,
-                kind: FileType::RegularFile,
+                is_dir: false,
                 perm: 0o644,
                 nlink: 1,
-                uid,
-                gid,
-                rdev: 0,
-                blksize: BLOCK_SIZE,
-                flags: 0,
             },
             children: None,
         };

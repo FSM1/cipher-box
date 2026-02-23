@@ -1,46 +1,58 @@
-//! FUSE filesystem module for CipherBox Desktop.
+//! Filesystem module for CipherBox Desktop.
 //!
-//! Mounts the encrypted vault at ~/CipherBox as a native macOS filesystem
-//! using FUSE-T. All crypto operations happen in Rust via the crypto module.
+//! Mounts the encrypted vault at ~/CipherBox as a native filesystem.
+//! On macOS: FUSE-T (fuser crate). On Windows: WinFsp (winfsp crate).
+//! All crypto operations happen in Rust via the crypto module.
 //!
-//! The cache and inode modules are always available (they don't depend on libfuse).
-//! The operations module and mount/unmount functions require the `fuse` feature.
+//! The cache, inode, and file_handle modules are always available (platform-agnostic).
+//! The operations module requires the `fuse` feature (macOS) or `winfsp` feature (Windows).
 
 pub mod cache;
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub mod decrypt;
 pub mod file_handle;
 pub mod inode;
 #[cfg(feature = "fuse")]
 pub mod operations;
+#[cfg(feature = "winfsp")]
+pub mod windows;
 
-#[cfg(feature = "fuse")]
+// Re-export Windows mount/unmount so callers can use crate::fuse::mount_filesystem
+// with the same function name regardless of platform (only one feature active per build).
+#[cfg(feature = "winfsp")]
+pub use windows::mount_filesystem;
+#[cfg(feature = "winfsp")]
+pub use windows::unmount_filesystem;
+
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 use std::collections::HashMap;
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 use std::path::PathBuf;
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 use std::sync::atomic::AtomicU64;
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 use std::sync::Arc;
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 use zeroize::{Zeroize, Zeroizing};
 
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 use std::time::Duration;
 
 #[cfg(feature = "fuse")]
 use fuser::MountOption;
 
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 use crate::api::client::ApiClient;
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 use crate::state::AppState;
 
-/// Timeout for network I/O in FUSE callbacks to prevent blocking the NFS thread.
-#[cfg(feature = "fuse")]
+/// Timeout for network I/O in filesystem callbacks to prevent blocking the mount thread.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Run an async future with a timeout on the tokio runtime.
-/// Prevents FUSE-T NFS thread hangs from indefinite network I/O.
-#[cfg(feature = "fuse")]
+/// Prevents filesystem thread hangs from indefinite network I/O.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 fn block_with_timeout<F, T>(rt: &tokio::runtime::Handle, fut: F) -> Result<T, String>
 where
     F: std::future::Future<Output = Result<T, String>>,
@@ -54,7 +66,7 @@ where
 }
 
 /// Pending folder refresh result sent from background tasks.
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub struct PendingRefresh {
     pub ino: u64,
     pub ipns_name: String,
@@ -63,14 +75,14 @@ pub struct PendingRefresh {
 }
 
 /// Pending content prefetch result sent from background tasks.
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub enum PendingContent {
     Success { cid: String, data: Vec<u8> },
     Failure { cid: String },
 }
 
 /// Notification from a background upload thread that a file upload completed.
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub struct UploadComplete {
     pub ino: u64,
     pub new_cid: String,
@@ -82,7 +94,7 @@ pub struct UploadComplete {
 
 /// Entry in the debounced publish queue.
 /// Tracks folders that need metadata published after file mutations.
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 struct PublishQueueEntry {
     /// When the first mutation was queued (for debounce timing).
     first_dirty: std::time::Instant,
@@ -94,7 +106,7 @@ struct PublishQueueEntry {
 /// and maintain a monotonic sequence number cache per IPNS name.
 ///
 /// Shared via `Arc` between `CipherBoxFS` and background publish threads.
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub struct PublishCoordinator {
     /// Per-IPNS-name sequence number cache (monotonically increasing).
     seq_cache: std::sync::Mutex<HashMap<String, u64>>,
@@ -102,7 +114,7 @@ pub struct PublishCoordinator {
     publish_locks: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 impl PublishCoordinator {
     pub fn new() -> Self {
         Self {
@@ -185,7 +197,7 @@ impl PublishCoordinator {
 
 /// Encrypt a FolderMetadata struct and package as JSON bytes ready for IPFS upload.
 /// CPU-only, no network I/O.
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 fn encrypt_metadata_to_json(
     metadata: &crate::crypto::folder::FolderMetadata,
     folder_key: &[u8],
@@ -204,7 +216,7 @@ fn encrypt_metadata_to_json(
 
 /// Spawn a background OS thread to upload encrypted metadata and publish via IPNS.
 /// Returns immediately — does NOT block the calling thread.
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 fn spawn_metadata_publish(
     api: Arc<ApiClient>,
     rt: tokio::runtime::Handle,
@@ -276,11 +288,12 @@ fn spawn_metadata_publish(
     });
 }
 
-/// The main FUSE filesystem struct.
+/// The main filesystem struct.
 ///
-/// Implements `fuser::Filesystem` to serve decrypted folder listings
-/// and file content from the CipherBox vault.
-#[cfg(feature = "fuse")]
+/// Shared between macOS FUSE and Windows WinFsp implementations.
+/// Contains the inode table, caches, API client, and all state needed
+/// for filesystem operations.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub struct CipherBoxFS {
     /// Inode table mapping inode numbers to metadata.
     pub inodes: inode::InodeTable,
@@ -301,7 +314,7 @@ pub struct CipherBoxFS {
     pub root_folder_key: Zeroizing<Vec<u8>>,
     /// Root IPNS name (k51... format).
     pub root_ipns_name: String,
-    /// Tokio runtime handle for spawning async tasks from FUSE threads.
+    /// Tokio runtime handle for spawning async tasks from filesystem threads.
     pub rt: tokio::runtime::Handle,
     /// Next file handle counter.
     pub next_fh: AtomicU64,
@@ -319,7 +332,7 @@ pub struct CipherBoxFS {
     pub refresh_tx: std::sync::mpsc::Sender<PendingRefresh>,
     /// Folders with recent local mutations — skip background refreshes
     /// that would overwrite local state before IPNS publish propagates.
-    /// Maps folder ino → mutation timestamp.
+    /// Maps folder ino -> mutation timestamp.
     pub mutated_folders: HashMap<u64, std::time::Instant>,
     /// CIDs currently being prefetched in background (to avoid duplicate fetches).
     pub prefetching: std::collections::HashSet<String>,
@@ -340,7 +353,7 @@ pub struct CipherBoxFS {
     publish_queue: HashMap<u64, PublishQueueEntry>,
 }
 
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 impl CipherBoxFS {
     /// Get the decrypted folder key for a folder/root inode.
     /// Returns None if the inode is not a folder or root.
@@ -696,7 +709,7 @@ impl CipherBoxFS {
             }
 
             // Resolve FilePointers eagerly after populating.
-            // TODO: This blocks the FUSE thread with O(N * timeout) latency for N
+            // TODO: This blocks the filesystem thread with O(N * timeout) latency for N
             // unresolved FilePointers. Should be refactored to spawn async tasks via
             // a file_pointer_tx/rx channel pair (like refresh_tx/rx) to avoid stalling
             // the single NFS thread on network I/O.
@@ -724,7 +737,7 @@ impl CipherBoxFS {
                             });
                             match resolve_result {
                                 Ok(enc_bytes) => {
-                                    match operations::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk_arr) {
+                                    match decrypt::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk_arr) {
                                         Ok(fm) => {
                                             self.inodes.resolve_file_pointer(
                                                 *ino, fm.cid, fm.file_key_encrypted,
@@ -763,7 +776,7 @@ impl CipherBoxFS {
 
 /// Generate a UUID-like string from an inode number (deterministic).
 /// Used for folder/file IDs in metadata when we don't have the original UUID.
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 fn uuid_from_ino(ino: u64) -> String {
     format!(
         "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
@@ -776,14 +789,14 @@ fn uuid_from_ino(ino: u64) -> String {
 }
 
 /// Get the mount point path: ~/CipherBox
-#[cfg(feature = "fuse")]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub fn mount_point() -> PathBuf {
     dirs::home_dir()
         .expect("Could not determine home directory")
         .join("CipherBox")
 }
 
-/// Mount the FUSE filesystem after successful authentication.
+/// Mount the FUSE filesystem after successful authentication (macOS only).
 ///
 /// Creates the ~/CipherBox directory if it doesn't exist, builds the
 /// CipherBoxFS with keys from AppState, and spawns the FUSE event loop
@@ -879,7 +892,7 @@ pub async fn mount_filesystem(
     }.await;
     match fetch_result {
         Ok((encrypted_bytes, cid)) => {
-            match operations::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &root_folder_key) {
+            match decrypt::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &root_folder_key) {
                 Ok(metadata) => {
                     // Cache metadata directly for readdir staleness checks
                     metadata_cache.set(&root_ipns_name, metadata.clone(), cid);
@@ -903,7 +916,7 @@ pub async fn mount_filesystem(
                                         }.await;
                                         match fp_result {
                                             Ok(enc_bytes) => {
-                                                match operations::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk) {
+                                                match decrypt::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk) {
                                                     Ok(fm) => {
                                                         inodes.resolve_file_pointer(
                                                             *fp_ino, fm.cid, fm.file_key_encrypted,
@@ -949,7 +962,7 @@ pub async fn mount_filesystem(
                         }.await;
                         match sub_result {
                             Ok((enc_bytes, sub_cid)) => {
-                                match operations::decrypt_metadata_from_ipfs_public(&enc_bytes, sub_key) {
+                                match decrypt::decrypt_metadata_from_ipfs_public(&enc_bytes, sub_key) {
                                     Ok(sub_metadata) => {
                                         metadata_cache.set(sub_ipns, sub_metadata.clone(), sub_cid);
                                         match inodes.populate_folder(*sub_ino, &sub_metadata, &private_key, &public_key, false) {
@@ -968,7 +981,7 @@ pub async fn mount_filesystem(
                                                             }.await;
                                                             match fp_result {
                                                                 Ok(enc_bytes) => {
-                                                                    match operations::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &sk) {
+                                                                    match decrypt::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &sk) {
                                                                         Ok(fm) => {
                                                                             inodes.resolve_file_pointer(
                                                                                 *fp_ino, fm.cid, fm.file_key_encrypted,
@@ -1097,10 +1110,10 @@ pub async fn mount_filesystem(
     }
 }
 
-/// Unmount the FUSE filesystem.
+/// Unmount the FUSE filesystem (macOS only).
 ///
 /// Calls the system `umount` command to cleanly unmount ~/CipherBox.
-#[cfg(feature = "fuse")]
+#[cfg(all(feature = "fuse", target_os = "macos"))]
 pub fn unmount_filesystem() -> Result<(), String> {
     let mount_path = mount_point();
     log::info!("Unmounting CipherBoxFS at {}", mount_path.display());

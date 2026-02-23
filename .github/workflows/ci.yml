@@ -204,3 +204,162 @@ jobs:
 
       - name: Build packages (excluding desktop)
         run: pnpm --filter @cipherbox/crypto --filter @cipherbox/api --filter @cipherbox/web build
+
+  cargo-check-windows:
+    name: Cargo Check (Windows)
+    needs: [lint]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install WinFsp
+        shell: powershell
+        run: |
+          $url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
+          $out = "winfsp.msi"
+          $expectedHash = "073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A"
+          Invoke-WebRequest -Uri $url -OutFile $out
+          $actualHash = (Get-FileHash $out -Algorithm SHA256).Hash
+          if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
+          Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
+
+      - name: Create WinFsp MSI placeholder for resource glob
+        shell: powershell
+        run: New-Item -ItemType File -Force -Path "apps/desktop/src-tauri/resources/winfsp-placeholder.msi"
+
+      - name: Install Rust toolchain
+        run: rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: windows-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: windows-cargo-
+
+      - name: Cargo check with winfsp feature
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features winfsp
+
+  cargo-check-macos:
+    name: Cargo Check (macOS)
+    needs: [lint]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install FUSE-T
+        run: brew install --cask fuse-t
+
+      - name: Install Rust toolchain
+        run: rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: macos-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: macos-cargo-
+
+      - name: Cargo check with fuse feature
+        working-directory: apps/desktop/src-tauri
+        run: cargo check --no-default-features --features fuse
+
+  build-desktop-windows:
+    name: Build Windows Desktop
+    needs: [cargo-check-windows, typecheck]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install WinFsp
+        shell: powershell
+        run: |
+          $url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
+          $resourceDir = "${{ github.workspace }}/apps/desktop/src-tauri/resources"
+          $out = "$resourceDir/winfsp-2.1.25156.msi"
+          $expectedHash = "073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A"
+          New-Item -ItemType Directory -Force -Path $resourceDir
+          Invoke-WebRequest -Uri $url -OutFile $out
+          $actualHash = (Get-FileHash $out -Algorithm SHA256).Hash
+          if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
+          Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
+
+      - name: Install Rust toolchain
+        run: rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: windows-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: windows-cargo-
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build crypto package
+        run: pnpm --filter @cipherbox/crypto build
+
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          args: -- --no-default-features --features winfsp
+
+  build-desktop-macos:
+    name: Build macOS Desktop
+    needs: [cargo-check-macos, typecheck]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install FUSE-T
+        run: brew install --cask fuse-t
+
+      - name: Install Rust toolchain
+        run: rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: macos-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: macos-cargo-
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build crypto package
+        run: pnpm --filter @cipherbox/crypto build
+
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          args: -- --no-default-features --features fuse

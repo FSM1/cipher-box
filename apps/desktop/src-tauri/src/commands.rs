@@ -4,8 +4,12 @@
 //! `invoke()` API. They handle authentication, vault key decryption,
 //! Keychain storage, and logout.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tauri::{Manager, State};
+
+/// Counter for unique OAuth popup window labels (shared with tray handler).
+static POPUP_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 use zeroize::Zeroizing;
 
@@ -143,14 +147,14 @@ async fn complete_auth_setup(
     // 6. Mark as authenticated
     *state.is_authenticated.write().await = true;
 
-    // 7. Mount FUSE filesystem (or just mark as synced if FUSE not enabled)
+    // 7. Mount filesystem (or just mark as synced if no filesystem feature enabled)
     // NOTE: Device registry spawn moved AFTER mount to avoid concurrent HTTP
     //       requests that cause reqwest connection pool starvation during pre-populate.
-    #[cfg(not(feature = "fuse"))]
+    #[cfg(not(any(feature = "fuse", feature = "winfsp")))]
     {
         let _ = crate::tray::update_tray_status(app, &crate::tray::TrayStatus::Synced);
     }
-    #[cfg(feature = "fuse")]
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
     {
         *state.mount_status.write().await = crate::state::MountStatus::Mounting;
         let private_key = state
@@ -158,28 +162,28 @@ async fn complete_auth_setup(
             .read()
             .await
             .as_ref()
-            .ok_or("Private key not available for FUSE mount")?
+            .ok_or("Private key not available for filesystem mount")?
             .clone();
         let public_key = state
             .public_key
             .read()
             .await
             .as_ref()
-            .ok_or("Public key not available for FUSE mount")?
+            .ok_or("Public key not available for filesystem mount")?
             .clone();
         let root_folder_key = state
             .root_folder_key
             .read()
             .await
             .as_ref()
-            .ok_or("Root folder key not available for FUSE mount")?
+            .ok_or("Root folder key not available for filesystem mount")?
             .clone();
         let root_ipns_name = state
             .root_ipns_name
             .read()
             .await
             .as_ref()
-            .ok_or("Root IPNS name not available for FUSE mount")?
+            .ok_or("Root IPNS name not available for filesystem mount")?
             .clone();
         let root_ipns_private_key = state.root_ipns_private_key.read().await.clone();
 
@@ -206,10 +210,10 @@ async fn complete_auth_setup(
             Ok(_handle) => {
                 *state.mount_status.write().await = crate::state::MountStatus::Mounted;
                 let _ = crate::tray::update_tray_status(app, &crate::tray::TrayStatus::Synced);
-                log::info!("FUSE filesystem mounted at ~/CipherBox");
+                log::info!("Filesystem mounted at {}", crate::fuse::mount_point().display());
             }
             Err(e) => {
-                let err_msg = format!("FUSE mount failed: {}", e);
+                let err_msg = format!("Filesystem mount failed: {}", e);
                 *state.mount_status.write().await =
                     crate::state::MountStatus::Error(err_msg.clone());
                 let _ = crate::tray::update_tray_status(
@@ -527,16 +531,57 @@ pub async fn handle_test_login_complete(
     .await
 }
 
+/// Open an OAuth popup window directly from Rust.
+///
+/// Bypasses `window.open()` which is unreliable on Windows WebView2 (the
+/// `NewWindowRequested` event / `on_new_window` handler may silently fail).
+/// Instead, the webview calls this command via `invoke()` to create a new
+/// Tauri webview window pointing directly at the OAuth URL.
+#[tauri::command]
+pub async fn open_oauth_popup(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    let n = POPUP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let label = format!("oauth-popup-{}", n);
+
+    let parsed_url: tauri::Url = url
+        .parse()
+        .map_err(|e| format!("Invalid OAuth URL: {}", e))?;
+
+    // Allowlist: only HTTPS requests to known OAuth providers are permitted.
+    const ALLOWED_HOSTS: &[&str] = &["accounts.google.com"];
+    if parsed_url.scheme() != "https" {
+        return Err("OAuth URL must use HTTPS".to_string());
+    }
+    let host = parsed_url.host_str().unwrap_or("");
+    if !ALLOWED_HOSTS.contains(&host) {
+        return Err(format!("OAuth URL host '{}' is not allowed", host));
+    }
+
+    log::info!("Creating OAuth popup window: {} -> {}", label, host);
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        &label,
+        tauri::WebviewUrl::External(parsed_url),
+    )
+    .title("Sign in with Google")
+    .inner_size(500.0, 700.0)
+    .center()
+    .build()
+    .map_err(|e| format!("Failed to create OAuth popup: {}", e))?;
+
+    Ok(())
+}
+
 /// Logout: invalidate session, clear Keychain, zero all sensitive keys.
 #[tauri::command]
 pub async fn logout(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     log::info!("Logging out");
 
-    // Unmount FUSE filesystem before clearing keys
-    #[cfg(feature = "fuse")]
+    // Unmount filesystem before clearing keys
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
     {
         if let Err(e) = crate::fuse::unmount_filesystem() {
-            log::warn!("FUSE unmount failed (will continue logout): {}", e);
+            log::warn!("Filesystem unmount failed (will continue logout): {}", e);
         }
         *state.mount_status.write().await = crate::state::MountStatus::Unmounted;
     }
