@@ -1,0 +1,45 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "43c02df5aab2",
+  "session_id": "8268563e-7099-4b74-a85e-f55af754cbf8",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-23T23:05:35.01454Z",
+  "branch": "feat/phase-15-link-sharing",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/shares/dto/invite-response.dto.ts",
+    "apps/api/src/shares/shares.service.ts",
+    "packages/api-client/openapi.json",
+    "tests/e2e/page-objects/dialogs/invite-link-tab.page.ts",
+    "apps/api/src/shares/dto/claim-invite.dto.ts",
+    "apps/api/src/shares/invites.controller.spec.ts",
+    "apps/api/src/shares/invites.controller.ts",
+    "apps/api/src/shares/share-invites.controller.spec.ts",
+    "apps/api/src/shares/shares.service.spec.ts",
+    "apps/web/src/components/file-browser/InviteLinkTab.tsx",
+    "apps/web/src/components/file-browser/ShareDialog.tsx",
+    "apps/web/src/styles/share-dialog.css",
+    "apps/api/src/shares/dto/create-invite.dto.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "20afe64a4228",
+  "checkpoint_transcript_start": 626,
+  "transcript_lines_at_start": 626,
+  "token_usage": {
+    "input_tokens": 59,
+    "cache_creation_tokens": 129977,
+    "cache_read_tokens": 5425882,
+    "output_tokens": 13773,
+    "api_call_count": 49
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-23T23:05:34.634225Z",
+    "agent_lines": 0,
+    "human_added": 66,
+    "human_modified": 96,
+    "human_removed": 0,
+    "total_committed": 66,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/8268563e-7099-4b74-a85e-f55af754cbf8.jsonl"
+}
