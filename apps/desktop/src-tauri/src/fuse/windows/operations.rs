@@ -627,8 +627,8 @@ pub(crate) mod implementation {
         fn get_security_by_name(
             &self,
             file_name: &U16CStr,
-            security_descriptor: Option<&mut [c_void]>,
-            find_reparse_point: impl FnOnce(&U16CStr) -> Option<FileSecurity>,
+            _security_descriptor: Option<&mut [c_void]>,
+            _find_reparse_point: impl FnOnce(&U16CStr) -> Option<FileSecurity>,
         ) -> Result<FileSecurity, FspError> {
             let path = file_name.to_string_lossy();
             let fs = self.inner.lock().unwrap();
@@ -662,7 +662,7 @@ pub(crate) mod implementation {
         fn open(
             &self,
             file_name: &U16CStr,
-            create_options: u32,
+            _create_options: u32,
             granted_access: u32,
             file_info: &mut OpenFileInfo,
         ) -> Result<Self::FileContext, FspError> {
@@ -1743,7 +1743,8 @@ pub(crate) mod implementation {
             // Proactive content prefetch for child files
             fs.drain_content_prefetches();
             for &child_ino in &children {
-                if let Some(child) = fs.inodes.get(child_ino) {
+                // Clone fields from inode to release the immutable borrow on fs
+                let file_info = fs.inodes.get(child_ino).and_then(|child| {
                     if let InodeKind::File {
                         cid,
                         encrypted_file_key,
@@ -1752,63 +1753,67 @@ pub(crate) mod implementation {
                         ..
                     } = &child.kind
                     {
-                        if !cid.is_empty()
-                            && fs.content_cache.get(cid).is_none()
-                            && !fs.prefetching.contains(cid)
-                        {
-                            let api = fs.api.clone();
-                            let rt = fs.rt.clone();
-                            let tx = fs.content_tx.clone();
-                            let cid_clone = cid.clone();
-                            let efk = encrypted_file_key.clone();
-                            let iv_clone = iv.clone();
-                            let enc_mode = encryption_mode.clone();
-                            let pk = fs.private_key.clone();
-                            fs.prefetching.insert(cid.clone());
+                        if !cid.is_empty() {
+                            Some((cid.clone(), encrypted_file_key.clone(), iv.clone(), encryption_mode.clone()))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                });
+                if let Some((cid_clone, efk, iv_clone, enc_mode)) = file_info {
+                    if fs.content_cache.get(&cid_clone).is_none()
+                        && !fs.prefetching.contains(&cid_clone)
+                    {
+                        let api = fs.api.clone();
+                        let rt = fs.rt.clone();
+                        let tx = fs.content_tx.clone();
+                        let pk = fs.private_key.clone();
+                        fs.prefetching.insert(cid_clone.clone());
 
-                            rt.spawn(async move {
-                                let result = tokio::time::timeout(
-                                    CONTENT_DOWNLOAD_TIMEOUT,
-                                    fetch_and_decrypt_content_async(
-                                        &api,
-                                        &cid_clone,
-                                        &efk,
-                                        &iv_clone,
-                                        &enc_mode,
-                                        &pk,
-                                    ),
-                                )
-                                .await;
+                        rt.spawn(async move {
+                            let result = tokio::time::timeout(
+                                CONTENT_DOWNLOAD_TIMEOUT,
+                                fetch_and_decrypt_content_async(
+                                    &api,
+                                    &cid_clone,
+                                    &efk,
+                                    &iv_clone,
+                                    &enc_mode,
+                                    &pk,
+                                ),
+                            )
+                            .await;
 
-                                match result {
-                                    Ok(Ok(plaintext)) => {
-                                        let _ = tx.send(
-                                            crate::fuse::PendingContent::Success {
-                                                cid: cid_clone,
-                                                data: plaintext,
-                                            },
-                                        );
-                                    }
-                                    Ok(Err(e)) => {
-                                        let _ = tx.send(
-                                            crate::fuse::PendingContent::Failure {
-                                                cid: cid_clone,
-                                            },
-                                        );
-                                    }
-                                    Err(_) => {
-                                        let _ = tx.send(
-                                            crate::fuse::PendingContent::Failure {
-                                                cid: cid_clone,
-                                            },
-                                        );
-                                    }
+                            match result {
+                                Ok(Ok(plaintext)) => {
+                                    let _ = tx.send(
+                                        crate::fuse::PendingContent::Success {
+                                            cid: cid_clone,
+                                            data: plaintext,
+                                        },
+                                    );
                                 }
-                            });
+                                Ok(Err(_e)) => {
+                                    let _ = tx.send(
+                                        crate::fuse::PendingContent::Failure {
+                                            cid: cid_clone,
+                                        },
+                                    );
+                                }
+                                Err(_) => {
+                                    let _ = tx.send(
+                                        crate::fuse::PendingContent::Failure {
+                                            cid: cid_clone,
+                                        },
+                                    );
+                                }
+                            }
+                        });
                         }
                     }
                 }
-            }
 
             Ok(bytes_written)
         }
