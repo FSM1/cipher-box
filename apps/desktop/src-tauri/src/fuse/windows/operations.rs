@@ -855,321 +855,17 @@ pub(crate) mod implementation {
 
         // -- close --
         fn close(&self, context: Self::FileContext) {
+            // close() (IRP_MJ_CLOSE) may be deferred indefinitely by the Windows
+            // cache manager. All data flushing happens in cleanup() (IRP_MJ_CLEANUP)
+            // which fires immediately when the user-mode handle is closed.
+            // Here we just remove the handle from open_files if it wasn't already
+            // removed during cleanup flush.
             let mut fs = self.inner.lock().unwrap();
             fs.drain_upload_completions();
 
-            let handle = fs.open_files.remove(&context.fh);
-            if let Some(handle) = handle {
-                // Check if file needs upload (dirty or new file with empty CID)
-                let is_new_file = handle.temp_path.is_some() && {
-                    fs.inodes
-                        .get(context.ino)
-                        .map(|i| match &i.kind {
-                            InodeKind::File { cid, .. } => cid.is_empty(),
-                            _ => false,
-                        })
-                        .unwrap_or(false)
-                };
-                let needs_upload =
-                    handle.temp_path.is_some() && (handle.dirty || is_new_file);
-
-                if needs_upload {
-                    log::debug!(
-                        "close: uploading ino {} (dirty={}, new={})",
-                        context.ino,
-                        handle.dirty,
-                        is_new_file
-                    );
-
-                    let prepare_result = (|| -> Result<(), String> {
-                        let plaintext = handle.read_all()?;
-                        let mut file_key =
-                            crate::crypto::utils::generate_file_key();
-                        let iv = crate::crypto::utils::generate_iv();
-                        let ciphertext = crate::crypto::aes::encrypt_aes_gcm(
-                            &plaintext, &file_key, &iv,
-                        )
-                        .map_err(|e| format!("File encryption failed: {}", e))?;
-                        let wrapped_key = crate::crypto::ecies::wrap_key(
-                            &file_key,
-                            &fs.public_key,
-                        )
-                        .map_err(|e| format!("Key wrapping failed: {}", e))?;
-                        crate::crypto::utils::clear_bytes(&mut file_key);
-
-                        let (
-                            old_file_cid,
-                            _old_encrypted_key,
-                            _old_iv,
-                            old_size,
-                            old_mode,
-                            existing_versions,
-                            file_ipns_private_key,
-                            file_meta_ipns_name,
-                        ) = fs
-                            .inodes
-                            .get(context.ino)
-                            .map(|inode| match &inode.kind {
-                                InodeKind::File {
-                                    cid,
-                                    encrypted_file_key,
-                                    iv,
-                                    size,
-                                    encryption_mode,
-                                    versions,
-                                    file_ipns_private_key,
-                                    file_meta_ipns_name,
-                                    ..
-                                } => (
-                                    if cid.is_empty() {
-                                        None
-                                    } else {
-                                        Some(cid.clone())
-                                    },
-                                    encrypted_file_key.clone(),
-                                    iv.clone(),
-                                    *size,
-                                    encryption_mode.clone(),
-                                    versions.clone(),
-                                    file_ipns_private_key.clone(),
-                                    file_meta_ipns_name.clone(),
-                                ),
-                                _ => (
-                                    None,
-                                    String::new(),
-                                    String::new(),
-                                    0,
-                                    "GCM".to_string(),
-                                    None,
-                                    None,
-                                    None,
-                                ),
-                            })
-                            .unwrap_or((
-                                None,
-                                String::new(),
-                                String::new(),
-                                0,
-                                "GCM".to_string(),
-                                None,
-                                None,
-                                None,
-                            ));
-
-                        let encrypted_file_key_hex = hex::encode(&wrapped_key);
-                        let iv_hex = hex::encode(&iv);
-                        let file_size = plaintext.len() as u64;
-                        let file_name = fs
-                            .inodes
-                            .get(context.ino)
-                            .map(|i| i.name.clone())
-                            .unwrap_or_default();
-                        let mime_type = mime_from_extension(&file_name);
-
-                        // Version creation with cooldown
-                        let now_ms = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as u64;
-
-                        let should_version =
-                            if let Some(ref versions) = existing_versions {
-                                if let Some(newest) = versions.first() {
-                                    now_ms.saturating_sub(newest.timestamp)
-                                        >= VERSION_COOLDOWN_MS
-                                } else {
-                                    old_file_cid
-                                        .as_ref()
-                                        .is_some_and(|c| !c.is_empty())
-                                }
-                            } else {
-                                old_file_cid
-                                    .as_ref()
-                                    .is_some_and(|c| !c.is_empty())
-                            };
-
-                        let (new_versions, pruned_cids) = if should_version {
-                            if let Some(ref old_c) = old_file_cid {
-                                if !old_c.is_empty() {
-                                    let version_entry =
-                                        crate::crypto::folder::VersionEntry {
-                                            cid: old_c.clone(),
-                                            file_key_encrypted: _old_encrypted_key
-                                                .clone(),
-                                            file_iv: _old_iv.clone(),
-                                            size: old_size,
-                                            timestamp: now_ms,
-                                            encryption_mode: old_mode.clone(),
-                                        };
-                                    let mut versions = vec![version_entry];
-                                    versions.extend(
-                                        existing_versions.unwrap_or_default(),
-                                    );
-                                    let pruned: Vec<String> =
-                                        if versions.len() > MAX_VERSIONS_PER_FILE {
-                                            versions
-                                                .split_off(MAX_VERSIONS_PER_FILE)
-                                                .into_iter()
-                                                .map(|v| v.cid)
-                                                .collect()
-                                        } else {
-                                            vec![]
-                                        };
-                                    (Some(versions), pruned)
-                                } else {
-                                    (existing_versions, vec![])
-                                }
-                            } else {
-                                (existing_versions, vec![])
-                            }
-                        } else {
-                            (existing_versions, vec![])
-                        };
-
-                        let versions_for_meta = new_versions
-                            .as_ref()
-                            .filter(|v| !v.is_empty())
-                            .cloned();
-
-                        if let Some(inode) = fs.inodes.get_mut(context.ino) {
-                            let cached_hex = match &inode.kind {
-                                InodeKind::File {
-                                    file_ipns_key_encrypted_hex,
-                                    ..
-                                } => file_ipns_key_encrypted_hex.clone(),
-                                _ => None,
-                            };
-                            inode.kind = InodeKind::File {
-                                cid: String::new(),
-                                encrypted_file_key: encrypted_file_key_hex.clone(),
-                                iv: iv_hex.clone(),
-                                size: file_size,
-                                encryption_mode: "GCM".to_string(),
-                                file_meta_ipns_name: file_meta_ipns_name.clone(),
-                                file_meta_resolved: true,
-                                file_ipns_private_key: file_ipns_private_key
-                                    .clone(),
-                                file_ipns_key_encrypted_hex: cached_hex,
-                                versions: versions_for_meta.clone(),
-                            };
-                            inode.attr.size = file_size;
-                            inode.attr.blocks = (file_size + 511) / 512;
-                            inode.attr.mtime = SystemTime::now();
-                        }
-
-                        fs.pending_content
-                            .insert(context.ino, plaintext);
-
-                        let parent_ino = fs
-                            .inodes
-                            .get(context.ino)
-                            .map(|i| i.parent_ino)
-                            .unwrap_or(ROOT_INO);
-
-                        let folder_key_for_file_meta =
-                            fs.get_folder_key(parent_ino);
-
-                        fs.queue_publish(parent_ino, true);
-
-                        let api = fs.api.clone();
-                        let rt = fs.rt.clone();
-                        let upload_tx = fs.upload_tx.clone();
-                        let coordinator = fs.publish_coordinator.clone();
-                        let ino = context.ino;
-
-                        let file_meta =
-                            crate::crypto::folder::FileMetadata {
-                                version: "v1".to_string(),
-                                cid: String::new(),
-                                file_key_encrypted: encrypted_file_key_hex,
-                                file_iv: iv_hex,
-                                size: file_size,
-                                mime_type,
-                                encryption_mode: "GCM".to_string(),
-                                created_at: now_ms,
-                                modified_at: now_ms,
-                                versions: versions_for_meta,
-                            };
-
-                        std::thread::spawn(move || {
-                            let result = rt.block_on(async {
-                                let file_cid =
-                                    crate::api::ipfs::upload_content(
-                                        &api,
-                                        &ciphertext,
-                                    )
-                                    .await?;
-                                log::info!(
-                                    "File uploaded: ino {} -> CID {}",
-                                    ino,
-                                    file_cid
-                                );
-
-                                let _ = upload_tx.send(
-                                    crate::fuse::UploadComplete {
-                                        ino,
-                                        new_cid: file_cid.clone(),
-                                        parent_ino,
-                                        old_file_cid,
-                                        pruned_cids,
-                                    },
-                                );
-
-                                if let (
-                                    Some(ipns_key),
-                                    Some(ipns_name),
-                                    Some(folder_key),
-                                ) = (
-                                    &file_ipns_private_key,
-                                    &file_meta_ipns_name,
-                                    &folder_key_for_file_meta,
-                                ) {
-                                    let mut file_meta_with_cid = file_meta;
-                                    file_meta_with_cid.cid = file_cid;
-                                    if let Err(e) = publish_file_metadata(
-                                        &api,
-                                        &file_meta_with_cid,
-                                        folder_key,
-                                        ipns_key,
-                                        ipns_name,
-                                        &coordinator,
-                                    )
-                                    .await
-                                    {
-                                        log::warn!(
-                                            "Per-file IPNS publish failed for ino {}: {}",
-                                            ino,
-                                            e
-                                        );
-                                    }
-                                }
-
-                                Ok::<(), String>(())
-                            });
-
-                            if let Err(e) = result {
-                                log::error!(
-                                    "Background upload failed for ino {}: {}",
-                                    ino,
-                                    e
-                                );
-                            }
-                        });
-
-                        Ok(())
-                    })();
-
-                    if let Err(e) = prepare_result {
-                        log::error!(
-                            "File upload preparation failed for ino {}: {}",
-                            context.ino,
-                            e
-                        );
-                    }
-
-                    handle.cleanup();
-                }
-                // Non-dirty handles: just drop (cleanup via Drop impl)
+            if let Some(handle) = fs.open_files.remove(&context.fh) {
+                // Handle survived cleanup without being flushed (e.g., read-only handle)
+                handle.cleanup();
             }
         }
 
@@ -1181,6 +877,7 @@ pub(crate) mod implementation {
             offset: u64,
         ) -> Result<u32, FspError> {
             let mut fs = self.inner.lock().unwrap();
+            fs.drain_upload_completions();
             fs.drain_content_prefetches();
 
             let fh = context.fh;
@@ -1509,19 +1206,22 @@ pub(crate) mod implementation {
         }
 
         // -- cleanup --
-        // Called when a file handle is being cleaned up. If FspCleanupDelete flag
-        // is set, this is the actual delete (equivalent to unlink/rmdir).
+        // Called when a file handle is being cleaned up (IRP_MJ_CLEANUP).
+        // This is called immediately when the user closes the Win32 handle,
+        // BEFORE close() which may be deferred by the cache manager.
+        // If FspCleanupDelete flag is set, this is the actual delete.
         fn cleanup(
             &self,
             context: &Self::FileContext,
             _file_name: Option<&U16CStr>,
             flags: u32,
         ) {
+            let mut fs = self.inner.lock().unwrap();
+            let ino = context.ino;
+            let fh = context.fh;
+
             // FspCleanupDelete = 0x01
             if flags & 0x01 != 0 {
-                let mut fs = self.inner.lock().unwrap();
-                let ino = context.ino;
-
                 // Get parent and CID info before removal
                 let (parent_ino, cid_to_unpin) =
                     match fs.inodes.get(ino) {
@@ -1572,6 +1272,316 @@ pub(crate) mod implementation {
                         let _ =
                             crate::api::ipfs::unpin_content(&api, &cid).await;
                     });
+                }
+            } else {
+                // Non-delete cleanup: flush dirty file handles.
+                // On WinFsp, close() (IRP_MJ_CLOSE) may be deferred indefinitely by
+                // the Windows cache manager. cleanup() (IRP_MJ_CLEANUP) fires immediately
+                // when the user-mode handle is closed, so we must flush data here.
+                fs.drain_upload_completions();
+
+                let needs_flush = fs.open_files.get(&fh)
+                    .map(|h| {
+                        let has_temp = h.temp_path.is_some();
+                        let is_new = has_temp && fs.inodes.get(ino)
+                            .map(|i| match &i.kind {
+                                InodeKind::File { cid, .. } => cid.is_empty(),
+                                _ => false,
+                            })
+                            .unwrap_or(false);
+                        has_temp && (h.dirty || is_new)
+                    })
+                    .unwrap_or(false);
+
+                if needs_flush {
+                    // Remove the handle so we own it for read_all + cleanup
+                    let handle = fs.open_files.remove(&fh).unwrap();
+
+                    let prepare_result = (|| -> Result<(), String> {
+                        let plaintext = handle.read_all()?;
+                        let mut file_key =
+                            crate::crypto::utils::generate_file_key();
+                        let iv = crate::crypto::utils::generate_iv();
+                        let ciphertext = crate::crypto::aes::encrypt_aes_gcm(
+                            &plaintext, &file_key, &iv,
+                        )
+                        .map_err(|e| format!("File encryption failed: {}", e))?;
+                        let wrapped_key = crate::crypto::ecies::wrap_key(
+                            &file_key,
+                            &fs.public_key,
+                        )
+                        .map_err(|e| format!("Key wrapping failed: {}", e))?;
+                        crate::crypto::utils::clear_bytes(&mut file_key);
+
+                        let (
+                            old_file_cid,
+                            _old_encrypted_key,
+                            _old_iv,
+                            old_size,
+                            old_mode,
+                            existing_versions,
+                            file_ipns_private_key,
+                            file_meta_ipns_name,
+                        ) = fs
+                            .inodes
+                            .get(ino)
+                            .map(|inode| match &inode.kind {
+                                InodeKind::File {
+                                    cid,
+                                    encrypted_file_key,
+                                    iv,
+                                    size,
+                                    encryption_mode,
+                                    versions,
+                                    file_ipns_private_key,
+                                    file_meta_ipns_name,
+                                    ..
+                                } => (
+                                    if cid.is_empty() {
+                                        None
+                                    } else {
+                                        Some(cid.clone())
+                                    },
+                                    encrypted_file_key.clone(),
+                                    iv.clone(),
+                                    *size,
+                                    encryption_mode.clone(),
+                                    versions.clone(),
+                                    file_ipns_private_key.clone(),
+                                    file_meta_ipns_name.clone(),
+                                ),
+                                _ => (
+                                    None,
+                                    String::new(),
+                                    String::new(),
+                                    0,
+                                    "GCM".to_string(),
+                                    None,
+                                    None,
+                                    None,
+                                ),
+                            })
+                            .unwrap_or((
+                                None,
+                                String::new(),
+                                String::new(),
+                                0,
+                                "GCM".to_string(),
+                                None,
+                                None,
+                                None,
+                            ));
+
+                        let encrypted_file_key_hex = hex::encode(&wrapped_key);
+                        let iv_hex = hex::encode(&iv);
+                        let file_size = plaintext.len() as u64;
+                        let file_name = fs
+                            .inodes
+                            .get(ino)
+                            .map(|i| i.name.clone())
+                            .unwrap_or_default();
+                        let mime_type = mime_from_extension(&file_name);
+
+                        // Version creation with cooldown
+                        let now_ms = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+
+                        let should_version =
+                            if let Some(ref versions) = existing_versions {
+                                if let Some(newest) = versions.first() {
+                                    now_ms.saturating_sub(newest.timestamp)
+                                        >= VERSION_COOLDOWN_MS
+                                } else {
+                                    old_file_cid
+                                        .as_ref()
+                                        .is_some_and(|c| !c.is_empty())
+                                }
+                            } else {
+                                old_file_cid
+                                    .as_ref()
+                                    .is_some_and(|c| !c.is_empty())
+                            };
+
+                        let (new_versions, pruned_cids) = if should_version {
+                            if let Some(ref old_c) = old_file_cid {
+                                if !old_c.is_empty() {
+                                    let version_entry =
+                                        crate::crypto::folder::VersionEntry {
+                                            cid: old_c.clone(),
+                                            file_key_encrypted: _old_encrypted_key
+                                                .clone(),
+                                            file_iv: _old_iv.clone(),
+                                            size: old_size,
+                                            timestamp: now_ms,
+                                            encryption_mode: old_mode.clone(),
+                                        };
+                                    let mut versions = vec![version_entry];
+                                    versions.extend(
+                                        existing_versions.unwrap_or_default(),
+                                    );
+                                    let pruned: Vec<String> =
+                                        if versions.len() > MAX_VERSIONS_PER_FILE {
+                                            versions
+                                                .split_off(MAX_VERSIONS_PER_FILE)
+                                                .into_iter()
+                                                .map(|v| v.cid)
+                                                .collect()
+                                        } else {
+                                            vec![]
+                                        };
+                                    (Some(versions), pruned)
+                                } else {
+                                    (existing_versions, vec![])
+                                }
+                            } else {
+                                (existing_versions, vec![])
+                            }
+                        } else {
+                            (existing_versions, vec![])
+                        };
+
+                        let versions_for_meta = new_versions
+                            .as_ref()
+                            .filter(|v| !v.is_empty())
+                            .cloned();
+
+                        if let Some(inode) = fs.inodes.get_mut(ino) {
+                            let cached_hex = match &inode.kind {
+                                InodeKind::File {
+                                    file_ipns_key_encrypted_hex,
+                                    ..
+                                } => file_ipns_key_encrypted_hex.clone(),
+                                _ => None,
+                            };
+                            inode.kind = InodeKind::File {
+                                cid: String::new(),
+                                encrypted_file_key: encrypted_file_key_hex.clone(),
+                                iv: iv_hex.clone(),
+                                size: file_size,
+                                encryption_mode: "GCM".to_string(),
+                                file_meta_ipns_name: file_meta_ipns_name.clone(),
+                                file_meta_resolved: true,
+                                file_ipns_private_key: file_ipns_private_key
+                                    .clone(),
+                                file_ipns_key_encrypted_hex: cached_hex,
+                                versions: versions_for_meta.clone(),
+                            };
+                            inode.attr.size = file_size;
+                            inode.attr.blocks = (file_size + 511) / 512;
+                            inode.attr.mtime = SystemTime::now();
+                        }
+
+                        fs.pending_content.insert(ino, plaintext);
+
+                        let parent_ino = fs
+                            .inodes
+                            .get(ino)
+                            .map(|i| i.parent_ino)
+                            .unwrap_or(ROOT_INO);
+
+                        let folder_key_for_file_meta =
+                            fs.get_folder_key(parent_ino);
+
+                        fs.queue_publish(parent_ino, true);
+
+                        let api = fs.api.clone();
+                        let rt = fs.rt.clone();
+                        let upload_tx = fs.upload_tx.clone();
+                        let coordinator = fs.publish_coordinator.clone();
+
+                        let file_meta =
+                            crate::crypto::folder::FileMetadata {
+                                version: "v1".to_string(),
+                                cid: String::new(),
+                                file_key_encrypted: encrypted_file_key_hex,
+                                file_iv: iv_hex,
+                                size: file_size,
+                                mime_type,
+                                encryption_mode: "GCM".to_string(),
+                                created_at: now_ms,
+                                modified_at: now_ms,
+                                versions: versions_for_meta,
+                            };
+
+                        std::thread::spawn(move || {
+                            let result = rt.block_on(async {
+                                let file_cid =
+                                    crate::api::ipfs::upload_content(
+                                        &api,
+                                        &ciphertext,
+                                    )
+                                    .await?;
+                                log::info!(
+                                    "File uploaded: ino {} -> CID {}",
+                                    ino,
+                                    file_cid
+                                );
+
+                                let _ = upload_tx.send(
+                                    crate::fuse::UploadComplete {
+                                        ino,
+                                        new_cid: file_cid.clone(),
+                                        parent_ino,
+                                        old_file_cid,
+                                        pruned_cids,
+                                    },
+                                );
+
+                                if let (
+                                    Some(ipns_key),
+                                    Some(ipns_name),
+                                    Some(folder_key),
+                                ) = (
+                                    &file_ipns_private_key,
+                                    &file_meta_ipns_name,
+                                    &folder_key_for_file_meta,
+                                ) {
+                                    let mut file_meta_with_cid = file_meta;
+                                    file_meta_with_cid.cid = file_cid;
+                                    if let Err(e) = publish_file_metadata(
+                                        &api,
+                                        &file_meta_with_cid,
+                                        folder_key,
+                                        ipns_key,
+                                        ipns_name,
+                                        &coordinator,
+                                    )
+                                    .await
+                                    {
+                                        log::warn!(
+                                            "Per-file IPNS publish failed for ino {}: {}",
+                                            ino,
+                                            e
+                                        );
+                                    }
+                                }
+
+                                Ok::<(), String>(())
+                            });
+
+                            if let Err(e) = result {
+                                log::error!(
+                                    "Background upload failed for ino {}: {}",
+                                    ino,
+                                    e
+                                );
+                            }
+                        });
+
+                        Ok(())
+                    })();
+
+                    if let Err(e) = prepare_result {
+                        log::error!(
+                            "File upload preparation failed for ino {}: {}",
+                            ino,
+                            e
+                        );
+                    }
+
+                    handle.cleanup();
                 }
             }
         }

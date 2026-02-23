@@ -460,8 +460,17 @@ mod mount_impl {
         // Set up stop signal for clean shutdown
         let stop_signal = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let _ = WINFSP_STOP.get_or_init(|| stop_signal.clone());
+        let stop_clone = stop_signal.clone();
 
-        // Start the dispatcher and spawn the event loop on a dedicated OS thread
+        // Start the dispatcher and spawn a keep-alive thread.
+        //
+        // FspFileSystemStartDispatcher starts background worker threads and
+        // returns immediately (it does NOT block). The FileSystemHost must
+        // remain alive for the mounted filesystem to keep working — dropping
+        // it calls FspFileSystemStopDispatcher + FspFileSystemRemoveMountPoint.
+        //
+        // The dedicated thread holds ownership of `host` and parks until the
+        // stop signal fires, at which point it drops the host (clean shutdown).
         let (tx, rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
 
         let handle = std::thread::Builder::new()
@@ -470,31 +479,38 @@ mod mount_impl {
                 log::info!("WinFsp filesystem starting at {}", mount_str);
                 match host.start() {
                     Ok(()) => {
-                        log::info!("WinFsp filesystem stopped cleanly");
+                        // Dispatcher threads started — filesystem is live.
+                        log::info!("WinFsp dispatcher started at {}", mount_str);
                         let _ = tx.send(Ok(()));
+
+                        // Keep host alive until stop is signaled.
+                        while !stop_clone.load(std::sync::atomic::Ordering::SeqCst) {
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                        }
+                        log::info!("WinFsp stop signal received, shutting down...");
+                        // host.stop() + host.unmount() happen in Drop
                     }
                     Err(e) => {
-                        log::error!("WinFsp error: {:?}", e);
-                        let _ = tx.send(Err(format!("WinFsp error: {:?}", e)));
+                        log::error!("WinFsp start error: {:?}", e);
+                        let _ = tx.send(Err(format!("WinFsp start error: {:?}", e)));
                     }
                 }
             })
             .map_err(|e| format!("Failed to spawn WinFsp thread: {}", e))?;
 
-        // Wait up to 2 seconds for early failure detection
-        match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+        // Wait for the start() result (should arrive almost immediately)
+        match rx.recv_timeout(std::time::Duration::from_secs(5)) {
             Ok(Ok(())) => {
-                // WinFsp stopped immediately (unusual)
-                Err("WinFsp filesystem stopped immediately after starting".to_string())
+                // Dispatcher started, mount is live
+                log::info!("WinFsp mount confirmed at {}", mount_path.display());
+                Ok(handle)
             }
             Ok(Err(e)) => {
-                // Start failed -- propagate error
+                // start() returned an error
                 Err(e)
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                // No response after 2s -- mount is running
-                log::info!("WinFsp mount confirmed at {}", mount_path.display());
-                Ok(handle)
+                Err("WinFsp dispatcher start timed out".to_string())
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 Err("WinFsp mount thread exited unexpectedly".to_string())
@@ -504,9 +520,9 @@ mod mount_impl {
 
     /// Unmount the WinFsp filesystem.
     ///
-    /// Signals the WinFsp host to stop its event loop. The FileSystemHost's
-    /// Drop implementation calls FspFileSystemStopDispatcher() which causes
-    /// the blocking host.start() in the mount thread to return.
+    /// Sets the stop signal which causes the mount keep-alive thread to exit.
+    /// When the thread exits, the FileSystemHost is dropped, which calls
+    /// FspFileSystemStopDispatcher() + FspFileSystemRemoveMountPoint().
     ///
     /// Also cleans up the temp directory and stale mount point.
     pub fn unmount_filesystem() -> Result<(), String> {
