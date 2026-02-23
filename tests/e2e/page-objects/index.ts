@@ -21,4 +21,7 @@ export {
 } from './file-browser';
 
 // Dialog page objects
-export { ConfirmDialogPage, RenameDialogPage, ShareDialogPage } from './dialogs';
+export { ConfirmDialogPage, RenameDialogPage, ShareDialogPage, InviteLinkTabPage } from './dialogs';
+
+// Pages
+export { InvitePageObject } from './pages/invite.page';
