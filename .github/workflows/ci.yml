@@ -262,7 +262,8 @@ jobs:
           restore-keys: macos-cargo-
 
       - name: Cargo check with fuse feature
-        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+        working-directory: apps/desktop/src-tauri
+        run: cargo check
 
   build-desktop-windows:
     name: Build Windows Desktop
