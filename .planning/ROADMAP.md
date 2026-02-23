@@ -49,6 +49,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 11: Windows Desktop** - Windows desktop app with WinFsp virtual filesystem (Tauri + NSIS installer)
 - [x] **Phase 11.1: macOS Desktop Catch-Up** - Close all desktop gaps from Phases 12-12.6 before cross-platform expansion (INSERTED)
 - [ ] **Phase 11.3: Linux Desktop** - Linux desktop app with libfuse FUSE mount (Tauri + AppImage/deb) (INSERTED)
+- [ ] **Phase 11.4: Cross-Platform E2E Testing** - Validate each desktop client against API/web with native Postgres + IPFS per runner (INSERTED)
 - [x] **Phase 12: Core Kit Identity Provider Foundation** - Replace PnP Modal SDK with MPC Core Kit, CipherBox as identity provider
 - [x] **Phase 12.1: AES-CTR Streaming Encryption** - AES-256-CTR for media files with byte-range decryption and in-browser playback (INSERTED)
 - [x] **Phase 12.2: Encrypted Device Registry** - Encrypted device metadata on IPFS for cross-device infrastructure (INSERTED)
@@ -93,6 +94,7 @@ See `.planning/milestones/m3/ROADMAP.md` for full M3 phase details.
 **Plans:** 3 plans
 
 Plans:
+
 - [x] 11-01-PLAN.md — Platform abstraction layer: FileAttrs struct, cross-platform inode/cache/file_handle, Cargo.toml winfsp dep, build.rs delayload
 - [x] 11-02-PLAN.md — WinFsp FileSystemContext implementation: all callbacks, Windows mount/unmount, path resolution, platform special file filter
 - [x] 11-03-PLAN.md — Platform branching (main.rs, tray, commands) + Tauri NSIS packaging with WinFsp bundling + CI Windows build job
@@ -109,6 +111,23 @@ Plans:
 2. Background sync, system tray, and keyring storage work on Linux (parity with macOS/Windows)
 3. CI builds and packages Linux desktop app (adds to existing macOS + Windows matrix)
    **Plans**: TBD
+
+### Phase 11.4: Cross-Platform E2E Testing (INSERTED)
+
+**Goal**: Validate that each desktop client (Windows, macOS, Linux) can round-trip correctly against the API and web client — proving cross-platform data integrity, encryption compatibility, and sync correctness without requiring cross-runner coordination
+**Depends on**: Phase 11 (Windows Desktop), Phase 11.1 (macOS Desktop Catch-Up), Phase 11.3 (Linux Desktop — all platform clients must exist)
+**Requirements**: E2E-01, E2E-02, E2E-03, E2E-04, E2E-05
+**Research flag**: NEEDS `/gsd:research-phase` -- Native Postgres/IPFS installation on macOS + Windows CI runners, Tauri command-level testing without full GUI, CI matrix strategy for shared test suite across 3 platforms
+**Success Criteria** (what must be TRUE):
+
+1. Each platform CI runner (Windows, macOS, Linux) can start a local backend stack (API + Postgres + IPFS) using native installs (no Docker on macOS/Windows)
+2. API/web creates test data (vault, folders, files) and desktop client reads it correctly via Tauri commands or FUSE mount
+3. Desktop client creates/modifies data and API/web verifies the changes are correctly encrypted and accessible
+4. Cross-platform crypto round-trip tests pass: content encrypted on platform A can be decrypted by platform B's crypto layer
+5. IPNS sync round-trip works: metadata published by one client is resolved correctly by another client on the same runner
+6. CI test matrix runs all 3 platforms with shared test definitions (no per-platform test duplication)
+
+**Plans**: TBD
 
 ### Phase 12: Core Kit Identity Provider Foundation
 
@@ -420,6 +439,7 @@ Parallel phases:
 
 - Phase 11 (Windows Desktop) can run in parallel with any M2 phase (depends only on Phase 9/M1).
 - Phase 11.3 (Linux Desktop) can run in parallel with any M2 phase (depends on Phase 11 for platform abstraction).
+- Phase 11.4 (Cross-Platform E2E) must follow Phase 11.3 (all three desktop platforms must exist).
 - Phase 17 (AWS Nitro TEE) can optionally execute in parallel with Phases 14-16 (depends on Phase 12).
 
 | Phase                       | Milestone | Plans Complete | Status      | Completed  |
@@ -457,6 +477,7 @@ Parallel phases:
 | 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
 | 11. Windows Desktop         | M2        | 3/3            | Complete    | 2026-02-22 |
 | 11.3 Linux Desktop          | M2        | 0/TBD          | Not started | -          |
+| 11.4 Cross-Platform E2E     | M2        | 0/TBD          | Not started | -          |
 | 17. AWS Nitro TEE           | M2        | 0/TBD          | Not started | -          |
 | 18. Billing Infrastructure  | M3        | 0/TBD          | Not started | -          |
 | 19. Team Accounts           | M3        | 0/TBD          | Not started | -          |
@@ -470,5 +491,5 @@ Milestone 1 shipped: 2026-02-11
 Milestone 2 roadmap created: 2026-02-11
 Milestone 3 roadmap created: 2026-02-11
 Total M1 phases: 17 | Total M1 plans: 72 | Depth: Comprehensive
-Total M2 phases: 9 | Total M2 plans: TBD | Depth: Comprehensive
+Total M2 phases: 10 | Total M2 plans: TBD | Depth: Comprehensive
 Total M3 phases: 4 | Total M3 plans: TBD | Depth: Comprehensive
