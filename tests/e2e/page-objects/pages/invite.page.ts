@@ -23,7 +23,7 @@ export class InvitePageObject {
    * URL format: http://localhost:5173/#/invite/TOKEN?key=KEY
    */
   async goto(token: string, ephemeralKeyHex: string): Promise<void> {
-    const baseUrl = this.page.url().split('#')[0] || 'http://localhost:5173';
+    const baseUrl = this.getBaseUrl();
     await this.page.goto(`${baseUrl}#/invite/${token}?key=${ephemeralKeyHex}`);
   }
 
@@ -31,8 +31,20 @@ export class InvitePageObject {
    * Navigate to an invite URL without the ephemeral key (invalid URL test).
    */
   async gotoInvalidUrl(token: string): Promise<void> {
-    const baseUrl = this.page.url().split('#')[0] || 'http://localhost:5173';
+    const baseUrl = this.getBaseUrl();
     await this.page.goto(`${baseUrl}#/invite/${token}`);
+  }
+
+  /**
+   * Derive the base URL from the current page, falling back to localhost:5173
+   * for fresh contexts (about:blank).
+   */
+  private getBaseUrl(): string {
+    const currentUrl = this.page.url();
+    if (!currentUrl || currentUrl === 'about:blank') {
+      return 'http://localhost:5173/';
+    }
+    return currentUrl.split('#')[0];
   }
 
   // ============================================
