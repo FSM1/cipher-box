@@ -43,3 +43,16 @@ ok can we keep going with plan 4?
 
 - `7163d5a`: test(15-04): page objects for InviteLinkTab and Inv...
 
+### Prompt 4
+
+<objective>
+Detect drift between Pencil design files (`designs/*.pen`) and CSS/TSX implementation. Report discrepancies and offer to fix them — either updating the design to match code or vice versa.
+
+Modes:
+
+- **No args:** Check files changed on current branch vs main. Interactive — asks resolution direction.
+- **`check`:** Same scope as no-args but report-only. No modifications.
+- **`PR#`:** Check files changed in a specific PR. Report-only.
+
+This skill lives outside `gsd/` to survive GSD ...
+
