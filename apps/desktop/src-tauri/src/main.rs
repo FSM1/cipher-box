@@ -23,16 +23,23 @@ fn check_winfsp_installed() -> bool {
     use winreg::enums::*;
     use winreg::RegKey;
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    match hklm.open_subkey("SOFTWARE\\WinFsp") {
-        Ok(key) => match key.get_value::<String, _>("InstallDir") {
-            Ok(dir) => {
+    // WinFsp is a 32-bit installer, so on 64-bit Windows the registry key
+    // lives under WOW6432Node. Try the native path first, then WOW6432Node.
+    let subkeys = [
+        "SOFTWARE\\WinFsp",
+        "SOFTWARE\\WOW6432Node\\WinFsp",
+    ];
+    for subkey in &subkeys {
+        if let Ok(key) = hklm.open_subkey(subkey) {
+            if let Ok(dir) = key.get_value::<String, _>("InstallDir") {
                 let dll_path = std::path::Path::new(&dir).join("bin").join("winfsp-x64.dll");
-                dll_path.exists()
+                if dll_path.exists() {
+                    return true;
+                }
             }
-            Err(_) => false,
-        },
-        Err(_) => false,
+        }
     }
+    false
 }
 
 /// CLI arguments for debug builds only.

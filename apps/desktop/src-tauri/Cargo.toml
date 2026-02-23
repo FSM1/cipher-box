@@ -9,7 +9,7 @@ fuse = ["dep:fuser", "dep:unicode-normalization"]
 winfsp = ["dep:winfsp", "dep:widestring"]
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "image-ico"] }
 tauri-plugin-deep-link = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-shell = "2"
