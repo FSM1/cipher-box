@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "a3dc9cde62c0",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-15-link-sharing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/migrations/1740400000000-AddShareInvites.ts",
+    "apps/api/src/shares/dto/claim-invite.dto.ts",
+    "apps/api/src/shares/dto/create-invite.dto.ts",
+    "apps/api/src/shares/dto/invite-response.dto.ts",
+    "apps/api/src/shares/entities/index.ts",
+    "apps/api/src/shares/entities/share-invite.entity.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a3/dc9cde62c0/0/metadata.json",
+      "transcript": "/a3/dc9cde62c0/0/full.jsonl",
+      "context": "/a3/dc9cde62c0/0/context.md",
+      "content_hash": "/a3/dc9cde62c0/0/content_hash.txt",
+      "prompt": "/a3/dc9cde62c0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 31,
+    "cache_creation_tokens": 125614,
+    "cache_read_tokens": 2579024,
+    "output_tokens": 5507,
+    "api_call_count": 22
+  }
+}
