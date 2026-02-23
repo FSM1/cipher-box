@@ -965,6 +965,7 @@ mod implementation {
                 perm: 0o644,
                 nlink: 1,
             };
+            let fuse_attr = attr.to_fuse_attr(current_uid(), current_gid());
 
             // Generate random Ed25519 IPNS keypair for this file
             let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
@@ -1043,7 +1044,7 @@ mod implementation {
             self.mutated_folders.insert(parent, std::time::Instant::now());
 
             log::debug!("create: {} in parent {} -> ino {} fh {}", name_str, parent, ino, fh);
-            reply.created(&FILE_TTL, &attr.to_fuse_attr(current_uid(), current_gid()), 0, fh, 0);
+            reply.created(&FILE_TTL, &fuse_attr, 0, fh, 0);
         }
 
         /// Open a file for reading or writing.
@@ -1839,7 +1840,7 @@ mod implementation {
 
             log::debug!("mkdir: {} in parent {}", name_str, parent);
 
-            let result = (|| -> Result<FileAttr, String> {
+            let result = (|| -> Result<fuser::FileAttr, String> {
                 // Generate new folder key (32 random bytes)
                 let folder_key = crate::crypto::utils::generate_file_key();
 
@@ -1876,6 +1877,7 @@ mod implementation {
                     perm: 0o755,
                     nlink: 2,
                 };
+                let fuse_attr = attr.to_fuse_attr(current_uid(), current_gid());
 
                 let inode = InodeData {
                     ino,
@@ -2025,12 +2027,12 @@ mod implementation {
                     }
                 });
 
-                Ok(attr)
+                Ok(fuse_attr)
             })();
 
             match result {
-                Ok(attr) => {
-                    reply.entry(&DIR_TTL, &attr.to_fuse_attr(current_uid(), current_gid()), 0);
+                Ok(fuse_attr) => {
+                    reply.entry(&DIR_TTL, &fuse_attr, 0);
                 }
                 Err(e) => {
                     log::error!("mkdir failed: {}", e);

@@ -4,8 +4,12 @@
 //! `invoke()` API. They handle authentication, vault key decryption,
 //! Keychain storage, and logout.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tauri::{Manager, State};
+
+/// Counter for unique OAuth popup window labels (shared with tray handler).
+static POPUP_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 use zeroize::Zeroizing;
 
@@ -525,6 +529,36 @@ pub async fn handle_test_login_complete(
         true, // skip Keychain — test-login re-authenticates each time
     )
     .await
+}
+
+/// Open an OAuth popup window directly from Rust.
+///
+/// Bypasses `window.open()` which is unreliable on Windows WebView2 (the
+/// `NewWindowRequested` event / `on_new_window` handler may silently fail).
+/// Instead, the webview calls this command via `invoke()` to create a new
+/// Tauri webview window pointing directly at the OAuth URL.
+#[tauri::command]
+pub async fn open_oauth_popup(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    let n = POPUP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let label = format!("oauth-popup-{}", n);
+    log::info!("Creating OAuth popup window: {} -> {}", label, url);
+
+    let parsed_url: tauri::Url = url
+        .parse()
+        .map_err(|e| format!("Invalid OAuth URL: {}", e))?;
+
+    tauri::WebviewWindowBuilder::new(
+        &app,
+        &label,
+        tauri::WebviewUrl::External(parsed_url),
+    )
+    .title("Sign in with Google")
+    .inner_size(500.0, 700.0)
+    .center()
+    .build()
+    .map_err(|e| format!("Failed to create OAuth popup: {}", e))?;
+
+    Ok(())
 }
 
 /// Logout: invalidate session, clear Keychain, zero all sensitive keys.
