@@ -253,11 +253,7 @@ export async function claimInvite(
       encryptedKey: string;
     }> = [];
 
-    const rawChildKeys = inviteData.encryptedChildKeys as Array<{
-      keyType: 'file' | 'folder';
-      itemId: string;
-      encryptedKey: string;
-    }> | null;
+    const rawChildKeys = inviteData.encryptedChildKeys;
 
     if (rawChildKeys && rawChildKeys.length > 0) {
       for (const ck of rawChildKeys) {
@@ -276,10 +272,10 @@ export async function claimInvite(
     }
 
     // POST claim with re-wrapped keys
-    const result = (await invitesControllerClaimInvite(token, {
+    const result = await invitesControllerClaimInvite(token, {
       encryptedKey: reWrappedKey,
       childKeys,
-    })) as unknown as { shareId: string };
+    });
 
     return { shareId: result.shareId };
   } finally {

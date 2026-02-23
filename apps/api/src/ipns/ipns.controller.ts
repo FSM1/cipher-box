@@ -21,12 +21,7 @@ import {
   ResolveIpnsResponseDto,
 } from './dto';
 import { MetricsService } from '../metrics/metrics.service';
-
-interface RequestWithUser extends Request {
-  user: {
-    id: string;
-  };
-}
+import { RequestWithUser } from '../common/types';
 
 @ApiTags('IPNS')
 @ApiBearerAuth()

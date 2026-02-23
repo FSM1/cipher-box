@@ -64,6 +64,21 @@ export function InvitePage() {
 
   // Track whether we've started claiming to prevent double-claim
   const claimingRef = useRef(false);
+  const redirectTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  // Strip the ephemeral key from the address bar immediately after reading it
+  useEffect(() => {
+    if (token && ephemeralKeyRef.current) {
+      navigate(`/invite/${token}`, { replace: true });
+    }
+  }, []);
+
+  // Clean up redirect timer on unmount
+  useEffect(() => {
+    return () => {
+      if (redirectTimerRef.current) clearTimeout(redirectTimerRef.current);
+    };
+  }, []);
 
   // Validate URL params and check invite status on mount
   useEffect(() => {
@@ -75,16 +90,26 @@ export function InvitePage() {
 
     let cancelled = false;
 
-    checkInviteStatus(token).then((status) => {
-      if (cancelled) return;
+    checkInviteStatus(token)
+      .then((status) => {
+        if (cancelled) return;
 
-      if (status === 'active') {
-        setPageState('valid');
-      } else {
-        setErrorReason(status as ErrorReason);
+        if (status === 'active') {
+          setPageState('valid');
+        } else {
+          const reason: ErrorReason =
+            status === 'expired' || status === 'claimed' || status === 'revoked'
+              ? status
+              : 'invalid';
+          setErrorReason(reason);
+          setPageState('error');
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setErrorReason('invalid');
         setPageState('error');
-      }
-    });
+      });
 
     return () => {
       cancelled = true;
@@ -107,7 +132,7 @@ export function InvitePage() {
         // Zero the ephemeral key
         ephemeralKeyRef.current = null;
         // Navigate to shared after brief delay
-        setTimeout(() => {
+        redirectTimerRef.current = setTimeout(() => {
           navigate('/shared', { replace: true });
         }, 500);
       })

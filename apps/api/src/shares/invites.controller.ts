@@ -13,13 +13,12 @@ import { ThrottlerGuard } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SharesService } from './shares.service';
 import { ClaimInviteDto } from './dto/claim-invite.dto';
-import { InviteStatusResponseDto, InviteDataResponseDto } from './dto/invite-response.dto';
-
-interface RequestWithUser extends Request {
-  user: {
-    id: string;
-  };
-}
+import {
+  InviteStatusResponseDto,
+  InviteDataResponseDto,
+  ClaimInviteResponseDto,
+} from './dto/invite-response.dto';
+import { RequestWithUser } from '../common/types';
 
 /**
  * Public-facing invite controller at /invites prefix.
@@ -118,7 +117,11 @@ export class InvitesController {
       'Creates Share and ShareKey records. Single-claim enforced atomically.',
   })
   @ApiParam({ name: 'token', description: 'Invite token (URL-safe base64)' })
-  @ApiResponse({ status: 201, description: 'Invite claimed successfully' })
+  @ApiResponse({
+    status: 201,
+    description: 'Invite claimed successfully',
+    type: ClaimInviteResponseDto,
+  })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 404, description: 'Invite not found or expired' })
   @ApiResponse({ status: 409, description: 'Invite already claimed or self-claim' })

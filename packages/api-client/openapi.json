@@ -1611,7 +1611,14 @@
         },
         "responses": {
           "201": {
-            "description": "Invite claimed successfully"
+            "description": "Invite claimed successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimInviteResponseDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized"
@@ -2856,6 +2863,25 @@
         },
         "required": ["status"]
       },
+      "InviteChildKeyDto": {
+        "type": "object",
+        "properties": {
+          "keyType": {
+            "type": "string",
+            "description": "Type of key: file or folder",
+            "enum": ["file", "folder"]
+          },
+          "itemId": {
+            "type": "string",
+            "description": "UUID of the file or subfolder"
+          },
+          "encryptedKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of the key wrapped with ephemeral public key"
+          }
+        },
+        "required": ["keyType", "itemId", "encryptedKey"]
+      },
       "InviteDataResponseDto": {
         "type": "object",
         "properties": {
@@ -2869,9 +2895,12 @@
             "description": "Hex-encoded item key wrapped with ephemeral public key"
           },
           "encryptedChildKeys": {
-            "type": "object",
             "description": "Array of child keys wrapped with ephemeral public key, or null",
-            "nullable": true
+            "nullable": true,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InviteChildKeyDto"
+            }
           },
           "itemType": {
             "type": "string",
@@ -2931,24 +2960,15 @@
         },
         "required": ["encryptedKey"]
       },
-      "InviteChildKeyDto": {
+      "ClaimInviteResponseDto": {
         "type": "object",
         "properties": {
-          "keyType": {
+          "shareId": {
             "type": "string",
-            "description": "Type of key: file or folder",
-            "enum": ["file", "folder"]
-          },
-          "itemId": {
-            "type": "string",
-            "description": "UUID of the file or subfolder"
-          },
-          "encryptedKey": {
-            "type": "string",
-            "description": "Hex-encoded ECIES ciphertext of the key wrapped with ephemeral public key"
+            "description": "UUID of the created share"
           }
         },
-        "required": ["keyType", "itemId", "encryptedKey"]
+        "required": ["shareId"]
       },
       "CreateInviteDto": {
         "type": "object",

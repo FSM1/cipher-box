@@ -6,7 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { InviteDataResponseDtoStatus } from './inviteDataResponseDtoStatus';
-import type { InviteDataResponseDtoEncryptedChildKeys } from './inviteDataResponseDtoEncryptedChildKeys';
+import type { InviteChildKeyDto } from './inviteChildKeyDto';
 import type { InviteDataResponseDtoItemType } from './inviteDataResponseDtoItemType';
 
 export interface InviteDataResponseDto {
@@ -18,7 +18,7 @@ export interface InviteDataResponseDto {
    * Array of child keys wrapped with ephemeral public key, or null
    * @nullable
    */
-  encryptedChildKeys: InviteDataResponseDtoEncryptedChildKeys;
+  encryptedChildKeys: InviteChildKeyDto[] | null;
   itemType: InviteDataResponseDtoItemType;
   /** IPNS name of the shared item */
   ipnsName: string;

@@ -32,7 +32,9 @@ export class AddShareInvites1740400000000 implements MigrationInterface {
         CONSTRAINT "PK_share_invites" PRIMARY KEY ("id"),
         CONSTRAINT "UQ_share_invites_token" UNIQUE ("token"),
         CONSTRAINT "FK_share_invites_sharer" FOREIGN KEY ("sharer_id")
-          REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE NO ACTION
+          REFERENCES "users" ("id") ON DELETE CASCADE ON UPDATE NO ACTION,
+        CONSTRAINT "FK_share_invites_claimed_by" FOREIGN KEY ("claimed_by")
+          REFERENCES "users" ("id") ON DELETE SET NULL ON UPDATE NO ACTION
       )
     `);
 

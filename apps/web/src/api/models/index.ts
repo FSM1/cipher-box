@@ -16,6 +16,7 @@ export * from './childKeyDtoKeyType';
 export * from './claimChildKeyDto';
 export * from './claimChildKeyDtoKeyType';
 export * from './claimInviteDto';
+export * from './claimInviteResponseDto';
 export * from './createApprovalDto';
 export * from './createInviteDto';
 export * from './createInviteDtoItemType';

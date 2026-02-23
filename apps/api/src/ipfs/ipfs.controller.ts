@@ -15,7 +15,7 @@ import {
   Request,
   PayloadTooLargeException,
 } from '@nestjs/common';
-import { Response, Request as ExpressRequest } from 'express';
+import { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiTags,
@@ -30,12 +30,9 @@ import { IPFS_PROVIDER, IpfsProvider } from './providers';
 import { UploadResponseDto, UnpinDto, UnpinResponseDto } from './dto';
 import { VaultService } from '../vault/vault.service';
 import { MetricsService } from '../metrics/metrics.service';
+import { RequestWithUser } from '../common/types';
 
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
-
-interface RequestWithUser extends ExpressRequest {
-  user: { id: string };
-}
 
 @ApiTags('IPFS')
 @ApiBearerAuth()

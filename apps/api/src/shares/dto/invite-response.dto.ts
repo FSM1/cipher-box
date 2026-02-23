@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { InviteChildKeyDto } from './create-invite.dto';
 
 /**
  * Response for creating or listing invites (sharer's view).
@@ -59,6 +60,7 @@ export class InviteDataResponseDto {
 
   @ApiProperty({
     description: 'Array of child keys wrapped with ephemeral public key, or null',
+    type: [InviteChildKeyDto],
     nullable: true,
   })
   encryptedChildKeys!: Array<{
@@ -75,4 +77,12 @@ export class InviteDataResponseDto {
 
   @ApiProperty({ description: 'Display name of the shared item' })
   itemName!: string;
+}
+
+/**
+ * Response for the claim invite endpoint.
+ */
+export class ClaimInviteResponseDto {
+  @ApiProperty({ description: 'UUID of the created share' })
+  shareId!: string;
 }

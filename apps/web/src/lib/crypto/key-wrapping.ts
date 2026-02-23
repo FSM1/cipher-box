@@ -71,21 +71,21 @@ export async function collectChildKeys(
     } else {
       const folder = child as FolderEntry;
       // Re-wrap the subfolder's folderKey for the target
-      const folderKeyRewrapped = await reWrapEncryptedKey(
-        folder.folderKeyEncrypted,
-        ownerPrivateKey,
-        targetPubKeyBytes
-      );
-      childKeys.push({
-        keyType: 'folder' as ChildKeyDto['keyType'],
-        itemId: folder.id,
-        encryptedKey: folderKeyRewrapped,
-      });
-      wrapped++;
-      onProgress(wrapped);
-
-      // Recurse into subfolder: resolve its metadata and collect its children
       try {
+        const folderKeyRewrapped = await reWrapEncryptedKey(
+          folder.folderKeyEncrypted,
+          ownerPrivateKey,
+          targetPubKeyBytes
+        );
+        childKeys.push({
+          keyType: 'folder' as ChildKeyDto['keyType'],
+          itemId: folder.id,
+          encryptedKey: folderKeyRewrapped,
+        });
+        wrapped++;
+        onProgress(wrapped);
+
+        // Recurse into subfolder: resolve its metadata and collect its children
         const resolved = await resolveIpnsRecord(folder.ipnsName);
         if (resolved) {
           const folderKeyBytes = await unwrapKey(
@@ -114,7 +114,7 @@ export async function collectChildKeys(
           }
         }
       } catch (err) {
-        console.error(`Failed to traverse subfolder ${folder.name}:`, err);
+        console.error(`Failed to re-wrap folder key for ${folder.name}:`, err);
         // Continue with other children
       }
     }

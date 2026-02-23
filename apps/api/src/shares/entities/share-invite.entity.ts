@@ -14,7 +14,7 @@ export class ShareInvite {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
 
-  @Column({ type: 'varchar', length: 44, name: 'token' })
+  @Column({ type: 'varchar', length: 44, name: 'token', unique: true })
   token!: string;
 
   @Index()

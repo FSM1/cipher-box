@@ -81,20 +81,29 @@ export function InviteLinkTab({
       });
 
       // Auto-copy URL to clipboard
+      let copied = false;
       try {
         await navigator.clipboard.writeText(url);
+        copied = true;
       } catch {
         // Clipboard may not be available (e.g., insecure context)
-        // URL is still created successfully
       }
 
       // Truncate URL for display
       const displayUrl = url.length > 60 ? `${url.slice(0, 30)}...${url.slice(-20)}` : url;
-      setSuccess(`link copied to clipboard: ${displayUrl}`);
+      setSuccess(
+        copied
+          ? `link copied to clipboard: ${displayUrl}`
+          : `link created (copy failed -- save this): ${displayUrl}`
+      );
 
-      // Refresh invite list
-      const updatedInvites = await fetchInvitesForItem(ipnsName);
-      setInvites(updatedInvites);
+      // Refresh invite list (don't overwrite success on failure)
+      try {
+        const updatedInvites = await fetchInvitesForItem(ipnsName);
+        setInvites(updatedInvites);
+      } catch {
+        // List refresh failed, but invite was created successfully
+      }
     } catch (err) {
       console.error('Failed to create invite link:', err);
       const message = err instanceof Error ? err.message : 'failed to create invite link';

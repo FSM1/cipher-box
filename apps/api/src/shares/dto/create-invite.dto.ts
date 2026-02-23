@@ -11,7 +11,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
-class InviteChildKeyDto {
+export class InviteChildKeyDto {
   @ApiProperty({
     description: 'Type of key: file or folder',
     enum: ['file', 'folder'],

@@ -21,7 +21,12 @@ import type {
   UseQueryResult,
 } from '@tanstack/react-query';
 
-import type { ClaimInviteDto, InviteDataResponseDto, InviteStatusResponseDto } from '../models';
+import type {
+  ClaimInviteDto,
+  ClaimInviteResponseDto,
+  InviteDataResponseDto,
+  InviteStatusResponseDto,
+} from '../models';
 
 import { customInstance } from '../custom-instance';
 
@@ -286,7 +291,7 @@ export const invitesControllerClaimInvite = (
   claimInviteDto: ClaimInviteDto,
   signal?: AbortSignal
 ) => {
-  return customInstance<void>({
+  return customInstance<ClaimInviteResponseDto>({
     url: `/invites/${token}/claim`,
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

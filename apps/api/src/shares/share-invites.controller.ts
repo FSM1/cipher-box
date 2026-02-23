@@ -18,12 +18,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SharesService } from './shares.service';
 import { CreateInviteDto } from './dto/create-invite.dto';
 import { InviteResponseDto } from './dto/invite-response.dto';
-
-interface RequestWithUser extends Request {
-  user: {
-    id: string;
-  };
-}
+import { RequestWithUser } from '../common/types';
 
 /**
  * Authenticated invite management controller at /shares/invites prefix.
