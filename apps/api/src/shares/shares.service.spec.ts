@@ -27,8 +27,10 @@ describe('SharesService', () => {
   let mockShareInviteRepo: {
     findOne: jest.Mock;
     find: jest.Mock;
+    create: jest.Mock;
     save: jest.Mock;
     remove: jest.Mock;
+    createQueryBuilder: jest.Mock;
   };
   let mockUserRepo: {
     findOne: jest.Mock;
@@ -86,8 +88,10 @@ describe('SharesService', () => {
     mockShareInviteRepo = {
       findOne: jest.fn(),
       find: jest.fn(),
+      create: jest.fn().mockImplementation((data) => data),
       save: jest.fn(),
       remove: jest.fn(),
+      createQueryBuilder: jest.fn(),
     };
     mockUserRepo = {
       findOne: jest.fn(),
@@ -594,6 +598,414 @@ describe('SharesService', () => {
       await expect(
         service.updateShareEncryptedKey(shareId, recipientId, 'ff'.repeat(64))
       ).rejects.toThrow('Only the sharer can update share keys');
+    });
+  });
+
+  // ──────────────────────────────────────────────────────
+  // Invite link methods (Phase 15)
+  // ──────────────────────────────────────────────────────
+
+  describe('createInvite', () => {
+    const createInviteDto = {
+      itemType: 'folder' as const,
+      ipnsName: testIpnsName,
+      itemName: 'My Folder',
+      encryptedKey: testEncryptedKey,
+    };
+
+    it('should create and save an invite entity', async () => {
+      const savedInvite = {
+        id: 'inv-1',
+        token: 'random-token',
+        sharerId,
+        itemType: 'folder',
+        ipnsName: testIpnsName,
+        itemName: 'My Folder',
+        encryptedKey: Buffer.from(testEncryptedKey, 'hex'),
+        encryptedChildKeys: null,
+        status: 'active',
+        maxClaims: 1,
+        claimCount: 0,
+        expiresAt: new Date(),
+        createdAt: new Date(),
+      };
+      mockShareInviteRepo.save.mockResolvedValue(savedInvite);
+
+      const result = await service.createInvite(sharerId, createInviteDto);
+
+      expect(result).toEqual(savedInvite);
+      expect(mockShareInviteRepo.save).toHaveBeenCalledTimes(1);
+    });
+
+    it('should store encryptedKey as Buffer from hex', async () => {
+      mockShareInviteRepo.save.mockImplementation((entity: any) => Promise.resolve(entity));
+
+      await service.createInvite(sharerId, createInviteDto);
+
+      // The service calls inviteRepo.create then inviteRepo.save
+      // We verify via the save call that the entity has a Buffer encryptedKey
+      const saveCall = mockShareInviteRepo.save.mock.calls[0][0];
+      expect(Buffer.isBuffer(saveCall.encryptedKey)).toBe(true);
+      expect(saveCall.encryptedKey.toString('hex')).toBe(testEncryptedKey);
+    });
+
+    it('should pass encryptedChildKeys from dto', async () => {
+      const dtoWithChildren = {
+        ...createInviteDto,
+        encryptedChildKeys: [
+          { keyType: 'file' as const, itemId: 'f1', encryptedKey: 'dd'.repeat(32) },
+        ],
+      };
+      mockShareInviteRepo.save.mockImplementation((entity: any) => Promise.resolve(entity));
+
+      await service.createInvite(sharerId, dtoWithChildren);
+
+      const saveCall = mockShareInviteRepo.save.mock.calls[0][0];
+      expect(saveCall.encryptedChildKeys).toEqual(dtoWithChildren.encryptedChildKeys);
+    });
+
+    it('should set encryptedChildKeys to null when not provided', async () => {
+      mockShareInviteRepo.save.mockImplementation((entity: any) => Promise.resolve(entity));
+
+      await service.createInvite(sharerId, createInviteDto);
+
+      const saveCall = mockShareInviteRepo.save.mock.calls[0][0];
+      expect(saveCall.encryptedChildKeys).toBeNull();
+    });
+  });
+
+  describe('getInviteStatus', () => {
+    it('should return status when invite exists and is active', async () => {
+      const invite = {
+        status: 'active',
+        expiresAt: new Date(Date.now() + 3600_000), // 1 hour from now
+      };
+      mockShareInviteRepo.findOne.mockResolvedValue(invite);
+
+      const result = await service.getInviteStatus('test-token');
+
+      expect(result).toEqual({ status: 'active' });
+    });
+
+    it('should return null when invite not found', async () => {
+      mockShareInviteRepo.findOne.mockResolvedValue(null);
+
+      const result = await service.getInviteStatus('nonexistent-token');
+
+      expect(result).toBeNull();
+    });
+
+    it('should auto-expire and remove invite past TTL', async () => {
+      const invite = {
+        status: 'active',
+        expiresAt: new Date(Date.now() - 1000), // expired 1 second ago
+      };
+      mockShareInviteRepo.findOne.mockResolvedValue(invite);
+      mockShareInviteRepo.remove.mockResolvedValue(invite);
+
+      const result = await service.getInviteStatus('expired-token');
+
+      expect(result).toBeNull();
+      expect(mockShareInviteRepo.remove).toHaveBeenCalledWith(invite);
+    });
+
+    it('should return claimed status without auto-expiring', async () => {
+      const invite = {
+        status: 'claimed',
+        expiresAt: new Date(Date.now() - 1000), // past expiry but already claimed
+      };
+      mockShareInviteRepo.findOne.mockResolvedValue(invite);
+
+      const result = await service.getInviteStatus('claimed-token');
+
+      expect(result).toEqual({ status: 'claimed' });
+      expect(mockShareInviteRepo.remove).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getInviteForClaim', () => {
+    it('should return active invite when valid', async () => {
+      const invite = {
+        id: 'inv-1',
+        status: 'active',
+        expiresAt: new Date(Date.now() + 3600_000),
+      };
+      mockShareInviteRepo.findOne.mockResolvedValue(invite);
+
+      const result = await service.getInviteForClaim('test-token');
+
+      expect(result).toEqual(invite);
+    });
+
+    it('should return null when invite not found', async () => {
+      mockShareInviteRepo.findOne.mockResolvedValue(null);
+
+      const result = await service.getInviteForClaim('nonexistent-token');
+
+      expect(result).toBeNull();
+    });
+
+    it('should auto-expire and return null for expired invite', async () => {
+      const invite = {
+        status: 'active',
+        expiresAt: new Date(Date.now() - 1000),
+      };
+      mockShareInviteRepo.findOne.mockResolvedValue(invite);
+      mockShareInviteRepo.remove.mockResolvedValue(invite);
+
+      const result = await service.getInviteForClaim('expired-token');
+
+      expect(result).toBeNull();
+      expect(mockShareInviteRepo.remove).toHaveBeenCalledWith(invite);
+    });
+
+    it('should return null for non-active invite (claimed)', async () => {
+      const invite = {
+        status: 'claimed',
+        expiresAt: new Date(Date.now() + 3600_000),
+      };
+      mockShareInviteRepo.findOne.mockResolvedValue(invite);
+
+      const result = await service.getInviteForClaim('claimed-token');
+
+      expect(result).toBeNull();
+    });
+
+    it('should return null for revoked invite', async () => {
+      const invite = {
+        status: 'revoked',
+        expiresAt: new Date(Date.now() + 3600_000),
+      };
+      mockShareInviteRepo.findOne.mockResolvedValue(invite);
+
+      const result = await service.getInviteForClaim('revoked-token');
+
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('claimInvite', () => {
+    const claimDto = {
+      encryptedKey: 'ff'.repeat(64),
+      childKeys: [{ keyType: 'file' as const, itemId: 'f1', encryptedKey: 'ee'.repeat(32) }],
+    };
+
+    const invite = {
+      id: 'inv-1',
+      token: 'claim-token',
+      sharerId,
+      itemType: 'folder',
+      ipnsName: testIpnsName,
+      itemName: 'My Folder',
+      encryptedKey: Buffer.from(testEncryptedKey, 'hex'),
+      status: 'active',
+    };
+
+    it('should create share and share keys, return shareId', async () => {
+      const newShareId = '990e8400-e29b-41d4-a716-446655440005';
+      mockShareInviteRepo.findOne.mockResolvedValue(invite);
+      // Atomic update succeeds
+      mockShareInviteRepo.save.mockResolvedValue({});
+      // No existing active share
+      mockShareRepo.findOne.mockResolvedValue(null);
+      // No revoked shares
+      mockShareRepo.find.mockResolvedValue([]);
+      // Create share
+      mockShareRepo.create.mockReturnValue({ id: newShareId });
+      mockShareRepo.save.mockResolvedValue({ id: newShareId });
+      // Create share keys
+      mockShareKeyRepo.create.mockImplementation((data) => data);
+      mockShareKeyRepo.save.mockResolvedValue([]);
+
+      // Mock the createQueryBuilder chain for the atomic UPDATE
+      const mockQb = {
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 1 }),
+      };
+      (mockShareInviteRepo as any).createQueryBuilder = jest.fn().mockReturnValue(mockQb);
+
+      const result = await service.claimInvite('claim-token', recipientId, claimDto);
+
+      expect(result).toEqual({ shareId: newShareId });
+      expect(mockShareRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sharerId,
+          recipientId,
+          itemType: 'folder',
+          ipnsName: testIpnsName,
+        })
+      );
+      expect(mockShareKeyRepo.create).toHaveBeenCalledTimes(1);
+      expect(mockShareKeyRepo.save).toHaveBeenCalled();
+    });
+
+    it('should throw ConflictException for self-claim', async () => {
+      mockShareInviteRepo.findOne.mockResolvedValue(invite);
+
+      await expect(service.claimInvite('claim-token', sharerId, claimDto)).rejects.toThrow(
+        ConflictException
+      );
+      await expect(service.claimInvite('claim-token', sharerId, claimDto)).rejects.toThrow(
+        'Cannot claim your own invite'
+      );
+    });
+
+    it('should throw NotFoundException when invite not found', async () => {
+      mockShareInviteRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.claimInvite('nonexistent', recipientId, claimDto)).rejects.toThrow(
+        NotFoundException
+      );
+      await expect(service.claimInvite('nonexistent', recipientId, claimDto)).rejects.toThrow(
+        'Invite not found or expired'
+      );
+    });
+
+    it('should throw ConflictException when atomic update fails (already claimed)', async () => {
+      mockShareInviteRepo.findOne.mockResolvedValue(invite);
+
+      const mockQb = {
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 0 }),
+      };
+      (mockShareInviteRepo as any).createQueryBuilder = jest.fn().mockReturnValue(mockQb);
+
+      await expect(service.claimInvite('claim-token', recipientId, claimDto)).rejects.toThrow(
+        ConflictException
+      );
+      await expect(service.claimInvite('claim-token', recipientId, claimDto)).rejects.toThrow(
+        'Invite already claimed, expired, or revoked'
+      );
+    });
+
+    it('should return existing shareId when share already exists', async () => {
+      const existingShareId = '880e8400-e29b-41d4-a716-446655440004';
+      mockShareInviteRepo.findOne.mockResolvedValue(invite);
+
+      const mockQb = {
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockResolvedValue({ affected: 1 }),
+      };
+      (mockShareInviteRepo as any).createQueryBuilder = jest.fn().mockReturnValue(mockQb);
+
+      // Existing active share found
+      mockShareRepo.findOne.mockResolvedValue({ id: existingShareId });
+
+      const result = await service.claimInvite('claim-token', recipientId, claimDto);
+
+      expect(result).toEqual({ shareId: existingShareId });
+      // Should NOT create new share
+      expect(mockShareRepo.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('getInvitesForItem', () => {
+    it('should return active non-expired invites', async () => {
+      const activeInvite = {
+        id: 'inv-1',
+        token: 'token-1',
+        status: 'active',
+        expiresAt: new Date(Date.now() + 3600_000),
+      };
+      mockShareInviteRepo.find.mockResolvedValue([activeInvite]);
+
+      const result = await service.getInvitesForItem(sharerId, testIpnsName);
+
+      expect(result).toEqual([activeInvite]);
+      expect(mockShareInviteRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            sharerId,
+            ipnsName: testIpnsName,
+            status: 'active',
+          },
+          order: { createdAt: 'DESC' },
+        })
+      );
+    });
+
+    it('should auto-clean expired invites and return only active ones', async () => {
+      const activeInvite = {
+        id: 'inv-1',
+        status: 'active',
+        expiresAt: new Date(Date.now() + 3600_000),
+      };
+      const expiredInvite = {
+        id: 'inv-2',
+        status: 'active',
+        expiresAt: new Date(Date.now() - 1000),
+      };
+      mockShareInviteRepo.find.mockResolvedValue([activeInvite, expiredInvite]);
+      mockShareInviteRepo.remove.mockResolvedValue([expiredInvite]);
+
+      const result = await service.getInvitesForItem(sharerId, testIpnsName);
+
+      expect(result).toEqual([activeInvite]);
+      expect(mockShareInviteRepo.remove).toHaveBeenCalledWith([expiredInvite]);
+    });
+
+    it('should return empty array when no invites exist', async () => {
+      mockShareInviteRepo.find.mockResolvedValue([]);
+
+      const result = await service.getInvitesForItem(sharerId, testIpnsName);
+
+      expect(result).toEqual([]);
+    });
+
+    it('should not call remove when no expired invites', async () => {
+      const activeInvite = {
+        id: 'inv-1',
+        status: 'active',
+        expiresAt: new Date(Date.now() + 3600_000),
+      };
+      mockShareInviteRepo.find.mockResolvedValue([activeInvite]);
+
+      await service.getInvitesForItem(sharerId, testIpnsName);
+
+      expect(mockShareInviteRepo.remove).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('revokeInvite', () => {
+    it('should set status to revoked', async () => {
+      const invite = { id: 'inv-1', sharerId, status: 'active' };
+      mockShareInviteRepo.findOne.mockResolvedValue(invite);
+      mockShareInviteRepo.save.mockResolvedValue({});
+
+      await service.revokeInvite('inv-1', sharerId);
+
+      const saved = mockShareInviteRepo.save.mock.calls[0][0];
+      expect(saved.status).toBe('revoked');
+    });
+
+    it('should throw NotFoundException when invite not found', async () => {
+      mockShareInviteRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.revokeInvite('nonexistent', sharerId)).rejects.toThrow(
+        NotFoundException
+      );
+      await expect(service.revokeInvite('nonexistent', sharerId)).rejects.toThrow(
+        'Invite not found'
+      );
+    });
+
+    it('should throw ForbiddenException when user is not sharer', async () => {
+      const invite = { id: 'inv-1', sharerId, status: 'active' };
+      mockShareInviteRepo.findOne.mockResolvedValue(invite);
+
+      await expect(service.revokeInvite('inv-1', recipientId)).rejects.toThrow(ForbiddenException);
+      await expect(service.revokeInvite('inv-1', recipientId)).rejects.toThrow(
+        'Only the sharer can revoke an invite'
+      );
     });
   });
 });
