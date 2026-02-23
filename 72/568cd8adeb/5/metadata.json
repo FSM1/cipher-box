@@ -1,0 +1,46 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "72568cd8adeb",
+  "session_id": "f74c4715-3047-403a-a55f-d5d70614c624",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-23T22:57:20.123915Z",
+  "branch": "feat/phase-15-link-sharing",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/common/types.ts",
+    "apps/api/src/device-approval/device-approval.controller.ts",
+    "apps/api/src/ipfs/ipfs.controller.ts",
+    "apps/api/src/ipns/ipns.controller.ts",
+    "apps/api/src/migrations/1740400000000-AddShareInvites.ts",
+    "apps/api/src/shares/dto/create-invite.dto.ts",
+    "apps/api/src/shares/dto/invite-response.dto.ts",
+    "apps/api/src/shares/entities/share-invite.entity.ts",
+    "apps/api/src/shares/invites.controller.ts",
+    "apps/api/src/shares/share-invites.controller.ts",
+    "apps/api/src/shares/shares.controller.ts",
+    "apps/api/src/vault/vault.controller.ts",
+    "apps/web/src/components/file-browser/InviteLinkTab.tsx",
+    "apps/web/src/lib/crypto/key-wrapping.ts",
+    "apps/web/src/routes/InvitePage.tsx",
+    "apps/web/src/services/invite.service.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "47e1a8cff0a5",
+  "token_usage": {
+    "input_tokens": 45,
+    "cache_creation_tokens": 90979,
+    "cache_read_tokens": 3821080,
+    "output_tokens": 4526,
+    "api_call_count": 41
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-23T22:57:19.531363Z",
+    "agent_lines": 108,
+    "human_added": 58,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 166,
+    "agent_percentage": 65.06024096385542
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/f74c4715-3047-403a-a55f-d5d70614c624.jsonl"
+}

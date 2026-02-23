@@ -1,0 +1,8 @@
+# Session Context
+
+## User Prompts
+
+### Prompt 1
+
+lots of things to be addressed in that pr based on feedback from coderabbit. please address any comments you feel are valid, and comment and resolve all the threads.
+
