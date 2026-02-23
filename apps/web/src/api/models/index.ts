@@ -45,7 +45,6 @@ export * from './initVaultDto';
 export * from './inviteChildKeyDto';
 export * from './inviteChildKeyDtoKeyType';
 export * from './inviteDataResponseDto';
-export * from './inviteDataResponseDtoEncryptedChildKeys';
 export * from './inviteDataResponseDtoItemType';
 export * from './inviteDataResponseDtoStatus';
 export * from './inviteResponseDto';
