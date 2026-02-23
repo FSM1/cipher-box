@@ -22,6 +22,7 @@ import { fetchFromIpfs } from '../../lib/api/ipfs';
 import type { CreateShareDtoItemType } from '../../api/models/createShareDtoItemType';
 import type { ChildKeyDto } from '../../api/models/childKeyDto';
 import { useShareStore } from '../../stores/share.store';
+import { collectChildKeys, reWrapEncryptedKey } from '../../lib/crypto/key-wrapping';
 import '../../styles/share-dialog.css';
 
 type ShareDialogProps = {
@@ -61,121 +62,6 @@ function truncateKey(key: string): string {
   if (key.length < 12) return key;
   const hex = key.startsWith('0x') ? key.slice(2) : key;
   return `0x${hex.slice(0, 4)}...${hex.slice(-4)}`;
-}
-
-/**
- * Collect all descendant keys from a folder for sharing.
- * Traverses subfolders depth-first, re-wrapping each file and subfolder key
- * for the recipient.
- *
- * @param children - Children of the current folder
- * @param folderKey - Decrypted AES key of the current folder (for resolving file metadata)
- * @param ownerPrivateKey - Owner's secp256k1 private key for unwrapping ECIES keys
- * @param recipientPubKeyBytes - Recipient's uncompressed secp256k1 public key
- * @param onProgress - Callback for progress tracking
- */
-async function collectChildKeys(
-  children: FolderChild[],
-  folderKey: Uint8Array,
-  ownerPrivateKey: Uint8Array,
-  recipientPubKeyBytes: Uint8Array,
-  onProgress: (wrapped: number) => void
-): Promise<ChildKeyDto[]> {
-  const childKeys: ChildKeyDto[] = [];
-  let wrapped = 0;
-
-  for (const child of children) {
-    if (child.type === 'file') {
-      const fp = child as FilePointer;
-      // Resolve file metadata to get fileKeyEncrypted, then re-wrap for recipient
-      try {
-        const { metadata: fileMeta } = await resolveFileMetadata(fp.fileMetaIpnsName, folderKey);
-        const reWrappedFileKey = await reWrapEncryptedKey(
-          fileMeta.fileKeyEncrypted,
-          ownerPrivateKey,
-          recipientPubKeyBytes
-        );
-        childKeys.push({
-          keyType: 'file' as ChildKeyDto['keyType'],
-          itemId: fp.id,
-          encryptedKey: reWrappedFileKey,
-        });
-        wrapped++;
-        onProgress(wrapped);
-      } catch (err) {
-        console.error(`Failed to re-wrap file key for ${fp.name}:`, err);
-        // Continue with other children
-      }
-    } else {
-      const folder = child as FolderEntry;
-      // Re-wrap the subfolder's folderKey for the recipient
-      const folderKeyRewrapped = await reWrapEncryptedKey(
-        folder.folderKeyEncrypted,
-        ownerPrivateKey,
-        recipientPubKeyBytes
-      );
-      childKeys.push({
-        keyType: 'folder' as ChildKeyDto['keyType'],
-        itemId: folder.id,
-        encryptedKey: folderKeyRewrapped,
-      });
-      wrapped++;
-      onProgress(wrapped);
-
-      // Recurse into subfolder: resolve its metadata and collect its children
-      try {
-        const resolved = await resolveIpnsRecord(folder.ipnsName);
-        if (resolved) {
-          const folderKeyBytes = await unwrapKey(
-            hexToBytes(folder.folderKeyEncrypted),
-            ownerPrivateKey
-          );
-          try {
-            const encryptedBytes = await fetchFromIpfs(resolved.cid);
-            const encryptedJson = new TextDecoder().decode(encryptedBytes);
-            const encrypted = JSON.parse(encryptedJson);
-            const metadata = await decryptFolderMetadata(encrypted, folderKeyBytes);
-
-            const subKeys = await collectChildKeys(
-              metadata.children,
-              folderKeyBytes,
-              ownerPrivateKey,
-              recipientPubKeyBytes,
-              (subWrapped) => {
-                onProgress(wrapped + subWrapped);
-              }
-            );
-            wrapped += subKeys.length;
-            childKeys.push(...subKeys);
-          } finally {
-            folderKeyBytes.fill(0);
-          }
-        }
-      } catch (err) {
-        console.error(`Failed to traverse subfolder ${folder.name}:`, err);
-        // Continue with other children
-      }
-    }
-  }
-
-  return childKeys;
-}
-
-/**
- * Re-wrap an ECIES-encrypted hex key from owner to recipient.
- */
-async function reWrapEncryptedKey(
-  encryptedKeyHex: string,
-  ownerPrivateKey: Uint8Array,
-  recipientPubKey: Uint8Array
-): Promise<string> {
-  const plainKey = await unwrapKey(hexToBytes(encryptedKeyHex), ownerPrivateKey);
-  try {
-    const rewrapped = await wrapKey(plainKey, recipientPubKey);
-    return bytesToHex(rewrapped);
-  } finally {
-    plainKey.fill(0);
-  }
 }
 
 /**
