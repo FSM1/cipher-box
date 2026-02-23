@@ -48,7 +48,7 @@ export const getInvitesControllerGetInviteStatusQueryKey = (token?: string) => {
 
 export const getInvitesControllerGetInviteStatusQueryOptions = <
   TData = Awaited<ReturnType<typeof invitesControllerGetInviteStatus>>,
-  TError = unknown,
+  TError = void,
 >(
   token: string,
   options?: {
@@ -75,11 +75,11 @@ export const getInvitesControllerGetInviteStatusQueryOptions = <
 export type InvitesControllerGetInviteStatusQueryResult = NonNullable<
   Awaited<ReturnType<typeof invitesControllerGetInviteStatus>>
 >;
-export type InvitesControllerGetInviteStatusQueryError = unknown;
+export type InvitesControllerGetInviteStatusQueryError = void;
 
 export function useInvitesControllerGetInviteStatus<
   TData = Awaited<ReturnType<typeof invitesControllerGetInviteStatus>>,
-  TError = unknown,
+  TError = void,
 >(
   token: string,
   options: {
@@ -99,7 +99,7 @@ export function useInvitesControllerGetInviteStatus<
 ): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 export function useInvitesControllerGetInviteStatus<
   TData = Awaited<ReturnType<typeof invitesControllerGetInviteStatus>>,
-  TError = unknown,
+  TError = void,
 >(
   token: string,
   options?: {
@@ -119,7 +119,7 @@ export function useInvitesControllerGetInviteStatus<
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 export function useInvitesControllerGetInviteStatus<
   TData = Awaited<ReturnType<typeof invitesControllerGetInviteStatus>>,
-  TError = unknown,
+  TError = void,
 >(
   token: string,
   options?: {
@@ -135,7 +135,7 @@ export function useInvitesControllerGetInviteStatus<
 
 export function useInvitesControllerGetInviteStatus<
   TData = Awaited<ReturnType<typeof invitesControllerGetInviteStatus>>,
-  TError = unknown,
+  TError = void,
 >(
   token: string,
   options?: {

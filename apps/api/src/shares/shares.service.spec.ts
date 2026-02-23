@@ -890,6 +890,7 @@ describe('SharesService', () => {
       itemName: 'My Folder',
       encryptedKey: Buffer.from(testEncryptedKey, 'hex'),
       status: 'active',
+      expiresAt: new Date(Date.now() + 3600_000), // 1 hour from now
     };
 
     it('should create share and share keys, return shareId', async () => {
@@ -952,6 +953,44 @@ describe('SharesService', () => {
       );
       await expect(service.claimInvite('nonexistent', recipientId, claimDto)).rejects.toThrow(
         'Invite not found or expired'
+      );
+    });
+
+    it('should throw NotFoundException for expired active invite and remove it', async () => {
+      const expiredInvite = {
+        ...invite,
+        expiresAt: new Date(Date.now() - 1000),
+      };
+      mockShareInviteRepo.findOne.mockResolvedValue(expiredInvite);
+      mockShareInviteRepo.remove.mockResolvedValue(expiredInvite);
+
+      await expect(service.claimInvite('claim-token', recipientId, claimDto)).rejects.toThrow(
+        NotFoundException
+      );
+      expect(mockShareInviteRepo.remove).toHaveBeenCalledWith(expiredInvite);
+    });
+
+    it('should throw NotFoundException for non-active invite (claimed)', async () => {
+      const claimedInvite = {
+        ...invite,
+        status: 'claimed',
+      };
+      mockShareInviteRepo.findOne.mockResolvedValue(claimedInvite);
+
+      await expect(service.claimInvite('claim-token', recipientId, claimDto)).rejects.toThrow(
+        NotFoundException
+      );
+    });
+
+    it('should throw NotFoundException for revoked invite', async () => {
+      const revokedInvite = {
+        ...invite,
+        status: 'revoked',
+      };
+      mockShareInviteRepo.findOne.mockResolvedValue(revokedInvite);
+
+      await expect(service.claimInvite('claim-token', recipientId, claimDto)).rejects.toThrow(
+        NotFoundException
       );
     });
 

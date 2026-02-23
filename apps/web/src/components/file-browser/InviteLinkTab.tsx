@@ -44,6 +44,8 @@ export function InviteLinkTab({
 
     let cancelled = false;
     setInvitesLoading(true);
+    setInvites([]);
+    setError(null);
 
     fetchInvitesForItem(ipnsName)
       .then((result) => {
@@ -55,6 +57,7 @@ export function InviteLinkTab({
         if (!cancelled) {
           console.error('Failed to fetch invites:', err);
           setError('failed to load invite links');
+          setInvites([]);
         }
       })
       .finally(() => {

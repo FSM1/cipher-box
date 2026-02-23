@@ -420,6 +420,20 @@ export class SharesService {
       throw new NotFoundException('Invite not found or expired');
     }
 
+    // Pre-transaction expiry / status check so expired/revoked invites
+    // return 404 instead of leaking through to the atomic UPDATE (which
+    // would throw 409 and signal that the token exists).
+    if (invite.expiresAt < new Date()) {
+      if (invite.status === 'active') {
+        await this.inviteRepo.remove(invite);
+      }
+      throw new NotFoundException('Invite not found or expired');
+    }
+
+    if (invite.status !== 'active') {
+      throw new NotFoundException('Invite not found or expired');
+    }
+
     // Self-claim prevention
     if (invite.sharerId === claimerId) {
       throw new ConflictException('Cannot claim your own invite');

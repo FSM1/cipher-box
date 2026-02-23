@@ -1536,6 +1536,9 @@
                 }
               }
             }
+          },
+          "404": {
+            "description": "Invite not found or expired"
           }
         },
         "summary": "Get invite status (public)",

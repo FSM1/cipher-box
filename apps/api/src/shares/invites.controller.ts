@@ -48,6 +48,7 @@ export class InvitesController {
     description: 'Invite status',
     type: InviteStatusResponseDto,
   })
+  @ApiResponse({ status: 404, description: 'Invite not found or expired' })
   async getInviteStatus(@Param('token') token: string): Promise<{ status: string }> {
     const result = await this.sharesService.getInviteStatus(token);
     if (!result || result.status !== 'active') {
