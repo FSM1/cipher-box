@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "8dc6a2eb42b0",
+  "session_id": "1ecb0b84-877e-4f76-b3c5-80df45f67856",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-23T01:11:52.703856Z",
+  "branch": "feat/phase-15-link-sharing",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/components/file-browser/InviteLinkTab.tsx",
+    "apps/web/src/components/file-browser/ShareDialog.tsx",
+    "apps/web/src/styles/share-dialog.css"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "d5c5ac435069",
+  "checkpoint_transcript_start": 781,
+  "transcript_lines_at_start": 781,
+  "token_usage": {
+    "input_tokens": 1,
+    "cache_creation_tokens": 830,
+    "cache_read_tokens": 85083,
+    "output_tokens": 6,
+    "api_call_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-23T01:11:51.962623Z",
+    "agent_lines": 0,
+    "human_added": 424,
+    "human_modified": 101,
+    "human_removed": 0,
+    "total_committed": 424,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/1ecb0b84-877e-4f76-b3c5-80df45f67856.jsonl"
+}
