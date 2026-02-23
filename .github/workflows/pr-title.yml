@@ -30,4 +30,22 @@ jobs:
             exit 1
           fi
 
+          # Check for parenthesized text in the description (after "type(scope): ")
+          # This breaks Release Please's conventional commit parser which
+          # misinterprets parens as a malformed scope.
+          description="${PR_TITLE#*: }"
+          if [[ "$description" =~ \(.+\) ]]; then
+            echo "::error::PR title description must not contain parenthesized text (e.g., \"(some words)\")."
+            echo ""
+            echo "Release Please's commit parser misinterprets parentheses in the"
+            echo "description as a malformed scope, causing silent release failures."
+            echo ""
+            echo "Got: $PR_TITLE"
+            echo ""
+            echo "Instead, use dashes, brackets, or remove the parens:"
+            echo "  feat: Phase 11 — Windows Desktop - WinFsp virtual filesystem"
+            echo "  feat: Phase 11 — Windows Desktop [WinFsp virtual filesystem]"
+            exit 1
+          fi
+
           echo "PR title is valid: $PR_TITLE"
