@@ -275,4 +275,4 @@ jobs:
         with:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
-          args: --features winfsp
+          args: --no-default-features --features winfsp
