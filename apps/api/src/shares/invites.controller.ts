@@ -50,7 +50,10 @@ export class InvitesController {
   })
   async getInviteStatus(@Param('token') token: string): Promise<{ status: string }> {
     const result = await this.sharesService.getInviteStatus(token);
-    return { status: result?.status ?? 'expired' };
+    if (!result || result.status !== 'active') {
+      throw new NotFoundException();
+    }
+    return { status: 'active' };
   }
 
   /**

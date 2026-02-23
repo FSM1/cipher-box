@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { SharesService } from './shares.service';
 import { Share } from './entities/share.entity';
@@ -97,6 +98,25 @@ describe('SharesService', () => {
       findOne: jest.fn(),
     };
 
+    const mockDataSource = {
+      transaction: jest.fn().mockImplementation((cb: (manager: unknown) => Promise<unknown>) =>
+        cb({
+          createQueryBuilder: mockShareInviteRepo.createQueryBuilder,
+          findOne: (entity: unknown, opts: unknown) =>
+            entity === Share ? mockShareRepo.findOne(opts) : mockShareInviteRepo.findOne(opts),
+          find: (entity: unknown, opts: unknown) =>
+            entity === Share ? mockShareRepo.find(opts) : mockShareInviteRepo.find(opts),
+          create: (entity: unknown, data: unknown) =>
+            entity === ShareKey ? mockShareKeyRepo.create(data) : mockShareRepo.create(data),
+          save: (data: unknown) => {
+            if (Array.isArray(data)) return mockShareKeyRepo.save(data);
+            return mockShareRepo.save(data);
+          },
+          remove: (data: unknown) => mockShareRepo.remove(data),
+        })
+      ),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SharesService,
@@ -104,6 +124,7 @@ describe('SharesService', () => {
         { provide: getRepositoryToken(ShareKey), useValue: mockShareKeyRepo },
         { provide: getRepositoryToken(ShareInvite), useValue: mockShareInviteRepo },
         { provide: getRepositoryToken(User), useValue: mockUserRepo },
+        { provide: DataSource, useValue: mockDataSource },
       ],
     }).compile();
 

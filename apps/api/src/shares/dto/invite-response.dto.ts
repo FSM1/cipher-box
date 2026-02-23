@@ -23,10 +23,10 @@ export class InviteResponseDto {
   @ApiProperty({ enum: ['active', 'claimed', 'revoked'] })
   status!: string;
 
-  @ApiProperty({ description: 'When the invite expires' })
+  @ApiProperty({ description: 'When the invite expires', type: 'string', format: 'date-time' })
   expiresAt!: Date;
 
-  @ApiProperty({ description: 'When the invite was created' })
+  @ApiProperty({ description: 'When the invite was created', type: 'string', format: 'date-time' })
   createdAt!: Date;
 }
 

@@ -6,7 +6,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, Not } from 'typeorm';
+import { Repository, DataSource, IsNull, Not } from 'typeorm';
 import { randomBytes } from 'crypto';
 import { Share } from './entities/share.entity';
 import { ShareKey } from './entities/share-key.entity';
@@ -32,7 +32,8 @@ export class SharesService {
     @InjectRepository(ShareInvite)
     private readonly inviteRepo: Repository<ShareInvite>,
     @InjectRepository(User)
-    private readonly userRepo: Repository<User>
+    private readonly userRepo: Repository<User>,
+    private readonly dataSource: DataSource
   ) {}
 
   /**
@@ -424,83 +425,87 @@ export class SharesService {
       throw new ConflictException('Cannot claim your own invite');
     }
 
-    // Atomic UPDATE to prevent race condition on single-claim
-    const result = await this.inviteRepo
-      .createQueryBuilder()
-      .update(ShareInvite)
-      .set({
-        status: 'claimed',
-        claimedBy: claimerId,
-        claimCount: () => 'claim_count + 1',
-      })
-      .where('token = :token', { token })
-      .andWhere('status = :status', { status: 'active' })
-      .andWhere('claim_count < max_claims')
-      .andWhere('expires_at > NOW()')
-      .execute();
-
-    if (!result.affected || result.affected < 1) {
-      throw new ConflictException('Invite already claimed, expired, or revoked');
-    }
-
-    // Check for existing active share (same sharer, recipient, ipnsName)
-    const existingShare = await this.shareRepo.findOne({
-      where: {
-        sharerId: invite.sharerId,
-        recipientId: claimerId,
-        ipnsName: invite.ipnsName,
-        revokedAt: IsNull(),
-      },
-    });
-
-    if (existingShare) {
-      this.logger.warn(
-        `Invite claim for ${invite.ipnsName}: share already exists between ${invite.sharerId} and ${claimerId}`
-      );
-      return { shareId: existingShare.id };
-    }
-
-    // Clean up any revoked-but-not-yet-rotated records for this triple
-    const revoked = await this.shareRepo.find({
-      where: {
-        sharerId: invite.sharerId,
-        recipientId: claimerId,
-        ipnsName: invite.ipnsName,
-        revokedAt: Not(IsNull()),
-      },
-    });
-    if (revoked.length > 0) {
-      await this.shareRepo.remove(revoked);
-    }
-
-    // Create Share record with re-wrapped keys from the claim DTO
-    const share = this.shareRepo.create({
-      sharerId: invite.sharerId,
-      recipientId: claimerId,
-      itemType: invite.itemType,
-      ipnsName: invite.ipnsName,
-      itemName: invite.itemName,
-      encryptedKey: Buffer.from(dto.encryptedKey, 'hex'),
-      hiddenByRecipient: false,
-      revokedAt: null,
-    });
-
-    const savedShare = await this.shareRepo.save(share);
-
-    // Create ShareKey records from re-wrapped child keys
-    if (dto.childKeys && dto.childKeys.length > 0) {
-      const shareKeys = dto.childKeys.map((ck) =>
-        this.shareKeyRepo.create({
-          shareId: savedShare.id,
-          keyType: ck.keyType,
-          itemId: ck.itemId,
-          encryptedKey: Buffer.from(ck.encryptedKey, 'hex'),
+    // Run atomic claim + Share creation inside a transaction so that
+    // a failure after marking the invite as claimed is rolled back.
+    return this.dataSource.transaction(async (manager) => {
+      // Atomic UPDATE to prevent race condition on single-claim
+      const result = await manager
+        .createQueryBuilder()
+        .update(ShareInvite)
+        .set({
+          status: 'claimed',
+          claimedBy: claimerId,
+          claimCount: () => 'claim_count + 1',
         })
-      );
-      await this.shareKeyRepo.save(shareKeys);
-    }
+        .where('token = :token', { token })
+        .andWhere('status = :status', { status: 'active' })
+        .andWhere('claim_count < max_claims')
+        .andWhere('expires_at > NOW()')
+        .execute();
 
-    return { shareId: savedShare.id };
+      if (!result.affected || result.affected < 1) {
+        throw new ConflictException('Invite already claimed, expired, or revoked');
+      }
+
+      // Check for existing active share (same sharer, recipient, ipnsName)
+      const existingShare = await manager.findOne(Share, {
+        where: {
+          sharerId: invite.sharerId,
+          recipientId: claimerId,
+          ipnsName: invite.ipnsName,
+          revokedAt: IsNull(),
+        },
+      });
+
+      if (existingShare) {
+        this.logger.warn(
+          `Invite claim for ${invite.ipnsName}: share already exists between ${invite.sharerId} and ${claimerId}`
+        );
+        return { shareId: existingShare.id };
+      }
+
+      // Clean up any revoked-but-not-yet-rotated records for this triple
+      const revoked = await manager.find(Share, {
+        where: {
+          sharerId: invite.sharerId,
+          recipientId: claimerId,
+          ipnsName: invite.ipnsName,
+          revokedAt: Not(IsNull()),
+        },
+      });
+      if (revoked.length > 0) {
+        await manager.remove(revoked);
+      }
+
+      // Create Share record with re-wrapped keys from the claim DTO
+      const share = manager.create(Share, {
+        sharerId: invite.sharerId,
+        recipientId: claimerId,
+        itemType: invite.itemType,
+        ipnsName: invite.ipnsName,
+        itemName: invite.itemName,
+        encryptedKey: Buffer.from(dto.encryptedKey, 'hex'),
+        hiddenByRecipient: false,
+        revokedAt: null,
+      });
+
+      const savedShare = await manager.save(share);
+
+      // Create ShareKey records from re-wrapped child keys
+      if (dto.childKeys && dto.childKeys.length > 0) {
+        const shareKeys = dto.childKeys.map((ck) =>
+          manager.create(ShareKey, {
+            shareId: savedShare.id,
+            keyType: ck.keyType,
+            itemId: ck.itemId,
+            encryptedKey: Buffer.from(ck.encryptedKey, 'hex'),
+          })
+        );
+        await manager.save(shareKeys);
+      }
+
+      return { shareId: savedShare.id };
+    });
   }
 
   /**

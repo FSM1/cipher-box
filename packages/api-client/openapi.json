@@ -3028,14 +3028,14 @@
             "enum": ["active", "claimed", "revoked"]
           },
           "expiresAt": {
-            "format": "date-time",
             "type": "string",
-            "description": "When the invite expires"
+            "description": "When the invite expires",
+            "format": "date-time"
           },
           "createdAt": {
-            "format": "date-time",
             "type": "string",
-            "description": "When the invite was created"
+            "description": "When the invite was created",
+            "format": "date-time"
           }
         },
         "required": [

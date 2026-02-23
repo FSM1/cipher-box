@@ -97,6 +97,8 @@ export function ShareDialog({
   const [revokingId, setRevokingId] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const directTabRef = useRef<HTMLButtonElement>(null);
+  const inviteTabRef = useRef<HTMLButtonElement>(null);
 
   // Fetch existing recipients when dialog opens
   useEffect(() => {
@@ -348,22 +350,44 @@ export function ShareDialog({
     <Modal open={isOpen} onClose={onClose} title={title} className="share-dialog-backdrop">
       <div className="share-dialog">
         {/* Tab bar */}
-        <div className="share-tab-bar" role="tablist">
+        <div className="share-tab-bar" role="tablist" aria-label="Share method">
           <button
+            ref={directTabRef}
             type="button"
             role="tab"
+            id="share-tab-direct"
             aria-selected={activeTab === 'direct'}
+            aria-controls="share-panel-direct"
+            tabIndex={activeTab === 'direct' ? 0 : -1}
             className={`share-tab${activeTab === 'direct' ? ' share-tab--active' : ''}`}
             onClick={() => setActiveTab('direct')}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                setActiveTab('invite');
+                inviteTabRef.current?.focus();
+              }
+            }}
           >
             {'DIRECT SHARE'}
           </button>
           <button
+            ref={inviteTabRef}
             type="button"
             role="tab"
+            id="share-tab-invite"
             aria-selected={activeTab === 'invite'}
+            aria-controls="share-panel-invite"
+            tabIndex={activeTab === 'invite' ? 0 : -1}
             className={`share-tab${activeTab === 'invite' ? ' share-tab--active' : ''}`}
             onClick={() => setActiveTab('invite')}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                setActiveTab('direct');
+                directTabRef.current?.focus();
+              }
+            }}
           >
             {'INVITE LINK'}
           </button>
@@ -371,7 +395,7 @@ export function ShareDialog({
 
         {/* Direct Share tab panel */}
         {activeTab === 'direct' && (
-          <div role="tabpanel">
+          <div role="tabpanel" id="share-panel-direct" aria-labelledby="share-tab-direct">
             {/* Input section */}
             <div className="share-input-section">
               <label className="share-input-label" htmlFor="share-pubkey-input">

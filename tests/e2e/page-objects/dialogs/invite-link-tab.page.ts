@@ -151,7 +151,9 @@ export class InviteLinkTabPage {
   async waitForLoaded(): Promise<void> {
     // Wait for either items, empty state, or ensure loading disappears
     await this.page
-      .locator('.invite-link-item, .invite-link-tab .share-recipients-empty')
+      .locator(
+        '.invite-link-item, .invite-link-tab .share-recipients-empty, .invite-link-tab .share-error'
+      )
       .first()
       .waitFor({ state: 'visible', timeout: 10000 });
   }

@@ -3,6 +3,7 @@ import {
   IsString,
   IsIn,
   IsArray,
+  IsUUID,
   ValidateNested,
   IsOptional,
   Matches,
@@ -24,7 +25,7 @@ export class InviteChildKeyDto {
     description: 'UUID of the file or subfolder',
   })
   @IsString()
-  @MinLength(1)
+  @IsUUID()
   itemId!: string;
 
   @ApiProperty({
@@ -32,7 +33,7 @@ export class InviteChildKeyDto {
   })
   @IsString()
   @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedKey must be a hex string' })
-  @MinLength(2)
+  @MinLength(258)
   @MaxLength(2048)
   encryptedKey!: string;
 }
@@ -67,7 +68,7 @@ export class CreateInviteDto {
   })
   @IsString()
   @Matches(/^[0-9a-fA-F]+$/, { message: 'encryptedKey must be a hex string' })
-  @MinLength(2)
+  @MinLength(258)
   @MaxLength(2048)
   encryptedKey!: string;
 

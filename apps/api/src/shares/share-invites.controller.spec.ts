@@ -144,6 +144,7 @@ describe('ShareInvitesController', () => {
 
       expect('encryptedKey' in result[0]).toBe(false);
       expect('sharerId' in result[0]).toBe(false);
+      expect('encryptedChildKeys' in result[0]).toBe(false);
     });
   });
 

@@ -54,6 +54,7 @@ export function InviteLinkTab({
       .catch((err) => {
         if (!cancelled) {
           console.error('Failed to fetch invites:', err);
+          setError('failed to load invite links');
         }
       })
       .finally(() => {
@@ -146,7 +147,12 @@ export function InviteLinkTab({
   };
 
   return (
-    <div className="invite-link-tab" role="tabpanel">
+    <div
+      className="invite-link-tab"
+      role="tabpanel"
+      id="share-panel-invite"
+      aria-labelledby="share-tab-invite"
+    >
       {/* Create invite link button */}
       <div className="invite-link-create">
         <button

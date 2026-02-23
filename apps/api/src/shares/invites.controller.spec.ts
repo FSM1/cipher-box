@@ -72,20 +72,22 @@ describe('InvitesController', () => {
       expect(mockSharesService.getInviteStatus).toHaveBeenCalledWith(testToken);
     });
 
-    it('should return expired when service returns null', async () => {
+    it('should throw NotFoundException when service returns null (expired/not found)', async () => {
       mockSharesService.getInviteStatus.mockResolvedValue(null);
 
-      const result = await controller.getInviteStatus(testToken);
-
-      expect(result).toEqual({ status: 'expired' });
+      await expect(controller.getInviteStatus(testToken)).rejects.toThrow(NotFoundException);
     });
 
-    it('should return claimed status when invite is claimed', async () => {
+    it('should throw NotFoundException for non-active status (prevents token-existence oracle)', async () => {
       mockSharesService.getInviteStatus.mockResolvedValue({ status: 'claimed' });
 
-      const result = await controller.getInviteStatus(testToken);
+      await expect(controller.getInviteStatus(testToken)).rejects.toThrow(NotFoundException);
+    });
 
-      expect(result).toEqual({ status: 'claimed' });
+    it('should throw NotFoundException for revoked status', async () => {
+      mockSharesService.getInviteStatus.mockResolvedValue({ status: 'revoked' });
+
+      await expect(controller.getInviteStatus(testToken)).rejects.toThrow(NotFoundException);
     });
   });
 
