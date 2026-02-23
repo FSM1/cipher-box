@@ -1,0 +1,9 @@
+does the plan for phase 15 include updating the e2e tests to ensure the new functionality works as intended?
+
+---
+
+yes i think that is absolutely essential
+
+---
+
+ship it
