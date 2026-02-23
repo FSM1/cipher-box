@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 15 PLANNED (Link Sharing)
+**Current focus:** Milestone 2 -- Phase 15 IN PROGRESS (Link Sharing)
 
 ## Current Position
 
 Phase: 15 (Link Sharing)
-Plan: 0 of 4
-Status: Planned, ready to execute
-Last activity: 2026-02-23 -- Phase 15 fully planned (4 plans created)
+Plan: 1 of 4
+Status: In progress
+Last activity: 2026-02-23 -- Completed 15-01-PLAN.md (invite link backend)
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 15: 1/4)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 130
-- Average duration: 5.5 min
-- Total execution time: 12.5 hours
+- Total plans completed: 128
+- Average duration: 5.4 min
+- Total execution time: 12.0 hours
 
 **By Phase (M1 summary):**
 
@@ -41,12 +41,11 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 11.2   | 3/3   | 30 min  | 10.0 min |
 | M2 Phase 13     | 5/5   | 31 min  | 6.2 min  |
 | M2 Phase 14     | 6/6   | 42 min  | 7.0 min  |
-| M2 Phase 11     | 3/3   | 35 min  | 11.7 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 8m, 8m, 14m, 16m, 5m
-- Trend: Normalizing (final Windows plan was config/CI changes, no complex API translation)
+- Last 5 plans: 6m, 5m, 8m, 8m, 7m
+- Trend: Stable
 
 Updated after each plan completion.
 
@@ -181,18 +180,9 @@ Recent decisions affecting current work:
 | Dynamic import() for checkAndRotateIfNeeded circular dep               | 14-06     | share.service imports folder.store; folder.service importing share.service creates circular; dynamic import() defers |
 | Lazy rotation defers parent metadata update to caller                  | 14-06     | checkAndRotateIfNeeded returns new key + rotated flag; caller handles parent folderKeyEncrypted update               |
 | Post-upload re-wrapping is fire-and-forget                             | 14-06     | Non-blocking: failures logged but never delay upload completion UI                                                   |
-| FileAttrs with to_fuse_attr() boundary conversion                      | 11-01     | Core uses platform-agnostic FileAttrs; uid/gid injected at operations layer, not stored in shared structs            |
-| AccessMode enum replaces libc POSIX flags                              | 11-01     | Platform-independent ReadOnly/WriteOnly/ReadWrite instead of O_RDONLY/O_WRONLY/O_RDWR                                |
-| cfg(any(fuse, winfsp)) for shared filesystem code                      | 11-01     | Shared types available to both platforms; mount/unmount remain feature-specific                                      |
-| Self-contained decrypt functions per platform module                   | 11-02     | Windows module has own decrypt_metadata_from_ipfs; fuse::operations gated to fuse-only, can't be cross-referenced    |
-| Arc<Mutex<CipherBoxFS>> for WinFsp interior mutability                 | 11-02     | WinFsp callbacks receive &self; Mutex wraps shared state for safe mutation from any thread                           |
-| OnceLock<AtomicBool> stop signal for WinFsp unmount                    | 11-02     | Avoids storing FileSystemHost globally; stop flag coordinates shutdown across threads                                |
-| WinFsp creates mount directory (no pre-create)                         | 11-02     | WinFsp uses reparse point for mount; pre-existing directory causes mount failure                                     |
-| Platform dispatch via cfg re-exports in fuse/mod.rs                    | 11-02     | Same function names (mount_filesystem/unmount_filesystem) resolve to correct impl via feature flags                  |
-| WinFsp runtime detection via winreg at startup                         | 11-03     | Registry check + DLL existence verification; notification if missing, app still launches                             |
-| NSIS ExecWait for WinFsp MSI install (not nsExec)                      | 11-03     | Simpler exit code handling; MSI installed silently with INSTALLLEVEL=1000                                            |
-| WinFsp MSI downloaded in CI, not committed to git                      | 11-03     | Binary files not suitable for source control; CI downloads from official GitHub release                              |
-| cfg(any(fuse, winfsp)) in entry point files                            | 11-03     | Compound feature gate enables same mount/unmount code paths on both platforms                                        |
+| Two controller classes for mixed auth invite endpoints                 | 15-01     | InvitesController (no class guard) at /invites, ShareInvitesController (JwtAuthGuard) at /shares/invites             |
+| Authenticated GET /invites/:token/data for claim flow                  | 15-01     | Separate from public status check; returns encryptedKey + encryptedChildKeys for unwrap/re-wrap                      |
+| Hard-delete expired invites on read (not soft-delete)                  | 15-01     | Consistent with DeviceApproval auto-expire pattern; invites have no audit value                                      |
 
 ### Pending Todos
 
@@ -219,7 +209,6 @@ Recent decisions affecting current work:
 - Phase 12.3.1 inserted after Phase 12.3: Pre-Wipe Identity Cleanup — deterministic IPNS derivation, SHA-256 hashed identifiers for all auth methods, remove cross-method email auto-linking. Done before DB wipe to avoid migration code.
 - Phase 12.5 inserted after Phase 12.4: MFA Polishing, UAT & E2E Testing — polish auth flows, add wallet E2E with mock EIP-1193/6963 provider, fix bugs from CoreKit auth UAT
 - Phase 12.6 inserted after Phase 12.5: Per-File IPNS Metadata Split — split file metadata into per-file IPNS records before vault wipe (clean break, no dual-schema). Phase 12.1 (AES-CTR) moved to after 12.6.
-- Phase 11.4 inserted after Phase 11.3: Cross-Platform E2E Testing — validate each desktop client (Windows, macOS, Linux) against the API/web client on each platform's CI runner with natively installed Postgres + IPFS. Proves encryption compatibility, sync correctness, and data integrity across all platforms.
 - Phase 11.2 inserted after Phase 11.1: Remove v1 Folder Metadata — eliminate v1/v2 dual-schema code, make v2 FilePointer canonical everywhere, add per-file IPNS publishing to desktop FUSE. Triggered by cross-device format oscillation bug (desktop writes v1, web re-saves as v2 hybrid, desktop rejects).
 - Phase 15 split: "Link Sharing and Search" split into Phase 15 (Link Sharing) and Phase 15.1 (Client-Side Search). Independent features with different security surfaces.
 
@@ -247,9 +236,7 @@ Recent decisions affecting current work:
 
 ### Research Flags
 
-- Phase 11 (Windows Desktop): COMPLETE -- WinFsp Rust crate, platform abstraction, NSIS installer hooks, CI Windows runner researched
-- Phase 11.3 (Linux Desktop): NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse) packaging, AppImage/deb, Linux system tray, Linux keyring, CI Linux runner
-- Phase 11.4 (Cross-Platform E2E): NEEDS `/gsd:research-phase` -- Native Postgres/IPFS on macOS + Windows CI runners (no Docker), Tauri command-level testing without GUI, CI matrix strategy for shared test suite across 3 platforms
+- Phase 11 (Desktop): NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse), Windows virtual drive (WinFsp/Dokany), Tauri cross-compilation
 - Phase 14 (Sharing): COMPLETE -- research done, 6 plans created, all 6 executed
 - Phase 15 (Link Sharing): COMPLETE -- ephemeral key bridge pattern, HashRouter fragment handling, unauthenticated endpoint design researched; 4 plans created
 - Phase 15.1 (Client-Side Search): Standard patterns -- minisearch + idb (per research), skip research
@@ -267,11 +254,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Phase 15 fully planned (4 plans: backend, API+crypto service, UI, E2E tests)
+Stopped at: Completed 15-01-PLAN.md (invite link backend: entity, migration, controllers, service)
 Resume file: None
-Next: Run /gsd:execute-phase 15 for Link Sharing (invite links).
+Next: Execute 15-02-PLAN.md (API client regen + frontend invite service with ephemeral key bridge crypto)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-22 after Phase 11 (Windows Desktop) complete — verified, PLAT-02 marked Complete_
+_Last updated: 2026-02-23 after Phase 15 Plan 01 complete_

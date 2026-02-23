@@ -405,7 +405,7 @@ Plans:
 
 Plans:
 
-- [ ] 15-01-PLAN.md — Backend: ShareInvite entity, migration, DTOs, InvitesController, service methods, module registration
+- [x] 15-01-PLAN.md — Backend: ShareInvite entity, migration, DTOs, InvitesController, service methods, module registration
 - [ ] 15-02-PLAN.md — API client regen + frontend invite service with ephemeral key bridge crypto
 - [ ] 15-03-PLAN.md — ShareDialog tabbed UI (Direct Share | Invite Link) + InvitePage landing page + route + build verification
 - [ ] 15-04-PLAN.md — E2E test suite: Playwright page objects + invite-link-workflow.spec.ts
@@ -492,7 +492,7 @@ Parallel phases:
 | 11.2 Remove v1 Folder Meta  | M2        | 3/3            | Complete    | 2026-02-19 |
 | 13. File Versioning         | M2        | 5/5            | Complete    | 2026-02-19 |
 | 14. User-to-User Sharing    | M2        | 6/6            | Complete    | 2026-02-21 |
-| 15. Link Sharing            | M2        | 0/3            | Not started | -          |
+| 15. Link Sharing            | M2        | 1/4            | In progress | -          |
 | 15.1 Client-Side Search     | M2        | 0/TBD          | Not started | -          |
 | 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
 | 11. Windows Desktop         | M2        | 3/3            | Complete    | 2026-02-22 |
