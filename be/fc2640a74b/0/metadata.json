@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "befc2640a74b",
+  "session_id": "104eabfa-edd8-4300-a9ac-d17a136d563c",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-23T19:37:54.934519Z",
+  "branch": "feat/phase-15-link-sharing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/REQUIREMENTS.md",
+    ".planning/ROADMAP.md",
+    ".planning/phases/15-link-sharing/15-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ca5a07033d4c",
+  "token_usage": {
+    "input_tokens": 31,
+    "cache_creation_tokens": 125614,
+    "cache_read_tokens": 2579024,
+    "output_tokens": 5507,
+    "api_call_count": 22
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-23T19:37:53.367313Z",
+    "agent_lines": 77,
+    "human_added": 1,
+    "human_modified": 65,
+    "human_removed": 0,
+    "total_committed": 143,
+    "agent_percentage": 53.84615384615385
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/104eabfa-edd8-4300-a9ac-d17a136d563c.jsonl"
+}
