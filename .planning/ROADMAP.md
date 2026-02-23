@@ -401,13 +401,14 @@ Plans:
 1. User can generate a shareable link for a file where the decryption key is in the URL fragment only (never sent to server)
 2. Recipient can open the link, log in or create an account, and the share is auto-claimed (appears in "Shared with me")
 
-**Plans:** 3 plans
+**Plans:** 4 plans
 
 Plans:
 
 - [ ] 15-01-PLAN.md — Backend: ShareInvite entity, migration, DTOs, InvitesController, service methods, module registration
 - [ ] 15-02-PLAN.md — API client regen + frontend invite service with ephemeral key bridge crypto
 - [ ] 15-03-PLAN.md — ShareDialog tabbed UI (Direct Share | Invite Link) + InvitePage landing page + route + build verification
+- [ ] 15-04-PLAN.md — E2E test suite: Playwright page objects + invite-link-workflow.spec.ts
 
 ### Phase 15.1: Client-Side Search (INSERTED)
 

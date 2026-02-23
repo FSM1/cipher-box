@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 11 Windows Desktop COMPLETE (all 3 plans done)
+**Current focus:** Milestone 2 -- Phase 15 PLANNED (Link Sharing)
 
 ## Current Position
 
-Phase: 11-windows-desktop (Windows Desktop)
-Plan: 3 of 3
-Status: Phase complete
-Last activity: 2026-02-22 -- Completed 11-03-PLAN.md (NSIS Installer & CI Windows Build)
+Phase: 15 (Link Sharing)
+Plan: 0 of 4
+Status: Planned, ready to execute
+Last activity: 2026-02-23 -- Phase 15 fully planned (4 plans created)
 
 Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE)
 
@@ -251,7 +251,7 @@ Recent decisions affecting current work:
 - Phase 11.3 (Linux Desktop): NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse) packaging, AppImage/deb, Linux system tray, Linux keyring, CI Linux runner
 - Phase 11.4 (Cross-Platform E2E): NEEDS `/gsd:research-phase` -- Native Postgres/IPFS on macOS + Windows CI runners (no Docker), Tauri command-level testing without GUI, CI matrix strategy for shared test suite across 3 platforms
 - Phase 14 (Sharing): COMPLETE -- research done, 6 plans created, all 6 executed
-- Phase 15 (Link Sharing): NEEDS `/gsd:research-phase` -- unauthenticated web viewer security
+- Phase 15 (Link Sharing): COMPLETE -- ephemeral key bridge pattern, HashRouter fragment handling, unauthenticated endpoint design researched; 4 plans created
 - Phase 15.1 (Client-Side Search): Standard patterns -- minisearch + idb (per research), skip research
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
@@ -266,10 +266,10 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-22
-Stopped at: Phase 11 (Windows Desktop) complete and verified (4/4 must-haves passed)
+Last session: 2026-02-23
+Stopped at: Phase 15 fully planned (4 plans: backend, API+crypto service, UI, E2E tests)
 Resume file: None
-Next: Run /gsd:plan-phase 15 for Link Sharing (invite links).
+Next: Run /gsd:execute-phase 15 for Link Sharing (invite links).
 
 ---
 
