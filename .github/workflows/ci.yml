@@ -239,6 +239,31 @@ jobs:
       - name: Cargo check with winfsp feature
         run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features winfsp
 
+  cargo-check-macos:
+    name: Cargo Check (macOS)
+    needs: [lint]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install FUSE-T
+        run: brew install --cask fuse-t
+
+      - name: Install Rust toolchain
+        run: rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: macos-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: macos-cargo-
+
+      - name: Cargo check with fuse feature
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml
+
   build-desktop-windows:
     name: Build Windows Desktop
     needs: [cargo-check-windows, typecheck]
@@ -276,3 +301,33 @@ jobs:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
           args: -- --no-default-features --features winfsp
+
+  build-desktop-macos:
+    name: Build macOS Desktop
+    needs: [cargo-check-macos, typecheck]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install FUSE-T
+        run: brew install --cask fuse-t
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build crypto package
+        run: pnpm --filter @cipherbox/crypto build
+
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
