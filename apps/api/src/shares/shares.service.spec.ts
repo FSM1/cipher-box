@@ -278,6 +278,64 @@ describe('SharesService', () => {
 
       expect(mockShareRepo.remove).not.toHaveBeenCalled();
     });
+
+    it('should strip 0x prefix from recipientPublicKey before lookup', async () => {
+      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
+      mockShareRepo.findOne.mockResolvedValue(null);
+      mockShareRepo.find.mockResolvedValue([]);
+      mockShareRepo.create.mockReturnValue(mockShare);
+      mockShareRepo.save.mockResolvedValue(mockShare);
+
+      const dto = { ...testCreateDto, recipientPublicKey: '0x' + recipientPublicKey };
+      await service.createShare(sharerId, dto);
+
+      expect(mockUserRepo.findOne).toHaveBeenCalledWith({
+        where: { publicKey: recipientPublicKey },
+      });
+    });
+
+    it('should accept recipientPublicKey without 0x prefix', async () => {
+      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
+      mockShareRepo.findOne.mockResolvedValue(null);
+      mockShareRepo.find.mockResolvedValue([]);
+      mockShareRepo.create.mockReturnValue(mockShare);
+      mockShareRepo.save.mockResolvedValue(mockShare);
+
+      // Key without 0x prefix -- should be used as-is
+      const dto = { ...testCreateDto, recipientPublicKey };
+      await service.createShare(sharerId, dto);
+
+      expect(mockUserRepo.findOne).toHaveBeenCalledWith({
+        where: { publicKey: recipientPublicKey },
+      });
+    });
+
+    it('should throw ConflictException on duplicate key race condition', async () => {
+      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
+      mockShareRepo.findOne.mockResolvedValue(null);
+      mockShareRepo.find.mockResolvedValue([]);
+      mockShareRepo.create.mockReturnValue(mockShare);
+      mockShareRepo.save.mockRejectedValue(
+        new Error('duplicate key value violates unique constraint')
+      );
+
+      await expect(service.createShare(sharerId, testCreateDto)).rejects.toThrow(ConflictException);
+      await expect(service.createShare(sharerId, testCreateDto)).rejects.toThrow(
+        'Share already exists for this item and recipient'
+      );
+    });
+
+    it('should rethrow non-duplicate-key save errors', async () => {
+      mockUserRepo.findOne.mockResolvedValue(mockRecipient);
+      mockShareRepo.findOne.mockResolvedValue(null);
+      mockShareRepo.find.mockResolvedValue([]);
+      mockShareRepo.create.mockReturnValue(mockShare);
+      mockShareRepo.save.mockRejectedValue(new Error('connection failed'));
+
+      await expect(service.createShare(sharerId, testCreateDto)).rejects.toThrow(
+        'connection failed'
+      );
+    });
   });
 
   describe('getReceivedShares', () => {
@@ -522,6 +580,18 @@ describe('SharesService', () => {
       const result = await service.lookupUserByPublicKey(recipientPublicKey);
 
       expect(result).toBe(false);
+    });
+
+    it('should strip 0x prefix from publicKey before lookup', async () => {
+      mockUserRepo.findOne.mockResolvedValue({ id: recipientId });
+
+      const result = await service.lookupUserByPublicKey('0x' + recipientPublicKey);
+
+      expect(result).toBe(true);
+      expect(mockUserRepo.findOne).toHaveBeenCalledWith({
+        where: { publicKey: recipientPublicKey },
+        select: ['id'],
+      });
     });
   });
 

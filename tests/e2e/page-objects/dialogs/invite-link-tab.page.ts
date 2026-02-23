@@ -213,7 +213,11 @@ export class InviteLinkTabPage {
       const original = navigator.clipboard.writeText.bind(navigator.clipboard);
       navigator.clipboard.writeText = async (text: string) => {
         (window as unknown as Record<string, string>).__clipboardContent = text;
-        return original(text);
+        try {
+          return await original(text);
+        } catch {
+          // Clipboard may not be available in headless CI
+        }
       };
     });
   }
