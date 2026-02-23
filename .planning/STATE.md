@@ -181,18 +181,18 @@ Recent decisions affecting current work:
 | Dynamic import() for checkAndRotateIfNeeded circular dep               | 14-06     | share.service imports folder.store; folder.service importing share.service creates circular; dynamic import() defers |
 | Lazy rotation defers parent metadata update to caller                  | 14-06     | checkAndRotateIfNeeded returns new key + rotated flag; caller handles parent folderKeyEncrypted update               |
 | Post-upload re-wrapping is fire-and-forget                             | 14-06     | Non-blocking: failures logged but never delay upload completion UI                                                   |
-| FileAttrs with to_fuse_attr() boundary conversion                      | 11-01     | Core uses platform-agnostic FileAttrs; uid/gid injected at operations layer, not stored in shared structs           |
-| AccessMode enum replaces libc POSIX flags                              | 11-01     | Platform-independent ReadOnly/WriteOnly/ReadWrite instead of O_RDONLY/O_WRONLY/O_RDWR                               |
+| FileAttrs with to_fuse_attr() boundary conversion                      | 11-01     | Core uses platform-agnostic FileAttrs; uid/gid injected at operations layer, not stored in shared structs            |
+| AccessMode enum replaces libc POSIX flags                              | 11-01     | Platform-independent ReadOnly/WriteOnly/ReadWrite instead of O_RDONLY/O_WRONLY/O_RDWR                                |
 | cfg(any(fuse, winfsp)) for shared filesystem code                      | 11-01     | Shared types available to both platforms; mount/unmount remain feature-specific                                      |
-| Self-contained decrypt functions per platform module                    | 11-02     | Windows module has own decrypt_metadata_from_ipfs; fuse::operations gated to fuse-only, can't be cross-referenced   |
-| Arc<Mutex<CipherBoxFS>> for WinFsp interior mutability                 | 11-02     | WinFsp callbacks receive &self; Mutex wraps shared state for safe mutation from any thread                          |
+| Self-contained decrypt functions per platform module                   | 11-02     | Windows module has own decrypt_metadata_from_ipfs; fuse::operations gated to fuse-only, can't be cross-referenced    |
+| Arc<Mutex<CipherBoxFS>> for WinFsp interior mutability                 | 11-02     | WinFsp callbacks receive &self; Mutex wraps shared state for safe mutation from any thread                           |
 | OnceLock<AtomicBool> stop signal for WinFsp unmount                    | 11-02     | Avoids storing FileSystemHost globally; stop flag coordinates shutdown across threads                                |
-| WinFsp creates mount directory (no pre-create)                         | 11-02     | WinFsp uses reparse point for mount; pre-existing directory causes mount failure                                    |
-| Platform dispatch via cfg re-exports in fuse/mod.rs                    | 11-02     | Same function names (mount_filesystem/unmount_filesystem) resolve to correct impl via feature flags                 |
-| WinFsp runtime detection via winreg at startup                         | 11-03     | Registry check + DLL existence verification; notification if missing, app still launches                            |
-| NSIS ExecWait for WinFsp MSI install (not nsExec)                      | 11-03     | Simpler exit code handling; MSI installed silently with INSTALLLEVEL=1000                                           |
-| WinFsp MSI downloaded in CI, not committed to git                      | 11-03     | Binary files not suitable for source control; CI downloads from official GitHub release                             |
-| cfg(any(fuse, winfsp)) in entry point files                            | 11-03     | Compound feature gate enables same mount/unmount code paths on both platforms                                       |
+| WinFsp creates mount directory (no pre-create)                         | 11-02     | WinFsp uses reparse point for mount; pre-existing directory causes mount failure                                     |
+| Platform dispatch via cfg re-exports in fuse/mod.rs                    | 11-02     | Same function names (mount_filesystem/unmount_filesystem) resolve to correct impl via feature flags                  |
+| WinFsp runtime detection via winreg at startup                         | 11-03     | Registry check + DLL existence verification; notification if missing, app still launches                             |
+| NSIS ExecWait for WinFsp MSI install (not nsExec)                      | 11-03     | Simpler exit code handling; MSI installed silently with INSTALLLEVEL=1000                                            |
+| WinFsp MSI downloaded in CI, not committed to git                      | 11-03     | Binary files not suitable for source control; CI downloads from official GitHub release                              |
+| cfg(any(fuse, winfsp)) in entry point files                            | 11-03     | Compound feature gate enables same mount/unmount code paths on both platforms                                        |
 
 ### Pending Todos
 
@@ -219,6 +219,7 @@ Recent decisions affecting current work:
 - Phase 12.3.1 inserted after Phase 12.3: Pre-Wipe Identity Cleanup — deterministic IPNS derivation, SHA-256 hashed identifiers for all auth methods, remove cross-method email auto-linking. Done before DB wipe to avoid migration code.
 - Phase 12.5 inserted after Phase 12.4: MFA Polishing, UAT & E2E Testing — polish auth flows, add wallet E2E with mock EIP-1193/6963 provider, fix bugs from CoreKit auth UAT
 - Phase 12.6 inserted after Phase 12.5: Per-File IPNS Metadata Split — split file metadata into per-file IPNS records before vault wipe (clean break, no dual-schema). Phase 12.1 (AES-CTR) moved to after 12.6.
+- Phase 11.4 inserted after Phase 11.3: Cross-Platform E2E Testing — validate each desktop client (Windows, macOS, Linux) against the API/web client on each platform's CI runner with natively installed Postgres + IPFS. Proves encryption compatibility, sync correctness, and data integrity across all platforms.
 - Phase 11.2 inserted after Phase 11.1: Remove v1 Folder Metadata — eliminate v1/v2 dual-schema code, make v2 FilePointer canonical everywhere, add per-file IPNS publishing to desktop FUSE. Triggered by cross-device format oscillation bug (desktop writes v1, web re-saves as v2 hybrid, desktop rejects).
 
 ### Blockers/Concerns
@@ -247,6 +248,7 @@ Recent decisions affecting current work:
 
 - Phase 11 (Windows Desktop): COMPLETE -- WinFsp Rust crate, platform abstraction, NSIS installer hooks, CI Windows runner researched
 - Phase 11.3 (Linux Desktop): NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse) packaging, AppImage/deb, Linux system tray, Linux keyring, CI Linux runner
+- Phase 11.4 (Cross-Platform E2E): NEEDS `/gsd:research-phase` -- Native Postgres/IPFS on macOS + Windows CI runners (no Docker), Tauri command-level testing without GUI, CI matrix strategy for shared test suite across 3 platforms
 - Phase 14 (Sharing): COMPLETE -- research done, 6 plans created, all 6 executed
 - Phase 15 (Link Sharing): NEEDS `/gsd:research-phase` -- unauthenticated web viewer security
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases

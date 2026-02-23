@@ -145,6 +145,14 @@ Requirements for production release. Each maps to roadmap phases 12+.
 - [ ] **PLAT-01**: Linux desktop app (Tauri + AppImage/deb, FUSE mount via libfuse)
 - [x] **PLAT-02**: Windows desktop app (Tauri + MSI/NSIS, virtual drive via WinFsp/Dokany)
 
+### Cross-Platform E2E Testing
+
+- [ ] **E2E-01**: Each platform CI runner (Windows, macOS, Linux) starts a local backend stack with natively installed Postgres + IPFS (no Docker on macOS/Windows)
+- [ ] **E2E-02**: Desktop client correctly reads vault data (folders, files) created by the API/web client on the same runner
+- [ ] **E2E-03**: API/web client correctly reads vault data created/modified by the desktop client on the same runner
+- [ ] **E2E-04**: Cross-platform crypto round-trip passes: content encrypted on one platform decrypts correctly on another platform's crypto layer
+- [ ] **E2E-05**: IPNS sync round-trip works: metadata published by one client is resolved correctly by another client on the same runner
+
 ## Milestone 3 Requirements (Encrypted Productivity Suite)
 
 Requirements for productivity suite. Each maps to roadmap phases 18+.
@@ -357,6 +365,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TEE-06      | Phase 17   | Pending  |
 | PLAT-01     | Phase 11.3 | Pending  |
 | PLAT-02     | Phase 11   | Complete |
+| E2E-01      | Phase 11.4 | Pending  |
+| E2E-02      | Phase 11.4 | Pending  |
+| E2E-03      | Phase 11.4 | Pending  |
+| E2E-04      | Phase 11.4 | Pending  |
+| E2E-05      | Phase 11.4 | Pending  |
 | BILL-01     | Phase 18   | Pending  |
 | BILL-02     | Phase 18   | Pending  |
 | BILL-03     | Phase 18   | Pending  |
@@ -398,8 +411,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 **Milestone 2 Coverage:**
 
-- M2 requirements: 25 total
-- Mapped to phases: 25
+- M2 requirements: 30 total
+- Mapped to phases: 30
 - Unmapped: 0
 
 **Milestone 3 Coverage:**
