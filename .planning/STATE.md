@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 15 (Link Sharing)
-Plan: 1 of 4
+Plan: 2 of 4
 Status: In progress
-Last activity: 2026-02-23 -- Completed 15-01-PLAN.md (invite link backend)
+Last activity: 2026-02-23 -- Completed 15-02-PLAN.md (frontend invite service + shared key-wrapping utilities)
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 15: 1/4)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 15: 2/4)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 128
+- Total plans completed: 129
 - Average duration: 5.4 min
-- Total execution time: 12.0 hours
+- Total execution time: 12.1 hours
 
 **By Phase (M1 summary):**
 
@@ -44,7 +44,7 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 
 **Recent Trend:**
 
-- Last 5 plans: 6m, 5m, 8m, 8m, 7m
+- Last 5 plans: 5m, 8m, 8m, 7m, 7m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -183,6 +183,9 @@ Recent decisions affecting current work:
 | Two controller classes for mixed auth invite endpoints                 | 15-01     | InvitesController (no class guard) at /invites, ShareInvitesController (JwtAuthGuard) at /shares/invites             |
 | Authenticated GET /invites/:token/data for claim flow                  | 15-01     | Separate from public status check; returns encryptedKey + encryptedChildKeys for unwrap/re-wrap                      |
 | Hard-delete expired invites on read (not soft-delete)                  | 15-01     | Consistent with DeviceApproval auto-expire pattern; invites have no audit value                                      |
+| collectChildKeys extracted to shared lib/crypto/key-wrapping.ts        | 15-02     | Same folder traversal logic needed by both ShareDialog (direct) and invite.service.ts (link); prevents duplication   |
+| secp256k1.keygen() for ephemeral invite keypairs                       | 15-02     | Noble v3 API uses keygen() returning { secretKey, publicKey }; matches useDeviceApproval pattern                     |
+| Orval void-typed claim response cast as unknown as { shareId }         | 15-02     | OpenAPI spec 201 has no response schema; backend returns { shareId: string } but Orval types as void                 |
 
 ### Pending Todos
 
@@ -254,11 +257,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-23
-Stopped at: Completed 15-01-PLAN.md (invite link backend: entity, migration, controllers, service)
+Stopped at: Completed 15-02-PLAN.md (shared key-wrapping utilities + invite service with ephemeral key bridge)
 Resume file: None
-Next: Execute 15-02-PLAN.md (API client regen + frontend invite service with ephemeral key bridge crypto)
+Next: Execute 15-03-PLAN.md (ShareDialog tabbed UI + InvitePage landing page + route)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-23 after Phase 15 Plan 01 complete_
+_Last updated: 2026-02-23 after Phase 15 Plan 02 complete_
