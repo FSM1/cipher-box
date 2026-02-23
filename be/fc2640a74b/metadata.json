@@ -3,7 +3,7 @@
   "checkpoint_id": "befc2640a74b",
   "strategy": "manual-commit",
   "branch": "feat/phase-15-link-sharing",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     ".planning/REQUIREMENTS.md",
     ".planning/ROADMAP.md",
@@ -16,13 +16,20 @@
       "context": "/be/fc2640a74b/0/context.md",
       "content_hash": "/be/fc2640a74b/0/content_hash.txt",
       "prompt": "/be/fc2640a74b/0/prompt.txt"
+    },
+    {
+      "metadata": "/be/fc2640a74b/1/metadata.json",
+      "transcript": "/be/fc2640a74b/1/full.jsonl",
+      "context": "/be/fc2640a74b/1/context.md",
+      "content_hash": "/be/fc2640a74b/1/content_hash.txt",
+      "prompt": "/be/fc2640a74b/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 31,
-    "cache_creation_tokens": 125614,
-    "cache_read_tokens": 2579024,
-    "output_tokens": 5507,
-    "api_call_count": 22
+    "input_tokens": 78,
+    "cache_creation_tokens": 283992,
+    "cache_read_tokens": 5079057,
+    "output_tokens": 8401,
+    "api_call_count": 60
   }
 }
