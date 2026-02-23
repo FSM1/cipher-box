@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "43c02df5aab2",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-15-link-sharing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/shares/dto/claim-invite.dto.ts",
+    "apps/api/src/shares/dto/create-invite.dto.ts",
+    "apps/api/src/shares/dto/invite-response.dto.ts",
+    "apps/api/src/shares/invites.controller.spec.ts",
+    "apps/api/src/shares/invites.controller.ts",
+    "apps/api/src/shares/share-invites.controller.spec.ts",
+    "apps/api/src/shares/shares.service.spec.ts",
+    "apps/api/src/shares/shares.service.ts",
+    "apps/web/src/components/file-browser/InviteLinkTab.tsx",
+    "apps/web/src/components/file-browser/ShareDialog.tsx",
+    "apps/web/src/styles/share-dialog.css",
+    "packages/api-client/openapi.json",
+    "tests/e2e/page-objects/dialogs/invite-link-tab.page.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/43/c02df5aab2/0/metadata.json",
+      "transcript": "/43/c02df5aab2/0/full.jsonl",
+      "context": "/43/c02df5aab2/0/context.md",
+      "content_hash": "/43/c02df5aab2/0/content_hash.txt",
+      "prompt": "/43/c02df5aab2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 31,
+    "cache_creation_tokens": 125614,
+    "cache_read_tokens": 2579024,
+    "output_tokens": 5507,
+    "api_call_count": 22
+  }
+}
