@@ -492,7 +492,7 @@ Parallel phases:
 | 11.2 Remove v1 Folder Meta  | M2        | 3/3            | Complete    | 2026-02-19 |
 | 13. File Versioning         | M2        | 5/5            | Complete    | 2026-02-19 |
 | 14. User-to-User Sharing    | M2        | 6/6            | Complete    | 2026-02-21 |
-| 15. Link Sharing            | M2        | 1/4            | In progress | -          |
+| 15. Link Sharing            | M2        | 3/4            | In progress | -          |
 | 15.1 Client-Side Search     | M2        | 0/TBD          | Not started | -          |
 | 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
 | 11. Windows Desktop         | M2        | 3/3            | Complete    | 2026-02-22 |
