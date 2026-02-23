@@ -4,6 +4,7 @@ import { ConflictException, ForbiddenException, NotFoundException } from '@nestj
 import { SharesService } from './shares.service';
 import { Share } from './entities/share.entity';
 import { ShareKey } from './entities/share-key.entity';
+import { ShareInvite } from './entities/share-invite.entity';
 import { User } from '../auth/entities/user.entity';
 import { CreateShareDto } from './dto/create-share.dto';
 import { AddShareKeysDto } from './dto/share-key.dto';
@@ -22,6 +23,12 @@ describe('SharesService', () => {
     find: jest.Mock;
     create: jest.Mock;
     save: jest.Mock;
+  };
+  let mockShareInviteRepo: {
+    findOne: jest.Mock;
+    find: jest.Mock;
+    save: jest.Mock;
+    remove: jest.Mock;
   };
   let mockUserRepo: {
     findOne: jest.Mock;
@@ -76,6 +83,12 @@ describe('SharesService', () => {
       create: jest.fn(),
       save: jest.fn(),
     };
+    mockShareInviteRepo = {
+      findOne: jest.fn(),
+      find: jest.fn(),
+      save: jest.fn(),
+      remove: jest.fn(),
+    };
     mockUserRepo = {
       findOne: jest.fn(),
     };
@@ -85,6 +98,7 @@ describe('SharesService', () => {
         SharesService,
         { provide: getRepositoryToken(Share), useValue: mockShareRepo },
         { provide: getRepositoryToken(ShareKey), useValue: mockShareKeyRepo },
+        { provide: getRepositoryToken(ShareInvite), useValue: mockShareInviteRepo },
         { provide: getRepositoryToken(User), useValue: mockUserRepo },
       ],
     }).compile();
