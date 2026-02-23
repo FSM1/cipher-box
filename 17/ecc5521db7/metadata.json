@@ -3,7 +3,7 @@
   "checkpoint_id": "17ecc5521db7",
   "strategy": "manual-commit",
   "branch": "feat/phase-15-link-sharing",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "apps/web/src/components/file-browser/ShareDialog.tsx",
     "apps/web/src/lib/crypto/key-wrapping.ts"
@@ -36,13 +36,20 @@
       "context": "/17/ecc5521db7/3/context.md",
       "content_hash": "/17/ecc5521db7/3/content_hash.txt",
       "prompt": "/17/ecc5521db7/3/prompt.txt"
+    },
+    {
+      "metadata": "/17/ecc5521db7/4/metadata.json",
+      "transcript": "/17/ecc5521db7/4/full.jsonl",
+      "context": "/17/ecc5521db7/4/context.md",
+      "content_hash": "/17/ecc5521db7/4/content_hash.txt",
+      "prompt": "/17/ecc5521db7/4/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 12634,
-    "cache_creation_tokens": 533267,
-    "cache_read_tokens": 11909042,
-    "output_tokens": 17125,
-    "api_call_count": 118
+    "input_tokens": 12647,
+    "cache_creation_tokens": 563605,
+    "cache_read_tokens": 12372968,
+    "output_tokens": 17567,
+    "api_call_count": 127
   }
 }
