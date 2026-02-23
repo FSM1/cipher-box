@@ -514,9 +514,10 @@ test.describe.serial('Invite Link Sharing Workflow', () => {
     // Verify error card appears
     expect(await bareInvitePage.isError()).toBe(true);
 
-    // Verify error message indicates revoked
+    // Verify error message -- API collapses all non-active statuses to 404
+    // to prevent token-existence oracle attacks, so client shows "expired"
     const errorMsg = await bareInvitePage.getErrorMessage();
-    expect(errorMsg).toContain('revoked');
+    expect(errorMsg).toMatch(/expired|revoked/);
 
     // Verify "[GO HOME]" button is visible
     await expect(bareInvitePage.homeButton()).toBeVisible();
