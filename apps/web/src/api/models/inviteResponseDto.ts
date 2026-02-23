@@ -9,6 +9,8 @@ import type { InviteResponseDtoItemType } from './inviteResponseDtoItemType';
 import type { InviteResponseDtoStatus } from './inviteResponseDtoStatus';
 
 export interface InviteResponseDto {
+  /** Invite UUID (for management operations like revoke) */
+  id: string;
   /** Invite token (URL-safe base64) */
   token: string;
   itemType: InviteResponseDtoItemType;

@@ -57,6 +57,7 @@ export class ShareInvitesController {
     @Request() req: RequestWithUser,
     @Body() dto: CreateInviteDto
   ): Promise<{
+    id: string;
     token: string;
     itemType: string;
     ipnsName: string;
@@ -67,6 +68,7 @@ export class ShareInvitesController {
   }> {
     const invite = await this.sharesService.createInvite(req.user.id, dto);
     return {
+      id: invite.id,
       token: invite.token,
       itemType: invite.itemType,
       ipnsName: invite.ipnsName,
@@ -104,6 +106,7 @@ export class ShareInvitesController {
     @Query('ipnsName') ipnsName: string
   ): Promise<
     Array<{
+      id: string;
       token: string;
       itemType: string;
       ipnsName: string;
@@ -115,6 +118,7 @@ export class ShareInvitesController {
   > {
     const invites = await this.sharesService.getInvitesForItem(req.user.id, ipnsName);
     return invites.map((inv) => ({
+      id: inv.id,
       token: inv.token,
       itemType: inv.itemType,
       ipnsName: inv.ipnsName,

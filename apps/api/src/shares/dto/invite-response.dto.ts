@@ -4,6 +4,9 @@ import { ApiProperty } from '@nestjs/swagger';
  * Response for creating or listing invites (sharer's view).
  */
 export class InviteResponseDto {
+  @ApiProperty({ description: 'Invite UUID (for management operations like revoke)' })
+  id!: string;
+
   @ApiProperty({ description: 'Invite token (URL-safe base64)' })
   token!: string;
 

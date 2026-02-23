@@ -318,7 +318,7 @@ export async function checkInviteStatus(
 export async function fetchInvitesForItem(ipnsName: string): Promise<InviteInfo[]> {
   const response = await shareInvitesControllerListInvites({ ipnsName });
   return response.map((inv) => ({
-    id: inv.token, // Use token as ID for revocation (the controller uses inviteId param)
+    id: inv.id,
     token: inv.token,
     status: inv.status,
     itemType: inv.itemType,

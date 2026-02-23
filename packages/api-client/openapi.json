@@ -2983,6 +2983,10 @@
       "InviteResponseDto": {
         "type": "object",
         "properties": {
+          "id": {
+            "type": "string",
+            "description": "Invite UUID (for management operations like revoke)"
+          },
           "token": {
             "type": "string",
             "description": "Invite token (URL-safe base64)"
@@ -3015,6 +3019,7 @@
           }
         },
         "required": [
+          "id",
           "token",
           "itemType",
           "ipnsName",
