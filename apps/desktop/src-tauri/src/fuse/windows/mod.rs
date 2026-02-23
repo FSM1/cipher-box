@@ -547,7 +547,9 @@ mod mount_impl {
         // WinFsp removes the reparse point mount directory on clean shutdown.
         // If it's still there after a crash, clean it up.
         if mount_path.exists() {
-            let _ = std::fs::remove_dir_all(&mount_path);
+            if let Err(e) = std::fs::remove_dir_all(&mount_path) {
+                log::warn!("Failed to remove stale mount path {}: {}", mount_path.display(), e);
+            }
         }
 
         log::info!("WinFsp unmount cleanup complete");

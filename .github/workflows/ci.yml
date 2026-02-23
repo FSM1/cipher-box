@@ -362,3 +362,4 @@ jobs:
         with:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
+          args: -- --no-default-features --features fuse

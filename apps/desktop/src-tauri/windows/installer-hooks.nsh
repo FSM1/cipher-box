@@ -12,17 +12,22 @@
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
-  ; Check if WinFsp is already installed via registry
+  ; Check if WinFsp is already installed via registry (64-bit and 32-bit hives)
   ReadRegStr $0 HKLM "SOFTWARE\WinFsp" "InstallDir"
+  StrCmp $0 "" 0 winfsp_installed
+  ReadRegStr $0 HKLM "SOFTWARE\WOW6432Node\WinFsp" "InstallDir"
   StrCmp $0 "" 0 winfsp_installed
 
   ; WinFsp not installed -- install it silently
   DetailPrint "Installing WinFsp filesystem driver..."
   ExecWait '"msiexec" /i "$INSTDIR\resources\winfsp-2.1.25156.msi" /qn INSTALLLEVEL=1000' $0
   StrCmp $0 "0" winfsp_installed
+  StrCmp $0 "3010" winfsp_installed
     MessageBox MB_OK|MB_ICONEXCLAMATION "WinFsp installation failed (exit code: $0). CipherBox requires WinFsp for the virtual filesystem. You can install it manually from https://winfsp.dev"
+    Goto winfsp_done
   winfsp_installed:
     DetailPrint "WinFsp filesystem driver is installed."
+  winfsp_done:
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
