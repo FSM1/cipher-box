@@ -281,6 +281,11 @@
   align-items: center;
 }
 
+/* Actions column header - hidden on desktop, shown on mobile */
+.file-list-header-actions {
+  display: none;
+}
+
 .file-list-body {
   flex: 1;
   min-height: 0;
@@ -660,6 +665,47 @@
   color: var(--color-green-primary);
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+/* ==========================================================================
+   Mobile Action Button (three-dot menu per row)
+   Hidden on desktop, visible on mobile via responsive.css
+   ========================================================================== */
+
+.file-list-item-mobile-actions {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.file-list-item-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: transparent;
+  border: var(--border-thickness) solid var(--color-border-dim);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-md);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+  line-height: 1;
+  letter-spacing: 2px;
+}
+
+.file-list-item-action-btn:hover,
+.file-list-item-action-btn:focus {
+  color: var(--color-text-primary);
+  border-color: var(--color-green-primary);
+}
+
+.file-list-item-action-btn:focus-visible {
+  outline: 2px solid var(--color-green-primary);
+  outline-offset: 1px;
 }
 
 /* Note: Mobile responsive styles are in responsive.css */

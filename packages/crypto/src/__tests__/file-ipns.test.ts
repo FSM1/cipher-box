@@ -10,19 +10,18 @@
 
 import { describe, it, expect } from 'vitest';
 import * as secp256k1 from '@noble/secp256k1';
-import { deriveFileIpnsKeypair } from '../file/derive-ipns';
+import { deriveFileIpnsKeypair, generateFileIpnsKeypair } from '../file/derive-ipns';
 import { encryptFileMetadata, decryptFileMetadata } from '../file/metadata';
 import {
   encryptFolderMetadata,
   decryptFolderMetadata,
-  isV2Metadata,
   validateFolderMetadata,
 } from '../folder/metadata';
 import { generateFileKey } from '../utils';
 import { CryptoError } from '../types';
 import type { FileMetadata } from '../file/types';
-import type { FolderMetadataV2 } from '../folder/types';
-import type { FolderEntry, FolderMetadata } from '../folder/types';
+import type { FolderMetadata } from '../folder/types';
+import type { FolderEntry } from '../folder/types';
 
 /**
  * Generate a random secp256k1 private key for testing.
@@ -127,6 +126,29 @@ describe('deriveFileIpnsKeypair', () => {
     const result = await deriveFileIpnsKeypair(privateKey, FILE_ID_1);
 
     expect(result.ipnsName).toMatch(/^(k51|bafzaa)/);
+  });
+});
+
+// ─── generateFileIpnsKeypair ───────────────────────────────────────
+
+describe('generateFileIpnsKeypair', () => {
+  it('returns valid Ed25519 keypair and IPNS name', async () => {
+    const result = await generateFileIpnsKeypair();
+
+    expect(result.privateKey).toBeInstanceOf(Uint8Array);
+    expect(result.publicKey).toBeInstanceOf(Uint8Array);
+    expect(result.privateKey.length).toBe(32);
+    expect(result.publicKey.length).toBe(32);
+    expect(result.ipnsName).toMatch(/^(k51|bafzaa)/);
+  });
+
+  it('two calls produce different keypairs (randomness)', async () => {
+    const result1 = await generateFileIpnsKeypair();
+    const result2 = await generateFileIpnsKeypair();
+
+    expect(result1.ipnsName).not.toBe(result2.ipnsName);
+    expect(result1.privateKey).not.toEqual(result2.privateKey);
+    expect(result1.publicKey).not.toEqual(result2.publicKey);
   });
 });
 
@@ -293,32 +315,74 @@ describe('validateFolderMetadata (v2)', () => {
     expect(result.children[2].type).toBe('file');
   });
 
-  it('v1 metadata still validates correctly (backward compat)', () => {
-    const data: FolderMetadata = {
-      version: 'v1',
+  it('v2 metadata with FilePointer containing ipnsPrivateKeyEncrypted validates correctly', () => {
+    const data = {
+      version: 'v2',
       children: [
         {
           type: 'file',
-          id: 'file-uuid',
-          name: 'test.txt',
-          cid: 'bafybeiabc',
-          fileKeyEncrypted: 'key123',
-          fileIv: 'iv123',
-          encryptionMode: 'GCM',
-          size: 1024,
+          id: 'file-uuid-migrated',
+          name: 'migrated.pdf',
+          fileMetaIpnsName: 'k51qzi5uqu5dh9jhgjfghjdfgh',
+          ipnsPrivateKeyEncrypted:
+            'deadbeefcafebabe1234567890abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
           createdAt: 1706054400000,
-          modifiedAt: 1706054400000,
+          modifiedAt: 1706140800000,
         },
       ],
     };
 
     const result = validateFolderMetadata(data);
-    expect(result.version).toBe('v1');
+    expect(result.version).toBe('v2');
+    expect(result.children).toHaveLength(1);
+    expect(result.children[0].type).toBe('file');
+  });
+
+  it('v2 metadata rejects FilePointer with non-string ipnsPrivateKeyEncrypted', () => {
+    const data = {
+      version: 'v2',
+      children: [
+        {
+          type: 'file',
+          id: 'file-uuid-bad',
+          name: 'bad.pdf',
+          fileMetaIpnsName: 'k51qzi5uqu5dh9jhgjfghjdfgh',
+          ipnsPrivateKeyEncrypted: 12345,
+          createdAt: 1706054400000,
+          modifiedAt: 1706140800000,
+        },
+      ],
+    };
+
+    expect(() => validateFolderMetadata(data)).toThrow(
+      'ipnsPrivateKeyEncrypted must be a hex string'
+    );
+  });
+
+  it('v2 metadata rejects FilePointer with too-short ipnsPrivateKeyEncrypted', () => {
+    const data = {
+      version: 'v2',
+      children: [
+        {
+          type: 'file',
+          id: 'file-uuid-short',
+          name: 'short.pdf',
+          fileMetaIpnsName: 'k51qzi5uqu5dh9jhgjfghjdfgh',
+          ipnsPrivateKeyEncrypted: 'abcd',
+          createdAt: 1706054400000,
+          modifiedAt: 1706140800000,
+        },
+      ],
+    };
+
+    expect(() => validateFolderMetadata(data)).toThrow(
+      'ipnsPrivateKeyEncrypted must be a hex string'
+    );
   });
 
   it('v2 metadata encrypts and decrypts correctly', async () => {
     const folderKey = generateFileKey();
-    const metadata: FolderMetadataV2 = {
+    const metadata: FolderMetadata = {
       version: 'v2',
       children: [
         {
@@ -350,27 +414,5 @@ describe('validateFolderMetadata (v2)', () => {
     expect(decrypted.children[0].type).toBe('folder');
     expect(decrypted.children[1].type).toBe('file');
     expect((decrypted.children[0] as FolderEntry).ipnsName).toBe('k51qzi5uqu5abc');
-  });
-});
-
-// ─── isV2Metadata type guard ──────────────────────────────────────
-
-describe('isV2Metadata', () => {
-  it('returns true for v2 metadata', () => {
-    const v2: FolderMetadataV2 = {
-      version: 'v2',
-      children: [],
-    };
-
-    expect(isV2Metadata(v2)).toBe(true);
-  });
-
-  it('returns false for v1 metadata', () => {
-    const v1: FolderMetadata = {
-      version: 'v1',
-      children: [],
-    };
-
-    expect(isV2Metadata(v1)).toBe(false);
   });
 });

@@ -5,13 +5,20 @@ import { useAuthStore } from '../stores/auth.store';
 import { unpinFromIpfs } from '../lib/api/ipfs';
 import { useQuotaStore } from '../stores/quota.store';
 import * as folderService from '../services/folder.service';
+import { reWrapForRecipients } from '../services/share.service';
 import {
   createFileMetadata,
   resolveFileMetadata,
   updateFileMetadata,
+  shouldCreateVersion,
+  restoreVersion,
+  deleteVersion,
+  getFileIpnsPrivateKey,
 } from '../services/file-metadata.service';
+import type { FileIpnsRecordPayload } from '../services/file-metadata.service';
 import type { FolderNode } from '../stores/folder.store';
-import type { FolderEntry, FilePointer, FolderChildV2 } from '@cipherbox/crypto';
+import type { FolderEntry, FilePointer, FolderChild } from '@cipherbox/crypto';
+import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 
 /** Maximum folder nesting depth per FOLD-03 */
 const MAX_FOLDER_DEPTH = 20;
@@ -190,6 +197,16 @@ export function useFolder() {
           ipnsPrivateKey,
         };
         useFolderStore.getState().setFolder(newFolderNode);
+
+        // Post-create: re-wrap new subfolder key for share recipients (fire-and-forget)
+        reWrapForRecipients({
+          folderIpnsName: parentFolder.ipnsName,
+          folders: useFolderStore.getState().folders,
+          currentFolderId: parentFolder.id,
+          newItems: [{ keyType: 'folder', itemId: folder.id, plaintextKey: folderKey }],
+        }).catch((err) => {
+          console.warn('[share] Post-create subfolder re-wrapping failed:', err);
+        });
 
         setState({ isLoading: false, error: null });
         return folder;
@@ -634,7 +651,7 @@ export function useFolder() {
 
         // 1. Generate fileId and create per-file IPNS metadata
         const fileId = crypto.randomUUID();
-        const { ipnsRecord } = await createFileMetadata({
+        const { ipnsRecord, ipnsPrivateKeyEncrypted } = await createFileMetadata({
           fileId,
           cid: fileData.cid,
           fileKeyEncrypted: fileData.wrappedKey,
@@ -642,7 +659,7 @@ export function useFolder() {
           size: fileData.originalSize,
           mimeType: fileData.mimeType ?? 'application/octet-stream',
           folderKey: parentFolder.folderKey,
-          userPrivateKey: auth.vaultKeypair.privateKey,
+          userPublicKey: auth.vaultKeypair.publicKey,
           encryptionMode: fileData.encryptionMode,
         });
 
@@ -652,13 +669,39 @@ export function useFolder() {
           fileId,
           name: fileData.originalName,
           fileIpnsRecord: ipnsRecord,
+          ipnsPrivateKeyEncrypted,
         });
 
         // 3. Update local state with new child and sequence number
-        const updatedChildren: FolderChildV2[] = [...parentFolder.children, filePointer];
+        const updatedChildren: FolderChild[] = [...parentFolder.children, filePointer];
         const store = useFolderStore.getState();
         store.updateFolderChildren(parentId, updatedChildren);
         store.updateFolderSequence(parentId, newSequenceNumber);
+
+        // 4. Post-upload: re-wrap file key for share recipients (fire-and-forget)
+        // Unwrap the fileKey from the owner-wrapped key, then delegate to reWrapForRecipients
+        (async () => {
+          try {
+            const authState = useAuthStore.getState();
+            if (!authState.vaultKeypair) return;
+            const fileKey = await unwrapKey(
+              hexToBytes(fileData.wrappedKey),
+              authState.vaultKeypair.privateKey
+            );
+            try {
+              await reWrapForRecipients({
+                folderIpnsName: parentFolder.ipnsName,
+                folders: useFolderStore.getState().folders,
+                currentFolderId: parentFolder.id,
+                newItems: [{ keyType: 'file', itemId: fileId, plaintextKey: fileKey }],
+              });
+            } finally {
+              fileKey.fill(0);
+            }
+          } catch (err) {
+            console.warn('[share] Post-upload file re-wrapping failed:', err);
+          }
+        })();
 
         setState({ isLoading: false, error: null });
         return filePointer;
@@ -713,10 +756,11 @@ export function useFolder() {
         }
 
         // 1. Create per-file IPNS metadata for each file
+        const userPublicKey = auth.vaultKeypair.publicKey;
         const filesWithRecords = await Promise.all(
           filesData.map(async (f) => {
             const fileId = crypto.randomUUID();
-            const { ipnsRecord } = await createFileMetadata({
+            const { ipnsRecord, ipnsPrivateKeyEncrypted } = await createFileMetadata({
               fileId,
               cid: f.cid,
               fileKeyEncrypted: f.wrappedKey,
@@ -724,10 +768,15 @@ export function useFolder() {
               size: f.originalSize,
               mimeType: f.mimeType ?? 'application/octet-stream',
               folderKey: parentFolder.folderKey,
-              userPrivateKey: auth.vaultKeypair!.privateKey,
+              userPublicKey,
               encryptionMode: f.encryptionMode,
             });
-            return { fileId, name: f.originalName, fileIpnsRecord: ipnsRecord };
+            return {
+              fileId,
+              name: f.originalName,
+              fileIpnsRecord: ipnsRecord,
+              ipnsPrivateKeyEncrypted,
+            };
           })
         );
 
@@ -741,6 +790,40 @@ export function useFolder() {
         const store = useFolderStore.getState();
         store.updateFolderChildren(parentId, [...parentFolder.children, ...filePointers]);
         store.updateFolderSequence(parentId, newSequenceNumber);
+
+        // 4. Post-upload: re-wrap file keys for share recipients (fire-and-forget)
+        (async () => {
+          const newItems: Array<{
+            keyType: 'file' | 'folder';
+            itemId: string;
+            plaintextKey: Uint8Array;
+          }> = [];
+          try {
+            const authState = useAuthStore.getState();
+            if (!authState.vaultKeypair) return;
+            const privateKey = authState.vaultKeypair.privateKey;
+            for (let i = 0; i < filesData.length; i++) {
+              const fileKey = await unwrapKey(hexToBytes(filesData[i].wrappedKey), privateKey);
+              newItems.push({
+                keyType: 'file',
+                itemId: filesWithRecords[i].fileId,
+                plaintextKey: fileKey,
+              });
+            }
+            await reWrapForRecipients({
+              folderIpnsName: parentFolder.ipnsName,
+              folders: useFolderStore.getState().folders,
+              currentFolderId: parentFolder.id,
+              newItems,
+            });
+          } catch (err) {
+            console.warn('[share] Post-upload batch file re-wrapping failed:', err);
+          } finally {
+            for (const item of newItems) {
+              item.plaintextKey.fill(0);
+            }
+          }
+        })();
 
         setState({ isLoading: false, error: null });
         return filePointers;
@@ -756,6 +839,9 @@ export function useFolder() {
   /**
    * Update a file's content in-place (v2: re-encrypt, update file IPNS, folder untouched).
    *
+   * Old CIDs are preserved as version history (VER-01). Only pruned versions
+   * (excess beyond max 10) have their CIDs unpinned.
+   *
    * @param parentId - Parent folder ID ('root' or folder UUID)
    * @param fileData - New file data after re-encryption
    * @returns Resolves when the update is complete
@@ -769,6 +855,7 @@ export function useFolder() {
         newFileKeyEncrypted: string;
         newFileIv: string;
         newSize: number;
+        forceVersion?: boolean; // true for web re-upload, false/undefined for text editor
       }
     ): Promise<void> => {
       setState({ isLoading: true, error: null });
@@ -804,34 +891,55 @@ export function useFolder() {
           parentFolder.folderKey
         );
 
-        // 3. Get old CID for unpinning before we overwrite
-        const oldCid = currentMetadata.cid;
+        // 3. Decrypt the file IPNS private key from FilePointer (or HKDF fallback)
+        const { privateKey: fileIpnsPrivateKey, migratedIpnsPrivateKeyEncrypted } =
+          await getFileIpnsPrivateKey(
+            filePointer,
+            auth.vaultKeypair.privateKey,
+            auth.vaultKeypair.publicKey
+          );
 
-        // 4. Update file metadata and publish new IPNS record
-        const { ipnsRecord } = await updateFileMetadata({
-          fileId: fileData.fileId,
-          folderKey: parentFolder.folderKey,
-          userPrivateKey: auth.vaultKeypair.privateKey,
-          currentMetadata,
-          updates: {
-            cid: fileData.newCid,
-            fileKeyEncrypted: fileData.newFileKeyEncrypted,
-            fileIv: fileData.newFileIv,
-            size: fileData.newSize,
-          },
-        });
+        // 4. Determine whether to create a version entry
+        const createVersion = shouldCreateVersion(currentMetadata, fileData.forceVersion ?? false);
 
-        // 5. Publish only the file IPNS record (folder metadata untouched!)
+        let ipnsRecord: FileIpnsRecordPayload;
+        let prunedCids: string[];
+        try {
+          // 5. Update file metadata and publish new IPNS record
+          ({ ipnsRecord, prunedCids } = await updateFileMetadata({
+            fileIpnsPrivateKey,
+            fileMetaIpnsName: filePointer.fileMetaIpnsName,
+            folderKey: parentFolder.folderKey,
+            currentMetadata,
+            updates: {
+              cid: fileData.newCid,
+              fileKeyEncrypted: fileData.newFileKeyEncrypted,
+              fileIv: fileData.newFileIv,
+              size: fileData.newSize,
+            },
+            createVersion,
+          }));
+        } finally {
+          fileIpnsPrivateKey.fill(0);
+        }
+
+        // 6. Publish only the file IPNS record (folder metadata untouched!)
         await folderService.replaceFileInFolder({
           fileId: fileData.fileId,
           fileIpnsRecord: ipnsRecord,
           parentFolderState: parentFolder,
         });
 
-        // 6. Update local state -- only touch modifiedAt on the FilePointer
+        // 7. Update local state -- touch modifiedAt and persist migrated IPNS key if applicable
         const updatedChildren = parentFolder.children.map((child) => {
           if (child.type === 'file' && child.id === fileData.fileId) {
-            return { ...child, modifiedAt: Date.now() };
+            return {
+              ...child,
+              modifiedAt: Date.now(),
+              ...(migratedIpnsPrivateKeyEncrypted
+                ? { ipnsPrivateKeyEncrypted: migratedIpnsPrivateKeyEncrypted }
+                : {}),
+            };
           }
           return child;
         });
@@ -839,8 +947,30 @@ export function useFolder() {
         const store = useFolderStore.getState();
         store.updateFolderChildren(parentId, updatedChildren);
 
-        // 7. Unpin old CID fire-and-forget
-        unpinFromIpfs(oldCid).catch(() => {});
+        // 7b. Lazy migration: persist wrapped IPNS key to folder metadata on IPFS
+        if (migratedIpnsPrivateKeyEncrypted) {
+          folderService
+            .updateFolderMetadata({
+              folderId: parentFolder.id,
+              children: updatedChildren,
+              folderKey: parentFolder.folderKey,
+              ipnsPrivateKey: parentFolder.ipnsPrivateKey,
+              ipnsName: parentFolder.ipnsName,
+              sequenceNumber: parentFolder.sequenceNumber,
+            })
+            .then(({ newSequenceNumber }) => {
+              useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
+            })
+            .catch((err) => {
+              console.warn('Lazy IPNS key migration: folder re-publish failed, will retry:', err);
+            });
+        }
+
+        // 8. Only unpin CIDs of pruned versions (excess beyond max 10)
+        // Old CIDs stay pinned as version history (VER-01)
+        for (const prunedCid of prunedCids) {
+          unpinFromIpfs(prunedCid).catch(() => {});
+        }
 
         // Refresh quota
         useQuotaStore.getState().fetchQuota();
@@ -848,6 +978,252 @@ export function useFolder() {
         setState({ isLoading: false, error: null });
       } catch (err) {
         const error = err instanceof Error ? err.message : 'Failed to update file';
+        setState({ isLoading: false, error });
+        throw err;
+      }
+    },
+    []
+  );
+
+  /**
+   * Restore a previous version of a file.
+   *
+   * Swaps the current content with a past version. The current content becomes
+   * a new version entry (non-destructive). Publishes updated IPNS record and
+   * unpins any pruned version CIDs.
+   *
+   * @param parentId - Parent folder ID ('root' or folder UUID)
+   * @param fileId - File ID (UUID)
+   * @param versionIndex - Index of version to restore (0 = newest past version)
+   */
+  const handleRestoreVersion = useCallback(
+    async (parentId: string, fileId: string, versionIndex: number): Promise<void> => {
+      setState({ isLoading: true, error: null });
+      try {
+        const folders = useFolderStore.getState().folders;
+        const vault = useVaultStore.getState();
+        const auth = useAuthStore.getState();
+
+        if (!auth.vaultKeypair) {
+          throw new Error('No ECIES keypair available - please log in again');
+        }
+
+        // Get parent folder state
+        const parentFolder =
+          parentId === 'root' ? getRootFolderState(vault, folders) : folders[parentId];
+
+        if (!parentFolder) {
+          throw new Error('Parent folder not found or vault not initialized');
+        }
+
+        // Find the FilePointer
+        const filePointer = parentFolder.children.find(
+          (c) => c.type === 'file' && c.id === fileId
+        ) as FilePointer | undefined;
+
+        if (!filePointer) {
+          throw new Error('File not found in folder');
+        }
+
+        // Resolve current file metadata from IPNS
+        const { metadata: currentMetadata } = await resolveFileMetadata(
+          filePointer.fileMetaIpnsName,
+          parentFolder.folderKey
+        );
+
+        // Decrypt the file IPNS private key from FilePointer (or HKDF fallback)
+        const { privateKey: fileIpnsPrivateKey, migratedIpnsPrivateKeyEncrypted } =
+          await getFileIpnsPrivateKey(
+            filePointer,
+            auth.vaultKeypair.privateKey,
+            auth.vaultKeypair.publicKey
+          );
+
+        let ipnsRecord: FileIpnsRecordPayload;
+        let prunedCids: string[];
+        try {
+          // Call restoreVersion service function
+          ({ ipnsRecord, prunedCids } = await restoreVersion({
+            fileIpnsPrivateKey,
+            fileMetaIpnsName: filePointer.fileMetaIpnsName,
+            folderKey: parentFolder.folderKey,
+            currentMetadata,
+            versionIndex,
+          }));
+        } finally {
+          fileIpnsPrivateKey.fill(0);
+        }
+
+        // Publish the IPNS record (folder metadata untouched)
+        await folderService.replaceFileInFolder({
+          fileId,
+          fileIpnsRecord: ipnsRecord,
+          parentFolderState: parentFolder,
+        });
+
+        // Update local folder state (modifiedAt and migrated IPNS key on FilePointer)
+        const updatedChildren = parentFolder.children.map((child) => {
+          if (child.type === 'file' && child.id === fileId) {
+            return {
+              ...child,
+              modifiedAt: Date.now(),
+              ...(migratedIpnsPrivateKeyEncrypted
+                ? { ipnsPrivateKeyEncrypted: migratedIpnsPrivateKeyEncrypted }
+                : {}),
+            };
+          }
+          return child;
+        });
+        useFolderStore.getState().updateFolderChildren(parentId, updatedChildren);
+
+        // Lazy migration: persist wrapped IPNS key to folder metadata on IPFS
+        if (migratedIpnsPrivateKeyEncrypted) {
+          folderService
+            .updateFolderMetadata({
+              folderId: parentFolder.id,
+              children: updatedChildren,
+              folderKey: parentFolder.folderKey,
+              ipnsPrivateKey: parentFolder.ipnsPrivateKey,
+              ipnsName: parentFolder.ipnsName,
+              sequenceNumber: parentFolder.sequenceNumber,
+            })
+            .then(({ newSequenceNumber }) => {
+              useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
+            })
+            .catch((err) => {
+              console.warn('Lazy IPNS key migration: folder re-publish failed, will retry:', err);
+            });
+        }
+
+        // Unpin pruned version CIDs
+        for (const prunedCid of prunedCids) {
+          unpinFromIpfs(prunedCid).catch(() => {});
+        }
+
+        // Refresh quota
+        useQuotaStore.getState().fetchQuota();
+
+        setState({ isLoading: false, error: null });
+      } catch (err) {
+        const error = err instanceof Error ? err.message : 'Failed to restore version';
+        setState({ isLoading: false, error });
+        throw err;
+      }
+    },
+    []
+  );
+
+  /**
+   * Delete a specific past version from a file's version history.
+   *
+   * Removes the version from metadata, publishes updated IPNS record, and
+   * unpins the deleted version's CID.
+   *
+   * @param parentId - Parent folder ID ('root' or folder UUID)
+   * @param fileId - File ID (UUID)
+   * @param versionIndex - Index of version to delete (0 = newest past version)
+   */
+  const handleDeleteVersion = useCallback(
+    async (parentId: string, fileId: string, versionIndex: number): Promise<void> => {
+      setState({ isLoading: true, error: null });
+      try {
+        const folders = useFolderStore.getState().folders;
+        const vault = useVaultStore.getState();
+        const auth = useAuthStore.getState();
+
+        if (!auth.vaultKeypair) {
+          throw new Error('No ECIES keypair available - please log in again');
+        }
+
+        // Get parent folder state
+        const parentFolder =
+          parentId === 'root' ? getRootFolderState(vault, folders) : folders[parentId];
+
+        if (!parentFolder) {
+          throw new Error('Parent folder not found or vault not initialized');
+        }
+
+        // Find the FilePointer
+        const filePointer = parentFolder.children.find(
+          (c) => c.type === 'file' && c.id === fileId
+        ) as FilePointer | undefined;
+
+        if (!filePointer) {
+          throw new Error('File not found in folder');
+        }
+
+        // Resolve current file metadata from IPNS
+        const { metadata: currentMetadata } = await resolveFileMetadata(
+          filePointer.fileMetaIpnsName,
+          parentFolder.folderKey
+        );
+
+        // Decrypt the file IPNS private key from FilePointer (or HKDF fallback)
+        const { privateKey: fileIpnsPrivateKey, migratedIpnsPrivateKeyEncrypted } =
+          await getFileIpnsPrivateKey(
+            filePointer,
+            auth.vaultKeypair.privateKey,
+            auth.vaultKeypair.publicKey
+          );
+
+        let ipnsRecord: FileIpnsRecordPayload;
+        let deletedCid: string;
+        try {
+          // Call deleteVersion service function
+          ({ ipnsRecord, deletedCid } = await deleteVersion({
+            fileIpnsPrivateKey,
+            fileMetaIpnsName: filePointer.fileMetaIpnsName,
+            folderKey: parentFolder.folderKey,
+            currentMetadata,
+            versionIndex,
+          }));
+        } finally {
+          fileIpnsPrivateKey.fill(0);
+        }
+
+        // Publish the IPNS record (folder metadata untouched)
+        await folderService.replaceFileInFolder({
+          fileId,
+          fileIpnsRecord: ipnsRecord,
+          parentFolderState: parentFolder,
+        });
+
+        // Lazy migration: persist wrapped IPNS key to folder metadata on IPFS
+        if (migratedIpnsPrivateKeyEncrypted) {
+          const updatedChildren = parentFolder.children.map((child) => {
+            if (child.type === 'file' && child.id === fileId) {
+              return { ...child, ipnsPrivateKeyEncrypted: migratedIpnsPrivateKeyEncrypted };
+            }
+            return child;
+          });
+          useFolderStore.getState().updateFolderChildren(parentId, updatedChildren);
+
+          folderService
+            .updateFolderMetadata({
+              folderId: parentFolder.id,
+              children: updatedChildren,
+              folderKey: parentFolder.folderKey,
+              ipnsPrivateKey: parentFolder.ipnsPrivateKey,
+              ipnsName: parentFolder.ipnsName,
+              sequenceNumber: parentFolder.sequenceNumber,
+            })
+            .then(({ newSequenceNumber }) => {
+              useFolderStore.getState().updateFolderSequence(parentId, newSequenceNumber);
+            })
+            .catch((err) => {
+              console.warn('Lazy IPNS key migration: folder re-publish failed, will retry:', err);
+            });
+        }
+
+        // Unpin deleted version CID
+        unpinFromIpfs(deletedCid).catch(() => {});
+
+        // Refresh quota
+        useQuotaStore.getState().fetchQuota();
+
+        setState({ isLoading: false, error: null });
+      } catch (err) {
+        const error = err instanceof Error ? err.message : 'Failed to delete version';
         setState({ isLoading: false, error });
         throw err;
       }
@@ -876,6 +1252,8 @@ export function useFolder() {
     addFile: handleAddFile,
     addFiles: handleAddFiles,
     updateFile: handleUpdateFile,
+    restoreVersion: handleRestoreVersion,
+    deleteVersion: handleDeleteVersion,
 
     // Utilities
     clearError,

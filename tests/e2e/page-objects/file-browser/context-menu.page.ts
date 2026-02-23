@@ -122,6 +122,48 @@ export class ContextMenuPage {
   }
 
   /**
+   * Get the Preview menu option (image, PDF, audio, video, text files).
+   */
+  previewOption(): Locator {
+    return this.menu().locator('button[role="menuitem"]', { hasText: 'Preview' });
+  }
+
+  /**
+   * Click the Preview option to open the preview dialog.
+   */
+  async clickPreview(): Promise<void> {
+    await this.previewOption().click();
+  }
+
+  /**
+   * Get the Share menu option.
+   */
+  shareOption(): Locator {
+    return this.menu().locator('button[role="menuitem"]', { hasText: 'Share' });
+  }
+
+  /**
+   * Click the Share option to open the share dialog.
+   */
+  async clickShare(): Promise<void> {
+    await this.shareOption().click();
+  }
+
+  /**
+   * Get the Hide menu option (shared items only).
+   */
+  hideOption(): Locator {
+    return this.menu().locator('button[role="menuitem"]', { hasText: 'Hide' });
+  }
+
+  /**
+   * Click the Hide option (shared items only).
+   */
+  async clickHide(): Promise<void> {
+    await this.hideOption().click();
+  }
+
+  /**
    * Get all visible menu option labels.
    * Useful for verifying which actions are available.
    */

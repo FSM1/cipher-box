@@ -115,7 +115,7 @@ export const useIpfsControllerUpload = <TError = void, TContext = unknown>(
   return useMutation(mutationOptions, queryClient);
 };
 /**
- * Remove a pinned file from IPFS via Pinata using its CID.
+ * Remove a pinned file from IPFS using its CID.
  * @summary Unpin file from IPFS
  */
 export const ipfsControllerUnpin = (unpinDto: UnpinDto, signal?: AbortSignal) => {

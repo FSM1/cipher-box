@@ -62,11 +62,15 @@ pub struct AppState {
     /// Set once the SyncDaemon is spawned. Uses std::sync::RwLock because the tray
     /// menu event handler is synchronous.
     pub sync_trigger: std::sync::RwLock<Option<SyncTrigger>>,
+
+    /// Hex-encoded secp256k1 private key for headless auth (debug builds only).
+    /// Set via `--dev-key <hex>` CLI argument. Compiled out in release builds.
+    pub dev_key: RwLock<Option<String>>,
 }
 
 impl AppState {
-    /// Create a new AppState with the given API base URL.
-    pub fn new(api_base_url: &str) -> Self {
+    /// Create a new AppState with the given API base URL and optional dev key.
+    pub fn new(api_base_url: &str, dev_key: Option<String>) -> Self {
         Self {
             api: Arc::new(ApiClient::new(api_base_url)),
             private_key: RwLock::new(None),
@@ -79,6 +83,7 @@ impl AppState {
             is_authenticated: RwLock::new(false),
             mount_status: RwLock::new(MountStatus::Unmounted),
             sync_trigger: std::sync::RwLock::new(None),
+            dev_key: RwLock::new(dev_key),
         }
     }
 
@@ -105,6 +110,13 @@ impl AppState {
         }
         {
             let mut key = self.root_ipns_private_key.write().await;
+            if let Some(ref mut k) = *key { k.zeroize(); }
+            *key = None;
+        }
+
+        // Clear dev key (sensitive: contains private key hex)
+        {
+            let mut key = self.dev_key.write().await;
             if let Some(ref mut k) = *key { k.zeroize(); }
             *key = None;
         }

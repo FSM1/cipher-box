@@ -8,15 +8,19 @@
 
 import {
   deriveFileIpnsKeypair,
+  generateFileIpnsKeypair,
   encryptFileMetadata,
   decryptFileMetadata,
   createIpnsRecord,
   marshalIpnsRecord,
   wrapKey,
+  unwrapKey,
   bytesToHex,
   hexToBytes,
   type FileMetadata,
+  type FilePointer,
   type EncryptedFileMetadata,
+  type VersionEntry,
 } from '@cipherbox/crypto';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
 import { resolveIpnsRecord } from './ipns.service';
@@ -24,6 +28,12 @@ import { useAuthStore } from '../stores/auth.store';
 
 /** IPNS record lifetime: 24 hours in milliseconds */
 const IPNS_LIFETIME_MS = 24 * 60 * 60 * 1000;
+
+/** Maximum number of past versions retained per file (VER-04) */
+const MAX_VERSIONS_PER_FILE = 10;
+
+/** Cooldown period for automatic version creation (15 minutes in ms) */
+const VERSION_COOLDOWN_MS = 15 * 60 * 1000;
 
 /** Safe base64 encoding that avoids call stack overflow from spread operator */
 function uint8ToBase64(bytes: Uint8Array): string {
@@ -44,11 +54,51 @@ export type FileIpnsRecordPayload = {
 };
 
 /**
+ * Retrieve the IPNS private key for a file, decrypting from the FilePointer
+ * if available, or falling back to HKDF derivation for legacy files.
+ *
+ * When HKDF fallback is used and userPublicKey is provided, the derived key
+ * is ECIES-wrapped for lazy migration: the caller should persist the wrapped
+ * key in the FilePointer and re-publish folder metadata.
+ *
+ * @param filePointer - FilePointer containing optional encrypted IPNS key
+ * @param userPrivateKey - User's secp256k1 private key (for ECIES unwrap or HKDF fallback)
+ * @param userPublicKey - User's secp256k1 public key (for wrapping during lazy migration)
+ * @returns Decrypted Ed25519 IPNS private key, plus migration data if HKDF fallback was used
+ * @remarks The caller is responsible for zeroing `privateKey` with `.fill(0)` after use.
+ */
+export async function getFileIpnsPrivateKey(
+  filePointer: FilePointer,
+  userPrivateKey: Uint8Array,
+  userPublicKey?: Uint8Array
+): Promise<{ privateKey: Uint8Array; migratedIpnsPrivateKeyEncrypted?: string }> {
+  if (filePointer.ipnsPrivateKeyEncrypted) {
+    const privateKey = await unwrapKey(
+      hexToBytes(filePointer.ipnsPrivateKeyEncrypted),
+      userPrivateKey
+    );
+    return { privateKey };
+  }
+  // Fallback: HKDF derivation for legacy FilePointers without encrypted key
+  const derived = await deriveFileIpnsKeypair(userPrivateKey, filePointer.id);
+
+  // Wrap derived key for lazy migration if public key is available
+  let migratedIpnsPrivateKeyEncrypted: string | undefined;
+  if (userPublicKey) {
+    const wrapped = await wrapKey(derived.privateKey, userPublicKey);
+    migratedIpnsPrivateKeyEncrypted = bytesToHex(wrapped);
+  }
+
+  return { privateKey: derived.privateKey, migratedIpnsPrivateKeyEncrypted };
+}
+
+/**
  * Create a per-file IPNS metadata record.
  *
- * Derives the file's IPNS keypair, encrypts file metadata with the parent
- * folder's key, uploads to IPFS, and creates a signed IPNS record.
- * Returns the record payload ready for batch publish.
+ * Generates a random Ed25519 IPNS keypair for the file, encrypts file metadata
+ * with the parent folder's key, uploads to IPFS, and creates a signed IPNS record.
+ * Returns the record payload ready for batch publish, plus the ECIES-wrapped
+ * IPNS private key for storage in the FilePointer.
  *
  * @param params.fileId - Unique file identifier (UUID)
  * @param params.cid - IPFS CID of the encrypted file content
@@ -57,9 +107,9 @@ export type FileIpnsRecordPayload = {
  * @param params.size - Original file size in bytes
  * @param params.mimeType - MIME type of the original file
  * @param params.folderKey - Parent folder's decrypted AES-256 key
- * @param params.userPrivateKey - User's secp256k1 private key (for HKDF derivation)
+ * @param params.userPublicKey - User's secp256k1 public key (for ECIES wrapping)
  * @param params.encryptionMode - Encryption mode ('GCM' or 'CTR', defaults to 'GCM')
- * @returns File IPNS name and record payload for batch publish
+ * @returns File IPNS name, record payload for batch publish, and ECIES-wrapped IPNS private key
  */
 export async function createFileMetadata(params: {
   fileId: string;
@@ -69,16 +119,21 @@ export async function createFileMetadata(params: {
   size: number;
   mimeType: string;
   folderKey: Uint8Array;
-  userPrivateKey: Uint8Array;
+  userPublicKey: Uint8Array;
   encryptionMode?: 'GCM' | 'CTR';
 }): Promise<{
   fileMetaIpnsName: string;
   ipnsRecord: FileIpnsRecordPayload;
+  ipnsPrivateKeyEncrypted: string;
 }> {
-  // 1. Derive file IPNS keypair from user private key + fileId
-  const ipnsKeypair = await deriveFileIpnsKeypair(params.userPrivateKey, params.fileId);
+  // 1. Generate random Ed25519 IPNS keypair for this file
+  const ipnsKeypair = await generateFileIpnsKeypair();
 
-  // 2. Create FileMetadata object
+  // 2. ECIES-wrap the IPNS private key with user's public key for storage in FilePointer
+  const wrappedIpnsKey = await wrapKey(ipnsKeypair.privateKey, params.userPublicKey);
+  const ipnsPrivateKeyEncrypted = bytesToHex(wrappedIpnsKey);
+
+  // 3. Create FileMetadata object
   const now = Date.now();
   const metadata: FileMetadata = {
     version: 'v1',
@@ -92,14 +147,14 @@ export async function createFileMetadata(params: {
     modifiedAt: now,
   };
 
-  // 3. Encrypt with parent folderKey
+  // 4. Encrypt with parent folderKey
   const encrypted: EncryptedFileMetadata = await encryptFileMetadata(metadata, params.folderKey);
 
-  // 4. Upload encrypted metadata to IPFS
+  // 5. Upload encrypted metadata to IPFS
   const blob = new Blob([JSON.stringify(encrypted)], { type: 'application/json' });
   const { cid: metadataCid } = await addToIpfs(blob);
 
-  // 5. Create IPNS record (sequence number 1 for new records)
+  // 6. Create IPNS record (sequence number 1 for new records)
   const record = await createIpnsRecord(
     ipnsKeypair.privateKey,
     `/ipfs/${metadataCid}`,
@@ -107,21 +162,24 @@ export async function createFileMetadata(params: {
     IPNS_LIFETIME_MS
   );
 
-  // 6. Marshal and base64 encode the record
+  // 7. Marshal and base64 encode the record
   const recordBytes = marshalIpnsRecord(record);
   const recordBase64 = uint8ToBase64(recordBytes);
 
-  // 7. TEE enrollment: encrypt IPNS private key with TEE public key
-  let encryptedIpnsPrivateKey: string | undefined;
+  // 8. TEE enrollment: encrypt IPNS private key with TEE public key
+  let teeEncryptedIpnsPrivateKey: string | undefined;
   let keyEpoch: number | undefined;
 
   const teeKeys = useAuthStore.getState().teeKeys;
   if (teeKeys?.currentPublicKey) {
     const teePublicKey = hexToBytes(teeKeys.currentPublicKey);
     const encryptedKey = await wrapKey(ipnsKeypair.privateKey, teePublicKey);
-    encryptedIpnsPrivateKey = bytesToHex(encryptedKey);
+    teeEncryptedIpnsPrivateKey = bytesToHex(encryptedKey);
     keyEpoch = teeKeys.currentEpoch;
   }
+
+  // Zero the private key now that wrapping, signing, and TEE enrollment are done
+  ipnsKeypair.privateKey.fill(0);
 
   return {
     fileMetaIpnsName: ipnsKeypair.ipnsName,
@@ -129,9 +187,10 @@ export async function createFileMetadata(params: {
       ipnsName: ipnsKeypair.ipnsName,
       recordBase64,
       metadataCid,
-      encryptedIpnsPrivateKey,
+      encryptedIpnsPrivateKey: teeEncryptedIpnsPrivateKey,
       keyEpoch,
     },
+    ipnsPrivateKeyEncrypted,
   };
 }
 
@@ -170,43 +229,91 @@ export async function resolveFileMetadata(
 }
 
 /**
+ * Determine whether a file content update should create a new version entry.
+ *
+ * - If `forceVersion` is true, always returns true (web re-upload always versions).
+ * - If no versions exist yet, returns true (first version always created).
+ * - If the newest version is older than VERSION_COOLDOWN_MS, returns true.
+ * - If the newest version is within cooldown, returns false (overwrite without versioning).
+ *
+ * @param currentMetadata - Current file metadata (may have existing versions)
+ * @param forceVersion - Whether to force version creation (e.g., explicit re-upload)
+ * @returns true if a new version entry should be created
+ */
+export function shouldCreateVersion(currentMetadata: FileMetadata, forceVersion: boolean): boolean {
+  if (forceVersion) return true;
+
+  const versions = currentMetadata.versions;
+  if (!versions || versions.length === 0) return true;
+
+  const newestTimestamp = versions[0].timestamp;
+  return Date.now() - newestTimestamp >= VERSION_COOLDOWN_MS;
+}
+
+/**
  * Update an existing file's per-IPNS metadata record.
  *
  * Merges updates into the current metadata, re-encrypts, uploads to IPFS,
  * and creates a new IPNS record with an incremented sequence number.
  * Does NOT re-enroll with TEE (already enrolled from creation).
  *
- * @param params.fileId - File identifier (for IPNS keypair derivation)
+ * @param params.fileIpnsPrivateKey - Decrypted Ed25519 IPNS private key for this file
+ * @param params.fileMetaIpnsName - IPNS name for this file's metadata record
  * @param params.folderKey - Parent folder's decrypted AES-256 key
- * @param params.userPrivateKey - User's secp256k1 private key (for HKDF derivation)
  * @param params.currentMetadata - Current file metadata to update
  * @param params.updates - Partial updates to apply (cid, fileKeyEncrypted, fileIv, size)
- * @returns Updated IPNS record payload for publish
+ * @param params.createVersion - Whether to push current metadata into versions array before updating
+ * @returns Updated IPNS record payload for publish, plus CIDs of pruned versions to unpin
  */
 export async function updateFileMetadata(params: {
-  fileId: string;
+  fileIpnsPrivateKey: Uint8Array;
+  fileMetaIpnsName: string;
   folderKey: Uint8Array;
-  userPrivateKey: Uint8Array;
   currentMetadata: FileMetadata;
   updates: Partial<Pick<FileMetadata, 'cid' | 'fileKeyEncrypted' | 'fileIv' | 'size'>>;
+  createVersion: boolean;
 }): Promise<{
   ipnsRecord: FileIpnsRecordPayload;
+  prunedCids: string[];
 }> {
-  // 1. Merge updates into current metadata
+  // 1. Build version history
+  let versions: VersionEntry[] | undefined;
+  let prunedCids: string[] = [];
+
+  if (params.createVersion) {
+    // Push current state into versions array (newest first)
+    const versionEntry: VersionEntry = {
+      cid: params.currentMetadata.cid,
+      fileKeyEncrypted: params.currentMetadata.fileKeyEncrypted,
+      fileIv: params.currentMetadata.fileIv,
+      size: params.currentMetadata.size,
+      timestamp: Date.now(),
+      encryptionMode: params.currentMetadata.encryptionMode ?? 'GCM',
+    };
+    const allVersions = [versionEntry, ...(params.currentMetadata.versions ?? [])];
+
+    // Prune excess versions beyond limit
+    versions = allVersions.slice(0, MAX_VERSIONS_PER_FILE);
+    prunedCids = allVersions.slice(MAX_VERSIONS_PER_FILE).map((v) => v.cid);
+  } else {
+    // Preserve existing versions as-is
+    versions = params.currentMetadata.versions;
+  }
+
+  // 2. Merge updates into current metadata
   const updatedMetadata: FileMetadata = {
     ...params.currentMetadata,
     ...params.updates,
+    // Only include versions field when there are actual versions (backward compat)
+    ...(versions && versions.length > 0 ? { versions } : { versions: undefined }),
     modifiedAt: Date.now(),
   };
 
-  // 2. Re-derive file IPNS keypair
-  const ipnsKeypair = await deriveFileIpnsKeypair(params.userPrivateKey, params.fileId);
-
   // 3. Resolve current IPNS to get sequence number
-  const resolved = await resolveIpnsRecord(ipnsKeypair.ipnsName);
+  const resolved = await resolveIpnsRecord(params.fileMetaIpnsName);
   if (!resolved) {
     throw new Error(
-      `Cannot update file metadata: existing IPNS record not found for ${ipnsKeypair.ipnsName}`
+      `Cannot update file metadata: existing IPNS record not found for ${params.fileMetaIpnsName}`
     );
   }
   const currentSeq = resolved.sequenceNumber;
@@ -221,7 +328,7 @@ export async function updateFileMetadata(params: {
 
   // 6. Create new IPNS record with incremented sequence number
   const record = await createIpnsRecord(
-    ipnsKeypair.privateKey,
+    params.fileIpnsPrivateKey,
     `/ipfs/${metadataCid}`,
     newSeq,
     IPNS_LIFETIME_MS
@@ -232,9 +339,172 @@ export async function updateFileMetadata(params: {
 
   return {
     ipnsRecord: {
-      ipnsName: ipnsKeypair.ipnsName,
+      ipnsName: params.fileMetaIpnsName,
       recordBase64,
       metadataCid,
     },
+    prunedCids,
+  };
+}
+
+/**
+ * Restore a previous version of a file.
+ * The current content becomes a new version entry, and the restored version's
+ * data becomes the current content. Non-destructive: version chain grows.
+ *
+ * @param params.fileIpnsPrivateKey - Decrypted Ed25519 IPNS private key for this file
+ * @param params.fileMetaIpnsName - IPNS name for this file's metadata record
+ * @param params.folderKey - Parent folder's decrypted AES-256 key
+ * @param params.currentMetadata - Current file metadata
+ * @param params.versionIndex - Index of version to restore (0 = newest past version)
+ * @returns Updated IPNS record payload and any pruned CIDs
+ */
+export async function restoreVersion(params: {
+  fileIpnsPrivateKey: Uint8Array;
+  fileMetaIpnsName: string;
+  folderKey: Uint8Array;
+  currentMetadata: FileMetadata;
+  versionIndex: number;
+}): Promise<{ ipnsRecord: FileIpnsRecordPayload; prunedCids: string[] }> {
+  const versions = params.currentMetadata.versions;
+  if (!versions || params.versionIndex < 0 || params.versionIndex >= versions.length) {
+    throw new Error('Invalid version index');
+  }
+
+  const versionToRestore = versions[params.versionIndex];
+
+  // Build a version entry from CURRENT metadata (it becomes a past version)
+  const currentAsVersion: VersionEntry = {
+    cid: params.currentMetadata.cid,
+    fileKeyEncrypted: params.currentMetadata.fileKeyEncrypted,
+    fileIv: params.currentMetadata.fileIv,
+    size: params.currentMetadata.size,
+    timestamp: Date.now(),
+    encryptionMode: params.currentMetadata.encryptionMode ?? 'GCM',
+  };
+
+  // Remove restored version from array, prepend current as new version entry
+  const remainingVersions = versions.filter((_, i) => i !== params.versionIndex);
+  const newVersions = [currentAsVersion, ...remainingVersions];
+
+  // Prune if exceeds max
+  const prunedVersions = newVersions.slice(0, MAX_VERSIONS_PER_FILE);
+  const prunedCids = newVersions.slice(MAX_VERSIONS_PER_FILE).map((v) => v.cid);
+
+  // Build updated metadata with restored version's data as current
+  const updatedMetadata: FileMetadata = {
+    ...params.currentMetadata,
+    cid: versionToRestore.cid,
+    fileKeyEncrypted: versionToRestore.fileKeyEncrypted,
+    fileIv: versionToRestore.fileIv,
+    size: versionToRestore.size,
+    encryptionMode: versionToRestore.encryptionMode,
+    versions: prunedVersions.length > 0 ? prunedVersions : undefined,
+    modifiedAt: Date.now(),
+  };
+
+  // Resolve current IPNS to get sequence number
+  const resolved = await resolveIpnsRecord(params.fileMetaIpnsName);
+  if (!resolved) {
+    throw new Error(
+      `Cannot restore version: existing IPNS record not found for ${params.fileMetaIpnsName}`
+    );
+  }
+  const newSeq = resolved.sequenceNumber + 1n;
+
+  // Encrypt updated metadata with folderKey
+  const encrypted = await encryptFileMetadata(updatedMetadata, params.folderKey);
+
+  // Upload to IPFS
+  const blob = new Blob([JSON.stringify(encrypted)], { type: 'application/json' });
+  const { cid: metadataCid } = await addToIpfs(blob);
+
+  // Create new IPNS record with incremented sequence number
+  const record = await createIpnsRecord(
+    params.fileIpnsPrivateKey,
+    `/ipfs/${metadataCid}`,
+    newSeq,
+    IPNS_LIFETIME_MS
+  );
+
+  const recordBytes = marshalIpnsRecord(record);
+  const recordBase64 = uint8ToBase64(recordBytes);
+
+  return {
+    ipnsRecord: {
+      ipnsName: params.fileMetaIpnsName,
+      recordBase64,
+      metadataCid,
+    },
+    prunedCids,
+  };
+}
+
+/**
+ * Delete a specific past version from a file's version history.
+ * Updates the file's IPNS metadata without the deleted version.
+ *
+ * @param params.fileIpnsPrivateKey - Decrypted Ed25519 IPNS private key for this file
+ * @param params.fileMetaIpnsName - IPNS name for this file's metadata record
+ * @param params.folderKey - Parent folder's decrypted AES-256 key
+ * @param params.currentMetadata - Current file metadata
+ * @param params.versionIndex - Index of version to delete
+ * @returns Updated IPNS record and CID to unpin
+ */
+export async function deleteVersion(params: {
+  fileIpnsPrivateKey: Uint8Array;
+  fileMetaIpnsName: string;
+  folderKey: Uint8Array;
+  currentMetadata: FileMetadata;
+  versionIndex: number;
+}): Promise<{ ipnsRecord: FileIpnsRecordPayload; deletedCid: string }> {
+  const versions = params.currentMetadata.versions;
+  if (!versions || params.versionIndex < 0 || params.versionIndex >= versions.length) {
+    throw new Error('Invalid version index');
+  }
+
+  const deletedCid = versions[params.versionIndex].cid;
+  const newVersions = versions.filter((_, i) => i !== params.versionIndex);
+
+  // Build updated metadata with filtered versions
+  const updatedMetadata: FileMetadata = {
+    ...params.currentMetadata,
+    versions: newVersions.length > 0 ? newVersions : undefined,
+  };
+
+  // Resolve current IPNS to get sequence number
+  const resolved = await resolveIpnsRecord(params.fileMetaIpnsName);
+  if (!resolved) {
+    throw new Error(
+      `Cannot delete version: existing IPNS record not found for ${params.fileMetaIpnsName}`
+    );
+  }
+  const newSeq = resolved.sequenceNumber + 1n;
+
+  // Encrypt updated metadata with folderKey
+  const encrypted = await encryptFileMetadata(updatedMetadata, params.folderKey);
+
+  // Upload to IPFS
+  const blob = new Blob([JSON.stringify(encrypted)], { type: 'application/json' });
+  const { cid: metadataCid } = await addToIpfs(blob);
+
+  // Create new IPNS record with incremented sequence number
+  const record = await createIpnsRecord(
+    params.fileIpnsPrivateKey,
+    `/ipfs/${metadataCid}`,
+    newSeq,
+    IPNS_LIFETIME_MS
+  );
+
+  const recordBytes = marshalIpnsRecord(record);
+  const recordBase64 = uint8ToBase64(recordBytes);
+
+  return {
+    ipnsRecord: {
+      ipnsName: params.fileMetaIpnsName,
+      recordBase64,
+      metadataCid,
+    },
+    deletedCid,
   };
 }

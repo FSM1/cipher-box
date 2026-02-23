@@ -20,6 +20,7 @@ import {
 import { getOrCreateDeviceIdentity } from '../lib/device/identity';
 import { detectDeviceInfo } from '../lib/device/info';
 import { initializeOrSyncRegistry } from '../services/device-registry.service';
+import { clearFileSizeCache } from './useFileSize';
 
 export function useAuth() {
   const navigate = useNavigate();
@@ -414,6 +415,7 @@ export function useAuth() {
       useSyncStore.getState().reset();
       useDeviceRegistryStore.getState().clearRegistry();
       useMfaStore.getState().reset();
+      clearFileSizeCache();
       clearAuthState();
 
       // 4. Clear pending REQUIRED_SHARE state
@@ -430,6 +432,7 @@ export function useAuth() {
       useSyncStore.getState().reset();
       useDeviceRegistryStore.getState().clearRegistry();
       useMfaStore.getState().reset();
+      clearFileSizeCache();
       clearAuthState();
       setPendingCipherboxJwt(null);
       setPendingAuthMethod(null);

@@ -40,3 +40,4 @@ coverage/
 # Temporary files
 temp/*
 tests/e2e/test-results/*
+.claude/settings.local.json

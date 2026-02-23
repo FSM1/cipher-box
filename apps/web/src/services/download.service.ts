@@ -60,8 +60,8 @@ export function triggerBrowserDownload(
   filename: string,
   mimeType: string = 'application/octet-stream'
 ): void {
-  // Cast to ArrayBuffer for TypeScript 5.9 compatibility (Uint8Array.buffer is ArrayBufferLike)
-  const blob = new Blob([content.buffer as ArrayBuffer], { type: mimeType });
+  // Cast needed for TS 5.9 where Uint8Array<ArrayBufferLike> isn't assignable to BlobPart
+  const blob = new Blob([content as BlobPart], { type: mimeType });
   const url = URL.createObjectURL(blob);
 
   const link = document.createElement('a');

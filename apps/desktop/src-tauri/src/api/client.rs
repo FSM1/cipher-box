@@ -21,8 +21,13 @@ pub struct ApiClient {
 impl ApiClient {
     /// Create a new API client with the given base URL.
     pub fn new(base_url: &str) -> Self {
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("failed to initialize HTTP client");
         Self {
-            client: Client::new(),
+            client,
             base_url: base_url.trim_end_matches('/').to_string(),
             access_token: Arc::new(RwLock::new(None)),
         }
@@ -32,6 +37,11 @@ impl ApiClient {
     pub async fn set_access_token(&self, token: String) {
         let mut guard = self.access_token.write().await;
         *guard = Some(token);
+    }
+
+    /// Read the current access token (used for session restore).
+    pub async fn get_access_token(&self) -> Option<String> {
+        self.access_token.read().await.clone()
     }
 
     /// Clear the access token (used on logout).

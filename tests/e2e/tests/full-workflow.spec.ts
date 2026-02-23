@@ -174,10 +174,23 @@ test.describe.serial('Full Workflow', () => {
    * Phase 6.3: Uses breadcrumb path to verify navigation (~/root/foldername format).
    */
   async function navigateIntoFolder(name: string): Promise<void> {
-    await fileList.doubleClickFolder(name);
-    // Wait for breadcrumb path to include the folder name
-    await breadcrumbs.waitForPathToContain(name, { timeout: 10000 });
-    navigationStack.push(name);
+    // Retry once if navigation fails (transient IPNS resolution failures in CI
+    // cause the app to navigate back to parent; the folder row reappears and
+    // a second attempt usually succeeds).
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await fileList.doubleClickFolder(name);
+      try {
+        await breadcrumbs.waitForPathToContain(name, { timeout: 30000 });
+        navigationStack.push(name);
+        return;
+      } catch {
+        if (attempt === 1) throw new Error(`navigateIntoFolder("${name}") failed after 2 attempts`);
+        // Wait for the app to settle after a failed navigation (it navigates back to parent)
+        await page.waitForTimeout(2000);
+        // Verify the folder row is still visible before retrying
+        await fileList.waitForItemToAppear(name, { timeout: 10000 });
+      }
+    }
   }
 
   /**
@@ -607,6 +620,8 @@ test.describe.serial('Full Workflow', () => {
   });
 
   test('3.10 Upload file to subfolder after reload', async () => {
+    test.setTimeout(90000);
+
     // Navigate into images folder
     await navigateIntoFolder(imagesFolder);
 
@@ -1217,6 +1232,127 @@ test.describe.serial('Full Workflow', () => {
     // Close without changes
     await textEditorDialog.clickCancel();
     await textEditorDialog.waitForClose();
+  });
+
+  // ============================================
+  // Phase 6.6: File Versioning (Version History)
+  // ============================================
+  // After test 6.5.3, the text editor save triggered shouldCreateVersion.
+  // Since no prior versions existed, the original content (editableFileUpdatedContent)
+  // was captured as v1. The current content is textEditorEditedContent.
+  // The 15-minute version cooldown prevents additional versions in this test run.
+
+  test('6.6.1 Version history visible in Details dialog', async () => {
+    test.setTimeout(60000);
+
+    // We're at root after 6.5.5. Right-click the editable file and open Details.
+    await fileList.rightClickItem(editableFileName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickDetails();
+    await detailsDialog.waitForOpen();
+
+    // Wait for file metadata to resolve and version section to appear.
+    // The version section only renders after IPNS resolution completes.
+    await detailsDialog.waitForVersionSection({ timeout: 30000 });
+
+    // Version section should be visible
+    expect(await detailsDialog.isVersionSectionVisible()).toBe(true);
+
+    // Should have exactly 1 past version (created by text editor save in 6.5.3)
+    expect(await detailsDialog.getVersionCount()).toBe(1);
+
+    // Version number should be "v1" (oldest = v1)
+    const versionText = await detailsDialog.getVersionNumberText(0);
+    expect(versionText).toBe('v1');
+
+    // Section header "// version history" should be present
+    const headers = await detailsDialog.getVisibleSectionHeaders();
+    expect(headers).toContain('// version history');
+
+    // Close the dialog
+    await detailsDialog.close();
+  });
+
+  test('6.6.2 Restore a past version', async () => {
+    // Restore involves IPNS publish which can be slow
+    test.setTimeout(60000);
+
+    // Open Details for the editable file
+    await fileList.rightClickItem(editableFileName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickDetails();
+    await detailsDialog.waitForOpen();
+
+    // Wait for version section to appear
+    await detailsDialog.waitForVersionSection({ timeout: 30000 });
+
+    // Click restore on version entry index 0 (the only version, v1)
+    await detailsDialog.clickVersionRestore(0);
+
+    // Inline confirm should appear
+    expect(await detailsDialog.isVersionConfirmVisible()).toBe(true);
+
+    // Confirm the restore
+    await detailsDialog.confirmVersionAction();
+
+    // After restore: the old current (textEditorEditedContent) becomes v1,
+    // and the restored content is now current. Version count stays at 1.
+    // Wait for the version section to refresh by re-checking version count.
+    await expect(async () => {
+      expect(await detailsDialog.getVersionCount()).toBe(1);
+    }).toPass({ timeout: 30000 });
+
+    // Close the details dialog
+    await detailsDialog.close();
+
+    // Verify the restore worked by opening the text editor
+    await fileList.rightClickItem(editableFileName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickEdit();
+    await textEditorDialog.waitForOpen({ timeout: 10000 });
+    await textEditorDialog.waitForContentLoaded({ timeout: 30000 });
+
+    // Content should now be the pre-6.5.3 content that was versioned
+    const content = await textEditorDialog.getContent();
+    expect(content).toBe(editableFileUpdatedContent);
+
+    // Close text editor without saving
+    await textEditorDialog.clickCancel();
+    await textEditorDialog.waitForClose();
+  });
+
+  test('6.6.3 Delete a past version', async () => {
+    test.setTimeout(60000);
+
+    // Open Details for the editable file
+    await fileList.rightClickItem(editableFileName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickDetails();
+    await detailsDialog.waitForOpen();
+
+    // Wait for version section (should show v1 = the content that was current before restore)
+    await detailsDialog.waitForVersionSection({ timeout: 30000 });
+
+    // Should have 1 version
+    expect(await detailsDialog.getVersionCount()).toBe(1);
+
+    // Click delete on version entry index 0
+    await detailsDialog.clickVersionDelete(0);
+
+    // Inline confirm should appear
+    expect(await detailsDialog.isVersionConfirmVisible()).toBe(true);
+
+    // Confirm the deletion
+    await detailsDialog.confirmVersionAction();
+
+    // After deletion, version count is 0, so the VersionHistory component
+    // should no longer render. Wait for the section to disappear.
+    await expect(async () => {
+      expect(await detailsDialog.isVersionSectionVisible()).toBe(false);
+    }).toPass({ timeout: 15000 });
+
+    // Close the details dialog
+    await detailsDialog.close();
   });
 
   // ============================================

@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
 import { IpnsService } from './ipns.service';
 import { FolderIpns } from './entities/folder-ipns.entity';
 import { PublishIpnsDto } from './dto';
@@ -219,18 +219,18 @@ describe('IpnsService', () => {
       );
     });
 
-    it('should throw HttpException on delegated routing failure', async () => {
+    it('should succeed and save to DB even on delegated routing failure', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
+      mockFolderIpnsRepo.save.mockResolvedValue(mockFolderEntity);
       mockFetch.mockResolvedValue({
         ok: false,
         status: 500,
         text: () => Promise.resolve('Internal Server Error'),
       });
 
-      await expect(service.publishRecord(testUserId, createDto())).rejects.toThrow(HttpException);
-      await expect(service.publishRecord(testUserId, createDto())).rejects.toThrow(
-        'Failed to publish IPNS record to routing network'
-      );
+      const result = await service.publishRecord(testUserId, createDto());
+      expect(result.success).toBe(true);
+      expect(mockFolderIpnsRepo.save).toHaveBeenCalled();
     });
 
     it('should retry on rate limiting (429) with Retry-After header', async () => {
@@ -297,8 +297,9 @@ describe('IpnsService', () => {
       expect(mockFetch).toHaveBeenCalledTimes(3);
     });
 
-    it('should throw HttpException after max retries on network errors', async () => {
+    it('should succeed and save to DB even after max retries on network errors', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
+      mockFolderIpnsRepo.save.mockResolvedValue(mockFolderEntity);
       mockFetch.mockRejectedValue(new Error('Network error'));
 
       jest.spyOn(global, 'setTimeout').mockImplementation((cb: () => void) => {
@@ -306,10 +307,9 @@ describe('IpnsService', () => {
         return 0 as unknown as NodeJS.Timeout;
       });
 
-      await expect(service.publishRecord(testUserId, createDto())).rejects.toThrow(HttpException);
-      await expect(service.publishRecord(testUserId, createDto())).rejects.toThrow(
-        'Failed to publish IPNS record to routing network after multiple attempts'
-      );
+      const result = await service.publishRecord(testUserId, createDto());
+      expect(result.success).toBe(true);
+      expect(mockFolderIpnsRepo.save).toHaveBeenCalled();
     });
 
     it('should update encrypted key on key rotation for existing folder', async () => {
@@ -898,11 +898,12 @@ describe('IpnsService', () => {
     });
   });
 
-  describe('error handling in publishToDelegatedRouting', () => {
+  describe('delegated routing failures are non-fatal', () => {
     let setTimeoutSpy: jest.SpyInstance;
 
     beforeEach(() => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
+      mockFolderIpnsRepo.save.mockResolvedValue(mockFolderEntity);
       setTimeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation((cb: () => void) => {
         cb();
         return 0 as unknown as NodeJS.Timeout;
@@ -913,58 +914,48 @@ describe('IpnsService', () => {
       setTimeoutSpy.mockRestore();
     });
 
-    it('should convert non-Error exceptions to Error objects', async () => {
+    it('should succeed when delegated routing rejects with string error', async () => {
       mockFetch.mockRejectedValue('string error');
 
-      await expect(
-        service.publishRecord(testUserId, {
-          ipnsName: testIpnsName,
-          record: testRecord,
-          metadataCid: testMetadataCid,
-        })
-      ).rejects.toThrow(HttpException);
+      const result = await service.publishRecord(testUserId, {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: testMetadataCid,
+      });
+      expect(result.success).toBe(true);
+      expect(mockFolderIpnsRepo.save).toHaveBeenCalled();
     });
 
-    it('should throw BAD_GATEWAY for non-429 HTTP errors', async () => {
+    it('should succeed when delegated routing returns non-429 HTTP errors', async () => {
       mockFetch.mockResolvedValue({
         ok: false,
         status: 400,
         text: () => Promise.resolve('Bad Request'),
       });
 
-      try {
-        await service.publishRecord(testUserId, {
-          ipnsName: testIpnsName,
-          record: testRecord,
-          metadataCid: testMetadataCid,
-        });
-        fail('Expected HttpException to be thrown');
-      } catch (error) {
-        expect(error).toBeInstanceOf(HttpException);
-        expect((error as HttpException).getStatus()).toBe(HttpStatus.BAD_GATEWAY);
-      }
+      const result = await service.publishRecord(testUserId, {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: testMetadataCid,
+      });
+      expect(result.success).toBe(true);
+      expect(mockFolderIpnsRepo.save).toHaveBeenCalled();
     });
 
-    it('should throw with generic message to avoid leaking internal details', async () => {
+    it('should succeed when delegated routing returns 503', async () => {
       mockFetch.mockResolvedValue({
         ok: false,
         status: 503,
         text: () => Promise.resolve('Sensitive internal error details'),
       });
 
-      try {
-        await service.publishRecord(testUserId, {
-          ipnsName: testIpnsName,
-          record: testRecord,
-          metadataCid: testMetadataCid,
-        });
-        fail('Expected HttpException to be thrown');
-      } catch (error) {
-        expect(error).toBeInstanceOf(HttpException);
-        const message = (error as HttpException).message;
-        expect(message).not.toContain('Sensitive');
-        expect(message).toBe('Failed to publish IPNS record to routing network');
-      }
+      const result = await service.publishRecord(testUserId, {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: testMetadataCid,
+      });
+      expect(result.success).toBe(true);
+      expect(mockFolderIpnsRepo.save).toHaveBeenCalled();
     });
   });
 });

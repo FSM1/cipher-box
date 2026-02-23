@@ -18,6 +18,8 @@ type PdfPreviewDialogProps = {
   item: FilePointer | null;
   /** Parent folder's decrypted AES-256 key (needed to decrypt file metadata) */
   folderKey: Uint8Array | null;
+  /** Share ID when previewing from a shared folder — uses re-wrapped file keys */
+  shareId?: string | null;
 };
 
 const MIN_ZOOM = 0.25;
@@ -30,12 +32,19 @@ const ZOOM_STEP = 0.25;
  * Downloads the encrypted file from IPFS, decrypts it, and renders
  * all pages using pdfjs-dist canvases. Supports zoom and page navigation.
  */
-export function PdfPreviewDialog({ open, onClose, item, folderKey }: PdfPreviewDialogProps) {
+export function PdfPreviewDialog({
+  open,
+  onClose,
+  item,
+  folderKey,
+  shareId,
+}: PdfPreviewDialogProps) {
   const { loading, error, objectUrl, handleDownload } = useFilePreview({
     open,
     item,
     mimeType: 'application/pdf',
     folderKey,
+    shareId,
   });
 
   const [zoom, setZoom] = useState(1.0);

@@ -46,7 +46,10 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 
 **Milestone Goal:** Elevate the staging MVP into a production-ready encrypted storage platform with sharing, search, MFA, file versioning, cross-platform desktop, and TEE failover.
 
-- [ ] **Phase 11: Cross-Platform Desktop** - Linux and Windows desktop apps (Tauri, platform-specific FUSE/virtual drive) -- can run in parallel
+- [x] **Phase 11: Windows Desktop** - Windows desktop app with WinFsp virtual filesystem (Tauri + NSIS installer)
+- [x] **Phase 11.1: macOS Desktop Catch-Up** - Close all desktop gaps from Phases 12-12.6 before cross-platform expansion (INSERTED)
+- [ ] **Phase 11.3: Linux Desktop** - Linux desktop app with libfuse FUSE mount (Tauri + AppImage/deb) (INSERTED)
+- [ ] **Phase 11.4: Cross-Platform E2E Testing** - Validate each desktop client against API/web with native Postgres + IPFS per runner (INSERTED)
 - [x] **Phase 12: Core Kit Identity Provider Foundation** - Replace PnP Modal SDK with MPC Core Kit, CipherBox as identity provider
 - [x] **Phase 12.1: AES-CTR Streaming Encryption** - AES-256-CTR for media files with byte-range decryption and in-browser playback (INSERTED)
 - [x] **Phase 12.2: Encrypted Device Registry** - Encrypted device metadata on IPFS for cross-device infrastructure (INSERTED)
@@ -55,8 +58,9 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 12.4: MFA + Cross-Device Approval** - MFA enrollment, recovery phrase, factor management, device approval flow (INSERTED)
 - [x] **Phase 12.5: MFA Polishing, UAT & E2E Testing** - Polish auth flows, wallet E2E with mock provider, fix UAT bugs (INSERTED)
 - [x] **Phase 12.6: Per-File IPNS Metadata Split** - Split file metadata into per-file IPNS records, decouple content updates from folder publishes (INSERTED)
-- [ ] **Phase 13: File Versioning** - Automatic version retention with history view and restore
-- [ ] **Phase 14: User-to-User Sharing** - Read-only folder sharing with ECIES key re-wrapping
+- [x] **Phase 11.2: Remove v1 Folder Metadata** - Eliminate v1/v2 dual-schema, make v2 FilePointer canonical, per-file IPNS in desktop FUSE (INSERTED)
+- [x] **Phase 13: File Versioning** - Automatic version retention with history view and restore
+- [x] **Phase 14: User-to-User Sharing** - Read-only folder and file sharing with ECIES key re-wrapping
 - [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
 - [ ] **Phase 16: Advanced Sync** - Conflict detection, offline queue, and idempotent replay
 - [ ] **Phase 17: AWS Nitro TEE** - Nitro enclave as fallback TEE provider for IPNS republishing
@@ -74,19 +78,56 @@ See `.planning/milestones/m3/ROADMAP.md` for full M3 phase details.
 
 ## Phase Details
 
-### Phase 11: Cross-Platform Desktop
+### Phase 11: Windows Desktop
 
-**Goal**: CipherBox desktop app runs on Linux and Windows with native filesystem integration
-**Depends on**: Phase 9 (macOS desktop complete in M1). Can run in parallel with any M2 phase.
-**Requirements**: PLAT-01, PLAT-02
-**Research flag**: NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse) and Windows virtual drive (WinFsp or Dokany) have platform-specific build and packaging requirements. Tauri cross-compilation and CI matrix need investigation.
+**Goal**: CipherBox desktop app runs on Windows with WinFsp virtual filesystem, full feature parity with macOS (system tray, credential storage, background sync, auto-start, headless mode)
+**Depends on**: Phase 9 (macOS desktop complete in M1), Phase 11.1 (macOS catch-up), Phase 11.2 (v1 removal). Can run in parallel with any M2 phase.
+**Requirements**: PLAT-02
+**Research flag**: COMPLETE -- WinFsp Rust crate (v0.12.4), platform abstraction architecture, NSIS installer hooks, CI Windows runner researched
+**Success Criteria** (what must be TRUE):
+
+1. Windows user can install CipherBox via NSIS installer (WinFsp driver bundled and silently installed)
+2. Windows user can log in and access a virtual filesystem mount at C:\Users\<user>\CipherBox
+3. Background sync, system tray, and Windows Credential Manager storage work (parity with macOS)
+4. CI builds and checks the Windows desktop app on windows-latest runner
+
+**Plans:** 3 plans
+
+Plans:
+
+- [x] 11-01-PLAN.md — Platform abstraction layer: FileAttrs struct, cross-platform inode/cache/file_handle, Cargo.toml winfsp dep, build.rs delayload
+- [x] 11-02-PLAN.md — WinFsp FileSystemContext implementation: all callbacks, Windows mount/unmount, path resolution, platform special file filter
+- [x] 11-03-PLAN.md — Platform branching (main.rs, tray, commands) + Tauri NSIS packaging with WinFsp bundling + CI Windows build job
+
+### Phase 11.3: Linux Desktop (INSERTED)
+
+**Goal**: CipherBox desktop app runs on Linux with native FUSE filesystem integration via libfuse, full feature parity with macOS and Windows (system tray, credential storage, background sync, auto-start, headless mode)
+**Depends on**: Phase 11 (Windows Desktop — platform abstraction layer reused), Phase 11.1 (macOS catch-up), Phase 11.2 (v1 removal)
+**Requirements**: PLAT-01
+**Research flag**: NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse) packaging differences from macOS fuser, AppImage/deb packaging, Linux system tray (libappindicator vs StatusNotifierItem), Linux keyring (Secret Service API), CI Linux runner requirements
 **Success Criteria** (what must be TRUE):
 
 1. Linux user can install CipherBox via AppImage or .deb, log in, and access a FUSE mount at ~/CipherBox
-2. Windows user can install CipherBox via MSI or NSIS installer, log in, and access a virtual drive (e.g., C:\CipherBox or mapped drive letter)
-3. Background sync, system tray, and keychain storage work on both platforms (parity with macOS)
-4. CI builds and packages desktop apps for all three platforms (macOS, Linux, Windows)
+2. Background sync, system tray, and keyring storage work on Linux (parity with macOS/Windows)
+3. CI builds and packages Linux desktop app (adds to existing macOS + Windows matrix)
    **Plans**: TBD
+
+### Phase 11.4: Cross-Platform E2E Testing (INSERTED)
+
+**Goal**: Validate that each desktop client (Windows, macOS, Linux) can round-trip correctly against the API and web client — proving cross-platform data integrity, encryption compatibility, and sync correctness without requiring cross-runner coordination
+**Depends on**: Phase 11 (Windows Desktop), Phase 11.1 (macOS Desktop Catch-Up), Phase 11.3 (Linux Desktop — all platform clients must exist)
+**Requirements**: E2E-01, E2E-02, E2E-03, E2E-04, E2E-05
+**Research flag**: NEEDS `/gsd:research-phase` -- Native Postgres/IPFS installation on macOS + Windows CI runners, Tauri command-level testing without full GUI, CI matrix strategy for shared test suite across 3 platforms
+**Success Criteria** (what must be TRUE):
+
+1. Each platform CI runner (Windows, macOS, Linux) can start a local backend stack (API + Postgres + IPFS) using native installs (no Docker on macOS/Windows)
+2. API/web creates test data (vault, folders, files) and desktop client reads it correctly via Tauri commands or FUSE mount
+3. Desktop client creates/modifies data and API/web verifies the changes are correctly encrypted and accessible
+4. Cross-platform crypto round-trip tests pass: content encrypted on platform A can be decrypted by platform B's crypto layer
+5. IPNS sync round-trip works: metadata published by one client is resolved correctly by another client on the same runner
+6. CI test matrix runs all 3 platforms with shared test definitions (no per-platform test duplication)
+
+**Plans**: TBD
 
 ### Phase 12: Core Kit Identity Provider Foundation
 
@@ -275,6 +316,30 @@ Plans:
 - [x] 12.6-04-PLAN.md — Frontend hooks + components: useFolder/useFilePreview/useDropUpload v2, FileBrowser/TextEditor/DetailsDialog updates
 - [x] 12.6-05-PLAN.md — Recovery tool v2 support, vault export docs update, full build verification
 
+### Phase 11.2: Remove v1 Folder Metadata (INSERTED)
+
+**Goal**: Eliminate folder metadata v1/v2 dual-schema code -- make v2 (FilePointer) the only format, tighten validation to reject hybrid metadata, and implement per-file IPNS publishing in desktop FUSE
+**Depends on**: Phase 11.1 (macOS Desktop Catch-Up), Phase 12.6 (Per-File IPNS Metadata Split)
+**Requirements**: Data integrity, cross-device interop
+**Success Criteria** (what must be TRUE):
+
+1. Only v2 folder metadata (FilePointer children with fileMetaIpnsName) is written by all clients
+2. v1 folder metadata (inline FileEntry with cid/fileKeyEncrypted) is rejected by validators on all platforms
+3. All v1/v2 branching code removed: ~500 lines of dual-schema types, dispatch, and conversion
+4. Desktop FUSE create() derives file IPNS keypair and release() publishes per-file FileMetadata
+5. Desktop build_folder_metadata emits FilePointer (not FileEntry) -- cross-device format is consistent
+6. TypeScript crypto package exports canonical names (FolderMetadata, FolderChild) -- no V2 suffix
+7. Recovery tool (recovery.html) handles only v2 FilePointer path
+8. All tests pass: pnpm test + cargo test --features fuse
+
+**Plans:** 3 plans
+
+Plans:
+
+- [x] 11.2-01-PLAN.md — TypeScript crypto types: delete v1, rename v2 to canonical, update web app imports
+- [x] 11.2-02-PLAN.md — Rust desktop: delete v1 types, rename v2, rewrite build_folder_metadata to FilePointer
+- [x] 11.2-03-PLAN.md — Per-file IPNS in FUSE create/release, recovery tool v2-only, cross-platform verification
+
 ### Phase 13: File Versioning
 
 **Goal**: Users can access and restore previous versions of their files
@@ -288,22 +353,41 @@ Plans:
 3. User can restore a previous version, which becomes the current version while preserving the version chain
 4. Version retention policy is enforced (configurable max versions per file) and excess versions are pruned automatically
 5. Storage consumed by retained versions counts against the user's 500 MiB quota
-   **Plans**: TBD
+
+**Plans:** 5 plans
+
+Plans:
+
+- [x] 13-01-PLAN.md — Crypto types: VersionEntry type in TS + Rust, FileMetadata versions array, backward-compatible validator
+- [x] 13-02-PLAN.md — Web versioning logic: updateFileMetadata with version push/prune, cooldown, stop unpinning old CIDs
+- [x] 13-03-PLAN.md — Desktop FUSE versioning: release() version creation, 15-min cooldown, stop unpinning old CIDs
+- [x] 13-04-PLAN.md — Version history UI: DetailsDialog version panel, download/restore/delete past versions
+- [x] 13-05-PLAN.md — Recovery tool version support + full cross-platform build verification
 
 ### Phase 14: User-to-User Sharing
 
-**Goal**: Users can share encrypted folders with other CipherBox users while maintaining zero-knowledge guarantees
+**Goal**: Users can share encrypted folders and individual files with other CipherBox users while maintaining zero-knowledge guarantees. Instant share via public key paste (no accept/decline flow). Read-only only. Lazy key rotation on revoke.
 **Depends on**: Phase 13
 **Requirements**: SHARE-01, SHARE-02, SHARE-03, SHARE-04, SHARE-05
-**Research flag**: NEEDS `/gsd:research-phase` -- share revocation key rotation protocol is the most complex protocol in M2. ECIES re-wrapping correctness must be validated with test vectors.
+**Research flag**: COMPLETE -- ECIES re-wrapping protocol, share record architecture, lazy rotation protocol, recipient browsing architecture researched
 **Success Criteria** (what must be TRUE):
 
-1. User can share a folder (read-only) with another CipherBox user by re-wrapping the folderKey with the recipient's publicKey via ECIES
-2. User can invite a recipient by email or public key, and the recipient sees the invitation and can accept or decline
-3. User can revoke a share, which triggers folderKey rotation and re-wrapping for all remaining recipients
-4. Recipient can browse shared folders in a "Shared with me" section of the file browser
-5. Server never sees plaintext folderKey at any point during the sharing flow
-   **Plans**: TBD
+1. User can share a folder or file (read-only) with another CipherBox user by re-wrapping the folderKey/fileKey with the recipient's publicKey via ECIES
+2. User can paste a recipient's secp256k1 public key and the share takes effect instantly (no accept/decline)
+3. User can revoke a share, which triggers lazy folderKey rotation on the next folder modification
+4. Recipient can browse shared folders in a "Shared with me" section at ~/shared
+5. Server never sees plaintext folderKey or fileKey at any point during the sharing flow
+
+**Plans:** 6 plans
+
+Plans:
+
+- [x] 14-01-PLAN.md — Crypto reWrapKey utility + Share/ShareKey TypeORM entities
+- [x] 14-02-PLAN.md — Backend shares module (service, controller, 8 endpoints, DTOs) + API client regen
+- [x] 14-03-PLAN.md — Frontend share store + share service + Settings public key display
+- [x] 14-04-PLAN.md — ShareDialog modal + context menu Share action + FileBrowser wiring
+- [x] 14-05-PLAN.md — "Shared with me" browsing (route, SharedFileBrowser, read-only enforcement, shared download)
+- [x] 14-06-PLAN.md — Post-upload share key propagation + revocation + lazy key rotation
 
 ### Phase 15: Link Sharing and Search
 
@@ -349,50 +433,56 @@ Plans:
 
 **Execution Order:**
 
-Sequential order: 12 -> 12.5 -> 12.6 -> 12.1 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
+Sequential order: 12 -> 12.5 -> 12.6 -> 12.1 -> 11.2 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
 
 Parallel phases:
 
-- Phase 11 (Cross-Platform Desktop) can run in parallel with any M2 phase (depends only on Phase 9/M1).
+- Phase 11 (Windows Desktop) can run in parallel with any M2 phase (depends only on Phase 9/M1).
+- Phase 11.3 (Linux Desktop) can run in parallel with any M2 phase (depends on Phase 11 for platform abstraction).
+- Phase 11.4 (Cross-Platform E2E) must follow Phase 11.3 (all three desktop platforms must exist).
 - Phase 17 (AWS Nitro TEE) can optionally execute in parallel with Phases 14-16 (depends on Phase 12).
 
-| Phase                      | Milestone | Plans Complete | Status      | Completed  |
-| -------------------------- | --------- | -------------- | ----------- | ---------- |
-| 1. Foundation              | M1        | 3/3            | Complete    | 2026-01-20 |
-| 2. Authentication          | M1        | 4/4            | Complete    | 2026-01-20 |
-| 3. Core Encryption         | M1        | 3/3            | Complete    | 2026-01-20 |
-| 4. File Storage            | M1        | 4/4            | Complete    | 2026-01-20 |
-| 4.1 API Service Testing    | M1        | 3/3            | Complete    | 2026-01-21 |
-| 4.2 Local IPFS Testing     | M1        | 2/2            | Complete    | 2026-01-21 |
-| 5. Folder System           | M1        | 4/4            | Complete    | 2026-01-21 |
-| 6. File Browser UI         | M1        | 4/4            | Complete    | 2026-01-22 |
-| 6.1 Webapp Automation      | M1        | 7/7            | Complete    | 2026-01-22 |
-| 6.2 Restyle App            | M1        | 6/6            | Complete    | 2026-01-27 |
-| 6.3 UI Structure           | M1        | 5/5            | Complete    | 2026-01-30 |
-| 7. Multi-Device Sync       | M1        | 4/4            | Complete    | 2026-02-02 |
-| 7.1 Atomic File Upload     | M1        | 2/2            | Complete    | 2026-02-07 |
-| 8. TEE Integration         | M1        | 4/4            | Complete    | 2026-02-07 |
-| 9. Desktop Client          | M1        | 7/7            | Complete    | 2026-02-08 |
-| 9.1 Env/DevOps/Staging     | M1        | 6/6            | Complete    | 2026-02-09 |
-| 10. Data Portability       | M1        | 3/3            | Complete    | 2026-02-11 |
-| 12. Core Kit Identity      | M2        | 5/5            | Complete    | 2026-02-13 |
-| 12.1 AES-CTR Streaming     | M2        | 4/4            | Complete    | 2026-02-17 |
-| 12.2 Device Registry       | M2        | 3/3            | Complete    | 2026-02-13 |
-| 12.3 SIWE + Identity       | M2        | 4/4            | Complete    | 2026-02-14 |
-| 12.3.1 Identity Cleanup    | M2        | 4/4            | Complete    | 2026-02-14 |
-| 12.4 MFA + Cross-Device    | M2        | 5/5            | Complete    | 2026-02-15 |
-| 12.5 MFA Polish/UAT/E2E    | M2        | 3/3            | Complete    | 2026-02-16 |
-| 12.6 Per-File IPNS Meta    | M2        | 5/5            | Complete    | 2026-02-17 |
-| 13. File Versioning        | M2        | 0/TBD          | Not started | -          |
-| 14. User-to-User Sharing   | M2        | 0/TBD          | Not started | -          |
-| 15. Link Sharing + Search  | M2        | 0/TBD          | Not started | -          |
-| 16. Advanced Sync          | M2        | 0/TBD          | Not started | -          |
-| 11. Cross-Platform Desktop | M2        | 0/TBD          | Not started | -          |
-| 17. AWS Nitro TEE          | M2        | 0/TBD          | Not started | -          |
-| 18. Billing Infrastructure | M3        | 0/TBD          | Not started | -          |
-| 19. Team Accounts          | M3        | 0/TBD          | Not started | -          |
-| 20. Document Editors       | M3        | 0/TBD          | Not started | -          |
-| 21. Document Signing       | M3        | 0/TBD          | Not started | -          |
+| Phase                       | Milestone | Plans Complete | Status      | Completed  |
+| --------------------------- | --------- | -------------- | ----------- | ---------- |
+| 1. Foundation               | M1        | 3/3            | Complete    | 2026-01-20 |
+| 2. Authentication           | M1        | 4/4            | Complete    | 2026-01-20 |
+| 3. Core Encryption          | M1        | 3/3            | Complete    | 2026-01-20 |
+| 4. File Storage             | M1        | 4/4            | Complete    | 2026-01-20 |
+| 4.1 API Service Testing     | M1        | 3/3            | Complete    | 2026-01-21 |
+| 4.2 Local IPFS Testing      | M1        | 2/2            | Complete    | 2026-01-21 |
+| 5. Folder System            | M1        | 4/4            | Complete    | 2026-01-21 |
+| 6. File Browser UI          | M1        | 4/4            | Complete    | 2026-01-22 |
+| 6.1 Webapp Automation       | M1        | 7/7            | Complete    | 2026-01-22 |
+| 6.2 Restyle App             | M1        | 6/6            | Complete    | 2026-01-27 |
+| 6.3 UI Structure            | M1        | 5/5            | Complete    | 2026-01-30 |
+| 7. Multi-Device Sync        | M1        | 4/4            | Complete    | 2026-02-02 |
+| 7.1 Atomic File Upload      | M1        | 2/2            | Complete    | 2026-02-07 |
+| 8. TEE Integration          | M1        | 4/4            | Complete    | 2026-02-07 |
+| 9. Desktop Client           | M1        | 7/7            | Complete    | 2026-02-08 |
+| 9.1 Env/DevOps/Staging      | M1        | 6/6            | Complete    | 2026-02-09 |
+| 10. Data Portability        | M1        | 3/3            | Complete    | 2026-02-11 |
+| 12. Core Kit Identity       | M2        | 5/5            | Complete    | 2026-02-13 |
+| 12.1 AES-CTR Streaming      | M2        | 4/4            | Complete    | 2026-02-17 |
+| 12.2 Device Registry        | M2        | 3/3            | Complete    | 2026-02-13 |
+| 12.3 SIWE + Identity        | M2        | 4/4            | Complete    | 2026-02-14 |
+| 12.3.1 Identity Cleanup     | M2        | 4/4            | Complete    | 2026-02-14 |
+| 12.4 MFA + Cross-Device     | M2        | 5/5            | Complete    | 2026-02-15 |
+| 12.5 MFA Polish/UAT/E2E     | M2        | 3/3            | Complete    | 2026-02-16 |
+| 12.6 Per-File IPNS Meta     | M2        | 5/5            | Complete    | 2026-02-17 |
+| 11.1 macOS Desktop Catch-Up | M2        | 7/7            | Complete    | 2026-02-17 |
+| 11.2 Remove v1 Folder Meta  | M2        | 3/3            | Complete    | 2026-02-19 |
+| 13. File Versioning         | M2        | 5/5            | Complete    | 2026-02-19 |
+| 14. User-to-User Sharing    | M2        | 6/6            | Complete    | 2026-02-21 |
+| 15. Link Sharing + Search   | M2        | 0/TBD          | Not started | -          |
+| 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
+| 11. Windows Desktop         | M2        | 3/3            | Complete    | 2026-02-22 |
+| 11.3 Linux Desktop          | M2        | 0/TBD          | Not started | -          |
+| 11.4 Cross-Platform E2E     | M2        | 0/TBD          | Not started | -          |
+| 17. AWS Nitro TEE           | M2        | 0/TBD          | Not started | -          |
+| 18. Billing Infrastructure  | M3        | 0/TBD          | Not started | -          |
+| 19. Team Accounts           | M3        | 0/TBD          | Not started | -          |
+| 20. Document Editors        | M3        | 0/TBD          | Not started | -          |
+| 21. Document Signing        | M3        | 0/TBD          | Not started | -          |
 
 ---
 
@@ -401,5 +491,5 @@ Milestone 1 shipped: 2026-02-11
 Milestone 2 roadmap created: 2026-02-11
 Milestone 3 roadmap created: 2026-02-11
 Total M1 phases: 17 | Total M1 plans: 72 | Depth: Comprehensive
-Total M2 phases: 9 | Total M2 plans: TBD | Depth: Comprehensive
+Total M2 phases: 10 | Total M2 plans: TBD | Depth: Comprehensive
 Total M3 phases: 4 | Total M3 plans: TBD | Depth: Comprehensive

@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { TeeService, RepublishEntry, RepublishResult } from './tee.service';
 import { TeeKeyStateService } from './tee-key-state.service';
+import { TeeKeyState } from './tee-key-state.entity';
 
 // Valid 65-byte uncompressed secp256k1 public key: 0x04 prefix + 64 bytes
 const VALID_PUBLIC_KEY_HEX = '04' + 'ab'.repeat(64);
@@ -296,7 +297,7 @@ describe('TeeService', () => {
       fetchMock.mockResolvedValueOnce(mockResponse({ publicKey: VALID_PUBLIC_KEY_HEX }));
 
       teeKeyStateService.getCurrentState!.mockResolvedValue(null);
-      teeKeyStateService.initializeEpoch!.mockResolvedValue({} as any);
+      teeKeyStateService.initializeEpoch!.mockResolvedValue({} as TeeKeyState);
 
       await service.initializeFromTee();
 
@@ -308,7 +309,10 @@ describe('TeeService', () => {
       const healthData = { healthy: true, epoch: 3 };
       fetchMock.mockResolvedValueOnce(mockResponse(healthData));
 
-      const existingState = { currentEpoch: 3, currentPublicKey: Buffer.from('abc') } as any;
+      const existingState = {
+        currentEpoch: 3,
+        currentPublicKey: Buffer.from('abc'),
+      } as unknown as TeeKeyState;
       teeKeyStateService.getCurrentState!.mockResolvedValue(existingState);
 
       await service.initializeFromTee();
@@ -321,7 +325,10 @@ describe('TeeService', () => {
       const healthData = { healthy: true, epoch: 5 };
       fetchMock.mockResolvedValueOnce(mockResponse(healthData));
 
-      const existingState = { currentEpoch: 3, currentPublicKey: Buffer.from('abc') } as any;
+      const existingState = {
+        currentEpoch: 3,
+        currentPublicKey: Buffer.from('abc'),
+      } as unknown as TeeKeyState;
       teeKeyStateService.getCurrentState!.mockResolvedValue(existingState);
 
       // Should not throw
@@ -360,7 +367,10 @@ describe('TeeService', () => {
       const healthData = { healthy: true, epoch: 2 };
       fetchMock.mockResolvedValueOnce(mockResponse(healthData));
 
-      const existingState = { currentEpoch: 2, currentPublicKey: Buffer.from('abc') } as any;
+      const existingState = {
+        currentEpoch: 2,
+        currentPublicKey: Buffer.from('abc'),
+      } as unknown as TeeKeyState;
       teeKeyStateService.getCurrentState!.mockResolvedValue(existingState);
 
       await service.initializeFromTee();

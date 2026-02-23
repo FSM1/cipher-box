@@ -1,10 +1,12 @@
-import { type KeyboardEvent, useEffect, useState } from 'react';
+import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { bytesToHex } from '@cipherbox/crypto';
 import { AppShell } from '../components/layout';
 import { LinkedMethods } from '../components/auth/LinkedMethods';
 import { SecurityTab } from '../components/mfa/SecurityTab';
 import { VaultExport } from '../components/vault/VaultExport';
 import { useAuth } from '../hooks/useAuth';
+import { useAuthStore } from '../stores/auth.store';
 
 type SettingsTabId = 'linked-methods' | 'security';
 
@@ -39,6 +41,27 @@ export function SettingsPage() {
   const { isAuthenticated, isLoading } = useAuth();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<SettingsTabId>('linked-methods');
+  const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const vaultKeypair = useAuthStore((s) => s.vaultKeypair);
+
+  const publicKeyHex = vaultKeypair?.publicKey ? `0x${bytesToHex(vaultKeypair.publicKey)}` : null;
+
+  const handleCopyPublicKey = useCallback(() => {
+    if (!publicKeyHex) return;
+    navigator.clipboard.writeText(publicKeyHex).then(() => {
+      setCopied(true);
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+      copyTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
+    });
+  }, [publicKeyHex]);
+
+  // Clean up timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) clearTimeout(copyTimeoutRef.current);
+    };
+  }, []);
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -127,6 +150,21 @@ export function SettingsPage() {
         <section className="settings-section" style={{ marginTop: 'var(--spacing-md)' }}>
           <VaultExport />
         </section>
+
+        {publicKeyHex && (
+          <section className="settings-section" style={{ marginTop: 'var(--spacing-md)' }}>
+            <h3 className="settings-section-heading">{'// your public key'}</h3>
+            <p className="settings-section-description">
+              {'// share this key with others to receive shared files'}
+            </p>
+            <div className="settings-pubkey-box">
+              <code className="settings-pubkey-value">{publicKeyHex}</code>
+            </div>
+            <button type="button" className="settings-pubkey-copy" onClick={handleCopyPublicKey}>
+              {copied ? '--copied' : '--copy'}
+            </button>
+          </section>
+        )}
       </div>
     </AppShell>
   );

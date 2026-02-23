@@ -6,6 +6,7 @@
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
 use thiserror::Error;
+use zeroize::Zeroize;
 
 /// Ed25519 public key size in bytes.
 pub const ED25519_PUBLIC_KEY_SIZE: usize = 32;
@@ -47,10 +48,11 @@ pub fn sign_ed25519(message: &[u8], private_key: &[u8]) -> Result<Vec<u8>, Ed255
         return Err(Ed25519Error::InvalidPrivateKeySize);
     }
 
-    let key_bytes: [u8; 32] = private_key
+    let mut key_bytes: [u8; 32] = private_key
         .try_into()
         .map_err(|_| Ed25519Error::InvalidPrivateKeySize)?;
     let signing_key = SigningKey::from_bytes(&key_bytes);
+    key_bytes.zeroize();
     let signature = signing_key.sign(message);
 
     Ok(signature.to_bytes().to_vec())
@@ -85,10 +87,11 @@ pub fn get_public_key(private_key: &[u8]) -> Result<Vec<u8>, Ed25519Error> {
         return Err(Ed25519Error::InvalidPrivateKeySize);
     }
 
-    let key_bytes: [u8; 32] = private_key
+    let mut key_bytes: [u8; 32] = private_key
         .try_into()
         .map_err(|_| Ed25519Error::InvalidPrivateKeySize)?;
     let signing_key = SigningKey::from_bytes(&key_bytes);
+    key_bytes.zeroize();
     let verifying_key = signing_key.verifying_key();
 
     Ok(verifying_key.to_bytes().to_vec())

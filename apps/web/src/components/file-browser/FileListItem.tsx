@@ -6,8 +6,9 @@ import {
   type MouseEvent,
   type TouchEvent,
 } from 'react';
-import type { FolderChildV2, FilePointer, FolderEntry } from '@cipherbox/crypto';
-import { formatDate } from '../../utils/format';
+import type { FolderChild, FilePointer, FolderEntry } from '@cipherbox/crypto';
+import { formatBytes, formatDate } from '../../utils/format';
+import { useFileSize } from '../../hooks/useFileSize';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
 
 /**
@@ -20,7 +21,7 @@ export type DragItem = { id: string; type: 'file' | 'folder' };
 
 type FileListItemProps = {
   /** The file or folder item to display */
-  item: FolderChildV2;
+  item: FolderChild;
   /** Whether this item is currently selected */
   isSelected: boolean;
   /** Parent folder ID (for drag data) */
@@ -28,7 +29,9 @@ type FileListItemProps = {
   /** All currently selected item IDs (for multi-select drag) */
   selectedIds: Set<string>;
   /** All items in the current folder (for resolving types of selected IDs) */
-  allItems: FolderChildV2[];
+  allItems: FolderChild[];
+  /** Parent folder's decrypted AES-256 key (for resolving file sizes) */
+  folderKey: Uint8Array | null;
   /** Callback when item is clicked (with modifier key info) */
   onSelect: (
     itemId: string,
@@ -37,9 +40,9 @@ type FileListItemProps = {
   /** Callback when folder is double-clicked to navigate into */
   onNavigate: (folderId: string) => void;
   /** Callback when right-click context menu is requested */
-  onContextMenu: (event: MouseEvent, item: FolderChildV2) => void;
+  onContextMenu: (event: MouseEvent, item: FolderChild) => void;
   /** Callback when drag starts */
-  onDragStart: (event: DragEvent, item: FolderChildV2) => void;
+  onDragStart: (event: DragEvent, item: FolderChild) => void;
   /** Callback when items are dropped onto this folder (folders only) */
   onDrop?: (items: DragItem[], sourceParentId: string) => void;
   /** Callback when external files are dropped onto this folder */
@@ -49,21 +52,21 @@ type FileListItemProps = {
 /**
  * Type guard for folder entries.
  */
-function isFolder(item: FolderChildV2): item is FolderEntry {
+function isFolder(item: FolderChild): item is FolderEntry {
   return item.type === 'folder';
 }
 
 /**
  * Type guard for file pointers (v2).
  */
-function isFile(item: FolderChildV2): item is FilePointer {
+function isFile(item: FolderChild): item is FilePointer {
   return item.type === 'file';
 }
 
 /**
  * Get text prefix for item type (terminal-style).
  */
-function getItemIcon(item: FolderChildV2): string {
+function getItemIcon(item: FolderChild): string {
   if (isFolder(item)) {
     return '[DIR]';
   }
@@ -84,6 +87,7 @@ export function FileListItem({
   parentId,
   selectedIds,
   allItems,
+  folderKey,
   onSelect,
   onNavigate,
   onContextMenu,
@@ -142,6 +146,25 @@ export function FileListItem({
   );
 
   /**
+   * Handle mobile action button click.
+   * Creates a synthetic mouse event positioned at the button for context menu.
+   */
+  const handleActionButtonClick = useCallback(
+    (e: React.MouseEvent<HTMLButtonElement>) => {
+      e.stopPropagation();
+      const rect = e.currentTarget.getBoundingClientRect();
+      const syntheticEvent = {
+        preventDefault: () => {},
+        stopPropagation: () => {},
+        clientX: rect.left,
+        clientY: rect.bottom,
+      } as unknown as MouseEvent;
+      onContextMenu(syntheticEvent, item);
+    },
+    [item, onContextMenu]
+  );
+
+  /**
    * Handle drag start - serialize item data.
    */
   const handleDragStart = useCallback(
@@ -190,6 +213,7 @@ export function FileListItem({
         // Create synthetic mouse event for context menu
         const syntheticEvent = {
           preventDefault: () => {},
+          stopPropagation: () => {},
           clientX: touch.clientX,
           clientY: touch.clientY,
         } as unknown as MouseEvent;
@@ -302,9 +326,11 @@ export function FileListItem({
     [item, onDrop, onExternalFileDrop]
   );
 
-  // Display size: v2 FilePointers don't have inline size (lives in per-file IPNS metadata).
-  // Show '--' for files until size is resolved on download/preview.
-  const sizeDisplay = isFile(item) ? '--' : '-';
+  // Lazily resolve file size from per-file IPNS metadata
+  const fileSize = useFileSize(isFile(item) ? item.fileMetaIpnsName : null, folderKey);
+
+  // Display size: resolved from IPNS metadata for files, dash for folders
+  const sizeDisplay = isFile(item) ? (fileSize !== null ? formatBytes(fileSize) : '...') : '-';
 
   // Display modified date
   const dateDisplay = formatDate(item.modifiedAt);
@@ -377,6 +403,18 @@ export function FileListItem({
         <span className="file-list-item-date" role="gridcell">
           {dateDisplay}
         </span>
+      </div>
+
+      {/* Mobile action button - hidden on desktop via CSS */}
+      <div className="file-list-item-mobile-actions" role="gridcell">
+        <button
+          type="button"
+          className="file-list-item-action-btn"
+          onClick={handleActionButtonClick}
+          aria-label={`Actions for ${item.name}`}
+        >
+          ...
+        </button>
       </div>
     </div>
   );

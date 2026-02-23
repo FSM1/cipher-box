@@ -1,15 +1,17 @@
 import { type DragEvent, type MouseEvent } from 'react';
-import type { FolderChildV2 } from '@cipherbox/crypto';
+import type { FolderChild } from '@cipherbox/crypto';
 import { FileListItem, type DragItem } from './FileListItem';
 import { ParentDirRow } from './ParentDirRow';
 
 type FileListProps = {
   /** Items to display (files and folders) */
-  items: FolderChildV2[];
+  items: FolderChild[];
   /** Set of currently selected item IDs */
   selectedIds: Set<string>;
   /** Parent folder ID (for drag operations) */
   parentId: string;
+  /** Parent folder's decrypted AES-256 key (for resolving file sizes) */
+  folderKey: Uint8Array | null;
   /** Whether to show [..] PARENT_DIR row (non-root folders) */
   showParentRow?: boolean;
   /** Callback when [..] row is clicked to navigate up */
@@ -24,9 +26,9 @@ type FileListProps = {
   /** Callback when navigating into a folder */
   onNavigate: (folderId: string) => void;
   /** Callback when context menu is requested */
-  onContextMenu: (event: MouseEvent, item: FolderChildV2) => void;
+  onContextMenu: (event: MouseEvent, item: FolderChild) => void;
   /** Callback when drag starts */
-  onDragStart: (event: DragEvent, item: FolderChildV2) => void;
+  onDragStart: (event: DragEvent, item: FolderChild) => void;
   /** Callback when items are dropped onto a folder */
   onDropOnFolder?: (items: DragItem[], sourceParentId: string, destFolderId: string) => void;
   /** Callback when external files are dropped onto a folder */
@@ -36,7 +38,7 @@ type FileListProps = {
 /**
  * Sort items: folders first, then files, both alphabetically.
  */
-function sortItems(items: FolderChildV2[]): FolderChildV2[] {
+function sortItems(items: FolderChild[]): FolderChild[] {
   return [...items].sort((a, b) => {
     // Folders come first
     if (a.type === 'folder' && b.type !== 'folder') return -1;
@@ -77,6 +79,7 @@ export function FileList({
   items,
   selectedIds,
   parentId,
+  folderKey,
   showParentRow,
   onNavigateUp,
   onSelect,
@@ -119,6 +122,8 @@ export function FileList({
         <div className="file-list-header-date" role="columnheader">
           [MODIFIED]
         </div>
+        {/* Empty header cell for mobile action column - hidden on desktop via CSS */}
+        <div className="file-list-header-actions" aria-hidden="true" />
       </div>
 
       {/* Item rows */}
@@ -132,6 +137,7 @@ export function FileList({
             parentId={parentId}
             selectedIds={selectedIds}
             allItems={items}
+            folderKey={folderKey}
             onSelect={onSelect}
             onNavigate={onNavigate}
             onContextMenu={onContextMenu}

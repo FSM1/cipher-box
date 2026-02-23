@@ -68,7 +68,7 @@ describe('VaultController', () => {
 
       vaultService.initializeVault.mockResolvedValue(mockVaultResponse);
 
-      await controller.initializeVault(mockRequest as any, initVaultDto);
+      await controller.initializeVault(mockRequest, initVaultDto);
 
       expect(vaultService.initializeVault).toHaveBeenCalledWith('user-uuid-123', initVaultDto);
     });
@@ -80,7 +80,7 @@ describe('VaultController', () => {
 
       vaultService.initializeVault.mockResolvedValue(mockVaultResponse);
 
-      const result = await controller.initializeVault(mockRequest as any, initVaultDto);
+      const result = await controller.initializeVault(mockRequest, initVaultDto);
 
       expect(result).toEqual(mockVaultResponse);
     });
@@ -94,7 +94,7 @@ describe('VaultController', () => {
 
       vaultService.findVault.mockResolvedValue(mockVaultResponse);
 
-      await controller.getVault(mockRequest as any);
+      await controller.getVault(mockRequest);
 
       expect(vaultService.findVault).toHaveBeenCalledWith('user-uuid-123');
     });
@@ -106,8 +106,8 @@ describe('VaultController', () => {
 
       vaultService.findVault.mockResolvedValue(null);
 
-      await expect(controller.getVault(mockRequest as any)).rejects.toThrow(NotFoundException);
-      await expect(controller.getVault(mockRequest as any)).rejects.toThrow('Vault not found');
+      await expect(controller.getVault(mockRequest)).rejects.toThrow(NotFoundException);
+      await expect(controller.getVault(mockRequest)).rejects.toThrow('Vault not found');
     });
 
     it('should return vault response if found', async () => {
@@ -117,7 +117,7 @@ describe('VaultController', () => {
 
       vaultService.findVault.mockResolvedValue(mockVaultResponse);
 
-      const result = await controller.getVault(mockRequest as any);
+      const result = await controller.getVault(mockRequest);
 
       expect(result).toEqual(mockVaultResponse);
     });
@@ -137,7 +137,7 @@ describe('VaultController', () => {
 
       vaultService.getQuota.mockResolvedValue(mockQuotaResponse);
 
-      await controller.getQuota(mockRequest as any);
+      await controller.getQuota(mockRequest);
 
       expect(vaultService.getQuota).toHaveBeenCalledWith('user-uuid-123');
     });
@@ -149,7 +149,7 @@ describe('VaultController', () => {
 
       vaultService.getQuota.mockResolvedValue(mockQuotaResponse);
 
-      const result = await controller.getQuota(mockRequest as any);
+      const result = await controller.getQuota(mockRequest);
 
       expect(result).toEqual(mockQuotaResponse);
     });

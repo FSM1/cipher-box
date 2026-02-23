@@ -6,6 +6,22 @@
  * while the parent folder only stores a slim FilePointer reference.
  */
 
+/** A single past version of a file. Stores full crypto context for independent decryption. */
+export type VersionEntry = {
+  /** IPFS CID of the encrypted file content for this version */
+  cid: string;
+  /** Hex-encoded ECIES-wrapped AES-256 key for decrypting this version */
+  fileKeyEncrypted: string;
+  /** Hex-encoded IV used for this version's encryption */
+  fileIv: string;
+  /** Original file size in bytes (before encryption) */
+  size: number;
+  /** When this version was created (Unix ms) -- i.e., when it became a "past" version */
+  timestamp: number;
+  /** Encryption mode used for this version */
+  encryptionMode: 'GCM' | 'CTR';
+};
+
 /**
  * Decrypted per-file metadata structure.
  * Stored as an encrypted blob in the file's own IPNS record.
@@ -30,6 +46,8 @@ export type FileMetadata = {
   createdAt: number;
   /** Last modification timestamp (Unix ms) */
   modifiedAt: number;
+  /** Past versions of this file (newest first). Omitted if no versions exist. */
+  versions?: VersionEntry[];
 };
 
 /**
@@ -44,6 +62,10 @@ export type FilePointer = {
   name: string;
   /** IPNS name of the file's own metadata record */
   fileMetaIpnsName: string;
+  /** Hex-encoded ECIES-wrapped Ed25519 private key for signing this file's IPNS record.
+   *  Present for files created after the random-key migration. Absent for legacy files
+   *  whose IPNS key is derived deterministically via HKDF. */
+  ipnsPrivateKeyEncrypted?: string;
   /** Creation timestamp (Unix ms) */
   createdAt: number;
   /** Last modification timestamp (Unix ms) */

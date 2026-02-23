@@ -101,11 +101,11 @@ Requirements for production release. Each maps to roadmap phases 12+.
 
 ### File Sharing
 
-- [ ] **SHARE-01**: User can share a folder (read-only) with another CipherBox user via ECIES key re-wrapping
-- [ ] **SHARE-02**: User can invite a recipient by email or public key
-- [ ] **SHARE-03**: Recipient can accept or decline a share invitation
-- [ ] **SHARE-04**: User can revoke a share (triggers folder key rotation for remaining recipients)
-- [ ] **SHARE-05**: User can view "Shared with me" folders in file browser
+- [x] **SHARE-01**: User can share a folder (read-only) with another CipherBox user via ECIES key re-wrapping
+- [x] **SHARE-02**: User can share with a recipient by pasting their secp256k1 public key (rescoped: public key only, no email invite)
+- [x] **SHARE-03**: Share takes effect instantly on public key paste (rescoped: no accept/decline — instant share by design)
+- [x] **SHARE-04**: User can revoke a share (triggers lazy folder key rotation on next modification)
+- [x] **SHARE-05**: User can view "Shared with me" folders in file browser at ~/shared
 - [ ] **SHARE-06**: User can generate a shareable link for a file (decryption key in URL fragment only)
 - [ ] **SHARE-07**: Recipient can download shared file via link without a CipherBox account
 
@@ -124,11 +124,11 @@ Requirements for production release. Each maps to roadmap phases 12+.
 
 ### File Versioning
 
-- [ ] **VER-01**: System automatically retains previous file versions on update (old CIDs kept pinned)
-- [ ] **VER-02**: User can view version history for a file
-- [ ] **VER-03**: User can restore a previous version of a file
-- [ ] **VER-04**: Version retention policy enforced (max versions per file, configurable)
-- [ ] **VER-05**: Version storage counted against user quota
+- [x] **VER-01**: System automatically retains previous file versions on update (old CIDs kept pinned)
+- [x] **VER-02**: User can view version history for a file
+- [x] **VER-03**: User can restore a previous version of a file
+- [x] **VER-04**: Version retention policy enforced (max versions per file, configurable)
+- [x] **VER-05**: Version storage counted against user quota
 
 ### Advanced Sync
 
@@ -143,7 +143,15 @@ Requirements for production release. Each maps to roadmap phases 12+.
 ### Cross-Platform Desktop
 
 - [ ] **PLAT-01**: Linux desktop app (Tauri + AppImage/deb, FUSE mount via libfuse)
-- [ ] **PLAT-02**: Windows desktop app (Tauri + MSI/NSIS, virtual drive via WinFsp/Dokany)
+- [x] **PLAT-02**: Windows desktop app (Tauri + MSI/NSIS, virtual drive via WinFsp/Dokany)
+
+### Cross-Platform E2E Testing
+
+- [ ] **E2E-01**: Each platform CI runner (Windows, macOS, Linux) starts a local backend stack with natively installed Postgres + IPFS (no Docker on macOS/Windows)
+- [ ] **E2E-02**: Desktop client correctly reads vault data (folders, files) created by the API/web client on the same runner
+- [ ] **E2E-03**: API/web client correctly reads vault data created/modified by the desktop client on the same runner
+- [ ] **E2E-04**: Cross-platform crypto round-trip passes: content encrypted on one platform decrypts correctly on another platform's crypto layer
+- [ ] **E2E-05**: IPNS sync round-trip works: metadata published by one client is resolved correctly by another client on the same runner
 
 ## Milestone 3 Requirements (Encrypted Productivity Suite)
 
@@ -336,16 +344,16 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MFA-02      | Phase 12.4 | Complete |
 | MFA-03      | Phase 12.4 | Complete |
 | MFA-04      | Phase 12.4 | Complete |
-| VER-01      | Phase 13   | Pending  |
-| VER-02      | Phase 13   | Pending  |
-| VER-03      | Phase 13   | Pending  |
-| VER-04      | Phase 13   | Pending  |
-| VER-05      | Phase 13   | Pending  |
-| SHARE-01    | Phase 14   | Pending  |
-| SHARE-02    | Phase 14   | Pending  |
-| SHARE-03    | Phase 14   | Pending  |
-| SHARE-04    | Phase 14   | Pending  |
-| SHARE-05    | Phase 14   | Pending  |
+| VER-01      | Phase 13   | Complete |
+| VER-02      | Phase 13   | Complete |
+| VER-03      | Phase 13   | Complete |
+| VER-04      | Phase 13   | Complete |
+| VER-05      | Phase 13   | Complete |
+| SHARE-01    | Phase 14   | Complete |
+| SHARE-02    | Phase 14   | Complete |
+| SHARE-03    | Phase 14   | Complete |
+| SHARE-04    | Phase 14   | Complete |
+| SHARE-05    | Phase 14   | Complete |
 | SHARE-06    | Phase 15   | Pending  |
 | SHARE-07    | Phase 15   | Pending  |
 | SRCH-01     | Phase 15   | Pending  |
@@ -355,8 +363,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SYNC-05     | Phase 16   | Pending  |
 | SYNC-06     | Phase 16   | Pending  |
 | TEE-06      | Phase 17   | Pending  |
-| PLAT-01     | Phase 11   | Pending  |
-| PLAT-02     | Phase 11   | Pending  |
+| PLAT-01     | Phase 11.3 | Pending  |
+| PLAT-02     | Phase 11   | Complete |
+| E2E-01      | Phase 11.4 | Pending  |
+| E2E-02      | Phase 11.4 | Pending  |
+| E2E-03      | Phase 11.4 | Pending  |
+| E2E-04      | Phase 11.4 | Pending  |
+| E2E-05      | Phase 11.4 | Pending  |
 | BILL-01     | Phase 18   | Pending  |
 | BILL-02     | Phase 18   | Pending  |
 | BILL-03     | Phase 18   | Pending  |
@@ -398,8 +411,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 **Milestone 2 Coverage:**
 
-- M2 requirements: 25 total
-- Mapped to phases: 25
+- M2 requirements: 30 total
+- Mapped to phases: 30
 - Unmapped: 0
 
 **Milestone 3 Coverage:**

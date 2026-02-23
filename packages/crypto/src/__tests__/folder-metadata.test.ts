@@ -1,24 +1,26 @@
 /**
  * @cipherbox/crypto - Folder Metadata Tests
  *
- * Tests for folder metadata encryption and decryption.
+ * Tests for folder metadata encryption and decryption (v2 schema only).
  */
 
 import { describe, it, expect } from 'vitest';
 import {
   encryptFolderMetadata,
   decryptFolderMetadata,
+  validateFolderMetadata,
   generateFileKey, // Uses sync 32-byte key generation
+  CryptoError,
   type FolderMetadata,
   type FolderEntry,
-  type FileEntry,
+  type FilePointer,
 } from '../index';
 
 describe('encryptFolderMetadata', () => {
   it('produces valid encrypted structure', async () => {
     const folderKey = generateFileKey(); // 32-byte key suitable for AES-256
     const metadata: FolderMetadata = {
-      version: 'v1',
+      version: 'v2',
       children: [],
     };
 
@@ -39,7 +41,7 @@ describe('encryptFolderMetadata', () => {
   it('different encryptions produce different IVs', async () => {
     const folderKey = generateFileKey();
     const metadata: FolderMetadata = {
-      version: 'v1',
+      version: 'v2',
       children: [],
     };
 
@@ -55,7 +57,7 @@ describe('decryptFolderMetadata', () => {
   it('recovers original metadata', async () => {
     const folderKey = generateFileKey();
     const metadata: FolderMetadata = {
-      version: 'v1',
+      version: 'v2',
       children: [],
     };
 
@@ -79,14 +81,14 @@ describe('decryptFolderMetadata', () => {
     };
 
     const metadata: FolderMetadata = {
-      version: 'v1',
+      version: 'v2',
       children: [folderEntry],
     };
 
     const encrypted = await encryptFolderMetadata(metadata, folderKey);
     const decrypted = await decryptFolderMetadata(encrypted, folderKey);
 
-    expect(decrypted.version).toBe('v1');
+    expect(decrypted.version).toBe('v2');
     expect(decrypted.children).toHaveLength(1);
 
     const recoveredFolder = decrypted.children[0] as FolderEntry;
@@ -100,60 +102,52 @@ describe('decryptFolderMetadata', () => {
     expect(recoveredFolder.modifiedAt).toBe(folderEntry.modifiedAt);
   });
 
-  it('round-trips preserves all file entry fields', async () => {
+  it('round-trips preserves all FilePointer fields', async () => {
     const folderKey = generateFileKey();
-    const fileEntry: FileEntry = {
+    const filePointer: FilePointer = {
       type: 'file',
       id: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
       name: 'report.pdf',
-      cid: 'bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4',
-      fileKeyEncrypted: '1234567890abcdef',
-      fileIv: 'aabbccddeeff00112233445566778899',
-      encryptionMode: 'GCM',
-      size: 1048576,
+      fileMetaIpnsName: 'k51qzi5uqu5dh9jhgjfghjdfgh',
       createdAt: 1706054400000,
       modifiedAt: 1706140800000,
     };
 
     const metadata: FolderMetadata = {
-      version: 'v1',
-      children: [fileEntry],
+      version: 'v2',
+      children: [filePointer],
     };
 
     const encrypted = await encryptFolderMetadata(metadata, folderKey);
     const decrypted = await decryptFolderMetadata(encrypted, folderKey);
 
-    expect(decrypted.version).toBe('v1');
+    expect(decrypted.version).toBe('v2');
     expect(decrypted.children).toHaveLength(1);
 
-    const recoveredFile = decrypted.children[0] as FileEntry;
+    const recoveredFile = decrypted.children[0] as FilePointer;
     expect(recoveredFile.type).toBe('file');
-    expect(recoveredFile.id).toBe(fileEntry.id);
-    expect(recoveredFile.name).toBe(fileEntry.name);
-    expect(recoveredFile.cid).toBe(fileEntry.cid);
-    expect(recoveredFile.fileKeyEncrypted).toBe(fileEntry.fileKeyEncrypted);
-    expect(recoveredFile.fileIv).toBe(fileEntry.fileIv);
-    expect(recoveredFile.encryptionMode).toBe('GCM');
-    expect(recoveredFile.size).toBe(fileEntry.size);
-    expect(recoveredFile.createdAt).toBe(fileEntry.createdAt);
-    expect(recoveredFile.modifiedAt).toBe(fileEntry.modifiedAt);
+    expect(recoveredFile.id).toBe(filePointer.id);
+    expect(recoveredFile.name).toBe(filePointer.name);
+    expect(recoveredFile.fileMetaIpnsName).toBe(filePointer.fileMetaIpnsName);
+    expect(recoveredFile.createdAt).toBe(filePointer.createdAt);
+    expect(recoveredFile.modifiedAt).toBe(filePointer.modifiedAt);
   });
 
   it('handles empty children array correctly', async () => {
     const folderKey = generateFileKey();
     const metadata: FolderMetadata = {
-      version: 'v1',
+      version: 'v2',
       children: [],
     };
 
     const encrypted = await encryptFolderMetadata(metadata, folderKey);
     const decrypted = await decryptFolderMetadata(encrypted, folderKey);
 
-    expect(decrypted.version).toBe('v1');
+    expect(decrypted.version).toBe('v2');
     expect(decrypted.children).toEqual([]);
   });
 
-  it('handles multiple children (mixed files/folders) correctly', async () => {
+  it('handles multiple children (mixed folders/files) correctly', async () => {
     const folderKey = generateFileKey();
 
     const folderEntry: FolderEntry = {
@@ -167,35 +161,27 @@ describe('decryptFolderMetadata', () => {
       modifiedAt: 1706054400000,
     };
 
-    const fileEntry1: FileEntry = {
+    const filePointer1: FilePointer = {
       type: 'file',
       id: 'file-uuid-1',
       name: 'document.txt',
-      cid: 'bafybeiabc',
-      fileKeyEncrypted: 'filekey1',
-      fileIv: '001122334455667788990011',
-      encryptionMode: 'GCM',
-      size: 1024,
+      fileMetaIpnsName: 'k51qzi5uqu5def',
       createdAt: 1706054400000,
       modifiedAt: 1706054400000,
     };
 
-    const fileEntry2: FileEntry = {
+    const filePointer2: FilePointer = {
       type: 'file',
       id: 'file-uuid-2',
       name: 'image.png',
-      cid: 'bafybeixyz',
-      fileKeyEncrypted: 'filekey2',
-      fileIv: 'aabbccddeeff00112233445566',
-      encryptionMode: 'GCM',
-      size: 2048,
+      fileMetaIpnsName: 'k51qzi5uqu5ghi',
       createdAt: 1706140800000,
       modifiedAt: 1706140800000,
     };
 
     const metadata: FolderMetadata = {
-      version: 'v1',
-      children: [folderEntry, fileEntry1, fileEntry2],
+      version: 'v2',
+      children: [folderEntry, filePointer1, filePointer2],
     };
 
     const encrypted = await encryptFolderMetadata(metadata, folderKey);
@@ -215,12 +201,89 @@ describe('decryptFolderMetadata', () => {
   });
 });
 
+describe('validateFolderMetadata', () => {
+  it('rejects v1 metadata', () => {
+    const data = {
+      version: 'v1',
+      children: [
+        {
+          type: 'file',
+          id: 'file-uuid',
+          name: 'test.txt',
+          cid: 'bafybeiabc',
+          fileKeyEncrypted: 'key123',
+          fileIv: 'iv123',
+          encryptionMode: 'GCM',
+          size: 1024,
+          createdAt: 1706054400000,
+          modifiedAt: 1706054400000,
+        },
+      ],
+    };
+
+    expect(() => validateFolderMetadata(data)).toThrow(CryptoError);
+    expect(() => validateFolderMetadata(data)).toThrow('unsupported version');
+  });
+
+  it('rejects file children with cid instead of fileMetaIpnsName', () => {
+    const data = {
+      version: 'v2',
+      children: [
+        {
+          type: 'file',
+          id: 'file-uuid',
+          name: 'test.txt',
+          cid: 'bafybeiabc',
+        },
+      ],
+    };
+
+    expect(() => validateFolderMetadata(data)).toThrow(CryptoError);
+    expect(() => validateFolderMetadata(data)).toThrow('fileMetaIpnsName');
+  });
+
+  it('accepts valid v2 metadata with FilePointer children', () => {
+    const data = {
+      version: 'v2',
+      children: [
+        {
+          type: 'file',
+          id: 'file-uuid',
+          name: 'test.txt',
+          fileMetaIpnsName: 'k51qzi5uqu5abc',
+          createdAt: 1706054400000,
+          modifiedAt: 1706054400000,
+        },
+      ],
+    };
+
+    const result = validateFolderMetadata(data);
+    expect(result.version).toBe('v2');
+    expect(result.children).toHaveLength(1);
+  });
+
+  it('rejects unknown version', () => {
+    const data = {
+      version: 'v3',
+      children: [],
+    };
+
+    expect(() => validateFolderMetadata(data)).toThrow(CryptoError);
+  });
+
+  it('rejects non-object data', () => {
+    expect(() => validateFolderMetadata(null)).toThrow(CryptoError);
+    expect(() => validateFolderMetadata('string')).toThrow(CryptoError);
+    expect(() => validateFolderMetadata(42)).toThrow(CryptoError);
+  });
+});
+
 describe('Folder Metadata Security', () => {
   it('should handle large folder metadata', async () => {
     const folderKey = generateFileKey();
 
-    // Create a large folder with 100 children (mixed files and folders)
-    const children: (FolderEntry | FileEntry)[] = [];
+    // Create a large folder with 100 children (mixed folders and file pointers)
+    const children: (FolderEntry | FilePointer)[] = [];
 
     for (let i = 0; i < 50; i++) {
       children.push({
@@ -238,18 +301,14 @@ describe('Folder Metadata Security', () => {
         type: 'file',
         id: `file-uuid-${i}`,
         name: `document-${i}-with-a-long-descriptive-filename.pdf`,
-        cid: `bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4${i}`,
-        fileKeyEncrypted: 'c'.repeat(200),
-        fileIv: '001122334455667788990011',
-        encryptionMode: 'GCM',
-        size: 1024 * 1024 * (i + 1), // Varying file sizes
+        fileMetaIpnsName: `k51qzi5uqu5dh9jhgjfghjdfghfile${i.toString().padStart(10, '0')}`,
         createdAt: Date.now() - i * 1000,
         modifiedAt: Date.now(),
-      } as FileEntry);
+      } as FilePointer);
     }
 
     const metadata: FolderMetadata = {
-      version: 'v1',
+      version: 'v2',
       children,
     };
 
@@ -273,7 +332,7 @@ describe('Folder Metadata Security', () => {
     const folderKey1 = generateFileKey();
     const folderKey2 = generateFileKey();
     const metadata: FolderMetadata = {
-      version: 'v1',
+      version: 'v2',
       children: [],
     };
 
@@ -289,7 +348,7 @@ describe('Folder Metadata Security', () => {
     const folderKey1 = generateFileKey();
     const folderKey2 = generateFileKey();
     const metadata: FolderMetadata = {
-      version: 'v1',
+      version: 'v2',
       children: [],
     };
 
@@ -302,7 +361,7 @@ describe('Folder Metadata Security', () => {
   it('corrupted ciphertext fails decryption', async () => {
     const folderKey = generateFileKey();
     const metadata: FolderMetadata = {
-      version: 'v1',
+      version: 'v2',
       children: [],
     };
 
@@ -321,7 +380,7 @@ describe('Folder Metadata Security', () => {
   it('corrupted IV fails decryption', async () => {
     const folderKey = generateFileKey();
     const metadata: FolderMetadata = {
-      version: 'v1',
+      version: 'v2',
       children: [],
     };
 

@@ -13,7 +13,12 @@
 export { BasePage } from './base.page';
 export { LoginPage } from './login.page';
 // File browser page objects
-export { FileListPage, ContextMenuPage, UploadZonePage } from './file-browser';
+export {
+  FileListPage,
+  ContextMenuPage,
+  UploadZonePage,
+  SharedFileBrowserPage,
+} from './file-browser';
 
 // Dialog page objects
-export { ConfirmDialogPage, RenameDialogPage } from './dialogs';
+export { ConfirmDialogPage, RenameDialogPage, ShareDialogPage } from './dialogs';

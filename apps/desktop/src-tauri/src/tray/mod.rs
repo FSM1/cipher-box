@@ -1,9 +1,10 @@
-//! System tray (menu bar) icon and menu for CipherBox Desktop.
+//! System tray icon and menu for CipherBox Desktop.
 //!
-//! Creates a macOS menu bar icon with status display and actions:
+//! Creates a tray icon with status display and actions:
 //! Open CipherBox, Sync Now, Login/Logout, Quit.
 //!
-//! The app runs as a pure background utility (no Dock icon).
+//! On macOS: runs as a pure background utility (no Dock icon).
+//! On Windows: runs as a system tray icon in the notification area.
 
 pub mod status;
 
@@ -24,7 +25,7 @@ const TRAY_ID: &str = "cipherbox-tray";
 ///
 /// Menu items:
 /// - `status`: Disabled informational line showing current status
-/// - `open`: Open ~/CipherBox in Finder (enabled when mounted)
+/// - `open`: Open ~/CipherBox in file manager (enabled when mounted)
 /// - `sync`: Trigger immediate sync (enabled when connected)
 /// - separator
 /// - `login`: Show Web3Auth webview (when not connected)
@@ -34,15 +35,22 @@ const TRAY_ID: &str = "cipherbox-tray";
 pub fn build_tray(app: &AppHandle) -> Result<(), String> {
     let menu = build_menu(app, &TrayStatus::NotConnected)?;
 
+    #[cfg(target_os = "macos")]
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../../icons/tray-icon@2x.png"))
+        .map_err(|e| format!("Failed to load tray icon: {}", e))?;
+    #[cfg(target_os = "windows")]
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../../icons/icon.ico"))
+        .map_err(|e| format!("Failed to load tray icon: {}", e))?;
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../../icons/tray-icon@2x.png"))
+        .map_err(|e| format!("Failed to load tray icon: {}", e))?;
+
     let _tray = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .show_menu_on_left_click(true)
         .tooltip("CipherBox")
-        .icon(
-            app.default_window_icon()
-                .cloned()
-                .unwrap_or_else(|| tauri::image::Image::new(&[], 0, 0)),
-        )
+        .icon(tray_icon)
+        .icon_as_template(true)
         .on_menu_event(move |app, event| {
             handle_menu_event(app, event.id().as_ref());
         })
@@ -116,13 +124,13 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
     use tauri_plugin_notification::NotificationExt;
     match id {
         "open" => {
-            // Open ~/CipherBox in Finder
+            // Open ~/CipherBox in the platform file manager
             let mount_point = dirs::home_dir()
                 .map(|h| h.join("CipherBox"))
                 .unwrap_or_default();
             if !mount_point.exists() {
-                log::warn!("Mount point {} does not exist — FUSE may not be mounted", mount_point.display());
-                // Show notification instead of a confusing Finder error
+                log::warn!("Mount point {} does not exist — filesystem may not be mounted", mount_point.display());
+                // Show notification instead of a confusing file manager error
                 if let Err(e) = app.notification()
                     .builder()
                     .title("CipherBox")
@@ -133,11 +141,23 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                 }
                 return;
             }
-            if let Err(e) = std::process::Command::new("open")
-                .arg(mount_point.to_str().unwrap_or("~/CipherBox"))
-                .spawn()
+            #[cfg(target_os = "macos")]
             {
-                log::error!("Failed to open CipherBox in Finder: {}", e);
+                if let Err(e) = std::process::Command::new("open")
+                    .arg(mount_point.to_str().unwrap_or("~/CipherBox"))
+                    .spawn()
+                {
+                    log::error!("Failed to open CipherBox in Finder: {}", e);
+                }
+            }
+            #[cfg(target_os = "windows")]
+            {
+                if let Err(e) = std::process::Command::new("explorer.exe")
+                    .arg(mount_point.to_str().unwrap_or_default())
+                    .spawn()
+                {
+                    log::error!("Failed to open CipherBox in Explorer: {}", e);
+                }
             }
         }
         "sync" => {
@@ -212,11 +232,11 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             tauri::async_runtime::spawn(async move {
                 let state = app_handle.state::<crate::state::AppState>();
 
-                // Unmount FUSE filesystem
-                #[cfg(feature = "fuse")]
+                // Unmount filesystem (FUSE on macOS, WinFsp on Windows)
+                #[cfg(any(feature = "fuse", feature = "winfsp"))]
                 {
                     if let Err(e) = crate::fuse::unmount_filesystem() {
-                        log::warn!("FUSE unmount during logout failed: {}", e);
+                        log::warn!("Filesystem unmount during logout failed: {}", e);
                     }
                     *state.mount_status.write().await = crate::state::MountStatus::Unmounted;
                 }
@@ -241,8 +261,8 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
             });
         }
         "quit" => {
-            // Unmount FUSE if mounted, then exit
-            #[cfg(feature = "fuse")]
+            // Unmount filesystem if mounted, then exit
+            #[cfg(any(feature = "fuse", feature = "winfsp"))]
             {
                 let _ = crate::fuse::unmount_filesystem();
             }

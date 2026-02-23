@@ -14,6 +14,7 @@ describe('DeviceApprovalService', () => {
     save: jest.Mock;
     find: jest.Mock;
     remove: jest.Mock;
+    count: jest.Mock;
     manager: {
       transaction: jest.Mock;
       findOne: jest.Mock;
@@ -60,6 +61,7 @@ describe('DeviceApprovalService', () => {
       save: jest.fn(),
       find: jest.fn(),
       remove: jest.fn(),
+      count: jest.fn().mockResolvedValue(0),
       manager: {
         ...mockManager,
         transaction: jest

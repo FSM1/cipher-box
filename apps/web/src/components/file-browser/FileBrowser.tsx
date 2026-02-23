@@ -7,7 +7,7 @@ import {
   type DragEvent,
   type MouseEvent,
 } from 'react';
-import type { FolderChildV2, FilePointer } from '@cipherbox/crypto';
+import type { FolderChild, FilePointer, FolderEntry } from '@cipherbox/crypto';
 import { useFolderNavigation } from '../../hooks/useFolderNavigation';
 import { useFolder } from '../../hooks/useFolder';
 import { useFileDownload } from '../../hooks/useFileDownload';
@@ -28,6 +28,7 @@ import { RenameDialog } from './RenameDialog';
 import { CreateFolderDialog } from './CreateFolderDialog';
 import { MoveDialog } from './MoveDialog';
 import { DetailsDialog } from './DetailsDialog';
+import { ShareDialog } from './ShareDialog';
 import { UploadZone } from './UploadZone';
 import { TextEditorDialog } from './TextEditorDialog';
 import { ImagePreviewDialog } from './ImagePreviewDialog';
@@ -41,9 +42,10 @@ import { OfflineBanner } from './OfflineBanner';
 import { SelectionActionBar } from './SelectionActionBar';
 
 /**
- * Type guard for file pointers (v2).
+ * Type guard for file pointers.
+ * Narrows FolderChild to FilePointer by checking type discriminant.
  */
-function isFilePointer(item: FolderChildV2): item is FilePointer {
+function isFilePointer(item: FolderChild): item is FilePointer {
   return item.type === 'file';
 }
 
@@ -185,7 +187,7 @@ function isPreviewableFile(name: string): boolean {
  */
 type DialogState = {
   open: boolean;
-  item: FolderChildV2 | null;
+  item: FolderChild | null;
 };
 
 /**
@@ -284,7 +286,7 @@ export function FileBrowser() {
 
       // Update folder store with new children
       // Per CONTEXT.md: last write wins, instant refresh (no toast/prompt)
-      useFolderStore.getState().updateFolderChildren('root', metadata.children as FolderChildV2[]);
+      useFolderStore.getState().updateFolderChildren('root', metadata.children);
       useFolderStore.getState().updateFolderSequence('root', resolved.sequenceNumber);
     } catch (err) {
       console.error('Sync refresh failed:', err);
@@ -446,6 +448,7 @@ export function FileBrowser() {
     item: null,
   });
   const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false);
+  const [shareItem, setShareItem] = useState<FolderChild | null>(null);
 
   // Clear selection when navigating to a new folder
   const handleNavigate = useCallback(
@@ -536,7 +539,7 @@ export function FileBrowser() {
   // Context menu handler - show context menu
   // If right-clicked item is not in selection, select only that item
   const handleContextMenu = useCallback(
-    (event: MouseEvent, item: FolderChildV2) => {
+    (event: MouseEvent, item: FolderChild) => {
       if (!selectedIds.has(item.id)) {
         setSelectedIds(new Set([item.id]));
         lastSelectedIdRef.current = item.id;
@@ -547,7 +550,7 @@ export function FileBrowser() {
   );
 
   // Drag start handler
-  const handleDragStart = useCallback((_event: DragEvent, _item: FolderChildV2) => {
+  const handleDragStart = useCallback((_event: DragEvent, _item: FolderChild) => {
     // Drag data is set by FileListItem component
   }, []);
 
@@ -619,6 +622,13 @@ export function FileBrowser() {
     }
   }, [contextMenu.item]);
 
+  // Open share dialog
+  const handleShareClick = useCallback(() => {
+    if (contextMenu.item) {
+      setShareItem(contextMenu.item);
+    }
+  }, [contextMenu.item]);
+
   // Open text editor dialog
   const handleEditClick = useCallback(() => {
     if (contextMenu.item) {
@@ -647,13 +657,13 @@ export function FileBrowser() {
   // Batch delete state: stores multiple items for batch confirmation
   const [batchDeleteDialog, setBatchDeleteDialog] = useState<{
     open: boolean;
-    items: FolderChildV2[];
+    items: FolderChild[];
   }>({ open: false, items: [] });
 
   // Batch move state: stores items for batch move dialog
   const [batchMoveDialog, setBatchMoveDialog] = useState<{
     open: boolean;
-    items: FolderChildV2[];
+    items: FolderChild[];
   }>({ open: false, items: [] });
 
   // Open batch delete confirmation
@@ -798,6 +808,10 @@ export function FileBrowser() {
     setDetailsDialog({ open: false, item: null });
   }, []);
 
+  const closeShareDialog = useCallback(() => {
+    setShareItem(null);
+  }, []);
+
   const closeEditorDialog = useCallback(() => {
     setEditorDialog({ open: false, item: null });
   }, []);
@@ -920,6 +934,7 @@ export function FileBrowser() {
           items={children}
           selectedIds={selectedIds}
           parentId={currentFolderId}
+          folderKey={currentFolder?.folderKey ?? null}
           showParentRow={currentFolderId !== 'root'}
           onNavigateUp={navigateUp}
           onSelect={handleSelect}
@@ -969,6 +984,7 @@ export function FileBrowser() {
           }
           onRename={handleRenameClick}
           onMove={handleMoveClick}
+          onShare={handleShareClick}
           onDelete={handleDeleteClick}
           onDetails={handleDetailsClick}
           onBatchDownload={
@@ -1027,7 +1043,24 @@ export function FileBrowser() {
         onClose={closeDetailsDialog}
         item={detailsDialog.item}
         folderKey={currentFolder?.folderKey ?? null}
+        parentFolderId={currentFolderId}
       />
+
+      {/* Share dialog */}
+      {shareItem && currentFolder && (
+        <ShareDialog
+          isOpen={!!shareItem}
+          onClose={closeShareDialog}
+          item={shareItem}
+          folderKey={currentFolder.folderKey}
+          ipnsName={
+            shareItem.type === 'folder'
+              ? (shareItem as FolderEntry).ipnsName
+              : (shareItem as FilePointer).fileMetaIpnsName
+          }
+          parentFolderId={currentFolderId}
+        />
+      )}
 
       {/* Text editor dialog */}
       <TextEditorDialog

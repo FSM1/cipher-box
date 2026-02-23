@@ -65,7 +65,7 @@ export { encryptAesGcm, decryptAesGcm, sealAesGcm, unsealAesGcm } from './aes';
 export { encryptAesCtr, decryptAesCtr, decryptAesCtrRange } from './aes';
 
 // ECIES secp256k1 key wrapping
-export { wrapKey, unwrapKey } from './ecies';
+export { wrapKey, unwrapKey, reWrapKey } from './ecies';
 
 // Ed25519 signing for IPNS
 export { generateEd25519Keypair, type Ed25519Keypair } from './ed25519';
@@ -86,27 +86,24 @@ export {
 export {
   encryptFolderMetadata,
   decryptFolderMetadata,
-  isV2Metadata,
   validateFolderMetadata,
   type FolderMetadata,
   type FolderChild,
   type FolderEntry,
-  type FileEntry,
   type EncryptedFolderMetadata,
-  type FolderMetadataV2,
-  type FolderChildV2,
-  type AnyFolderMetadata,
 } from './folder';
 
 // Per-file IPNS metadata types and encryption
 export {
   deriveFileIpnsKeypair,
+  generateFileIpnsKeypair,
   encryptFileMetadata,
   decryptFileMetadata,
   validateFileMetadata,
   type FileMetadata,
   type FilePointer,
   type EncryptedFileMetadata,
+  type VersionEntry,
 } from './file';
 
 // Device registry types and encryption

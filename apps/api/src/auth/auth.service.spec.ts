@@ -50,6 +50,19 @@ describe('AuthService', () => {
       save: jest.fn(),
       count: jest.fn(),
       remove: jest.fn(),
+      manager: {
+        transaction: jest.fn((cb: (manager: unknown) => Promise<unknown>) => {
+          const mockManager = {
+            createQueryBuilder: jest.fn().mockReturnValue({
+              setLock: jest.fn().mockReturnThis(),
+              where: jest.fn().mockReturnThis(),
+              getMany: jest.fn(),
+            }),
+            remove: jest.fn(),
+          };
+          return cb(mockManager);
+        }),
+      },
     };
 
     const mockRefreshTokenRepo = {
@@ -1077,20 +1090,35 @@ describe('AuthService', () => {
   });
 
   describe('unlinkMethod', () => {
-    it('should remove auth method', async () => {
-      const mockMethod = { id: 'method-id', userId: 'user-id', type: 'google' };
+    function setupTransactionMock(methods: Array<{ id: string }>) {
+      authMethodRepository.manager.transaction.mockImplementation(
+        async (cb: (manager: Record<string, jest.Mock>) => Promise<void>) => {
+          const mockManager = {
+            createQueryBuilder: jest.fn().mockReturnValue({
+              setLock: jest.fn().mockReturnThis(),
+              where: jest.fn().mockReturnThis(),
+              getMany: jest.fn().mockResolvedValue(methods),
+            }),
+            remove: jest.fn(),
+          };
+          return cb(mockManager);
+        }
+      );
+    }
 
-      authMethodRepository.findOne.mockResolvedValue(mockMethod);
-      authMethodRepository.count.mockResolvedValue(2);
-      authMethodRepository.remove.mockResolvedValue(mockMethod);
+    it('should remove auth method within transaction', async () => {
+      const mockMethod = { id: 'method-id', userId: 'user-id', type: 'google' };
+      const otherMethod = { id: 'other-id', userId: 'user-id', type: 'email' };
+
+      setupTransactionMock([mockMethod, otherMethod]);
 
       await service.unlinkMethod('user-id', 'method-id');
 
-      expect(authMethodRepository.remove).toHaveBeenCalledWith(mockMethod);
+      expect(authMethodRepository.manager.transaction).toHaveBeenCalled();
     });
 
     it('should throw BadRequestException if method not found', async () => {
-      authMethodRepository.findOne.mockResolvedValue(null);
+      setupTransactionMock([{ id: 'other-id' }]);
 
       await expect(service.unlinkMethod('user-id', 'method-id')).rejects.toThrow(
         BadRequestException
@@ -1101,10 +1129,7 @@ describe('AuthService', () => {
     });
 
     it('should throw BadRequestException if last auth method', async () => {
-      const mockMethod = { id: 'method-id', userId: 'user-id', type: 'google' };
-
-      authMethodRepository.findOne.mockResolvedValue(mockMethod);
-      authMethodRepository.count.mockResolvedValue(1);
+      setupTransactionMock([{ id: 'method-id' }]);
 
       await expect(service.unlinkMethod('user-id', 'method-id')).rejects.toThrow(
         BadRequestException

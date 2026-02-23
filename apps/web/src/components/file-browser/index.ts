@@ -16,3 +16,4 @@ export { RenameDialog } from './RenameDialog';
 export { CreateFolderDialog } from './CreateFolderDialog';
 export { MoveDialog } from './MoveDialog';
 export { Breadcrumbs } from './Breadcrumbs';
+export { SharedFileBrowser } from './SharedFileBrowser';

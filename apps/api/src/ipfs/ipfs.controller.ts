@@ -112,7 +112,7 @@ export class IpfsController {
   @Post('unpin')
   @ApiOperation({
     summary: 'Unpin file from IPFS',
-    description: 'Remove a pinned file from IPFS via Pinata using its CID.',
+    description: 'Remove a pinned file from IPFS using its CID.',
   })
   @ApiResponse({
     status: 201,
