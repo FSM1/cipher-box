@@ -1511,6 +1511,243 @@
         "tags": ["shares"]
       }
     },
+    "/invites/{token}": {
+      "get": {
+        "description": "Check the status of an invite link. Returns only status -- no file name or sharer identity is revealed before authentication.",
+        "operationId": "InvitesController_getInviteStatus",
+        "parameters": [
+          {
+            "name": "token",
+            "required": true,
+            "in": "path",
+            "description": "Invite token (URL-safe base64)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Invite status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteStatusResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get invite status (public)",
+        "tags": ["invites"]
+      }
+    },
+    "/invites/{token}/data": {
+      "get": {
+        "description": "Fetch full invite data including encrypted key ciphertext. Requires authentication. Used by the client claim flow.",
+        "operationId": "InvitesController_getInviteData",
+        "parameters": [
+          {
+            "name": "token",
+            "required": true,
+            "in": "path",
+            "description": "Invite token (URL-safe base64)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Full invite data for claim flow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteDataResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Invite not found or expired"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get invite data for claim flow (authenticated)",
+        "tags": ["invites"]
+      }
+    },
+    "/invites/{token}/claim": {
+      "post": {
+        "description": "Claim an invite by providing the item key re-wrapped for the recipient. Creates Share and ShareKey records. Single-claim enforced atomically.",
+        "operationId": "InvitesController_claimInvite",
+        "parameters": [
+          {
+            "name": "token",
+            "required": true,
+            "in": "path",
+            "description": "Invite token (URL-safe base64)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimInviteDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Invite claimed successfully"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "404": {
+            "description": "Invite not found or expired"
+          },
+          "409": {
+            "description": "Invite already claimed or self-claim"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Claim an invite link",
+        "tags": ["invites"]
+      }
+    },
+    "/shares/invites": {
+      "post": {
+        "description": "Create a new invite link with the item key wrapped by an ephemeral public key. Returns the invite token for URL construction. Default expiry: 7 days.",
+        "operationId": "ShareInvitesController_createInvite",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInviteDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Invite created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create an invite link",
+        "tags": ["share-invites"]
+      },
+      "get": {
+        "description": "Get all active (unclaimed, unexpired) invite links created by the authenticated user for the specified item. Expired invites are auto-cleaned.",
+        "operationId": "ShareInvitesController_listInvites",
+        "parameters": [
+          {
+            "name": "ipnsName",
+            "required": true,
+            "in": "query",
+            "description": "IPNS name of the item to list invites for",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of active invites",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InviteResponseDto"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List active invites for an item",
+        "tags": ["share-invites"]
+      }
+    },
+    "/shares/invites/{inviteId}": {
+      "delete": {
+        "description": "Revoke an active invite link. Only the original sharer can revoke. Already-claimed shares persist independently.",
+        "operationId": "ShareInvitesController_revokeInvite",
+        "parameters": [
+          {
+            "name": "inviteId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Invite revoked"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Only the sharer can revoke"
+          },
+          "404": {
+            "description": "Invite not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Revoke an invite link",
+        "tags": ["share-invites"]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "HealthController_check",
@@ -1600,6 +1837,14 @@
     {
       "name": "shares",
       "description": "User-to-user sharing endpoints"
+    },
+    {
+      "name": "invites",
+      "description": "Public invite link endpoints"
+    },
+    {
+      "name": "share-invites",
+      "description": "Authenticated invite management endpoints"
     }
   ],
   "servers": [],
@@ -2599,6 +2844,185 @@
           }
         },
         "required": ["encryptedKey"]
+      },
+      "InviteStatusResponseDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["active", "expired", "claimed", "revoked"],
+            "description": "Current status of the invite"
+          }
+        },
+        "required": ["status"]
+      },
+      "InviteDataResponseDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["active", "expired", "claimed", "revoked"],
+            "description": "Current status of the invite"
+          },
+          "encryptedKey": {
+            "type": "string",
+            "description": "Hex-encoded item key wrapped with ephemeral public key"
+          },
+          "encryptedChildKeys": {
+            "type": "object",
+            "description": "Array of child keys wrapped with ephemeral public key, or null",
+            "nullable": true
+          },
+          "itemType": {
+            "type": "string",
+            "enum": ["folder", "file"]
+          },
+          "ipnsName": {
+            "type": "string",
+            "description": "IPNS name of the shared item"
+          },
+          "itemName": {
+            "type": "string",
+            "description": "Display name of the shared item"
+          }
+        },
+        "required": [
+          "status",
+          "encryptedKey",
+          "encryptedChildKeys",
+          "itemType",
+          "ipnsName",
+          "itemName"
+        ]
+      },
+      "ClaimChildKeyDto": {
+        "type": "object",
+        "properties": {
+          "keyType": {
+            "type": "string",
+            "description": "Type of key: file or folder",
+            "enum": ["file", "folder"]
+          },
+          "itemId": {
+            "type": "string",
+            "description": "UUID of the file or subfolder"
+          },
+          "encryptedKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of the key re-wrapped for recipient"
+          }
+        },
+        "required": ["keyType", "itemId", "encryptedKey"]
+      },
+      "ClaimInviteDto": {
+        "type": "object",
+        "properties": {
+          "encryptedKey": {
+            "type": "string",
+            "description": "Hex-encoded item key re-wrapped for the recipient via ECIES"
+          },
+          "childKeys": {
+            "description": "Re-wrapped child keys for subfolders/files",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ClaimChildKeyDto"
+            }
+          }
+        },
+        "required": ["encryptedKey"]
+      },
+      "InviteChildKeyDto": {
+        "type": "object",
+        "properties": {
+          "keyType": {
+            "type": "string",
+            "description": "Type of key: file or folder",
+            "enum": ["file", "folder"]
+          },
+          "itemId": {
+            "type": "string",
+            "description": "UUID of the file or subfolder"
+          },
+          "encryptedKey": {
+            "type": "string",
+            "description": "Hex-encoded ECIES ciphertext of the key wrapped with ephemeral public key"
+          }
+        },
+        "required": ["keyType", "itemId", "encryptedKey"]
+      },
+      "CreateInviteDto": {
+        "type": "object",
+        "properties": {
+          "itemType": {
+            "type": "string",
+            "description": "Type of shared item",
+            "enum": ["folder", "file"]
+          },
+          "ipnsName": {
+            "type": "string",
+            "description": "IPNS name of the shared item"
+          },
+          "itemName": {
+            "type": "string",
+            "description": "Display name of the shared item"
+          },
+          "encryptedKey": {
+            "type": "string",
+            "description": "Hex-encoded item key wrapped with ephemeral public key via ECIES"
+          },
+          "encryptedChildKeys": {
+            "description": "Re-wrapped descendant keys (subfolder/file keys) with ephemeral public key",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InviteChildKeyDto"
+            }
+          }
+        },
+        "required": ["itemType", "ipnsName", "itemName", "encryptedKey"]
+      },
+      "InviteResponseDto": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "Invite token (URL-safe base64)"
+          },
+          "itemType": {
+            "type": "string",
+            "enum": ["folder", "file"]
+          },
+          "ipnsName": {
+            "type": "string",
+            "description": "IPNS name of the shared item"
+          },
+          "itemName": {
+            "type": "string",
+            "description": "Display name of the shared item"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active", "claimed", "revoked"]
+          },
+          "expiresAt": {
+            "format": "date-time",
+            "type": "string",
+            "description": "When the invite expires"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string",
+            "description": "When the invite was created"
+          }
+        },
+        "required": [
+          "token",
+          "itemType",
+          "ipnsName",
+          "itemName",
+          "status",
+          "expiresAt",
+          "createdAt"
+        ]
       }
     }
   }

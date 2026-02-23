@@ -33,9 +33,12 @@ import { IpnsService } from '../src/ipns/ipns.service';
 import { DeviceApprovalController } from '../src/device-approval/device-approval.controller';
 import { DeviceApprovalService } from '../src/device-approval/device-approval.service';
 import { SharesController } from '../src/shares/shares.controller';
+import { InvitesController } from '../src/shares/invites.controller';
+import { ShareInvitesController } from '../src/shares/share-invites.controller';
 import { SharesService } from '../src/shares/shares.service';
 import { Share } from '../src/shares/entities/share.entity';
 import { ShareKey } from '../src/shares/entities/share-key.entity';
+import { ShareInvite } from '../src/shares/entities/share-invite.entity';
 import { MetricsService } from '../src/metrics/metrics.service';
 import { User } from '../src/auth/entities/user.entity';
 import { AuthMethod } from '../src/auth/entities/auth-method.entity';
@@ -69,6 +72,11 @@ const mockShareKeyRepository = {
   useValue: {},
 };
 
+const mockShareInviteRepository = {
+  provide: getRepositoryToken(ShareInvite),
+  useValue: {},
+};
+
 const mockJwtService = {
   provide: 'JwtService',
   useValue: { sign: () => '' },
@@ -94,6 +102,8 @@ const mockConfigService = {
     IpnsController,
     DeviceApprovalController,
     SharesController,
+    InvitesController,
+    ShareInvitesController,
   ],
   providers: [
     AppService,
@@ -154,6 +164,7 @@ const mockConfigService = {
     mockRefreshTokenRepository,
     mockShareRepository,
     mockShareKeyRepository,
+    mockShareInviteRepository,
     mockJwtService,
     mockConfigService,
   ],
@@ -181,6 +192,8 @@ async function generateOpenApiSpec() {
     .addTag('IPNS', 'IPNS relay endpoints')
     .addTag('device-approval', 'Cross-device approval endpoints')
     .addTag('shares', 'User-to-user sharing endpoints')
+    .addTag('invites', 'Public invite link endpoints')
+    .addTag('share-invites', 'Authenticated invite management endpoints')
     .build();
 
   // Create document from the app
