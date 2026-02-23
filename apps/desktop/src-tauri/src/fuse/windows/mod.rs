@@ -10,7 +10,7 @@ pub mod operations;
 mod mount_impl {
     use std::collections::HashMap;
     use std::sync::atomic::AtomicU64;
-    use std::sync::{Arc, Mutex, OnceLock};
+    use std::sync::{Arc, Mutex};
 
     use zeroize::Zeroizing;
 
@@ -102,8 +102,8 @@ mod mount_impl {
     }
 
     /// Global handle to the WinFsp stop signal for clean shutdown.
-    /// When set to true, the mount thread exits its event loop.
-    static WINFSP_STOP: OnceLock<Arc<std::sync::atomic::AtomicBool>> = OnceLock::new();
+    /// Replaced on each mount so remount after unmount works correctly.
+    static WINFSP_STOP: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>> = Mutex::new(None);
 
     /// Mount the WinFsp filesystem after successful authentication.
     ///
@@ -132,8 +132,10 @@ mod mount_impl {
         // WinFsp creates the mount directory as a reparse point.
         // If a stale mount directory exists from a crash, clean it.
         if mount_path.exists() {
-            let _ = std::fs::remove_dir_all(&mount_path);
-            log::info!("Cleaned stale mount point: {}", mount_path.display());
+            match std::fs::remove_dir_all(&mount_path) {
+                Ok(()) => log::info!("Cleaned stale mount point: {}", mount_path.display()),
+                Err(e) => log::warn!("Failed to clean stale mount point {}: {}", mount_path.display(), e),
+            }
         }
 
         // Create temp directory for write buffering
@@ -309,7 +311,7 @@ mod mount_impl {
                                                                 sub_ino
                                                             );
                                                             let sub_unresolved =
-                                                                inodes.get_unresolved_file_pointers();
+                                                                inodes.get_unresolved_file_pointers_for_parent(*sub_ino);
                                                             if !sub_unresolved.is_empty() {
                                                                 let sk_arr: Result<[u8; 32], _> =
                                                                     sub_key.as_slice().try_into();
@@ -457,9 +459,9 @@ mod mount_impl {
         host.mount(&mount_str)
             .map_err(|e| format!("Failed to set WinFsp mount point: {:?}", e))?;
 
-        // Set up stop signal for clean shutdown
+        // Set up stop signal for clean shutdown (replaced on each mount for remount support)
         let stop_signal = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let _ = WINFSP_STOP.get_or_init(|| stop_signal.clone());
+        *WINFSP_STOP.lock().unwrap() = Some(stop_signal.clone());
         let stop_clone = stop_signal.clone();
 
         // Start the dispatcher and spawn a keep-alive thread.
@@ -529,8 +531,8 @@ mod mount_impl {
         let mount_path = crate::fuse::mount_point();
         log::info!("Unmounting WinFsp at {}", mount_path.display());
 
-        // Signal the stop flag (if the WinFsp host checks it in its event loop)
-        if let Some(stop) = WINFSP_STOP.get() {
+        // Signal the stop flag for the current mount's keep-alive thread
+        if let Some(stop) = WINFSP_STOP.lock().unwrap().as_ref() {
             stop.store(true, std::sync::atomic::Ordering::SeqCst);
         }
 

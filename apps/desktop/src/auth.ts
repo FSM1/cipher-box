@@ -724,6 +724,8 @@ function getGoogleCredential(): Promise<string> {
     // which is unreliable on Windows WebView2 (NewWindowRequested may silently fail).
     invoke('open_oauth_popup', { url: authUrl }).catch((err) => {
       console.error('[Google Auth] Failed to open popup:', err);
+      cleanup();
+      reject(new Error(`Failed to open OAuth popup: ${err}`));
     });
 
     const cleanup = () => {

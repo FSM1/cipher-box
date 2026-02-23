@@ -8,6 +8,10 @@
 ; during CipherBox setup if not already present on the system.
 
 !macro NSIS_HOOK_PREINSTALL
+  ; WinFsp install moved to POSTINSTALL — $INSTDIR is not populated yet during PREINSTALL.
+!macroend
+
+!macro NSIS_HOOK_POSTINSTALL
   ; Check if WinFsp is already installed via registry
   ReadRegStr $0 HKLM "SOFTWARE\WinFsp" "InstallDir"
   StrCmp $0 "" 0 winfsp_installed
@@ -19,10 +23,6 @@
     MessageBox MB_OK|MB_ICONEXCLAMATION "WinFsp installation failed (exit code: $0). CipherBox requires WinFsp for the virtual filesystem. You can install it manually from https://winfsp.dev"
   winfsp_installed:
     DetailPrint "WinFsp filesystem driver is installed."
-!macroend
-
-!macro NSIS_HOOK_POSTINSTALL
-  ; No post-install actions needed
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL

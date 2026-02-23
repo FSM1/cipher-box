@@ -210,7 +210,7 @@ async fn complete_auth_setup(
             Ok(_handle) => {
                 *state.mount_status.write().await = crate::state::MountStatus::Mounted;
                 let _ = crate::tray::update_tray_status(app, &crate::tray::TrayStatus::Synced);
-                log::info!("Filesystem mounted at ~/CipherBox");
+                log::info!("Filesystem mounted at {}", crate::fuse::mount_point().display());
             }
             Err(e) => {
                 let err_msg = format!("Filesystem mount failed: {}", e);
@@ -541,11 +541,22 @@ pub async fn handle_test_login_complete(
 pub async fn open_oauth_popup(app: tauri::AppHandle, url: String) -> Result<(), String> {
     let n = POPUP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let label = format!("oauth-popup-{}", n);
-    log::info!("Creating OAuth popup window: {} -> {}", label, url);
 
     let parsed_url: tauri::Url = url
         .parse()
         .map_err(|e| format!("Invalid OAuth URL: {}", e))?;
+
+    // Allowlist: only HTTPS requests to known OAuth providers are permitted.
+    const ALLOWED_HOSTS: &[&str] = &["accounts.google.com"];
+    if parsed_url.scheme() != "https" {
+        return Err("OAuth URL must use HTTPS".to_string());
+    }
+    let host = parsed_url.host_str().unwrap_or("");
+    if !ALLOWED_HOSTS.contains(&host) {
+        return Err(format!("OAuth URL host '{}' is not allowed", host));
+    }
+
+    log::info!("Creating OAuth popup window: {} -> {}", label, host);
 
     tauri::WebviewWindowBuilder::new(
         &app,

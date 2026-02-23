@@ -21,14 +21,14 @@ use crate::crypto::folder::{FolderChild, FolderMetadata};
 /// may also re-normalize. By normalizing to NFC on both storage and lookup,
 /// we avoid mismatches with accented characters (e.g., `e` vs `e` + combining grave).
 ///
-/// On Windows, WinFsp also benefits from consistent name normalization for
-/// case-preserving lookups.
+/// On Windows, WinFsp sends callbacks with arbitrary casing (often uppercased)
+/// for case-insensitive volumes. We fold to lowercase for consistent HashMap
+/// key matching while preserving original casing in InodeData.name.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub(crate) fn normalize_name(name: &str) -> String {
     // unicode-normalization is a dependency of the fuse feature.
-    // On Windows (winfsp feature), NFC normalization is still desirable but the
-    // unicode-normalization crate is not included -- return name as-is for now.
-    // WinFsp performs its own case-insensitive matching at the driver level.
+    // On Windows (winfsp feature), fold to lowercase for case-insensitive matching.
+    // WinFsp's case-insensitive lookup is the user-mode filesystem's responsibility.
     #[cfg(feature = "fuse")]
     {
         use unicode_normalization::UnicodeNormalization;
@@ -36,7 +36,7 @@ pub(crate) fn normalize_name(name: &str) -> String {
     }
     #[cfg(all(feature = "winfsp", not(feature = "fuse")))]
     {
-        name.to_string()
+        name.to_lowercase()
     }
 }
 
@@ -655,6 +655,25 @@ impl InodeTable {
     #[cfg(any(feature = "fuse", feature = "winfsp"))]
     pub fn get_unresolved_file_pointers(&self) -> Vec<(u64, String)> {
         self.inodes.values().filter_map(|inode| {
+            match &inode.kind {
+                InodeKind::File {
+                    file_meta_ipns_name: Some(ipns_name),
+                    file_meta_resolved: false,
+                    ..
+                } => Some((inode.ino, ipns_name.clone())),
+                _ => None,
+            }
+        }).collect()
+    }
+
+    /// Get unresolved FilePointer inodes scoped to a specific parent folder.
+    /// Avoids retrying root-level or other-folder pointers with the wrong folder key.
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
+    pub fn get_unresolved_file_pointers_for_parent(&self, parent_ino: u64) -> Vec<(u64, String)> {
+        self.inodes.values().filter_map(|inode| {
+            if inode.parent_ino != parent_ino {
+                return None;
+            }
             match &inode.kind {
                 InodeKind::File {
                     file_meta_ipns_name: Some(ipns_name),
