@@ -61,7 +61,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 11.2: Remove v1 Folder Metadata** - Eliminate v1/v2 dual-schema, make v2 FilePointer canonical, per-file IPNS in desktop FUSE (INSERTED)
 - [x] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [x] **Phase 14: User-to-User Sharing** - Read-only folder and file sharing with ECIES key re-wrapping
-- [ ] **Phase 15: Link Sharing** - Shareable file links for non-users with URL-fragment decryption keys
+- [x] **Phase 15: Link Sharing** - Shareable file links for non-users with URL-fragment decryption keys
 - [ ] **Phase 15.1: Client-Side Search** - Encrypted search index in IndexedDB with incremental updates (INSERTED)
 - [ ] **Phase 16: Advanced Sync** - Conflict detection, offline queue, and idempotent replay
 - [ ] **Phase 17: AWS Nitro TEE** - Nitro enclave as fallback TEE provider for IPNS republishing
@@ -407,8 +407,8 @@ Plans:
 
 - [x] 15-01-PLAN.md — Backend: ShareInvite entity, migration, DTOs, InvitesController, service methods, module registration
 - [x] 15-02-PLAN.md — API client regen + frontend invite service with ephemeral key bridge crypto
-- [ ] 15-03-PLAN.md — ShareDialog tabbed UI (Direct Share | Invite Link) + InvitePage landing page + route + build verification
-- [ ] 15-04-PLAN.md — E2E test suite: Playwright page objects + invite-link-workflow.spec.ts
+- [x] 15-03-PLAN.md — ShareDialog tabbed UI (Direct Share | Invite Link) + InvitePage landing page + route + build verification
+- [x] 15-04-PLAN.md — E2E test suite: Playwright page objects + invite-link-workflow.spec.ts
 
 ### Phase 15.1: Client-Side Search (INSERTED)
 
