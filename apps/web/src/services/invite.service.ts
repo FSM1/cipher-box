@@ -62,7 +62,7 @@ function generateEphemeralKeypair(): {
   const keypair = secp256k1.keygen();
   return {
     privateKey: keypair.secretKey,
-    publicKey: keypair.publicKey,
+    publicKey: secp256k1.getPublicKey(keypair.secretKey, false), // uncompressed 65-byte key for ECIES
     privateKeyHex: bytesToHex(keypair.secretKey),
   };
 }
