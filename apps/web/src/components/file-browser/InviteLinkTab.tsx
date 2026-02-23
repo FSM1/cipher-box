@@ -31,7 +31,7 @@ export function InviteLinkTab({
   isOpen,
 }: InviteLinkTabProps) {
   const [invites, setInvites] = useState<InviteInfo[]>([]);
-  const [invitesLoading, setInvitesLoading] = useState(false);
+  const [invitesLoading, setInvitesLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
