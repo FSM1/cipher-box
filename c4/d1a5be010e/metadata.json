@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "c4d1a5be010e",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-15-link-sharing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md",
+    ".planning/phases/15-link-sharing/15-01-SUMMARY.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c4/d1a5be010e/0/metadata.json",
+      "transcript": "/c4/d1a5be010e/0/full.jsonl",
+      "context": "/c4/d1a5be010e/0/context.md",
+      "content_hash": "/c4/d1a5be010e/0/content_hash.txt",
+      "prompt": "/c4/d1a5be010e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 31,
+    "cache_creation_tokens": 125614,
+    "cache_read_tokens": 2579024,
+    "output_tokens": 5507,
+    "api_call_count": 22
+  }
+}
