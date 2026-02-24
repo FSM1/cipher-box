@@ -154,9 +154,77 @@ jobs:
           tauriScript: pnpm tauri
           tagName: ${{ inputs.staging_tag || github.ref_name }}
           releaseName: 'CipherBox Desktop ${{ inputs.staging_tag || github.ref_name }}'
-          releaseBody: 'Staging build for ${{ inputs.staging_tag || github.ref_name }}. macOS only (unsigned - right-click > Open to launch).'
+          releaseBody: 'Staging build for ${{ inputs.staging_tag || github.ref_name }}. macOS (unsigned - right-click > Open to launch) and Windows (unsigned - click "More info" > "Run anyway").'
           releaseDraft: false
           prerelease: true
+
+  build-desktop-windows:
+    name: Build Desktop App (Windows)
+    runs-on: windows-latest
+    environment: staging
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.staging_tag || github.ref_name }}
+
+      - name: Install WinFsp
+        shell: powershell
+        run: |
+          $url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
+          $resourceDir = "${{ github.workspace }}/apps/desktop/src-tauri/resources"
+          $out = "$resourceDir/winfsp-2.1.25156.msi"
+          $expectedHash = "073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A"
+          New-Item -ItemType Directory -Force -Path $resourceDir
+          Invoke-WebRequest -Uri $url -OutFile $out
+          $actualHash = (Get-FileHash $out -Algorithm SHA256).Hash
+          if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
+          Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
+
+      - name: Install Rust toolchain
+        run: rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: windows-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: windows-cargo-
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build crypto package
+        run: pnpm --filter @cipherbox/crypto build
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
+          VITE_API_URL: ${{ vars.STAGING_API_URL }}
+          VITE_ENVIRONMENT: staging
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          tagName: ${{ inputs.staging_tag || github.ref_name }}
+          releaseName: 'CipherBox Desktop ${{ inputs.staging_tag || github.ref_name }}'
+          releaseBody: 'Staging build for ${{ inputs.staging_tag || github.ref_name }}. macOS (unsigned - right-click > Open to launch) and Windows (unsigned - click "More info" > "Run anyway").'
+          releaseDraft: false
+          prerelease: true
+          args: -- --no-default-features --features winfsp
 
   deploy-vps:
     name: Deploy to Staging VPS
