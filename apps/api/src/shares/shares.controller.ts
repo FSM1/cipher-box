@@ -29,12 +29,7 @@ import {
   PendingRotationResponseDto,
   ShareKeyResponseDto,
 } from './dto/share-response.dto';
-
-interface RequestWithUser extends Request {
-  user: {
-    id: string;
-  };
-}
+import { RequestWithUser } from '../common/types';
 
 @ApiTags('shares')
 @ApiBearerAuth()

@@ -106,8 +106,8 @@ Requirements for production release. Each maps to roadmap phases 12+.
 - [x] **SHARE-03**: Share takes effect instantly on public key paste (rescoped: no accept/decline — instant share by design)
 - [x] **SHARE-04**: User can revoke a share (triggers lazy folder key rotation on next modification)
 - [x] **SHARE-05**: User can view "Shared with me" folders in file browser at ~/shared
-- [ ] **SHARE-06**: User can generate a shareable link for a file (decryption key in URL fragment only)
-- [ ] **SHARE-07**: Recipient can download shared file via link without a CipherBox account
+- [x] **SHARE-06**: User can generate a shareable link for a file (decryption key in URL fragment only)
+- [x] **SHARE-07**: Recipient can open shared link, authenticate, and auto-claim share (rescoped: invite model requires auth)
 
 ### Search
 
@@ -354,8 +354,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SHARE-03    | Phase 14   | Complete |
 | SHARE-04    | Phase 14   | Complete |
 | SHARE-05    | Phase 14   | Complete |
-| SHARE-06    | Phase 15   | Pending  |
-| SHARE-07    | Phase 15   | Pending  |
+| SHARE-06    | Phase 15   | Complete |
+| SHARE-07    | Phase 15   | Complete |
 | SRCH-01     | Phase 15   | Pending  |
 | SRCH-02     | Phase 15   | Pending  |
 | SRCH-03     | Phase 15   | Pending  |

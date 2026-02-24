@@ -81,5 +81,17 @@ module.exports = {
       branches: 70,
       functions: 66,
     },
+    '**/shares/shares.controller.ts': {
+      lines: 80,
+      branches: 65, // Swagger/NestJS decorators inflate uncovered branches
+    },
+    '**/shares/share-invites.controller.ts': {
+      lines: 80,
+      branches: 65, // Swagger/NestJS decorators inflate uncovered branches
+    },
+    '**/shares/invites.controller.ts': {
+      lines: 80,
+      branches: 74, // Swagger/NestJS decorators inflate uncovered branches
+    },
   },
 };

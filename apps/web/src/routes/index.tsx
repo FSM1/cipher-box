@@ -3,12 +3,14 @@ import { Login } from './Login';
 import { FilesPage } from './FilesPage';
 import { SharedPage } from './SharedPage';
 import { SettingsPage } from './SettingsPage';
+import { InvitePage } from './InvitePage';
 
 export function AppRoutes() {
   return (
     <HashRouter>
       <Routes>
         <Route path="/" element={<Login />} />
+        <Route path="/invite/:token" element={<InvitePage />} />
         <Route path="/files/:folderId?" element={<FilesPage />} />
         <Route path="/shared" element={<SharedPage />} />
         <Route path="/settings" element={<SettingsPage />} />

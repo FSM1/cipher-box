@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 11 Windows Desktop COMPLETE (all 3 plans done)
+**Current focus:** Milestone 2 -- Phase 15 COMPLETE (Link Sharing), next: Phase 15.1 or 16
 
 ## Current Position
 
-Phase: 11-windows-desktop (Windows Desktop)
-Plan: 3 of 3
+Phase: 15 (Link Sharing)
+Plan: 4 of 4
 Status: Phase complete
-Last activity: 2026-02-22 -- Completed 11-03-PLAN.md (NSIS Installer & CI Windows Build)
+Last activity: 2026-02-23 -- Completed 15-04-PLAN.md (E2E test suite for invite link sharing)
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 130
+- Total plans completed: 134
 - Average duration: 5.5 min
-- Total execution time: 12.5 hours
+- Total execution time: 13.0 hours
 
 **By Phase (M1 summary):**
 
@@ -42,11 +42,12 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 13     | 5/5   | 31 min  | 6.2 min  |
 | M2 Phase 14     | 6/6   | 42 min  | 7.0 min  |
 | M2 Phase 11     | 3/3   | 35 min  | 11.7 min |
+| M2 Phase 15     | 4/4   | 35 min  | 8.8 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 8m, 8m, 14m, 16m, 5m
-- Trend: Normalizing (final Windows plan was config/CI changes, no complex API translation)
+- Last 5 plans: 8m, 7m, 7m, 12m, 7m
+- Trend: Stable
 
 Updated after each plan completion.
 
@@ -193,6 +194,15 @@ Recent decisions affecting current work:
 | NSIS ExecWait for WinFsp MSI install (not nsExec)                      | 11-03     | Simpler exit code handling; MSI installed silently with INSTALLLEVEL=1000                                            |
 | WinFsp MSI downloaded in CI, not committed to git                      | 11-03     | Binary files not suitable for source control; CI downloads from official GitHub release                              |
 | cfg(any(fuse, winfsp)) in entry point files                            | 11-03     | Compound feature gate enables same mount/unmount code paths on both platforms                                        |
+| Two controller classes for mixed auth invite endpoints                 | 15-01     | InvitesController (no class guard) at /invites, ShareInvitesController (JwtAuthGuard) at /shares/invites             |
+| Authenticated GET /invites/:token/data for claim flow                  | 15-01     | Separate from public status check; returns encryptedKey + encryptedChildKeys for unwrap/re-wrap                      |
+| Hard-delete expired invites on read (not soft-delete)                  | 15-01     | Consistent with DeviceApproval auto-expire pattern; invites have no audit value                                      |
+| collectChildKeys extracted to shared lib/crypto/key-wrapping.ts        | 15-02     | Same folder traversal logic needed by both ShareDialog (direct) and invite.service.ts (link); prevents duplication   |
+| secp256k1.keygen() for ephemeral invite keypairs                       | 15-02     | Noble v3 API uses keygen() returning { secretKey, publicKey }; matches useDeviceApproval pattern                     |
+| Orval void-typed claim response cast as unknown as { shareId }         | 15-02     | OpenAPI spec 201 has no response schema; backend returns { shareId: string } but Orval types as void                 |
+| Auto-claim via useEffect watching isAuthenticated state                | 15-03     | navigate(/shared, replace:true) overrides useAuth's navigate(/files); claimingRef prevents double-claim              |
+| Ephemeral key in useRef (not useState) on InvitePage                   | 15-03     | Prevents re-render loss and accidental serialization; zeroed to null after claim                                     |
+| MFA/REQUIRED_SHARE support on InvitePage                               | 15-03     | Same DeviceWaitingScreen and RecoveryInput as Login.tsx; after MFA resolves, auto-claim fires normally               |
 
 ### Pending Todos
 
@@ -219,8 +229,8 @@ Recent decisions affecting current work:
 - Phase 12.3.1 inserted after Phase 12.3: Pre-Wipe Identity Cleanup — deterministic IPNS derivation, SHA-256 hashed identifiers for all auth methods, remove cross-method email auto-linking. Done before DB wipe to avoid migration code.
 - Phase 12.5 inserted after Phase 12.4: MFA Polishing, UAT & E2E Testing — polish auth flows, add wallet E2E with mock EIP-1193/6963 provider, fix bugs from CoreKit auth UAT
 - Phase 12.6 inserted after Phase 12.5: Per-File IPNS Metadata Split — split file metadata into per-file IPNS records before vault wipe (clean break, no dual-schema). Phase 12.1 (AES-CTR) moved to after 12.6.
-- Phase 11.4 inserted after Phase 11.3: Cross-Platform E2E Testing — validate each desktop client (Windows, macOS, Linux) against the API/web client on each platform's CI runner with natively installed Postgres + IPFS. Proves encryption compatibility, sync correctness, and data integrity across all platforms.
 - Phase 11.2 inserted after Phase 11.1: Remove v1 Folder Metadata — eliminate v1/v2 dual-schema code, make v2 FilePointer canonical everywhere, add per-file IPNS publishing to desktop FUSE. Triggered by cross-device format oscillation bug (desktop writes v1, web re-saves as v2 hybrid, desktop rejects).
+- Phase 15 split: "Link Sharing and Search" split into Phase 15 (Link Sharing) and Phase 15.1 (Client-Side Search). Independent features with different security surfaces.
 
 ### Blockers/Concerns
 
@@ -246,11 +256,10 @@ Recent decisions affecting current work:
 
 ### Research Flags
 
-- Phase 11 (Windows Desktop): COMPLETE -- WinFsp Rust crate, platform abstraction, NSIS installer hooks, CI Windows runner researched
-- Phase 11.3 (Linux Desktop): NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse) packaging, AppImage/deb, Linux system tray, Linux keyring, CI Linux runner
-- Phase 11.4 (Cross-Platform E2E): NEEDS `/gsd:research-phase` -- Native Postgres/IPFS on macOS + Windows CI runners (no Docker), Tauri command-level testing without GUI, CI matrix strategy for shared test suite across 3 platforms
+- Phase 11 (Desktop): NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse), Windows virtual drive (WinFsp/Dokany), Tauri cross-compilation
 - Phase 14 (Sharing): COMPLETE -- research done, 6 plans created, all 6 executed
-- Phase 15 (Link Sharing): NEEDS `/gsd:research-phase` -- unauthenticated web viewer security
+- Phase 15 (Link Sharing): COMPLETE -- ephemeral key bridge pattern, HashRouter fragment handling, unauthenticated endpoint design researched; 4 plans created
+- Phase 15.1 (Client-Side Search): Standard patterns -- minisearch + idb (per research), skip research
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
 - Phase 12.1 (AES-CTR Streaming): COMPLETE -- all 4 plans done (CTR crypto primitives, streaming upload pipeline, service worker decrypt proxy, media playback integration)
@@ -264,12 +273,12 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-22
-Stopped at: Phase 11 (Windows Desktop) complete and verified (4/4 must-haves passed)
+Last session: 2026-02-23
+Stopped at: Completed 15-04-PLAN.md (E2E test suite for invite link sharing)
 Resume file: None
-Next: Phase 11.3 (Linux Desktop) needs /gsd:research-phase, or Phase 15 (Link Sharing + Search) needs /gsd:discuss-phase
+Next: Phase 15 complete. Plan Phase 15.1 (Client-Side Search) or next phase.
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-22 after Phase 11 (Windows Desktop) complete — verified, PLAT-02 marked Complete_
+_Last updated: 2026-02-23 after Phase 15 Plan 04 complete (Phase 15 complete)_

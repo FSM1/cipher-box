@@ -5,12 +5,7 @@ import { VaultService } from './vault.service';
 import { InitVaultDto, VaultResponseDto } from './dto/init-vault.dto';
 import { VaultExportDto } from './dto/vault-export.dto';
 import { QuotaResponseDto } from './dto/quota.dto';
-
-interface RequestWithUser extends Request {
-  user: {
-    id: string;
-  };
-}
+import { RequestWithUser } from '../common/types';
 
 @ApiTags('Vault')
 @ApiBearerAuth()

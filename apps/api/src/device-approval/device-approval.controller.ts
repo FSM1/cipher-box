@@ -15,12 +15,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { DeviceApprovalService } from './device-approval.service';
 import { CreateApprovalDto } from './dto/create-approval.dto';
 import { RespondApprovalDto } from './dto/respond-approval.dto';
-
-interface RequestWithUser extends Request {
-  user: {
-    id: string;
-  };
-}
+import { RequestWithUser } from '../common/types';
 
 @ApiTags('device-approval')
 @ApiBearerAuth()

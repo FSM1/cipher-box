@@ -61,7 +61,8 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 11.2: Remove v1 Folder Metadata** - Eliminate v1/v2 dual-schema, make v2 FilePointer canonical, per-file IPNS in desktop FUSE (INSERTED)
 - [x] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [x] **Phase 14: User-to-User Sharing** - Read-only folder and file sharing with ECIES key re-wrapping
-- [ ] **Phase 15: Link Sharing and Search** - Shareable file links and client-side encrypted search
+- [x] **Phase 15: Link Sharing** - Shareable file links for non-users with URL-fragment decryption keys -- COMPLETE 2026-02-23
+- [ ] **Phase 15.1: Client-Side Search** - Encrypted search index in IndexedDB with incremental updates (INSERTED)
 - [ ] **Phase 16: Advanced Sync** - Conflict detection, offline queue, and idempotent replay
 - [ ] **Phase 17: AWS Nitro TEE** - Nitro enclave as fallback TEE provider for IPNS republishing
 
@@ -389,19 +390,37 @@ Plans:
 - [x] 14-05-PLAN.md — "Shared with me" browsing (route, SharedFileBrowser, read-only enforcement, shared download)
 - [x] 14-06-PLAN.md — Post-upload share key propagation + revocation + lazy key rotation
 
-### Phase 15: Link Sharing and Search
+### Phase 15: Link Sharing
 
-**Goal**: Users can share individual files via link with non-users, and search across their entire vault
+**Goal**: Users can share files and folders via invite links where the decryption key lives in the URL fragment only (never sent to server). Recipients must authenticate (invite model) and the share is auto-claimed using Phase 14 infrastructure.
 **Depends on**: Phase 14
-**Requirements**: SHARE-06, SHARE-07, SRCH-01, SRCH-02, SRCH-03
-**Research flag**: Link sharing NEEDS `/gsd:research-phase` -- web viewer for unauthenticated access is a new security surface. Search is standard patterns (skip research).
+**Requirements**: SHARE-06, SHARE-07
+**Research flag**: COMPLETE -- ephemeral key bridge pattern, HashRouter fragment handling, unauthenticated endpoint design researched
 **Success Criteria** (what must be TRUE):
 
 1. User can generate a shareable link for a file where the decryption key is in the URL fragment only (never sent to server)
-2. Recipient can open the link in a browser and download the decrypted file without a CipherBox account
-3. User can search file names across all folders and see matching results with navigation to the file location
-4. Search index is encrypted and persisted in IndexedDB, surviving page refreshes
-5. Search index updates incrementally when IPNS polling detects metadata changes
+2. Recipient can open the link, log in or create an account, and the share is auto-claimed (appears in "Shared with me")
+
+**Plans:** 4 plans
+
+Plans:
+
+- [x] 15-01-PLAN.md — Backend: ShareInvite entity, migration, DTOs, InvitesController, service methods, module registration
+- [x] 15-02-PLAN.md — API client regen + frontend invite service with ephemeral key bridge crypto
+- [x] 15-03-PLAN.md — ShareDialog tabbed UI (Direct Share | Invite Link) + InvitePage landing page + route + build verification
+- [x] 15-04-PLAN.md — E2E test suite: Playwright page objects + invite-link-workflow.spec.ts
+
+### Phase 15.1: Client-Side Search (INSERTED)
+
+**Goal**: Users can search file names across their entire vault with an encrypted index persisted in IndexedDB
+**Depends on**: Phase 15
+**Requirements**: SRCH-01, SRCH-02, SRCH-03
+**Research flag**: Standard patterns -- minisearch + idb (per research), skip `/gsd:research-phase`
+**Success Criteria** (what must be TRUE):
+
+1. User can search file names across all folders and see matching results with navigation to the file location
+2. Search index is encrypted and persisted in IndexedDB, surviving page refreshes
+3. Search index updates incrementally when IPNS polling detects metadata changes
    **Plans**: TBD
 
 ### Phase 16: Advanced Sync
@@ -433,7 +452,7 @@ Plans:
 
 **Execution Order:**
 
-Sequential order: 12 -> 12.5 -> 12.6 -> 12.1 -> 11.2 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
+Sequential order: 12 -> 12.5 -> 12.6 -> 12.1 -> 11.2 -> 13 -> 14 -> 15 -> 15.1 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
 
 Parallel phases:
 
@@ -473,7 +492,8 @@ Parallel phases:
 | 11.2 Remove v1 Folder Meta  | M2        | 3/3            | Complete    | 2026-02-19 |
 | 13. File Versioning         | M2        | 5/5            | Complete    | 2026-02-19 |
 | 14. User-to-User Sharing    | M2        | 6/6            | Complete    | 2026-02-21 |
-| 15. Link Sharing + Search   | M2        | 0/TBD          | Not started | -          |
+| 15. Link Sharing            | M2        | 4/4            | Complete    | 2026-02-23 |
+| 15.1 Client-Side Search     | M2        | 0/TBD          | Not started | -          |
 | 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
 | 11. Windows Desktop         | M2        | 3/3            | Complete    | 2026-02-22 |
 | 11.3 Linux Desktop          | M2        | 0/TBD          | Not started | -          |

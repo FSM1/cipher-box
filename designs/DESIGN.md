@@ -1,7 +1,7 @@
 # CipherBox Design System
 
 **Source:** `designs/cipher-box-design.pen`
-**Last Updated:** 2026-02-16
+**Last Updated:** 2026-02-23
 **Status:** Active design system reference
 
 This document serves as the persistent design context for UI mockup generation. Load this file before any Pencil MCP interaction to ensure consistent outputs.
@@ -18,8 +18,8 @@ This document serves as the persistent design context for UI mockup generation. 
 | `#006644` | 100%    | Secondary text, muted      | `--color-text-muted`   |
 | `#003322` | 100%    | Row separators, dividers   | `--color-border-muted` |
 | `#F59E0B` | 100%    | Warning accent, MFA banner | `--color-warning`      |
-| `#F59E0B` | 8%      | Warning background tint    | —                      |
-| `#F59E0B` | 25%     | Warning border             | —                      |
+| `#F59E0B` | 8%      | Warning background tint    | ---                    |
+| `#F59E0B` | 25%     | Warning border             | ---                    |
 | `#EF4444` | 100%    | Error, danger actions      | `--color-error`        |
 | `#4a5a4e` | 100%    | Dim text, dismiss buttons  | `--color-text-dim`     |
 | `#8b9a8f` | 100%    | Muted labels               | `--color-text-muted`   |
@@ -221,7 +221,7 @@ frame (root - 1440x900)
 | -------------- | ----------------------------------------- |
 | Background     | `#000000`                                 |
 | Border         | 1px `#003322` (or `#00D084` for emphasis) |
-| Width          | 500px (standard), up to 560px for wizards |
+| Width          | 500px (standard), up to 600px for tabbed  |
 | Layout         | vertical                                  |
 | Header padding | 16px 24px                                 |
 | Body padding   | 24px                                      |
@@ -249,6 +249,42 @@ frame (root - 1440x900)
 | Name color     | `#00D084` (12px, weight 600)     |
 | Metadata color | `#006644` (10px)                 |
 | Status dot     | 6px circle, color matches status |
+
+### Tab Bar (Phase 15+)
+
+| Property     | Value                                                   |
+| ------------ | ------------------------------------------------------- |
+| Layout       | horizontal, stretch                                     |
+| Border       | 1px bottom `#003322`                                    |
+| Tab padding  | 12px 24px                                               |
+| Active tab   | 2px bottom border `#00D084`, text `#00D084`, weight 600 |
+| Inactive tab | No bottom border, text `#006644`, weight 400            |
+| Font         | JetBrains Mono 10px                                     |
+
+### Status Badge (Phase 15+)
+
+| Property | Value                                             |
+| -------- | ------------------------------------------------- |
+| Layout   | inline, transparent background                    |
+| Border   | 1px, color matches status                         |
+| Padding  | 2px 8px                                           |
+| Font     | JetBrains Mono 9px, weight 600                    |
+| ACTIVE   | border `#00D084`, text `#00D084`                  |
+| CLAIMED  | border `#006644`, text `#006644`, row 0.6 opacity |
+| EXPIRED  | border `#EF4444`, text `#EF4444`, row 0.4 opacity |
+
+### Invite Landing Page (Phase 15)
+
+| Property      | Value                                        |
+| ------------- | -------------------------------------------- |
+| Layout        | full viewport, no sidebar                    |
+| Header        | Minimal - logo only, border `#003322` bottom |
+| Content card  | 500px wide, centered, border `#00D084`       |
+| Card padding  | 40px all sides                               |
+| Card gap      | 24px between elements                        |
+| CTA button    | Primary filled, wider padding (12px 40px)    |
+| Security note | `// comment style` in `#4a5a4e`              |
+| Error card    | Same layout, border `#EF4444` instead        |
 
 ## Interaction Patterns
 
@@ -291,9 +327,16 @@ Record design decisions made during discuss-phase sessions.
 | 2026-02-15 | 12.4  | New device waiting state uses full-page centered card (no sidebar) | Pre-auth state, user doesn't have vault access yet                             |
 | 2026-02-15 | 12.4  | Checkbox acknowledgment for recovery phrase confirmation           | User explicitly confirms they saved the phrase                                 |
 | 2026-02-16 | 12.5  | MFA banner uses amber accent (`#F59E0B`), not green                | Amber draws attention/urgency vs terminal green; differentiates from normal UI |
-| 2026-02-16 | 12.5  | Wallet icon is "W" text, not Greek Xi (Ξ)                          | Universally legible; matches G (Google) and @ (Email) pattern                  |
+| 2026-02-16 | 12.5  | Wallet icon is "W" text, not Greek Xi                              | Universally legible; matches G (Google) and @ (Email) pattern                  |
 | 2026-02-16 | 12.5  | Wallet button uses primary green border (outline style)            | Matches secondary button pattern; consistent with Google/Email buttons         |
 | 2026-02-16 | 12.5  | Disabled unlink shows "// last method" hint text                   | Terminal-style comment explains why action is unavailable                      |
+| 2026-02-23 | 15    | Invite landing uses full-page centered card (no sidebar)           | Pre-auth state, mirrors Phase 12.4 new-device-waiting pattern                  |
+| 2026-02-23 | 15    | Share dialog expanded from 500px to 600px with tab bar             | Tab bar needs room; accommodates invite link content alongside direct share    |
+| 2026-02-23 | 15    | Tab bar uses 2px bottom-border for active indicator                | Minimal, terminal-aesthetic tab pattern; green for active, muted for inactive  |
+| 2026-02-23 | 15    | Status badges (ACTIVE/CLAIMED/EXPIRED) use colored borders only    | Consistent with terminal aesthetic; opacity dims entire row for past states    |
+| 2026-02-23 | 15    | Invite link header uses `#003322` border (not `#00D084`)           | Softer than main app header; invite page is branded but not full app chrome    |
+| 2026-02-23 | 15    | Error states on invite page use `#EF4444` border on card           | Red border immediately signals problem; matches existing error pattern         |
+| 2026-02-23 | 15    | Recipients show "via link" / "direct" origin tag                   | Users need to distinguish how each recipient got access for management         |
 
 ---
 

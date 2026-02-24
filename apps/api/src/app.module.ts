@@ -25,7 +25,7 @@ import { TeeKeyState } from './tee/tee-key-state.entity';
 import { TeeKeyRotationLog } from './tee/tee-key-rotation-log.entity';
 import { IpnsRepublishSchedule } from './republish/republish-schedule.entity';
 import { DeviceApproval } from './device-approval/device-approval.entity';
-import { Share, ShareKey } from './shares/entities';
+import { Share, ShareKey, ShareInvite } from './shares/entities';
 
 @Module({
   imports: [
@@ -79,6 +79,7 @@ import { Share, ShareKey } from './shares/entities';
           DeviceApproval,
           Share,
           ShareKey,
+          ShareInvite,
         ],
         synchronize: ['development', 'test'].includes(
           configService.get<string>('NODE_ENV', 'development')

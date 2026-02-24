@@ -22,6 +22,8 @@ import { fetchFromIpfs } from '../../lib/api/ipfs';
 import type { CreateShareDtoItemType } from '../../api/models/createShareDtoItemType';
 import type { ChildKeyDto } from '../../api/models/childKeyDto';
 import { useShareStore } from '../../stores/share.store';
+import { collectChildKeys, reWrapEncryptedKey } from '../../lib/crypto/key-wrapping';
+import { InviteLinkTab } from './InviteLinkTab';
 import '../../styles/share-dialog.css';
 
 type ShareDialogProps = {
@@ -64,121 +66,6 @@ function truncateKey(key: string): string {
 }
 
 /**
- * Collect all descendant keys from a folder for sharing.
- * Traverses subfolders depth-first, re-wrapping each file and subfolder key
- * for the recipient.
- *
- * @param children - Children of the current folder
- * @param folderKey - Decrypted AES key of the current folder (for resolving file metadata)
- * @param ownerPrivateKey - Owner's secp256k1 private key for unwrapping ECIES keys
- * @param recipientPubKeyBytes - Recipient's uncompressed secp256k1 public key
- * @param onProgress - Callback for progress tracking
- */
-async function collectChildKeys(
-  children: FolderChild[],
-  folderKey: Uint8Array,
-  ownerPrivateKey: Uint8Array,
-  recipientPubKeyBytes: Uint8Array,
-  onProgress: (wrapped: number) => void
-): Promise<ChildKeyDto[]> {
-  const childKeys: ChildKeyDto[] = [];
-  let wrapped = 0;
-
-  for (const child of children) {
-    if (child.type === 'file') {
-      const fp = child as FilePointer;
-      // Resolve file metadata to get fileKeyEncrypted, then re-wrap for recipient
-      try {
-        const { metadata: fileMeta } = await resolveFileMetadata(fp.fileMetaIpnsName, folderKey);
-        const reWrappedFileKey = await reWrapEncryptedKey(
-          fileMeta.fileKeyEncrypted,
-          ownerPrivateKey,
-          recipientPubKeyBytes
-        );
-        childKeys.push({
-          keyType: 'file' as ChildKeyDto['keyType'],
-          itemId: fp.id,
-          encryptedKey: reWrappedFileKey,
-        });
-        wrapped++;
-        onProgress(wrapped);
-      } catch (err) {
-        console.error(`Failed to re-wrap file key for ${fp.name}:`, err);
-        // Continue with other children
-      }
-    } else {
-      const folder = child as FolderEntry;
-      // Re-wrap the subfolder's folderKey for the recipient
-      const folderKeyRewrapped = await reWrapEncryptedKey(
-        folder.folderKeyEncrypted,
-        ownerPrivateKey,
-        recipientPubKeyBytes
-      );
-      childKeys.push({
-        keyType: 'folder' as ChildKeyDto['keyType'],
-        itemId: folder.id,
-        encryptedKey: folderKeyRewrapped,
-      });
-      wrapped++;
-      onProgress(wrapped);
-
-      // Recurse into subfolder: resolve its metadata and collect its children
-      try {
-        const resolved = await resolveIpnsRecord(folder.ipnsName);
-        if (resolved) {
-          const folderKeyBytes = await unwrapKey(
-            hexToBytes(folder.folderKeyEncrypted),
-            ownerPrivateKey
-          );
-          try {
-            const encryptedBytes = await fetchFromIpfs(resolved.cid);
-            const encryptedJson = new TextDecoder().decode(encryptedBytes);
-            const encrypted = JSON.parse(encryptedJson);
-            const metadata = await decryptFolderMetadata(encrypted, folderKeyBytes);
-
-            const subKeys = await collectChildKeys(
-              metadata.children,
-              folderKeyBytes,
-              ownerPrivateKey,
-              recipientPubKeyBytes,
-              (subWrapped) => {
-                onProgress(wrapped + subWrapped);
-              }
-            );
-            wrapped += subKeys.length;
-            childKeys.push(...subKeys);
-          } finally {
-            folderKeyBytes.fill(0);
-          }
-        }
-      } catch (err) {
-        console.error(`Failed to traverse subfolder ${folder.name}:`, err);
-        // Continue with other children
-      }
-    }
-  }
-
-  return childKeys;
-}
-
-/**
- * Re-wrap an ECIES-encrypted hex key from owner to recipient.
- */
-async function reWrapEncryptedKey(
-  encryptedKeyHex: string,
-  ownerPrivateKey: Uint8Array,
-  recipientPubKey: Uint8Array
-): Promise<string> {
-  const plainKey = await unwrapKey(hexToBytes(encryptedKeyHex), ownerPrivateKey);
-  try {
-    const rewrapped = await wrapKey(plainKey, recipientPubKey);
-    return bytesToHex(rewrapped);
-  } finally {
-    plainKey.fill(0);
-  }
-}
-
-/**
  * Share dialog modal for creating and managing shares.
  *
  * Allows users to:
@@ -197,6 +84,7 @@ export function ShareDialog({
   ipnsName,
   parentFolderId,
 }: ShareDialogProps) {
+  const [activeTab, setActiveTab] = useState<'direct' | 'invite'>('direct');
   const [pubKeyInput, setPubKeyInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -209,11 +97,14 @@ export function ShareDialog({
   const [revokingId, setRevokingId] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const directTabRef = useRef<HTMLButtonElement>(null);
+  const inviteTabRef = useRef<HTMLButtonElement>(null);
 
   // Fetch existing recipients when dialog opens
   useEffect(() => {
     if (!isOpen) {
       // Reset state on close
+      setActiveTab('direct');
       setPubKeyInput('');
       setError(null);
       setSuccess(null);
@@ -456,118 +347,178 @@ export function ShareDialog({
   const title = `SHARE: ${itemDisplayName}`;
 
   return (
-    <Modal open={isOpen} onClose={onClose} title={title}>
+    <Modal open={isOpen} onClose={onClose} title={title} className="share-dialog-backdrop">
       <div className="share-dialog">
-        {/* Input section */}
-        <div className="share-input-section">
-          <label className="share-input-label" htmlFor="share-pubkey-input">
-            {'// paste recipient public key'}
-          </label>
-          <div className="share-input-row">
-            <input
-              ref={inputRef}
-              id="share-pubkey-input"
-              type="text"
-              className={`share-input${error ? ' share-input--error' : ''}`}
-              placeholder="0x04..."
-              value={pubKeyInput}
-              onChange={(e) => {
-                setPubKeyInput(e.target.value);
-                setError(null);
-                setSuccess(null);
-              }}
-              onKeyDown={handleKeyDown}
-              disabled={isSharing}
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <button
-              type="button"
-              className="share-submit-btn"
-              onClick={handleShare}
-              disabled={isSharing || !pubKeyInput.trim()}
-            >
-              {isSharing ? '...' : '--share'}
-            </button>
-          </div>
-
-          {/* Error message */}
-          {error && (
-            <div className="share-error" role="alert">
-              {'> '}
-              {error}
-            </div>
-          )}
-
-          {/* Success message */}
-          {success && (
-            <div className="share-success" role="status">
-              {'> '}
-              {success}
-            </div>
-          )}
-
-          {/* Progress indicator for folder sharing */}
-          {progress && (
-            <div className="share-progress" role="status" aria-live="polite">
-              {'> '}re-wrapping keys... {progress.current}
-            </div>
-          )}
+        {/* Tab bar */}
+        <div className="share-tab-bar" role="tablist" aria-label="Share method">
+          <button
+            ref={directTabRef}
+            type="button"
+            role="tab"
+            id="share-tab-direct"
+            aria-selected={activeTab === 'direct'}
+            aria-controls="share-panel-direct"
+            tabIndex={activeTab === 'direct' ? 0 : -1}
+            className={`share-tab${activeTab === 'direct' ? ' share-tab--active' : ''}`}
+            onClick={() => setActiveTab('direct')}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                setActiveTab('invite');
+                inviteTabRef.current?.focus();
+              }
+            }}
+          >
+            {'DIRECT SHARE'}
+          </button>
+          <button
+            ref={inviteTabRef}
+            type="button"
+            role="tab"
+            id="share-tab-invite"
+            aria-selected={activeTab === 'invite'}
+            aria-controls="share-panel-invite"
+            tabIndex={activeTab === 'invite' ? 0 : -1}
+            className={`share-tab${activeTab === 'invite' ? ' share-tab--active' : ''}`}
+            onClick={() => setActiveTab('invite')}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                setActiveTab('direct');
+                directTabRef.current?.focus();
+              }
+            }}
+          >
+            {'INVITE LINK'}
+          </button>
         </div>
 
-        {/* Recipients section */}
-        <div className="share-recipients-section">
-          <div className="share-recipients-header">{'// recipients'}</div>
+        {/* Direct Share tab panel */}
+        {activeTab === 'direct' && (
+          <div role="tabpanel" id="share-panel-direct" aria-labelledby="share-tab-direct">
+            {/* Input section */}
+            <div className="share-input-section">
+              <label className="share-input-label" htmlFor="share-pubkey-input">
+                {'// paste recipient public key'}
+              </label>
+              <div className="share-input-row">
+                <input
+                  ref={inputRef}
+                  id="share-pubkey-input"
+                  type="text"
+                  className={`share-input${error ? ' share-input--error' : ''}`}
+                  placeholder="0x04..."
+                  value={pubKeyInput}
+                  onChange={(e) => {
+                    setPubKeyInput(e.target.value);
+                    setError(null);
+                    setSuccess(null);
+                  }}
+                  onKeyDown={handleKeyDown}
+                  disabled={isSharing}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <button
+                  type="button"
+                  className="share-submit-btn"
+                  onClick={handleShare}
+                  disabled={isSharing || !pubKeyInput.trim()}
+                >
+                  {isSharing ? '...' : '--share'}
+                </button>
+              </div>
 
-          {recipientsLoading || !recipientsFetched ? (
-            <div className="share-recipients-loading">loading...</div>
-          ) : recipients.length === 0 ? (
-            <div className="share-recipients-empty">no recipients yet</div>
-          ) : (
-            <div className="share-recipients-list">
-              {recipients.map((recipient) => (
-                <div key={recipient.shareId} className="share-recipient">
-                  <span className="share-recipient-key">
-                    {truncateKey(recipient.recipientPublicKey)}
-                  </span>
-
-                  {confirmRevokeId === recipient.shareId ? (
-                    <div className="share-revoke-confirm">
-                      <span className="share-revoke-confirm-text">{'confirm?'}</span>
-                      <button
-                        type="button"
-                        className="share-revoke-confirm-btn share-revoke-confirm-btn--yes"
-                        onClick={() => handleRevoke(recipient.shareId)}
-                        disabled={revokingId === recipient.shareId}
-                        aria-label="Confirm revoke"
-                      >
-                        {revokingId === recipient.shareId ? '...' : '[y]'}
-                      </button>
-                      <button
-                        type="button"
-                        className="share-revoke-confirm-btn share-revoke-confirm-btn--no"
-                        onClick={() => setConfirmRevokeId(null)}
-                        aria-label="Cancel revoke"
-                      >
-                        [n]
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      type="button"
-                      className="share-revoke-btn"
-                      onClick={() => setConfirmRevokeId(recipient.shareId)}
-                      disabled={revokingId !== null}
-                      aria-label={`Revoke share for ${truncateKey(recipient.recipientPublicKey)}`}
-                    >
-                      --revoke
-                    </button>
-                  )}
+              {/* Error message */}
+              {error && (
+                <div className="share-error" role="alert">
+                  {'> '}
+                  {error}
                 </div>
-              ))}
+              )}
+
+              {/* Success message */}
+              {success && (
+                <div className="share-success" role="status">
+                  {'> '}
+                  {success}
+                </div>
+              )}
+
+              {/* Progress indicator for folder sharing */}
+              {progress && (
+                <div className="share-progress" role="status" aria-live="polite">
+                  {'> '}re-wrapping keys... {progress.current}
+                </div>
+              )}
             </div>
-          )}
-        </div>
+
+            {/* Recipients section */}
+            <div className="share-recipients-section">
+              <div className="share-recipients-header">{'// recipients'}</div>
+
+              {recipientsLoading || !recipientsFetched ? (
+                <div className="share-recipients-loading">loading...</div>
+              ) : recipients.length === 0 ? (
+                <div className="share-recipients-empty">no recipients yet</div>
+              ) : (
+                <div className="share-recipients-list">
+                  {recipients.map((recipient) => (
+                    <div key={recipient.shareId} className="share-recipient">
+                      <span className="share-recipient-key">
+                        {truncateKey(recipient.recipientPublicKey)}
+                      </span>
+
+                      {confirmRevokeId === recipient.shareId ? (
+                        <div className="share-revoke-confirm">
+                          <span className="share-revoke-confirm-text">{'confirm?'}</span>
+                          <button
+                            type="button"
+                            className="share-revoke-confirm-btn share-revoke-confirm-btn--yes"
+                            onClick={() => handleRevoke(recipient.shareId)}
+                            disabled={revokingId === recipient.shareId}
+                            aria-label="Confirm revoke"
+                          >
+                            {revokingId === recipient.shareId ? '...' : '[y]'}
+                          </button>
+                          <button
+                            type="button"
+                            className="share-revoke-confirm-btn share-revoke-confirm-btn--no"
+                            onClick={() => setConfirmRevokeId(null)}
+                            aria-label="Cancel revoke"
+                          >
+                            [n]
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className="share-revoke-btn"
+                          onClick={() => setConfirmRevokeId(recipient.shareId)}
+                          disabled={revokingId !== null}
+                          aria-label={`Revoke share for ${truncateKey(recipient.recipientPublicKey)}`}
+                        >
+                          --revoke
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Invite Link tab panel */}
+        {activeTab === 'invite' && (
+          <InviteLinkTab
+            item={item}
+            folderKey={folderKey}
+            ipnsName={ipnsName}
+            parentFolderId={parentFolderId}
+            isOpen={isOpen && activeTab === 'invite'}
+          />
+        )}
       </div>
     </Modal>
   );
