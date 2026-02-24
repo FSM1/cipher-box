@@ -43,6 +43,14 @@ test.describe.serial('Search Workflow', () => {
     context = await browser.newContext();
     page = await context.newPage();
 
+    // Capture browser console for diagnostics
+    page.on('console', (msg) => {
+      const text = msg.text();
+      if (text.includes('[SearchIndex') || text.includes('[search]')) {
+        console.log(`[browser] ${text}`);
+      }
+    });
+
     // Initialize page objects
     fileList = new FileListPage(page);
     uploadZone = new UploadZonePage(page);
@@ -108,40 +116,9 @@ test.describe.serial('Search Workflow', () => {
   // ============================================
 
   test('2.1 Type query and verify results appear', async () => {
-    // Diagnostic: capture folder store and search state before searching
-    const diagBefore = await page.evaluate(() => {
-      const stores = (window as any).__ZUSTAND_STORES;
-      const folderState = stores?.folder?.getState();
-      const folders = folderState?.folders ?? {};
-      const folderIds = Object.keys(folders);
-      const folderSummary = folderIds.map((id: string) => ({
-        id,
-        name: folders[id].name,
-        childCount: folders[id].children?.length ?? 0,
-        childNames: (folders[id].children ?? []).map((c: any) => c.name).slice(0, 5),
-      }));
-      return { folderIds, folderSummary };
-    });
-    console.log('[diag] folder store before search:', JSON.stringify(diagBefore, null, 2));
-
     // Open palette
     await page.keyboard.press(searchShortcut);
     await searchPalette.waitForOpen({ timeout: 5000 });
-
-    // Wait a moment for the index build to complete (async effect)
-    await page.waitForTimeout(2000);
-
-    // Diagnostic: capture search index state after palette opens
-    const diagIndex = await page.evaluate(() => {
-      const idx = (window as any).__SEARCH_INDEX;
-      return {
-        indexAvailable: !!idx,
-        indexSize: idx?.size ?? -1,
-        indexVersion: idx?.version ?? -1,
-        isEmpty: idx?.isEmpty ?? true,
-      };
-    });
-    console.log('[diag] search index after palette open:', JSON.stringify(diagIndex));
 
     // Fill the search input with the first part of the test file name.
     // Use fill() — more reliable than pressSequentially for React controlled inputs.

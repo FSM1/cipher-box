@@ -67,11 +67,6 @@ if (import.meta.env.DEV) {
             folder: useFolderStore,
             sync: useSyncStore,
           };
-          // Expose search index for E2E diagnostics
-          import('./services/search-index.service').then(({ searchIndexService }) => {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (window as any).__SEARCH_INDEX = searchIndexService;
-          });
         });
       });
     });

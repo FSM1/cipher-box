@@ -40,6 +40,7 @@ export function useSearch() {
 
   // Refs
   const hasLoadedFromDb = useRef(false);
+  const buildingRef = useRef(false);
 
   // Store access
   const vaultKeypair = useAuthStore((s) => s.vaultKeypair);
@@ -75,26 +76,37 @@ export function useSearch() {
     return () => window.removeEventListener('keydown', handler);
   }, [toggle]);
 
-  // Build/load index when palette opens for the first time
+  // Build/refresh index every time the palette opens.
+  // On cold start (empty index, no prior DB load), try loading from encrypted
+  // IndexedDB first. Otherwise, always rebuild from the current folder store
+  // to ensure freshness (files may have been uploaded/deleted since last open).
   useEffect(() => {
-    if (!isOpen || isIndexReady || isBuilding) return;
+    if (!isOpen) return;
     if (!vaultKeypair) return;
+    if (buildingRef.current) return;
+
+    // If the index already has data (e.g. from a prior sync-triggered rebuild),
+    // mark ready immediately so the user can search the existing index while
+    // we rebuild with the latest folder state.
+    if (!searchIndexService.isEmpty) {
+      setIsIndexReady(true);
+    }
 
     const init = async () => {
+      buildingRef.current = true;
       setIsBuilding(true);
       try {
-        // Try loading from encrypted IndexedDB first
-        if (!hasLoadedFromDb.current) {
+        // Cold start: try loading from encrypted IndexedDB when index is empty
+        if (!hasLoadedFromDb.current && searchIndexService.isEmpty) {
           const loaded = await searchIndexService.loadEncrypted(vaultKeypair.privateKey);
           hasLoadedFromDb.current = true;
           if (loaded && !searchIndexService.isEmpty) {
             setIsIndexReady(true);
-            setIsBuilding(false);
             return;
           }
         }
 
-        // Build fresh from folder store
+        // Build fresh from current folder store state
         const currentFolders = useFolderStore.getState().folders;
         searchIndexService.buildFromFolderTree(currentFolders);
         setIsIndexReady(true);
@@ -109,10 +121,11 @@ export function useSearch() {
         setIsIndexReady(true);
       } finally {
         setIsBuilding(false);
+        buildingRef.current = false;
       }
     };
     init();
-  }, [isOpen, isIndexReady, isBuilding, vaultKeypair]);
+  }, [isOpen, vaultKeypair]);
 
   // Search with debounce (150ms)
   useEffect(() => {
