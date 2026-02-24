@@ -1,0 +1,120 @@
+Implement the following plan:
+
+# Plan: Path-Based Conditional CI Skipping
+
+## Context
+
+All CI jobs run on every PR regardless of what changed. Docs/planning-only PRs trigger expensive desktop builds (Windows + macOS runners, ~10-15 min each), unit tests with Postgres + IPFS, and E2E tests with Playwright — all unnecessary for markdown changes.
+
+**Goal:** Docs/planning PRs run only lint + typecheck. Source PRs run relevant jobs. Desktop jobs only run when desktop code changes.
+
+## Approach: `dorny/paths-filter` + Job-Level `if:`
+
+We **cannot** use workflow-level `paths:` filters because that prevents the workflow from running entirely, leaving required checks stuck in "Pending" and blocking merge. Instead:
+
+1. Add a `changes` detection job using `dorny/paths-filter@v3`
+2. Add `if:` conditions to each downstream job
+3. Skipped jobs report as "skipped" which satisfies required status checks
+
+### Path Groups
+
+**`src`** — any non-docs change:
+```
+- '**'
+- '!.planning/**'
+- '!.learnings/**'
+- '!docs/**'
+- '!designs/**'
+- '!00-Preliminary-R&D/**'
+- '!.claude/**'
+- '!**/*.md'
+- '!LICENSE'
+```
+
+**`desktop`** — desktop-specific:
+```
+- 'apps/desktop/**'
+- 'packages/crypto/**'
+- '.github/workflows/ci.yml'
+```
+
+### Job Conditions
+
+| Job | Condition | Rationale |
+|-----|-----------|-----------|
+| `lint` | always | Fast, universal |
+| `typecheck` | always | Fast, universal |
+| `api-spec` | `src` | Only API changes affect spec |
+| `test` | `src` | Only source changes affect tests |
+| `build` | `src` | Only source changes affect build |
+| `cargo-check-windows` | `desktop` | Only Rust/desktop changes |
+| `cargo-check-macos` | `desktop` | Only Rust/desktop changes |
+| `build-desktop-windows` | `desktop` | Only Rust/desktop changes |
+| `build-desktop-macos` | `desktop` | Only Rust/desktop changes |
+| `e2e` (separate workflow) | `src` | Only source changes affect E2E |
+
+**Push to `main` always runs all jobs** via `github.event_name == 'push'` override.
+
+### `if:` Pattern for Jobs with Skippable Dependencies
+
+```yaml
+if: |
+  !failure() && !cancelled() &&
+  (github.event_name == 'push' || needs.changes.outputs.src == 'true')
+```
+
+`!failure() && !cancelled()` replaces the implicit `success()` so that skipped upstream jobs don't block downstream ones.
+
+## Files to Modify
+
+### 1. `.github/workflows/ci.yml`
+
+- **Add** `changes` job (first job, ~10 lines)
+- **Modify** 7 jobs: add `changes` to `needs`, add `if:` condition
+- `lint` and `typecheck` unchanged
+
+### 2. `.github/workflows/e2e.yml`
+
+- **Add** `changes` job
+- **Modify** `e2e` job: add `needs: [changes]`, add `if:` condition (includes `workflow_dispatch` bypass)
+
+## Verification
+
+After pushing the PR (which itself changes `ci.yml` so all jobs will run):
+1. The PR's own CI run validates the workflow syntax and runs all jobs (since `.github/workflows/ci.yml` matches both `src` and `desktop`)
+2. Can verify docs-only skip behavior on a follow-up test branch if desired
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.REDACTED.jsonl
+
+---
+
+ok create a pr for these changes
+
+---
+
+the CI run is failing, due to the action not being in the allowed list. `The action dorny/paths-filter@v3 is not allowed in FSM1/cipher-box because all actions must be from a repository owned by FSM1, created by GitHub, verified in the GitHub Marketplace, or match one of the patterns: appleboy/*, docker/*, pnpm/*, tauri-apps/*.`
+
+---
+
+[Request interrupted by user]
+
+---
+
+honestly not against adding the dorny/paths-filter to the allow list
+
+---
+
+hmmm, does not seem like the jobs are starting up. maybe just an empty commit to that branch to kick the typres?
+
+---
+
+ok can we get back to main
+
+---
+
+ok, now just looking at the staging release tagging job, and noticed that there is no windows build step to generate the installation binary in that workflow. please update the CI to do this
+
+---
+
+[Request interrupted by user for tool use]

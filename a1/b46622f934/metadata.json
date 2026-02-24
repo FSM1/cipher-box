@@ -3,7 +3,7 @@
   "checkpoint_id": "a1b46622f934",
   "strategy": "manual-commit",
   "branch": "feat/windows-staging-build",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     ".github/workflows/deploy-staging.yml"
   ],
@@ -14,13 +14,20 @@
       "context": "/a1/b46622f934/0/context.md",
       "content_hash": "/a1/b46622f934/0/content_hash.txt",
       "prompt": "/a1/b46622f934/0/prompt.txt"
+    },
+    {
+      "metadata": "/a1/b46622f934/1/metadata.json",
+      "transcript": "/a1/b46622f934/1/full.jsonl",
+      "context": "/a1/b46622f934/1/context.md",
+      "content_hash": "/a1/b46622f934/1/content_hash.txt",
+      "prompt": "/a1/b46622f934/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 14,
-    "cache_creation_tokens": 30582,
-    "cache_read_tokens": 473927,
-    "output_tokens": 1282,
-    "api_call_count": 10
+    "input_tokens": 64,
+    "cache_creation_tokens": 71999,
+    "cache_read_tokens": 2529058,
+    "output_tokens": 5530,
+    "api_call_count": 46
   }
 }

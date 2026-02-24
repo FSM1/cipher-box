@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "a1b46622f934",
+  "session_id": "adcf9062-8e90-4c65-b32c-c8812e19a623",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-24T01:47:58.437518Z",
+  "branch": "feat/windows-staging-build",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/deploy-staging.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "d554f0626dcd",
+  "token_usage": {
+    "input_tokens": 50,
+    "cache_creation_tokens": 41417,
+    "cache_read_tokens": 2055131,
+    "output_tokens": 4248,
+    "api_call_count": 36
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-24T01:47:57.845935Z",
+    "agent_lines": 0,
+    "human_added": 91,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 91,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/adcf9062-8e90-4c65-b32c-c8812e19a623.jsonl"
+}
