@@ -3,7 +3,7 @@
   "checkpoint_id": "0c2580c51a5a",
   "strategy": "manual-commit",
   "branch": "feat/phase-15.1-client-side-search",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "apps/web/src/hooks/useSearch.ts",
     "apps/web/src/main.tsx",
@@ -23,13 +23,20 @@
       "context": "/0c/2580c51a5a/1/context.md",
       "content_hash": "/0c/2580c51a5a/1/content_hash.txt",
       "prompt": "/0c/2580c51a5a/1/prompt.txt"
+    },
+    {
+      "metadata": "/0c/2580c51a5a/2/metadata.json",
+      "transcript": "/0c/2580c51a5a/2/full.jsonl",
+      "context": "/0c/2580c51a5a/2/context.md",
+      "content_hash": "/0c/2580c51a5a/2/content_hash.txt",
+      "prompt": "/0c/2580c51a5a/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 109,
-    "cache_creation_tokens": 204618,
-    "cache_read_tokens": 9714296,
-    "output_tokens": 14074,
-    "api_call_count": 93
+    "input_tokens": 239,
+    "cache_creation_tokens": 439977,
+    "cache_read_tokens": 18415605,
+    "output_tokens": 19580,
+    "api_call_count": 178
   }
 }
