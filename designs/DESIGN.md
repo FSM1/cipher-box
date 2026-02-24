@@ -286,6 +286,33 @@ frame (root - 1440x900)
 | Security note | `// comment style` in `#4a5a4e`              |
 | Error card    | Same layout, border `#EF4444` instead        |
 
+### Search Command Palette (Phase 15.1)
+
+| Property         | Value                                              |
+| ---------------- | -------------------------------------------------- |
+| Width            | 600px, centered horizontally                       |
+| Position         | ~120px from top of viewport                        |
+| Background       | `#000000`                                          |
+| Border           | 1px `#00D084`                                      |
+| Backdrop         | `#000000CC`                                        |
+| Input padding    | 14px 20px                                          |
+| Input font       | JetBrains Mono 14px                                |
+| Input icon       | lucide `search` 18px `#006644`                     |
+| Input hint       | "ESC to close" 9px `#4a5a4e`                       |
+| Result padding   | 10px 20px                                          |
+| Result icon      | lucide (file-text/folder/etc) 16px `#006644`       |
+| Result name      | JetBrains Mono 12px `#00D084` weight 600           |
+| Result path      | JetBrains Mono 10px `#006644`                      |
+| Result date      | JetBrains Mono 10px `#4a5a4e` (right-aligned)      |
+| Result separator | 1px bottom `#003322`                               |
+| Selected bg      | `#001a11`                                          |
+| Selected border  | 2px left `#00D084`                                 |
+| Selected icon    | `#00D084` (bright)                                 |
+| Result count     | "// N results" 9px `#4a5a4e`                       |
+| Footer           | keyboard hints 9px `#4a5a4e`, top border `#003322` |
+| Trigger          | Cmd/Ctrl+K or search icon click                    |
+| Dismiss          | Escape key or click outside                        |
+
 ## Interaction Patterns
 
 ### Hover States
@@ -337,6 +364,11 @@ Record design decisions made during discuss-phase sessions.
 | 2026-02-23 | 15    | Invite link header uses `#003322` border (not `#00D084`)           | Softer than main app header; invite page is branded but not full app chrome    |
 | 2026-02-23 | 15    | Error states on invite page use `#EF4444` border on card           | Red border immediately signals problem; matches existing error pattern         |
 | 2026-02-23 | 15    | Recipients show "via link" / "direct" origin tag                   | Users need to distinguish how each recipient got access for management         |
+| 2026-02-24 | 15.1  | Command palette overlay for search (not inline)                    | Spotlight/Raycast UX; Cmd/Ctrl+K trigger, keyboard-first navigation            |
+| 2026-02-24 | 15.1  | 600px wide palette (spacious option with file type icons)          | Lucide icons distinguish file types; more breathing room than 500px compact    |
+| 2026-02-24 | 15.1  | Selected result: left border accent + background highlight         | 2px left #00D084 border + #001a11 bg; icon turns bright green on selection     |
+| 2026-02-24 | 15.1  | Search index encrypted in IndexedDB                                | Zero-knowledge on disk; consistent with project's privacy-first stance         |
+| 2026-02-24 | 15.1  | Fuzzy matching for file/folder name search                         | VS Code-style forgiving search; tolerates typos and abbreviations              |
 
 ---
 
