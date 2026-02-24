@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "4b637e3f971d",
+  "session_id": "f74c4715-3047-403a-a55f-d5d70614c624",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-24T00:01:01.792779Z",
+  "branch": "feat/phase-15-link-sharing",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/shares/invites.controller.ts",
+    "apps/api/src/shares/shares.service.spec.ts",
+    "apps/api/src/shares/shares.service.ts",
+    "apps/web/src/components/file-browser/InviteLinkTab.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "1280d372438e",
+  "transcript_identifier_at_start": "c35f8ff0-a7ab-4bf6-a853-7e6c44b6d479",
+  "checkpoint_transcript_start": 1683,
+  "transcript_lines_at_start": 1683,
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 21100,
+    "cache_read_tokens": 2882460,
+    "output_tokens": 2443,
+    "api_call_count": 26
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-24T00:00:59.464647Z",
+    "agent_lines": 0,
+    "human_added": 66,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 66,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/f74c4715-3047-403a-a55f-d5d70614c624.jsonl"
+}
