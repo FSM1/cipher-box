@@ -26,3 +26,14 @@ but the staging api should be suitable for the test credentials
 
 hmmm, ok stop the web dev server, and it looks like the same test is still failing in CI. there must be something else causing these test failures.
 
+### Prompt 7
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **Initial Request**: User wanted to point the local UI instance at the staging API for testing, since all changes are client-side (Phase 15.1 - client-side search).
+
+2. **First env change**: Changed `apps/web/.env.local` from `VITE_API_URL=http://localhost:3000` to `VITE_API_URL=http...
+
