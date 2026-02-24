@@ -3,7 +3,7 @@
   "checkpoint_id": "06838780708d",
   "strategy": "manual-commit",
   "branch": "feat/phase-15.1-client-side-search",
-  "checkpoints_count": 1,
+  "checkpoints_count": 3,
   "files_touched": [
     ".planning/STATE.md",
     ".planning/todos/pending/2026-02-24-async-incremental-search-index.md"
@@ -15,13 +15,20 @@
       "context": "/06/838780708d/0/context.md",
       "content_hash": "/06/838780708d/0/content_hash.txt",
       "prompt": "/06/838780708d/0/prompt.txt"
+    },
+    {
+      "metadata": "/06/838780708d/1/metadata.json",
+      "transcript": "/06/838780708d/1/full.jsonl",
+      "context": "/06/838780708d/1/context.md",
+      "content_hash": "/06/838780708d/1/content_hash.txt",
+      "prompt": "/06/838780708d/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 41,
-    "cache_creation_tokens": 88149,
-    "cache_read_tokens": 3181513,
-    "output_tokens": 5689,
-    "api_call_count": 37
+    "input_tokens": 185,
+    "cache_creation_tokens": 334569,
+    "cache_read_tokens": 16920673,
+    "output_tokens": 29851,
+    "api_call_count": 165
   }
 }
