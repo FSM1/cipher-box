@@ -1,0 +1,17 @@
+3 minor comments from coderabbit on the pr, and the e2e test is failing, most likely due to restrictions in the environment
+
+---
+
+yeah ship em
+
+---
+
+resolve the coderabbit threads
+
+---
+
+ok, seems like the e2e tests need some more resilience. another failure in ci on search test 2.1
+
+---
+
+yeah ship it
