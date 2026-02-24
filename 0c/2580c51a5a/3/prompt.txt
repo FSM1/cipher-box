@@ -1,0 +1,186 @@
+ok given the current setup, and the fact that all changes are entirely client-side, you can just point the local ui instance at the staging api for the duration of this test.
+
+---
+
+please remember to revert when we are done testing - in the mean time, start the dev server and execute the e2e test against it, in a headed browser session.
+
+---
+
+[Request interrupted by user]
+
+---
+
+kill all the existing servers on the ports, since oauth and such requires the use of 5173
+
+---
+
+but the staging api should be suitable for the test credentials
+
+---
+
+hmmm, ok stop the web dev server, and it looks like the same test is still failing in CI. there must be something else causing these test failures.
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **Initial Request**: User wanted to point the local UI instance at the staging API for testing, since all changes are client-side (Phase 15.1 - client-side search).
+
+2. **First env change**: Changed `apps/web/.env.local` from `VITE_API_URL=http://localhost:3000` to `VITE_API_URL=https://api-staging.cipherbox.cc`.
+
+3. **User asked to start dev server and run E2E tests headed**: Needed to kill existing servers on ports 5173/5174/5175 first since OAuth requires port 5173.
+
+4. **First test run failed**: `CryptoError: Key unwrapping failed` - because `tests/e2e/.env` still had `API_BASE_URL=http://localhost:3000`, so the test-login endpoint was hitting local (non-running) API while the web app pointed at staging.
+
+5. **Fixed by updating both env files**: Changed `API_BASE_URL` in `tests/e2e/.env` to staging. All 10 search tests passed.
+
+6. **Reverted env files**: Both back to localhost.
+
+7. **User noted CI still failing**: Investigated CI failure - different error than local. In CI, login works (108 other tests pass), but test 2.1 "Type query and verify results appear" fails with search results count = 0 after 30s timeout.
+
+8. **Downloaded CI artifacts**: Screenshot showed search palette with "search-test-" query showing "// no results for 'search-test-'" while the file was visible in the file list behind the palette.
+
+9. **Deep investigation of search architecture**:
+   - `useSearch` hook in `AppShell.tsx` (persists across palette open/close)
+   - Index built on first palette open from `useFolderStore.getState().folders`
+   - `isIndexReady` flag prevents rebuilding
+   - `triggerSearchIndexRebuild()` called only by sync handler in FileBrowser
+
+10. **User asked to reproduce locally**: Run full E2E suite against staging API to replicate CI conditions. User explicitly said to follow the pattern in `.learnings/2026-02-24-run-e2e-locally-before-push.md`.
+
+11. **Reproduced locally!**: Full suite run showed search test 2.1 failing with same symptoms.
+
+12. **Added diagnostic logging**:
+    - Exposed `searchIndexService` on `window.__SEARCH_INDEX` in `main.tsx`
+    - Added folder store state logging in test 2.1
+    - Added browser console capture via `page.on('console')`
+    - Added logging inside `buildFromFolderTree` and `useSearch` effect
+
+13. **ROOT CAUSE FOUND**: The `[SearchIndex.build]` fires BEFORE test 0.1 completes - it's triggered by `triggerSearchIndexRebuild()` from the sync handler during login/navigation. The initial sync detects new data from the staging API (from previous test runs), calls `buildFromFolderTree` with the folder store at THAT moment (which has 5-6 items from previous runs but NOT the current test's uploaded file). Since `isIndexReady` is then set to `true`, when the test later uploads a file and opens the palette, the index is never rebuilt.
+
+14. **Latest run details**: 
+    - Build fires with `isOpen=false` (not from palette open, from sync's `triggerSearchIndexRebuild`)
+    - Index built with 6 children (from previous test data, including old search-test file)
+    - Current test uploads a 7th child (new search-test file with different timestamp)
+    - Index has 6 items, search finds results for old file but NOT the new one
+    - Actual error: `waitForResults` passes (old file matches), but `names.some((n) => n.includes(testFileName))` fails because the specific new filename isn't in the index
+
+The env files are currently still pointing at staging (for reproduction). Diagnostic logging is still in the code (not committed beyond the first diagnostic commit).
+
+Summary:
+1. Primary Request and Intent:
+   - User wants to debug and fix E2E test failures for Phase 15.1 (client-side encrypted search) that pass locally but fail in CI
+   - The search tests are on branch `feat/phase-15.1-client-side-search`
+   - All changes are client-side, so the user directed pointing the local UI at the staging API for testing
+   - User explicitly requested running the full E2E suite locally against staging to replicate the CI problem, iterating quickly per `.learnings/2026-02-24-run-e2e-locally-before-push.md`
+   - User wants headed browser sessions for E2E tests
+   - User asked to remember to revert `.env.local` and `tests/e2e/.env` when done testing
+
+2. Key Technical Concepts:
+   - CipherBox client-side search using MiniSearch (fuzzy, prefix matching)
+   - Search index built from `useFolderStore.getState().folders` (Zustand store)
+   - `useSearch` hook in `AppShell.tsx` manages index lifecycle with `isIndexReady` flag
+   - `triggerSearchIndexRebuild()` - module-level callback registered by `useSearch`, called by sync handler in `FileBrowser.tsx`
+   - `useSyncPolling` fires immediately on mount (line 77-82) when vault has existing IPNS records
+   - Sync handler calls `triggerSearchIndexRebuild()` after updating folder store (FileBrowser.tsx:294)
+   - `searchIndexService` is a singleton that persists across component mounts
+   - IndexedDB encrypted persistence of search index via `loadEncrypted`/`persistEncrypted`
+   - MiniSearch tokenizes on non-alphanumeric chars: `search-test-123.txt` → tokens `search`, `test`, `123`, `txt`
+
+3. Files and Code Sections:
+   - `apps/web/.env.local`
+     - Controls which API the Vite dev server connects to
+     - Currently set to staging: `VITE_API_URL=https://api-staging.cipherbox.cc` (NEEDS REVERT)
+   - `tests/e2e/.env`
+     - Controls API for E2E test-login endpoint
+     - Currently set to staging: `API_BASE_URL=https://api-staging.cipherbox.cc` (NEEDS REVERT)
+   - `apps/web/src/hooks/useSearch.ts`
+     - Main search hook - has diagnostic logging added (not committed)
+     - Key issue: `isIndexReady` set to true by `rebuildIndex()` callback before test file is uploaded
+     - Build effect guard: `if (!isOpen || isIndexReady || isBuilding) return;`
+     - `rebuildIndex` callback (line 134-144): called by `triggerSearchIndexRebuild()`, builds from folder store and sets `isIndexReady=true`
+     - Added diagnostic: `console.log(\`[search] build effect: isOpen=${isOpen} isIndexReady=${isIndexReady}...\`)`
+   - `apps/web/src/services/search-index.service.ts`
+     - `buildFromFolderTree(folders)`: iterates folder children to build MiniSearch index
+     - Added diagnostic logging (not committed):
+       ```typescript
+       console.log(`[SearchIndex.build] folders=${folderIds.length} rootChildren=${rootChildren.length}: [${rootChildren.join(',')}]`);
+       console.trace('[SearchIndex.build] call stack');
+       ```
+   - `apps/web/src/main.tsx`
+     - Exposed `searchIndexService` on `window.__SEARCH_INDEX` for E2E diagnostics (committed in `80b8420ba`)
+   - `tests/e2e/tests/search-workflow.spec.ts`
+     - Added browser console capture: `page.on('console', ...)` filtering for `[SearchIndex` and `[search]`
+     - Added folder store diagnostic before search
+     - Added search index state diagnostic after palette open
+     - Added `await page.waitForTimeout(2000)` before index diagnostic
+   - `apps/web/src/components/file-browser/FileBrowser.tsx`
+     - Line 294: `triggerSearchIndexRebuild()` called after sync updates folder store
+     - This is the ONLY place (besides `rebuildIndex` in useSearch) that triggers index rebuild
+   - `apps/web/src/components/layout/AppShell.tsx`
+     - Where `useSearch()` hook is mounted (line 32) - persists across palette open/close
+   - `apps/web/src/hooks/useSyncPolling.ts`
+     - Line 77-82: Immediate sync on first mount when `rootIpnsName && isOnline && !isNewVault`
+     - This triggers the sync that calls `triggerSearchIndexRebuild()` during login
+   - `tests/e2e/page-objects/dialogs/search-palette.page.ts`
+     - `waitForResults()`: uses `expect().toPass()` with 500ms intervals, 30s timeout
+     - `getResultNames()`: extracts text from `.search-result-name` elements
+
+4. Errors and fixes:
+   - **`CryptoError: Key unwrapping failed` on first test run**:
+     - Cause: `tests/e2e/.env` had `API_BASE_URL=http://localhost:3000` while web app pointed at staging
+     - Fix: Updated both `.env.local` and `tests/e2e/.env` to point at staging
+   - **Search test 2.1 failing in CI with 0 results**:
+     - Root cause identified but NOT YET FIXED
+     - The sync handler fires `triggerSearchIndexRebuild()` during initial page load/navigation
+     - This builds the index from folder store BEFORE the test file is uploaded
+     - `isIndexReady` becomes `true`, preventing rebuild when palette opens later
+   - User feedback: "if you are adding logging, would it not make sense to run all the tests (entire e2e test suite against the staging api)" - user wanted local reproduction before pushing diagnostic commits to CI
+
+5. Problem Solving:
+   - **ROOT CAUSE IDENTIFIED**: The search index is built by `triggerSearchIndexRebuild()` called from the sync handler during initial navigation to `/files`. When running the full test suite, the staging vault already has data from previous test files (full-workflow test creates workspace folders and files). The initial sync detects this data, updates the folder store, and triggers an index rebuild. This happens BEFORE test 0.1 uploads the search test file. Since `isIndexReady` is set to `true` by `rebuildIndex()`, the index is never rebuilt when the palette opens in tests 1.1/1.2/2.1.
+   - Key evidence from diagnostic output:
+     ```
+     [browser] [SearchIndex.build] folders=1 rootChildren=6: [workspace-...,search-test-1771970740264.txt]
+     ```
+     Build fires before test 0.1 with 6 children (old data), then test 0.1 adds a 7th child (new search-test file).
+   - When running search tests ALONE (not after full-workflow), the vault might be empty or only have the current test's data, so timing works out.
+
+6. All user messages:
+   - "ok given the current setup, and the fact that all changes are entirely client-side, you can just point the local ui instance at the staging api for the duration of this test."
+   - "please remember to revert when we are done testing - in the mean time, start the dev server and execute the e2e test against it, in a headed browser session."
+   - "kill all the existing servers on the ports, since oauth and such requires the use of 5173"
+   - "but the staging api should be suitable for the test credentials"
+   - "hmmm, ok stop the web dev server, and it looks like the same test is still failing in CI. there must be something else causing these test failures."
+   - "hmmm, but why would this problem not be present when running the e2e tests locally?"
+   - "if you are adding logging, would it not make sense to run all the tests (entire e2e test suite against the staging api, to make sure that some old state isn't the cause. basically try and replicate the problem locally, iterate quickly and fix it as per @.learnings/2026-02-24-run-e2e-locally-before-push.md"
+   - "please run the tests in headed mode"
+
+7. Pending Tasks:
+   - **Fix the root cause**: The search index gets built prematurely by `triggerSearchIndexRebuild()` from the sync handler and is never rebuilt when new files are added. Need to either: (a) rebuild index each time palette opens, (b) subscribe to folder store changes and auto-rebuild, or (c) invalidate `isIndexReady` when folder store changes.
+   - **Revert env files**: Both `apps/web/.env.local` and `tests/e2e/.env` are currently pointing at staging API and MUST be reverted to `http://localhost:3000` when done testing.
+   - **Clean up diagnostic logging**: Remove temporary `console.log`/`console.trace` from `useSearch.ts`, `search-index.service.ts`, `search-workflow.spec.ts`, and `main.tsx`. One diagnostic commit was already pushed (`80b8420ba`) that needs to be cleaned up.
+   - **Dev server still running**: Background task `b810a64` (dev server on port 5173) is still running.
+
+8. Current Work:
+   Root cause has been identified through diagnostic logging. The last test run showed:
+   ```
+   [browser] [SearchIndex.build] folders=1 rootChildren=6: [workspace-...,search-test-1771970740264.txt]
+   ```
+   followed by test 2.1 failing at line 162:
+   ```
+   Error: expect(received).toBe(expected) // Object.is equality
+   Expected: true
+   Received: false
+   at names.some((n) => n.includes(testFileName))
+   ```
+   The index was built with 6 items (old data from staging) before the current test's file was uploaded. The new test file (7th child) was never indexed because `isIndexReady=true` prevented rebuild.
+
+9. Optional Next Step:
+   Fix the root cause: The `useSearch` hook's `rebuildIndex` callback (called by `triggerSearchIndexRebuild()` from the sync handler) sets `isIndexReady=true`, which prevents the index from being rebuilt when the folder store changes later. The fix should ensure the index is rebuilt (or at least invalidated) whenever the folder store changes. The simplest approach: in the `useSearch` hook, subscribe to folder store changes and rebuild the index when folders change, OR always rebuild when the palette opens (reset `isIndexReady` on open). Then verify locally with the full E2E suite against staging, clean up diagnostics, revert env files, and push.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.REDACTED.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
