@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "be0b498729fa",
+  "strategy": "manual-commit",
+  "branch": "fix/search-index-stale-rebuild",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useSearch.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/be/0b498729fa/0/metadata.json",
+      "transcript": "/be/0b498729fa/0/full.jsonl",
+      "context": "/be/0b498729fa/0/context.md",
+      "content_hash": "/be/0b498729fa/0/content_hash.txt",
+      "prompt": "/be/0b498729fa/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 41,
+    "cache_creation_tokens": 88149,
+    "cache_read_tokens": 3181513,
+    "output_tokens": 5689,
+    "api_call_count": 37
+  }
+}
