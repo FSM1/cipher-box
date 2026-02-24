@@ -35,6 +35,9 @@ test.describe.serial('Search Workflow', () => {
   const runId = Date.now();
   const testFileName = `search-test-${runId}.txt`;
 
+  // Platform-appropriate shortcut: Cmd+K on macOS, Ctrl+K on Linux/Windows
+  const searchShortcut = 'ControlOrMeta+k';
+
   test.beforeAll(async ({ browser: testBrowser }) => {
     browser = testBrowser;
     context = await browser.newContext();
@@ -74,9 +77,9 @@ test.describe.serial('Search Workflow', () => {
   // 1. Open / Close via shortcuts
   // ============================================
 
-  test('1.1 Open search palette via Cmd+K', async () => {
-    // Press Meta+K to open search palette
-    await page.keyboard.press('Meta+k');
+  test('1.1 Open search palette via Cmd/Ctrl+K', async () => {
+    // Press Cmd+K (macOS) or Ctrl+K (Linux/Windows) to open search palette
+    await page.keyboard.press(searchShortcut);
     await searchPalette.waitForOpen({ timeout: 5000 });
 
     // Verify input is focused
@@ -106,13 +109,17 @@ test.describe.serial('Search Workflow', () => {
 
   test('2.1 Type query and verify results appear', async () => {
     // Open palette
-    await page.keyboard.press('Meta+k');
+    await page.keyboard.press(searchShortcut);
     await searchPalette.waitForOpen({ timeout: 5000 });
 
-    // Type the first part of the test file name (enough for a match).
-    // Use pressSequentially for more reliable React state updates in CI.
+    // Fill the search input with the first part of the test file name.
+    // Use fill() — more reliable than pressSequentially for React controlled inputs.
     const queryText = `search-test-${runId}`;
-    await searchPalette.input().pressSequentially(queryText.slice(0, 12), { delay: 30 });
+    const querySlice = queryText.slice(0, 12);
+    await searchPalette.input().fill(querySlice);
+
+    // Verify the input value was accepted by React's controlled state
+    await expect(searchPalette.input()).toHaveValue(querySlice, { timeout: 5000 });
 
     // Wait for results — handles index build + debounce + render with auto-retry
     await searchPalette.waitForResults({ timeout: 30000 });
@@ -132,11 +139,11 @@ test.describe.serial('Search Workflow', () => {
 
   test('2.2 No results for nonsense query', async () => {
     // Open palette
-    await page.keyboard.press('Meta+k');
+    await page.keyboard.press(searchShortcut);
     await searchPalette.waitForOpen({ timeout: 5000 });
 
     // Type nonsense query
-    await searchPalette.input().pressSequentially('zzzzxqwnofile999', { delay: 30 });
+    await searchPalette.input().fill('zzzzxqwnofile999');
 
     // Wait for search to complete (either results or no-results)
     await searchPalette.waitForSearchComplete({ timeout: 30000 });
@@ -159,11 +166,11 @@ test.describe.serial('Search Workflow', () => {
 
   test('3.1 Select result and verify navigation', async () => {
     // Open palette
-    await page.keyboard.press('Meta+k');
+    await page.keyboard.press(searchShortcut);
     await searchPalette.waitForOpen({ timeout: 5000 });
 
     // Type query matching the test file
-    await searchPalette.input().pressSequentially(`search-test-${runId}`, { delay: 30 });
+    await searchPalette.input().fill(`search-test-${runId}`);
     await searchPalette.waitForResults({ timeout: 30000 });
 
     // Click the first result
@@ -181,11 +188,11 @@ test.describe.serial('Search Workflow', () => {
 
   test('3.2 Keyboard navigation with Enter selects result', async () => {
     // Open palette
-    await page.keyboard.press('Meta+k');
+    await page.keyboard.press(searchShortcut);
     await searchPalette.waitForOpen({ timeout: 5000 });
 
     // Type query matching the test file
-    await searchPalette.input().pressSequentially(`search-test-${runId}`, { delay: 30 });
+    await searchPalette.input().fill(`search-test-${runId}`);
     await searchPalette.waitForResults({ timeout: 30000 });
 
     // First result should be auto-selected (index 0)
@@ -205,11 +212,11 @@ test.describe.serial('Search Workflow', () => {
 
   test('4.1 Escape closes palette', async () => {
     // Open palette
-    await page.keyboard.press('Meta+k');
+    await page.keyboard.press(searchShortcut);
     await searchPalette.waitForOpen({ timeout: 5000 });
 
     // Type some text
-    await searchPalette.input().pressSequentially('some-text', { delay: 30 });
+    await searchPalette.input().fill('some-text');
 
     // Press Escape
     await page.keyboard.press('Escape');
@@ -220,7 +227,7 @@ test.describe.serial('Search Workflow', () => {
 
   test('4.2 Click outside closes palette', async () => {
     // Open palette
-    await page.keyboard.press('Meta+k');
+    await page.keyboard.press(searchShortcut);
     await searchPalette.waitForOpen({ timeout: 5000 });
 
     // Click the backdrop (near top-left corner, outside the centered palette)
