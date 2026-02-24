@@ -3,7 +3,7 @@
   "checkpoint_id": "75b6a55bfcd2",
   "strategy": "manual-commit",
   "branch": "feat/phase-15.1-client-side-search",
-  "checkpoints_count": 2,
+  "checkpoints_count": 3,
   "files_touched": [
     "tests/e2e/tests/search-workflow.spec.ts"
   ],
@@ -21,13 +21,20 @@
       "context": "/75/b6a55bfcd2/1/context.md",
       "content_hash": "/75/b6a55bfcd2/1/content_hash.txt",
       "prompt": "/75/b6a55bfcd2/1/prompt.txt"
+    },
+    {
+      "metadata": "/75/b6a55bfcd2/2/metadata.json",
+      "transcript": "/75/b6a55bfcd2/2/full.jsonl",
+      "context": "/75/b6a55bfcd2/2/context.md",
+      "content_hash": "/75/b6a55bfcd2/2/content_hash.txt",
+      "prompt": "/75/b6a55bfcd2/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 99,
-    "cache_creation_tokens": 194548,
-    "cache_read_tokens": 8607343,
-    "output_tokens": 12881,
-    "api_call_count": 83
+    "input_tokens": 229,
+    "cache_creation_tokens": 429907,
+    "cache_read_tokens": 17308652,
+    "output_tokens": 18387,
+    "api_call_count": 168
   }
 }
