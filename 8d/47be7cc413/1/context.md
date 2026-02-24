@@ -1,0 +1,12 @@
+# Session Context
+
+## User Prompts
+
+### Prompt 1
+
+3 minor comments from coderabbit on the pr, and the e2e test is failing, most likely due to restrictions in the environment
+
+### Prompt 2
+
+yeah ship em
+

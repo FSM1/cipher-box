@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "8d47be7cc413",
+  "session_id": "3ec09a39-0848-411e-8e2b-2eb48387f099",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-24T20:31:23.122424Z",
+  "branch": "feat/phase-15.1-client-side-search",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/components/layout/AppHeader.tsx",
+    "apps/web/src/services/search-index.service.ts",
+    "apps/web/src/styles/layout.css",
+    "apps/web/src/styles/search-palette.css",
+    "tests/e2e/page-objects/dialogs/search-palette.page.ts",
+    "tests/e2e/tests/search-workflow.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "bd07c1a645d2",
+  "transcript_identifier_at_start": "605297b8-f287-4d40-bca3-4c15056f5d82",
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 41842,
+    "cache_read_tokens": 1134425,
+    "output_tokens": 6477,
+    "api_call_count": 20
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-24T20:31:22.977559Z",
+    "agent_lines": 29,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 29,
+    "agent_percentage": 100
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/3ec09a39-0848-411e-8e2b-2eb48387f099.jsonl"
+}
