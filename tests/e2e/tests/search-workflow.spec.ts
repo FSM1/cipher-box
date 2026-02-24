@@ -109,19 +109,13 @@ test.describe.serial('Search Workflow', () => {
     await page.keyboard.press('Meta+k');
     await searchPalette.waitForOpen({ timeout: 5000 });
 
-    // Wait for the search index to finish building (may be slow in CI)
-    await searchPalette.waitForIndexReady({ timeout: 30000 });
-
-    // Type the first part of the test file name (enough for a match)
+    // Type the first part of the test file name (enough for a match).
+    // Use pressSequentially for more reliable React state updates in CI.
     const queryText = `search-test-${runId}`;
-    await searchPalette.typeQuery(queryText.slice(0, 12));
+    await searchPalette.input().pressSequentially(queryText.slice(0, 12), { delay: 30 });
 
-    // Wait for results (debounce + render)
-    await searchPalette.waitForResults({ timeout: 15000 });
-
-    // Verify at least one result appears
-    const resultCount = await searchPalette.getResultCount();
-    expect(resultCount).toBeGreaterThan(0);
+    // Wait for results — handles index build + debounce + render with auto-retry
+    await searchPalette.waitForResults({ timeout: 30000 });
 
     // Verify the test file is in the results
     const names = await searchPalette.getResultNames();
@@ -142,10 +136,10 @@ test.describe.serial('Search Workflow', () => {
     await searchPalette.waitForOpen({ timeout: 5000 });
 
     // Type nonsense query
-    await searchPalette.typeQuery('zzzzxqwnofile999');
+    await searchPalette.input().pressSequentially('zzzzxqwnofile999', { delay: 30 });
 
-    // Wait for debounce (150ms) + rendering
-    await page.waitForTimeout(500);
+    // Wait for search to complete (either results or no-results)
+    await searchPalette.waitForSearchComplete({ timeout: 30000 });
 
     // Verify no results
     const resultCount = await searchPalette.getResultCount();
@@ -169,8 +163,8 @@ test.describe.serial('Search Workflow', () => {
     await searchPalette.waitForOpen({ timeout: 5000 });
 
     // Type query matching the test file
-    await searchPalette.typeQuery(`search-test-${runId}`);
-    await searchPalette.waitForResults({ timeout: 15000 });
+    await searchPalette.input().pressSequentially(`search-test-${runId}`, { delay: 30 });
+    await searchPalette.waitForResults({ timeout: 30000 });
 
     // Click the first result
     await searchPalette.clickResult(0);
@@ -191,8 +185,8 @@ test.describe.serial('Search Workflow', () => {
     await searchPalette.waitForOpen({ timeout: 5000 });
 
     // Type query matching the test file
-    await searchPalette.typeQuery(`search-test-${runId}`);
-    await searchPalette.waitForResults({ timeout: 15000 });
+    await searchPalette.input().pressSequentially(`search-test-${runId}`, { delay: 30 });
+    await searchPalette.waitForResults({ timeout: 30000 });
 
     // First result should be auto-selected (index 0)
     // Press Enter to select it
@@ -215,7 +209,7 @@ test.describe.serial('Search Workflow', () => {
     await searchPalette.waitForOpen({ timeout: 5000 });
 
     // Type some text
-    await searchPalette.typeQuery('some-text');
+    await searchPalette.input().pressSequentially('some-text', { delay: 30 });
 
     // Press Escape
     await page.keyboard.press('Escape');

@@ -1,4 +1,4 @@
-import { type Page, type Locator } from '@playwright/test';
+import { expect, type Page, type Locator } from '@playwright/test';
 
 /**
  * Page object for SearchPalette component interactions.
@@ -172,24 +172,30 @@ export class SearchPalettePage {
   }
 
   /**
-   * Wait for the search index to finish building.
-   * Resolves immediately if the building indicator isn't visible.
+   * Wait for search to complete: index built, query executed, and results rendered.
+   * Uses Playwright's auto-retrying `expect().toPass()` to handle all timing
+   * variations (index build, debounce, React render) without racy point-in-time checks.
    */
-  async waitForIndexReady(options?: { timeout?: number }): Promise<void> {
-    const indicator = this.buildingIndicator();
-    // If the building indicator is currently visible, wait for it to disappear
-    if (await indicator.isVisible()) {
-      await indicator.waitFor({ state: 'hidden', ...options });
-    }
+  async waitForSearchComplete(options?: { timeout?: number }): Promise<void> {
+    const timeout = options?.timeout ?? 30000;
+    await expect(async () => {
+      // Search is complete when either results or the no-results message is visible
+      const hasResults = (await this.resultItems().count()) > 0;
+      const hasNoResults = await this.noResults().isVisible();
+      expect(hasResults || hasNoResults).toBe(true);
+    }).toPass({ timeout, intervals: [500] });
   }
 
   /**
    * Wait for at least one result item to become visible.
+   * Uses auto-retrying assertion to handle index build + debounce timing.
    */
   async waitForResults(options?: { timeout?: number }): Promise<void> {
-    await this.resultItems()
-      .first()
-      .waitFor({ state: 'visible', ...options });
+    const timeout = options?.timeout ?? 30000;
+    await expect(async () => {
+      const count = await this.resultItems().count();
+      expect(count).toBeGreaterThan(0);
+    }).toPass({ timeout, intervals: [500] });
   }
 
   /**
