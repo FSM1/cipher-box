@@ -3,7 +3,7 @@
   "checkpoint_id": "6d451443f6e4",
   "strategy": "manual-commit",
   "branch": "feat/phase-15.1-client-side-search",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "designs/cipher-box-design.pen"
   ],
@@ -14,13 +14,20 @@
       "context": "/6d/451443f6e4/0/context.md",
       "content_hash": "/6d/451443f6e4/0/content_hash.txt",
       "prompt": "/6d/451443f6e4/0/prompt.txt"
+    },
+    {
+      "metadata": "/6d/451443f6e4/1/metadata.json",
+      "transcript": "/6d/451443f6e4/1/full.jsonl",
+      "context": "/6d/451443f6e4/1/context.md",
+      "content_hash": "/6d/451443f6e4/1/content_hash.txt",
+      "prompt": "/6d/451443f6e4/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 63,
-    "cache_creation_tokens": 113849,
-    "cache_read_tokens": 5806528,
-    "output_tokens": 7965,
-    "api_call_count": 51
+    "input_tokens": 193,
+    "cache_creation_tokens": 349208,
+    "cache_read_tokens": 14507837,
+    "output_tokens": 13471,
+    "api_call_count": 136
   }
 }
