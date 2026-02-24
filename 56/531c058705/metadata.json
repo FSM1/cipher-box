@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "56531c058705",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-15.1-client-side-search",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/15.1-client-side-search/15.1-CONTEXT.md",
+    "designs/DESIGN.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/56/531c058705/0/metadata.json",
+      "transcript": "/56/531c058705/0/full.jsonl",
+      "context": "/56/531c058705/0/context.md",
+      "content_hash": "/56/531c058705/0/content_hash.txt",
+      "prompt": "/56/531c058705/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 87,
+    "cache_creation_tokens": 155373,
+    "cache_read_tokens": 8220024,
+    "output_tokens": 6094,
+    "api_call_count": 71
+  }
+}
