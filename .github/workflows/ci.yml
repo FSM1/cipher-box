@@ -7,6 +7,35 @@ on:
     branches: [main]
 
 jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      src: ${{ steps.filter.outputs.src }}
+      desktop: ${{ steps.filter.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            src:
+              - '**'
+              - '!.planning/**'
+              - '!.learnings/**'
+              - '!docs/**'
+              - '!designs/**'
+              - '!00-Preliminary-R&D/**'
+              - '!.claude/**'
+              - '!**/*.md'
+              - '!LICENSE'
+            desktop:
+              - 'apps/desktop/**'
+              - 'packages/crypto/**'
+              - '.github/workflows/ci.yml'
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -51,6 +80,9 @@ jobs:
 
   api-spec:
     name: Verify API Spec & Client
+    needs: [changes]
+    if: |
+      github.event_name == 'push' || needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -117,7 +149,10 @@ jobs:
 
   test:
     name: Test
-    needs: [lint, typecheck]
+    needs: [changes, lint, typecheck]
+    if: |
+      !failure() && !cancelled() &&
+      (github.event_name == 'push' || needs.changes.outputs.src == 'true')
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -185,7 +220,10 @@ jobs:
 
   build:
     name: Build
-    needs: [lint, typecheck, api-spec, test]
+    needs: [changes, lint, typecheck, api-spec, test]
+    if: |
+      !failure() && !cancelled() &&
+      (github.event_name == 'push' || needs.changes.outputs.src == 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -207,7 +245,10 @@ jobs:
 
   cargo-check-windows:
     name: Cargo Check (Windows)
-    needs: [lint]
+    needs: [changes, lint]
+    if: |
+      !failure() && !cancelled() &&
+      (github.event_name == 'push' || needs.changes.outputs.desktop == 'true')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -244,7 +285,10 @@ jobs:
 
   cargo-check-macos:
     name: Cargo Check (macOS)
-    needs: [lint]
+    needs: [changes, lint]
+    if: |
+      !failure() && !cancelled() &&
+      (github.event_name == 'push' || needs.changes.outputs.desktop == 'true')
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -270,7 +314,10 @@ jobs:
 
   build-desktop-windows:
     name: Build Windows Desktop
-    needs: [cargo-check-windows, typecheck]
+    needs: [changes, cargo-check-windows, typecheck]
+    if: |
+      !failure() && !cancelled() &&
+      (github.event_name == 'push' || needs.changes.outputs.desktop == 'true')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -323,7 +370,10 @@ jobs:
 
   build-desktop-macos:
     name: Build macOS Desktop
-    needs: [cargo-check-macos, typecheck]
+    needs: [changes, cargo-check-macos, typecheck]
+    if: |
+      !failure() && !cancelled() &&
+      (github.event_name == 'push' || needs.changes.outputs.desktop == 'true')
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
