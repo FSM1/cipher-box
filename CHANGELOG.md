@@ -2,117 +2,102 @@
 
 ## [0.16.0](https://github.com/FSM1/cipher-box/compare/v0.15.1...v0.16.0) (2026-02-24)
 
-
 ### Features
 
-* phase 15 link sharing ([#190](https://github.com/FSM1/cipher-box/issues/190)) ([76258cf](https://github.com/FSM1/cipher-box/commit/76258cf3ae063ef068aa7a52aa16582b321b8f12))
-
+- Phase 11 — Windows Desktop with WinFsp virtual filesystem ([#189](https://github.com/FSM1/cipher-box/issues/189)) ([7254721](https://github.com/FSM1/cipher-box/commit/72547215c4b0806f3e07ec8822803e0f2e1f6b0b))
+- phase 15 link sharing ([#190](https://github.com/FSM1/cipher-box/issues/190)) ([76258cf](https://github.com/FSM1/cipher-box/commit/76258cf3ae063ef068aa7a52aa16582b321b8f12))
 
 ### Bug Fixes
 
-* **ci:** prevent parenthesized text in commit subjects breaking Release Please ([#192](https://github.com/FSM1/cipher-box/issues/192)) ([1942b80](https://github.com/FSM1/cipher-box/commit/1942b800d669a4b905b7855fdde26406179675ea))
+- **ci:** prevent parenthesized text in commit subjects breaking Release Please ([#192](https://github.com/FSM1/cipher-box/issues/192)) ([1942b80](https://github.com/FSM1/cipher-box/commit/1942b800d669a4b905b7855fdde26406179675ea))
 
 ## [0.15.1](https://github.com/FSM1/cipher-box/compare/v0.15.0...v0.15.1) (2026-02-22)
 
-
 ### Bug Fixes
 
-* **api:** add missing migration to create shares tables ([#186](https://github.com/FSM1/cipher-box/issues/186)) ([26c9d9c](https://github.com/FSM1/cipher-box/commit/26c9d9c8dfb91dca65ace15212fc78a30da5e788))
+- **api:** add missing migration to create shares tables ([#186](https://github.com/FSM1/cipher-box/issues/186)) ([26c9d9c](https://github.com/FSM1/cipher-box/commit/26c9d9c8dfb91dca65ace15212fc78a30da5e788))
 
 ## [0.15.0](https://github.com/FSM1/cipher-box/compare/v0.14.0...v0.15.0) (2026-02-22)
 
-
 ### Features
 
-* **14:** user-to-user encrypted sharing ([#183](https://github.com/FSM1/cipher-box/issues/183)) ([84a232d](https://github.com/FSM1/cipher-box/commit/84a232db4faf6fbfb3a354cdf847e75583073851))
+- **14:** user-to-user encrypted sharing ([#183](https://github.com/FSM1/cipher-box/issues/183)) ([84a232d](https://github.com/FSM1/cipher-box/commit/84a232db4faf6fbfb3a354cdf847e75583073851))
 
 ## [0.14.0](https://github.com/FSM1/cipher-box/compare/v0.13.4...v0.14.0) (2026-02-21)
 
-
 ### Features
 
-* switch file IPNS keys from deterministic HKDF to random ([#181](https://github.com/FSM1/cipher-box/issues/181)) ([7f01f98](https://github.com/FSM1/cipher-box/commit/7f01f9823e4f0f1bef180f5da7a927c97592c6e9))
+- switch file IPNS keys from deterministic HKDF to random ([#181](https://github.com/FSM1/cipher-box/issues/181)) ([7f01f98](https://github.com/FSM1/cipher-box/commit/7f01f9823e4f0f1bef180f5da7a927c97592c6e9))
 
 ## [0.13.4](https://github.com/FSM1/cipher-box/compare/v0.13.3...v0.13.4) (2026-02-21)
 
-
 ### Bug Fixes
 
-* **crypto:** correct DeviceEntry publicKey validator from 130 to 64 hex chars ([f5be3cb](https://github.com/FSM1/cipher-box/commit/f5be3cb54889626ef36073d99d263f567679bef3))
-* **crypto:** correct DeviceEntry publicKey validator length ([#178](https://github.com/FSM1/cipher-box/issues/178)) ([f5be3cb](https://github.com/FSM1/cipher-box/commit/f5be3cb54889626ef36073d99d263f567679bef3))
+- **crypto:** correct DeviceEntry publicKey validator from 130 to 64 hex chars ([f5be3cb](https://github.com/FSM1/cipher-box/commit/f5be3cb54889626ef36073d99d263f567679bef3))
+- **crypto:** correct DeviceEntry publicKey validator length ([#178](https://github.com/FSM1/cipher-box/issues/178)) ([f5be3cb](https://github.com/FSM1/cipher-box/commit/f5be3cb54889626ef36073d99d263f567679bef3))
 
 ## [0.13.3](https://github.com/FSM1/cipher-box/compare/v0.13.2...v0.13.3) (2026-02-21)
 
-
 ### Bug Fixes
 
-* **api,crypto:** address 6 security review findings ([#172](https://github.com/FSM1/cipher-box/issues/172)) ([d222bd0](https://github.com/FSM1/cipher-box/commit/d222bd0b323d582575d0ec6e0639bf96893d8d5b))
-* **api,crypto:** address 6 security review findings (H-01, H-06, H-07, M-01, M-04, M-06) ([d222bd0](https://github.com/FSM1/cipher-box/commit/d222bd0b323d582575d0ec6e0639bf96893d8d5b))
-* **desktop:** allow FUSE rename on SMB backend ([#174](https://github.com/FSM1/cipher-box/issues/174)) ([049ac7b](https://github.com/FSM1/cipher-box/commit/049ac7baede7ff1e6bce56f50653afb9c90dda83))
+- **api,crypto:** address 6 security review findings ([#172](https://github.com/FSM1/cipher-box/issues/172)) ([d222bd0](https://github.com/FSM1/cipher-box/commit/d222bd0b323d582575d0ec6e0639bf96893d8d5b))
+- **api,crypto:** address 6 security review findings (H-01, H-06, H-07, M-01, M-04, M-06) ([d222bd0](https://github.com/FSM1/cipher-box/commit/d222bd0b323d582575d0ec6e0639bf96893d8d5b))
+- **desktop:** allow FUSE rename on SMB backend ([#174](https://github.com/FSM1/cipher-box/issues/174)) ([049ac7b](https://github.com/FSM1/cipher-box/commit/049ac7baede7ff1e6bce56f50653afb9c90dda83))
 
 ## [0.13.2](https://github.com/FSM1/cipher-box/compare/v0.13.1...v0.13.2) (2026-02-20)
 
-
 ### Bug Fixes
 
-* **desktop:** wrap get_dev_key invoke in try/catch for release builds ([#167](https://github.com/FSM1/cipher-box/issues/167)) ([1699b5e](https://github.com/FSM1/cipher-box/commit/1699b5e73e60cb2a1c84dc61c86141def27c82d7))
+- **desktop:** wrap get_dev_key invoke in try/catch for release builds ([#167](https://github.com/FSM1/cipher-box/issues/167)) ([1699b5e](https://github.com/FSM1/cipher-box/commit/1699b5e73e60cb2a1c84dc61c86141def27c82d7))
 
 ## [0.13.1](https://github.com/FSM1/cipher-box/compare/v0.13.0...v0.13.1) (2026-02-19)
 
-
 ### Bug Fixes
 
-* **web:** Implement lazy file size resolution from per-file IPNS metadata ([#163](https://github.com/FSM1/cipher-box/issues/163)) ([6197064](https://github.com/FSM1/cipher-box/commit/61970646d45f49af67167f811da2d2be4543223e))
-* **web:** navigate back to parent on subfolder load failure ([#166](https://github.com/FSM1/cipher-box/issues/166)) ([ec24fab](https://github.com/FSM1/cipher-box/commit/ec24fab24ba6bc9138b4ecbcbe436b274e80d7be))
+- **web:** Implement lazy file size resolution from per-file IPNS metadata ([#163](https://github.com/FSM1/cipher-box/issues/163)) ([6197064](https://github.com/FSM1/cipher-box/commit/61970646d45f49af67167f811da2d2be4543223e))
+- **web:** navigate back to parent on subfolder load failure ([#166](https://github.com/FSM1/cipher-box/issues/166)) ([ec24fab](https://github.com/FSM1/cipher-box/commit/ec24fab24ba6bc9138b4ecbcbe436b274e80d7be))
 
 ## [0.13.0](https://github.com/FSM1/cipher-box/compare/v0.12.2...v0.13.0) (2026-02-19)
 
-
 ### Features
 
-* Phase 13 — File Versioning ([#161](https://github.com/FSM1/cipher-box/issues/161)) ([60a2dc7](https://github.com/FSM1/cipher-box/commit/60a2dc7ec12780c4c9f5e57d5116f440dd55e2d1))
+- Phase 13 — File Versioning ([#161](https://github.com/FSM1/cipher-box/issues/161)) ([60a2dc7](https://github.com/FSM1/cipher-box/commit/60a2dc7ec12780c4c9f5e57d5116f440dd55e2d1))
 
 ## [0.12.2](https://github.com/FSM1/cipher-box/compare/v0.12.1...v0.12.2) (2026-02-19)
 
-
 ### Bug Fixes
 
-* **ci:** install FUSE-T instead of macFUSE for desktop build ([#159](https://github.com/FSM1/cipher-box/issues/159)) ([d151a07](https://github.com/FSM1/cipher-box/commit/d151a07a51c6535e016f842fcd5f089621715c75))
+- **ci:** install FUSE-T instead of macFUSE for desktop build ([#159](https://github.com/FSM1/cipher-box/issues/159)) ([d151a07](https://github.com/FSM1/cipher-box/commit/d151a07a51c6535e016f842fcd5f089621715c75))
 
 ## [0.12.1](https://github.com/FSM1/cipher-box/compare/v0.12.0...v0.12.1) (2026-02-19)
 
-
 ### Bug Fixes
 
-* **ci:** grant contents:write to staging deploy for release upload ([#157](https://github.com/FSM1/cipher-box/issues/157)) ([0312006](https://github.com/FSM1/cipher-box/commit/0312006f84e32427cc68488dbeafe84e45c6ce64))
+- **ci:** grant contents:write to staging deploy for release upload ([#157](https://github.com/FSM1/cipher-box/issues/157)) ([0312006](https://github.com/FSM1/cipher-box/commit/0312006f84e32427cc68488dbeafe84e45c6ce64))
 
 ## [0.12.0](https://github.com/FSM1/cipher-box/compare/v0.11.1...v0.12.0) (2026-02-19)
 
-
 ### Features
 
-* add desktop binary build to staging deploy ([#155](https://github.com/FSM1/cipher-box/issues/155)) ([2cee04e](https://github.com/FSM1/cipher-box/commit/2cee04e668a46b98d0d7d47b27386592aa5121a8))
-
+- add desktop binary build to staging deploy ([#155](https://github.com/FSM1/cipher-box/issues/155)) ([2cee04e](https://github.com/FSM1/cipher-box/commit/2cee04e668a46b98d0d7d47b27386592aa5121a8))
 
 ### Bug Fixes
 
-* **web:** improve mobile layout for file browser, toolbar, and footer ([#154](https://github.com/FSM1/cipher-box/issues/154)) ([f1fa934](https://github.com/FSM1/cipher-box/commit/f1fa934bd5227e18251461f84ee7dab035a461f0))
+- **web:** improve mobile layout for file browser, toolbar, and footer ([#154](https://github.com/FSM1/cipher-box/issues/154)) ([f1fa934](https://github.com/FSM1/cipher-box/commit/f1fa934bd5227e18251461f84ee7dab035a461f0))
 
 ## [0.11.1](https://github.com/FSM1/cipher-box/compare/v0.11.0...v0.11.1) (2026-02-19)
 
-
 ### Bug Fixes
 
-* **api:** save IPNS record to DB before delegated routing publish ([#151](https://github.com/FSM1/cipher-box/issues/151)) ([28edbc2](https://github.com/FSM1/cipher-box/commit/28edbc2dfc72d868148309dd66a80c0fd4a42530))
-* **desktop:** session restore on cold start and Google OAuth storage fix ([#153](https://github.com/FSM1/cipher-box/issues/153)) ([967bcc0](https://github.com/FSM1/cipher-box/commit/967bcc0c569c871759e08752efb9657fc10bb941))
+- **api:** save IPNS record to DB before delegated routing publish ([#151](https://github.com/FSM1/cipher-box/issues/151)) ([28edbc2](https://github.com/FSM1/cipher-box/commit/28edbc2dfc72d868148309dd66a80c0fd4a42530))
+- **desktop:** session restore on cold start and Google OAuth storage fix ([#153](https://github.com/FSM1/cipher-box/issues/153)) ([967bcc0](https://github.com/FSM1/cipher-box/commit/967bcc0c569c871759e08752efb9657fc10bb941))
 
 ## [0.11.0](https://github.com/FSM1/cipher-box/compare/v0.10.2...v0.11.0) (2026-02-19)
 
-
 ### Features
 
-* **desktop:** macOS desktop catch-up and hybrid metadata fix ([#148](https://github.com/FSM1/cipher-box/issues/148)) ([ccad747](https://github.com/FSM1/cipher-box/commit/ccad7472c768de4e9019d6b86c8ac084ed2ca3d4))
-* remove v1 folder metadata, make v2 FilePointer canonical ([#150](https://github.com/FSM1/cipher-box/issues/150)) ([30d982c](https://github.com/FSM1/cipher-box/commit/30d982ce6da0c128205ce08e0806b7db03fc65e4))
+- **desktop:** macOS desktop catch-up and hybrid metadata fix ([#148](https://github.com/FSM1/cipher-box/issues/148)) ([ccad747](https://github.com/FSM1/cipher-box/commit/ccad7472c768de4e9019d6b86c8ac084ed2ca3d4))
+- remove v1 folder metadata, make v2 FilePointer canonical ([#150](https://github.com/FSM1/cipher-box/issues/150)) ([30d982c](https://github.com/FSM1/cipher-box/commit/30d982ce6da0c128205ce08e0806b7db03fc65e4))
 
 ## [0.10.2](https://github.com/FSM1/cipher-box/compare/v0.10.1...v0.10.2) (2026-02-18)
 
