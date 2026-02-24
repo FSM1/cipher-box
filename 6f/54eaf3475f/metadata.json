@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "6f54eaf3475f",
+  "strategy": "manual-commit",
+  "branch": "fix/search-index-stale-rebuild",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".learnings/2026-02-24-run-e2e-locally-before-push.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6f/54eaf3475f/0/metadata.json",
+      "transcript": "/6f/54eaf3475f/0/full.jsonl",
+      "context": "/6f/54eaf3475f/0/context.md",
+      "content_hash": "/6f/54eaf3475f/0/content_hash.txt",
+      "prompt": "/6f/54eaf3475f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 41,
+    "cache_creation_tokens": 88149,
+    "cache_read_tokens": 3181513,
+    "output_tokens": 5689,
+    "api_call_count": 37
+  }
+}
