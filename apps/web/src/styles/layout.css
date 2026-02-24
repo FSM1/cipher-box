@@ -71,6 +71,39 @@
 .header-right {
   display: flex;
   align-items: center;
+  gap: 8px;
+}
+
+/* Search button */
+.header-search-btn {
+  background: none;
+  border: 1px solid var(--color-border-dim);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.header-search-btn:hover {
+  color: var(--color-green-primary);
+  border-color: var(--color-green-primary);
+}
+
+.header-search-btn:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
+.header-search-btn kbd {
+  font-family: var(--font-family-mono);
+  font-size: 10px;
+  border: 1px solid currentColor;
+  padding: 0 3px;
+  border-radius: 2px;
 }
 
 /* ==========================================================================
