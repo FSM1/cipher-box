@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "b4dfd49ac3d6",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-15-link-sharing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/security/REVIEW-2026-02-24-phase15-implementation.md",
+    "apps/api/src/common/pipes/parse-token.pipe.spec.ts",
+    "apps/api/src/common/pipes/parse-token.pipe.ts",
+    "apps/api/src/shares/dto/invite-response.dto.ts",
+    "apps/api/src/shares/invites.controller.spec.ts",
+    "apps/api/src/shares/invites.controller.ts",
+    "apps/api/src/shares/shares.service.spec.ts",
+    "apps/web/index.html",
+    "apps/web/src/api/models/inviteStatusResponseDto.ts",
+    "apps/web/src/api/models/inviteStatusResponseDtoStatus.ts",
+    "apps/web/src/routes/InvitePage.tsx",
+    "apps/web/src/services/invite.service.ts",
+    "packages/api-client/openapi.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b4/dfd49ac3d6/0/metadata.json",
+      "transcript": "/b4/dfd49ac3d6/0/full.jsonl",
+      "context": "/b4/dfd49ac3d6/0/context.md",
+      "content_hash": "/b4/dfd49ac3d6/0/content_hash.txt",
+      "prompt": "/b4/dfd49ac3d6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 31,
+    "cache_creation_tokens": 125614,
+    "cache_read_tokens": 2579024,
+    "output_tokens": 5507,
+    "api_call_count": 22
+  }
+}
