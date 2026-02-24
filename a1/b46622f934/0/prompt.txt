@@ -1,0 +1,44 @@
+Implement the following plan:
+
+# Plan: Add Windows Desktop Build to Staging Deployment
+
+## Context
+
+The `deploy-staging.yml` workflow builds macOS desktop binaries (`build-desktop`, line 116) but has no Windows equivalent. Staging releases only include macOS `.dmg` — no `.msi`/`.exe` for Windows testers. CI artifacts can't be reused because staging builds bake in staging-specific env vars (`VITE_API_URL`, `VITE_ENVIRONMENT=staging`, etc.) that CI builds don't have.
+
+## Changes
+
+### File: `.github/workflows/deploy-staging.yml`
+
+**1. Add `build-desktop-windows` job** after existing `build-desktop` (line 159), modeled on:
+- Existing macOS `build-desktop` job (staging env vars, tauri-action release settings)
+- CI's Windows jobs (WinFsp install + MSI resource copy)
+
+Steps:
+- `actions/checkout@v4` with staging tag ref
+- Install WinFsp via PowerShell (same hash-verified download as CI)
+- `rustup default stable`
+- Cargo cache (`actions/cache@v4`)
+- `pnpm/action-setup@v4` + `actions/setup-node@v4`
+- `pnpm install --frozen-lockfile`
+- `pnpm --filter @cipherbox/crypto build`
+- `tauri-apps/tauri-action@v0` with:
+  - Same staging env vars as macOS job (`VITE_WEB3AUTH_CLIENT_ID`, `VITE_API_URL`, `VITE_ENVIRONMENT`, `VITE_GOOGLE_CLIENT_ID`)
+  - `args: -- --no-default-features --features winfsp`
+  - Same release settings (`tagName`, `releaseName`, `prerelease: true`)
+  - `tauri-action` handles appending artifacts to an existing release
+
+**2. Update macOS job's `releaseBody`** to mention both platforms.
+
+**3. No changes to `deploy-vps`** — it only depends on server-side builds. Desktop builds run independently in parallel.
+
+## Verification
+
+Push a staging tag to trigger the workflow and confirm both platform jobs run and upload artifacts to the same GitHub release.
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.REDACTED.jsonl
+
+---
+
+yeah ship it and create a pr
