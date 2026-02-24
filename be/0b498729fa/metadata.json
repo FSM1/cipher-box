@@ -3,7 +3,7 @@
   "checkpoint_id": "be0b498729fa",
   "strategy": "manual-commit",
   "branch": "fix/search-index-stale-rebuild",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "apps/web/src/hooks/useSearch.ts"
   ],
@@ -14,13 +14,20 @@
       "context": "/be/0b498729fa/0/context.md",
       "content_hash": "/be/0b498729fa/0/content_hash.txt",
       "prompt": "/be/0b498729fa/0/prompt.txt"
+    },
+    {
+      "metadata": "/be/0b498729fa/1/metadata.json",
+      "transcript": "/be/0b498729fa/1/full.jsonl",
+      "context": "/be/0b498729fa/1/context.md",
+      "content_hash": "/be/0b498729fa/1/content_hash.txt",
+      "prompt": "/be/0b498729fa/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 41,
-    "cache_creation_tokens": 88149,
-    "cache_read_tokens": 3181513,
-    "output_tokens": 5689,
-    "api_call_count": 37
+    "input_tokens": 208,
+    "cache_creation_tokens": 461717,
+    "cache_read_tokens": 19956711,
+    "output_tokens": 30725,
+    "api_call_count": 186
   }
 }
