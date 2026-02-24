@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "0a40968c20c5",
+  "session_id": "89e80fce-6295-4323-8005-a616fe8b214a",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-24T19:19:43.192887Z",
+  "branch": "feat/phase-15.1-client-side-search",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/phases/15.1-client-side-search/15.1-03-PLAN.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "40af82ee2726",
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 72311,
+    "cache_read_tokens": 169601,
+    "output_tokens": 2101,
+    "api_call_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-24T19:19:42.715243Z",
+    "agent_lines": 0,
+    "human_added": 261,
+    "human_modified": 4,
+    "human_removed": 0,
+    "total_committed": 261,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/89e80fce-6295-4323-8005-a616fe8b214a.jsonl"
+}
