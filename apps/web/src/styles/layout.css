@@ -101,7 +101,7 @@
 .header-search-btn kbd {
   font-family: var(--font-family-mono);
   font-size: 10px;
-  border: 1px solid currentColor;
+  border: 1px solid currentcolor;
   padding: 0 3px;
   border-radius: 2px;
 }

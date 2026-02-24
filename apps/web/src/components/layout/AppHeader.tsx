@@ -4,6 +4,9 @@ interface AppHeaderProps {
   onSearchClick?: () => void;
 }
 
+const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
+const shortcutLabel = isMac ? '⌘K' : 'Ctrl+K';
+
 /**
  * App header component.
  * Contains logo, search button, and user menu dropdown.
@@ -20,11 +23,11 @@ export function AppHeader({ onSearchClick }: AppHeaderProps) {
           <button
             className="header-search-btn"
             onClick={onSearchClick}
-            aria-label="Search files (Cmd+K)"
-            title="Search (Cmd+K)"
+            aria-label={`Search files (${shortcutLabel})`}
+            title={`Search (${shortcutLabel})`}
             type="button"
           >
-            {'>_'} <kbd>K</kbd>
+            {'>_'} <kbd>{shortcutLabel}</kbd>
           </button>
         )}
         <UserMenu />

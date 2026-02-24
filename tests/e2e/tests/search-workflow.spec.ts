@@ -109,11 +109,14 @@ test.describe.serial('Search Workflow', () => {
     await page.keyboard.press('Meta+k');
     await searchPalette.waitForOpen({ timeout: 5000 });
 
+    // Wait for the search index to finish building (may be slow in CI)
+    await searchPalette.waitForIndexReady({ timeout: 30000 });
+
     // Type the first part of the test file name (enough for a match)
     const queryText = `search-test-${runId}`;
     await searchPalette.typeQuery(queryText.slice(0, 12));
 
-    // Wait for results (index build + debounce may take time on first open)
+    // Wait for results (debounce + render)
     await searchPalette.waitForResults({ timeout: 15000 });
 
     // Verify at least one result appears

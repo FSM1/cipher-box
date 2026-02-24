@@ -155,7 +155,9 @@ export class SearchIndexService {
     // Use a Map to keep only one document per id.
     const deduped = new Map<string, SearchDocument>();
     for (const doc of documents) {
-      deduped.set(doc.id, doc);
+      if (!deduped.has(doc.id)) {
+        deduped.set(doc.id, doc);
+      }
     }
 
     this.miniSearch.addAll(Array.from(deduped.values()));

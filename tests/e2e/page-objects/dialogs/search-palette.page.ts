@@ -52,7 +52,7 @@ export class SearchPalettePage {
    * A specific result item by zero-based index.
    */
   resultItem(index: number): Locator {
-    return this.page.locator(`.search-result-item:nth-child(${index + 1})`);
+    return this.resultItems().nth(index);
   }
 
   /**
@@ -169,6 +169,18 @@ export class SearchPalettePage {
    */
   async getFooterCountText(): Promise<string> {
     return (await this.footerCount().textContent()) ?? '';
+  }
+
+  /**
+   * Wait for the search index to finish building.
+   * Resolves immediately if the building indicator isn't visible.
+   */
+  async waitForIndexReady(options?: { timeout?: number }): Promise<void> {
+    const indicator = this.buildingIndicator();
+    // If the building indicator is currently visible, wait for it to disappear
+    if (await indicator.isVisible()) {
+      await indicator.waitFor({ state: 'hidden', ...options });
+    }
   }
 
   /**
