@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 15.1 (Client-Side Search)
-Plan: 1 of 2
-Status: In progress
-Last activity: 2026-02-24 -- Completed 15.1-01-PLAN.md (Search index service with encrypted persistence)
+Plan: 2 of 2
+Status: Phase complete
+Last activity: 2026-02-24 -- Completed 15.1-02-PLAN.md (Search UI & integration)
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 1/2)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 2/2 COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 135
+- Total plans completed: 136
 - Average duration: 5.5 min
-- Total execution time: 13.1 hours
+- Total execution time: 13.2 hours
 
 **By Phase (M1 summary):**
 
@@ -43,11 +43,11 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 14     | 6/6   | 42 min  | 7.0 min  |
 | M2 Phase 11     | 3/3   | 35 min  | 11.7 min |
 | M2 Phase 15     | 4/4   | 35 min  | 8.8 min  |
-| M2 Phase 15.1   | 1/2   | 4 min   | 4.0 min  |
+| M2 Phase 15.1   | 2/2   | 12 min  | 6.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 7m, 7m, 12m, 7m, 4m
+- Last 5 plans: 7m, 12m, 7m, 4m, 8m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -208,6 +208,9 @@ Recent decisions affecting current work:
 | HKDF info "cipherbox-search-index-v1" for search key derivation        | 15.1-01   | Domain separation from vault IPNS key and other derived keys using same private key                                  |
 | Web Crypto HKDF+AES-GCM directly (not @cipherbox/crypto)               | 15.1-01   | HKDF produces CryptoKey; crypto package expects raw Uint8Array, would need unnecessary conversion                    |
 | SearchIndexService as pure TS class (no React deps)                    | 15.1-01   | Clean separation; React hooks consume singleton instance, service is testable without React                          |
+| Module-level callback for cross-component search rebuild               | 15.1-02   | registerRebuildCallback/triggerSearchIndexRebuild avoids prop drilling from AppShell to FileBrowser                  |
+| Auth state transition watcher for search index cleanup                 | 15.1-02   | useRef tracks prev isAuthenticated; true->false triggers clearIndex; self-contained in useSearch hook                |
+| Unicode file type icons in search results                              | 15.1-02   | Terminal aesthetic consistency; no additional icon library needed                                                    |
 
 ### Pending Todos
 
@@ -264,7 +267,7 @@ Recent decisions affecting current work:
 - Phase 11 (Desktop): NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse), Windows virtual drive (WinFsp/Dokany), Tauri cross-compilation
 - Phase 14 (Sharing): COMPLETE -- research done, 6 plans created, all 6 executed
 - Phase 15 (Link Sharing): COMPLETE -- ephemeral key bridge pattern, HashRouter fragment handling, unauthenticated endpoint design researched; 4 plans created
-- Phase 15.1 (Client-Side Search): Standard patterns -- minisearch + idb (per research), skip research
+- Phase 15.1 (Client-Side Search): COMPLETE -- 2 plans done (search index service, search UI & integration)
 - Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
 - Phase 12.1 (AES-CTR Streaming): COMPLETE -- all 4 plans done (CTR crypto primitives, streaming upload pipeline, service worker decrypt proxy, media playback integration)
@@ -279,11 +282,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-02-24
-Stopped at: Completed 15.1-01-PLAN.md (Search index service with encrypted persistence)
+Stopped at: Completed 15.1-02-PLAN.md (Search UI & integration) -- Phase 15.1 COMPLETE
 Resume file: None
-Next: Execute 15.1-02-PLAN.md (React hooks, command palette UI, IPNS polling integration)
+Next: Phase 15.1 complete. Next phase TBD.
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-24 after Phase 15.1 Plan 01 complete_
+_Last updated: 2026-02-24 after Phase 15.1 Plan 02 complete (Phase 15.1 COMPLETE)_
