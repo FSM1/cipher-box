@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.17.0](https://github.com/FSM1/cipher-box/compare/v0.16.0...v0.17.0) (2026-02-24)
+
+
+### Features
+
+* **ci:** add Windows desktop build to staging deployment ([d5b1c0a](https://github.com/FSM1/cipher-box/commit/d5b1c0a4b8c9a504365ea808180cc2aece74657b))
+
+
+### Bug Fixes
+
+* **ci:** add Windows desktop build to staging deployment ([#196](https://github.com/FSM1/cipher-box/issues/196)) ([d5b1c0a](https://github.com/FSM1/cipher-box/commit/d5b1c0a4b8c9a504365ea808180cc2aece74657b))
+
 ## [0.16.0](https://github.com/FSM1/cipher-box/compare/v0.15.1...v0.16.0) (2026-02-24)
 
 ### Features
