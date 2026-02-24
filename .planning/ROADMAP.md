@@ -412,7 +412,7 @@ Plans:
 
 ### Phase 15.1: Client-Side Search (INSERTED)
 
-**Goal**: Users can search file names across their entire vault with an encrypted index persisted in IndexedDB
+**Goal**: Users can search file and folder names across their entire vault with an encrypted search index persisted in IndexedDB
 **Depends on**: Phase 15
 **Requirements**: SRCH-01, SRCH-02, SRCH-03
 **Research flag**: Standard patterns -- minisearch + idb (per research), skip `/gsd:research-phase`
@@ -421,7 +421,13 @@ Plans:
 1. User can search file names across all folders and see matching results with navigation to the file location
 2. Search index is encrypted and persisted in IndexedDB, surviving page refreshes
 3. Search index updates incrementally when IPNS polling detects metadata changes
-   **Plans**: TBD
+
+**Plans:** 2 plans
+
+Plans:
+
+- [ ] 15.1-01-PLAN.md — Search index service: minisearch setup, HKDF-derived AES-GCM encrypted IndexedDB persistence, folder tree indexing
+- [ ] 15.1-02-PLAN.md — Search UI (command palette overlay), useSearch hook, sync integration, AppHeader/AppShell wiring, human verification
 
 ### Phase 16: Advanced Sync
 
@@ -493,7 +499,7 @@ Parallel phases:
 | 13. File Versioning         | M2        | 5/5            | Complete    | 2026-02-19 |
 | 14. User-to-User Sharing    | M2        | 6/6            | Complete    | 2026-02-21 |
 | 15. Link Sharing            | M2        | 4/4            | Complete    | 2026-02-23 |
-| 15.1 Client-Side Search     | M2        | 0/TBD          | Not started | -          |
+| 15.1 Client-Side Search     | M2        | 0/2            | Not started | -          |
 | 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
 | 11. Windows Desktop         | M2        | 3/3            | Complete    | 2026-02-22 |
 | 11.3 Linux Desktop          | M2        | 0/TBD          | Not started | -          |
