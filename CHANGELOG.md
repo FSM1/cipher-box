@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.16.0](https://github.com/FSM1/cipher-box/compare/v0.15.1...v0.16.0) (2026-02-24)
+
+
+### Features
+
+* phase 15 link sharing ([#190](https://github.com/FSM1/cipher-box/issues/190)) ([76258cf](https://github.com/FSM1/cipher-box/commit/76258cf3ae063ef068aa7a52aa16582b321b8f12))
+
+
+### Bug Fixes
+
+* **ci:** prevent parenthesized text in commit subjects breaking Release Please ([#192](https://github.com/FSM1/cipher-box/issues/192)) ([1942b80](https://github.com/FSM1/cipher-box/commit/1942b800d669a4b905b7855fdde26406179675ea))
+
 ## [0.15.1](https://github.com/FSM1/cipher-box/compare/v0.15.0...v0.15.1) (2026-02-22)
 
 
