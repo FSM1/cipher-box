@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "6d451443f6e4",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-15.1-client-side-search",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "designs/cipher-box-design.pen"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6d/451443f6e4/0/metadata.json",
+      "transcript": "/6d/451443f6e4/0/full.jsonl",
+      "context": "/6d/451443f6e4/0/context.md",
+      "content_hash": "/6d/451443f6e4/0/content_hash.txt",
+      "prompt": "/6d/451443f6e4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 63,
+    "cache_creation_tokens": 113849,
+    "cache_read_tokens": 5806528,
+    "output_tokens": 7965,
+    "api_call_count": 51
+  }
+}
