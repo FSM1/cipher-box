@@ -13,4 +13,5 @@ export * from './useInterval';
 export * from './useLinkedMethods';
 export * from './useOnlineStatus';
 export * from './useSyncPolling';
+export * from './useSearch';
 export * from './useVisibility';
