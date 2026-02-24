@@ -3,7 +3,7 @@
   "checkpoint_id": "656495b0b2e3",
   "strategy": "manual-commit",
   "branch": "feat/phase-15.1-client-side-search",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     ".coderabbit.yaml"
   ],
@@ -14,13 +14,20 @@
       "context": "/65/6495b0b2e3/0/context.md",
       "content_hash": "/65/6495b0b2e3/0/content_hash.txt",
       "prompt": "/65/6495b0b2e3/0/prompt.txt"
+    },
+    {
+      "metadata": "/65/6495b0b2e3/1/metadata.json",
+      "transcript": "/65/6495b0b2e3/1/full.jsonl",
+      "context": "/65/6495b0b2e3/1/context.md",
+      "content_hash": "/65/6495b0b2e3/1/content_hash.txt",
+      "prompt": "/65/6495b0b2e3/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 67,
-    "cache_creation_tokens": 115950,
-    "cache_read_tokens": 6386409,
-    "output_tokens": 8384,
-    "api_call_count": 55
+    "input_tokens": 197,
+    "cache_creation_tokens": 351309,
+    "cache_read_tokens": 15087718,
+    "output_tokens": 13890,
+    "api_call_count": 140
   }
 }
