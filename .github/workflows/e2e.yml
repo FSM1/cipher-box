@@ -8,8 +8,36 @@ on:
   workflow_dispatch:
 
 jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      src: ${{ steps.filter.outputs.src }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            src:
+              - '**'
+              - '!.planning/**'
+              - '!.learnings/**'
+              - '!docs/**'
+              - '!designs/**'
+              - '!00-Preliminary-R&D/**'
+              - '!.claude/**'
+              - '!**/*.md'
+              - '!LICENSE'
+
   e2e:
     name: E2E Tests
+    needs: [changes]
+    if: |
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
