@@ -62,7 +62,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 13: File Versioning** - Automatic version retention with history view and restore
 - [x] **Phase 14: User-to-User Sharing** - Read-only folder and file sharing with ECIES key re-wrapping
 - [x] **Phase 15: Link Sharing** - Shareable file links for non-users with URL-fragment decryption keys -- COMPLETE 2026-02-23
-- [ ] **Phase 15.1: Client-Side Search** - Encrypted search index in IndexedDB with incremental updates (INSERTED)
+- [x] **Phase 15.1: Client-Side Search** - Encrypted search index in IndexedDB with incremental updates (INSERTED) -- COMPLETE 2026-02-24
 - [ ] **Phase 16: Advanced Sync** - Conflict detection, offline queue, and idempotent replay
 - [ ] **Phase 17: AWS Nitro TEE** - Nitro enclave as fallback TEE provider for IPNS republishing
 
@@ -428,7 +428,7 @@ Plans:
 
 - [x] 15.1-01-PLAN.md — Search index service: minisearch setup, HKDF-derived AES-GCM encrypted IndexedDB persistence, folder tree indexing
 - [x] 15.1-02-PLAN.md — Search UI (command palette overlay), useSearch hook, sync integration, AppHeader/AppShell wiring, human verification
-- [ ] 15.1-03-PLAN.md — E2E test suite: SearchPalettePage page object + search-workflow.spec.ts (gap closure)
+- [x] 15.1-03-PLAN.md — E2E test suite: SearchPalettePage page object + search-workflow.spec.ts (gap closure)
 
 ### Phase 16: Advanced Sync
 
@@ -500,7 +500,7 @@ Parallel phases:
 | 13. File Versioning         | M2        | 5/5            | Complete    | 2026-02-19 |
 | 14. User-to-User Sharing    | M2        | 6/6            | Complete    | 2026-02-21 |
 | 15. Link Sharing            | M2        | 4/4            | Complete    | 2026-02-23 |
-| 15.1 Client-Side Search     | M2        | 2/3            | In progress | -          |
+| 15.1 Client-Side Search     | M2        | 3/3            | Complete    | 2026-02-24 |
 | 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
 | 11. Windows Desktop         | M2        | 3/3            | Complete    | 2026-02-22 |
 | 11.3 Linux Desktop          | M2        | 0/TBD          | Not started | -          |
