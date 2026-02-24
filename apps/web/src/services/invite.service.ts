@@ -290,14 +290,13 @@ export async function claimInvite(
 
 /**
  * Check the status of an invite link (public, no auth required).
- * Returns the invite status or 'expired' on error/404.
+ * The server returns only 'active' or 404 (to prevent token-existence
+ * oracle attacks). Any non-active state maps to 'expired' on the client.
  */
-export async function checkInviteStatus(
-  token: string
-): Promise<'active' | 'expired' | 'claimed' | 'revoked'> {
+export async function checkInviteStatus(token: string): Promise<'active' | 'expired'> {
   try {
     const result = await invitesControllerGetInviteStatus(token);
-    return result.status as 'active' | 'expired' | 'claimed' | 'revoked';
+    return result.status === 'active' ? 'active' : 'expired';
   } catch {
     return 'expired';
   }

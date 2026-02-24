@@ -14,15 +14,19 @@ import '../styles/invite-page.css';
 /** State machine for invite page */
 type InvitePageState = 'loading' | 'valid' | 'claiming' | 'claimed' | 'error';
 
-/** Error reason for display */
-type ErrorReason = 'expired' | 'claimed' | 'revoked' | 'invalid';
+/**
+ * Error reason for display.
+ * Note: The server collapses all non-active invite statuses to 404 to prevent
+ * token-existence oracle attacks. 'claimed' errors come from the claim endpoint
+ * (HTTP 409), not the status check.
+ */
+type ErrorReason = 'expired' | 'claimed' | 'invalid';
 
 type MfaView = 'waiting' | 'recovery';
 
 const ERROR_MESSAGES: Record<ErrorReason, string> = {
   expired: 'this link has expired',
   claimed: 'this link has already been claimed',
-  revoked: 'this link has been revoked',
   invalid: 'invalid link',
 };
 
@@ -97,11 +101,7 @@ export function InvitePage() {
         if (status === 'active') {
           setPageState('valid');
         } else {
-          const reason: ErrorReason =
-            status === 'expired' || status === 'claimed' || status === 'revoked'
-              ? status
-              : 'invalid';
-          setErrorReason(reason);
+          setErrorReason('expired');
           setPageState('error');
         }
       })

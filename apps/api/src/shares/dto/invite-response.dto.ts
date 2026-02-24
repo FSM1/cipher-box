@@ -36,8 +36,10 @@ export class InviteResponseDto {
  */
 export class InviteStatusResponseDto {
   @ApiProperty({
-    enum: ['active', 'expired', 'claimed', 'revoked'],
-    description: 'Current status of the invite',
+    enum: ['active'],
+    description:
+      'Invite status. Only "active" is returned; all other states result in 404 ' +
+      'to prevent token-existence oracle attacks.',
   })
   status!: string;
 }

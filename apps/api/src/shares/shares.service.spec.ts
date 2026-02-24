@@ -1036,6 +1036,66 @@ describe('SharesService', () => {
       // Should NOT create new share
       expect(mockShareRepo.create).not.toHaveBeenCalled();
     });
+
+    it('should ensure only one concurrent claim succeeds (atomic UPDATE guard)', async () => {
+      // Simulate two concurrent claims: both pass the pre-transaction checks
+      // (findOne returns active invite), but only one succeeds at the atomic UPDATE.
+      mockShareInviteRepo.findOne.mockResolvedValue(invite);
+
+      const claimerId2 = 'aa0e8400-e29b-41d4-a716-446655440099';
+      let callCount = 0;
+
+      // First call to execute: affected=1 (success), second call: affected=0 (race lost)
+      const mockQb = {
+        update: jest.fn().mockReturnThis(),
+        set: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        execute: jest.fn().mockImplementation(() => {
+          callCount++;
+          return Promise.resolve({ affected: callCount === 1 ? 1 : 0 });
+        }),
+      };
+      (mockShareInviteRepo as any).createQueryBuilder = jest.fn().mockReturnValue(mockQb);
+
+      // Setup for the first (successful) claim
+      mockShareRepo.findOne.mockResolvedValue(null);
+      mockShareRepo.find.mockResolvedValue([]);
+      const newShareId = 'new-share-id';
+      mockShareRepo.create.mockReturnValue({ id: newShareId });
+      mockShareRepo.save.mockResolvedValue({ id: newShareId });
+      mockShareKeyRepo.create.mockImplementation((data) => data);
+      mockShareKeyRepo.save.mockResolvedValue([]);
+
+      // First claim succeeds
+      const result1 = await service.claimInvite('claim-token', recipientId, claimDto);
+      expect(result1).toEqual({ shareId: newShareId });
+
+      // Second concurrent claim fails with ConflictException
+      await expect(service.claimInvite('claim-token', claimerId2, claimDto)).rejects.toThrow(
+        ConflictException
+      );
+    });
+
+    it('should throw NotFoundException (not ConflictException) for expired invite to prevent oracle', async () => {
+      // Verify that expired invites return 404, not 409.
+      // This prevents an attacker from learning that a token exists by checking
+      // whether they get 404 (not found) vs 409 (conflict/expired).
+      const expiredInvite = {
+        ...invite,
+        expiresAt: new Date(Date.now() - 1000),
+      };
+      mockShareInviteRepo.findOne.mockResolvedValue(expiredInvite);
+      mockShareInviteRepo.remove.mockResolvedValue(expiredInvite);
+
+      try {
+        await service.claimInvite('claim-token', recipientId, claimDto);
+        fail('Should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(NotFoundException);
+        expect(err).not.toBeInstanceOf(ConflictException);
+      }
+    });
   });
 
   describe('getInvitesForItem', () => {

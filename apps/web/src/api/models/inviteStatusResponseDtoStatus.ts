@@ -7,14 +7,11 @@
  */
 
 /**
- * Current status of the invite
+ * Invite status. Only "active" is returned; all other states result in 404 to prevent token-existence oracle attacks.
  */
 export type InviteStatusResponseDtoStatus =
   (typeof InviteStatusResponseDtoStatus)[keyof typeof InviteStatusResponseDtoStatus];
 
 export const InviteStatusResponseDtoStatus = {
   active: 'active',
-  expired: 'expired',
-  claimed: 'claimed',
-  revoked: 'revoked',
 } as const;

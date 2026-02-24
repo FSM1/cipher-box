@@ -1,10 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { InvitesController } from './invites.controller';
 import { SharesService } from './shares.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ShareInvite } from './entities/share-invite.entity';
+import { ParseTokenPipe } from '../common/pipes/parse-token.pipe';
 
 describe('InvitesController', () => {
   let controller: InvitesController;
@@ -88,6 +89,26 @@ describe('InvitesController', () => {
       mockSharesService.getInviteStatus.mockResolvedValue({ status: 'revoked' });
 
       await expect(controller.getInviteStatus(testToken)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('ParseTokenPipe (applied to all endpoints)', () => {
+    const pipe = new ParseTokenPipe();
+
+    it('should accept valid base64url tokens', () => {
+      expect(pipe.transform('abcdefghijklmnopqrstuv')).toBe('abcdefghijklmnopqrstuv');
+    });
+
+    it('should reject tokens with invalid characters', () => {
+      expect(() => pipe.transform("'; DROP TABLE--")).toThrow(BadRequestException);
+    });
+
+    it('should reject overly long tokens', () => {
+      expect(() => pipe.transform('a'.repeat(100))).toThrow(BadRequestException);
+    });
+
+    it('should reject empty tokens', () => {
+      expect(() => pipe.transform('')).toThrow(BadRequestException);
     });
   });
 

@@ -8,6 +8,6 @@
 import type { InviteStatusResponseDtoStatus } from './inviteStatusResponseDtoStatus';
 
 export interface InviteStatusResponseDto {
-  /** Current status of the invite */
+  /** Invite status. Only "active" is returned; all other states result in 404 to prevent token-existence oracle attacks. */
   status: InviteStatusResponseDtoStatus;
 }

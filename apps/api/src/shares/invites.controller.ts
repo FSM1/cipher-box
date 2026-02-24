@@ -19,6 +19,7 @@ import {
   ClaimInviteResponseDto,
 } from './dto/invite-response.dto';
 import { RequestWithUser } from '../common/types';
+import { ParseTokenPipe } from '../common/pipes/parse-token.pipe';
 
 /**
  * Public-facing invite controller at /invites prefix.
@@ -49,7 +50,9 @@ export class InvitesController {
     type: InviteStatusResponseDto,
   })
   @ApiResponse({ status: 404, description: 'Invite not found or expired' })
-  async getInviteStatus(@Param('token') token: string): Promise<{ status: string }> {
+  async getInviteStatus(
+    @Param('token', ParseTokenPipe) token: string
+  ): Promise<{ status: string }> {
     const result = await this.sharesService.getInviteStatus(token);
     if (!result || result.status !== 'active') {
       throw new NotFoundException();
@@ -79,7 +82,7 @@ export class InvitesController {
   })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   @ApiResponse({ status: 404, description: 'Invite not found or expired' })
-  async getInviteData(@Param('token') token: string): Promise<{
+  async getInviteData(@Param('token', ParseTokenPipe) token: string): Promise<{
     status: string;
     encryptedKey: string;
     encryptedChildKeys: Array<{
@@ -131,7 +134,7 @@ export class InvitesController {
   @ApiResponse({ status: 409, description: 'Invite already claimed or self-claim' })
   async claimInvite(
     @Request() req: RequestWithUser,
-    @Param('token') token: string,
+    @Param('token', ParseTokenPipe) token: string,
     @Body() dto: ClaimInviteDto
   ): Promise<{ shareId: string }> {
     return this.sharesService.claimInvite(token, req.user.id, dto);

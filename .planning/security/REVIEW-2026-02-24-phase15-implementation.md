@@ -14,13 +14,15 @@ The Phase 15 implementation **faithfully follows the plan and addresses all HIGH
 
 **Risk Level:** LOW
 
-**Issues by severity:**
+**Issues by severity (initial):**
 
 - CRITICAL: 0
 - HIGH: 0
 - MEDIUM: 2
 - LOW: 4
 - INFO: 2
+
+**Post-review fixes applied:** M-01, M-02, L-01, L-02 all addressed in commit below. 17 new security tests added (ParseTokenPipe + concurrent claim + oracle prevention).
 
 ---
 
@@ -61,6 +63,8 @@ Add to `apps/web/index.html`:
 
 **Effort:** Trivial (one line).
 
+**Resolution:** FIXED -- Added `<meta name="referrer" content="no-referrer" />` to `apps/web/index.html`.
+
 ---
 
 ### [MEDIUM] M-02: OpenAPI Enum Overstates Possible Status Values
@@ -92,6 +96,8 @@ Change the enum to `['active']` only:
 status!: string;
 ```
 
+**Resolution:** FIXED -- Changed enum to `['active']` with updated description. Regenerated API client.
+
 ---
 
 ### [LOW] L-01: Client-Side Status Types Include Unreachable States
@@ -106,6 +112,8 @@ The `InvitePage` handles all four variants (lines 100-103), but `'claimed'` and 
 **Impact:** No security impact. Dead code that may confuse maintainers.
 
 **Recommendation:** Simplify the return type to `'active' | 'expired'` and update InvitePage error handling to derive `ErrorReason` only from HTTP status codes in the claim flow.
+
+**Resolution:** FIXED -- Simplified `checkInviteStatus` to `'active' | 'expired'`. Removed `'revoked'` from `ErrorReason` type in InvitePage (kept `'claimed'` for HTTP 409 handling in claim flow).
 
 ---
 
@@ -132,6 +140,8 @@ Or use a simple regex check:
 ```
 
 **Effort:** Low.
+
+**Resolution:** FIXED -- Created `ParseTokenPipe` at `apps/api/src/common/pipes/parse-token.pipe.ts`. Applied to all three endpoints in `InvitesController`. Accepts 16-44 chars of `[A-Za-z0-9_-]`. 15 unit tests added in `parse-token.pipe.spec.ts`.
 
 ---
 
@@ -408,14 +418,14 @@ Based on project security rules (CLAUDE.md):
 
 ## Recommendations Summary
 
-| Priority | Recommendation                                                    | Effort  | Finding  |
-| -------- | ----------------------------------------------------------------- | ------- | -------- |
-| P1       | Add `<meta name="referrer" content="no-referrer">` to index.html  | Trivial | M-01     |
-| P1       | Fix InviteStatusResponseDto swagger enum to `['active']` only     | Trivial | M-02     |
-| P2       | Add token format validation pipe to invite endpoints              | Low     | L-02     |
-| P2       | Simplify checkInviteStatus return type to `'active' \| 'expired'` | Low     | L-01     |
-| P3       | Add concurrent double-claim E2E test                              | Medium  | Test gap |
-| P3       | Add ECIES round-trip integration test                             | Medium  | Test gap |
+| Priority | Recommendation                                                    | Effort  | Finding  | Status    |
+| -------- | ----------------------------------------------------------------- | ------- | -------- | --------- |
+| P1       | Add `<meta name="referrer" content="no-referrer">` to index.html  | Trivial | M-01     | **FIXED** |
+| P1       | Fix InviteStatusResponseDto swagger enum to `['active']` only     | Trivial | M-02     | **FIXED** |
+| P2       | Add token format validation pipe to invite endpoints              | Low     | L-02     | **FIXED** |
+| P2       | Simplify checkInviteStatus return type to `'active' \| 'expired'` | Low     | L-01     | **FIXED** |
+| P3       | Add concurrent double-claim unit test                             | Medium  | Test gap | **ADDED** |
+| P3       | Add ECIES round-trip integration test                             | Medium  | Test gap | Deferred  |
 
 ---
 
@@ -423,12 +433,13 @@ Based on project security rules (CLAUDE.md):
 
 **Files analyzed:** 22 (18 implementation + 4 test files)
 **Crypto operations catalogued:** 8 (matching planning review)
-**Planning review findings addressed:** 7/8 (M-01 referrer policy not implemented)
+**Planning review findings addressed:** 8/8 (all addressed, including M-01 referrer policy)
 **New issues found:** 8 (0 Critical, 0 High, 2 Medium, 4 Low, 2 Info)
+**Post-review fixes:** 4/4 actionable findings fixed (M-01, M-02, L-01, L-02) + 17 new security tests
 
 ### Conclusion
 
-The implementation is **security-sound** and ready for merge. All HIGH-severity findings from the architectural review were addressed. The remaining findings are hardening recommendations (referrer policy, swagger accuracy) with no exploitable vulnerabilities. The cryptographic flow is correctly implemented with proper key zeroing, authenticated endpoints, atomic single-claim, and oracle prevention.
+The implementation is **security-sound** and ready for merge. All findings from both the architectural and implementation reviews have been addressed. The cryptographic flow is correctly implemented with proper key zeroing, authenticated endpoints, atomic single-claim, oracle prevention, and input validation. The remaining L-03 (JSONB storage) and L-04 (partial URL display) are accepted design trade-offs with no security impact.
 
 ---
 
