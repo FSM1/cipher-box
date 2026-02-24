@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "ee84f9e00d91",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-15.1-client-side-search",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/e2e/page-objects/dialogs/index.ts",
+    "tests/e2e/page-objects/dialogs/search-palette.page.ts",
+    "tests/e2e/page-objects/index.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ee/84f9e00d91/0/metadata.json",
+      "transcript": "/ee/84f9e00d91/0/full.jsonl",
+      "context": "/ee/84f9e00d91/0/context.md",
+      "content_hash": "/ee/84f9e00d91/0/content_hash.txt",
+      "prompt": "/ee/84f9e00d91/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 52828,
+    "cache_read_tokens": 190167,
+    "output_tokens": 13,
+    "api_call_count": 3
+  }
+}
