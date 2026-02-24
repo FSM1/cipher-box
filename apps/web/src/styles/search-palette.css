@@ -32,9 +32,9 @@
 .search-input-row {
   display: flex;
   align-items: center;
-  padding: 12px 16px;
+  padding: 14px 20px;
   border-bottom: 1px solid var(--color-border-dim);
-  gap: 8px;
+  gap: 12px;
 }
 
 .search-icon {
@@ -64,7 +64,7 @@
 
 .search-esc-hint {
   color: var(--color-text-dim);
-  font-size: 10px;
+  font-size: 9px;
   border: 1px solid var(--color-text-dim);
   padding: 1px 4px;
   flex-shrink: 0;
@@ -80,16 +80,19 @@
 .search-result-item {
   display: flex;
   align-items: center;
-  padding: 8px 16px;
+  padding: 10px 20px;
   cursor: pointer;
-  gap: 10px;
+  gap: 14px;
   border-left: 2px solid transparent;
+  border-right: 2px solid transparent;
+  border-top: 1px solid transparent;
+  border-bottom: 1px solid var(--color-border-dim);
 }
 
 .search-result-item:hover,
 .search-result-item.selected {
   background: var(--color-nav-active);
-  border-left-color: var(--color-green-primary);
+  border-color: var(--color-green-primary);
 }
 
 .search-result-icon {
@@ -116,10 +119,14 @@
 .search-result-name {
   color: var(--color-text-primary);
   font-size: 12px;
-  font-weight: var(--font-weight-bold);
+  font-weight: var(--font-weight-normal);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.search-result-item.selected .search-result-name {
+  font-weight: var(--font-weight-semibold);
 }
 
 .search-result-name mark {
@@ -129,7 +136,7 @@
 }
 
 .search-result-path {
-  color: var(--color-text-dim);
+  color: var(--color-text-secondary);
   font-size: 10px;
   white-space: nowrap;
   overflow: hidden;
@@ -157,25 +164,25 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 16px;
+  padding: 10px 20px;
   border-top: 1px solid var(--color-border-dim);
 }
 
 .search-footer-hints {
   color: var(--color-text-dim);
-  font-size: 10px;
+  font-size: 9px;
 }
 
 .search-footer-hints kbd {
   display: inline;
   font-family: var(--font-family-mono);
-  font-size: 10px;
+  font-size: 9px;
   color: var(--color-text-secondary);
 }
 
 .search-footer-count {
   color: var(--color-text-dim);
-  font-size: 10px;
+  font-size: 9px;
 }
 
 /* ==========================================================================

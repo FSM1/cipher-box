@@ -301,12 +301,13 @@ frame (root - 1440x900)
 | Input hint       | "ESC to close" 9px `#4a5a4e`                       |
 | Result padding   | 10px 20px                                          |
 | Result icon      | lucide (file-text/folder/etc) 16px `#006644`       |
-| Result name      | JetBrains Mono 12px `#00D084` weight 600           |
+| Result name      | JetBrains Mono 12px `#00D084` weight normal        |
+| Result name sel  | weight 600 on selected result                      |
 | Result path      | JetBrains Mono 10px `#006644`                      |
 | Result date      | JetBrains Mono 10px `#4a5a4e` (right-aligned)      |
 | Result separator | 1px bottom `#003322`                               |
 | Selected bg      | `#001a11`                                          |
-| Selected border  | 2px left `#00D084`                                 |
+| Selected border  | 2px left/right + 1px top/bottom `#00D084`          |
 | Selected icon    | `#00D084` (bright)                                 |
 | Result count     | "// N results" 9px `#4a5a4e`                       |
 | Footer           | keyboard hints 9px `#4a5a4e`, top border `#003322` |
