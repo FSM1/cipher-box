@@ -13,6 +13,7 @@ import { useFolder } from '../../hooks/useFolder';
 import { useFileDownload } from '../../hooks/useFileDownload';
 import { useContextMenu } from '../../hooks/useContextMenu';
 import { useSyncPolling } from '../../hooks/useSyncPolling';
+import { triggerSearchIndexRebuild } from '../../hooks/useSearch';
 import { useDeviceRegistrySync } from '../../hooks/useDeviceRegistrySync';
 import { useDropUpload, isExternalFileDrag } from '../../hooks/useDropUpload';
 import { useVaultStore } from '../../stores/vault.store';
@@ -288,6 +289,9 @@ export function FileBrowser() {
       // Per CONTEXT.md: last write wins, instant refresh (no toast/prompt)
       useFolderStore.getState().updateFolderChildren('root', metadata.children);
       useFolderStore.getState().updateFolderSequence('root', resolved.sequenceNumber);
+
+      // Rebuild search index with updated folder data
+      triggerSearchIndexRebuild();
     } catch (err) {
       console.error('Sync refresh failed:', err);
       // During initial sync, propagate so useSyncPolling keeps the

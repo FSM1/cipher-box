@@ -12,3 +12,4 @@ export * from './streaming-crypto.service';
 export * from './folder.service';
 export * from './ipns.service';
 export * from './upload.service';
+export { searchIndexService, type SearchResult } from './search-index.service';

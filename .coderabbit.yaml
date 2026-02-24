@@ -88,6 +88,7 @@ reviews:
     - '!.claude/agents/**'
     - '!.claude/commands/**'
     - '!.claude/get-shit-done/**'
+    - '!**/*.pen'
 
 chat:
   # Enable chat interactions in PR comments

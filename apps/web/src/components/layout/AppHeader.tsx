@@ -1,10 +1,17 @@
 import { UserMenu } from './UserMenu';
 
+interface AppHeaderProps {
+  onSearchClick?: () => void;
+}
+
+const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
+const shortcutLabel = isMac ? '⌘K' : 'Ctrl+K';
+
 /**
  * App header component.
- * Contains logo and user menu dropdown.
+ * Contains logo, search button, and user menu dropdown.
  */
-export function AppHeader() {
+export function AppHeader({ onSearchClick }: AppHeaderProps) {
   return (
     <header className="app-header" data-testid="app-header">
       <div className="header-left">
@@ -12,6 +19,17 @@ export function AppHeader() {
         <span className="header-logo">CIPHERBOX</span>
       </div>
       <div className="header-right">
+        {onSearchClick && (
+          <button
+            className="header-search-btn"
+            onClick={onSearchClick}
+            aria-label={`Search files (${shortcutLabel})`}
+            title={`Search (${shortcutLabel})`}
+            type="button"
+          >
+            {'>_'} <kbd>{shortcutLabel}</kbd>
+          </button>
+        )}
         <UserMenu />
       </div>
     </header>

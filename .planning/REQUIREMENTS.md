@@ -111,9 +111,9 @@ Requirements for production release. Each maps to roadmap phases 12+.
 
 ### Search
 
-- [ ] **SRCH-01**: User can search file names across all folders (client-side)
-- [ ] **SRCH-02**: Search index is encrypted and persisted in IndexedDB
-- [ ] **SRCH-03**: Search index updates incrementally when IPNS polling detects changes
+- [x] **SRCH-01**: User can search file names across all folders (client-side)
+- [x] **SRCH-02**: Search index is encrypted and persisted in IndexedDB
+- [x] **SRCH-03**: Search index updates incrementally when IPNS polling detects changes
 
 ### Multi-Factor Authentication
 
@@ -356,9 +356,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SHARE-05    | Phase 14   | Complete |
 | SHARE-06    | Phase 15   | Complete |
 | SHARE-07    | Phase 15   | Complete |
-| SRCH-01     | Phase 15   | Pending  |
-| SRCH-02     | Phase 15   | Pending  |
-| SRCH-03     | Phase 15   | Pending  |
+| SRCH-01     | Phase 15.1 | Complete |
+| SRCH-02     | Phase 15.1 | Complete |
+| SRCH-03     | Phase 15.1 | Complete |
 | SYNC-04     | Phase 16   | Pending  |
 | SYNC-05     | Phase 16   | Pending  |
 | SYNC-06     | Phase 16   | Pending  |
