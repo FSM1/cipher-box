@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.18.0](https://github.com/FSM1/cipher-box/compare/v0.17.0...v0.18.0) (2026-02-24)
+
+
+### Features
+
+* phase 15.1 client-side encrypted search  ([#198](https://github.com/FSM1/cipher-box/issues/198)) ([3236f4a](https://github.com/FSM1/cipher-box/commit/3236f4af5599cd58ed290a418ae6266406e0b8b1))
+
+
+### Bug Fixes
+
+* **15.1:** prevent logout race in search index init ([#200](https://github.com/FSM1/cipher-box/issues/200)) ([11abcfa](https://github.com/FSM1/cipher-box/commit/11abcfa9b53861c25c3af0e4d575c066882848b2))
+
 ## [0.17.0](https://github.com/FSM1/cipher-box/compare/v0.16.0...v0.17.0) (2026-02-24)
 
 
