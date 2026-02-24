@@ -41,6 +41,7 @@ export function useSearch() {
   // Refs
   const hasLoadedFromDb = useRef(false);
   const buildingRef = useRef(false);
+  const cancelledRef = useRef(false);
 
   // Store access
   const vaultKeypair = useAuthStore((s) => s.vaultKeypair);
@@ -92,6 +93,8 @@ export function useSearch() {
       setIsIndexReady(true);
     }
 
+    cancelledRef.current = false;
+
     const init = async () => {
       buildingRef.current = true;
       setIsBuilding(true);
@@ -99,6 +102,7 @@ export function useSearch() {
         // Cold start: try loading from encrypted IndexedDB when index is empty
         if (!hasLoadedFromDb.current && searchIndexService.isEmpty) {
           const loaded = await searchIndexService.loadEncrypted(vaultKeypair.privateKey);
+          if (cancelledRef.current) return;
           hasLoadedFromDb.current = true;
           if (loaded && !searchIndexService.isEmpty) {
             setIsIndexReady(true);
@@ -109,6 +113,7 @@ export function useSearch() {
         // Build fresh from current folder store state
         const currentFolders = useFolderStore.getState().folders;
         searchIndexService.buildFromFolderTree(currentFolders);
+        if (cancelledRef.current) return;
         setIsIndexReady(true);
 
         // Persist encrypted (fire-and-forget)
@@ -117,6 +122,7 @@ export function useSearch() {
         });
       } catch (err) {
         console.error('[search] Failed to initialize index:', err);
+        if (cancelledRef.current) return;
         // Still mark ready -- search works in-memory even if persistence fails
         setIsIndexReady(true);
       } finally {
@@ -164,8 +170,11 @@ export function useSearch() {
     };
   }, [rebuildIndex]);
 
-  // Clear index (called on logout)
+  // Clear index (called on logout).
+  // Sets cancelledRef to abort any in-flight init() that may be suspended
+  // at an await, preventing stale state writes and post-logout persistence.
   const clearIndex = useCallback(async () => {
+    cancelledRef.current = true;
     try {
       await searchIndexService.clear();
     } catch (err) {
@@ -173,6 +182,7 @@ export function useSearch() {
     }
     setIsIndexReady(false);
     hasLoadedFromDb.current = false;
+    buildingRef.current = false;
     setIsOpen(false);
     setQuery('');
     setResults([]);
