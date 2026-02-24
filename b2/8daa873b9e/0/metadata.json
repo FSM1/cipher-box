@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "b28daa873b9e",
+  "session_id": "adcf9062-8e90-4c65-b32c-c8812e19a623",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-24T01:30:16.784549Z",
+  "branch": "chore/ci-path-skip",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/e2e.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "3ecf88059882",
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 31951,
+    "cache_read_tokens": 1144715,
+    "output_tokens": 1899,
+    "api_call_count": 22
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-24T01:30:16.047686Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/adcf9062-8e90-4c65-b32c-c8812e19a623.jsonl"
+}
