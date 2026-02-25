@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "f7d93f403bc4",
+  "session_id": "3adffe43-0178-4425-8872-4c6954b48ae6",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-25T13:34:57.498233Z",
+  "branch": "feat/account-deletion-gdpr",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/quick/021-account-deletion-gdpr/021-PLAN.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ec8aabf5a48b",
+  "token_usage": {
+    "input_tokens": 98,
+    "cache_creation_tokens": 269041,
+    "cache_read_tokens": 6943185,
+    "output_tokens": 6834,
+    "api_call_count": 74
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-25T13:34:55.732445Z",
+    "agent_lines": 406,
+    "human_added": 4,
+    "human_modified": 37,
+    "human_removed": 0,
+    "total_committed": 447,
+    "agent_percentage": 90.82774049217002
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/3adffe43-0178-4425-8872-4c6954b48ae6.jsonl"
+}
