@@ -410,19 +410,38 @@ test.describe.serial('Sharing Workflow', () => {
   });
 
   test('7.2 Charlie sees the newly added file', async () => {
-    // Wait briefly for any background operations from 7.1 to settle
-    await charlie.page.waitForTimeout(2000);
+    // IPNS propagation on staging can take many seconds after Alice's
+    // upload in 7.1. Retry navigation into the shared folder to trigger
+    // fresh IPNS resolves until the post-share file appears.
+    test.setTimeout(120000);
+    await charlie.page.waitForTimeout(3000);
 
-    // Navigate Charlie into the shared folder to check for the new file
-    await navigateToShared(charlie);
-    await charlieSharedBrowser.waitForLoaded({ timeout: 30000 });
+    const maxAttempts = 3;
+    let found = false;
 
-    await charlieSharedBrowser.navigateIntoFolder(sharedFolderName);
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // Navigate Charlie into the shared folder
+      await navigateToShared(charlie);
+      await charlieSharedBrowser.waitForLoaded({ timeout: 30000 });
+      await charlieSharedBrowser.navigateIntoFolder(sharedFolderName);
 
-    // Wait for folder contents - the new file should be visible
-    const itemNames = await charlieSharedBrowser.getFolderItemNames();
-    expect(itemNames.some((n) => n.includes(postShareFileName))).toBe(true);
+      // Wait for the post-share file to appear
+      try {
+        await charlieSharedBrowser
+          .getFolderItem(postShareFileName)
+          .waitFor({ state: 'visible', timeout: 30000 });
+        found = true;
+        break;
+      } catch {
+        // IPNS hasn't propagated yet — navigate back and retry
+        if (attempt < maxAttempts) {
+          await charlieSharedBrowser.navigateToRoot();
+          await charlie.page.waitForTimeout(5000);
+        }
+      }
+    }
 
+    expect(found).toBe(true);
     await charlieSharedBrowser.navigateToRoot();
   });
 
