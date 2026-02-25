@@ -1,0 +1,50 @@
+<bash-input>git switch main</bash-input>
+
+---
+
+<bash-stdout>Switched to branch 'main'
+Your branch is up to date with 'origin/main'.</bash-stdout><bash-stderr></bash-stderr>
+
+---
+
+can you start a local ui dev server pointed at the staging api
+
+---
+
+can you run the e2e tests against the local ui, in headed mode
+
+---
+
+[Request interrupted by user]
+
+---
+
+sorry, that wont work on that port - you need to kill which ever dev server is taking up port 5173
+
+---
+
+yeah nuke it
+
+---
+
+ok now run the e2e tests in a headed browser against this local dev instance
+
+---
+
+can you pull out the correct test credentials from the staging server env?
+
+---
+
+yes
+
+---
+
+yeah I think that making the tests resilient enough to execute reliably against the staging api is quite important. if you do decide to make any test changes, dont forget to switch to a feature branch
+
+---
+
+ok thanks, please add a @.learnings/README.md entry
+
+---
+
+ok push this all up and create a pr
