@@ -1,4 +1,5 @@
 import {
+  Inject,
   Injectable,
   Logger,
   UnauthorizedException,
@@ -16,6 +17,8 @@ import Redis from 'ioredis';
 import { User } from './entities/user.entity';
 import { AuthMethod } from './entities/auth-method.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
+import { PinnedCid } from '../vault/entities/pinned-cid.entity';
+import { IPFS_PROVIDER, IpfsProvider } from '../ipfs/providers/ipfs-provider.interface';
 import { JwtIssuerService } from './services/jwt-issuer.service';
 import { TokenService } from './services/token.service';
 import { SiweService } from './services/siwe.service';
@@ -39,7 +42,11 @@ export class AuthService implements OnModuleDestroy {
     @InjectRepository(AuthMethod)
     private authMethodRepository: Repository<AuthMethod>,
     @InjectRepository(RefreshToken)
-    private refreshTokenRepository: Repository<RefreshToken>
+    private refreshTokenRepository: Repository<RefreshToken>,
+    @InjectRepository(PinnedCid)
+    private pinnedCidRepository: Repository<PinnedCid>,
+    @Inject(IPFS_PROVIDER)
+    private ipfsProvider: IpfsProvider
   ) {
     this.redis = new Redis({
       host: configService.get('REDIS_HOST', 'localhost'),
@@ -189,11 +196,32 @@ export class AuthService implements OnModuleDestroy {
 
   /**
    * Permanently delete a user account and all associated data.
-   * ON DELETE CASCADE on all FK references to users.id handles
-   * cleanup of auth_methods, refresh_tokens, vaults, pinned_cids,
-   * folder_ipns, ipns_republish_schedule, shares, share_keys, and share_invites.
+   *
+   * 1. Unpins all IPFS content from the local Kubo node (best-effort)
+   * 2. Deletes the user row — ON DELETE CASCADE handles cleanup of
+   *    auth_methods, refresh_tokens, vaults, pinned_cids, folder_ipns,
+   *    ipns_republish_schedule, shares, share_keys, and share_invites.
    */
   async deleteAccount(userId: string): Promise<{ success: boolean }> {
+    // Fetch all pinned CIDs before cascade deletes the records
+    const pinnedCids = await this.pinnedCidRepository.find({
+      where: { userId },
+      select: ['cid'],
+    });
+
+    // Unpin all content from Kubo (best-effort, don't block deletion on failure)
+    if (pinnedCids.length > 0) {
+      const results = await Promise.allSettled(
+        pinnedCids.map((pin) => this.ipfsProvider.unpinFile(pin.cid))
+      );
+      const failed = results.filter((r) => r.status === 'rejected').length;
+      this.logger.log(
+        `Unpinned ${pinnedCids.length - failed}/${pinnedCids.length} CIDs for user ${userId}` +
+          (failed > 0 ? ` (${failed} failed)` : '')
+      );
+    }
+
+    // Delete user row — cascade handles all related DB records
     const result = await this.userRepository.delete(userId);
     if (result.affected === 0) {
       throw new BadRequestException('Account not found');
