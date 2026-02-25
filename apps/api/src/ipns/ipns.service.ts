@@ -378,14 +378,30 @@ export class IpnsService {
       }
     }
 
+    // Always check DB cache — it's written synchronously during publish
+    // and may be ahead of the network (delegated routing can serve stale records)
+    const cached = await this.folderIpnsRepository.findOne({
+      where: { ipnsName },
+    });
+
+    if (result && cached?.latestCid) {
+      // Both sources available — prefer the one with the higher sequence number
+      const networkSeq = BigInt(result.sequenceNumber);
+      const dbSeq = BigInt(cached.sequenceNumber);
+      if (dbSeq > networkSeq) {
+        this.logger.log(
+          `DB cache has newer sequence (${dbSeq} > ${networkSeq}) for ${ipnsName}, using DB: ${cached.latestCid}`
+        );
+        return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
+      }
+      return result;
+    }
+
     if (result) {
       return result;
     }
 
     // Delegated routing returned null (404) or threw BAD_GATEWAY — try DB cache
-    const cached = await this.folderIpnsRepository.findOne({
-      where: { ipnsName },
-    });
     if (cached?.latestCid) {
       this.logger.log(`Resolved ${ipnsName} from DB cache: ${cached.latestCid}`);
       return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };

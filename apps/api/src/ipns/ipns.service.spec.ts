@@ -896,6 +896,57 @@ describe('IpnsService', () => {
       expect(result!.cid).toBe('bafyCACHED_PARSE');
       expect(mockFolderIpnsRepo.findOne).toHaveBeenCalled();
     });
+
+    it('should prefer DB cache when it has a higher sequence number than network', async () => {
+      // Network returns stale record (seq 3)
+      const mockRecordBytes = new Uint8Array([1, 2, 3]);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
+      });
+      mockParseIpnsRecord.mockReturnValue({
+        value: '/ipfs/bafySTALE',
+        sequence: 3n,
+      });
+
+      // DB has newer record (seq 10)
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: 'bafyFRESH',
+        sequenceNumber: '10',
+      });
+
+      const result = await service.resolveRecord(testIpnsName);
+
+      expect(result).not.toBeNull();
+      expect(result!.cid).toBe('bafyFRESH');
+      expect(result!.sequenceNumber).toBe('10');
+    });
+
+    it('should prefer network result when it has equal or higher sequence than DB', async () => {
+      const mockRecordBytes = new Uint8Array([1, 2, 3]);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
+      });
+      mockParseIpnsRecord.mockReturnValue({
+        value: '/ipfs/bafyNETWORK',
+        sequence: 10n,
+      });
+
+      // DB has same sequence
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: 'bafyDB',
+        sequenceNumber: '10',
+      });
+
+      const result = await service.resolveRecord(testIpnsName);
+
+      expect(result).not.toBeNull();
+      expect(result!.cid).toBe('bafyNETWORK');
+      expect(result!.sequenceNumber).toBe('10');
+    });
   });
 
   describe('delegated routing failures are non-fatal', () => {
