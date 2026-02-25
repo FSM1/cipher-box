@@ -109,6 +109,25 @@
     display: none;
   }
 
+  /* Shared browser: collapse to single NAME column on mobile */
+  .shared-browser .file-list-header {
+    grid-template-columns: 1fr;
+  }
+
+  .shared-browser .file-list-row {
+    grid-template-columns: 1fr;
+  }
+
+  .shared-browser .file-list-cell-size,
+  .shared-browser .file-list-cell-date {
+    display: none;
+  }
+
+  .shared-browser .shared-by-cell,
+  .shared-browser .file-list-header-shared-by {
+    display: none;
+  }
+
   /* Show the mobile action button and header actions column */
   .file-list-item-mobile-actions {
     display: flex;
