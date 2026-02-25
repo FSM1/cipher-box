@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "05fa457d0ffe",
+  "session_id": "3adffe43-0178-4425-8872-4c6954b48ae6",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-25T10:54:48.84346Z",
+  "branch": "claude/fix-shared-items-rendering-RiAMw",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/styles/shared-browser.css"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "a57501fa77ae",
+  "token_usage": {
+    "input_tokens": 33,
+    "cache_creation_tokens": 127759,
+    "cache_read_tokens": 1431290,
+    "output_tokens": 2521,
+    "api_call_count": 25
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-25T10:54:43.785238Z",
+    "agent_lines": 0,
+    "human_added": 379,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 379,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/3adffe43-0178-4425-8872-4c6954b48ae6.jsonl"
+}

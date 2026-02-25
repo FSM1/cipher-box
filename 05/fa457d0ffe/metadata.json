@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "05fa457d0ffe",
+  "strategy": "manual-commit",
+  "branch": "claude/fix-shared-items-rendering-RiAMw",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/styles/shared-browser.css"
+  ],
+  "sessions": [
+    {
+      "metadata": "/05/fa457d0ffe/0/metadata.json",
+      "transcript": "/05/fa457d0ffe/0/full.jsonl",
+      "context": "/05/fa457d0ffe/0/context.md",
+      "content_hash": "/05/fa457d0ffe/0/content_hash.txt",
+      "prompt": "/05/fa457d0ffe/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 33,
+    "cache_creation_tokens": 127759,
+    "cache_read_tokens": 1431290,
+    "output_tokens": 2521,
+    "api_call_count": 25
+  }
+}
