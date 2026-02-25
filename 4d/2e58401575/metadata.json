@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "4d2e58401575",
+  "strategy": "manual-commit",
+  "branch": "feat/account-deletion-gdpr",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/auth/auth.service.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4d/2e58401575/0/metadata.json",
+      "transcript": "/4d/2e58401575/0/full.jsonl",
+      "context": "/4d/2e58401575/0/context.md",
+      "content_hash": "/4d/2e58401575/0/content_hash.txt",
+      "prompt": "/4d/2e58401575/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 88,
+    "cache_creation_tokens": 234068,
+    "cache_read_tokens": 4396791,
+    "output_tokens": 5388,
+    "api_call_count": 74
+  }
+}
