@@ -23,6 +23,8 @@ import type {
 
 import type {
   AuthMethodResponseDto,
+  DeleteAccountDto,
+  DeleteAccountResponseDto,
   DesktopRefreshDto,
   LinkMethodDto,
   LoginDto,
@@ -252,6 +254,82 @@ export const useAuthControllerLogout = <TError = void, TContext = unknown>(
   queryClient?: QueryClient
 ): UseMutationResult<Awaited<ReturnType<typeof authControllerLogout>>, TError, void, TContext> => {
   const mutationOptions = getAuthControllerLogoutMutationOptions(options);
+
+  return useMutation(mutationOptions, queryClient);
+};
+/**
+ * @summary Permanently delete user account and all associated data
+ */
+export const authControllerDeleteAccount = (deleteAccountDto: DeleteAccountDto) => {
+  return customInstance<DeleteAccountResponseDto>({
+    url: `/auth/account`,
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    data: deleteAccountDto,
+  });
+};
+
+export const getAuthControllerDeleteAccountMutationOptions = <
+  TError = void,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof authControllerDeleteAccount>>,
+    TError,
+    { data: DeleteAccountDto },
+    TContext
+  >;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof authControllerDeleteAccount>>,
+  TError,
+  { data: DeleteAccountDto },
+  TContext
+> => {
+  const mutationKey = ['authControllerDeleteAccount'];
+  const { mutation: mutationOptions } = options
+    ? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof authControllerDeleteAccount>>,
+    { data: DeleteAccountDto }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return authControllerDeleteAccount(data);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type AuthControllerDeleteAccountMutationResult = NonNullable<
+  Awaited<ReturnType<typeof authControllerDeleteAccount>>
+>;
+export type AuthControllerDeleteAccountMutationBody = DeleteAccountDto;
+export type AuthControllerDeleteAccountMutationError = void;
+
+/**
+ * @summary Permanently delete user account and all associated data
+ */
+export const useAuthControllerDeleteAccount = <TError = void, TContext = unknown>(
+  options?: {
+    mutation?: UseMutationOptions<
+      Awaited<ReturnType<typeof authControllerDeleteAccount>>,
+      TError,
+      { data: DeleteAccountDto },
+      TContext
+    >;
+  },
+  queryClient?: QueryClient
+): UseMutationResult<
+  Awaited<ReturnType<typeof authControllerDeleteAccount>>,
+  TError,
+  { data: DeleteAccountDto },
+  TContext
+> => {
+  const mutationOptions = getAuthControllerDeleteAccountMutationOptions(options);
 
   return useMutation(mutationOptions, queryClient);
 };

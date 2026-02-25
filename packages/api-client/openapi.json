@@ -108,6 +108,47 @@
         "tags": ["Auth"]
       }
     },
+    "/auth/account": {
+      "delete": {
+        "operationId": "AuthController_deleteAccount",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteAccountDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Account deleted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteAccountResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid confirmation or account not found"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Permanently delete user account and all associated data",
+        "tags": ["Auth"]
+      }
+    },
     "/auth/methods": {
       "get": {
         "operationId": "AuthController_getMethods",
@@ -1948,6 +1989,27 @@
             "type": "boolean",
             "description": "Whether logout was successful",
             "example": true
+          }
+        },
+        "required": ["success"]
+      },
+      "DeleteAccountDto": {
+        "type": "object",
+        "properties": {
+          "confirmation": {
+            "type": "string",
+            "description": "Must be the string \"DELETE\" to confirm account deletion",
+            "example": "DELETE"
+          }
+        },
+        "required": ["confirmation"]
+      },
+      "DeleteAccountResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Whether the account was successfully deleted"
           }
         },
         "required": ["success"]

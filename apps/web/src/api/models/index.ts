@@ -24,6 +24,8 @@ export * from './createShareDto';
 export * from './createShareDtoItemType';
 export * from './createShareResponseDto';
 export * from './createShareResponseDtoItemType';
+export * from './deleteAccountDto';
+export * from './deleteAccountResponseDto';
 export * from './derivationInfoDto';
 export * from './derivationInfoDtoDerivationVersion';
 export * from './derivationInfoDtoMethod';

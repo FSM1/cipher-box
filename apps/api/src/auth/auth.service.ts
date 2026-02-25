@@ -188,6 +188,21 @@ export class AuthService implements OnModuleDestroy {
   }
 
   /**
+   * Permanently delete a user account and all associated data.
+   * ON DELETE CASCADE on all FK references to users.id handles
+   * cleanup of auth_methods, refresh_tokens, vaults, pinned_cids,
+   * folder_ipns, ipns_republish_schedule, shares, share_keys, and share_invites.
+   */
+  async deleteAccount(userId: string): Promise<{ success: boolean }> {
+    const result = await this.userRepository.delete(userId);
+    if (result.affected === 0) {
+      throw new BadRequestException('Account not found');
+    }
+    this.logger.log(`Account deleted: userId=${userId}`);
+    return { success: true };
+  }
+
+  /**
    * Refresh tokens by searching for the matching refresh token across all users.
    * This allows refresh without requiring the (possibly expired) access token.
    */
