@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "17ec0a7a46d4",
+  "strategy": "manual-commit",
+  "branch": "fix/e2e-staging-resilience",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".learnings/2026-02-25-ipns-stale-resolution-staging.md",
+    "apps/api/src/ipns/ipns.service.spec.ts",
+    "apps/api/src/ipns/ipns.service.ts",
+    "tests/e2e/tests/full-workflow.spec.ts",
+    "tests/e2e/tests/sharing-workflow.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/17/ec0a7a46d4/0/metadata.json",
+      "transcript": "/17/ec0a7a46d4/0/full.jsonl",
+      "context": "/17/ec0a7a46d4/0/context.md",
+      "content_hash": "/17/ec0a7a46d4/0/content_hash.txt",
+      "prompt": "/17/ec0a7a46d4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 105,
+    "cache_creation_tokens": 272889,
+    "cache_read_tokens": 7655096,
+    "output_tokens": 7185,
+    "api_call_count": 79
+  }
+}

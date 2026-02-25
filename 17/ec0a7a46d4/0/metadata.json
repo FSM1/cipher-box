@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "17ec0a7a46d4",
+  "session_id": "3adffe43-0178-4425-8872-4c6954b48ae6",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-25T16:30:51.271936Z",
+  "branch": "fix/e2e-staging-resilience",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/e2e/tests/full-workflow.spec.ts",
+    "tests/e2e/tests/sharing-workflow.spec.ts",
+    ".learnings/2026-02-25-ipns-stale-resolution-staging.md",
+    "apps/api/src/ipns/ipns.service.spec.ts",
+    "apps/api/src/ipns/ipns.service.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "773629955f5c",
+  "token_usage": {
+    "input_tokens": 105,
+    "cache_creation_tokens": 272889,
+    "cache_read_tokens": 7655096,
+    "output_tokens": 7185,
+    "api_call_count": 79
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-25T16:30:49.867413Z",
+    "agent_lines": 0,
+    "human_added": 124,
+    "human_modified": 17,
+    "human_removed": 0,
+    "total_committed": 124,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/3adffe43-0178-4425-8872-4c6954b48ae6.jsonl"
+}
