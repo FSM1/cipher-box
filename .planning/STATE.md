@@ -264,7 +264,7 @@ Recent decisions affecting current work:
 | 018 | E2E versioning tests                      | 2026-02-19 | 3fd131e | [018-e2e-versioning-tests](./quick/018-e2e-versioning-tests/)                                               |
 | 019 | Metadata schema evolution protocol        | 2026-02-21 | dcb49e1 | [019-metadata-schema-evolution-protocol](./quick/019-metadata-schema-evolution-protocol/)                   |
 | 020 | Fix shared items rendering                | 2026-02-25 | 96b7591 | [020-fix-shared-items-rendering](./quick/020-fix-shared-items-rendering/)                                   |
-| 021 | Account deletion (GDPR)                   | 2026-02-25 | f55e89f | [021-account-deletion-gdpr](./quick/021-account-deletion-gdpr/)                                             |
+| 021 | Account deletion (GDPR)                   | 2026-02-25 | 8ae01dd | [021-account-deletion-gdpr](./quick/021-account-deletion-gdpr/)                                             |
 
 ### Research Flags
 

@@ -25,12 +25,14 @@ key-files:
   modified:
     - apps/api/src/auth/auth.controller.ts
     - apps/api/src/auth/auth.service.ts
+    - apps/api/src/auth/auth.module.ts
     - apps/web/src/components/mfa/SecurityTab.tsx
     - apps/web/src/lib/api/auth.ts
     - apps/web/src/App.css
 
 key-decisions:
-  - 'ON DELETE CASCADE handles all cleanup -- no manual deletion of related records needed'
+  - 'IPFS unpin before cascade delete -- fetch pinned CIDs and unpin from Kubo (best-effort) before removing DB records'
+  - 'ON DELETE CASCADE handles all DB cleanup -- no manual deletion of related records needed'
   - 'Type-to-confirm pattern (type DELETE) prevents accidental account deletion'
   - 'Full logout flow after deletion clears crypto keys, Core Kit session, and all stores'
 
@@ -57,7 +59,8 @@ DELETE /auth/account endpoint with CASCADE cleanup and Danger Zone UI requiring 
 ## Accomplishments
 
 - Backend DELETE /auth/account endpoint with JWT auth and confirmation validation
-- ON DELETE CASCADE handles all related data cleanup (auth_methods, refresh_tokens, vaults, shares, etc.)
+- IPFS unpin: fetches all pinned CIDs and unpins from local Kubo node (best-effort) before cascade delete
+- ON DELETE CASCADE handles all related DB record cleanup (auth_methods, refresh_tokens, vaults, shares, etc.)
 - Danger Zone UI in SecurityTab with red terminal aesthetic (#EF4444 red, #001a11 bg)
 - Type-to-confirm dialog requiring exact string "DELETE" before deletion proceeds
 - Full logout flow after deletion (clear crypto keys, Core Kit session, all stores, redirect to login)
@@ -67,8 +70,9 @@ DELETE /auth/account endpoint with CASCADE cleanup and Danger Zone UI requiring 
 
 Each task was committed atomically:
 
-1. **Task 1: Backend DELETE /auth/account endpoint** - `2034a907d` (feat) -- committed prior to this execution
+1. **Task 1: Backend DELETE /auth/account endpoint** - `2034a907d` (feat)
 2. **Task 2: Frontend Danger Zone UI in SecurityTab** - `f55e89f55` (feat)
+3. **Task 3: IPFS unpin on account deletion** - `8ae01ddda` (feat)
 
 ## Files Created/Modified
 
