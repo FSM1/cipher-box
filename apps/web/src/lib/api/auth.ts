@@ -95,6 +95,14 @@ export const authApi = {
     await apiClient.post('/auth/unlink', { methodId });
   },
 
+  /**
+   * Permanently delete the authenticated user's account.
+   * Requires confirmation string "DELETE".
+   */
+  deleteAccount: async (): Promise<void> => {
+    await apiClient.delete('/auth/account', { data: { confirmation: 'DELETE' } });
+  },
+
   // --- CipherBox Identity Provider endpoints (Plan 12-01) ---
 
   /** Get CipherBox identity JWT via Google OAuth token */
