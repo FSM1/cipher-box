@@ -1198,6 +1198,9 @@ describe('AuthService', () => {
 
       const result = await service.deleteAccount(userId);
 
+      expect(ipfsProvider.unpinFile).toHaveBeenCalledTimes(2);
+      expect(ipfsProvider.unpinFile).toHaveBeenCalledWith('QmGood');
+      expect(ipfsProvider.unpinFile).toHaveBeenCalledWith('QmBad');
       expect(userRepository.delete).toHaveBeenCalledWith(userId);
       expect(result).toEqual({ success: true });
     });

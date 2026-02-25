@@ -43,7 +43,12 @@ export function SecurityTab() {
     try {
       await authApi.deleteAccount();
       // Account deleted server-side. Clear local state and redirect.
-      await logout();
+      try {
+        await logout();
+      } catch {
+        // Account is already gone — force redirect even if logout cleanup fails
+        window.location.href = '/';
+      }
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : 'Failed to delete account');
       setIsDeleting(false);
