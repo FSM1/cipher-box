@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "d8f296a43c3b",
+  "strategy": "manual-commit",
+  "branch": "feat/account-deletion-gdpr",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/auth/auth.controller.ts",
+    "apps/api/src/auth/auth.service.ts",
+    "apps/api/src/auth/dto/delete-account.dto.ts",
+    "apps/web/src/api/auth/auth.ts",
+    "apps/web/src/api/models/deleteAccountDto.ts",
+    "apps/web/src/api/models/deleteAccountResponseDto.ts",
+    "apps/web/src/api/models/index.ts",
+    "packages/api-client/openapi.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d8/f296a43c3b/0/metadata.json",
+      "transcript": "/d8/f296a43c3b/0/full.jsonl",
+      "context": "/d8/f296a43c3b/0/context.md",
+      "content_hash": "/d8/f296a43c3b/0/content_hash.txt",
+      "prompt": "/d8/f296a43c3b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 241012,
+    "cache_read_tokens": 2811569,
+    "output_tokens": 3833,
+    "api_call_count": 42
+  }
+}

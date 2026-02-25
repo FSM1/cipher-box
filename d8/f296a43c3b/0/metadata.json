@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "d8f296a43c3b",
+  "session_id": "3adffe43-0178-4425-8872-4c6954b48ae6",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-25T13:23:01.647269Z",
+  "branch": "feat/account-deletion-gdpr",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/api/models/index.ts",
+    "packages/api-client/openapi.json",
+    "apps/api/src/auth/auth.controller.ts",
+    "apps/api/src/auth/auth.service.ts",
+    "apps/api/src/auth/dto/delete-account.dto.ts",
+    "apps/web/src/api/auth/auth.ts",
+    "apps/web/src/api/models/deleteAccountDto.ts",
+    "apps/web/src/api/models/deleteAccountResponseDto.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "0bfd6525682c",
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 241012,
+    "cache_read_tokens": 2811569,
+    "output_tokens": 3833,
+    "api_call_count": 42
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-25T13:23:00.452131Z",
+    "agent_lines": 0,
+    "human_added": 228,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 228,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/3adffe43-0178-4425-8872-4c6954b48ae6.jsonl"
+}
