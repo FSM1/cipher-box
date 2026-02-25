@@ -147,6 +147,7 @@ export function SecurityTab() {
             <input
               type="text"
               className="security-tab-danger-input"
+              aria-label="Type DELETE to confirm account deletion"
               value={deleteInput}
               onChange={(e) => setDeleteInput(e.target.value)}
               placeholder="type DELETE to confirm"

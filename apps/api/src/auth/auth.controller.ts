@@ -171,6 +171,8 @@ export class AuthController {
 
   @Delete('account')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Permanently delete user account and all associated data' })
@@ -189,11 +191,12 @@ export class AuthController {
     if (dto.confirmation !== 'DELETE') {
       throw new BadRequestException('Confirmation must be the string "DELETE"');
     }
+    const result = await this.authService.deleteAccount(req.user.id);
     const isDesktop = (req as unknown as ExpressRequest).headers['x-client-type'] === 'desktop';
     if (!isDesktop) {
       res.clearCookie('refresh_token', { path: '/auth' });
     }
-    return this.authService.deleteAccount(req.user.id);
+    return result;
   }
 
   @Get('methods')

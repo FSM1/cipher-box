@@ -12,6 +12,8 @@ import { SiweService } from './services/siwe.service';
 import { User } from './entities/user.entity';
 import { AuthMethod } from './entities/auth-method.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
+import { PinnedCid } from '../vault/entities/pinned-cid.entity';
+import { IPFS_PROVIDER } from '../ipfs/providers/ipfs-provider.interface';
 
 // Mock ioredis to prevent real Redis connections in tests
 const mockRedisInstance = {
@@ -71,6 +73,15 @@ describe('AuthService', () => {
       update: jest.fn(),
     };
 
+    const mockPinnedCidRepo = {
+      find: jest.fn(),
+      delete: jest.fn(),
+    };
+
+    const mockIpfsProvider = {
+      unpin: jest.fn().mockResolvedValue(undefined),
+    };
+
     const mockTokenService = {
       createTokens: jest.fn(),
       rotateRefreshToken: jest.fn(),
@@ -112,6 +123,8 @@ describe('AuthService', () => {
         { provide: getRepositoryToken(User), useValue: mockUserRepo },
         { provide: getRepositoryToken(AuthMethod), useValue: mockAuthMethodRepo },
         { provide: getRepositoryToken(RefreshToken), useValue: mockRefreshTokenRepo },
+        { provide: getRepositoryToken(PinnedCid), useValue: mockPinnedCidRepo },
+        { provide: IPFS_PROVIDER, useValue: mockIpfsProvider },
       ],
     }).compile();
 
