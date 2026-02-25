@@ -528,8 +528,9 @@ test.describe.serial('Full Workflow', () => {
   // key unwrapping). This path is NOT exercised by in-session tests.
 
   test('3.7 Page reload preserves session and reloads root folder', async () => {
-    // Reload + re-auth + IPNS sync chain can take >30s in CI
-    test.setTimeout(90000);
+    // On staging, IPNS resolution after a page reload can take >60s due to
+    // cache propagation delays. Allow generous timeout with a retry cycle.
+    test.setTimeout(240000);
 
     // Navigate to root before reload so we start from a clean state
     await navigateToRoot();
@@ -552,9 +553,10 @@ test.describe.serial('Full Workflow', () => {
       timeout: 30000,
     });
 
-    // Wait for initial sync to complete — all root items must appear
-    // This proves IPNS root metadata was re-fetched and decrypted
-    await fileList.waitForItemToAppear(workspaceFolder, { timeout: 60000 });
+    // Wait for initial sync to complete — all root items must appear.
+    // This proves IPNS root metadata was re-fetched and decrypted.
+    // Use 120s timeout — staging IPNS resolution can exceed 60s.
+    await fileList.waitForItemToAppear(workspaceFolder, { timeout: 120000 });
 
     // Wait for files to appear too (sync may render folders before files)
     await fileList.waitForItemToAppear(rootFiles[0].name, { timeout: 30000 });
