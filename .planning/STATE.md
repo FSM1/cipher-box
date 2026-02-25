@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 Phase: 15.1 (Client-Side Search)
 Plan: 3 of 3
 Status: Phase complete
-Last activity: 2026-02-25 -- Completed quick task 020: Fix shared items rendering
+Last activity: 2026-02-25 -- Completed quick task 021: Account deletion (GDPR)
 
 Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE)
 
@@ -264,6 +264,7 @@ Recent decisions affecting current work:
 | 018 | E2E versioning tests                      | 2026-02-19 | 3fd131e | [018-e2e-versioning-tests](./quick/018-e2e-versioning-tests/)                                               |
 | 019 | Metadata schema evolution protocol        | 2026-02-21 | dcb49e1 | [019-metadata-schema-evolution-protocol](./quick/019-metadata-schema-evolution-protocol/)                   |
 | 020 | Fix shared items rendering                | 2026-02-25 | 96b7591 | [020-fix-shared-items-rendering](./quick/020-fix-shared-items-rendering/)                                   |
+| 021 | Account deletion (GDPR)                   | 2026-02-25 | f55e89f | [021-account-deletion-gdpr](./quick/021-account-deletion-gdpr/)                                             |
 
 ### Research Flags
 
@@ -284,12 +285,12 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-24
-Stopped at: Completed 15.1-03-PLAN.md (E2E search tests - gap closure) -- Phase 15.1 fully verified
+Last session: 2026-02-25
+Stopped at: Completed quick task 021 (Account deletion GDPR)
 Resume file: None
-Next: Phase 15.1 complete with all verification gaps closed. Next phase TBD.
+Next: Quick task 021 complete. Next phase TBD.
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-24 after Phase 15.1 Plan 03 complete (E2E search tests gap closure)_
+_Last updated: 2026-02-25 after quick task 021 complete (Account deletion GDPR)_
