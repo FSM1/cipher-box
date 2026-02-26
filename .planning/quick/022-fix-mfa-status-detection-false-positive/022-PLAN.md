@@ -109,3 +109,31 @@ Do NOT modify any other logic. The rest of the hook, store integration, and down
 <output>
 After completion, create `.planning/quick/022-fix-mfa-status-detection-false-positive/022-SUMMARY.md`
 </output>
+
+<documentation>
+The hashedShare is a cloud custodial key — it's Web3Auth's "training wheels" factor that exists on every fresh account. It makes the initial 2/2 setup seamless (user logs in with JWT, the hashedShare is automatically retrieved from Web3Auth's network, both shares combine to sign).
+
+What enableMFA() does
+
+When enableMFA() is called, it:
+
+1. Deletes the hashedShare (removes the cloud custodial key)
+2. Creates a device factor (stored locally)
+3. Creates a backup/recovery factor (returned as the mnemonic)
+
+So the account goes from semi-custodial (Web3Auth can reconstruct your key via the hashedShare) to fully non-custodial (only your devices + recovery phrase can reconstruct it).
+
+Your staging account state
+
+- totalFactors: 2 — the JWT verifier share + the hashedShare
+- This is the default pre-MFA state for every account
+- enableMFA() was never called, so the hashedShare was never deleted
+
+So yes — totalFactors > 2 should work and is much simpler than parsing shareDescriptions. The baseline is always 2 (JWT + hashedShare), and enableMFA() deletes one and adds two, pushing it to 3+.
+
+Sources:
+
+- <https://web3auth.io/docs/sdk/mpc-core-kit/mpc-core-kit-js>
+- <https://github.com/Web3Auth/mpc-core-kit-examples/blob/main/mpc-core-kit-web/quick-starts/mpc-core-kit-nextjs-quick-start/app/page.tsx>
+- <https://web3auth.io/docs/infrastructure/mpc-architecture>
+  </documentation>
