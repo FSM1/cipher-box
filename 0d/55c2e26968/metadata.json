@@ -3,7 +3,7 @@
   "checkpoint_id": "0d55c2e26968",
   "strategy": "manual-commit",
   "branch": "fix/mfa-auth-flow-broken",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     ".planning/debug/resolved/mfa-auth-flow-broken.md",
     "apps/web/src/components/mfa/DeviceWaitingScreen.tsx",
@@ -18,13 +18,20 @@
       "context": "/0d/55c2e26968/0/context.md",
       "content_hash": "/0d/55c2e26968/0/content_hash.txt",
       "prompt": "/0d/55c2e26968/0/prompt.txt"
+    },
+    {
+      "metadata": "/0d/55c2e26968/1/metadata.json",
+      "transcript": "/0d/55c2e26968/1/full.jsonl",
+      "context": "/0d/55c2e26968/1/context.md",
+      "content_hash": "/0d/55c2e26968/1/content_hash.txt",
+      "prompt": "/0d/55c2e26968/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 3,
-    "cache_creation_tokens": 12816,
-    "cache_read_tokens": 70855,
-    "output_tokens": 153,
-    "api_call_count": 2
+    "input_tokens": 121,
+    "cache_creation_tokens": 366910,
+    "cache_read_tokens": 6691333,
+    "output_tokens": 8459,
+    "api_call_count": 98
   }
 }
