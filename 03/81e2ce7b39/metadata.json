@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "0381e2ce7b39",
+  "strategy": "manual-commit",
+  "branch": "fix/mfa-status-false-positive",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/AUTHENTICATION_ARCHITECTURE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/03/81e2ce7b39/0/metadata.json",
+      "transcript": "/03/81e2ce7b39/0/full.jsonl",
+      "context": "/03/81e2ce7b39/0/context.md",
+      "content_hash": "/03/81e2ce7b39/0/content_hash.txt",
+      "prompt": "/03/81e2ce7b39/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 118,
+    "cache_creation_tokens": 354094,
+    "cache_read_tokens": 6620478,
+    "output_tokens": 8306,
+    "api_call_count": 96
+  }
+}
