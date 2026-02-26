@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.3](https://github.com/FSM1/cipher-box/compare/v0.19.2...v0.19.3) (2026-02-26)
+
+
+### Bug Fixes
+
+* **web:** MFA auth flow + Security tab display bugs ([#210](https://github.com/FSM1/cipher-box/issues/210)) ([9fd64d1](https://github.com/FSM1/cipher-box/commit/9fd64d14ef183699f59e21f32dfe3a8fef37dfbf))
+
 ## [0.19.2](https://github.com/FSM1/cipher-box/compare/v0.19.1...v0.19.2) (2026-02-26)
 
 
