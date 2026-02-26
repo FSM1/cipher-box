@@ -51,9 +51,9 @@ export class IdentityController implements OnModuleDestroy {
     private authMethodRepository: Repository<AuthMethod>
   ) {
     this.redis = new Redis({
-      host: configService.get('REDIS_HOST', 'localhost'),
-      port: configService.get<number>('REDIS_PORT', 6379),
-      password: configService.get('REDIS_PASSWORD', undefined),
+      host: this.configService.get('REDIS_HOST', 'localhost'),
+      port: this.configService.get<number>('REDIS_PORT', 6379),
+      password: this.configService.get('REDIS_PASSWORD', undefined),
       lazyConnect: true,
     });
   }
@@ -253,29 +253,11 @@ export class IdentityController implements OnModuleDestroy {
       throw new UnauthorizedException('Invalid or expired nonce');
     }
 
-    // 3. Build allowed domains from CORS origins (host:port without scheme)
-    const rawOrigins = this.configService.get<string>('CORS_ALLOWED_ORIGINS');
-    const allowedDomains = rawOrigins
-      ? rawOrigins
-          .split(',')
-          .map((o) => o.trim())
-          .filter((o) => !o.includes('*'))
-          .map((o) => {
-            try {
-              const url = new URL(o);
-              return url.host;
-            } catch {
-              return o;
-            }
-          })
-      : ['localhost:5173', 'localhost:4173', 'localhost'];
-
-    // 4. Verify SIWE message + signature
+    // 3. Verify SIWE message + signature
     const walletAddress = await this.siweService.verifySiweMessage(
       dto.message,
       dto.signature as `0x${string}`,
-      parsed.nonce,
-      allowedDomains
+      parsed.nonce
     );
 
     // 5. Link intent: just verify ownership and issue JWT (no user creation)

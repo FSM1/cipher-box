@@ -1,4 +1,5 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { createHash, randomBytes } from 'crypto';
 import { getAddress } from 'viem';
 import { parseSiweMessage, validateSiweMessage } from 'viem/siwe';
@@ -6,6 +7,26 @@ import { verifyMessage } from 'viem';
 
 @Injectable()
 export class SiweService {
+  private readonly allowedDomains: string[];
+
+  constructor(private readonly configService: ConfigService) {
+    const rawOrigins = this.configService.get<string>('CORS_ALLOWED_ORIGINS');
+    this.allowedDomains = rawOrigins
+      ? rawOrigins
+          .split(',')
+          .map((o) => o.trim())
+          .filter((o) => !o.includes('*'))
+          .map((o) => {
+            try {
+              const url = new URL(o);
+              return url.host;
+            } catch {
+              return o;
+            }
+          })
+      : ['localhost:5173', 'localhost:4173', 'localhost'];
+  }
+
   /**
    * Generate a cryptographically random nonce for SIWE.
    * Returns 32 hex characters (16 random bytes).
@@ -17,6 +38,7 @@ export class SiweService {
 
   /**
    * Verify a SIWE message and signature (EOA only, no RPC needed).
+   * Validates the domain against CORS_ALLOWED_ORIGINS.
    * Returns the verified wallet address (EIP-55 checksummed).
    *
    * @throws UnauthorizedException if message is invalid or signature doesn't match
@@ -24,8 +46,7 @@ export class SiweService {
   async verifySiweMessage(
     message: string,
     signature: `0x${string}`,
-    expectedNonce: string,
-    allowedDomains: string[]
+    expectedNonce: string
   ): Promise<string> {
     // 1. Parse the SIWE message
     const parsed = parseSiweMessage(message);
@@ -34,8 +55,8 @@ export class SiweService {
     }
 
     // 2. Validate message fields (domain, nonce, expiry, etc.)
-    // Accept any domain from the allowed list (CORS origins)
-    const isValid = allowedDomains.some((domain) =>
+    // Accept any domain from the allowed list (derived from CORS origins)
+    const isValid = this.allowedDomains.some((domain) =>
       validateSiweMessage({
         message: parsed,
         domain,

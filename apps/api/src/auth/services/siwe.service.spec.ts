@@ -1,4 +1,5 @@
 import { UnauthorizedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { SiweService } from './siwe.service';
 
 // Mock viem modules
@@ -26,11 +27,21 @@ const mockParseSiweMessage = parseSiweMessage as jest.Mock;
 const mockValidateSiweMessage = validateSiweMessage as jest.Mock;
 const mockVerifyMessage = verifyMessage as jest.Mock;
 
+function createService(corsOrigins?: string): SiweService {
+  const mockConfigService = {
+    get: jest.fn((key: string) => {
+      if (key === 'CORS_ALLOWED_ORIGINS') return corsOrigins;
+      return undefined;
+    }),
+  } as unknown as ConfigService;
+  return new SiweService(mockConfigService);
+}
+
 describe('SiweService', () => {
   let service: SiweService;
 
   beforeEach(() => {
-    service = new SiweService();
+    service = createService('http://example.com,http://localhost:5173');
     jest.clearAllMocks();
   });
 
@@ -134,7 +145,6 @@ describe('SiweService', () => {
     const testMessage = 'example.com wants you to sign in with your Ethereum account...';
     const testSignature = '0xabc123' as `0x${string}`;
     const testNonce = 'abc123def456abc123def456abc123de';
-    const testDomains = ['example.com'];
     const testAddress = '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045';
 
     it('should return checksummed address on valid verification', async () => {
@@ -143,20 +153,10 @@ describe('SiweService', () => {
       mockVerifyMessage.mockResolvedValue(true);
       mockGetAddress.mockReturnValue(testAddress);
 
-      const result = await service.verifySiweMessage(
-        testMessage,
-        testSignature,
-        testNonce,
-        testDomains
-      );
+      const result = await service.verifySiweMessage(testMessage, testSignature, testNonce);
 
       expect(result).toBe(testAddress);
       expect(mockParseSiweMessage).toHaveBeenCalledWith(testMessage);
-      expect(mockValidateSiweMessage).toHaveBeenCalledWith({
-        message: { address: testAddress, nonce: testNonce },
-        domain: 'example.com',
-        nonce: testNonce,
-      });
       expect(mockVerifyMessage).toHaveBeenCalledWith({
         address: testAddress,
         message: testMessage,
@@ -164,17 +164,14 @@ describe('SiweService', () => {
       });
     });
 
-    it('should accept any domain from the allowed list', async () => {
+    it('should accept any domain from CORS origins', async () => {
       mockParseSiweMessage.mockReturnValue({ address: testAddress, nonce: testNonce });
-      // First domain fails, second succeeds
+      // First domain (example.com) fails, second (localhost:5173) succeeds
       mockValidateSiweMessage.mockReturnValueOnce(false).mockReturnValueOnce(true);
       mockVerifyMessage.mockResolvedValue(true);
       mockGetAddress.mockReturnValue(testAddress);
 
-      const result = await service.verifySiweMessage(testMessage, testSignature, testNonce, [
-        'other.com',
-        'example.com',
-      ]);
+      const result = await service.verifySiweMessage(testMessage, testSignature, testNonce);
 
       expect(result).toBe(testAddress);
       expect(mockValidateSiweMessage).toHaveBeenCalledTimes(2);
@@ -184,17 +181,18 @@ describe('SiweService', () => {
       mockParseSiweMessage.mockReturnValue({ nonce: testNonce });
 
       await expect(
-        service.verifySiweMessage(testMessage, testSignature, testNonce, testDomains)
+        service.verifySiweMessage(testMessage, testSignature, testNonce)
       ).rejects.toThrow(UnauthorizedException);
     });
 
     it('should throw UnauthorizedException if no domain matches', async () => {
+      const svc = createService('http://wrong.com,http://other.com');
       mockParseSiweMessage.mockReturnValue({ address: testAddress, nonce: testNonce });
       mockValidateSiweMessage.mockReturnValue(false);
 
-      await expect(
-        service.verifySiweMessage(testMessage, testSignature, testNonce, ['wrong.com', 'other.com'])
-      ).rejects.toThrow(UnauthorizedException);
+      await expect(svc.verifySiweMessage(testMessage, testSignature, testNonce)).rejects.toThrow(
+        UnauthorizedException
+      );
     });
 
     it('should throw UnauthorizedException if signature is invalid', async () => {
@@ -203,8 +201,40 @@ describe('SiweService', () => {
       mockVerifyMessage.mockResolvedValue(false);
 
       await expect(
-        service.verifySiweMessage(testMessage, testSignature, testNonce, testDomains)
+        service.verifySiweMessage(testMessage, testSignature, testNonce)
       ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('should use default domains when CORS_ALLOWED_ORIGINS is not set', async () => {
+      const svc = createService(undefined);
+      mockParseSiweMessage.mockReturnValue({ address: testAddress, nonce: testNonce });
+      mockValidateSiweMessage.mockReturnValue(true);
+      mockVerifyMessage.mockResolvedValue(true);
+      mockGetAddress.mockReturnValue(testAddress);
+
+      const result = await svc.verifySiweMessage(testMessage, testSignature, testNonce);
+
+      expect(result).toBe(testAddress);
+      // Should try localhost defaults
+      expect(mockValidateSiweMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ domain: 'localhost:5173' })
+      );
+    });
+
+    it('should skip wildcard CORS origins', async () => {
+      const svc = createService('https://app.example.com,https://pr-*.example.com');
+      mockParseSiweMessage.mockReturnValue({ address: testAddress, nonce: testNonce });
+      mockValidateSiweMessage.mockReturnValue(true);
+      mockVerifyMessage.mockResolvedValue(true);
+      mockGetAddress.mockReturnValue(testAddress);
+
+      await svc.verifySiweMessage(testMessage, testSignature, testNonce);
+
+      // Only the non-wildcard origin should be tried
+      expect(mockValidateSiweMessage).toHaveBeenCalledTimes(1);
+      expect(mockValidateSiweMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ domain: 'app.example.com' })
+      );
     });
   });
 });
