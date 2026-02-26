@@ -51,9 +51,9 @@ export class IdentityController implements OnModuleDestroy {
     private authMethodRepository: Repository<AuthMethod>
   ) {
     this.redis = new Redis({
-      host: configService.get('REDIS_HOST', 'localhost'),
-      port: configService.get<number>('REDIS_PORT', 6379),
-      password: configService.get('REDIS_PASSWORD', undefined),
+      host: this.configService.get('REDIS_HOST', 'localhost'),
+      port: this.configService.get<number>('REDIS_PORT', 6379),
+      password: this.configService.get('REDIS_PASSWORD', undefined),
       lazyConnect: true,
     });
   }
@@ -253,15 +253,11 @@ export class IdentityController implements OnModuleDestroy {
       throw new UnauthorizedException('Invalid or expired nonce');
     }
 
-    // 3. Determine domain for validation
-    const domain = this.configService.get<string>('SIWE_DOMAIN', 'localhost');
-
-    // 4. Verify SIWE message + signature
+    // 3. Verify SIWE message + signature
     const walletAddress = await this.siweService.verifySiweMessage(
       dto.message,
       dto.signature as `0x${string}`,
-      parsed.nonce,
-      domain
+      parsed.nonce
     );
 
     // 5. Link intent: just verify ownership and issue JWT (no user creation)

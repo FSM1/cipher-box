@@ -27,8 +27,7 @@ async function bootstrap() {
   app.use(cookieParser());
 
   // CORS_ALLOWED_ORIGINS supports wildcards (e.g. https://cipher-box-pr-*.onrender.com)
-  // Falls back to WEB_APP_URL for backwards compatibility
-  const rawOrigins = process.env.CORS_ALLOWED_ORIGINS || process.env.WEB_APP_URL;
+  const rawOrigins = process.env.CORS_ALLOWED_ORIGINS;
   const originEntries = rawOrigins
     ? rawOrigins.split(',').map((s) => s.trim())
     : ['http://localhost:5173', 'http://localhost:4173'];

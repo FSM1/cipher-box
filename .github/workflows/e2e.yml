@@ -124,7 +124,7 @@ jobs:
           echo "DB_PASSWORD=postgres" >> apps/api/.env
           echo "DB_DATABASE=cipherbox_test" >> apps/api/.env
           echo "JWT_SECRET=e2e-test-jwt-secret-key-for-ci" >> apps/api/.env
-          echo "WEB_APP_URL=http://localhost:5173" >> apps/api/.env
+          echo "CORS_ALLOWED_ORIGINS=http://localhost:5173" >> apps/api/.env
           echo "IPFS_PROVIDER=local" >> apps/api/.env
           echo "IPFS_LOCAL_API_URL=http://localhost:5001" >> apps/api/.env
           echo "IPFS_LOCAL_GATEWAY_URL=http://localhost:8080" >> apps/api/.env
@@ -151,7 +151,7 @@ jobs:
           IPFS_LOCAL_GATEWAY_URL: http://localhost:8080
           # API configuration
           JWT_SECRET: e2e-test-jwt-secret-key-for-ci
-          WEB_APP_URL: http://localhost:5173
+          CORS_ALLOWED_ORIGINS: http://localhost:5173
           # IPNS delegated routing (mock service for E2E tests)
           DELEGATED_ROUTING_URL: http://localhost:3001
           # Redis for BullMQ job scheduling
