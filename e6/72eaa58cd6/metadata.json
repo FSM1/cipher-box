@@ -3,7 +3,7 @@
   "checkpoint_id": "e672eaa58cd6",
   "strategy": "manual-commit",
   "branch": "fix/mfa-status-false-positive",
-  "checkpoints_count": 1,
+  "checkpoints_count": 3,
   "files_touched": [
     ".planning/STATE.md",
     ".planning/todos/pending/2026-02-26-alternative-mfa-factor-types.md"
@@ -15,13 +15,20 @@
       "context": "/e6/72eaa58cd6/0/context.md",
       "content_hash": "/e6/72eaa58cd6/0/content_hash.txt",
       "prompt": "/e6/72eaa58cd6/0/prompt.txt"
+    },
+    {
+      "metadata": "/e6/72eaa58cd6/1/metadata.json",
+      "transcript": "/e6/72eaa58cd6/1/full.jsonl",
+      "context": "/e6/72eaa58cd6/1/context.md",
+      "content_hash": "/e6/72eaa58cd6/1/content_hash.txt",
+      "prompt": "/e6/72eaa58cd6/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 118,
-    "cache_creation_tokens": 354094,
-    "cache_read_tokens": 6620478,
-    "output_tokens": 8306,
-    "api_call_count": 96
+    "input_tokens": 3534,
+    "cache_creation_tokens": 473222,
+    "cache_read_tokens": 10967713,
+    "output_tokens": 12555,
+    "api_call_count": 142
   }
 }
