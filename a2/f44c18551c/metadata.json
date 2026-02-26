@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "a2f44c18551c",
+  "strategy": "manual-commit",
+  "branch": "fix/siwe-domain-cors-origins",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/auth/controllers/identity.controller.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a2/f44c18551c/0/metadata.json",
+      "transcript": "/a2/f44c18551c/0/full.jsonl",
+      "context": "/a2/f44c18551c/0/context.md",
+      "content_hash": "/a2/f44c18551c/0/content_hash.txt",
+      "prompt": "/a2/f44c18551c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 162,
+    "cache_creation_tokens": 74512,
+    "cache_read_tokens": 9585245,
+    "output_tokens": 12863,
+    "api_call_count": 131
+  }
+}
