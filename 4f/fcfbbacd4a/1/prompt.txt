@@ -1,0 +1,106 @@
+Implement the following plan:
+
+# Fix MFA Security Tab: Factor Detection, Device Metadata, Recovery Status
+
+## Context
+
+After signing in with a recovery phrase, the Security tab shows three bugs:
+1. Device shows "Unknown device" / "last active: unknown" - the factor created during recovery has no metadata
+2. Recovery phrase shows "no recovery phrase" - even though it was just used to sign in
+3. Factor count (4) is accurate but inconsistent with visible UI (1 device, no recovery shown)
+
+**Root causes** (all traced to Web3Auth SDK internals):
+
+- `enableMFA({})` creates both device and recovery factors with `shareDescription` defaulting to `FactorKeyTypeShareDescription.Other` ("Other"), because the SDK's `createFactor()` defaults to "Other" when no `shareDescription` is provided. Our code only recognizes "deviceShare" and "seedPhrase" types.
+- Each factor's stored JSON includes `tssShareIndex` (2=DEVICE, 3=RECOVERY) which can be used to infer the correct type.
+- Web3Auth's `addFactorDescription` *spreads* `additionalMetadata` at the top level of the JSON, but our `getFactors()` parser looks for a nested `parsed.additionalMetadata` object that doesn't exist.
+- `recoverWithMnemonic()` creates a device factor without any `additionalMetadata` (no `deviceId`, no `browserName`).
+
+## Changes
+
+### 1. Fix `getFactors()` parsing — `apps/web/src/hooks/useMfa.ts` (lines 169-202)
+
+- Parse `tssShareIndex` from the flat JSON object
+- Normalize type: when `module` is `"Other"`, use `tssShareIndex` to map to correct type:
+  - `tssShareIndex === 2` → `FactorKeyTypeShareDescription.DeviceShare`
+  - `tssShareIndex === 3` → `FactorKeyTypeShareDescription.SeedPhrase`
+- Extract metadata fields from the flat JSON structure (not from a nested `additionalMetadata` key)
+- Exclude known system fields (`module`, `dateAdded`, `tssShareIndex`) from the extracted metadata
+
+This single change fixes:
+- Recovery phrase detection (RecoveryPhraseSection checks `type === 'seedPhrase'`)
+- Device list showing enableMFA-created devices (AuthorizedDevices filters on `type === 'deviceShare'`)
+- Device names for enableMFA devices (they have `browserName` in top-level metadata set by bowser)
+
+### 2. Add device metadata to recovery flow — `apps/web/src/hooks/useMfa.ts` (line 152-158)
+
+In `recoverWithMnemonic()`, add `additionalMetadata` to the `createFactor` call:
+```typescript
+import { getOrCreateDeviceIdentity } from '../lib/device/identity';
+import { detectDeviceInfo } from '../lib/device/info';
+
+// Inside recoverWithMnemonic:
+const deviceKeypair = await getOrCreateDeviceIdentity();
+const deviceInfo = detectDeviceInfo();
+
+await coreKit.createFactor({
+  shareType: TssShareType.DEVICE,
+  factorKey: newDeviceFactor.private,
+  shareDescription: FactorKeyTypeShareDescription.DeviceShare,
+  additionalMetadata: {
+    deviceId: deviceKeypair.deviceId,
+    browserName: deviceInfo.name,
+  },
+});
+```
+
+This makes the recovery-created device matchable to the device registry for name/lastActive display.
+
+### 3. Fix `enableMfa()` for future enrollments — `apps/web/src/hooks/useMfa.ts` (line 84)
+
+Pass `shareDescription` in enableMFA params so the recovery factor gets tagged correctly:
+```typescript
+const backupFactorKeyHex = await coreKit.enableMFA({
+  shareDescription: FactorKeyTypeShareDescription.SeedPhrase,
+});
+```
+
+The SDK spreads `enableMFAParams` into the recovery factor's `createFactor` call, so this gives future recovery factors the correct "seedPhrase" module. (Existing accounts are handled by fix #1's tssShareIndex normalization.)
+
+## Files Modified
+
+| File | Change |
+|------|--------|
+| `apps/web/src/hooks/useMfa.ts` | Fix `getFactors()` parsing, add metadata to `recoverWithMnemonic`, fix `enableMfa` params |
+
+No changes needed to `AuthorizedDevices.tsx`, `RecoveryPhraseSection.tsx`, or `SecurityTab.tsx` — the type normalization in `getFactors()` makes downstream consumers work correctly.
+
+## Verification
+
+1. Run `pnpm --filter @cipherbox/web dev` pointed at staging API
+2. Sign in with recovery phrase
+3. Navigate to Settings > Security tab
+4. Verify:
+   - Recovery phrase shows "recovery phrase active" (not "no recovery phrase")
+   - Device list shows current device with browser name (not "Unknown device")
+   - If stale device exists, it appears in the list with its browser name and can be revoked
+   - Factor count is consistent with visible factors
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.REDACTED.jsonl
+
+---
+
+please update @.planning/debug/resolved/mfa-auth-flow-broken.md with these new findings and fixes.
+
+---
+
+ok now things are looking better, but the last active is still listed as unknown.
+
+---
+
+have you updated the debug logging?
+
+---
+
+ok great its working a whole lot better now. please push these changes up and prepare the pr
