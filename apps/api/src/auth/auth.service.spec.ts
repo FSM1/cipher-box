@@ -78,7 +78,6 @@ describe('AuthService', () => {
 
     const mockPinnedCidRepo = {
       find: jest.fn(),
-      delete: jest.fn(),
     };
 
     const mockIpfsProvider = {

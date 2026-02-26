@@ -47,10 +47,11 @@ export function SecurityTab() {
         await logout();
       } catch {
         // Account is already gone — force redirect even if logout cleanup fails
-        window.location.href = '/';
+        window.location.href = '/login';
       }
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : 'Failed to delete account');
+    } finally {
       setIsDeleting(false);
     }
   }, [deleteInput, logout]);
