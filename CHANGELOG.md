@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.2](https://github.com/FSM1/cipher-box/compare/v0.19.1...v0.19.2) (2026-02-26)
+
+
+### Bug Fixes
+
+* **api:** derive SIWE allowed domains from CORS origins ([#207](https://github.com/FSM1/cipher-box/issues/207)) ([4723063](https://github.com/FSM1/cipher-box/commit/4723063ecbfc15b66b031f4e1dd72b6e1fabcf00))
+
 ## [0.19.1](https://github.com/FSM1/cipher-box/compare/v0.19.0...v0.19.1) (2026-02-26)
 
 
