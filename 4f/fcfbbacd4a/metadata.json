@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "4ffcfbbacd4a",
+  "strategy": "manual-commit",
+  "branch": "fix/mfa-auth-flow-broken",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/debug/resolved/mfa-auth-flow-broken.md",
+    "apps/web/src/components/mfa/AuthorizedDevices.tsx",
+    "apps/web/src/hooks/useMfa.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4f/fcfbbacd4a/0/metadata.json",
+      "transcript": "/4f/fcfbbacd4a/0/full.jsonl",
+      "context": "/4f/fcfbbacd4a/0/context.md",
+      "content_hash": "/4f/fcfbbacd4a/0/content_hash.txt",
+      "prompt": "/4f/fcfbbacd4a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 63553,
+    "cache_read_tokens": 2579051,
+    "output_tokens": 8916,
+    "api_call_count": 30
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "4ffcfbbacd4a",
+  "session_id": "2bc7716b-f6a4-41f5-a947-17594a4dee28",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T22:56:38.792416Z",
+  "branch": "fix/mfa-auth-flow-broken",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/hooks/useMfa.ts",
+    ".planning/debug/resolved/mfa-auth-flow-broken.md",
+    "apps/web/src/components/mfa/AuthorizedDevices.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "66e182854c72",
+  "transcript_identifier_at_start": "29605c54-13d2-4687-ab75-2b76993938ce",
+  "checkpoint_transcript_start": 110,
+  "transcript_lines_at_start": 110,
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 63553,
+    "cache_read_tokens": 2579051,
+    "output_tokens": 8916,
+    "api_call_count": 30
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T22:56:33.606158Z",
+    "agent_lines": 269,
+    "human_added": 114,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 384,
+    "agent_percentage": 70.05208333333334
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/2bc7716b-f6a4-41f5-a947-17594a4dee28.jsonl"
+}
