@@ -12,6 +12,8 @@ import { SiweService } from './services/siwe.service';
 import { User } from './entities/user.entity';
 import { AuthMethod } from './entities/auth-method.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
+import { PinnedCid } from '../vault/entities/pinned-cid.entity';
+import { IPFS_PROVIDER } from '../ipfs/providers/ipfs-provider.interface';
 
 // Mock ioredis to prevent real Redis connections in tests
 const mockRedisInstance = {
@@ -37,11 +39,14 @@ describe('AuthService', () => {
   let userRepository: Record<string, jest.Mock>;
   let authMethodRepository: Record<string, jest.Mock>;
   let refreshTokenRepository: Record<string, jest.Mock>;
+  let pinnedCidRepository: Record<string, jest.Mock>;
+  let ipfsProvider: Record<string, jest.Mock>;
 
   beforeEach(async () => {
     const mockUserRepo = {
       findOne: jest.fn(),
       save: jest.fn(),
+      delete: jest.fn(),
     };
 
     const mockAuthMethodRepo = {
@@ -69,6 +74,14 @@ describe('AuthService', () => {
       find: jest.fn(),
       save: jest.fn(),
       update: jest.fn(),
+    };
+
+    const mockPinnedCidRepo = {
+      find: jest.fn(),
+    };
+
+    const mockIpfsProvider = {
+      unpinFile: jest.fn().mockResolvedValue(undefined),
     };
 
     const mockTokenService = {
@@ -112,6 +125,8 @@ describe('AuthService', () => {
         { provide: getRepositoryToken(User), useValue: mockUserRepo },
         { provide: getRepositoryToken(AuthMethod), useValue: mockAuthMethodRepo },
         { provide: getRepositoryToken(RefreshToken), useValue: mockRefreshTokenRepo },
+        { provide: getRepositoryToken(PinnedCid), useValue: mockPinnedCidRepo },
+        { provide: IPFS_PROVIDER, useValue: mockIpfsProvider },
       ],
     }).compile();
 
@@ -123,6 +138,8 @@ describe('AuthService', () => {
     userRepository = module.get(getRepositoryToken(User));
     authMethodRepository = module.get(getRepositoryToken(AuthMethod));
     refreshTokenRepository = module.get(getRepositoryToken(RefreshToken));
+    pinnedCidRepository = module.get(getRepositoryToken(PinnedCid));
+    ipfsProvider = module.get(IPFS_PROVIDER);
   });
 
   afterEach(() => {
@@ -1137,6 +1154,62 @@ describe('AuthService', () => {
       await expect(service.unlinkMethod('user-id', 'method-id')).rejects.toThrow(
         'Cannot unlink your last auth method'
       );
+    });
+  });
+
+  describe('deleteAccount', () => {
+    const userId = 'user-to-delete';
+
+    it('should unpin all CIDs and delete user', async () => {
+      pinnedCidRepository.find.mockResolvedValue([{ cid: 'QmCid1' }, { cid: 'QmCid2' }]);
+      userRepository.delete.mockResolvedValue({ affected: 1 });
+
+      const result = await service.deleteAccount(userId);
+
+      expect(pinnedCidRepository.find).toHaveBeenCalledWith({
+        where: { userId },
+        select: ['cid'],
+      });
+      expect(ipfsProvider.unpinFile).toHaveBeenCalledTimes(2);
+      expect(ipfsProvider.unpinFile).toHaveBeenCalledWith('QmCid1');
+      expect(ipfsProvider.unpinFile).toHaveBeenCalledWith('QmCid2');
+      expect(userRepository.delete).toHaveBeenCalledWith(userId);
+      expect(result).toEqual({ success: true });
+    });
+
+    it('should skip unpinning when no pinned CIDs exist', async () => {
+      pinnedCidRepository.find.mockResolvedValue([]);
+      userRepository.delete.mockResolvedValue({ affected: 1 });
+
+      const result = await service.deleteAccount(userId);
+
+      expect(ipfsProvider.unpinFile).not.toHaveBeenCalled();
+      expect(userRepository.delete).toHaveBeenCalledWith(userId);
+      expect(result).toEqual({ success: true });
+    });
+
+    it('should still delete user when some unpins fail', async () => {
+      pinnedCidRepository.find.mockResolvedValue([{ cid: 'QmGood' }, { cid: 'QmBad' }]);
+      ipfsProvider.unpinFile
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('unpin failed'));
+      userRepository.delete.mockResolvedValue({ affected: 1 });
+
+      const result = await service.deleteAccount(userId);
+
+      expect(ipfsProvider.unpinFile).toHaveBeenCalledTimes(2);
+      expect(ipfsProvider.unpinFile).toHaveBeenCalledWith('QmGood');
+      expect(ipfsProvider.unpinFile).toHaveBeenCalledWith('QmBad');
+      expect(userRepository.delete).toHaveBeenCalledWith(userId);
+      expect(result).toEqual({ success: true });
+    });
+
+    it('should throw BadRequestException when user not found', async () => {
+      pinnedCidRepository.find.mockResolvedValue([]);
+      userRepository.delete.mockResolvedValue({ affected: 0 });
+
+      await expect(service.deleteAccount(userId)).rejects.toThrow(BadRequestException);
+      await expect(service.deleteAccount(userId)).rejects.toThrow('Account not found');
     });
   });
 

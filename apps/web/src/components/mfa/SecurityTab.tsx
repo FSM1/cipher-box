@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useMfa } from '../../hooks/useMfa';
+import { useAuth } from '../../hooks/useAuth';
+import { authApi } from '../../lib/api/auth';
 import { MfaEnrollmentWizard } from './MfaEnrollmentWizard';
 import { AuthorizedDevices } from './AuthorizedDevices';
 import { RecoveryPhraseSection } from './RecoveryPhraseSection';
@@ -13,7 +15,12 @@ import { RecoveryPhraseSection } from './RecoveryPhraseSection';
  */
 export function SecurityTab() {
   const { checkMfaStatus, isMfaEnabled, factorCount, threshold } = useMfa();
+  const { logout } = useAuth();
   const [showWizard, setShowWizard] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteInput, setDeleteInput] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Check MFA status on mount
   useEffect(() => {
@@ -27,6 +34,32 @@ export function SecurityTab() {
 
   const handleEnrollmentCancel = useCallback(() => {
     setShowWizard(false);
+  }, []);
+
+  const handleDeleteAccount = useCallback(async () => {
+    if (deleteInput !== 'DELETE') return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await authApi.deleteAccount();
+      // Account deleted server-side. Clear local state and redirect.
+      try {
+        await logout();
+      } catch {
+        // Account is already gone — force redirect even if logout cleanup fails
+        window.location.href = '/login';
+      }
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete account');
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [deleteInput, logout]);
+
+  const handleCancelDelete = useCallback(() => {
+    setShowDeleteConfirm(false);
+    setDeleteInput('');
+    setDeleteError(null);
   }, []);
 
   return (
@@ -94,6 +127,62 @@ export function SecurityTab() {
           )}
         </>
       )}
+
+      {/* Danger Zone */}
+      <div className="security-tab-danger-zone">
+        <h3 className="security-tab-danger-zone-title">{'// danger_zone'}</h3>
+        {!showDeleteConfirm ? (
+          <div className="security-tab-danger-zone-content">
+            <p className="security-tab-danger-zone-desc">
+              permanently delete your account and all associated data. this action cannot be undone.
+            </p>
+            <button
+              type="button"
+              className="security-tab-danger-btn"
+              onClick={() => setShowDeleteConfirm(true)}
+            >
+              --delete-account
+            </button>
+          </div>
+        ) : (
+          <div className="security-tab-danger-zone-confirm">
+            <p className="security-tab-danger-zone-warn">
+              this will permanently delete your account, vault, files, shares, and all encryption
+              keys. type <strong>DELETE</strong> to confirm.
+            </p>
+            <input
+              type="text"
+              className="security-tab-danger-input"
+              aria-label="Type DELETE to confirm account deletion"
+              value={deleteInput}
+              onChange={(e) => setDeleteInput(e.target.value)}
+              placeholder="type DELETE to confirm"
+              autoComplete="off"
+              spellCheck={false}
+              disabled={isDeleting}
+            />
+            {deleteError && <p className="security-tab-danger-error">{deleteError}</p>}
+            <div className="security-tab-danger-actions">
+              <button
+                type="button"
+                className="security-tab-danger-cancel"
+                onClick={handleCancelDelete}
+                disabled={isDeleting}
+              >
+                --cancel
+              </button>
+              <button
+                type="button"
+                className="security-tab-danger-confirm-btn"
+                onClick={handleDeleteAccount}
+                disabled={deleteInput !== 'DELETE' || isDeleting}
+              >
+                {isDeleting ? 'deleting...' : '--confirm-delete'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Desktop note */}
       <p className="security-tab-note">

@@ -16,6 +16,8 @@ import { JwtStrategy } from './strategies/jwt.strategy';
 import { User } from './entities/user.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { AuthMethod } from './entities/auth-method.entity';
+import { PinnedCid } from '../vault/entities/pinned-cid.entity';
+import { IpfsModule } from '../ipfs/ipfs.module';
 
 @Module({
   imports: [
@@ -27,7 +29,8 @@ import { AuthMethod } from './entities/auth-method.entity';
       }),
       inject: [ConfigService],
     }),
-    TypeOrmModule.forFeature([User, RefreshToken, AuthMethod]),
+    TypeOrmModule.forFeature([User, RefreshToken, AuthMethod, PinnedCid]),
+    IpfsModule.forRootAsync(),
   ],
   controllers: [AuthController, IdentityController],
   providers: [

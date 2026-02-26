@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Get,
+  Delete,
   Body,
   HttpCode,
   HttpStatus,
@@ -10,6 +11,7 @@ import {
   Res,
   Req,
   UnauthorizedException,
+  BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { Response, Request as ExpressRequest } from 'express';
@@ -23,6 +25,7 @@ import {
   UnlinkMethodDto,
   UnlinkMethodResponseDto,
 } from './dto/link-method.dto';
+import { DeleteAccountDto, DeleteAccountResponseDto } from './dto/delete-account.dto';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -164,6 +167,36 @@ export class AuthController {
     }
 
     return this.authService.logout(req.user.id);
+  }
+
+  @Delete('account')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Permanently delete user account and all associated data' })
+  @ApiResponse({
+    status: 200,
+    description: 'Account deleted successfully',
+    type: DeleteAccountResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Invalid confirmation or account not found' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async deleteAccount(
+    @Request() req: RequestWithUser,
+    @Body() dto: DeleteAccountDto,
+    @Res({ passthrough: true }) res: Response
+  ): Promise<DeleteAccountResponseDto> {
+    if (dto.confirmation !== 'DELETE') {
+      throw new BadRequestException('Confirmation must be the string "DELETE"');
+    }
+    const result = await this.authService.deleteAccount(req.user.id);
+    const isDesktop = (req as unknown as ExpressRequest).headers['x-client-type'] === 'desktop';
+    if (!isDesktop) {
+      res.clearCookie('refresh_token', { path: '/auth' });
+    }
+    return result;
   }
 
   @Get('methods')
