@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "6f5ec9ce41a3",
+  "session_id": "10829f11-8b39-445b-b143-500309be2a6c",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T21:41:26.371618Z",
+  "branch": "fix/siwe-domain-cors-origins",
+  "checkpoints_count": 7,
+  "files_touched": [
+    ".github/workflows/deploy-staging.yml",
+    "apps/api/.env.example",
+    "apps/api/src/auth/auth.service.ts",
+    "apps/api/src/auth/controllers/identity.controller.spec.ts",
+    "apps/api/src/auth/controllers/identity.controller.ts",
+    "apps/api/src/auth/services/siwe.service.spec.ts",
+    "apps/api/src/auth/services/siwe.service.ts",
+    "apps/web/.env.example"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "852a68bbe37e",
+  "transcript_identifier_at_start": "f98aa651-5538-4dac-af27-51accac14b10",
+  "checkpoint_transcript_start": 239,
+  "transcript_lines_at_start": 239,
+  "token_usage": {
+    "input_tokens": 125,
+    "cache_creation_tokens": 51665,
+    "cache_read_tokens": 6694396,
+    "output_tokens": 10485,
+    "api_call_count": 101
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T21:41:25.046003Z",
+    "agent_lines": 67,
+    "human_added": 3,
+    "human_modified": 10,
+    "human_removed": 0,
+    "total_committed": 80,
+    "agent_percentage": 83.75
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/10829f11-8b39-445b-b143-500309be2a6c.jsonl"
+}
