@@ -12,6 +12,8 @@ import { Point } from '@tkey/common-types';
 import BN from 'bn.js';
 import { useCoreKit } from '../lib/web3auth/core-kit-provider';
 import { useMfaStore } from '../stores/mfa.store';
+import { getOrCreateDeviceIdentity } from '../lib/device/identity';
+import { detectDeviceInfo } from '../lib/device/info';
 
 export type FactorInfo = {
   factorPubHex: string;
@@ -22,7 +24,7 @@ export type FactorInfo = {
 };
 
 export function useMfa() {
-  const { coreKit, syncStatus } = useCoreKit();
+  const { coreKit } = useCoreKit();
 
   const isMfaEnabled = useMfaStore((s) => s.isMfaEnabled);
   const isEnrolling = useMfaStore((s) => s.isEnrolling);
@@ -81,7 +83,9 @@ export function useMfa() {
       const preMfaTssPub = coreKit.getKeyDetails().tssPubKey;
 
       // enableMFA creates device factor + recovery factor atomically
-      const backupFactorKeyHex = await coreKit.enableMFA({});
+      const backupFactorKeyHex = await coreKit.enableMFA({
+        shareDescription: FactorKeyTypeShareDescription.SeedPhrase,
+      });
 
       // Commit the MFA changes
       await coreKit.commitChanges();
@@ -117,15 +121,24 @@ export function useMfa() {
   /**
    * Input a factor key (hex string) to complete REQUIRED_SHARE login.
    * Used for both recovery and cross-device approval flows.
+   *
+   * IMPORTANT: Does NOT call syncStatus() because doing so would transition
+   * Core Kit's React context to LOGGED_IN, which triggers the session
+   * restoration effect in useAuth.ts. Since backend auth hasn't completed yet
+   * (no valid access token or refresh cookie), the session restore fails and
+   * calls coreKitLogout(), effectively undoing the recovery.
+   *
+   * The caller (completeRequiredShare) is responsible for syncing status
+   * AFTER backend auth completes.
    */
   const inputFactorKey = useCallback(
     async (factorKeyHex: string): Promise<void> => {
       if (!coreKit) throw new Error('Core Kit not initialized');
       const factorKey = new BN(factorKeyHex, 'hex');
       await coreKit.inputFactorKey(factorKey);
-      syncStatus();
+      // syncStatus() deliberately omitted — see comment above
     },
-    [coreKit, syncStatus]
+    [coreKit]
   );
 
   /**
@@ -140,12 +153,18 @@ export function useMfa() {
       const factorKeyHex = mnemonicToKey(mnemonic.trim().toLowerCase());
       await inputFactorKey(factorKeyHex);
 
-      // Create a device factor for this new device
+      // Create a device factor for this new device with metadata
       const newDeviceFactor = generateFactorKey();
+      const deviceKeypair = await getOrCreateDeviceIdentity();
+      const deviceInfo = detectDeviceInfo();
       await coreKit.createFactor({
         shareType: TssShareType.DEVICE,
         factorKey: newDeviceFactor.private,
         shareDescription: FactorKeyTypeShareDescription.DeviceShare,
+        additionalMetadata: {
+          deviceId: deviceKeypair.deviceId,
+          browserName: deviceInfo.name,
+        },
       });
       await coreKit.setDeviceFactor(newDeviceFactor.private);
       await coreKit.commitChanges();
@@ -163,18 +182,42 @@ export function useMfa() {
       const details = coreKit.getKeyDetails();
       const factors: FactorInfo[] = [];
 
+      // Known system fields stored by Web3Auth in the flat JSON description.
+      // Everything else is user-provided additionalMetadata (spread at top level by addFactorDescription).
+      const systemFields = new Set(['module', 'dateAdded', 'tssShareIndex', 'tssIndex']);
+
       for (const [factorPubHex, descriptions] of Object.entries(details.shareDescriptions)) {
         for (const descJson of descriptions) {
           try {
-            const parsed = JSON.parse(descJson) as {
-              module?: string;
-              additionalMetadata?: Record<string, string>;
-            };
+            const parsed = JSON.parse(descJson) as Record<string, unknown>;
+            const module = (parsed.module as string) || 'unknown';
+            const tssShareIndex = parsed.tssShareIndex as number | undefined;
+
+            // Normalize type: enableMFA() creates factors with module="Other"
+            // but tssShareIndex correctly identifies 2=DEVICE, 3=RECOVERY
+            let type = module;
+            if (module === FactorKeyTypeShareDescription.Other || module === 'Other') {
+              if (tssShareIndex === 2) {
+                type = FactorKeyTypeShareDescription.DeviceShare;
+              } else if (tssShareIndex === 3) {
+                type = FactorKeyTypeShareDescription.SeedPhrase;
+              }
+            }
+
+            // Extract additionalMetadata from flat JSON (Web3Auth spreads it at top level)
+            const additionalMetadata: Record<string, string> = {};
+            for (const [key, value] of Object.entries(parsed)) {
+              if (!systemFields.has(key) && typeof value === 'string') {
+                additionalMetadata[key] = value;
+              }
+            }
+
             factors.push({
               factorPubHex,
-              description: parsed.module || 'unknown',
-              type: parsed.module || 'unknown',
-              additionalMetadata: parsed.additionalMetadata,
+              description: type,
+              type,
+              additionalMetadata:
+                Object.keys(additionalMetadata).length > 0 ? additionalMetadata : undefined,
             });
           } catch {
             factors.push({

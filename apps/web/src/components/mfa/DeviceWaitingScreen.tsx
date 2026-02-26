@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDeviceApproval, type ApprovalStatus } from '../../hooks/useDeviceApproval';
+import { useAuthStore } from '../../stores/auth.store';
 
 type DeviceWaitingScreenProps = {
   onRecoveryFallback: () => void;
@@ -22,13 +23,26 @@ export function DeviceWaitingScreen({
   onApprovalComplete,
 }: DeviceWaitingScreenProps) {
   const { requestApproval, cancelRequest, approvalStatus, approvalError } = useDeviceApproval();
+  const accessToken = useAuthStore((s) => s.accessToken);
 
   const [countdown, setCountdown] = useState(APPROVAL_TTL_MS);
   const startTimeRef = useRef<number>(Date.now());
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const requestFiredRef = useRef(false);
 
-  // Start the approval request on mount
+  // Start the approval request once the temp access token is available.
+  // The token is obtained asynchronously in loginWithGoogle/Email/Wallet
+  // AFTER syncStatus() sets isRequiredShare=true, so this component may
+  // mount before the token is stored. We wait for it to avoid a 401.
   useEffect(() => {
+    if (!accessToken || requestFiredRef.current) return;
+    requestFiredRef.current = true;
+
+    // Clear any existing interval before starting a new one (defensive against retry re-trigger)
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
+    }
+
     startTimeRef.current = Date.now();
     requestApproval();
 
@@ -38,15 +52,17 @@ export function DeviceWaitingScreen({
       const remaining = Math.max(0, APPROVAL_TTL_MS - elapsed);
       setCountdown(remaining);
     }, 1000);
+  }, [accessToken, requestApproval]);
 
+  // Cleanup on unmount: clear countdown timer and cancel pending request
+  useEffect(() => {
     return () => {
       if (countdownRef.current) {
         clearInterval(countdownRef.current);
       }
-      // Cancel request on unmount
       cancelRequest();
     };
-  }, []);
+  }, [cancelRequest]);
 
   // Auto-complete when approval succeeds
   useEffect(() => {
@@ -56,6 +72,7 @@ export function DeviceWaitingScreen({
   }, [approvalStatus, onApprovalComplete]);
 
   const handleRetry = useCallback(() => {
+    requestFiredRef.current = false;
     startTimeRef.current = Date.now();
     setCountdown(APPROVAL_TTL_MS);
     requestApproval();

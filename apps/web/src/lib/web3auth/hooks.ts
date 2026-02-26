@@ -1,4 +1,5 @@
 import { useCallback } from 'react';
+import BN from 'bn.js';
 import * as secp256k1 from '@noble/secp256k1';
 import { hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import { useCoreKit } from './core-kit-provider';
@@ -201,6 +202,33 @@ async function doLoginWithCoreKit(
   }
 
   if (coreKit.status === COREKIT_STATUS.REQUIRED_SHARE) {
+    // Bug fix: Web3Auth's handleExistingUser() does NOT auto-check localStorage
+    // for the device factor when the hashedShare has been deleted (post-MFA).
+    // We must manually retrieve and input the device factor if it exists.
+    console.log('[CoreKit] REQUIRED_SHARE — checking for device factor in localStorage...');
+    try {
+      const deviceFactorHex = await coreKit.getDeviceFactor();
+      if (deviceFactorHex) {
+        console.log('[CoreKit] Device factor found in localStorage, auto-inputting...');
+        await coreKit.inputFactorKey(new BN(deviceFactorHex, 'hex'));
+
+        if (coreKit.status === COREKIT_STATUS.LOGGED_IN) {
+          console.log('[CoreKit] Device factor accepted — now LOGGED_IN');
+          try {
+            await coreKit.commitChanges();
+          } catch (err) {
+            console.error('[CoreKit] commitChanges after device factor FAILED:', err);
+          }
+          syncStatus();
+          return 'logged_in';
+        }
+      } else {
+        console.log('[CoreKit] No device factor in localStorage — true REQUIRED_SHARE');
+      }
+    } catch (err) {
+      console.warn('[CoreKit] Device factor check failed (expected on new device):', err);
+    }
+
     syncStatus();
     return 'required_share';
   }
