@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "9c66b80b16b1",
+  "strategy": "manual-commit",
+  "branch": "fix/mfa-auth-flow-broken",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/todos/pending/2026-02-27-e2e-mfa-flows-wallet-login.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9c/66b80b16b1/0/metadata.json",
+      "transcript": "/9c/66b80b16b1/0/full.jsonl",
+      "context": "/9c/66b80b16b1/0/context.md",
+      "content_hash": "/9c/66b80b16b1/0/content_hash.txt",
+      "prompt": "/9c/66b80b16b1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 95937,
+    "cache_read_tokens": 3316270,
+    "output_tokens": 12743,
+    "api_call_count": 44
+  }
+}
