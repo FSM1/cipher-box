@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "e2779b1c1b44",
+  "session_id": "82326bff-9e84-4813-be9a-b8b8fc9cc44a",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T19:01:27.793192Z",
+  "branch": "fix/mfa-status-false-positive",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/quick/022-fix-mfa-status-detection-false-positive/022-PLAN.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "df546aded5e4",
+  "token_usage": {
+    "input_tokens": 423,
+    "cache_creation_tokens": 75456,
+    "cache_read_tokens": 3479353,
+    "output_tokens": 4619,
+    "api_call_count": 45
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T19:01:27.40484Z",
+    "agent_lines": 85,
+    "human_added": 9,
+    "human_modified": 17,
+    "human_removed": 0,
+    "total_committed": 111,
+    "agent_percentage": 76.57657657657657
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/82326bff-9e84-4813-be9a-b8b8fc9cc44a.jsonl"
+}

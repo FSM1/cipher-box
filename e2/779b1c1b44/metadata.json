@@ -3,7 +3,7 @@
   "checkpoint_id": "e2779b1c1b44",
   "strategy": "manual-commit",
   "branch": "fix/mfa-status-false-positive",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     ".planning/quick/022-fix-mfa-status-detection-false-positive/022-PLAN.md"
   ],
@@ -14,13 +14,20 @@
       "context": "/e2/779b1c1b44/0/context.md",
       "content_hash": "/e2/779b1c1b44/0/content_hash.txt",
       "prompt": "/e2/779b1c1b44/0/prompt.txt"
+    },
+    {
+      "metadata": "/e2/779b1c1b44/1/metadata.json",
+      "transcript": "/e2/779b1c1b44/1/full.jsonl",
+      "context": "/e2/779b1c1b44/1/context.md",
+      "content_hash": "/e2/779b1c1b44/1/content_hash.txt",
+      "prompt": "/e2/779b1c1b44/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 118,
-    "cache_creation_tokens": 354094,
-    "cache_read_tokens": 6620478,
-    "output_tokens": 8306,
-    "api_call_count": 96
+    "input_tokens": 541,
+    "cache_creation_tokens": 429550,
+    "cache_read_tokens": 10099831,
+    "output_tokens": 12925,
+    "api_call_count": 141
   }
 }
