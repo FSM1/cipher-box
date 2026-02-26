@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 Phase: 15.1 (Client-Side Search)
 Plan: 3 of 3
 Status: Phase complete
-Last activity: 2026-02-25 -- Completed quick task 021: Account deletion (GDPR)
+Last activity: 2026-02-26 -- Completed quick task 022: Fix MFA status detection false positive
 
 Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE)
 
@@ -47,7 +47,7 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 
 **Recent Trend:**
 
-- Last 5 plans: 12m, 7m, 4m, 8m, 5m
+- Last 5 plans: 7m, 4m, 8m, 5m, 2m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -214,7 +214,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-12 pending todo(s):
+13 pending todo(s):
 
 - `2026-02-07-web-worker-large-file-encryption.md` -- Offload large file encryption to Web Worker (area: ui)
 - `2026-02-14-bring-your-own-ipfs-node.md` -- Add bring-your-own IPFS node support (area: api)
@@ -228,6 +228,7 @@ Recent decisions affecting current work:
 - `2026-02-22-crdt-ipns-inbox-sharing.md` -- CRDT IPNS inbox for sharing (area: architecture)
 - `2026-02-22-disable-synchronize-true-all-envs.md` -- Disable synchronize:true in dev and CI to surface missing migrations (area: api)
 - `2026-02-24-async-incremental-search-index.md` -- Make search index build async/incremental for large vaults (area: ui)
+- `2026-02-26-alternative-mfa-factor-types.md` -- Add alternative MFA factor types: passkey (WebAuthn PRF), password-derived key, secondary OAuth (area: auth)
 
 ### Roadmap Evolution
 
@@ -265,6 +266,7 @@ Recent decisions affecting current work:
 | 019 | Metadata schema evolution protocol        | 2026-02-21 | dcb49e1 | [019-metadata-schema-evolution-protocol](./quick/019-metadata-schema-evolution-protocol/)                   |
 | 020 | Fix shared items rendering                | 2026-02-25 | 96b7591 | [020-fix-shared-items-rendering](./quick/020-fix-shared-items-rendering/)                                   |
 | 021 | Account deletion (GDPR)                   | 2026-02-25 | 8ae01dd | [021-account-deletion-gdpr](./quick/021-account-deletion-gdpr/)                                             |
+| 022 | Fix MFA status detection false positive   | 2026-02-26 | ff850e0 | [022-fix-mfa-status-detection-false-positive](./quick/022-fix-mfa-status-detection-false-positive/)         |
 
 ### Research Flags
 
@@ -285,12 +287,12 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-25
-Stopped at: Completed quick task 021 (Account deletion GDPR)
+Last session: 2026-02-26
+Stopped at: Completed quick task 022 (Fix MFA status detection false positive)
 Resume file: None
-Next: Quick task 021 complete. Next phase TBD.
+Next: Quick task 022 complete. Next phase TBD.
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-25 after quick task 021 complete (Account deletion GDPR)_
+_Last updated: 2026-02-26 after quick task 022 complete (Fix MFA status detection false positive)_
