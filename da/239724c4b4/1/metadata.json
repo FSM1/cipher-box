@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "da239724c4b4",
+  "session_id": "2bc7716b-f6a4-41f5-a947-17594a4dee28",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T22:28:48.697335Z",
+  "branch": "chore/ci-exclude-version-bumps",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "15503be2a9bc",
+  "transcript_identifier_at_start": "29605c54-13d2-4687-ab75-2b76993938ce",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 32384,
+    "cache_read_tokens": 737219,
+    "output_tokens": 3827,
+    "api_call_count": 14
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T22:28:48.045244Z",
+    "agent_lines": 8,
+    "human_added": 16,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 24,
+    "agent_percentage": 33.33333333333333
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/2bc7716b-f6a4-41f5-a947-17594a4dee28.jsonl"
+}

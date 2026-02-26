@@ -3,7 +3,7 @@
   "checkpoint_id": "da239724c4b4",
   "strategy": "manual-commit",
   "branch": "chore/ci-exclude-version-bumps",
-  "checkpoints_count": 1,
+  "checkpoints_count": 3,
   "files_touched": [
     ".github/workflows/ci.yml"
   ],
@@ -14,13 +14,20 @@
       "context": "/da/239724c4b4/0/context.md",
       "content_hash": "/da/239724c4b4/0/content_hash.txt",
       "prompt": "/da/239724c4b4/0/prompt.txt"
+    },
+    {
+      "metadata": "/da/239724c4b4/1/metadata.json",
+      "transcript": "/da/239724c4b4/1/full.jsonl",
+      "context": "/da/239724c4b4/1/context.md",
+      "content_hash": "/da/239724c4b4/1/content_hash.txt",
+      "prompt": "/da/239724c4b4/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 197,
-    "cache_creation_tokens": 92948,
-    "cache_read_tokens": 13154199,
-    "output_tokens": 15674,
-    "api_call_count": 162
+    "input_tokens": 217,
+    "cache_creation_tokens": 125332,
+    "cache_read_tokens": 13891418,
+    "output_tokens": 19501,
+    "api_call_count": 176
   }
 }
