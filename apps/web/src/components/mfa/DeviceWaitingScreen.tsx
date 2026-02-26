@@ -38,6 +38,11 @@ export function DeviceWaitingScreen({
     if (!accessToken || requestFiredRef.current) return;
     requestFiredRef.current = true;
 
+    // Clear any existing interval before starting a new one (defensive against retry re-trigger)
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
+    }
+
     startTimeRef.current = Date.now();
     requestApproval();
 
