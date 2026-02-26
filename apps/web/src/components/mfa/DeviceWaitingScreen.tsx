@@ -67,6 +67,7 @@ export function DeviceWaitingScreen({
   }, [approvalStatus, onApprovalComplete]);
 
   const handleRetry = useCallback(() => {
+    requestFiredRef.current = false;
     startTimeRef.current = Date.now();
     setCountdown(APPROVAL_TTL_MS);
     requestApproval();
