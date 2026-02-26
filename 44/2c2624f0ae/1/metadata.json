@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "442c2624f0ae",
+  "session_id": "9a46d14a-7ff2-4234-9c76-1be427fa14e7",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T23:08:41.211646Z",
+  "branch": "fix/mfa-auth-flow-broken",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/components/mfa/DeviceWaitingScreen.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "fbb278a79e07",
+  "checkpoint_transcript_start": 230,
+  "transcript_lines_at_start": 230,
+  "token_usage": {
+    "input_tokens": 17,
+    "cache_creation_tokens": 61600,
+    "cache_read_tokens": 1292880,
+    "output_tokens": 1389,
+    "api_call_count": 15
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T23:08:40.449131Z",
+    "agent_lines": 0,
+    "human_added": 1,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/9a46d14a-7ff2-4234-9c76-1be427fa14e7.jsonl"
+}
