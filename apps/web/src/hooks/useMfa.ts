@@ -22,7 +22,7 @@ export type FactorInfo = {
 };
 
 export function useMfa() {
-  const { coreKit, syncStatus } = useCoreKit();
+  const { coreKit } = useCoreKit();
 
   const isMfaEnabled = useMfaStore((s) => s.isMfaEnabled);
   const isEnrolling = useMfaStore((s) => s.isEnrolling);
@@ -117,15 +117,24 @@ export function useMfa() {
   /**
    * Input a factor key (hex string) to complete REQUIRED_SHARE login.
    * Used for both recovery and cross-device approval flows.
+   *
+   * IMPORTANT: Does NOT call syncStatus() because doing so would transition
+   * Core Kit's React context to LOGGED_IN, which triggers the session
+   * restoration effect in useAuth.ts. Since backend auth hasn't completed yet
+   * (no valid access token or refresh cookie), the session restore fails and
+   * calls coreKitLogout(), effectively undoing the recovery.
+   *
+   * The caller (completeRequiredShare) is responsible for syncing status
+   * AFTER backend auth completes.
    */
   const inputFactorKey = useCallback(
     async (factorKeyHex: string): Promise<void> => {
       if (!coreKit) throw new Error('Core Kit not initialized');
       const factorKey = new BN(factorKeyHex, 'hex');
       await coreKit.inputFactorKey(factorKey);
-      syncStatus();
+      // syncStatus() deliberately omitted — see comment above
     },
-    [coreKit, syncStatus]
+    [coreKit]
   );
 
   /**

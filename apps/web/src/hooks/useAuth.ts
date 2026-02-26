@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCoreKitAuth } from '../lib/web3auth/hooks';
+import { useCoreKit } from '../lib/web3auth/core-kit-provider';
 import { authApi } from '../lib/api/auth';
 import { vaultApi } from '../lib/api/vault';
 import { useAuthStore } from '../stores/auth.store';
@@ -35,6 +36,7 @@ export function useAuth() {
     getPublicKeyHex,
     logout: coreKitLogout,
   } = useCoreKitAuth();
+  const { syncStatus } = useCoreKit();
   const {
     accessToken,
     isAuthenticated,
@@ -220,13 +222,20 @@ export function useAuth() {
     // Complete backend auth with the REAL publicKey (replaces the placeholder session)
     await completeBackendAuth(method, jwt);
 
+    // NOW sync Core Kit React state to LOGGED_IN.
+    // We deliberately delayed this from inputFactorKey() to prevent the session
+    // restoration effect from firing before backend auth completed.
+    // At this point isAuthenticated is true (from completeBackendAuth -> setAccessToken),
+    // so the session restore guard (coreKitLoggedIn && !isAuthenticated) won't trigger.
+    syncStatus();
+
     // Clear pending state
     setPendingCipherboxJwt(null);
     setPendingAuthMethod(null);
 
     // Navigate to files
     navigate('/files');
-  }, [pendingCipherboxJwt, pendingAuthMethod, completeBackendAuth, navigate]);
+  }, [pendingCipherboxJwt, pendingAuthMethod, completeBackendAuth, syncStatus, navigate]);
 
   /**
    * Login with Google OAuth token.
