@@ -31,9 +31,17 @@ jobs:
               - '!.claude/**'
               - '!**/*.md'
               - '!LICENSE'
+              - '!**/package.json'
+              - '!**/Cargo.toml'
+              - '!**/tauri.conf.json'
+              - '!.release-please-manifest.json'
             desktop:
               - 'apps/desktop/**'
+              - '!apps/desktop/package.json'
+              - '!apps/desktop/src-tauri/Cargo.toml'
+              - '!apps/desktop/src-tauri/tauri.conf.json'
               - 'packages/crypto/**'
+              - '!packages/crypto/package.json'
               - '.github/workflows/ci.yml'
 
   lint:
