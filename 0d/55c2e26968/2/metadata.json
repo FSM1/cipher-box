@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "0d55c2e26968",
+  "session_id": "82326bff-9e84-4813-be9a-b8b8fc9cc44a",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T21:11:16.755342Z",
+  "branch": "fix/mfa-auth-flow-broken",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/components/mfa/DeviceWaitingScreen.tsx",
+    "apps/web/src/hooks/useAuth.ts",
+    "apps/web/src/hooks/useMfa.ts",
+    "apps/web/src/lib/web3auth/hooks.ts",
+    ".planning/debug/resolved/mfa-auth-flow-broken.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "21282c20c00e",
+  "transcript_identifier_at_start": "2c70bfba-646e-4953-a0e5-7d447626862b",
+  "checkpoint_transcript_start": 995,
+  "transcript_lines_at_start": 995,
+  "token_usage": {
+    "input_tokens": 7,
+    "cache_creation_tokens": 5018,
+    "cache_read_tokens": 647714,
+    "output_tokens": 635,
+    "api_call_count": 5
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T21:11:15.379001Z",
+    "agent_lines": 0,
+    "human_added": 195,
+    "human_modified": 7,
+    "human_removed": 0,
+    "total_committed": 195,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/82326bff-9e84-4813-be9a-b8b8fc9cc44a.jsonl"
+}

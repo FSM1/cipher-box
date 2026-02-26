@@ -1,0 +1,1228 @@
+Im trying to understand the MFA setup - My user account on staging never went through MFA enrollment - the pubkey is 0x04ef49bbad9a7586b9f5ac1e95adac03479677fd9b5fc6df4aa9691b89f96ca5de3e3d882cdd892ffd9a4b28a934aa4ef644120abed4419f4052cbf0f370bc1b34
+
+---
+
+can you start a playwright session pointed at staging? I will handle the authentication. alternatively, if it will help with debugging, we could just do the same with a local dev server for the ui pointed at staging api
+
+---
+
+ok logged in
+
+---
+
+there is no social login share - all initial auth with w3auth is via a cipherbox jwt configured as a custom provider with w3auth
+
+---
+
+So what role does the hashedShare even play? What is your assessment of this just being created by Core Kit based on? 
+
+ would an easier fix not just be `const enabled = details.totalFactors > 2`?
+
+---
+
+ok, use the gsd quick skill to implement this fix as well as all the necessary documentation in the planning folder.
+
+---
+
+<objective>
+Execute small, ad-hoc tasks with GSD guarantees (atomic commits, STATE.md tracking) while skipping optional agents (research, plan-checker, verifier).
+
+Quick mode is the same system with a shorter path:
+
+- Spawns gsd-planner (quick mode) + gsd-executor(s)
+- Skips gsd-phase-researcher, gsd-plan-checker, gsd-verifier
+- Quick tasks live in `.planning/quick/` separate from planned phases
+- Updates STATE.md "Quick Tasks Completed" table (NOT ROADMAP.md)
+
+**For UI tasks:**
+
+- Detects UI-related task descriptions
+- Offers to generate/use Pencil designs before planning
+- Optionally verifies against design with Playwright MCP after execution
+
+Use when: You know exactly what to do and the task is small enough to not need research or verification.
+</objective>
+
+<execution_context>
+Orchestration is inline - no separate workflow file. Quick mode is deliberately simpler than full GSD.
+</execution_context>
+
+<context>
+@.planning/STATE.md
+</context>
+
+<process>
+### Step 1: Pre-flight validation
+
+Check that an active GSD project exists:
+
+```bash
+if [ ! -f .planning/ROADMAP.md ]; then
+  echo "Quick mode requires an active project with ROADMAP.md."
+  echo "Run /gsd:new-project first."
+  exit 1
+fi
+```
+
+If validation fails, stop immediately with the error message.
+
+Quick tasks can run mid-phase - validation only checks ROADMAP.md exists, not phase status.
+
+---
+
+### Step 2: Get task description
+
+Prompt user interactively for the task description:
+
+```text
+AskUserQuestion(
+  header: "Quick Task",
+  question: "What do you want to do?",
+  followUp: null
+)
+```
+
+Store response as `$DESCRIPTION`.
+
+If empty, re-prompt: "Please provide a task description."
+
+Generate slug from description:
+
+```bash
+slug=$(echo "$DESCRIPTION" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | cut -c1-40)
+```
+
+**Scan learnings** for relevant context:
+
+```bash
+ls .learnings/*.md 2>/dev/null | grep -v README
+```
+
+If entries exist, quickly scan titles and read any that relate to the task description. Extract gotchas, patterns, and key files that may be relevant. This prevents repeating past mistakes. Skip if no `.learnings/` directory exists.
+
+---
+
+### Step 2b: Detect UI task and offer design workflow
+
+Check if the task description involves UI work:
+
+```bash
+# Check for UI keywords in description
+# Note: This heuristic may produce false positives for tasks that mention UI terms
+# in non-UI contexts (e.g., "update button text in config"). The user can always
+# select "Skip design - just implement" if the detection is incorrect.
+if echo "$DESCRIPTION" | grep -iqE "ui|ux|style|restyle|design|layout|component|page|view|screen|display|button|form|modal|dialog|popover|tooltip|toast|dropdown|sidebar|header|footer|nav|menu|card|list|table|grid|icon|badge|avatar|breadcrumb|tab|color|font|typography|spacing|padding|margin|responsive|mobile|css|visual|appearance|interface|frontend|dashboard|browser|drag|drop|dnd|hover|focus|animation|transition|overlay|scroll|carousel|interaction|gesture|click|swipe|resize|collapse|expand|accordion|input|checkbox|radio|select|slider|toggle|switch|picker|upload|panel|drawer|toolbar|statusbar|banner|alert|notification|snackbar|thumbnail|preview|placeholder|skeleton|spinner|progress|loading"; then
+  IS_UI_TASK=true
+else
+  IS_UI_TASK=false
+fi
+```
+
+**If UI task detected:**
+
+1. Check for existing Pencil design file:
+
+```bash
+DESIGN_FILE=$(ls designs/*.pen 2>/dev/null | head -1)
+if [ -z "$DESIGN_FILE" ]; then
+  echo "No design file found in designs/. Will proceed without design reference."
+fi
+```
+
+2. Offer design workflow:
+
+```text
+AskUserQuestion(
+  header: "UI Task Detected",
+  question: "This looks like a UI task. How would you like to proceed?",
+  options: [
+    "Use existing Pencil design" (if design file exists),
+    "Generate new design mockup first",
+    "Skip design - just implement"
+  ]
+)
+```
+
+3. **If "Use existing design":**
+   - Load design tokens from existing `.pen` file
+   - Ask which frame/component to reference
+   - Store design reference for planner context
+
+4. **If "Generate new mockup":**
+
+   First, load existing design context for consistency:
+
+   ```typescript
+   // Load existing design system
+   const existingDesign = await mcp__pencil__read_design({ path: DESIGN_FILE });
+   const tokens = await mcp__pencil__get_design_tokens({
+     file: DESIGN_FILE,
+     extract: ['colors', 'typography', 'spacing', 'effects', 'borders'],
+   });
+   ```
+
+   Then, translate user's task description to design parameters:
+
+   ```typescript
+   // Parse task description for design intent
+   const taskIntent = {
+     description: DESCRIPTION, // e.g., "Add a delete confirmation modal"
+     componentType: inferComponentType(DESCRIPTION), // e.g., "modal"
+     action: inferAction(DESCRIPTION), // e.g., "delete" → destructive styling
+   };
+
+   // Map to design parameters using existing tokens
+   const designParams = {
+     colors: tokens.colors,
+     typography: tokens.typography,
+     // Adjust for context (e.g., destructive action = error color)
+     accentColor: taskIntent.action === 'delete' ? '#EF4444' : tokens.colors.primary,
+   };
+   ```
+
+   Create mockup with full context:
+
+   ```typescript
+   await mcp__pencil__create_design({
+     type: 'frame',
+     name: `Quick: ${slug}`,
+     width: 800,
+     height: 600,
+     fill: tokens.colors.background,
+
+     // Pass context for consistency
+     designContext: {
+       tokens: tokens,
+       taskIntent: taskIntent,
+       referenceFrames: existingDesign.frames.map((f) => f.name),
+       consistencyRules: [
+         'Use ONLY colors from existing palette',
+         'Match existing component patterns',
+         'Follow established spacing scale',
+       ],
+     },
+
+     children: [
+       /* generated based on componentType */
+     ],
+   });
+   ```
+
+   - Present to user for approval with design rationale
+   - Store approved design reference
+
+5. **If "Skip design":**
+   - Proceed without design reference
+   - Note: Verification against design will be skipped
+
+Store result as `$DESIGN_CONTEXT` for planner.
+
+---
+
+### Step 3: Calculate next quick task number
+
+Ensure `.planning/quick/` directory exists and find the next sequential number:
+
+```bash
+# Ensure .planning/quick/ exists
+mkdir -p .planning/quick
+
+# Find highest existing number and increment
+last=$(ls -1d .planning/quick/[0-9][0-9][0-9]-* 2>/dev/null | sort -r | head -1 | xargs -I{} basename {} | grep -oE '^[0-9]+')
+
+if [ -z "$last" ]; then
+  next_num="001"
+else
+  next_num=$(printf "%03d" $((10#$last + 1)))
+fi
+```
+
+---
+
+### Step 4: Create quick task directory
+
+Create the directory for this quick task:
+
+```bash
+QUICK_DIR=".planning/quick/${next_num}-${slug}"
+mkdir -p "$QUICK_DIR"
+```
+
+Report to user:
+
+```text
+Creating quick task ${next_num}: ${DESCRIPTION}
+Directory: ${QUICK_DIR}
+```
+
+Store `$QUICK_DIR` for use in orchestration.
+
+---
+
+### Step 5: Spawn planner (quick mode)
+
+Spawn gsd-planner with quick mode context:
+
+```text
+Task(
+  prompt="
+<planning_context>
+
+**Mode:** quick
+**Directory:** ${QUICK_DIR}
+**Description:** ${DESCRIPTION}
+
+**Project State:**
+@.planning/STATE.md
+
+${DESIGN_CONTEXT ? `
+**Design Reference (UI Task):**
+- Design file: ${DESIGN_FILE}
+- Frame: ${DESIGN_FRAME}
+- Design tokens: Use colors, typography, spacing from existing design
+
+Implementation must match Pencil design specifications exactly.
+Verification will compare against design frame.
+` : ''}
+
+</planning_context>
+
+<constraints>
+- Create a SINGLE plan with 1-3 focused tasks
+- Quick tasks should be atomic and self-contained
+- No research phase, no checker phase
+- Target ~30% context usage (simple, focused)
+${IS_UI_TASK ? '- Include CSS values from design specs in task descriptions' : ''}
+${IS_UI_TASK ? '- Add verification step to check implementation matches design' : ''}
+</constraints>
+
+<output>
+Write plan to: ${QUICK_DIR}/${next_num}-PLAN.md
+Return: ## PLANNING COMPLETE with plan path
+</output>
+",
+  subagent_type="gsd-planner",
+  description="Quick plan: ${DESCRIPTION}"
+)
+```
+
+After planner returns:
+
+1. Verify plan exists at `${QUICK_DIR}/${next_num}-PLAN.md`
+2. Extract plan count (typically 1 for quick tasks)
+3. Report: "Plan created: ${QUICK_DIR}/${next_num}-PLAN.md"
+
+If plan not found, error: "Planner failed to create ${next_num}-PLAN.md"
+
+---
+
+### Step 6: Spawn executor
+
+Spawn gsd-executor with plan reference:
+
+```text
+Task(
+  prompt="
+Execute quick task ${next_num}.
+
+Plan: @${QUICK_DIR}/${next_num}-PLAN.md
+Project state: @.planning/STATE.md
+
+<constraints>
+- Execute all tasks in the plan
+- Commit each task atomically
+- Create summary at: ${QUICK_DIR}/${next_num}-SUMMARY.md
+- Do NOT update ROADMAP.md (quick tasks are separate from planned phases)
+</constraints>
+",
+  subagent_type="gsd-executor",
+  description="Execute: ${DESCRIPTION}"
+)
+```
+
+After executor returns:
+
+1. Verify summary exists at `${QUICK_DIR}/${next_num}-SUMMARY.md`
+2. Extract commit hash from executor output
+3. Report completion status
+
+If summary not found, error: "Executor failed to create ${next_num}-SUMMARY.md"
+
+Note: For quick tasks producing multiple plans (rare), spawn executors in parallel waves per execute-phase patterns.
+
+---
+
+### Step 6b: Quick UI verification (for UI tasks only)
+
+If `IS_UI_TASK=true` and `DESIGN_CONTEXT` exists, offer quick verification:
+
+```text
+AskUserQuestion(
+  header: "UI Verification",
+  question: "Task complete. Would you like me to verify the UI matches the design?",
+  options: ["Yes, verify against design", "Skip verification"]
+)
+```
+
+**If "Yes, verify":**
+
+1. **Use Playwright MCP to verify (if available):**
+
+```typescript
+// Navigate to the app
+await mcp__playwright__navigate({ url: 'http://localhost:5173' });
+
+// Capture screenshot
+await mcp__playwright__screenshot({
+  selector: '${COMPONENT_SELECTOR}',
+  name: 'quick-${next_num}-result',
+});
+
+// Verify computed styles match design
+const styles = await mcp__playwright__evaluate({
+  script: `
+    const el = document.querySelector('${COMPONENT_SELECTOR}');
+    const s = getComputedStyle(el);
+    return {
+      backgroundColor: s.backgroundColor,
+      color: s.color,
+      fontFamily: s.fontFamily,
+      padding: s.padding
+    };
+  `,
+});
+```
+
+2. **Compare against design specs:**
+
+```typescript
+// Load expected values from design
+const designSpecs = await mcp__pencil__get_frame({ frameId: DESIGN_FRAME });
+
+// Compare with tolerance for color format differences
+// RGB values are considered matching if they represent the same color:
+// - "#000000" matches "rgb(0, 0, 0)"
+// - "#00D084" matches "rgb(0, 208, 132)"
+// Spacing values must match exactly (no tolerance for pixel differences)
+const discrepancies = compareStyles(styles, designSpecs, {
+  colorTolerance: 'format-only', // Allow rgb/hex format differences
+  spacingTolerance: 0, // Exact pixel match required
+});
+```
+
+3. **Report results:**
+
+```markdown
+## Quick Verification Results
+
+**Component:** ${COMPONENT_SELECTOR}
+**Design frame:** ${DESIGN_FRAME}
+
+| Property   | Design    | Implemented    | Status |
+| ---------- | --------- | -------------- | ------ |
+| background | #000000   | rgb(0,0,0)     | ✓      |
+| color      | #00D084   | rgb(0,208,132) | ✓      |
+| padding    | 12px 24px | 12px 24px      | ✓      |
+
+**Result:** [All specs match / X discrepancies found]
+```
+
+4. **If discrepancies found:**
+
+```text
+AskUserQuestion(
+  header: "Discrepancies Found",
+  question: "Found ${count} discrepancies. What would you like to do?",
+  options: ["Fix now", "Accept as-is", "View details"]
+)
+```
+
+If "Fix now" → Re-run executor with fix instructions
+If "Accept as-is" → Continue to STATE.md update
+If "View details" → Show full discrepancy report
+
+**If Playwright MCP not available:**
+
+Document for manual verification:
+
+```markdown
+## Manual Verification Required
+
+Playwright MCP not available. Please verify manually:
+
+1. Open http://localhost:5173
+2. Check ${COMPONENT_SELECTOR}
+3. Compare against design frame: ${DESIGN_FRAME}
+
+Expected:
+
+- Background: ${expected_bg}
+- Color: ${expected_color}
+- Padding: ${expected_padding}
+```
+
+---
+
+### Step 6c: Design sync check (UI tasks only)
+
+If `IS_UI_TASK=true` and a `.pen` file exists, offer a lightweight design sync:
+
+```bash
+DESIGN_FILE=$(ls designs/*.pen 2>/dev/null | head -1)
+```
+
+**Only runs if both conditions are true:**
+
+- `IS_UI_TASK=true`
+- `DESIGN_FILE` is non-empty
+
+```bash
+# Get changed CSS/TSX files on this branch
+CHANGED_UI=$(git diff --name-only main...HEAD -- '*.css' '*.tsx' 2>/dev/null | grep -v '^$')
+```
+
+If UI files changed, offer sync check:
+
+```text
+AskUserQuestion(
+  header: "Design Sync",
+  question: "UI files changed on this branch. Check if design needs updating?",
+  options: [
+    { label: "Yes, sync design", description: "Run lightweight design sync (defaults to updating design to match code)" },
+    { label: "Skip", description: "Continue without checking design" }
+  ],
+  multiSelect: false
+)
+```
+
+**If "Yes, sync design":**
+
+Run a lightweight version of `/design:sync` inline:
+
+1. Get changed CSS/TSX files (already computed above)
+2. Map to design frames using `designs/DESIGN.md` component hierarchy
+3. For mapped files: extract CSS values, compare against Pencil frames via `mcp__pencil__batch_get`
+4. Default direction: **update design to match code** (code was just written)
+5. Apply `mcp__pencil__batch_design` updates for any mismatches
+6. Take screenshot to verify
+7. Report changes and remind user to save Pencil file
+
+**If "Skip":** Continue to Step 7.
+
+**Non-blocking:** This step never prevents task completion. If Pencil MCP is unavailable or errors occur, log a note and continue.
+
+---
+
+### Step 7: Update STATE.md
+
+Update STATE.md with quick task completion record.
+
+**7a. Check if "Quick Tasks Completed" section exists:**
+
+Read STATE.md and check for `### Quick Tasks Completed` section.
+
+**7b. If section doesn't exist, create it:**
+
+Insert after `### Blockers/Concerns` section:
+
+```markdown
+### Quick Tasks Completed
+
+| #   | Description | Date | Commit | Directory |
+| --- | ----------- | ---- | ------ | --------- |
+```
+
+**7c. Append new row to table:**
+
+```markdown
+| ${next_num} | ${DESCRIPTION} | $(date +%Y-%m-%d) | ${commit_hash} | [${next_num}-${slug}](./quick/${next_num}-${slug}/) |
+```
+
+**7d. Update "Last activity" line:**
+
+Find and update the line:
+
+```text
+Last activity: $(date +%Y-%m-%d) - Completed quick task ${next_num}: ${DESCRIPTION}
+```
+
+Use Edit tool to make these changes atomically
+
+---
+
+### Step 8: Final commit and completion
+
+Stage and commit quick task artifacts:
+
+```bash
+# Stage quick task artifacts
+git add ${QUICK_DIR}/${next_num}-PLAN.md
+git add ${QUICK_DIR}/${next_num}-SUMMARY.md
+git add .planning/STATE.md
+
+# For UI tasks: add design file if modified
+if [ "$IS_UI_TASK" = true ]; then
+  git diff --quiet designs/*.pen 2>/dev/null || git add designs/*.pen
+fi
+
+# Commit with quick task format
+git commit -m "$(cat <<'EOF'
+docs(quick-${next_num}): ${DESCRIPTION}
+
+Quick task completed.
+${IS_UI_TASK:+- Design mockups added to .pen file}
+
+Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+EOF
+)"
+```
+
+Get final commit hash:
+
+```bash
+commit_hash=$(git rev-parse --short HEAD)
+```
+
+**Capture learnings** (skip if trivial):
+
+If the quick task involved non-obvious discoveries, gotchas, or useful patterns, create a learnings entry at `.learnings/YYYY-MM-DD-brief-description.md`:
+
+```markdown
+# [Brief Title]
+
+**Date:** YYYY-MM-DD
+
+## Original Prompt
+
+> [User's original task description]
+
+## What I Learned
+
+- [Non-obvious discoveries, gotchas, edge cases]
+
+## What Would Have Helped
+
+- [Missing context, files to check first]
+
+## Key Files
+
+- [Relevant files for future reference]
+```
+
+If created, commit it:
+
+```bash
+git add .learnings/
+git commit -m "docs(learnings): quick-${next_num} - {brief description}"
+```
+
+Display completion output:
+
+```text
+---
+
+GSD > QUICK TASK COMPLETE
+
+Quick Task ${next_num}: ${DESCRIPTION}
+
+Summary: ${QUICK_DIR}/${next_num}-SUMMARY.md
+Commit: ${commit_hash}
+
+---
+
+Ready for next task: /gsd:quick
+```
+
+</process>
+
+<success_criteria>
+
+- [ ] ROADMAP.md validation passes
+- [ ] User provides task description
+- [ ] Slug generated (lowercase, hyphens, max 40 chars)
+- [ ] Next number calculated (001, 002, 003...)
+- [ ] Directory created at `.planning/quick/NNN-slug/`
+- [ ] **For UI tasks:** Design workflow offered (use existing / generate / skip)
+- [ ] **For UI tasks:** Design context passed to planner if applicable
+- [ ] `${next_num}-PLAN.md` created by planner
+- [ ] `${next_num}-SUMMARY.md` created by executor
+- [ ] **For UI tasks:** Quick verification offered (Playwright MCP if available)
+- [ ] STATE.md updated with quick task row
+- [ ] Artifacts committed
+      </success_criteria>
+
+
+ARGUMENTS: Fix MFA status detection in useMfa.ts - change `details.totalFactors >= 2` to `details.totalFactors > 2` because every Web3Auth MPC Core Kit account starts with 2 factors (JWT verifier share + hashedShare cloud custodial key) by default. The hashedShare is deleted when enableMFA() is called and replaced with device + recovery factors, pushing totalFactors to 3+. The current check falsely shows MFA as [ENABLED] for every user. Also update planning documentation to record this fix.
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **Initial Request**: User wants to understand the MFA setup - their account on staging never went through MFA enrollment, but the security page shows MFA as "[ENABLED]" with "2 factors active, 2/2 threshold". They provided their public key and a screenshot of the security page.
+
+2. **My Initial Research**: I spawned an Explore agent to investigate the MFA code. Found key files:
+   - `apps/web/src/hooks/useMfa.ts` - Central MFA hook
+   - `apps/web/src/stores/mfa.store.ts` - Zustand store
+   - `apps/web/src/components/mfa/SecurityTab.tsx` - UI component
+   - `apps/web/src/components/mfa/AuthorizedDevices.tsx` - Device list
+   - `apps/web/src/components/mfa/RecoveryPhraseSection.tsx` - Recovery phrase UI
+
+3. **Initial Explanation**: I explained that MFA status comes from Web3Auth's MPC Core Kit via `coreKit.getKeyDetails()`, and `totalFactors >= 2` marks MFA as enabled. I initially (incorrectly) attributed the 2 factors to "social login share + hashedShare".
+
+4. **Playwright Session**: User asked to start a Playwright session pointed at staging. I navigated to https://app-staging.cipherbox.cc, user logged in, then I navigated to Settings > Security tab and confirmed the issue visually.
+
+5. **Console Investigation**: I used Playwright's evaluate to dig into Core Kit's state. After several attempts (finding React fiber root key was `__reactContainer` not `__reactFiber`), I successfully extracted the key details:
+   ```json
+   {
+     "totalFactors": 2,
+     "threshold": 2,
+     "requiredFactors": 0,
+     "shareDescriptions": {
+       "024b05fc...": [
+         "{\"module\":\"hashedShare\",\"dateAdded\":1771472255283,\"tssShareIndex\":2}"
+       ]
+     }
+   }
+   ```
+
+6. **User Correction**: I initially said "social login share" was one of the factors. User corrected me: "there is no social login share - all initial auth with w3auth is via a cipherbox jwt configured as a custom provider with w3auth". I acknowledged the correction and updated my understanding.
+
+7. **User's Key Questions**: User asked:
+   - "What role does the hashedShare even play?"
+   - "What is your assessment of this just being created by Core Kit based on?"
+   - "Would an easier fix not just be `const enabled = details.totalFactors > 2`?"
+
+8. **Research on hashedShare**: I searched Web3Auth docs (many 404s), found key info:
+   - `.planning/phases/12.4-mfa-cross-device/12.4-03-PLAN.md:165` says: "For `module === 'hashedShare'` factors: do NOT show (this is the cloud custodial key, which is deleted by enableMFA)"
+   - Web search confirmed: "MFA enabled, device factor stored in local store, deleted hashed cloud key"
+   - The hashedShare is a cloud custodial key, deleted when enableMFA() is called
+
+9. **Fix Confirmation**: Confirmed that `totalFactors > 2` is the correct simple fix because:
+   - Baseline: 2 factors (JWT verifier + hashedShare)
+   - After enableMFA(): hashedShare deleted, device + recovery added = 3+ factors
+
+10. **GSD Quick Task Execution**: User asked to use `/gsd:quick` to implement the fix. I:
+    - Created branch `fix/mfa-status-false-positive` from latest main
+    - Created quick task directory `.planning/quick/022-fix-mfa-status-detection-false-positive/`
+    - Spawned gsd-planner (created 022-PLAN.md)
+    - Spawned gsd-executor (created fix + 022-SUMMARY.md)
+    - Fixed markdown lint error (fenced code blocks needed language specifiers)
+    - Final commits: ff850e0 (code fix), 580e606 (docs/summary), e36a788 (plan)
+
+Key files read:
+- `apps/web/src/hooks/useMfa.ts` - The main fix location
+- `apps/web/src/lib/web3auth/core-kit-provider.tsx` - CoreKit React context
+- `apps/web/src/lib/web3auth/core-kit.ts` - CoreKit singleton
+- `apps/web/src/stores/mfa.store.ts` - Zustand MFA store
+- `apps/web/src/components/mfa/SecurityTab.tsx` - Security tab UI
+- `apps/web/src/components/mfa/AuthorizedDevices.tsx` - Device list component
+- `apps/web/src/components/mfa/RecoveryPhraseSection.tsx` - Recovery phrase component
+- `.planning/phases/12.4-mfa-cross-device/12.4-03-PLAN.md` - Planning doc with hashedShare info
+- `.learnings/2026-02-15-phase-12.4-mfa-cross-device.md` - MFA learnings
+
+The fix was a single character change: `>=` to `>` on line 46 of useMfa.ts, plus a comment update.
+
+Errors encountered:
+1. Git index.lock file existed - removed it
+2. Markdown lint failed on plan file (fenced code blocks without language) - fixed by adding `text` language specifier
+3. React fiber key was `__reactContainer` not `__reactFiber` - adjusted query
+
+User messages to capture:
+1. Initial question about MFA setup
+2. "ok logged in"
+3. "once again, if it will help with debugging, we can just spin up the web app locally"
+4. Correction about no social login share
+5. Questions about hashedShare role and `> 2` fix suggestion
+6. "ok, use the gsd quick skill to implement this fix as well as all the necessary documentation in the planning folder."
+
+The task is complete. The branch is ready to push and create a PR.
+
+Summary:
+1. Primary Request and Intent:
+   The user wanted to understand why their staging account's MFA security page shows "[ENABLED]" with "2 factors active, 2/2 threshold" despite never going through MFA enrollment. Their public key is `0x04ef49bbad9a7586b9f5ac1e95adac03479677fd9b5fc6df4aa9691b89f96ca5de3e3d882cdd892ffd9a4b28a934aa4ef644120abed4419f4052cbf0f370bc1b34`. After root cause analysis, the user requested the fix be implemented using the `/gsd:quick` skill with full planning documentation.
+
+2. Key Technical Concepts:
+   - **Web3Auth MPC Core Kit**: The authentication SDK used by CipherBox. Uses Threshold Secret Sharing (TSS) to split keys into factors.
+   - **hashedShare**: A cloud custodial key automatically created by MPC Core Kit during account setup. Has `module: "hashedShare"` and `tssShareIndex: 2`. It is **deleted** when `enableMFA()` is called.
+   - **Default account state**: Every fresh account has `totalFactors: 2` (JWT verifier share + hashedShare), `threshold: 2`. This is the baseline semi-custodial state.
+   - **enableMFA() behavior**: Deletes the hashedShare, creates a device factor + recovery factor, pushing `totalFactors` to 3+. Transitions account from semi-custodial to fully non-custodial.
+   - **CipherBox JWT custom provider**: Web3Auth is NOT using social login directly. CipherBox backend authenticates users and issues a JWT used with Web3Auth as a custom verifier. The user explicitly corrected this misunderstanding.
+   - **Bug**: `details.totalFactors >= 2` is always true for every account, causing false positive MFA enabled status.
+   - **Fix**: Change to `details.totalFactors > 2` — after enableMFA(), factors go to 3+.
+   - **GSD Quick Task**: The project's task execution framework for small atomic changes with planning docs, STATE.md tracking, and atomic commits.
+
+3. Files and Code Sections:
+   - **`apps/web/src/hooks/useMfa.ts`** (THE FIX FILE)
+     - Central MFA operations hook (276 lines). Contains `checkMfaStatus()`, `enableMfa()`, `getFactors()`, `deleteFactor()`, `recoverWithMnemonic()`, `regenerateRecoveryPhrase()`.
+     - **Bug was on line 46**: `const enabled = details.totalFactors >= 2;`
+     - **Fix**: Changed to `const enabled = details.totalFactors > 2;`
+     - **Comment updated** from `MFA is enabled when totalFactors >= 2.` to `MFA is enabled when totalFactors > 2 (every account starts with 2 default factors: JWT verifier share + hashedShare cloud custodial key).`
+     - Key code structure of checkMfaStatus:
+       ```typescript
+       const checkMfaStatus = useCallback((): {
+         isMfaEnabled: boolean;
+         totalFactors: number;
+         threshold: number;
+       } => {
+         if (!coreKit || coreKit.status !== COREKIT_STATUS.LOGGED_IN) {
+           return { isMfaEnabled: false, totalFactors: 0, threshold: 0 };
+         }
+         try {
+           const details = coreKit.getKeyDetails();
+           const enabled = details.totalFactors > 2; // FIXED from >= 2
+           useMfaStore.getState().setMfaEnabled(enabled);
+           useMfaStore.getState().setFactorDetails(details.totalFactors, details.threshold);
+           return { isMfaEnabled: enabled, totalFactors: details.totalFactors, threshold: details.threshold };
+         } catch { return { isMfaEnabled: false, totalFactors: 0, threshold: 0 }; }
+       }, [coreKit]);
+       ```
+
+   - **`apps/web/src/lib/web3auth/core-kit.ts`**
+     - Core Kit singleton with `getCoreKit()` and `initCoreKit()`. Uses `manualSync: true`. Network maps: staging/local/ci → DEVNET, production → MAINNET.
+
+   - **`apps/web/src/lib/web3auth/core-kit-provider.tsx`**
+     - React context provider wrapping Core Kit. Exposes `coreKit`, `status`, `isLoggedIn`, `isRequiredShare`, `syncStatus()`.
+
+   - **`apps/web/src/stores/mfa.store.ts`**
+     - Zustand store with `isMfaEnabled`, `isEnrolling`, `factorCount`, `threshold`, `hasSeenPrompt`.
+
+   - **`apps/web/src/components/mfa/SecurityTab.tsx`**
+     - Displays MFA badge `[ENABLED]`/`[DISABLED]` based on `isMfaEnabled` from store. Shows factor count. Conditionally renders AuthorizedDevices and RecoveryPhraseSection when MFA enabled.
+
+   - **`apps/web/src/components/mfa/AuthorizedDevices.tsx`**
+     - Filters factors by `module === 'DeviceShare' | 'deviceShare' | 'webDeviceShare'`. Line 89: if `factors.length === 0` shows "loading", line 93: if `deviceFactors.length === 0` shows "no device factors found." This correctly showed empty because no device factors exist — only a hashedShare.
+
+   - **`apps/web/src/components/mfa/RecoveryPhraseSection.tsx`**
+     - Checks `f.type === FactorKeyTypeShareDescription.SeedPhrase || f.type === 'seedPhrase'`. Correctly showed "no recovery phrase" because no seedPhrase factor exists.
+
+   - **`.planning/phases/12.4-mfa-cross-device/12.4-03-PLAN.md:165`**
+     - Critical documentation: "For `module === 'hashedShare'` factors: do NOT show (this is the cloud custodial key, which is deleted by enableMFA)"
+
+   - **`.planning/quick/022-fix-mfa-status-detection-false-positive/022-PLAN.md`** (CREATED)
+     - Single plan with 1 task: fix the threshold check and update comment.
+
+   - **`.REDACTED.md`** (CREATED)
+     - Execution summary created by gsd-executor.
+
+   - **`.planning/STATE.md`** (UPDATED)
+     - Quick task 022 row added to table, last activity updated, session continuity updated.
+
+4. Errors and Fixes:
+   - **Git index.lock stale file**: `fatal: Unable to create '.git/index.lock': File exists`. Fixed by `rm .git/index.lock`.
+   - **React fiber key wrong**: Tried `__reactFiber` but React 18 uses `__reactContainer` on root. Fixed by checking `Object.keys(root).filter(k => k.startsWith('__react'))` which returned `__reactContainer$6vp7bkjpthn`.
+   - **Markdown lint failure on plan commit**: Fenced code blocks at lines 54 and 60 of 022-PLAN.md had no language specified (MD040 error). Fixed by changing bare ` ``` ` to ` ```text `.
+   - **User correction on factor types**: I incorrectly called one factor a "social login share". User corrected: "there is no social login share - all initial auth with w3auth is via a cipherbox jwt configured as a custom provider with w3auth". I acknowledged and updated my explanation to reference the JWT verifier share instead.
+
+5. Problem Solving:
+   - **Root cause identified via Playwright console inspection**: Used `page.evaluate()` walking React fiber tree from `__reactContainer` to find CoreKit context value, then called `coreKit.getKeyDetails()` directly. This revealed `shareDescriptions` had only one entry: a `hashedShare` with `tssShareIndex: 2`.
+   - **Cross-referenced with project planning docs**: `.planning/phases/12.4-mfa-cross-device/12.4-03-PLAN.md` confirmed hashedShare is "the cloud custodial key, which is deleted by enableMFA".
+   - **Web search confirmed**: Web3Auth docs/examples show "MFA enabled, device factor stored in local store, deleted hashed cloud key" pattern.
+   - **Fix validated**: `totalFactors > 2` correctly handles both pre-MFA (2 factors = disabled) and post-MFA (3+ factors = enabled) states.
+
+6. All User Messages:
+   - "Im trying to understand the MFA setup - My user account on staging never went through MFA enrollment - the pubkey is 0x04ef49bbad9a7586b9f5ac1e95adac03479677fd9b5fc6df4aa9691b89f96ca5de3e3d882cdd892ffd9a4b28a934aa4ef644120abed4419f4052cbf0f370bc1b34" (with screenshot of security page showing [ENABLED], 2 factors, no device factors, no recovery phrase)
+   - "can you start a playwright session pointed at staging? I will handle the authentication. alternatively, if it will help with debugging, we could just do the same with a local dev server for the ui pointed at staging api"
+   - "ok logged in"
+   - "once again, if it will help with debugging, we can just spin up the web app locally" (sent while I was already doing console queries)
+   - "there is no social login share - all initial auth with w3auth is via a cipherbox jwt configured as a custom provider with w3auth" (correction of my incorrect explanation)
+   - "So what role does the hashedShare even play? What is your assessment of this just being created by Core Kit based on? would an easier fix not just be `const enabled = details.totalFactors > 2`?" (questioning my approach and suggesting simpler fix)
+   - "ok, use the gsd quick skill to implement this fix as well as all the necessary documentation in the planning folder." (implementation request)
+
+7. Pending Tasks:
+   - Push the branch `fix/mfa-status-false-positive` and create a PR (user has not yet requested this but I mentioned it was ready).
+
+8. Current Work:
+   The GSD quick task 022 is **complete**. The fix has been implemented, documented, and committed on branch `fix/mfa-status-false-positive` with 3 commits:
+   - `ff850e0e7` - fix(quick-022): correct MFA status detection false positive
+   - `580e60634` - docs(quick-022): complete MFA status false positive fix
+   - `e36a788b9` - docs(quick-022): add plan for MFA status detection fix
+   
+   The last assistant message stated: "Ready to push and create a PR when you want."
+
+9. Optional Next Step:
+   Push the branch and create a PR. The last exchange was:
+   > Assistant: "Ready to push and create a PR when you want."
+   
+   The user has not yet explicitly asked to push/create PR, so this should wait for user confirmation.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.REDACTED.jsonl
+
+---
+
+I wanted to ask regarding something oyu mentioned `account goes from semi-custodial (Web3Auth can reconstruct your key via the hashedShare)`. I am guessing this would only be possible via collusion between multiple w3auth nodes to retrieve enough shares of the jwt verifier share?
+
+---
+
+you good there?
+
+---
+
+ok, can you add a detailed document to the @docs/ folder, explaining the default base-case setup (when a user signs up) - including the web3auth/torus layer details, as well as the security implications (from the above message). Also document the state post `enableMFA()`
+
+---
+
+I feel that the `5.1 How TSS works` bit is quite unnecessary since cipherbox only really uses the key
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **Context from previous conversation (compacted summary)**:
+   - User discovered MFA status showing "[ENABLED]" on staging despite never enrolling in MFA
+   - Root cause found: `details.totalFactors >= 2` in useMfa.ts is always true (fresh accounts have 2 factors: JWT verifier share + hashedShare)
+   - Fix: Change `>= 2` to `> 2`
+   - User corrected that there's no "social login share" - CipherBox uses a custom JWT verifier with Web3Auth
+   - GSD quick task 022 was executed: fix committed on branch `fix/mfa-status-false-positive`
+   - 3 commits made: ff850e0e7 (code fix), 580e60634 (docs/summary), e36a788b9 (plan)
+
+2. **First exchange in this session**:
+   - User asked about semi-custodial implications: "I am guessing this would only be possible via collusion between multiple w3auth nodes to retrieve enough shares of the jwt verifier share?"
+   - I explained the DKG node collusion + metadata server access requirement, and how post-MFA moves one factor outside Web3Auth's control entirely
+
+3. **"you good there?"**:
+   - User checking in, I confirmed ready to push/PR
+
+4. **Documentation request**:
+   - User asked to add a detailed document to `docs/` explaining:
+     - Default base-case setup when a user signs up
+     - Web3Auth/Torus layer details
+     - Security implications (from the semi-custodial discussion)
+     - State post `enableMFA()`
+
+5. **Research phase**:
+   - Spawned Explore agent to research Web3Auth MPC Core Kit architecture
+   - Read key files: core-kit.ts, useMfa.ts, hooks.ts, jwt-issuer.service.ts, TECHNICAL_ARCHITECTURE.md
+
+6. **Document creation**:
+   - Created document (ended up as `docs/AUTHENTICATION_ARCHITECTURE.md` on disk, though I wrote to `docs/WEB3AUTH_KEY_ARCHITECTURE.md`)
+   - Document had 9 sections including a dedicated TSS section
+
+7. **User feedback on section 5.1**:
+   - User said: "I feel that the `5.1 How TSS works` bit is quite unnecessary since cipherbox only really uses the key"
+   - This is because CipherBox calls `_UNSAFE_exportTssKey()` every session - it never uses TSS signing
+
+8. **Edits made**:
+   - Removed entire section 5 (Threshold Signature Scheme)
+   - Added key export note to section 1 overview paragraph
+   - Renumbered all subsequent sections (6→5, 7→6, 8→7, 9→8)
+   - Updated TOC accordingly
+
+9. **File naming discrepancy**:
+   - Write tool created file as `WEB3AUTH_KEY_ARCHITECTURE.md` but it appeared on disk as `AUTHENTICATION_ARCHITECTURE.md`
+   - Git status showed `?? docs/AUTHENTICATION_ARCHITECTURE.md`
+   - The file was successfully edited under its actual name
+
+10. **Current state**:
+    - Document is complete with user's feedback incorporated
+    - File: `docs/AUTHENTICATION_ARCHITECTURE.md` (untracked)
+    - I asked "Want me to commit this to the branch?"
+    - No response yet from user (summary was requested instead)
+
+Key files read:
+- `apps/web/src/lib/web3auth/core-kit.ts` - Core Kit singleton config
+- `apps/web/src/hooks/useMfa.ts` - MFA operations (the fixed file)
+- `apps/web/src/lib/web3auth/hooks.ts` - Login flows, key export
+- `apps/api/src/auth/services/jwt-issuer.service.ts` - JWT issuance for custom verifier
+- `00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md` - Key hierarchy (sections 1-4.3)
+- `apps/web/src/lib/web3auth/core-kit-provider.tsx` - React context provider
+- `apps/web/src/components/mfa/SecurityTab.tsx` - Security tab UI
+
+The document's final structure (after edits):
+1. Overview
+2. Authentication Flow
+3. Default Account State (Pre-MFA)
+4. Factor Lifecycle After enableMFA()
+5. Security Analysis (was 6)
+6. Cross-Device Approval (was 7)
+7. MFA Status Detection (was 8)
+8. Key Files Reference (was 9)
+
+Summary:
+1. Primary Request and Intent:
+   - **Original task (from previous session)**: Fix MFA status detection false positive in `useMfa.ts` - change `details.totalFactors >= 2` to `details.totalFactors > 2`. This was completed via GSD quick task 022 on branch `fix/mfa-status-false-positive` with 3 commits.
+   - **Security question**: User asked about the semi-custodial implications - whether Web3Auth key reconstruction requires collusion among multiple DKG nodes. I confirmed it requires both DKG node collusion AND metadata server access, and explained how post-MFA moves factors outside Web3Auth's control.
+   - **Documentation request**: User asked to create a detailed document in `docs/` explaining: (1) the default base-case setup when a user signs up including Web3Auth/Torus layer details, (2) security implications of the semi-custodial state, and (3) the state after `enableMFA()`.
+   - **User feedback on document**: User said section 5.1 "How TSS Works" was unnecessary since CipherBox only uses the exported key, never TSS signing. I removed the section and folded the key export note into the overview.
+
+2. Key Technical Concepts:
+   - **Web3Auth MPC Core Kit**: Authentication SDK using Threshold Secret Sharing to split keys into factors
+   - **Custom Verifier `cipherbox-identity`**: CipherBox backend authenticates users and issues RS256 JWTs consumed by Web3Auth (NOT direct social login)
+   - **hashedShare**: Cloud custodial key auto-created by Core Kit during DKG. Stored on Web3Auth metadata server. Deleted when `enableMFA()` is called.
+   - **Default account state**: 2 factors (JWT verifier share + hashedShare), threshold 2, semi-custodial
+   - **Post-MFA state**: 3+ factors (JWT verifier + device share + recovery share), threshold 2, non-custodial
+   - **`_UNSAFE_exportTssKey()`**: Reconstructs full private key client-side from factors. CipherBox uses this every session for ECIES decryption and IPNS signing.
+   - **TSS key stability**: `enableMFA()` does NOT change the derived keypair - CipherBox verifies pre/post tssPubKey match
+   - **`manualSync: true`**: Core Kit requires explicit `commitChanges()` after mutations
+   - **Cross-device approval**: Ephemeral ECIES key exchange via bulletin board API with 5-minute TTL
+
+3. Files and Code Sections:
+   - **`docs/AUTHENTICATION_ARCHITECTURE.md`** (CREATED and EDITED)
+     - New documentation file covering Web3Auth key architecture, factor lifecycle, security analysis
+     - Originally had 9 sections; section 5 (TSS) removed per user feedback, renumbered to 8 sections
+     - Key edit: Added to overview paragraph: "While TSS supports distributed signing without reconstructing the key, CipherBox needs the full private key client-side for ECIES decryption and IPNS signing, so it calls `_UNSAFE_exportTssKey()` each session to reconstruct the key locally from the available factors."
+   
+   - **`apps/web/src/lib/web3auth/core-kit.ts`** (READ for reference)
+     - Core Kit singleton with `manualSync: true`, network config (staging→DEVNET, production→MAINNET)
+     - `getCoreKit()` and `initCoreKit()` functions
+   
+   - **`apps/web/src/hooks/useMfa.ts`** (READ for reference, was EDITED in previous session)
+     - Contains the `> 2` fix from quick task 022
+     - `checkMfaStatus()`, `enableMfa()`, `getFactors()`, `deleteFactor()`, `recoverWithMnemonic()`, `regenerateRecoveryPhrase()`
+     - Key pattern: `enableMfa()` captures pre-MFA tssPubKey, calls `enableMFA({})`, verifies tssPubKey unchanged
+   
+   - **`apps/web/src/lib/web3auth/hooks.ts`** (READ for reference)
+     - `doLoginWithCoreKit()` - shared login logic using `coreKit.loginWithJWT({ verifier: 'cipherbox-identity', verifierId: userId, idToken: cipherboxJwt })`
+     - `getVaultKeypair()` - calls `_UNSAFE_exportTssKey()` and derives secp256k1 keypair
+   
+   - **`apps/api/src/auth/services/jwt-issuer.service.ts`** (READ for reference)
+     - Issues RS256 JWTs with `iss: 'cipherbox'`, `aud: 'web3auth'`, `kid: 'cipherbox-identity-1'`, 5-minute expiry
+     - Serves public key via JWKS endpoint
+   
+   - **`00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md`** (READ sections 1-4.3)
+     - Key hierarchy diagram, auth architecture, encryption primitives
+   
+   - **`apps/web/src/lib/web3auth/core-kit-provider.tsx`** (READ in previous session)
+     - React context provider exposing `coreKit`, `status`, `isLoggedIn`, `isRequiredShare`, `syncStatus()`
+   
+   - **`apps/web/src/components/mfa/SecurityTab.tsx`** (READ in previous session)
+     - Displays MFA badge `[ENABLED]`/`[DISABLED]` based on `isMfaEnabled` from store
+
+4. Errors and fixes:
+   - **File naming discrepancy**: Write tool was called with path `docs/WEB3AUTH_KEY_ARCHITECTURE.md` but the file appeared on disk as `docs/AUTHENTICATION_ARCHITECTURE.md`. Discovered via `git status` showing `?? docs/AUTHENTICATION_ARCHITECTURE.md` and confirmed with `ls -la docs/`. Subsequent edits used the correct on-disk filename.
+   - **Glob returning no results**: `Glob` for `docs/WEB3AUTH*` returned nothing because the file was saved under a different name. Resolved by checking git status.
+   - **User feedback on TSS section**: User said "I feel that the `5.1 How TSS works` bit is quite unnecessary since cipherbox only really uses the key." Fixed by removing entire section 5, folding key export note into overview, and renumbering remaining sections.
+
+5. Problem Solving:
+   - Created comprehensive documentation of Web3Auth key architecture based on actual source code analysis
+   - Researched via Explore agent + direct file reads to verify all technical claims
+   - Incorporated user's earlier correction (no social login share - custom JWT verifier) throughout the document
+   - Addressed user feedback about unnecessary TSS section by removing it and preserving only the relevant key export detail
+
+6. All user messages:
+   - "I wanted to ask regarding something you mentioned `account goes from semi-custodial (Web3Auth can reconstruct your key via the hashedShare)`. I am guessing this would only be possible via collusion between multiple w3auth nodes to retrieve enough shares of the jwt verifier share?"
+   - "you good there?"
+   - "ok, can you add a detailed document to the @docs/ folder, explaining the default base-case setup (when a user signs up) - including the web3auth/torus layer details, as well as the security implications (from the above message). Also document the state post `enableMFA()`"
+   - "I feel that the `5.1 How TSS works` bit is quite unnecessary since cipherbox only really uses the key"
+
+7. Pending Tasks:
+   - Commit `docs/AUTHENTICATION_ARCHITECTURE.md` to the `fix/mfa-status-false-positive` branch (I asked "Want me to commit this to the branch?" but user hasn't responded yet)
+   - Push branch and create PR (mentioned as ready from previous session, user hasn't explicitly requested yet)
+
+8. Current Work:
+   Finished editing `docs/AUTHENTICATION_ARCHITECTURE.md` to remove the TSS section per user feedback. The document now has 8 sections (was 9). All edits are complete:
+   - Section 5 (Threshold Signature Scheme) fully removed
+   - Key export note moved to section 1 overview
+   - TOC updated, all sections renumbered (6→5, 7→6, 8→7, 9→8)
+   - File is untracked in git (`?? docs/AUTHENTICATION_ARCHITECTURE.md`)
+   
+   My last message was: "Done. Removed the TSS section entirely and moved the key export note into the overview as a single sentence. The doc now goes straight from factor lifecycle to security analysis. Want me to commit this to the branch?"
+
+9. Optional Next Step:
+   Commit the new document to the `fix/mfa-status-false-positive` branch. My last message asked: "Want me to commit this to the branch?" - awaiting user confirmation before proceeding.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.REDACTED.jsonl
+
+---
+
+currently the factors supported are the recovery phrase and the device shares. I want to find out about all the other possible factors that we could try for when required_shares > 0
+
+Some high level ideas I want you to explore:
+- TOTP to recover a share
+- passkeys
+
+obviously if you know of any other alternatives, I am open to these as well.
+
+---
+
+I think its perfectly fine to note this research down for future phases
+
+---
+
+<objective>
+Capture an idea, task, or issue that surfaces during a GSD session as a structured todo for later work.
+
+Enables "thought → capture → continue" flow without losing context or derailing current work.
+</objective>
+
+<context>
+@.planning/STATE.md
+</context>
+
+<process>
+
+<step name="ensure_directory">
+```bash
+mkdir -p .planning/todos/pending .planning/todos/done
+```
+</step>
+
+<step name="check_existing_areas">
+```bash
+ls .planning/todos/pending/*.md 2>/dev/null | xargs -I {} grep "^area:" {} 2>/dev/null | cut -d' ' -f2 | sort -u
+```
+
+Note existing areas for consistency in infer_area step.
+</step>
+
+<step name="extract_content">
+**With arguments:** Use as the title/focus.
+- `/gsd:add-todo Add auth token refresh` → title = "Add auth token refresh"
+
+**Without arguments:** Analyze recent conversation to extract:
+- The specific problem, idea, or task discussed
+- Relevant file paths mentioned
+- Technical details (error messages, line numbers, constraints)
+
+Formulate:
+- `title`: 3-10 word descriptive title (action verb preferred)
+- `problem`: What's wrong or why this is needed
+- `solution`: Approach hints or "TBD" if just an idea
+- `files`: Relevant paths with line numbers from conversation
+</step>
+
+<step name="infer_area">
+Infer area from file paths:
+
+| Path pattern | Area |
+|--------------|------|
+| `src/api/*`, `api/*` | `api` |
+| `src/components/*`, `src/ui/*` | `ui` |
+| `src/auth/*`, `auth/*` | `auth` |
+| `src/db/*`, `database/*` | `database` |
+| `tests/*`, `__tests__/*` | `testing` |
+| `docs/*` | `docs` |
+| `.planning/*` | `planning` |
+| `scripts/*`, `bin/*` | `tooling` |
+| No files or unclear | `general` |
+
+Use existing area from step 2 if similar match exists.
+</step>
+
+<step name="check_duplicates">
+```bash
+grep -l -i "[key words from title]" .planning/todos/pending/*.md 2>/dev/null
+```
+
+If potential duplicate found:
+1. Read the existing todo
+2. Compare scope
+
+If overlapping, use AskUserQuestion:
+- header: "Duplicate?"
+- question: "Similar todo exists: [title]. What would you like to do?"
+- options:
+  - "Skip" — keep existing todo
+  - "Replace" — update existing with new context
+  - "Add anyway" — create as separate todo
+</step>
+
+<step name="create_file">
+```bash
+timestamp=$(date "+%Y-%m-%dT%H:%M")
+date_prefix=$(date "+%Y-%m-%d")
+```
+
+Generate slug from title (lowercase, hyphens, no special chars).
+
+Write to `.planning/todos/pending/${date_prefix}-${slug}.md`:
+
+```markdown
+---
+created: [timestamp]
+title: [title]
+area: [area]
+files:
+  - [file:lines]
+---
+
+## Problem
+
+[problem description - enough context for future Claude to understand weeks later]
+
+## Solution
+
+[approach hints or "TBD"]
+```
+</step>
+
+<step name="update_state">
+If `.planning/STATE.md` exists:
+
+1. Count todos: `ls .planning/todos/pending/*.md 2>/dev/null | wc -l`
+2. Update "### Pending Todos" under "## Accumulated Context"
+</step>
+
+<step name="git_commit">
+Commit the todo and any updated state:
+
+```bash
+git add .planning/todos/pending/[filename]
+[ -f .planning/STATE.md ] && git add .planning/STATE.md
+git commit -m "$(cat <<'EOF'
+docs: capture todo - [title]
+
+Area: [area]
+EOF
+)"
+```
+
+Confirm: "Committed: docs: capture todo - [title]"
+</step>
+
+<step name="confirm">
+```
+Todo saved: .planning/todos/pending/[filename]
+
+  [title]
+  Area: [area]
+  Files: [count] referenced
+
+---
+
+Would you like to:
+
+1. Continue with current work
+2. Add another todo
+3. View all todos (/gsd:check-todos)
+```
+</step>
+
+</process>
+
+<output>
+- `.planning/todos/pending/[date]-[slug].md`
+- Updated `.planning/STATE.md` (if exists)
+</output>
+
+<anti_patterns>
+- Don't create todos for work in current plan (that's deviation rule territory)
+- Don't create elaborate solution sections — captures ideas, not plans
+- Don't block on missing information — "TBD" is fine
+</anti_patterns>
+
+<success_criteria>
+- [ ] Directory structure exists
+- [ ] Todo file created with valid frontmatter
+- [ ] Problem section has enough context for future Claude
+- [ ] No duplicates (checked and resolved)
+- [ ] Area consistent with existing todos
+- [ ] STATE.md updated if exists
+- [ ] Todo and state committed to git
+</success_criteria>
+
+
+ARGUMENTS: Add alternative MFA factor types: passkey (WebAuthn PRF), password-derived key, secondary OAuth. Research complete — see conversation for full analysis of TOTP (not viable without server custody), passkeys (best option, PRF extension produces deterministic 32-byte output for factor key derivation), password shares (simplest, Argon2id derivation, PasswordShare already in Core Kit enum), social recovery (high complexity), and secondary OAuth (SocialShare pattern from Web3Auth examples). Priority: passkey > password > secondary OAuth. Key constraint: any factor must produce a 256-bit BN for coreKit.inputFactorKey().
+
+---
+
+ok great push this all up and create a pr
+
+---
+
+ok lets get back to main
