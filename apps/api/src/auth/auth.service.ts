@@ -418,7 +418,6 @@ export class AuthService implements OnModuleDestroy {
     }
 
     // 2. Verify SIWE signature with nonce consumption (C-01: prevent replay)
-    const domain = this.configService.get<string>('SIWE_DOMAIN', 'localhost');
     const parsed = parseSiweMessage(linkDto.siweMessage);
     if (!parsed.nonce) {
       throw new BadRequestException('Invalid SIWE message: missing nonce');
@@ -440,8 +439,7 @@ export class AuthService implements OnModuleDestroy {
     const walletAddress = await this.siweService.verifySiweMessage(
       linkDto.siweMessage,
       linkDto.siweSignature as `0x${string}`,
-      parsed.nonce,
-      domain
+      parsed.nonce
     );
 
     // 3. Hash the wallet address for lookup
