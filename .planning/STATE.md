@@ -214,7 +214,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-13 pending todo(s):
+14 pending todo(s):
 
 - `2026-02-07-web-worker-large-file-encryption.md` -- Offload large file encryption to Web Worker (area: ui)
 - `2026-02-14-bring-your-own-ipfs-node.md` -- Add bring-your-own IPFS node support (area: api)
@@ -229,6 +229,7 @@ Recent decisions affecting current work:
 - `2026-02-22-disable-synchronize-true-all-envs.md` -- Disable synchronize:true in dev and CI to surface missing migrations (area: api)
 - `2026-02-24-async-incremental-search-index.md` -- Make search index build async/incremental for large vaults (area: ui)
 - `2026-02-26-alternative-mfa-factor-types.md` -- Add alternative MFA factor types: passkey (WebAuthn PRF), password-derived key, secondary OAuth (area: auth)
+- `2026-02-27-e2e-mfa-flows-wallet-login.md` -- E2E test coverage for MFA flows using wallet login (area: testing)
 
 ### Roadmap Evolution
 
