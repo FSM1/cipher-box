@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "0d55c2e26968",
+  "strategy": "manual-commit",
+  "branch": "fix/mfa-auth-flow-broken",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/debug/resolved/mfa-auth-flow-broken.md",
+    "apps/web/src/components/mfa/DeviceWaitingScreen.tsx",
+    "apps/web/src/hooks/useAuth.ts",
+    "apps/web/src/hooks/useMfa.ts",
+    "apps/web/src/lib/web3auth/hooks.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0d/55c2e26968/0/metadata.json",
+      "transcript": "/0d/55c2e26968/0/full.jsonl",
+      "context": "/0d/55c2e26968/0/context.md",
+      "content_hash": "/0d/55c2e26968/0/content_hash.txt",
+      "prompt": "/0d/55c2e26968/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3,
+    "cache_creation_tokens": 12816,
+    "cache_read_tokens": 70855,
+    "output_tokens": 153,
+    "api_call_count": 2
+  }
+}
