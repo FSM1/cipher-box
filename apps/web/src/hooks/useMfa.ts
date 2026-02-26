@@ -31,7 +31,8 @@ export function useMfa() {
 
   /**
    * Check MFA status from Core Kit key details.
-   * MFA is enabled when totalFactors >= 2.
+   * MFA is enabled when totalFactors > 2 (every account starts with 2
+   * default factors: JWT verifier share + hashedShare cloud custodial key).
    */
   const checkMfaStatus = useCallback((): {
     isMfaEnabled: boolean;
@@ -43,7 +44,7 @@ export function useMfa() {
     }
     try {
       const details = coreKit.getKeyDetails();
-      const enabled = details.totalFactors >= 2;
+      const enabled = details.totalFactors > 2;
       useMfaStore.getState().setMfaEnabled(enabled);
       useMfaStore.getState().setFactorDetails(details.totalFactors, details.threshold);
       return {
