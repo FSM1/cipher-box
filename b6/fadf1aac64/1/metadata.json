@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "b6fadf1aac64",
+  "session_id": "572687ab-27ed-487b-94a3-d8b381e0fb52",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T23:47:33.673973Z",
+  "branch": "docs/todo-mfa-e2e-coverage",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "7aaf7e9e6538",
+  "checkpoint_transcript_start": 170,
+  "transcript_lines_at_start": 170,
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 20410,
+    "cache_read_tokens": 506894,
+    "output_tokens": 623,
+    "api_call_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T23:47:33.375097Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/572687ab-27ed-487b-94a3-d8b381e0fb52.jsonl"
+}
