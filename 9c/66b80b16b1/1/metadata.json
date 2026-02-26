@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.5",
+  "checkpoint_id": "9c66b80b16b1",
+  "session_id": "572687ab-27ed-487b-94a3-d8b381e0fb52",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-26T23:42:04.572956Z",
+  "branch": "fix/mfa-auth-flow-broken",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/pending/2026-02-27-e2e-mfa-flows-wallet-login.md",
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "4588705de14e",
+  "token_usage": {
+    "input_tokens": 17,
+    "cache_creation_tokens": 32457,
+    "cache_read_tokens": 601724,
+    "output_tokens": 699,
+    "api_call_count": 11
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-26T23:42:04.291449Z",
+    "agent_lines": 0,
+    "human_added": 62,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 62,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-michael-Code-cipher-box/572687ab-27ed-487b-94a3-d8b381e0fb52.jsonl"
+}
