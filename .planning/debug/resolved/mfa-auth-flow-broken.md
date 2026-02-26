@@ -1,14 +1,14 @@
 ---
 status: resolved
-trigger: 'Three interrelated MFA authentication bugs after enabling MFA on CipherBox web app'
+trigger: 'Seven interrelated MFA bugs: three auth flow + four Security tab display'
 created: 2026-02-26T00:00:00Z
-updated: 2026-02-26T00:15:00Z
+updated: 2026-02-26T01:30:00Z
 ---
 
 ## Current Focus
 
-hypothesis: All three root causes confirmed and fixed
-test: TypeScript compilation + ESLint pass
+hypothesis: All seven root causes confirmed and fixed
+test: TypeScript compilation pass
 expecting: Clean build
 next_action: Archive and commit
 
@@ -19,24 +19,37 @@ expected:
 1. After enabling MFA, device share saved to localStorage; re-login doesn't require additional shares
 2. Recovery key completes authentication and grants vault access
 3. Device approval requests work for new browsers needing a share
+4. Security tab shows recovery phrase as active after recovery sign-in
+5. Security tab shows device with browser name and last active time
+6. Factor count is consistent with visible UI (devices + recovery)
+7. Device last active shows relative time (e.g. "just now") for current device
 
 actual:
 
 1. After MFA enable + logout/login, app shows "missing shares" (required_shares > 0)
 2. Recovery key accepted but redirects back to login screen
 3. POST /device-approval/request returns 401 Unauthorized
+4. Security tab shows "no recovery phrase" even after signing in with recovery
+5. Security tab shows "Unknown device" / "last active: unknown" for recovery-created device
+6. Factor count (4) is accurate but inconsistent with visible UI (1 device, no recovery shown)
+7. Device last active shows "unknown" even for current device after recovery sign-in
 
 errors:
 
 - "missing shares" state after re-login with MFA enabled
 - Recovery key redirected to login
 - 401 on POST /device-approval/request
+- RecoveryPhraseSection shows "no recovery phrase" (type !== 'seedPhrase')
+- AuthorizedDevices shows "Unknown device" (no additionalMetadata)
 
 reproduction:
 
 1. Login -> Enable MFA -> Logout -> Login -> "missing shares"
 2. Try recovery key -> redirected to login
 3. Device approval request -> 401
+4. Sign in with recovery phrase -> Settings > Security -> "no recovery phrase"
+5. Same flow -> device list shows "Unknown device" / "last active: unknown"
+6. Same flow -> device last active shows "unknown" even for current device
 
 started: Current state on staging
 
@@ -71,6 +84,42 @@ started: Current state on staging
   found: Only pre-existing warnings (no-explicit-any in test files). Zero new errors from our changes.
   implication: Fixes pass linting.
 
+- timestamp: 2026-02-26T00:30:00Z
+  checked: Web3Auth SDK addFactorDescription() source and enableMFA() internals
+  found: enableMFA({}) creates both device and recovery factors with shareDescription defaulting
+  to FactorKeyTypeShareDescription.Other ("Other") because createFactor() defaults to "Other"
+  when no shareDescription is provided. Our getFactors() parser only recognized "deviceShare"
+  and "seedPhrase" module types, so both factors were classified as "Other"/unknown.
+  implication: Bug 4+6 root cause confirmed. Need type normalization via tssShareIndex.
+
+- timestamp: 2026-02-26T00:32:00Z
+  checked: Web3Auth addFactorDescription() spread behavior
+  found: addFactorDescription spreads additionalMetadata at the top level of the JSON description
+  object (alongside module, dateAdded, tssShareIndex). Our getFactors() looked for a nested
+  parsed.additionalMetadata object that doesn't exist -- metadata fields like deviceId and
+  browserName are at the root level.
+  implication: Bug 5 root cause confirmed. Need flat JSON extraction for metadata.
+
+- timestamp: 2026-02-26T00:34:00Z
+  checked: recoverWithMnemonic() in useMfa.ts
+  found: createFactor() call had no additionalMetadata -- the device factor created during
+  recovery had no deviceId or browserName, making it unmatchable to the device registry.
+  implication: Bug 5 contributing cause. Need to pass device identity and info during recovery.
+
+- timestamp: 2026-02-26T00:40:00Z
+  checked: AuthorizedDevices.tsx registryMap filter and lastActive fallback
+  found: registryMap only included devices with status === 'authorized'. Recovery-created devices
+  get status 'pending' in the registry, so their lastSeenAt was excluded from the map. Also,
+  the registry sync is fire-and-forget (void async IIFE), so it may not have completed when the
+  Security tab renders -- registry is null in the store, meaning no lastSeenAt for any device.
+  implication: Bug 7 root cause confirmed. Two issues: overly strict status filter + no fallback
+  for current device when registry hasn't loaded yet.
+
+- timestamp: 2026-02-26T00:50:00Z
+  checked: TypeScript compilation after all fixes (pnpm --filter web exec tsc --noEmit)
+  found: All fixes compile cleanly with no errors.
+  implication: All seven bug fixes are type-safe.
+
 ## Resolution
 
 root_cause: |
@@ -93,6 +142,26 @@ DeviceWaitingScreen before the calling function (loginWithGoogle/Email/Wallet) c
 obtain the temporary access token. The original useEffect([], []) on mount fired
 requestApproval() immediately with no token in auth store.
 
+BUG 4 (recovery phrase shows "no recovery phrase"): enableMFA({}) creates the recovery factor
+with shareDescription defaulting to FactorKeyTypeShareDescription.Other ("Other"). getFactors()
+only recognized "seedPhrase" as the recovery type. RecoveryPhraseSection checks
+type === 'seedPhrase', so the "Other"-typed recovery factor was invisible.
+
+BUG 5 (device shows "Unknown device"): Two causes: (a) Web3Auth's addFactorDescription()
+spreads additionalMetadata at the top level of the JSON, but getFactors() looked for a nested
+parsed.additionalMetadata object. (b) recoverWithMnemonic() created the device factor without
+any additionalMetadata (no deviceId, browserName), so even correct parsing found nothing.
+
+BUG 6 (factor count inconsistent with visible UI): Direct consequence of bugs 4+5. Factor
+count (4) was correct from getKeyDetails().totalFactors, but the UI showed fewer because
+"Other"-typed factors were not recognized as devices or recovery phrases.
+
+BUG 7 (device last active shows "unknown"): Two causes: (a) AuthorizedDevices registryMap
+filtered on status === 'authorized', but recovery-created devices get status 'pending' in
+the registry, so their lastSeenAt was excluded. (b) The registry sync is fire-and-forget
+(void async IIFE in useAuth), so the Security tab may render before the store is populated,
+meaning registry is null and no device has a lastSeenAt to display.
+
 fix: |
 BUG 1: Added device factor auto-detection in doLoginWithCoreKit() (hooks.ts). After
 REQUIRED_SHARE status, call coreKit.getDeviceFactor(). If found, auto-input it via
@@ -108,15 +177,34 @@ BUG 3: Added accessToken subscription to DeviceWaitingScreen. Changed mount effe
 accessToken before firing requestApproval(). Added requestFiredRef to prevent duplicate
 requests. Separated countdown/cancel cleanup into its own effect.
 
+BUG 4: Fixed getFactors() to normalize type via tssShareIndex. When module is "Other",
+tssShareIndex 2 maps to DeviceShare, tssShareIndex 3 maps to SeedPhrase. Also fixed
+enableMfa() to pass shareDescription: SeedPhrase so future enrollments tag the recovery
+factor correctly (existing accounts handled by tssShareIndex normalization).
+
+BUG 5: Fixed getFactors() to extract additionalMetadata from the flat JSON structure instead
+of looking for a nested object. Excludes known system fields (module, dateAdded, tssShareIndex,
+tssIndex). Also added device metadata (deviceId, browserName) to recoverWithMnemonic()'s
+createFactor call using getOrCreateDeviceIdentity() and detectDeviceInfo().
+
+BUG 6: Resolved automatically by fixes 4+5 -- correct type normalization makes all factors
+visible in the appropriate UI sections.
+
+BUG 7: Broadened AuthorizedDevices registryMap filter from status === 'authorized' to
+status !== 'revoked', so pending devices (from recovery) have their lastSeenAt included.
+Added "just now" fallback for the current device when no registry entry exists (handles
+the race where registry sync hasn't completed yet).
+
 verification: |
 
-- TypeScript compilation: PASS (zero errors)
+- TypeScript compilation: PASS (zero errors for all seven fixes)
 - ESLint: PASS (zero new errors, only pre-existing warnings)
-- Code review: All four files verified for correctness
+- Code review: All files verified for correctness
 
 files_changed:
 
-- apps/web/src/lib/web3auth/hooks.ts
-- apps/web/src/hooks/useMfa.ts
-- apps/web/src/hooks/useAuth.ts
-- apps/web/src/components/mfa/DeviceWaitingScreen.tsx
+- apps/web/src/lib/web3auth/hooks.ts (bug 1)
+- apps/web/src/hooks/useMfa.ts (bugs 2, 4, 5, 6)
+- apps/web/src/hooks/useAuth.ts (bug 2)
+- apps/web/src/components/mfa/DeviceWaitingScreen.tsx (bug 3)
+- apps/web/src/components/mfa/AuthorizedDevices.tsx (bug 7)

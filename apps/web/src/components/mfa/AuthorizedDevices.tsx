@@ -38,11 +38,12 @@ export function AuthorizedDevices() {
         f.type === 'webDeviceShare'
     );
 
-    // Build a map from deviceId to registry entry for quick lookup
+    // Build a map from deviceId to registry entry for quick lookup.
+    // Include all non-revoked devices (pending devices from recovery still have valid lastSeenAt).
     const registryMap = new Map<string, { name: string; lastSeenAt: number }>();
     if (registry?.devices) {
       for (const device of registry.devices) {
-        if (device.status === 'authorized') {
+        if (device.status !== 'revoked') {
           registryMap.set(device.deviceId, {
             name: device.name,
             lastSeenAt: device.lastSeenAt,
@@ -61,7 +62,9 @@ export function AuthorizedDevices() {
         name: registryEntry?.name || factor.additionalMetadata?.browserName || 'Unknown device',
         lastActive: registryEntry?.lastSeenAt
           ? formatRelativeTime(registryEntry.lastSeenAt)
-          : 'unknown',
+          : isCurrent
+            ? 'just now'
+            : 'unknown',
         isCurrent,
       };
     });
