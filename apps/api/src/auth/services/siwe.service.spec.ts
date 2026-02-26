@@ -134,7 +134,7 @@ describe('SiweService', () => {
     const testMessage = 'example.com wants you to sign in with your Ethereum account...';
     const testSignature = '0xabc123' as `0x${string}`;
     const testNonce = 'abc123def456abc123def456abc123de';
-    const testDomain = 'example.com';
+    const testDomains = ['example.com'];
     const testAddress = '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045';
 
     it('should return checksummed address on valid verification', async () => {
@@ -147,14 +147,14 @@ describe('SiweService', () => {
         testMessage,
         testSignature,
         testNonce,
-        testDomain
+        testDomains
       );
 
       expect(result).toBe(testAddress);
       expect(mockParseSiweMessage).toHaveBeenCalledWith(testMessage);
       expect(mockValidateSiweMessage).toHaveBeenCalledWith({
         message: { address: testAddress, nonce: testNonce },
-        domain: testDomain,
+        domain: 'example.com',
         nonce: testNonce,
       });
       expect(mockVerifyMessage).toHaveBeenCalledWith({
@@ -164,20 +164,36 @@ describe('SiweService', () => {
       });
     });
 
+    it('should accept any domain from the allowed list', async () => {
+      mockParseSiweMessage.mockReturnValue({ address: testAddress, nonce: testNonce });
+      // First domain fails, second succeeds
+      mockValidateSiweMessage.mockReturnValueOnce(false).mockReturnValueOnce(true);
+      mockVerifyMessage.mockResolvedValue(true);
+      mockGetAddress.mockReturnValue(testAddress);
+
+      const result = await service.verifySiweMessage(testMessage, testSignature, testNonce, [
+        'other.com',
+        'example.com',
+      ]);
+
+      expect(result).toBe(testAddress);
+      expect(mockValidateSiweMessage).toHaveBeenCalledTimes(2);
+    });
+
     it('should throw UnauthorizedException if message has no address', async () => {
       mockParseSiweMessage.mockReturnValue({ nonce: testNonce });
 
       await expect(
-        service.verifySiweMessage(testMessage, testSignature, testNonce, testDomain)
+        service.verifySiweMessage(testMessage, testSignature, testNonce, testDomains)
       ).rejects.toThrow(UnauthorizedException);
     });
 
-    it('should throw UnauthorizedException if message validation fails', async () => {
+    it('should throw UnauthorizedException if no domain matches', async () => {
       mockParseSiweMessage.mockReturnValue({ address: testAddress, nonce: testNonce });
       mockValidateSiweMessage.mockReturnValue(false);
 
       await expect(
-        service.verifySiweMessage(testMessage, testSignature, testNonce, testDomain)
+        service.verifySiweMessage(testMessage, testSignature, testNonce, ['wrong.com', 'other.com'])
       ).rejects.toThrow(UnauthorizedException);
     });
 
@@ -187,7 +203,7 @@ describe('SiweService', () => {
       mockVerifyMessage.mockResolvedValue(false);
 
       await expect(
-        service.verifySiweMessage(testMessage, testSignature, testNonce, testDomain)
+        service.verifySiweMessage(testMessage, testSignature, testNonce, testDomains)
       ).rejects.toThrow(UnauthorizedException);
     });
   });

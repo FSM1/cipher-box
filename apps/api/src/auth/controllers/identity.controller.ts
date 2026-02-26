@@ -253,15 +253,31 @@ export class IdentityController implements OnModuleDestroy {
       throw new UnauthorizedException('Invalid or expired nonce');
     }
 
-    // 3. Determine domain for validation
-    const domain = this.configService.get<string>('SIWE_DOMAIN', 'localhost');
+    // 3. Build allowed domains from CORS origins (host:port without scheme)
+    const rawOrigins =
+      this.configService.get<string>('CORS_ALLOWED_ORIGINS') ||
+      this.configService.get<string>('WEB_APP_URL');
+    const allowedDomains = rawOrigins
+      ? rawOrigins
+          .split(',')
+          .map((o) => o.trim())
+          .filter((o) => !o.includes('*'))
+          .map((o) => {
+            try {
+              const url = new URL(o);
+              return url.host;
+            } catch {
+              return o;
+            }
+          })
+      : ['localhost:5173', 'localhost:4173', 'localhost'];
 
     // 4. Verify SIWE message + signature
     const walletAddress = await this.siweService.verifySiweMessage(
       dto.message,
       dto.signature as `0x${string}`,
       parsed.nonce,
-      domain
+      allowedDomains
     );
 
     // 5. Link intent: just verify ownership and issue JWT (no user creation)

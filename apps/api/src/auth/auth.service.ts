@@ -418,7 +418,24 @@ export class AuthService implements OnModuleDestroy {
     }
 
     // 2. Verify SIWE signature with nonce consumption (C-01: prevent replay)
-    const domain = this.configService.get<string>('SIWE_DOMAIN', 'localhost');
+    const rawOrigins =
+      this.configService.get<string>('CORS_ALLOWED_ORIGINS') ||
+      this.configService.get<string>('WEB_APP_URL');
+    const allowedDomains = rawOrigins
+      ? rawOrigins
+          .split(',')
+          .map((o) => o.trim())
+          .filter((o) => !o.includes('*'))
+          .map((o) => {
+            try {
+              const url = new URL(o);
+              return url.host;
+            } catch {
+              return o;
+            }
+          })
+      : ['localhost:5173', 'localhost:4173', 'localhost'];
+
     const parsed = parseSiweMessage(linkDto.siweMessage);
     if (!parsed.nonce) {
       throw new BadRequestException('Invalid SIWE message: missing nonce');
@@ -441,7 +458,7 @@ export class AuthService implements OnModuleDestroy {
       linkDto.siweMessage,
       linkDto.siweSignature as `0x${string}`,
       parsed.nonce,
-      domain
+      allowedDomains
     );
 
     // 3. Hash the wallet address for lookup

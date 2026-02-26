@@ -87,7 +87,7 @@ describe('IdentityController', () => {
         if (key === 'REDIS_HOST') return 'localhost';
         if (key === 'REDIS_PORT') return 6379;
         if (key === 'REDIS_PASSWORD') return undefined;
-        if (key === 'SIWE_DOMAIN') return 'localhost';
+        if (key === 'CORS_ALLOWED_ORIGINS') return 'http://localhost:5173,http://localhost:4173';
         return defaultValue;
       }),
     };

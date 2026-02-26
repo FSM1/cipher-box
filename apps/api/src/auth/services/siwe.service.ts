@@ -25,7 +25,7 @@ export class SiweService {
     message: string,
     signature: `0x${string}`,
     expectedNonce: string,
-    expectedDomain: string
+    allowedDomains: string[]
   ): Promise<string> {
     // 1. Parse the SIWE message
     const parsed = parseSiweMessage(message);
@@ -34,11 +34,14 @@ export class SiweService {
     }
 
     // 2. Validate message fields (domain, nonce, expiry, etc.)
-    const isValid = validateSiweMessage({
-      message: parsed,
-      domain: expectedDomain,
-      nonce: expectedNonce,
-    });
+    // Accept any domain from the allowed list (CORS origins)
+    const isValid = allowedDomains.some((domain) =>
+      validateSiweMessage({
+        message: parsed,
+        domain,
+        nonce: expectedNonce,
+      })
+    );
     if (!isValid) {
       throw new UnauthorizedException('SIWE message validation failed');
     }
