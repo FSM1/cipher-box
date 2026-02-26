@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.1](https://github.com/FSM1/cipher-box/compare/v0.19.0...v0.19.1) (2026-02-26)
+
+
+### Bug Fixes
+
+* **web:** MFA status detection false positive + auth architecture docs ([#205](https://github.com/FSM1/cipher-box/issues/205)) ([a395b82](https://github.com/FSM1/cipher-box/commit/a395b82dd5b6a9cdbc5d8a974d70d05c6e053ee7))
+
 ## [0.19.0](https://github.com/FSM1/cipher-box/compare/v0.18.0...v0.19.0) (2026-02-26)
 
 
