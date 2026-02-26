@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.19.0](https://github.com/FSM1/cipher-box/compare/v0.18.0...v0.19.0) (2026-02-26)
+
+
+### Features
+
+* **web:** GDPR account deletion with IPFS unpin ([#202](https://github.com/FSM1/cipher-box/issues/202)) ([b981d41](https://github.com/FSM1/cipher-box/commit/b981d4127f20c5b240572b6cf43642a00bf8825d))
+
+
+### Bug Fixes
+
+* **ipns:** prefer DB cache over stale network IPNS records ([#203](https://github.com/FSM1/cipher-box/issues/203)) ([8d3c989](https://github.com/FSM1/cipher-box/commit/8d3c9898c6cd7267965a1894f0287a0b800f128d))
+
 ## [0.18.0](https://github.com/FSM1/cipher-box/compare/v0.17.0...v0.18.0) (2026-02-24)
 
 
