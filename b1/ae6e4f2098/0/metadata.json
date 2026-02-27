@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "b1ae6e4f2098",
+  "session_id": "55992fc0-b093-4ca5-b316-9fab69994992",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-27T14:56:59.333486Z",
+  "branch": "docs/resolve-debug-sessions",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/debug/corekit-auth-uat-resolved.md",
+    ".planning/debug/mfa-banner-footer-overlap-resolved.md",
+    ".planning/debug/mfa-banner-footer-overlap.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "eb5992e22e23",
+  "token_usage": {
+    "input_tokens": 1937,
+    "cache_creation_tokens": 72514,
+    "cache_read_tokens": 2133820,
+    "output_tokens": 4860,
+    "api_call_count": 25
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-27T14:56:57.915931Z",
+    "agent_lines": 320,
+    "human_added": 1,
+    "human_modified": 14,
+    "human_removed": 0,
+    "total_committed": 335,
+    "agent_percentage": 95.52238805970148
+  }
+}

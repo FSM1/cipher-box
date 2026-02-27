@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "b1ae6e4f2098",
+  "strategy": "manual-commit",
+  "branch": "docs/resolve-debug-sessions",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/debug/corekit-auth-uat-resolved.md",
+    ".planning/debug/mfa-banner-footer-overlap-resolved.md",
+    ".planning/debug/mfa-banner-footer-overlap.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b1/ae6e4f2098/0/metadata.json",
+      "transcript": "/b1/ae6e4f2098/0/full.jsonl",
+      "context": "/b1/ae6e4f2098/0/context.md",
+      "content_hash": "/b1/ae6e4f2098/0/content_hash.txt",
+      "prompt": "/b1/ae6e4f2098/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1937,
+    "cache_creation_tokens": 72514,
+    "cache_read_tokens": 2133820,
+    "output_tokens": 4860,
+    "api_call_count": 25
+  }
+}
