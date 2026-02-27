@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "fbf6eb4f48fe",
+  "session_id": "356e0a61-0610-41b7-a594-c656a60ecc8a",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-27T11:54:51.371449Z",
+  "branch": "feat/e2e-mfa-flows",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/auth/strategies/jwt.strategy.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "60d5046ba8e8",
+  "checkpoint_transcript_start": 199,
+  "transcript_lines_at_start": 199,
+  "token_usage": {
+    "input_tokens": 75,
+    "cache_creation_tokens": 9087,
+    "cache_read_tokens": 790889,
+    "output_tokens": 1047,
+    "api_call_count": 15
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-27T11:54:50.370252Z",
+    "agent_lines": 0,
+    "human_added": 23,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 23,
+    "agent_percentage": 0
+  }
+}
