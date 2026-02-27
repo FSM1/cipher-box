@@ -102,6 +102,7 @@ export function useDeviceApproval() {
       approverPollRef.current = null;
     }
     isPollingPendingRef.current = false;
+    handledRequestIdsRef.current.clear();
   }, []);
 
   // =========================================================================
@@ -307,31 +308,35 @@ export function useDeviceApproval() {
   // =========================================================================
 
   /**
+   * Fetch pending requests from the bulletin board, filtering out recently
+   * handled ones to prevent stale in-flight responses from re-adding them.
+   */
+  const fetchFilteredPending = useCallback(async () => {
+    try {
+      const pending = await deviceApprovalApi.getPending();
+      const handled = handledRequestIdsRef.current;
+      const filtered =
+        handled.size > 0
+          ? pending.filter((r) => r.requestId && !handled.has(r.requestId))
+          : pending;
+      setPendingRequests(filtered);
+    } catch {
+      // Network error -- continue polling
+    }
+  }, []);
+
+  /**
    * Start polling for pending approval requests (existing device side).
    */
   const pollPendingRequests = useCallback(() => {
     if (isPollingPendingRef.current) return;
     isPollingPendingRef.current = true;
 
-    const poll = async () => {
-      try {
-        const pending = await deviceApprovalApi.getPending();
-        // Filter out requests that were recently approved/denied locally
-        // to prevent stale in-flight poll responses from re-adding them.
-        const handled = handledRequestIdsRef.current;
-        const filtered =
-          handled.size > 0 ? pending.filter((r) => !handled.has(r.requestId!)) : pending;
-        setPendingRequests(filtered);
-      } catch {
-        // Network error -- continue polling
-      }
-    };
-
     // Poll every 5 seconds
-    approverPollRef.current = setInterval(poll, 5000);
+    approverPollRef.current = setInterval(fetchFilteredPending, 5000);
     // Fire immediately
-    void poll();
-  }, []);
+    void fetchFilteredPending();
+  }, [fetchFilteredPending]);
 
   /**
    * Approve a pending request: ECIES-encrypt current factor key with
@@ -400,19 +405,8 @@ export function useDeviceApproval() {
     if (isVisible) {
       // Resume polling when tab becomes visible
       if (!approverPollRef.current) {
-        const poll = async () => {
-          try {
-            const pending = await deviceApprovalApi.getPending();
-            const handled = handledRequestIdsRef.current;
-            const filtered =
-              handled.size > 0 ? pending.filter((r) => !handled.has(r.requestId!)) : pending;
-            setPendingRequests(filtered);
-          } catch {
-            // Network error -- continue polling
-          }
-        };
-        approverPollRef.current = setInterval(poll, 5000);
-        void poll();
+        approverPollRef.current = setInterval(fetchFilteredPending, 5000);
+        void fetchFilteredPending();
       }
     } else {
       // Pause polling when tab is hidden
@@ -421,7 +415,7 @@ export function useDeviceApproval() {
         approverPollRef.current = null;
       }
     }
-  }, [isVisible]);
+  }, [isVisible, fetchFilteredPending]);
 
   // =========================================================================
   // CLEANUP ON UNMOUNT
