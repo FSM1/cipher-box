@@ -1,6 +1,7 @@
 import { ExecutionContext, ForbiddenException, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
+import { Observable, firstValueFrom } from 'rxjs';
 
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
@@ -9,8 +10,12 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    // Standard JWT validation (sets req.user via JwtStrategy.validate)
-    const result = await super.canActivate(context);
+    // Standard JWT validation (sets req.user via JwtStrategy.validate).
+    // super.canActivate() returns boolean | Promise<boolean> | Observable<boolean>;
+    // handle all three variants.
+    const superResult = super.canActivate(context);
+    const result =
+      superResult instanceof Observable ? await firstValueFrom(superResult) : await superResult;
     if (!result) return false;
 
     // Check scope restrictions on the authenticated token
