@@ -2,7 +2,7 @@ import { type BrowserContext, type Page } from '@playwright/test';
 import { installMockWallet } from '@johanneskares/wallet-mock';
 import { generatePrivateKey, privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
 import { mainnet } from 'viem/chains';
-import { http } from 'viem';
+import { custom } from 'viem';
 
 /**
  * Result of a wallet login attempt.
@@ -11,6 +11,33 @@ import { http } from 'viem';
  *   (DeviceWaitingScreen is shown).
  */
 export type WalletLoginResult = { outcome: 'success' } | { outcome: 'requiredShare' };
+
+/**
+ * Local-only transport for the mock wallet.
+ *
+ * The mock wallet from @johanneskares/wallet-mock doesn't explicitly handle
+ * `eth_chainId` — unhandled methods fall through to the configured viem
+ * transport. Using `http()` (the default mainnet RPC) causes `eth_chainId`
+ * to make a real HTTP request, which hangs in CI where the RPC may be
+ * unreachable. This custom transport returns mock data for all methods
+ * the mock wallet doesn't handle itself, avoiding any network calls.
+ */
+const localTransport = custom({
+  async request({ method }) {
+    switch (method) {
+      case 'eth_chainId':
+        return '0x1'; // mainnet
+      case 'net_version':
+        return '1';
+      case 'eth_blockNumber':
+        return '0x0';
+      case 'eth_getBalance':
+        return '0x0';
+      default:
+        throw new Error(`Mock transport: unhandled method ${method}`);
+    }
+  },
+});
 
 /**
  * Generate a random viem account for MFA tests.
@@ -40,7 +67,7 @@ export async function setupMockWallet(page: Page, account: PrivateKeyAccount): P
     page,
     account,
     defaultChain: mainnet,
-    transports: { [mainnet.id]: http() },
+    transports: { [mainnet.id]: localTransport },
   });
 }
 
