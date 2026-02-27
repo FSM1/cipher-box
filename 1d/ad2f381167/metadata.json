@@ -3,7 +3,7 @@
   "checkpoint_id": "1dad2f381167",
   "strategy": "manual-commit",
   "branch": "chore/ci-skip-desktop-on-version-bumps",
-  "checkpoints_count": 2,
+  "checkpoints_count": 3,
   "files_touched": [
     ".github/workflows/ci.yml"
   ],
@@ -14,13 +14,20 @@
       "context": "/1d/ad2f381167/0/context.md",
       "content_hash": "/1d/ad2f381167/0/content_hash.txt",
       "prompt": "/1d/ad2f381167/0/prompt.txt"
+    },
+    {
+      "metadata": "/1d/ad2f381167/1/metadata.json",
+      "transcript": "/1d/ad2f381167/1/full.jsonl",
+      "context": "/1d/ad2f381167/1/context.md",
+      "content_hash": "/1d/ad2f381167/1/content_hash.txt",
+      "prompt": "/1d/ad2f381167/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 17,
-    "cache_creation_tokens": 27271,
-    "cache_read_tokens": 546530,
-    "output_tokens": 2405,
-    "api_call_count": 11
+    "input_tokens": 73,
+    "cache_creation_tokens": 123208,
+    "cache_read_tokens": 3862800,
+    "output_tokens": 15148,
+    "api_call_count": 55
   }
 }
