@@ -31,18 +31,9 @@ jobs:
               - 'pnpm-workspace.yaml'
               - 'tsconfig*.json'
               - 'biome.json'
-              - '!**/*.md'
-              - '!**/package.json'
-              - '!**/Cargo.toml'
-              - '!**/tauri.conf.json'
-              - '!.release-please-manifest.json'
             desktop:
               - 'apps/desktop/**'
-              - '!apps/desktop/package.json'
-              - '!apps/desktop/src-tauri/Cargo.toml'
-              - '!apps/desktop/src-tauri/tauri.conf.json'
               - 'packages/crypto/**'
-              - '!packages/crypto/package.json'
               - '.github/workflows/ci.yml'
 
   lint:
@@ -68,6 +59,9 @@ jobs:
 
   typecheck:
     name: Typecheck
+    needs: [changes]
+    if: |
+      github.event_name == 'push' || needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
