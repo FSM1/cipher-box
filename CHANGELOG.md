@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.5](https://github.com/FSM1/cipher-box/compare/v0.19.4...v0.19.5) (2026-02-27)
+
+
+### Bug Fixes
+
+* **api:** disable synchronize:true in all environments ([#216](https://github.com/FSM1/cipher-box/issues/216)) ([4b4a3b3](https://github.com/FSM1/cipher-box/commit/4b4a3b315e7f3588f3c815e4aed0faf7bd098010))
+
 ## [0.19.4](https://github.com/FSM1/cipher-box/compare/v0.19.3...v0.19.4) (2026-02-27)
 
 
