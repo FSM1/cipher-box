@@ -41,7 +41,6 @@ jobs:
       needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: staging
 
     services:
       postgres:
