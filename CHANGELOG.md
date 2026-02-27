@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.4](https://github.com/FSM1/cipher-box/compare/v0.19.3...v0.19.4) (2026-02-27)
+
+
+### Bug Fixes
+
+* **api,web:** MFA REQUIRED_SHARE auth flow + E2E test coverage ([#213](https://github.com/FSM1/cipher-box/issues/213)) ([133a541](https://github.com/FSM1/cipher-box/commit/133a541b792a11a32eeae620a806e39a4d1c39a5))
+
 ## [0.19.3](https://github.com/FSM1/cipher-box/compare/v0.19.2...v0.19.3) (2026-02-26)
 
 
