@@ -291,8 +291,7 @@ export function useAuth() {
           setUserEmail(email);
         }
 
-        // 4. Navigate to files
-        navigate('/files');
+        // Navigation handled by Login.tsx redirect effect (isAuthenticated → /files)
       } catch (error) {
         console.error('[useAuth] Google login failed:', error);
         throw error;
@@ -300,7 +299,7 @@ export function useAuth() {
         setIsLoggingIn(false);
       }
     },
-    [isLoggingIn, coreKitLoginGoogle, completeBackendAuth, setAccessToken, setUserEmail, navigate]
+    [isLoggingIn, coreKitLoginGoogle, completeBackendAuth, setAccessToken, setUserEmail]
   );
 
   /**
@@ -333,7 +332,7 @@ export function useAuth() {
         // Normal path
         await completeBackendAuth('email', cipherboxJwt);
         setUserEmail(email);
-        navigate('/files');
+        // Navigation handled by Login.tsx redirect effect (isAuthenticated → /files)
       } catch (error) {
         console.error('[useAuth] Email login failed:', error);
         throw error;
@@ -341,7 +340,7 @@ export function useAuth() {
         setIsLoggingIn(false);
       }
     },
-    [isLoggingIn, coreKitLoginEmail, completeBackendAuth, setAccessToken, setUserEmail, navigate]
+    [isLoggingIn, coreKitLoginEmail, completeBackendAuth, setAccessToken, setUserEmail]
   );
 
   /**
@@ -372,7 +371,11 @@ export function useAuth() {
 
         // Normal path
         await completeBackendAuth('wallet', cipherboxJwt);
-        navigate('/files');
+        // Navigation is handled by Login.tsx's redirect effect (isAuthenticated → /files).
+        // completeBackendAuth sets the access token early, but initializeOrLoadVault()
+        // inside it may still be pending. An explicit navigate here would fire AFTER
+        // vault init completes — by which point the user may have navigated away from
+        // the login page, causing a disruptive late redirect.
       } catch (error) {
         console.error('[useAuth] Wallet login failed:', error);
         throw error;
@@ -380,7 +383,7 @@ export function useAuth() {
         setIsLoggingIn(false);
       }
     },
-    [isLoggingIn, coreKitLoginWallet, completeBackendAuth, setAccessToken, navigate]
+    [isLoggingIn, coreKitLoginWallet, completeBackendAuth, setAccessToken]
   );
 
   /**

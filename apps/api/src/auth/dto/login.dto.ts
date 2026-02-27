@@ -14,14 +14,16 @@ export class LoginDto {
 
   @ApiProperty({
     description:
-      'secp256k1 public key exported from Core Kit after loginWithJWT (uncompressed, 130 hex chars)',
+      'secp256k1 public key exported from Core Kit after loginWithJWT (uncompressed, 130 hex chars), ' +
+      'or a placeholder "pending-core-kit-{userId}" for REQUIRED_SHARE temp auth',
     example: '04abc123...',
   })
   @IsString()
   @IsNotEmpty()
-  @Matches(/^04[0-9a-fA-F]{128}$/, {
+  @Matches(/^(04[0-9a-fA-F]{128}|pending-core-kit-.+)$/, {
     message:
-      'publicKey must be an uncompressed secp256k1 public key (130 hex chars starting with 04)',
+      'publicKey must be an uncompressed secp256k1 public key (130 hex chars starting with 04) ' +
+      'or a pending-core-kit placeholder',
   })
   publicKey!: string;
 

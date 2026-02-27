@@ -10,7 +10,7 @@ import type { LoginDtoLoginType } from './loginDtoLoginType';
 export interface LoginDto {
   /** CipherBox-issued JWT identity token */
   idToken: string;
-  /** secp256k1 public key exported from Core Kit after loginWithJWT (uncompressed, 130 hex chars) */
+  /** secp256k1 public key exported from Core Kit after loginWithJWT (uncompressed, 130 hex chars), or a placeholder "pending-core-kit-{userId}" for REQUIRED_SHARE temp auth */
   publicKey: string;
   /** Type of login used (always corekit) */
   loginType: LoginDtoLoginType;

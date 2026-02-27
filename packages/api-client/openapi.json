@@ -1918,7 +1918,7 @@
           },
           "publicKey": {
             "type": "string",
-            "description": "secp256k1 public key exported from Core Kit after loginWithJWT (uncompressed, 130 hex chars)",
+            "description": "secp256k1 public key exported from Core Kit after loginWithJWT (uncompressed, 130 hex chars), or a placeholder \"pending-core-kit-{userId}\" for REQUIRED_SHARE temp auth",
             "example": "04abc123..."
           },
           "loginType": {

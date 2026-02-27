@@ -200,9 +200,12 @@ export function useDeviceApproval() {
 
     try {
       // 1. Generate ephemeral secp256k1 keypair
+      // keygen() returns compressed pubkey (33 bytes) by default, but the
+      // backend DTO requires uncompressed (65 bytes = 130 hex chars).
       const ephemeral = secp256k1.keygen();
       ephemeralPrivKeyRef.current = ephemeral.secretKey;
-      const ephemeralPubKeyHex = bytesToHex(ephemeral.publicKey);
+      const uncompressedPubKey = secp256k1.getPublicKey(ephemeral.secretKey, false);
+      const ephemeralPubKeyHex = bytesToHex(uncompressedPubKey);
 
       // 2. Get device identity
       const deviceIdentity = await getOrCreateDeviceIdentity();
