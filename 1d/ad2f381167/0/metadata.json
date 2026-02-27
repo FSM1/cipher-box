@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "1dad2f381167",
+  "session_id": "2211e959-bda5-488f-a0f4-3ffce1eaea5d",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-27T13:06:01.571281Z",
+  "branch": "chore/ci-skip-desktop-on-version-bumps",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "8ddd4508a8ab",
+  "token_usage": {
+    "input_tokens": 17,
+    "cache_creation_tokens": 27271,
+    "cache_read_tokens": 546530,
+    "output_tokens": 2405,
+    "api_call_count": 11
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-27T13:06:00.507603Z",
+    "agent_lines": 14,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 14,
+    "agent_percentage": 100
+  }
+}
