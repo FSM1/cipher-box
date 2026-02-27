@@ -226,9 +226,9 @@ Recent decisions affecting current work:
 - `2026-02-21-desktop-tee-enrollment-for-new-files.md` -- Desktop TEE enrollment for new files (area: desktop)
 - `2026-02-21-phase14-security-review-deferred.md` -- Phase 14 security review: deferred findings M1, M5, L1, L4 (area: shares)
 - `2026-02-22-crdt-ipns-inbox-sharing.md` -- CRDT IPNS inbox for sharing (area: architecture)
-- `2026-02-22-disable-synchronize-true-all-envs.md` -- Disable synchronize:true in dev and CI to surface missing migrations (area: api)
 - `2026-02-24-async-incremental-search-index.md` -- Make search index build async/incremental for large vaults (area: ui)
 - `2026-02-26-alternative-mfa-factor-types.md` -- Add alternative MFA factor types: passkey (WebAuthn PRF), password-derived key, secondary OAuth (area: auth)
+- `2026-02-27-ci-migration-drift-check.md` -- Add CI migration drift check via TypeORM migration:generate (area: api)
 
 ### Roadmap Evolution
 

@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { Module } from '@nestjs/common';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -81,9 +82,9 @@ import { Share, ShareKey, ShareInvite } from './shares/entities';
           ShareKey,
           ShareInvite,
         ],
-        synchronize: ['development', 'test'].includes(
-          configService.get<string>('NODE_ENV', 'development')
-        ),
+        synchronize: false,
+        migrations: [join(__dirname, 'migrations', '*.js')],
+        migrationsRun: true,
         logging:
           configService.get<string>('NODE_ENV') === 'development'
             ? ['error', 'warn', 'migration'] // Dev: errors, warnings, migrations only (no SQL query spam)
