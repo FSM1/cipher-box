@@ -1,0 +1,40 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "f62a6e2f0cc7",
+  "session_id": "cf2eb2dc-d7d4-448d-a247-c1122c9a63ae",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-27T04:34:04.300227Z",
+  "branch": "feat/e2e-mfa-flows",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/auth/auth.controller.ts",
+    "apps/api/src/auth/auth.service.spec.ts",
+    "apps/api/src/auth/auth.service.ts",
+    "apps/api/src/auth/decorators/allow-scope.decorator.ts",
+    "apps/api/src/auth/dto/login.dto.ts",
+    "apps/api/src/auth/guards/jwt-auth.guard.ts",
+    "apps/api/src/auth/services/token.service.spec.ts",
+    "apps/api/src/auth/services/token.service.ts",
+    "apps/api/src/auth/strategies/jwt.strategy.ts",
+    "apps/api/src/common/types.ts",
+    "apps/api/src/device-approval/device-approval.controller.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "2be80ade7473",
+  "token_usage": {
+    "input_tokens": 368,
+    "cache_creation_tokens": 363921,
+    "cache_read_tokens": 24238365,
+    "output_tokens": 36783,
+    "api_call_count": 216
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-27T04:34:02.125584Z",
+    "agent_lines": 170,
+    "human_added": 5,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 175,
+    "agent_percentage": 97.14285714285714
+  }
+}

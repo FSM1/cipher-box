@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "f62a6e2f0cc7",
+  "strategy": "manual-commit",
+  "branch": "feat/e2e-mfa-flows",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/auth/auth.controller.ts",
+    "apps/api/src/auth/auth.service.spec.ts",
+    "apps/api/src/auth/auth.service.ts",
+    "apps/api/src/auth/decorators/allow-scope.decorator.ts",
+    "apps/api/src/auth/dto/login.dto.ts",
+    "apps/api/src/auth/guards/jwt-auth.guard.ts",
+    "apps/api/src/auth/services/token.service.spec.ts",
+    "apps/api/src/auth/services/token.service.ts",
+    "apps/api/src/auth/strategies/jwt.strategy.ts",
+    "apps/api/src/common/types.ts",
+    "apps/api/src/device-approval/device-approval.controller.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f6/2a6e2f0cc7/0/metadata.json",
+      "transcript": "/f6/2a6e2f0cc7/0/full.jsonl",
+      "context": "/f6/2a6e2f0cc7/0/context.md",
+      "content_hash": "/f6/2a6e2f0cc7/0/content_hash.txt",
+      "prompt": "/f6/2a6e2f0cc7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 368,
+    "cache_creation_tokens": 363921,
+    "cache_read_tokens": 24238365,
+    "output_tokens": 36783,
+    "api_call_count": 216
+  }
+}
