@@ -5,6 +5,8 @@ import { ShareInvitesController } from './share-invites.controller';
 import { SharesService } from './shares.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ShareInvite } from './entities/share-invite.entity';
+import { User } from '../auth/entities/user.entity';
+import { RequestWithUser } from '../common/types';
 
 describe('ShareInvitesController', () => {
   let controller: ShareInvitesController;
@@ -25,7 +27,7 @@ describe('ShareInvitesController', () => {
     id: inviteId,
     token: testToken,
     sharerId: userId,
-    sharer: {} as any,
+    sharer: {} as User,
     itemType: 'folder',
     ipnsName: 'k51qzi5uqu5dg12345',
     itemName: 'My Folder',
@@ -74,7 +76,7 @@ describe('ShareInvitesController', () => {
         encryptedKey: testEncryptedKey,
       };
 
-      const result = await controller.createInvite(mockReq as any, dto);
+      const result = await controller.createInvite(mockReq as RequestWithUser, dto);
 
       expect(result.id).toBe(inviteId);
       expect(result.token).toBe(testToken);
@@ -97,7 +99,7 @@ describe('ShareInvitesController', () => {
         encryptedKey: testEncryptedKey,
       };
 
-      const result = await controller.createInvite(mockReq as any, dto);
+      const result = await controller.createInvite(mockReq as RequestWithUser, dto);
 
       expect('encryptedKey' in result).toBe(false);
       expect('sharerId' in result).toBe(false);
@@ -115,7 +117,7 @@ describe('ShareInvitesController', () => {
       };
       mockSharesService.getInvitesForItem.mockResolvedValue([mockInvite, invite2]);
 
-      const result = await controller.listInvites(mockReq as any, 'k51qzi5uqu5dg12345');
+      const result = await controller.listInvites(mockReq as RequestWithUser, 'k51qzi5uqu5dg12345');
 
       expect(result).toHaveLength(2);
       expect(result[0].id).toBe(inviteId);
@@ -132,7 +134,7 @@ describe('ShareInvitesController', () => {
     it('should return empty array when no invites exist', async () => {
       mockSharesService.getInvitesForItem.mockResolvedValue([]);
 
-      const result = await controller.listInvites(mockReq as any, 'k51qzi5uqu5dg12345');
+      const result = await controller.listInvites(mockReq as RequestWithUser, 'k51qzi5uqu5dg12345');
 
       expect(result).toEqual([]);
     });
@@ -140,7 +142,7 @@ describe('ShareInvitesController', () => {
     it('should not expose internal fields in list results', async () => {
       mockSharesService.getInvitesForItem.mockResolvedValue([mockInvite]);
 
-      const result = await controller.listInvites(mockReq as any, 'k51qzi5uqu5dg12345');
+      const result = await controller.listInvites(mockReq as RequestWithUser, 'k51qzi5uqu5dg12345');
 
       expect('encryptedKey' in result[0]).toBe(false);
       expect('sharerId' in result[0]).toBe(false);
@@ -152,7 +154,7 @@ describe('ShareInvitesController', () => {
     it('should delegate to service with inviteId and userId', async () => {
       mockSharesService.revokeInvite.mockResolvedValue(undefined);
 
-      await controller.revokeInvite(mockReq as any, inviteId);
+      await controller.revokeInvite(mockReq as RequestWithUser, inviteId);
 
       expect(mockSharesService.revokeInvite).toHaveBeenCalledWith(inviteId, userId);
     });
@@ -160,7 +162,7 @@ describe('ShareInvitesController', () => {
     it('should pass through service exceptions', async () => {
       mockSharesService.revokeInvite.mockRejectedValue(new NotFoundException('Invite not found'));
 
-      await expect(controller.revokeInvite(mockReq as any, inviteId)).rejects.toThrow(
+      await expect(controller.revokeInvite(mockReq as RequestWithUser, inviteId)).rejects.toThrow(
         NotFoundException
       );
     });

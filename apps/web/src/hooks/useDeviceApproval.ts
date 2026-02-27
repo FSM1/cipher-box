@@ -280,6 +280,9 @@ export function useDeviceApproval() {
    * when the approve response arrives.
    */
   const cancelRequest = useCallback(async () => {
+    // Invalidate any in-flight requestApproval() completion immediately.
+    requestGenRef.current += 1;
+
     stopRequesterPolling();
     clearEphemeralKey();
     setApprovalStatus('idle');
