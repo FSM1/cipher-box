@@ -12,6 +12,7 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AllowScope } from '../auth/decorators/allow-scope.decorator';
 import { DeviceApprovalService } from './device-approval.service';
 import { CreateApprovalDto } from './dto/create-approval.dto';
 import { RespondApprovalDto } from './dto/respond-approval.dto';
@@ -19,6 +20,7 @@ import { RequestWithUser } from '../common/types';
 
 @ApiTags('device-approval')
 @ApiBearerAuth()
+@AllowScope('device-approval')
 @UseGuards(JwtAuthGuard, ThrottlerGuard)
 @Controller('device-approval')
 export class DeviceApprovalController {

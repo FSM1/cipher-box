@@ -56,12 +56,22 @@ export function useDeviceApproval() {
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const requestIdRef = useRef<string | null>(null);
   const ephemeralPrivKeyRef = useRef<Uint8Array | null>(null);
+  // Generation counter to detect stale requestApproval completions.
+  // In React StrictMode, the effect fires twice (mount→unmount→remount), launching
+  // two concurrent requestApproval() calls whose async completions can race.
+  // Each call increments the counter; after each await, the call checks if it's
+  // still the active generation — if not, it cancels itself and returns early.
+  const requestGenRef = useRef(0);
   const requesterPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // --- Existing device (approver) state ---
   const [pendingRequests, setPendingRequests] = useState<PendingApproval[]>([]);
   const isPollingPendingRef = useRef(false);
   const approverPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Track recently approved/denied request IDs to filter out stale polling responses.
+  // Without this, the 5s polling interval can re-add a request that was just handled
+  // if the poll response was already in-flight when the respond API call completed.
+  const handledRequestIdsRef = useRef<Set<string>>(new Set());
 
   /**
    * Zero-fill and clear ephemeral private key from memory.
@@ -92,6 +102,7 @@ export function useDeviceApproval() {
       approverPollRef.current = null;
     }
     isPollingPendingRef.current = false;
+    handledRequestIdsRef.current.clear();
   }, []);
 
   // =========================================================================
@@ -193,16 +204,30 @@ export function useDeviceApproval() {
   /**
    * Create an approval request on the bulletin board (new device side).
    * Generates an ephemeral keypair and starts polling.
+   *
+   * Uses a generation counter to handle React StrictMode double-mounting:
+   * the effect fires requestApproval twice in quick succession. Without the
+   * counter, both async calls race to set requestIdRef and start polling.
+   * If the first call's createRequest completes after the second's, it
+   * overwrites the ref and starts polling for a stale request (whose
+   * ephemeral key was already zeroed by cleanup), causing "Key unwrapping
+   * failed" when the approver encrypts the factor key with the stale
+   * request's public key.
    */
   const requestApproval = useCallback(async () => {
+    const gen = ++requestGenRef.current;
+
     setApprovalStatus('requesting');
     setApprovalError(null);
 
     try {
       // 1. Generate ephemeral secp256k1 keypair
+      // keygen() returns compressed pubkey (33 bytes) by default, but the
+      // backend DTO requires uncompressed (65 bytes = 130 hex chars).
       const ephemeral = secp256k1.keygen();
       ephemeralPrivKeyRef.current = ephemeral.secretKey;
-      const ephemeralPubKeyHex = bytesToHex(ephemeral.publicKey);
+      const uncompressedPubKey = secp256k1.getPublicKey(ephemeral.secretKey, false);
+      const ephemeralPubKeyHex = bytesToHex(uncompressedPubKey);
 
       // 2. Get device identity
       const deviceIdentity = await getOrCreateDeviceIdentity();
@@ -217,12 +242,27 @@ export function useDeviceApproval() {
         ephemeralPublicKey: ephemeralPubKeyHex,
       });
 
+      // 5. Check if this call was superseded by a newer requestApproval()
+      //    (happens in React StrictMode when the effect fires twice).
+      if (gen !== requestGenRef.current) {
+        // Stale: a newer requestApproval already started. Cancel this request
+        // on the backend and bail — the newer call will set its own refs.
+        try {
+          await deviceApprovalApi.cancel(requestId);
+        } catch {
+          /* best-effort */
+        }
+        return;
+      }
+
       requestIdRef.current = requestId;
       setApprovalStatus('pending');
 
-      // 5. Start polling for response
+      // 6. Start polling for response
       startRequesterPolling(requestId);
     } catch (err) {
+      // Only handle errors for the active generation
+      if (gen !== requestGenRef.current) return;
       clearEphemeralKey();
       setApprovalError(err instanceof Error ? err.message : 'Failed to create approval request');
       setApprovalStatus('error');
@@ -232,26 +272,60 @@ export function useDeviceApproval() {
   /**
    * Cancel the pending approval request (new device side).
    * Also called when recovery phrase is used instead (RESEARCH.md Pitfall 5).
+   *
+   * IMPORTANT: All synchronous state cleanup (stop polling, clear ephemeral key,
+   * null refs, reset status) MUST happen BEFORE the async API call. In React
+   * StrictMode, cleanup and setup run in quick succession — if requestApproval()
+   * generates a new ephemeral key between our `await cancel()` and
+   * `clearEphemeralKey()`, we'd zero the NEW key, causing "Key unwrapping failed"
+   * when the approve response arrives.
    */
   const cancelRequest = useCallback(async () => {
-    stopRequesterPolling();
+    // Invalidate any in-flight requestApproval() completion immediately.
+    requestGenRef.current += 1;
 
-    if (requestIdRef.current) {
+    stopRequesterPolling();
+    clearEphemeralKey();
+    setApprovalStatus('idle');
+
+    // Capture and clear requestId synchronously so a concurrent
+    // requestApproval() can safely set a new value on the ref.
+    const requestId = requestIdRef.current;
+    requestIdRef.current = null;
+
+    // Async API cleanup (best-effort, uses captured local variable)
+    if (requestId) {
       try {
-        await deviceApprovalApi.cancel(requestIdRef.current);
+        await deviceApprovalApi.cancel(requestId);
       } catch {
         // Best-effort cleanup -- request may already be expired/cancelled
       }
-      requestIdRef.current = null;
     }
-
-    clearEphemeralKey();
-    setApprovalStatus('idle');
   }, [stopRequesterPolling, clearEphemeralKey]);
 
   // =========================================================================
   // EXISTING DEVICE SIDE (APPROVER)
   // =========================================================================
+
+  /**
+   * Fetch pending requests from the bulletin board, filtering out recently
+   * handled ones to prevent stale in-flight responses from re-adding them.
+   */
+  const fetchFilteredPending = useCallback(async () => {
+    try {
+      const pending = await deviceApprovalApi.getPending();
+      // Guard against in-flight responses resolving after polling stopped
+      if (!isPollingPendingRef.current) return;
+      const handled = handledRequestIdsRef.current;
+      const filtered =
+        handled.size > 0
+          ? pending.filter((r) => r.requestId && !handled.has(r.requestId))
+          : pending;
+      setPendingRequests(filtered);
+    } catch {
+      // Network error -- continue polling
+    }
+  }, []);
 
   /**
    * Start polling for pending approval requests (existing device side).
@@ -260,20 +334,11 @@ export function useDeviceApproval() {
     if (isPollingPendingRef.current) return;
     isPollingPendingRef.current = true;
 
-    const poll = async () => {
-      try {
-        const pending = await deviceApprovalApi.getPending();
-        setPendingRequests(pending);
-      } catch {
-        // Network error -- continue polling
-      }
-    };
-
     // Poll every 5 seconds
-    approverPollRef.current = setInterval(poll, 5000);
+    approverPollRef.current = setInterval(fetchFilteredPending, 5000);
     // Fire immediately
-    void poll();
-  }, []);
+    void fetchFilteredPending();
+  }, [fetchFilteredPending]);
 
   /**
    * Approve a pending request: ECIES-encrypt current factor key with
@@ -306,7 +371,9 @@ export function useDeviceApproval() {
         respondedByDeviceId: deviceIdentity.deviceId,
       });
 
-      // 5. Remove from pending list
+      // 5. Remove from pending list and mark as handled to prevent
+      //    stale polling responses from re-adding it
+      handledRequestIdsRef.current.add(requestId);
       setPendingRequests((prev) => prev.filter((r) => r.requestId !== requestId));
     },
     [coreKit]
@@ -324,7 +391,8 @@ export function useDeviceApproval() {
       respondedByDeviceId: deviceIdentity.deviceId,
     });
 
-    // Remove from pending list
+    // Remove from pending list and mark as handled
+    handledRequestIdsRef.current.add(requestId);
     setPendingRequests((prev) => prev.filter((r) => r.requestId !== requestId));
   }, []);
 
@@ -339,16 +407,8 @@ export function useDeviceApproval() {
     if (isVisible) {
       // Resume polling when tab becomes visible
       if (!approverPollRef.current) {
-        const poll = async () => {
-          try {
-            const pending = await deviceApprovalApi.getPending();
-            setPendingRequests(pending);
-          } catch {
-            // Network error -- continue polling
-          }
-        };
-        approverPollRef.current = setInterval(poll, 5000);
-        void poll();
+        approverPollRef.current = setInterval(fetchFilteredPending, 5000);
+        void fetchFilteredPending();
       }
     } else {
       // Pause polling when tab is hidden
@@ -357,7 +417,7 @@ export function useDeviceApproval() {
         approverPollRef.current = null;
       }
     }
-  }, [isVisible]);
+  }, [isVisible, fetchFilteredPending]);
 
   // =========================================================================
   // CLEANUP ON UNMOUNT

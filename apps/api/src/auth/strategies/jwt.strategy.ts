@@ -9,6 +9,7 @@ import { User } from '../entities/user.entity';
 interface JwtPayload {
   sub: string; // User ID (UUID)
   publicKey: string;
+  scope?: string[]; // Restricted scope for temp auth tokens (e.g., ['device-approval'])
   iat: number;
   exp: number;
 }
@@ -31,7 +32,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: JwtPayload): Promise<User> {
+  async validate(payload: JwtPayload): Promise<User & { scope?: string[] }> {
     const user = await this.userRepository.findOne({
       where: { id: payload.sub },
     });
@@ -40,6 +41,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException('User not found');
     }
 
-    return user;
+    // Attach scope from JWT payload so guards can enforce restrictions
+    return Object.assign(user, payload.scope ? { scope: payload.scope } : {});
   }
 }

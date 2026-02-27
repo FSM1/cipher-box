@@ -729,7 +729,7 @@ describe('SharesService', () => {
     });
 
     it('should store encryptedKey as Buffer from hex', async () => {
-      mockShareInviteRepo.save.mockImplementation((entity: any) => Promise.resolve(entity));
+      mockShareInviteRepo.save.mockImplementation((entity: ShareInvite) => Promise.resolve(entity));
 
       await service.createInvite(sharerId, createInviteDto);
 
@@ -747,7 +747,7 @@ describe('SharesService', () => {
           { keyType: 'file' as const, itemId: 'f1', encryptedKey: 'dd'.repeat(32) },
         ],
       };
-      mockShareInviteRepo.save.mockImplementation((entity: any) => Promise.resolve(entity));
+      mockShareInviteRepo.save.mockImplementation((entity: ShareInvite) => Promise.resolve(entity));
 
       await service.createInvite(sharerId, dtoWithChildren);
 
@@ -756,7 +756,7 @@ describe('SharesService', () => {
     });
 
     it('should set encryptedChildKeys to null when not provided', async () => {
-      mockShareInviteRepo.save.mockImplementation((entity: any) => Promise.resolve(entity));
+      mockShareInviteRepo.save.mockImplementation((entity: ShareInvite) => Promise.resolve(entity));
 
       await service.createInvite(sharerId, createInviteDto);
 
@@ -917,7 +917,7 @@ describe('SharesService', () => {
         andWhere: jest.fn().mockReturnThis(),
         execute: jest.fn().mockResolvedValue({ affected: 1 }),
       };
-      (mockShareInviteRepo as any).createQueryBuilder = jest.fn().mockReturnValue(mockQb);
+      mockShareInviteRepo.createQueryBuilder = jest.fn().mockReturnValue(mockQb);
 
       const result = await service.claimInvite('claim-token', recipientId, claimDto);
 
@@ -1004,7 +1004,7 @@ describe('SharesService', () => {
         andWhere: jest.fn().mockReturnThis(),
         execute: jest.fn().mockResolvedValue({ affected: 0 }),
       };
-      (mockShareInviteRepo as any).createQueryBuilder = jest.fn().mockReturnValue(mockQb);
+      mockShareInviteRepo.createQueryBuilder = jest.fn().mockReturnValue(mockQb);
 
       await expect(service.claimInvite('claim-token', recipientId, claimDto)).rejects.toThrow(
         ConflictException
@@ -1025,7 +1025,7 @@ describe('SharesService', () => {
         andWhere: jest.fn().mockReturnThis(),
         execute: jest.fn().mockResolvedValue({ affected: 1 }),
       };
-      (mockShareInviteRepo as any).createQueryBuilder = jest.fn().mockReturnValue(mockQb);
+      mockShareInviteRepo.createQueryBuilder = jest.fn().mockReturnValue(mockQb);
 
       // Existing active share found
       mockShareRepo.findOne.mockResolvedValue({ id: existingShareId });
@@ -1056,7 +1056,7 @@ describe('SharesService', () => {
           return Promise.resolve({ affected: callCount === 1 ? 1 : 0 });
         }),
       };
-      (mockShareInviteRepo as any).createQueryBuilder = jest.fn().mockReturnValue(mockQb);
+      mockShareInviteRepo.createQueryBuilder = jest.fn().mockReturnValue(mockQb);
 
       // Setup for the first (successful) claim
       mockShareRepo.findOne.mockResolvedValue(null);

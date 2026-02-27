@@ -2,8 +2,29 @@ import { test, expect } from '@playwright/test';
 import { installMockWallet } from '@johanneskares/wallet-mock';
 import { privateKeyToAccount } from 'viem/accounts';
 import { mainnet } from 'viem/chains';
-import { http } from 'viem';
+import { custom } from 'viem';
 import { LoginPage } from '../page-objects/login.page';
+
+/**
+ * Local-only transport for the mock wallet.
+ * Avoids network calls to default mainnet RPC which hang in CI.
+ */
+const localTransport = custom({
+  async request({ method }) {
+    switch (method) {
+      case 'eth_chainId':
+        return '0x1';
+      case 'net_version':
+        return '1';
+      case 'eth_blockNumber':
+        return '0x0';
+      case 'eth_getBalance':
+        return '0x0';
+      default:
+        throw new Error(`Mock transport: unhandled method ${method}`);
+    }
+  },
+});
 
 /**
  * Wallet Login E2E Tests (TC09-TC12)
@@ -36,7 +57,7 @@ test.describe('TC09: Wallet login happy path (with mock wallet)', () => {
       page,
       account,
       defaultChain: mainnet,
-      transports: { [mainnet.id]: http() },
+      transports: { [mainnet.id]: localTransport },
     });
 
     loginPage = new LoginPage(page);
@@ -148,7 +169,7 @@ test.describe('TC10: Wallet login cancel', () => {
       page,
       account,
       defaultChain: mainnet,
-      transports: { [mainnet.id]: http() },
+      transports: { [mainnet.id]: localTransport },
     });
 
     loginPage = new LoginPage(page);
@@ -233,7 +254,7 @@ test.describe('TC12: Wallet login error handling', () => {
       page,
       account,
       defaultChain: mainnet,
-      transports: { [mainnet.id]: http() },
+      transports: { [mainnet.id]: localTransport },
     });
 
     loginPage = new LoginPage(page);

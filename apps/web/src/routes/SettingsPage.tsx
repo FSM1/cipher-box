@@ -7,6 +7,7 @@ import { SecurityTab } from '../components/mfa/SecurityTab';
 import { VaultExport } from '../components/vault/VaultExport';
 import { useAuth } from '../hooks/useAuth';
 import { useAuthStore } from '../stores/auth.store';
+import { useMfaStore } from '../stores/mfa.store';
 
 type SettingsTabId = 'linked-methods' | 'security';
 
@@ -63,12 +64,16 @@ export function SettingsPage() {
     };
   }, []);
 
-  // Redirect if not authenticated
+  // Redirect if not authenticated.
+  // Skip during MFA enrollment — enableMFA() makes long Devnet calls that can
+  // outlive the access token, causing a background 401 → refresh failure → logout.
+  // The enrollment wizard must remain mounted to complete.
+  const isEnrolling = useMfaStore((s) => s.isEnrolling);
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
+    if (!isLoading && !isAuthenticated && !isEnrolling) {
       navigate('/');
     }
-  }, [isAuthenticated, isLoading, navigate]);
+  }, [isAuthenticated, isLoading, isEnrolling, navigate]);
 
   // Show loading state while checking authentication
   if (isLoading) {

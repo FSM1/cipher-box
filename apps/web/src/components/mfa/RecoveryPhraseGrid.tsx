@@ -12,7 +12,11 @@ type RecoveryPhraseGridProps = {
 
 export function RecoveryPhraseGrid({ words }: RecoveryPhraseGridProps) {
   return (
-    <div className="recovery-phrase-grid" aria-label="Recovery phrase">
+    <div
+      className="recovery-phrase-grid"
+      data-testid="recovery-phrase-grid"
+      aria-label="Recovery phrase"
+    >
       {words.map((word, index) => (
         <div key={index} className="recovery-phrase-cell">
           <span className="recovery-phrase-number">{String(index + 1).padStart(2, '0')}</span>

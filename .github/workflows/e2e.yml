@@ -133,6 +133,7 @@ jobs:
           echo "REDIS_HOST=localhost" >> apps/api/.env
           echo "REDIS_PORT=6379" >> apps/api/.env
           echo "TEST_LOGIN_SECRET=e2e-test-secret-ci-only" >> apps/api/.env
+          echo "IDENTITY_JWT_PRIVATE_KEY=${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}" >> apps/api/.env
 
       - name: Run E2E tests
         # Run all tests in the tests/ directory (archived tests live in tests/archive/)

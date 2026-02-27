@@ -5,5 +5,5 @@ import { Request } from 'express';
  * Shared across all controllers that require authentication.
  */
 export interface RequestWithUser extends Request {
-  user: { id: string };
+  user: { id: string; scope?: string[] };
 }

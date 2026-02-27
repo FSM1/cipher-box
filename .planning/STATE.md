@@ -12,7 +12,7 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 Phase: 15.1 (Client-Side Search)
 Plan: 3 of 3
 Status: Phase complete
-Last activity: 2026-02-26 -- Completed quick task 022: Fix MFA status detection false positive
+Last activity: 2026-02-27 -- Started todo: E2E MFA flow test coverage
 
 Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE)
 
@@ -214,7 +214,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-14 pending todo(s):
+13 pending todo(s):
 
 - `2026-02-07-web-worker-large-file-encryption.md` -- Offload large file encryption to Web Worker (area: ui)
 - `2026-02-14-bring-your-own-ipfs-node.md` -- Add bring-your-own IPFS node support (area: api)
@@ -229,7 +229,6 @@ Recent decisions affecting current work:
 - `2026-02-22-disable-synchronize-true-all-envs.md` -- Disable synchronize:true in dev and CI to surface missing migrations (area: api)
 - `2026-02-24-async-incremental-search-index.md` -- Make search index build async/incremental for large vaults (area: ui)
 - `2026-02-26-alternative-mfa-factor-types.md` -- Add alternative MFA factor types: passkey (WebAuthn PRF), password-derived key, secondary OAuth (area: auth)
-- `2026-02-27-e2e-mfa-flows-wallet-login.md` -- E2E test coverage for MFA flows using wallet login (area: testing)
 
 ### Roadmap Evolution
 

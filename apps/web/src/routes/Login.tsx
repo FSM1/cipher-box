@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { StatusIndicator } from '../components/layout';
 import { GoogleLoginButton } from '../components/auth/GoogleLoginButton';
 import { EmailLoginForm } from '../components/auth/EmailLoginForm';
@@ -31,6 +31,7 @@ export function Login() {
     loginWithWallet,
   } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [loginError, setLoginError] = useState<string | null>(null);
   const [mfaView, setMfaView] = useState<MfaView>('waiting');
 
@@ -49,12 +50,19 @@ export function Login() {
 
   const isApiDown = !isHealthLoading && (isHealthError || healthData?.status !== 'ok');
 
-  // Redirect if already authenticated
+  // Redirect if already authenticated AND still on the login page.
+  // The pathname check prevents a late-firing re-render (e.g. from
+  // setIsLoggingIn(false) in the login finally block) from navigating
+  // to /files after the user has already moved to a different route.
+  // The isRequiredShare check prevents redirecting when the user has a
+  // temp access token but still needs to complete MFA (device approval
+  // or recovery phrase). Without this, the redirect would unmount
+  // DeviceWaitingScreen before the approval request is created.
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && !isRequiredShare && location.pathname === '/') {
       navigate('/files');
     }
-  }, [isAuthenticated, navigate]);
+  }, [isAuthenticated, isRequiredShare, location.pathname, navigate]);
 
   const handleGoogleLogin = useCallback(
     async (googleIdToken: string) => {

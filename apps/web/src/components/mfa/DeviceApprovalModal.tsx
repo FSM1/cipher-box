@@ -104,7 +104,7 @@ export function DeviceApprovalModal() {
       aria-modal="true"
       aria-label="Device approval request"
     >
-      <div className="device-approval-modal">
+      <div className="device-approval-modal" data-testid="device-approval-modal">
         <div className="device-approval-header">
           <h2 className="device-approval-title">Device Approval Request</h2>
         </div>
@@ -113,7 +113,12 @@ export function DeviceApprovalModal() {
           <div className="device-approval-details">
             <div className="device-approval-detail-row">
               <span className="device-approval-detail-label">device</span>
-              <span className="device-approval-detail-value">{currentRequest.deviceName}</span>
+              <span
+                className="device-approval-detail-value"
+                data-testid="device-approval-device-name"
+              >
+                {currentRequest.deviceName}
+              </span>
             </div>
             <div className="device-approval-detail-row">
               <span className="device-approval-detail-label">requested</span>
@@ -148,6 +153,7 @@ export function DeviceApprovalModal() {
             className="device-approval-btn-deny"
             onClick={handleDeny}
             disabled={isResponding}
+            data-testid="device-approval-deny"
           >
             --deny
           </button>
@@ -156,6 +162,7 @@ export function DeviceApprovalModal() {
             className="device-approval-btn-approve"
             onClick={handleApprove}
             disabled={isResponding}
+            data-testid="device-approval-approve"
           >
             {isResponding ? 'approving...' : '--approve'}
           </button>

@@ -8,7 +8,15 @@ import { RefreshToken } from '../entities/refresh-token.entity';
 
 interface TokenPair {
   accessToken: string;
+  /** Empty string when skipRefreshToken is set (falsy, safe for conditional checks) */
   refreshToken: string;
+}
+
+interface CreateTokenOptions {
+  /** Restrict token to specific API scopes (e.g., ['device-approval']) */
+  scope?: string[];
+  /** Skip refresh token generation (for temp auth flows) */
+  skipRefreshToken?: boolean;
 }
 
 @Injectable()
@@ -21,9 +29,22 @@ export class TokenService {
     private refreshTokenRepo: Repository<RefreshToken>
   ) {}
 
-  async createTokens(userId: string, publicKey: string): Promise<TokenPair> {
-    // Generate access token
-    const accessToken = this.jwtService.sign({ sub: userId, publicKey }, { expiresIn: '15m' });
+  async createTokens(
+    userId: string,
+    publicKey: string,
+    options?: CreateTokenOptions
+  ): Promise<TokenPair> {
+    // Generate access token (include scope claim if restricted)
+    const payload: Record<string, unknown> = { sub: userId, publicKey };
+    if (options?.scope) {
+      payload.scope = options.scope;
+    }
+    const accessToken = this.jwtService.sign(payload, { expiresIn: '15m' });
+
+    // Skip refresh token for temp auth (scoped tokens should not be refreshable)
+    if (options?.skipRefreshToken) {
+      return { accessToken, refreshToken: '' };
+    }
 
     // Generate refresh token
     const refreshToken = randomBytes(32).toString('hex');

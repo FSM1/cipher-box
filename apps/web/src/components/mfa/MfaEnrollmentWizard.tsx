@@ -86,7 +86,7 @@ export function MfaEnrollmentWizard({ onComplete, onCancel }: MfaEnrollmentWizar
   );
 
   return (
-    <div className="mfa-wizard">
+    <div className="mfa-wizard" data-testid="mfa-wizard">
       {/* Step indicator */}
       <div className="mfa-wizard-step-indicator">
         <span className="mfa-wizard-step-label">{'step ' + step + ' of 3'}</span>
@@ -99,7 +99,7 @@ export function MfaEnrollmentWizard({ onComplete, onCancel }: MfaEnrollmentWizar
 
       {/* Step 1: Explain MFA */}
       {step === 1 && (
-        <div className="mfa-wizard-step">
+        <div className="mfa-wizard-step" data-testid="mfa-wizard-step-1">
           <h3 className="mfa-wizard-step-title">{'// enable multi-factor authentication'}</h3>
           <div className="mfa-wizard-step-content">
             <p className="mfa-wizard-text">
@@ -122,6 +122,7 @@ export function MfaEnrollmentWizard({ onComplete, onCancel }: MfaEnrollmentWizar
               type="button"
               className="mfa-wizard-btn mfa-wizard-btn-secondary"
               onClick={onCancel}
+              data-testid="mfa-wizard-cancel"
             >
               --cancel
             </button>
@@ -129,6 +130,7 @@ export function MfaEnrollmentWizard({ onComplete, onCancel }: MfaEnrollmentWizar
               type="button"
               className="mfa-wizard-btn mfa-wizard-btn-primary"
               onClick={handleGoToStep2}
+              data-testid="mfa-wizard-continue"
             >
               --continue
             </button>
@@ -138,18 +140,18 @@ export function MfaEnrollmentWizard({ onComplete, onCancel }: MfaEnrollmentWizar
 
       {/* Step 2: Recovery Phrase */}
       {step === 2 && (
-        <div className="mfa-wizard-step">
+        <div className="mfa-wizard-step" data-testid="mfa-wizard-step-2">
           <h3 className="mfa-wizard-step-title">{'// recovery phrase'}</h3>
           <div className="mfa-wizard-step-content">
             {isLoading && (
-              <div className="mfa-wizard-loading">
+              <div className="mfa-wizard-loading" data-testid="mfa-wizard-loading">
                 <span className="mfa-wizard-spinner" aria-hidden="true" />
                 enabling MFA and generating recovery phrase...
               </div>
             )}
 
             {error && (
-              <div className="mfa-wizard-error" role="alert">
+              <div className="mfa-wizard-error" role="alert" data-testid="mfa-wizard-error">
                 <p>{error}</p>
                 {!partiallyEnabled && (
                   <button
@@ -183,6 +185,7 @@ export function MfaEnrollmentWizard({ onComplete, onCancel }: MfaEnrollmentWizar
                   tabIndex={0}
                   onClick={toggleAcknowledged}
                   onKeyDown={handleCheckboxKeyDown}
+                  data-testid="mfa-wizard-acknowledge"
                 >
                   <span className="mfa-wizard-checkbox-box" aria-hidden="true">
                     {acknowledged ? '[x]' : '[ ]'}
@@ -200,6 +203,7 @@ export function MfaEnrollmentWizard({ onComplete, onCancel }: MfaEnrollmentWizar
               type="button"
               className="mfa-wizard-btn mfa-wizard-btn-secondary"
               onClick={handleGoBackToStep1}
+              data-testid="mfa-wizard-back"
             >
               --back
             </button>
@@ -208,6 +212,7 @@ export function MfaEnrollmentWizard({ onComplete, onCancel }: MfaEnrollmentWizar
               className="mfa-wizard-btn mfa-wizard-btn-primary"
               onClick={handleGoToStep3}
               disabled={!acknowledged || isLoading || !!error}
+              data-testid="mfa-wizard-continue"
             >
               --continue
             </button>
@@ -217,7 +222,7 @@ export function MfaEnrollmentWizard({ onComplete, onCancel }: MfaEnrollmentWizar
 
       {/* Step 3: Success */}
       {step === 3 && (
-        <div className="mfa-wizard-step">
+        <div className="mfa-wizard-step" data-testid="mfa-wizard-step-3">
           <h3 className="mfa-wizard-step-title">{'// mfa enabled'}</h3>
           <div className="mfa-wizard-step-content">
             <div className="mfa-wizard-success">
@@ -243,6 +248,7 @@ export function MfaEnrollmentWizard({ onComplete, onCancel }: MfaEnrollmentWizar
               type="button"
               className="mfa-wizard-btn mfa-wizard-btn-primary"
               onClick={onComplete}
+              data-testid="mfa-wizard-done"
             >
               --done
             </button>

@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { Repository, IsNull, Like, Not } from 'typeorm';
+import { Repository, IsNull, Not } from 'typeorm';
 import { createECDH, createHash, timingSafeEqual } from 'crypto';
 import * as jose from 'jose';
 import * as argon2 from 'argon2';
@@ -71,20 +71,52 @@ export class AuthService implements OnModuleDestroy {
     });
 
     // 2b. Placeholder publicKey resolution for Core Kit identity provider.
-    // When a user first authenticates via CipherBox identity provider,
-    // they get a placeholder publicKey ('pending-core-kit-{userId}').
-    // After Core Kit login, the client calls /auth/login with the REAL publicKey.
-    // We need to find the placeholder user and update their publicKey.
+    //
+    // Two scenarios need resolution:
+    //
+    // A) FIRST LOGIN completion: User was created with a placeholder publicKey
+    //    ('pending-core-kit-{verifierId}') during identity token issuance.
+    //    After Core Kit loginWithJWT, the client calls /auth/login with the
+    //    REAL publicKey. Find the placeholder user and update their publicKey.
+    //
+    // B) REQUIRED_SHARE temp auth: MFA is enabled but the new device can't
+    //    reconstruct the Core Kit key (missing device factor). The client
+    //    sends a placeholder publicKey to get a temp access token for the
+    //    device approval bulletin board. The user already has a REAL publicKey
+    //    from their first login, so we look them up by identity (authMethod
+    //    identifierHash) instead of by publicKey.
     if (!user) {
       const verifierId = payload.verifierId || payload.sub;
+
       if (verifierId) {
+        // A) Check for user with placeholder publicKey (first login completion)
         const placeholderUser = await this.userRepository.findOne({
-          where: { publicKey: Like(`pending-core-kit-${verifierId}%`) },
+          where: { publicKey: `pending-core-kit-${verifierId}` },
         });
         if (placeholderUser) {
           this.logger.log(`Resolving placeholder publicKey for user ${placeholderUser.id}`);
-          placeholderUser.publicKey = loginDto.publicKey;
-          user = await this.userRepository.save(placeholderUser);
+          // Only update publicKey if the incoming key is a real one (not another placeholder)
+          if (!loginDto.publicKey.startsWith('pending-core-kit-')) {
+            placeholderUser.publicKey = loginDto.publicKey;
+            user = await this.userRepository.save(placeholderUser);
+          } else {
+            user = placeholderUser;
+          }
+        }
+      }
+
+      // B) REQUIRED_SHARE temp auth: user already completed first login (has real
+      //    publicKey), so no placeholder row exists. Look up directly by userId
+      //    from the JWT sub — works for all auth method types (email, Google, wallet).
+      if (!user && payload.sub && loginDto.publicKey.startsWith('pending-core-kit-')) {
+        const existingUser = await this.userRepository.findOne({
+          where: { id: payload.sub },
+        });
+        if (existingUser) {
+          this.logger.log(
+            `REQUIRED_SHARE temp auth: found existing user ${existingUser.id} by userId`
+          );
+          user = existingUser;
         }
       }
     }
@@ -139,7 +171,15 @@ export class AuthService implements OnModuleDestroy {
     await this.authMethodRepository.save(authMethod);
 
     // 5. Create tokens
-    const tokens = await this.tokenService.createTokens(user.id, user.publicKey);
+    // REQUIRED_SHARE temp auth: issue scoped, non-refreshable tokens that only
+    // grant access to the device-approval bulletin board. The new device will
+    // do a second /auth/login with the real publicKey after key reconstruction.
+    const isTempAuth = loginDto.publicKey.startsWith('pending-core-kit-') && !isNewUser;
+    const tokens = await this.tokenService.createTokens(
+      user.id,
+      user.publicKey,
+      isTempAuth ? { scope: ['device-approval'], skipRefreshToken: true } : undefined
+    );
 
     return {
       accessToken: tokens.accessToken,

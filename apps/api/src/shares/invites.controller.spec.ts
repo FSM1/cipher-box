@@ -5,6 +5,8 @@ import { InvitesController } from './invites.controller';
 import { SharesService } from './shares.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ShareInvite } from './entities/share-invite.entity';
+import { User } from '../auth/entities/user.entity';
+import { RequestWithUser } from '../common/types';
 import { ParseTokenPipe } from '../common/pipes/parse-token.pipe';
 
 describe('InvitesController', () => {
@@ -25,7 +27,7 @@ describe('InvitesController', () => {
     id: '770e8400-e29b-41d4-a716-446655440002',
     token: testToken,
     sharerId: '660e8400-e29b-41d4-a716-446655440001',
-    sharer: {} as any,
+    sharer: {} as User,
     itemType: 'folder',
     ipnsName: 'k51qzi5uqu5dg12345',
     itemName: 'My Folder',
@@ -156,7 +158,7 @@ describe('InvitesController', () => {
         childKeys: [{ keyType: 'file' as const, itemId: 'f1', encryptedKey: 'ee'.repeat(32) }],
       };
 
-      const result = await controller.claimInvite(mockReq as any, testToken, dto);
+      const result = await controller.claimInvite(mockReq as RequestWithUser, testToken, dto);
 
       expect(result).toEqual({ shareId });
       expect(mockSharesService.claimInvite).toHaveBeenCalledWith(testToken, userId, dto);
@@ -169,9 +171,9 @@ describe('InvitesController', () => {
 
       const dto = { encryptedKey: 'ff'.repeat(64) };
 
-      await expect(controller.claimInvite(mockReq as any, testToken, dto)).rejects.toThrow(
-        NotFoundException
-      );
+      await expect(
+        controller.claimInvite(mockReq as RequestWithUser, testToken, dto)
+      ).rejects.toThrow(NotFoundException);
     });
   });
 });

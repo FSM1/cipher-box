@@ -58,10 +58,12 @@ export function useAuth() {
   const initializeOrLoadVaultRef = useRef<(() => Promise<void>) | null>(null);
   const coreKitLogoutRef = useRef<(() => Promise<void>) | null>(null);
 
-  // Pending auth state for REQUIRED_SHARE flow
-  // Stored so completeRequiredShare() can resume after factor input
-  const [pendingCipherboxJwt, setPendingCipherboxJwt] = useState<string | null>(null);
-  const [pendingAuthMethod, setPendingAuthMethod] = useState<string | null>(null);
+  // Pending auth state for REQUIRED_SHARE flow.
+  // Stored in Zustand (not useState) so the state is shared across all
+  // useAuth() hook instances — Login.tsx sets it, useDeviceApproval reads it
+  // via its own useAuth() call.
+  const pendingAuthMethod = useAuthStore((s) => s.pendingAuthMethod);
+  const setPendingAuth = useAuthStore((s) => s.setPendingAuth);
 
   const isLoading = !coreKitInitialized || isLoggingIn || isLoggingOut;
 
@@ -211,8 +213,10 @@ export function useAuth() {
    * (since Core Kit is now LOGGED_IN), then navigates to /files.
    */
   const completeRequiredShare = useCallback(async (): Promise<void> => {
-    const jwt = pendingCipherboxJwt;
-    const method = pendingAuthMethod;
+    // Read directly from Zustand store to get fresh values — this callback
+    // may be called from useDeviceApproval's useAuth() instance, so we
+    // can't rely on closure-captured selector values.
+    const { pendingCipherboxJwt: jwt, pendingAuthMethod: method } = useAuthStore.getState();
 
     if (!jwt || !method) {
       throw new Error('No pending auth info for REQUIRED_SHARE completion');
@@ -230,12 +234,11 @@ export function useAuth() {
     syncStatus();
 
     // Clear pending state
-    setPendingCipherboxJwt(null);
-    setPendingAuthMethod(null);
+    setPendingAuth(null, null);
 
     // Navigate to files
     navigate('/files');
-  }, [pendingCipherboxJwt, pendingAuthMethod, completeBackendAuth, syncStatus, navigate]);
+  }, [completeBackendAuth, syncStatus, setPendingAuth, navigate]);
 
   /**
    * Login with Google OAuth token.
@@ -258,8 +261,7 @@ export function useAuth() {
         if (coreKitStatus === 'required_share') {
           // MFA enabled but device factor missing.
           // Store pending auth info for later completion after factor input.
-          setPendingCipherboxJwt(cipherboxJwt);
-          setPendingAuthMethod('google');
+          setPendingAuth(cipherboxJwt, 'google');
 
           // Obtain temporary backend access token so the new device can
           // call bulletin board API endpoints (device-approval/*).
@@ -291,8 +293,7 @@ export function useAuth() {
           setUserEmail(email);
         }
 
-        // 4. Navigate to files
-        navigate('/files');
+        // Navigation handled by Login.tsx redirect effect (isAuthenticated → /files)
       } catch (error) {
         console.error('[useAuth] Google login failed:', error);
         throw error;
@@ -300,7 +301,7 @@ export function useAuth() {
         setIsLoggingIn(false);
       }
     },
-    [isLoggingIn, coreKitLoginGoogle, completeBackendAuth, setAccessToken, setUserEmail, navigate]
+    [isLoggingIn, coreKitLoginGoogle, completeBackendAuth, setAccessToken, setUserEmail]
   );
 
   /**
@@ -317,8 +318,7 @@ export function useAuth() {
         const { cipherboxJwt, userId, status: coreKitStatus } = await coreKitLoginEmail(email, otp);
 
         if (coreKitStatus === 'required_share') {
-          setPendingCipherboxJwt(cipherboxJwt);
-          setPendingAuthMethod('email');
+          setPendingAuth(cipherboxJwt, 'email');
 
           const tempLoginResponse = await authApi.login({
             idToken: cipherboxJwt,
@@ -333,7 +333,7 @@ export function useAuth() {
         // Normal path
         await completeBackendAuth('email', cipherboxJwt);
         setUserEmail(email);
-        navigate('/files');
+        // Navigation handled by Login.tsx redirect effect (isAuthenticated → /files)
       } catch (error) {
         console.error('[useAuth] Email login failed:', error);
         throw error;
@@ -341,7 +341,7 @@ export function useAuth() {
         setIsLoggingIn(false);
       }
     },
-    [isLoggingIn, coreKitLoginEmail, completeBackendAuth, setAccessToken, setUserEmail, navigate]
+    [isLoggingIn, coreKitLoginEmail, completeBackendAuth, setAccessToken, setUserEmail]
   );
 
   /**
@@ -358,8 +358,7 @@ export function useAuth() {
         const { status: coreKitStatus } = await coreKitLoginWallet(cipherboxJwt, userId);
 
         if (coreKitStatus === 'required_share') {
-          setPendingCipherboxJwt(cipherboxJwt);
-          setPendingAuthMethod('wallet');
+          setPendingAuth(cipherboxJwt, 'wallet');
 
           const tempLoginResponse = await authApi.login({
             idToken: cipherboxJwt,
@@ -372,7 +371,11 @@ export function useAuth() {
 
         // Normal path
         await completeBackendAuth('wallet', cipherboxJwt);
-        navigate('/files');
+        // Navigation is handled by Login.tsx's redirect effect (isAuthenticated → /files).
+        // completeBackendAuth sets the access token early, but initializeOrLoadVault()
+        // inside it may still be pending. An explicit navigate here would fire AFTER
+        // vault init completes — by which point the user may have navigated away from
+        // the login page, causing a disruptive late redirect.
       } catch (error) {
         console.error('[useAuth] Wallet login failed:', error);
         throw error;
@@ -380,7 +383,7 @@ export function useAuth() {
         setIsLoggingIn(false);
       }
     },
-    [isLoggingIn, coreKitLoginWallet, completeBackendAuth, setAccessToken, navigate]
+    [isLoggingIn, coreKitLoginWallet, completeBackendAuth, setAccessToken]
   );
 
   /**
@@ -427,11 +430,7 @@ export function useAuth() {
       clearFileSizeCache();
       clearAuthState();
 
-      // 4. Clear pending REQUIRED_SHARE state
-      setPendingCipherboxJwt(null);
-      setPendingAuthMethod(null);
-
-      // 5. Navigate to login
+      // 4. Navigate to login (pending auth cleared by clearAuthState -> store logout)
       navigate('/');
     } catch (error) {
       console.error('[useAuth] Logout failed:', error);
@@ -443,8 +442,6 @@ export function useAuth() {
       useMfaStore.getState().reset();
       clearFileSizeCache();
       clearAuthState();
-      setPendingCipherboxJwt(null);
-      setPendingAuthMethod(null);
       navigate('/');
     } finally {
       setIsLoggingOut(false);
