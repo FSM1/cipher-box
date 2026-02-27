@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "2409dd078846",
+  "strategy": "manual-commit",
+  "branch": "chore/disable-synchronize-true",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/todos/done/2026-02-22-disable-synchronize-true-all-envs.md",
+    "apps/api/package.json",
+    "apps/api/src/app.module.ts",
+    "docs/DATABASE_EVOLUTION_PROTOCOL.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/24/09dd078846/0/metadata.json",
+      "transcript": "/24/09dd078846/0/full.jsonl",
+      "context": "/24/09dd078846/0/context.md",
+      "content_hash": "/24/09dd078846/0/content_hash.txt",
+      "prompt": "/24/09dd078846/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 43,
+    "cache_creation_tokens": 61887,
+    "cache_read_tokens": 3679030,
+    "output_tokens": 3633,
+    "api_call_count": 38
+  }
+}
