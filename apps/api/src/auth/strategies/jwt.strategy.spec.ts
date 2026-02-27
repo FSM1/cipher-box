@@ -113,6 +113,29 @@ describe('JwtStrategy', () => {
       expect(result).toEqual(mockUser);
     });
 
+    it('should attach scope from JWT payload when present', async () => {
+      const mockUser = {
+        id: 'user-uuid-123',
+        publicKey: 'pubkey123',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      userRepository.findOne.mockResolvedValue(mockUser);
+
+      const payload = {
+        sub: 'user-uuid-123',
+        publicKey: 'pubkey123',
+        scope: ['device-approval'],
+        iat: 1234567890,
+        exp: 1234567890 + 900,
+      };
+
+      const result = await strategy.validate(payload);
+
+      expect(result).toEqual({ ...mockUser, scope: ['device-approval'] });
+    });
+
     it('should throw UnauthorizedException if user not found', async () => {
       userRepository.findOne.mockResolvedValue(null);
 
