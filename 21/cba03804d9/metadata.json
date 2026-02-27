@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "21cba03804d9",
+  "strategy": "manual-commit",
+  "branch": "feat/e2e-mfa-flows",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/e2e/tests/mfa-flows.spec.ts",
+    "tests/e2e/utils/mfa-helpers.ts",
+    "tests/e2e/utils/wallet-login-helpers.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/21/cba03804d9/0/metadata.json",
+      "transcript": "/21/cba03804d9/0/full.jsonl",
+      "context": "/21/cba03804d9/0/context.md",
+      "content_hash": "/21/cba03804d9/0/content_hash.txt",
+      "prompt": "/21/cba03804d9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7453,
+    "cache_creation_tokens": 733282,
+    "cache_read_tokens": 27662448,
+    "output_tokens": 71405,
+    "api_call_count": 224
+  }
+}

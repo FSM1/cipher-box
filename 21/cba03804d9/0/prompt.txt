@@ -1,0 +1,1658 @@
+Implement the following plan:
+
+# Plan: E2E MFA Flow Test Coverage
+
+## Context
+
+MFA flows have zero E2E coverage. The `loginViaTestEndpoint()` bypass skips Core Kit entirely, making it impossible to test MFA enrollment, device approval, or recovery phrase flows. This plan adds comprehensive E2E tests using wallet login (real Core Kit initialization via `@johanneskares/wallet-mock`) to exercise the full MFA lifecycle.
+
+**Key insight**: Each fresh backend DB creates a unique userId for the wallet address. Core Kit maps `(verifier, verifierId=userId)` to fresh DKG shares, so MFA state is clean per CI run. Within a run, tests are serial — enrollment enables MFA, then subsequent tests exercise REQUIRED_SHARE flows.
+
+## Architecture
+
+### Test Strategy
+
+One serial test file `mfa-flows.spec.ts` with shared browser context for the "existing device" and fresh contexts for "new device" scenarios. Serial execution ensures MFA enrollment (test 1) persists for subsequent tests.
+
+**Test matrix:**
+| Test | What it validates | Contexts |
+|------|------------------|----------|
+| TC-MFA-01 | Wallet login → MFA enrollment wizard → capture recovery phrase | 1 (primary) |
+| TC-MFA-02 | Settings Security tab reflects MFA enabled state | 1 (primary) |
+| TC-MFA-03 | New device login → REQUIRED_SHARE → device approval from existing device | 2 (primary=approver, new=requester) |
+| TC-MFA-04 | New device login → REQUIRED_SHARE → recovery phrase restore | 2 (primary alive, new=recoverer) |
+| TC-MFA-05 | Deny approval request → requester sees denied state | 2 (primary=denier, new=requester) |
+
+### Network Considerations
+
+- Core Kit operations hit Web3Auth Sapphire Devnet (5-15s latency each)
+- Full suite may take 60-120s
+- Tests tagged `@mfa` for optional nightly-only CI scheduling
+- Generous timeouts (30s per Core Kit operation, 60s for full flows)
+
+## Environment Setup
+
+MFA tests run against the **local stack** (not staging):
+- **Docker services** (PostgreSQL, Redis, IPFS) on host `192.168.133.114` — already configured in `apps/api/.env`
+- **API** at `http://localhost:3000` — started via `pnpm --filter api dev` or Playwright webServer
+- **Web** at `http://localhost:5173` — started via `pnpm --filter web dev` or Playwright webServer
+- **Mock IPNS** at `http://localhost:3001` — started by Playwright webServer
+
+MFA wallet login tests drive the browser UI exclusively (no direct API calls from test code), so the `API_BASE_URL` in `tests/e2e/.env` (currently staging) is irrelevant — the browser talks to localhost:5173 which proxies to the local API. No `.env` changes needed.
+
+## Changes
+
+### 1. Add `data-testid` attributes to MFA components
+
+No MFA component has `data-testid` currently. Add them to key interactive elements for robust E2E targeting.
+
+**Files:**
+- `apps/web/src/components/mfa/MfaEnrollmentWizard.tsx`
+  - `data-testid="mfa-wizard"` on root
+  - `data-testid="mfa-wizard-step-N"` on each step div (N=1,2,3)
+  - `data-testid="mfa-wizard-continue"` / `mfa-wizard-cancel` / `mfa-wizard-back` / `mfa-wizard-done` on buttons
+  - `data-testid="mfa-wizard-loading"` on loading state
+  - `data-testid="mfa-wizard-phrase"` on RecoveryPhraseGrid wrapper
+  - `data-testid="mfa-wizard-acknowledge"` on checkbox
+  - `data-testid="mfa-wizard-error"` on error div
+
+- `apps/web/src/components/mfa/RecoveryPhraseGrid.tsx`
+  - `data-testid="recovery-phrase-grid"` on root
+  - Words extracted via existing `.recovery-phrase-word` class spans (no per-word testids needed)
+
+- `apps/web/src/components/mfa/DeviceWaitingScreen.tsx`
+  - `data-testid="device-waiting"` on root
+  - `data-testid="device-waiting-countdown"` on countdown
+  - `data-testid="device-waiting-recovery-link"` on recovery fallback
+  - `data-testid="device-waiting-retry"` on retry button
+  - `data-testid="device-waiting-status"` on status message (denied/expired/error)
+
+- `apps/web/src/components/mfa/RecoveryInput.tsx`
+  - `data-testid="recovery-input"` on root
+  - `data-testid="recovery-textarea"` on textarea
+  - `data-testid="recovery-submit"` on recover button
+  - `data-testid="recovery-back"` on back button
+  - `data-testid="recovery-error"` on error div
+
+- `apps/web/src/components/mfa/DeviceApprovalModal.tsx`
+  - `data-testid="device-approval-modal"` on modal
+  - `data-testid="device-approval-approve"` on approve button
+  - `data-testid="device-approval-deny"` on deny button
+  - `data-testid="device-approval-device-name"` on device name display
+
+- `apps/web/src/components/mfa/SecurityTab.tsx`
+  - `data-testid="security-tab"` on root
+  - `data-testid="mfa-status-badge"` on status indicator
+  - `data-testid="mfa-enable-btn"` on enable button
+
+### 2. Create wallet login E2E helper
+
+**New file: `tests/e2e/utils/wallet-login-helpers.ts`**
+
+```typescript
+// loginViaWallet(page) → drives the real wallet → SIWE → Core Kit flow
+// Returns: { success: true } | { requiredShare: true }
+//
+// Flow:
+// 1. installMockWallet() with Hardhat account #0
+// 2. Navigate to login page
+// 3. Click wallet button → select mock wallet connector
+// 4. Wait for either /files redirect (success) or DeviceWaitingScreen (MFA)
+//
+// Used by all MFA tests as the authentication method since
+// test-login bypass doesn't initialize Core Kit.
+```
+
+Reuses existing patterns from `wallet-login.spec.ts` (mock wallet setup, Hardhat key) and `login.page.ts` (page object selectors).
+
+### 3. Create MFA page interaction helpers
+
+**New file: `tests/e2e/utils/mfa-helpers.ts`**
+
+Helper functions for MFA UI interactions:
+- `enrollMfa(page)` — Click enable → step through wizard → extract recovery phrase words → acknowledge → done. Returns 24-word mnemonic string.
+- `extractRecoveryPhrase(page)` — Read words from `.recovery-phrase-word` spans inside `[data-testid="recovery-phrase-grid"]`
+- `enterRecoveryPhrase(page, mnemonic)` — Fill textarea and submit
+- `waitForDeviceApproval(page)` — Wait for DeviceApprovalModal to appear
+- `approveDevice(page)` — Click approve on DeviceApprovalModal
+- `denyDevice(page)` — Click deny on DeviceApprovalModal
+- `navigateToSecurityTab(page)` — Navigate to Settings → Security tab
+- `getMfaStatusText(page)` — Read MFA status badge text
+
+### 4. Create MFA E2E test suite
+
+**New file: `tests/e2e/tests/mfa-flows.spec.ts`**
+
+```typescript
+test.describe.serial('MFA flows @mfa', () => {
+  let primaryPage: Page;
+  let primaryContext: BrowserContext;
+  let savedStorageState: string; // path to saved state
+  let recoveryPhrase: string;
+  const account = privateKeyToAccount(HARDHAT_ACCOUNT_0_KEY);
+
+  test.beforeAll(async ({ browser }) => {
+    primaryContext = await browser.newContext();
+    primaryPage = await primaryContext.newPage();
+    await installMockWallet({ page: primaryPage, account, ... });
+  });
+
+  test.afterAll(async () => {
+    await primaryContext.close();
+  });
+
+  test('TC-MFA-01: wallet login and MFA enrollment', async () => {
+    // 1. Login via wallet (happy path, no MFA yet)
+    // 2. Navigate to Settings → Security
+    // 3. Click enable MFA → wizard step 1 → continue
+    // 4. Wait for wizard step 2 (enableMFA hits Devnet, ~10s)
+    // 5. Extract recovery phrase from grid
+    // 6. Check acknowledge checkbox → continue
+    // 7. Verify wizard step 3 shows success
+    // 8. Click done
+    // 9. Save storage state for later tests
+    // 10. Store recovery phrase
+  });
+
+  test('TC-MFA-02: MFA status reflected in Security tab', async () => {
+    // 1. Navigate to Settings → Security (same context)
+    // 2. Verify status badge shows [ENABLED]
+    // 3. Verify factor count shows expected values
+  });
+
+  test('TC-MFA-03: device approval - approve', async ({ browser }) => {
+    // 1. Ensure primaryPage is on /files (approver, polls for requests)
+    // 2. Create new context B (no localStorage = new device)
+    // 3. Install mock wallet on context B page
+    // 4. Login via wallet on context B → should enter REQUIRED_SHARE
+    // 5. Wait for DeviceWaitingScreen on context B
+    // 6. Wait for DeviceApprovalModal on primaryPage (polling picks up request)
+    // 7. Click --approve on primaryPage
+    // 8. Wait for context B to complete login → redirect to /files
+    // 9. Close context B
+  });
+
+  test('TC-MFA-04: recovery phrase restore', async ({ browser }) => {
+    // 1. Create new context C (new device)
+    // 2. Install mock wallet, login → REQUIRED_SHARE
+    // 3. Wait for DeviceWaitingScreen
+    // 4. Click "use recovery phrase instead"
+    // 5. Enter saved recovery phrase
+    // 6. Click --recover
+    // 7. Wait for redirect to /files
+    // 8. Close context C
+  });
+
+  test('TC-MFA-05: device approval - deny', async ({ browser }) => {
+    // 1. Create new context D (new device)
+    // 2. Install mock wallet, login → REQUIRED_SHARE
+    // 3. Wait for DeviceWaitingScreen on context D
+    // 4. Wait for DeviceApprovalModal on primaryPage
+    // 5. Click --deny on primaryPage
+    // 6. Verify context D shows "Request was denied" message
+    // 7. Close context D
+  });
+});
+```
+
+### 5. CI configuration
+
+**File: `tests/e2e/playwright.config.ts`** — no changes needed. Tests run in same chromium project. The `@mfa` tag in the describe block name allows filtering:
+```bash
+# Run only MFA tests
+pnpm exec playwright test --grep @mfa
+
+# Exclude MFA tests from fast CI
+pnpm exec playwright test --grep-invert @mfa
+```
+
+Optionally add a GitHub Actions workflow for nightly MFA tests if the main suite becomes too slow.
+
+## Files Modified
+
+| File | Change |
+|------|--------|
+| `apps/web/src/components/mfa/MfaEnrollmentWizard.tsx` | Add data-testid attributes |
+| `apps/web/src/components/mfa/RecoveryPhraseGrid.tsx` | Add data-testid attributes |
+| `apps/web/src/components/mfa/DeviceWaitingScreen.tsx` | Add data-testid attributes |
+| `apps/web/src/components/mfa/RecoveryInput.tsx` | Add data-testid attributes |
+| `apps/web/src/components/mfa/DeviceApprovalModal.tsx` | Add data-testid attributes |
+| `apps/web/src/components/mfa/SecurityTab.tsx` | Add data-testid attributes |
+| `tests/e2e/utils/wallet-login-helpers.ts` | **New** — wallet login E2E helper |
+| `tests/e2e/utils/mfa-helpers.ts` | **New** — MFA UI interaction helpers |
+| `tests/e2e/tests/mfa-flows.spec.ts` | **New** — MFA E2E test suite (5 tests) |
+
+## Verification
+
+1. **Build check**: `pnpm build` passes (data-testid additions don't break anything)
+2. **Existing tests**: `pnpm exec playwright test --grep-invert @mfa` still passes
+3. **MFA tests locally**: `pnpm exec playwright test tests/mfa-flows.spec.ts` (requires API + web running, hits Devnet)
+4. **Visual check**: Run with `--headed` to observe the wallet login → MFA enrollment → device approval flows
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.claude/projects/-Users-michael-Code-cipher-box/75d991b6-ff7a-4eb6-a765-46974bca661a.jsonl
+
+---
+
+ok can we run the new suite against a headed browser instance locally?
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **Initial Request**: User provided a detailed plan for implementing E2E MFA flow test coverage for CipherBox. The plan included adding data-testid attributes to 6 MFA components, creating wallet login helpers, MFA page interaction helpers, and a test suite with 5 serial tests.
+
+2. **Phase 1 - Research**: I used Explore agents to read all 6 MFA component files and the existing E2E test infrastructure (wallet-login.spec.ts, login.page.ts, web3auth-helpers.ts, playwright.config.ts, etc.)
+
+3. **Phase 2 - Implementation**: 
+   - Added data-testid attributes to all 6 MFA components
+   - Created wallet-login-helpers.ts (initially with Hardhat account #0)
+   - Created mfa-helpers.ts with MFA page interaction functions
+   - Created mfa-flows.spec.ts with 5 serial tests
+   - Both build and TypeScript checks passed
+
+4. **Phase 3 - Testing**: User asked to run the test suite headed locally.
+
+5. **First failure**: TC-MFA-01 timed out waiting for recovery-phrase-grid. The screenshot showed the page was on /files, not /settings. I investigated the trace.
+
+6. **Fix 1 - Error detection**: Updated enrollMfa to race between grid appearing and error appearing.
+
+7. **Second failure**: The wallet login returned `requiredShare` instead of `success` - MFA was already enabled for the Hardhat account #0 identity on Sapphire Devnet from a previous test run.
+
+8. **Fix 2 - Random wallet identity**: Changed from Hardhat account #0 to `generatePrivateKey()` for fresh DKG identity each run. Updated setupMockWallet/createWalletContext to accept account parameter. Updated test suite to use createTestAccount().
+
+9. **Third failure**: Wallet login succeeded (fresh identity), but enrollMfa still timed out. Screenshot showed /files again.
+
+10. **Diagnostic run**: Added console logging, URL change tracking, and detailed error diagnostics to TC-MFA-01. Results showed:
+    - URL changes: `/ → / → #/files → #/settings → #/files` 
+    - The page navigates from #/settings to #/files during enableMFA
+    - Console errors: SW registration, 404 resources
+    - Wizard not visible at timeout
+
+11. **Investigation**: Used Explore agent to analyze CoreKit provider and useAuth hook. Found:
+    - CoreKit provider has no automatic status change detection
+    - `isAuthenticated` is derived from accessToken in auth store
+    - The API client (client.ts) has a 401 interceptor that calls `useAuthStore.getState().logout()` on refresh failure, which sets `isAuthenticated: false`
+
+12. **Fix 3 - SettingsPage guard**: Added `isEnrolling` from MFA store to SettingsPage's redirect guard to prevent redirect during MFA enrollment. Build passed.
+
+13. **Fourth failure**: Same issue - page still navigates from #/settings to #/files. The isEnrolling guard didn't prevent it.
+
+14. **Further investigation**: Found that `useAuthStore.getState().logout()` (from 401 interceptor) does NOT reset MFA store (doesn't call `useMfaStore.reset()`). So `isEnrolling` should still be true. The navigation source might be elsewhere.
+
+15. **Current state**: Was about to inject a navigation trap to capture the exact call stack causing the redirect from #/settings to #/files.
+
+Key files modified:
+- 6 MFA components (data-testid)
+- SettingsPage.tsx (isEnrolling guard)
+- 3 new test files
+- wallet-login-helpers.ts rewritten twice
+
+The core unsolved problem: During `enableMFA()` Devnet operation (~10-15s), the page navigates from #/settings to #/files, unmounting the wizard. The exact trigger is still unknown despite multiple investigation attempts.
+
+Summary:
+1. Primary Request and Intent:
+   The user asked to implement a detailed plan for E2E MFA flow test coverage in CipherBox. The plan specifies:
+   - Adding `data-testid` attributes to 6 MFA components
+   - Creating a wallet login E2E helper (`tests/e2e/utils/wallet-login-helpers.ts`)
+   - Creating MFA page interaction helpers (`tests/e2e/utils/mfa-helpers.ts`)
+   - Creating an MFA E2E test suite (`tests/e2e/tests/mfa-flows.spec.ts`) with 5 serial tests (TC-MFA-01 through TC-MFA-05)
+   
+   After implementation, the user explicitly asked: "ok can we run the new suite against a headed browser instance locally?"
+
+2. Key Technical Concepts:
+   - **@johanneskares/wallet-mock**: EIP-6963 mock wallet provider for Playwright tests. Must be installed BEFORE page navigation. Uses viem's `privateKeyToAccount` for real ECDSA signatures.
+   - **Web3Auth Core Kit (MPC)**: Distributed key generation on Sapphire Devnet. `enableMFA()` creates device + recovery factors atomically. Operations take 5-15s per Devnet call.
+   - **DKG identity persistence**: Core Kit maps `(verifier, verifierId=userId)` to DKG shares on Sapphire Devnet. State persists across runs. A fresh backend DB gives a new userId → fresh DKG identity.
+   - **Serial test execution**: `test.describe.serial()` ensures MFA enrollment (TC-MFA-01) persists for subsequent tests.
+   - **Multiple browser contexts**: Primary context = "existing device" throughout. New contexts = "new device" for TC-MFA-03/04/05.
+   - **Auth state**: `isAuthenticated` is derived from `accessToken` in Zustand auth store. API client has 401 interceptor that calls `useAuthStore.getState().logout()` on token refresh failure.
+   - **MFA store `isEnrolling` flag**: Set true before `enableMFA()`, false in finally block. Used to track enrollment in progress.
+
+3. Files and Code Sections:
+
+   - **`apps/web/src/components/mfa/MfaEnrollmentWizard.tsx`** (modified)
+     - Added data-testid: `mfa-wizard`, `mfa-wizard-step-1/2/3`, `mfa-wizard-continue`, `mfa-wizard-cancel`, `mfa-wizard-back`, `mfa-wizard-done`, `mfa-wizard-loading`, `mfa-wizard-error`, `mfa-wizard-acknowledge`
+
+   - **`apps/web/src/components/mfa/RecoveryPhraseGrid.tsx`** (modified)
+     - Added `data-testid="recovery-phrase-grid"` to root div
+
+   - **`apps/web/src/components/mfa/DeviceWaitingScreen.tsx`** (modified)
+     - Added: `device-waiting`, `device-waiting-status` (on denied/expired/error status messages), `device-waiting-countdown`, `device-waiting-retry`, `device-waiting-recovery-link`
+
+   - **`apps/web/src/components/mfa/RecoveryInput.tsx`** (modified)
+     - Added: `recovery-input`, `recovery-textarea`, `recovery-submit`, `recovery-back`, `recovery-error`
+
+   - **`apps/web/src/components/mfa/DeviceApprovalModal.tsx`** (modified)
+     - Added: `device-approval-modal`, `device-approval-approve`, `device-approval-deny`, `device-approval-device-name`
+
+   - **`apps/web/src/components/mfa/SecurityTab.tsx`** (modified)
+     - Added: `security-tab`, `mfa-status-badge`, `mfa-enable-btn`
+
+   - **`apps/web/src/routes/SettingsPage.tsx`** (modified - bug fix attempt)
+     - Added `useMfaStore` import and `isEnrolling` guard to prevent redirect during MFA enrollment
+     ```typescript
+     import { useMfaStore } from '../stores/mfa.store';
+     // ...
+     const isEnrolling = useMfaStore((s) => s.isEnrolling);
+     useEffect(() => {
+       if (!isLoading && !isAuthenticated && !isEnrolling) {
+         navigate('/');
+       }
+     }, [isAuthenticated, isLoading, isEnrolling, navigate]);
+     ```
+     - **NOTE**: This fix did NOT resolve the navigation issue.
+
+   - **`tests/e2e/utils/wallet-login-helpers.ts`** (new file, current version)
+     - Uses `generatePrivateKey()` for fresh DKG identity each run
+     - Key exports: `createTestAccount()`, `setupMockWallet(page, account)`, `createWalletContext(browser, account)`, `loginViaWallet(page, options)`
+     ```typescript
+     export function createTestAccount(): PrivateKeyAccount {
+       return privateKeyToAccount(generatePrivateKey());
+     }
+     
+     export async function setupMockWallet(page: Page, account: PrivateKeyAccount): Promise<void> {
+       await installMockWallet({
+         page, account, defaultChain: mainnet,
+         transports: { [mainnet.id]: http() },
+       });
+     }
+     
+     export async function loginViaWallet(page: Page, options: { timeout?: number } = {}): Promise<WalletLoginResult> {
+       // Navigate to /, wait for wallet button enabled, click wallet, select Mock Wallet
+       // Race between /files redirect (success) and device-waiting screen (requiredShare)
+     }
+     ```
+
+   - **`tests/e2e/utils/mfa-helpers.ts`** (new file, current version)
+     - Key exports: `navigateToSecurityTab(page)`, `getMfaStatusText(page)`, `enrollMfa(page, options)`, `extractRecoveryPhrase(page)`, `enterRecoveryPhrase(page, mnemonic, options)`, `waitForDeviceApproval(page, options)`, `approveDevice(page)`, `denyDevice(page)`
+     - `enrollMfa` races between `recovery-phrase-grid` appearing (success) and `mfa-wizard-error` appearing (failure)
+     ```typescript
+     const outcome = await Promise.race([
+       gridLocator.waitFor({ state: 'visible', timeout: enableTimeout }).then(() => 'grid' as const),
+       errorLocator.waitFor({ state: 'visible', timeout: enableTimeout }).then(() => 'error' as const),
+     ]);
+     if (outcome === 'error') {
+       const errorText = await errorLocator.textContent();
+       throw new Error(`MFA enrollment failed: ${errorText}`);
+     }
+     ```
+
+   - **`tests/e2e/tests/mfa-flows.spec.ts`** (new file, current version with debug instrumentation)
+     - 5 serial tests in `test.describe.serial('MFA flows @mfa')`
+     - TC-MFA-01 currently has debug instrumentation: console logging, URL change tracking, diagnostic catch block
+     - Uses `createTestAccount()` for random wallet identity per run
+     - Shared `account`, `primaryContext`, `primaryPage`, `recoveryPhrase` across tests
+
+   - **`apps/web/src/lib/api/client.ts`** (read only - key finding)
+     - 401 interceptor calls `useAuthStore.getState().logout()` on refresh failure (line 62)
+     - This sets `isAuthenticated: false` which can trigger SettingsPage redirect
+
+   - **`apps/web/src/hooks/useAuth.ts`** (read only - key finding)
+     - Session restoration effect (line 462-497): when `coreKitLoggedIn && !isAuthenticated`, tries to refresh token and restore session
+     - Multiple `navigate('/files')` calls in login completion callbacks
+
+   - **`apps/web/src/hooks/useMfa.ts`** (read only)
+     - `enableMfa()` calls `coreKit.commitChanges()`, `coreKit.enableMFA()`, `coreKit.commitChanges()` sequentially
+     - Sets `isEnrolling = true` before, `false` in finally block
+     - Does NOT call `syncStatus()` (deliberately avoids triggering React state changes)
+
+   - **`apps/web/src/stores/auth.store.ts`** (read only)
+     - `logout()` only resets auth state (accessToken, isAuthenticated, etc.)
+     - Does NOT reset MFA store
+
+4. Errors and Fixes:
+   - **Error 1: Recovery phrase grid timeout (first run)**
+     - `enrollMfa` timed out after 60s waiting for `[data-testid="recovery-phrase-grid"]`
+     - Screenshot showed page on /files instead of /settings with wizard
+     - Fix: Added error detection - race between grid and error locator in `enrollMfa`
+   
+   - **Error 2: Wallet login returned `requiredShare` instead of `success`**
+     - MFA was already enabled for Hardhat account #0 on Sapphire Devnet from previous test runs
+     - Local dev DB persists the same userId between runs → same DKG identity → MFA still enabled
+     - Fix: Changed from static Hardhat key to `generatePrivateKey()` for fresh DKG identity each run. Updated `setupMockWallet` and `createWalletContext` to accept account parameter.
+   
+   - **Error 3: Page navigates from #/settings to #/files during enableMFA (UNSOLVED)**
+     - Diagnostics showed URL changes: `/ → / → #/files → #/settings → #/files`
+     - Wizard not visible at failure time. No wizard error visible.
+     - Console errors: SW registration errors, 404 resource loads
+     - Theory: During long enableMFA Devnet call, a background API request gets 401, refresh fails, `useAuthStore.getState().logout()` called → `isAuthenticated = false` → redirect
+     - Attempted fix: Added `isEnrolling` guard in SettingsPage redirect effect
+     - **Fix did NOT work** - same navigation pattern persists
+     - Root cause still unknown - the navigation from #/settings to #/files happens even with the isEnrolling guard
+
+5. Problem Solving:
+   - **Solved**: Random wallet identity per test run ensures fresh DKG state on Devnet
+   - **Solved**: Error detection in enrollMfa (race between grid and error)
+   - **Unsolved (ACTIVE)**: Page navigates away from /settings during enableMFA operation. The exact code path causing the navigation from `#/settings` to `#/files` has not been identified. The `isEnrolling` guard in SettingsPage did not fix it, suggesting the navigation comes from elsewhere (possibly `useAuth.ts` session restoration effect, Login.tsx redirect, or another component). Was about to inject a JavaScript navigation trap to capture the call stack.
+
+6. All User Messages:
+   - "Implement the following plan: [detailed E2E MFA flow test coverage plan]"
+   - "ok can we run the new suite against a headed browser instance locally?"
+
+7. Pending Tasks:
+   - Identify the exact code path causing the `#/settings → #/files` navigation during `enableMFA()` (root cause not yet found)
+   - Fix the navigation bug so TC-MFA-01 enrollment wizard stays mounted
+   - Remove debug instrumentation from TC-MFA-01 after fixing
+   - Run full 5-test suite to verify all tests pass
+   - Consider whether the SettingsPage `isEnrolling` guard fix should be kept or reverted (it's correct in principle but doesn't fix the current issue)
+
+8. Current Work:
+   Actively debugging why the page navigates from `#/settings` to `#/files` during the `enableMFA()` Devnet call in TC-MFA-01. The last diagnostic run showed the exact URL change sequence and confirmed:
+   - Wizard is NOT visible at timeout
+   - No wizard error is visible
+   - The `isEnrolling` guard in SettingsPage did not prevent the redirect
+   
+   I was about to inject a JavaScript navigation interceptor to capture the exact call stack of whatever code is calling `navigate('/files')` or changing `window.location.hash`. The last edit added URL change tracking and console message capture to TC-MFA-01.
+
+9. Optional Next Step:
+   Inject a JavaScript trap to intercept React Router navigation and capture the call stack, then re-run TC-MFA-01 to identify the exact code path causing the `#/settings → #/files` redirect during `enableMFA()`. This directly continues the debugging work from the last assistant action where I was investigating: "The auth store `logout()` (called by 401 interceptor) doesn't reset MFA store, so `isEnrolling` should still be true. Something else is navigating. Let me inject a navigation trap to capture the exact call stack."
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.claude/projects/-Users-michael-Code-cipher-box/c8328e0a-366a-46e9-a1b2-518e0d53294e.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation, focusing on all technical details, code changes, and debugging efforts.
+
+The conversation starts with a system reminder showing previously read files and a plan for E2E MFA flow test coverage. The actual conversation in this session continues from a previous context that was compacted, with a detailed summary provided.
+
+Key events in this session:
+
+1. The session begins with the assistant continuing to debug a navigation issue where during `enableMFA()`, the page navigates from `#/settings` to `#/files`, unmounting the MFA enrollment wizard.
+
+2. The assistant searched for all `navigate('/files')` calls across the codebase, finding them in:
+   - Login.tsx:55 (redirect if already authenticated)
+   - useAuth.ts:237 (completeRequiredShare)
+   - useAuth.ts:295 (loginWithGoogle)
+   - useAuth.ts:336 (loginWithEmail)
+   - useAuth.ts:375 (loginWithWallet)
+   - useFolderNavigation.ts (multiple places)
+   - AppShell.tsx:39,41 (search result selection)
+
+3. The assistant read useAuth.ts session restoration effect (lines 462-497), the API client's 401 interceptor (client.ts), and the auth store's logout method.
+
+4. The assistant checked background polling mechanisms in FileBrowser.tsx (sync polling 30s, device registry 60s), DeviceApprovalModal polling, etc.
+
+5. The assistant checked the router configuration in routes/index.tsx - HashRouter with routes for /, /files/:folderId?, /settings, etc.
+
+6. The assistant read the full MfaEnrollmentWizard.tsx to understand how enableMfa is called.
+
+7. The assistant read the CoreKitProvider to understand that status is only updated via explicit syncStatus() calls.
+
+8. The user provided a crucial clue: "I did not notice this redirect when I was manually testing mfa flows, everything seemed to be working normally."
+
+9. First fix attempt: Added a stabilization wait after login (waiting for "New Folder" button to be visible) before navigating to settings. This did NOT fix the issue.
+
+10. Second fix attempt: Injected a navigation interceptor (history.pushState patch) that captures stack traces. This revealed the EXACT source:
+```
+[NAV_TRAP] pushState to #/files
+at history.pushState
+at push (react-router-dom.js:729:21)
+at react-router-dom.js:6026:63
+at src/hooks/useAuth.ts?t=1772149596577:247:9
+at async src/routes/Login.tsx?t=1772153467840:87:9
+at async handleSiweFlow (src/components/auth/WalletLoginButton.tsx:58:7)
+```
+
+11. Third fix attempt: Modified Login.tsx to add `useLocation()` check so the redirect effect only fires when `location.pathname === '/'`. This did NOT fix the issue either.
+
+12. The second run with the navigation trap (after the Login.tsx fix) showed the SAME stack trace, confirming the navigate is from the `loginWithWallet` async chain itself (not the Login effect), running as a stale async closure.
+
+13. Most recent action: Modified the navigation interceptor to capture ALL pushState calls with sequential numbering and the current hash, to understand if there are multiple navigations and their exact timing.
+
+Key files modified in this session:
+- tests/e2e/tests/mfa-flows.spec.ts - multiple edits for debugging
+- apps/web/src/routes/Login.tsx - added useLocation check (fix attempt that didn't work)
+- apps/web/src/routes/SettingsPage.tsx - has isEnrolling guard from previous session
+
+Files read for investigation:
+- apps/web/src/hooks/useAuth.ts
+- apps/web/src/hooks/useMfa.ts
+- apps/web/src/lib/api/client.ts
+- apps/web/src/stores/auth.store.ts
+- apps/web/src/lib/web3auth/core-kit-provider.tsx
+- apps/web/src/components/mfa/MfaEnrollmentWizard.tsx
+- apps/web/src/components/mfa/SecurityTab.tsx
+- apps/web/src/components/auth/WalletLoginButton.tsx
+- apps/web/src/routes/Login.tsx
+- apps/web/src/routes/index.tsx
+- Various test files and error context files
+
+The core unsolved problem: A `navigate('/files')` call fires during MFA enrollment, coming from the `handleSiweFlow → handleWalletLogin → loginWithWallet` async chain. This chain should have completed when the test first detected the URL change to `/files`, but somehow it fires again ~60 seconds later during enrollment.
+
+The assistant was about to run the test with improved diagnostics (capturing ALL pushState calls with numbering) to understand the full sequence of navigations.
+
+Summary:
+1. Primary Request and Intent:
+   The user is implementing E2E MFA flow test coverage for CipherBox (a plan from a previous session). The immediate task is debugging why TC-MFA-01 fails: during `enableMFA()` (which calls Web3Auth Sapphire Devnet for 10-15s), the page navigates from `#/settings` back to `#/files`, unmounting the MFA enrollment wizard and causing a timeout. The user explicitly noted that **manual testing works fine**, making this an E2E-specific timing/race condition.
+
+2. Key Technical Concepts:
+   - **@johanneskares/wallet-mock**: EIP-6963 mock wallet for Playwright tests, auto-approves connect + signMessage
+   - **Web3Auth MPC Core Kit**: DKG on Sapphire Devnet, `enableMFA()` creates device + recovery factors (5-15s per Devnet call)
+   - **React Router v6 HashRouter**: Routes defined in `routes/index.tsx`, navigation via `useNavigate()` and `window.location.hash`
+   - **Zustand auth store**: `isAuthenticated` derived from `accessToken !== null`, store-level `logout()` separate from hook-level `logout()`
+   - **Stale async closures**: The root cause — async functions created during Login component render continue executing after component unmounts
+   - **401 interceptor pattern**: `client.ts` intercepts 401s, attempts refresh, calls `useAuthStore.getState().logout()` on failure
+   - **`isEnrolling` guard**: Added to SettingsPage in previous session to prevent redirect during MFA enrollment
+   - **Navigation trap technique**: Patching `history.pushState` to capture call stacks of unexpected navigations
+
+3. Files and Code Sections:
+
+   - **`tests/e2e/tests/mfa-flows.spec.ts`** (modified multiple times for debugging)
+     - Current state includes: stabilization wait after login, navigation interceptor, improved error diagnostics
+     - Most recent edit changes the nav trap to capture ALL pushState calls with sequential numbering:
+     ```typescript
+     await primaryPage.evaluate(() => {
+       let navCount = 0;
+       const origPushState = history.pushState.bind(history);
+       history.pushState = function (...args: Parameters<typeof origPushState>) {
+         navCount++;
+         const url = String(args[2] ?? '');
+         console.error(`[NAV_TRAP] #${navCount} pushState to ${url} (from: ${window.location.hash})\n${new Error().stack}`);
+         return origPushState(...args);
+       };
+     });
+     ```
+     - Also includes stabilization wait after login:
+     ```typescript
+     await primaryPage.getByRole('button', { name: 'New Folder' }).waitFor({
+       state: 'visible',
+       timeout: 15_000,
+     });
+     ```
+
+   - **`apps/web/src/routes/Login.tsx`** (modified - fix attempt that didn't resolve the issue)
+     - Added `useLocation` import and pathname check to redirect effect:
+     ```typescript
+     import { useNavigate, useLocation } from 'react-router-dom';
+     // ...
+     const location = useLocation();
+     // ...
+     useEffect(() => {
+       if (isAuthenticated && location.pathname === '/') {
+         navigate('/files');
+       }
+     }, [isAuthenticated, location.pathname, navigate]);
+     ```
+     - This change is correct in principle but doesn't fix the issue because the navigate comes from inside the `loginWithWallet` async chain, not from the redirect effect.
+
+   - **`apps/web/src/routes/SettingsPage.tsx`** (modified in previous session, still has isEnrolling guard)
+     - Has `isEnrolling` guard from MFA store to prevent redirect during enrollment:
+     ```typescript
+     const isEnrolling = useMfaStore((s) => s.isEnrolling);
+     useEffect(() => {
+       if (!isLoading && !isAuthenticated && !isEnrolling) {
+         navigate('/');
+       }
+     }, [isAuthenticated, isLoading, isEnrolling, navigate]);
+     ```
+
+   - **`apps/web/src/hooks/useAuth.ts`** (read only - critical for understanding the bug)
+     - `loginWithWallet` (lines 352-384): calls `coreKitLoginWallet` then `completeBackendAuth` then `navigate('/files')` at line 375, with `setIsLoggingIn(false)` in finally block
+     - `completeRequiredShare` (lines 213-238): calls `completeBackendAuth`, `syncStatus()`, then `navigate('/files')` at line 237
+     - Session restoration effect (lines 462-497): fires when `coreKitLoggedIn && !isAuthenticated && !isLoggingIn`
+
+   - **`apps/web/src/components/auth/WalletLoginButton.tsx`** (read only - part of the bug chain)
+     - `handleSiweFlow` (line 48): async function triggered by useEffect when `isConnected && address && phase === 'connecting'`
+     - Calls `onLogin(idToken, userId)` at line 81, then `setPhase('idle')` and `setShowConnectors(false)`
+     - Uses `siweInProgress.current` ref to prevent re-entry
+
+   - **`apps/web/src/lib/api/client.ts`** (read only)
+     - 401 interceptor attempts token refresh, on failure calls `useAuthStore.getState().logout()`
+     - Does NOT reset MFA store (doesn't call `useMfaStore.getState().reset()`)
+
+   - **`apps/web/src/lib/web3auth/core-kit-provider.tsx`** (read only)
+     - Status only updated via explicit `syncStatus()` calls, not automatically during `enableMFA()`
+
+   - **`apps/web/src/hooks/useMfa.ts`** (read only)
+     - `enableMfa()` sets `isEnrolling=true`, calls `coreKit.commitChanges()`, `coreKit.enableMFA()`, `coreKit.commitChanges()`, sets `isEnrolling=false` in finally
+     - Core Kit operations go to Sapphire Devnet, NOT through CipherBox apiClient
+
+   - **`apps/web/src/components/mfa/SecurityTab.tsx`** (read only)
+     - No navigation triggers, only calls `checkMfaStatus()` on mount
+
+   - **`apps/web/src/components/mfa/MfaEnrollmentWizard.tsx`** (read only, has data-testids from previous session)
+     - `handleEnableMfa` calls `enableMfa()` from useMfa hook
+     - Called from `handleGoToStep2` when user clicks Continue on step 1
+
+   - **`apps/web/src/routes/index.tsx`** (read only)
+     - HashRouter with routes: `/` → Login, `/files/:folderId?` → FilesPage, `/settings` → SettingsPage
+
+   - **Other files from previous sessions** (data-testids already added):
+     - `apps/web/src/components/mfa/RecoveryPhraseGrid.tsx`
+     - `apps/web/src/components/mfa/DeviceWaitingScreen.tsx`
+     - `apps/web/src/components/mfa/RecoveryInput.tsx`
+     - `apps/web/src/components/mfa/DeviceApprovalModal.tsx`
+     - `tests/e2e/utils/wallet-login-helpers.ts`
+     - `tests/e2e/utils/mfa-helpers.ts`
+
+4. Errors and fixes:
+
+   - **Error 1: Page navigates from #/settings to #/files during enableMFA() (STILL UNSOLVED)**
+     - Navigation trap revealed exact source: `handleSiweFlow → handleWalletLogin → loginWithWallet → navigate('/files')` in useAuth.ts
+     - **Fix attempt A**: Added stabilization wait after login (wait for "New Folder" button) - DID NOT FIX
+     - **Fix attempt B**: Added `location.pathname === '/'` check to Login.tsx redirect effect - DID NOT FIX (because the navigate comes from the loginWithWallet async chain, not the redirect effect)
+     - The navigate call appears to come from a stale async closure from the login flow that fires ~60 seconds after login completed
+     - User feedback: "I did not notice this redirect when I was manually testing mfa flows, everything seemed to be working normally" - confirming this is E2E-specific
+
+   - **Previous session errors (already fixed)**:
+     - Random wallet identity needed (fixed by using `generatePrivateKey()`)
+     - Error detection in enrollMfa (fixed by racing grid vs error locator)
+     - `consoleErrors` variable typo (was `consoleErrors`, should be `consoleMessages` - fixed by removing the diagnostic code)
+
+5. Problem Solving:
+   - **SOLVED**: Identified the exact code path causing the redirect via navigation trap: `WalletLoginButton.tsx:handleSiweFlow → Login.tsx:handleWalletLogin → useAuth.ts:loginWithWallet → navigate('/files')`
+   - **UNSOLVED**: Why this async chain fires again ~60 seconds after the initial login completed. The `loginWithWallet` function calls `navigate('/files')` at line 375 — the test catches this URL change. But somehow the same navigate fires again during enrollment. The most recent diagnostic change (capturing ALL pushState calls with numbering) hasn't been run yet.
+
+6. All user messages:
+   - "I did not notice this redirect when I was manually testing mfa flows, everything seemed to be working normally."
+   - (Plus implicit continuation request from the context restoration)
+
+7. Pending Tasks:
+   - Run the test with the improved navigation trap (ALL pushState calls with sequential numbering) to understand the full sequence of navigations
+   - Fix the root cause of the late-firing `navigate('/files')` during MFA enrollment
+   - Remove debug instrumentation from TC-MFA-01 after fixing
+   - Run the full 5-test suite to verify all tests pass
+   - Clean up the Login.tsx change (keep if correct, revert if not needed)
+   - Consider whether the SettingsPage `isEnrolling` guard is still needed
+
+8. Current Work:
+   Actively debugging the navigation redirect bug in TC-MFA-01. The most recent edit modified the navigation interceptor in `mfa-flows.spec.ts` to capture ALL `history.pushState` calls (not just those targeting `/files`) with sequential numbering and the current hash at the time of the call:
+   ```typescript
+   await primaryPage.evaluate(() => {
+     let navCount = 0;
+     const origPushState = history.pushState.bind(history);
+     history.pushState = function (...args: Parameters<typeof origPushState>) {
+       navCount++;
+       const url = String(args[2] ?? '');
+       console.error(`[NAV_TRAP] #${navCount} pushState to ${url} (from: ${window.location.hash})\n${new Error().stack}`);
+       return origPushState(...args);
+     };
+   });
+   ```
+   This was the last edit made before the summary was requested. The test has NOT been run with this latest change yet.
+
+9. Optional Next Step:
+   Run the test with the improved navigation trap to capture the full sequence of pushState calls:
+   ```bash
+   cd /Users/michael/Code/cipher-box/tests/e2e && pnpm exec playwright test tests/mfa-flows.spec.ts --grep "TC-MFA-01" --headed --reporter=list
+   ```
+   The output will show ALL navigations with numbering and source hash, revealing whether there's a single late navigate or multiple navigates, and their exact timing relative to the enrollment. This is the direct continuation of the debugging effort that was in progress, specifically tracing the `handleSiweFlow → handleWalletLogin → loginWithWallet → navigate('/files')` call chain that was identified by the previous navigation trap run.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.claude/projects/-Users-michael-Code-cipher-box/c8328e0a-366a-46e9-a1b2-518e0d53294e.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation, focusing on all technical details, code changes, and debugging efforts.
+
+The conversation is a continuation from a previous session that ran out of context. The previous session's summary is included and provides essential context about the E2E MFA flow test coverage work.
+
+**Session Context (from previous compaction summary):**
+- Working on E2E MFA flow test coverage for CipherBox
+- TC-MFA-01 was failing: during `enableMFA()`, the page navigates from `#/settings` back to `#/files`, unmounting the MFA enrollment wizard
+- Navigation trap technique was used to capture pushState calls
+- Previous stack trace identified: `handleSiweFlow → handleWalletLogin → loginWithWallet → navigate('/files')`
+- Multiple fix attempts had been tried but didn't work:
+  - Added stabilization wait after login (waiting for "New Folder" button)
+  - Added `location.pathname === '/'` check to Login.tsx redirect effect
+  - Modified navigation interceptor to capture ALL pushState calls with numbering
+- User confirmed: "I did not notice this redirect when I was manually testing mfa flows, everything seemed to be working normally"
+
+**This Session's Work:**
+
+1. The assistant read key files to understand the architecture:
+   - `WalletLoginButton.tsx` - The SIWE flow with useEffect trigger and handleSiweFlow
+   - `useAuth.ts` - Login functions (loginWithWallet, loginWithGoogle, loginWithEmail), session restoration effect, completeRequiredShare, completeBackendAuth
+   - `useMfa.ts` - enableMfa function, checkMfaStatus, factor management
+   - `core-kit-provider.tsx` - CoreKitProvider, syncStatus mechanism
+   - `wallet-login-helpers.ts` - E2E test helpers (loginViaWallet, setupMockWallet, createWalletContext)
+   - `mfa-helpers.ts` - MFA UI interaction helpers (enrollMfa, navigateToSecurityTab, etc.)
+   - `client.ts` - API 401 interceptor with token refresh
+   - `AppShell.tsx` - Contains DeviceApprovalModal (polls for requests)
+   - `DeviceApprovalModal.tsx` - Polls for pending approval requests
+   - `wagmi/provider.tsx` - WagmiProvider with reconnectOnMount=false
+   - `main.tsx` - React StrictMode enabled
+
+2. Key finding: React `StrictMode` is enabled in main.tsx, but that turned out to NOT be the root cause.
+
+3. The assistant ran TC-MFA-01 with the improved nav trap diagnostics. The output captured exactly 1 navigation:
+```
+[NAV_TRAP] #1 pushState to #/files (from: #/settings)
+Error
+    at history.pushState
+    at push (react-router-dom.js:729:21)
+    at react-router-dom.js:6026:63
+    at http://localhost:5173/src/hooks/useAuth.ts?t=1772149596577:247:9
+    at async http://localhost:5173/src/routes/Login.tsx?t=1772155751823:88:9
+    at async handleSiweFlow (http://localhost:5173/src/components/auth/WalletLoginButton.tsx:58:7)
+```
+
+4. **ROOT CAUSE IDENTIFIED**: Race between two `navigate('/files')` calls:
+   - **Early navigate**: Login.tsx redirect effect fires when `isAuthenticated` becomes true (from `setAccessToken` in `completeBackendAuth`), BEFORE `initializeOrLoadVault()` completes. The test's `waitForURL('**/files')` resolves here.
+   - **Late navigate**: After `initializeOrLoadVault()` completes, `completeBackendAuth` returns, and `loginWithWallet` calls its explicit `navigate('/files')`. But by now the user has navigated to `/settings` for MFA enrollment.
+
+   The key timing issue: `completeBackendAuth` sets the access token at step 3 (making isAuthenticated=true), but `initializeOrLoadVault()` at step 5 takes time. React re-renders during the await, Login.tsx redirect effect fires, URL changes to /files, test proceeds. Then when vault init finally completes, the explicit navigate('/files') fires from /settings.
+
+5. **FIX APPLIED**: Removed `navigate('/files')` from all three login functions in useAuth.ts:
+   - `loginWithWallet` (line 375) - removed navigate, added comment
+   - `loginWithGoogle` (line 295) - removed navigate, added comment  
+   - `loginWithEmail` (line 336) - removed navigate, added comment
+   - Also removed `navigate` from their useCallback dependency arrays
+   - Kept `navigate('/files')` in `completeRequiredShare` and `navigate('/')` in `logout`
+
+6. **Debug cleanup**: Removed the nav trap diagnostic code from `mfa-flows.spec.ts`
+
+7. **Test results after fix**:
+   - TC-MFA-01 alone: PASSES consistently (21.3s, 23.6s)
+   - Full suite attempt 1: TC-MFA-01 failed with "Network Error" (transient API connectivity issue)
+   - Full suite attempt 2: TC-MFA-01 PASSED, TC-MFA-02 PASSED, TC-MFA-03 FAILED
+   - TC-MFA-03 failure: DeviceApprovalModal never appeared on primary page - separate issue from the navigate bug
+
+8. The assistant was about to investigate TC-MFA-03's failure (device approval flow) when the summary was requested. The assistant had just read `DeviceWaitingScreen.tsx` to understand how approval requests are created and polled.
+
+**Files Modified:**
+- `apps/web/src/hooks/useAuth.ts` - Removed navigate('/files') from loginWithWallet, loginWithGoogle, loginWithEmail
+- `tests/e2e/tests/mfa-flows.spec.ts` - Cleaned up nav trap diagnostics
+
+**Files Read (this session):**
+- `apps/web/src/components/auth/WalletLoginButton.tsx`
+- `apps/web/src/hooks/useAuth.ts` (full file)
+- `apps/web/src/hooks/useMfa.ts`
+- `apps/web/src/lib/web3auth/core-kit-provider.tsx`
+- `apps/web/src/lib/api/client.ts`
+- `apps/web/src/components/layout/AppShell.tsx`
+- `apps/web/src/components/mfa/DeviceApprovalModal.tsx`
+- `apps/web/src/components/mfa/DeviceWaitingScreen.tsx`
+- `apps/web/src/lib/wagmi/provider.tsx`
+- `apps/web/src/main.tsx`
+- `tests/e2e/utils/wallet-login-helpers.ts`
+- `tests/e2e/utils/mfa-helpers.ts`
+- Various error context files
+
+**User Messages:**
+The user only sent one message continuing the conversation from the previous context compaction - instructing to continue from where we left off.
+
+Summary:
+1. Primary Request and Intent:
+   The user is implementing E2E MFA flow test coverage for CipherBox (5 serial tests: TC-MFA-01 through TC-MFA-05). The immediate task is fixing bugs that prevent the E2E tests from passing. TC-MFA-01 was failing because during `enableMFA()` (a 10-60 second Devnet operation), the page unexpectedly navigated from `#/settings` to `#/files`, unmounting the MFA enrollment wizard. This was identified and fixed in this session. Now TC-MFA-03 (device approval flow) is the next failing test.
+
+2. Key Technical Concepts:
+   - **@johanneskares/wallet-mock**: EIP-6963 mock wallet for Playwright tests, auto-approves connect + signMessage
+   - **Web3Auth MPC Core Kit**: DKG on Sapphire Devnet, `enableMFA()` creates device + recovery factors (5-15s per Devnet call)
+   - **React Router v6 HashRouter**: Routes in `routes/index.tsx`, navigation via `useNavigate()`
+   - **Zustand auth store**: `isAuthenticated` derived from `accessToken !== null`
+   - **Stale async closures / race conditions**: The root cause — `completeBackendAuth` sets access token early (triggering Login.tsx redirect), but `initializeOrLoadVault()` is still pending. The explicit `navigate('/files')` in login functions fires late.
+   - **Navigation trap technique**: Patching `history.pushState` to capture stack traces of unexpected navigations
+   - **React StrictMode**: Enabled in main.tsx — investigated as a potential cause but ruled out
+   - **wagmi**: reconnectOnMount=false configured; disconnect() called after SIWE signing
+   - **Serial test execution**: `test.describe.serial` ensures MFA enrollment persists for subsequent tests
+   - **401 interceptor pattern**: `client.ts` intercepts 401s, attempts refresh, calls store logout on failure
+   - **`isEnrolling` guard**: In SettingsPage to prevent redirect during MFA enrollment
+
+3. Files and Code Sections:
+   - **`apps/web/src/hooks/useAuth.ts`** (MODIFIED - core fix)
+     - Contains `loginWithWallet`, `loginWithGoogle`, `loginWithEmail`, `completeRequiredShare`, `completeBackendAuth`, session restoration effect, and `logout`
+     - **FIX**: Removed `navigate('/files')` from all three login functions and removed `navigate` from their dependency arrays
+     - The Login.tsx redirect effect already handles navigation when `isAuthenticated` becomes true
+     - `completeBackendAuth` calls `setAccessToken` (making isAuthenticated=true) BEFORE `initializeOrLoadVault()` completes — the Login.tsx effect fires during this window
+     - Key change in `loginWithWallet`:
+     ```typescript
+     // Normal path
+     await completeBackendAuth('wallet', cipherboxJwt);
+     // Navigation is handled by Login.tsx's redirect effect (isAuthenticated → /files).
+     // completeBackendAuth sets the access token early, but initializeOrLoadVault()
+     // inside it may still be pending. An explicit navigate here would fire AFTER
+     // vault init completes — by which point the user may have navigated away from
+     // the login page, causing a disruptive late redirect.
+     ```
+     - Dependency array changed from `[isLoggingIn, coreKitLoginWallet, completeBackendAuth, setAccessToken, navigate]` to `[isLoggingIn, coreKitLoginWallet, completeBackendAuth, setAccessToken]`
+     - Same pattern applied to `loginWithGoogle` (removed navigate and `navigate` dep) and `loginWithEmail` (removed navigate and `navigate` dep)
+     - `navigate` is still used by `completeRequiredShare` (line 237, `navigate('/files')`) and `logout` (lines 438/451, `navigate('/')`)
+     - `completeBackendAuth` sets token before vault init:
+     ```typescript
+     const completeBackendAuth = useCallback(
+       async (authMethod: string, cipherboxJwt: string): Promise<void> => {
+         const publicKey = await getPublicKeyHex();
+         const response = await authApi.login({...});
+         setAccessToken(response.accessToken);  // ← isAuthenticated becomes true HERE
+         setLastAuthMethod(authMethod);
+         await initializeOrLoadVault();  // ← This takes TIME (API calls, vault decryption)
+       }, [...]
+     );
+     ```
+     - Session restoration effect (lines 462-497): fires when `coreKitLoggedIn && !isAuthenticated && !isLoggingIn`, tries refresh, calls coreKitLogout on failure
+
+   - **`tests/e2e/tests/mfa-flows.spec.ts`** (MODIFIED - cleanup)
+     - Removed navigation trap diagnostic code (lines 94-126 replaced with simple enrollMfa call)
+     - Current test structure: 5 serial tests sharing `primaryContext`/`primaryPage`/`recoveryPhrase`
+     - TC-MFA-01 passes, TC-MFA-02 passes, TC-MFA-03 fails at `waitForDeviceApproval`
+     - Current clean TC-MFA-01 code:
+     ```typescript
+     // 4. Run through the enrollment wizard
+     recoveryPhrase = await enrollMfa(primaryPage, { enableTimeout: 60_000 });
+
+     // 5. Verify we got a valid 24-word phrase
+     const words = recoveryPhrase.split(' ');
+     expect(words).toHaveLength(24);
+     ```
+
+   - **`apps/web/src/routes/Login.tsx`** (MODIFIED in previous session, still has useLocation fix)
+     - Has redirect effect with location check (added in previous session):
+     ```typescript
+     const location = useLocation();
+     useEffect(() => {
+       if (isAuthenticated && location.pathname === '/') {
+         navigate('/files');
+       }
+     }, [isAuthenticated, location.pathname, navigate]);
+     ```
+     - This redirect effect is now the SOLE mechanism for post-login navigation to /files
+
+   - **`apps/web/src/routes/SettingsPage.tsx`** (MODIFIED in previous session)
+     - Has `isEnrolling` guard to prevent redirect during MFA enrollment:
+     ```typescript
+     const isEnrolling = useMfaStore((s) => s.isEnrolling);
+     useEffect(() => {
+       if (!isLoading && !isAuthenticated && !isEnrolling) {
+         navigate('/');
+       }
+     }, [isAuthenticated, isLoading, isEnrolling, navigate]);
+     ```
+
+   - **`apps/web/src/components/auth/WalletLoginButton.tsx`** (READ - key for understanding the bug)
+     - useEffect triggers handleSiweFlow when `isConnected && address && phase === 'connecting' && !siweInProgress.current`
+     - handleSiweFlow: gets nonce → creates SIWE → signs → verifies → disconnect() → `await onLogin(idToken, userId)` → cleanup
+     - `phase` starts as 'idle' on mount, only set to 'connecting' on user click
+
+   - **`apps/web/src/hooks/useMfa.ts`** (READ)
+     - `enableMfa()`: sets isEnrolling=true, calls commitChanges, enableMFA (Devnet), commitChanges, TSS key check, setEnrolling(false) in finally
+     - `checkMfaStatus()`: reads Core Kit key details locally (no API call), MFA enabled when `totalFactors > 2`
+
+   - **`apps/web/src/lib/web3auth/core-kit-provider.tsx`** (READ)
+     - `syncStatus()` only updates React state — reads `getCoreKit().status` and calls `setStatus()`
+
+   - **`apps/web/src/lib/api/client.ts`** (READ)
+     - 401 interceptor clears auth state on refresh failure: `useFolderStore.clearFolders()`, `useVaultStore.clearVaultKeys()`, `useSyncStore.reset()`, `useAuthStore.logout()` — does NOT clear MFA store
+
+   - **`apps/web/src/components/layout/AppShell.tsx`** (READ)
+     - Renders `DeviceApprovalModal` and `MfaEnrollmentPrompt` on all authenticated pages
+     - DeviceApprovalModal polls for approval requests (relevant to TC-MFA-03)
+
+   - **`apps/web/src/components/mfa/DeviceApprovalModal.tsx`** (READ)
+     - Polls when `isAuthenticated && isMfaEnabled && !isRequiredShare && !coreKitRequiredShare`
+     - Uses `useDeviceApproval` hook for polling
+     - Calls `useAuth()` which includes `useNavigate()`
+
+   - **`apps/web/src/components/mfa/DeviceWaitingScreen.tsx`** (READ - just before summary)
+     - Creates approval request via `requestApproval()` from `useDeviceApproval` hook
+     - Waits for `accessToken` to be available before sending request (to avoid 401)
+     - Has `requestFiredRef` to prevent double-firing
+     - Auto-completes on `approvalStatus === 'approved'`
+
+   - **`apps/web/src/main.tsx`** (READ)
+     - React StrictMode enabled wrapping WagmiSetup → CoreKitProvider → QueryClientProvider → App
+
+   - **`apps/web/src/lib/wagmi/provider.tsx`** (READ)
+     - `reconnectOnMount={false}` — wagmi doesn't auto-reconnect on page load
+
+   - **`tests/e2e/utils/wallet-login-helpers.ts`** (READ)
+     - `loginViaWallet`: goto('/') → wait for wallet button → click → select Mock Wallet → race between waitForURL('/files') and DeviceWaitingScreen visible
+     - `setupMockWallet`: calls `installMockWallet` from @johanneskares/wallet-mock
+     - `createWalletContext`: creates new browser context with mock wallet
+
+   - **`tests/e2e/utils/mfa-helpers.ts`** (READ)
+     - `enrollMfa`: clicks enable → wizard step 1 → continue → wait for grid or error → extract phrase → acknowledge → continue → done
+     - `waitForDeviceApproval`: waits for `[data-testid="device-approval-modal"]` visible
+     - `approveDevice`/`denyDevice`: clicks approve/deny buttons
+
+4. Errors and fixes:
+   - **TC-MFA-01: Late navigate('/files') during MFA enrollment (FIXED)**:
+     - Root cause: `completeBackendAuth` sets `accessToken` early (making `isAuthenticated=true`), triggering Login.tsx redirect effect. But `initializeOrLoadVault()` inside `completeBackendAuth` is still pending. When it completes, `loginWithWallet`'s explicit `navigate('/files')` fires — but by now the user navigated to /settings for MFA enrollment.
+     - Fix: Removed `navigate('/files')` from `loginWithWallet`, `loginWithGoogle`, `loginWithEmail` in useAuth.ts. The Login.tsx redirect effect (`isAuthenticated → navigate('/files')`) is the sole navigation mechanism now.
+     - User had previously noted: "I did not notice this redirect when I was manually testing mfa flows, everything seemed to be working normally" — confirming this was E2E-specific (timing-dependent race condition).
+
+   - **TC-MFA-01: Transient "Network Error" on full suite runs (NOT FIXED, intermittent)**:
+     - When running the full 5-test suite, TC-MFA-01 sometimes fails with "Network Error" on the wallet login. Error context shows Login page with "Network Error" alert in wallet section.
+     - API health check shows healthy. Passes when running TC-MFA-01 alone.
+     - Likely transient API connectivity or Devnet issue.
+
+   - **TC-MFA-03: DeviceApprovalModal never appears on primary page (NOT YET INVESTIGATED)**:
+     - After TC-MFA-01 and TC-MFA-02 pass, TC-MFA-03 fails waiting for the DeviceApprovalModal on the primary page.
+     - The primary page is on /files, authenticated, with MFA enabled (after TC-MFA-01).
+     - Investigation needed: whether context B successfully creates an approval request, whether primary page polling is active and finding requests.
+
+5. Problem Solving:
+   - **SOLVED**: The navigate('/files') race condition in login functions. The fix removes redundant explicit navigates, relying on Login.tsx's redirect effect which fires when `isAuthenticated` becomes true. This is safe because: (a) the redirect already fires before vault init completes (current behavior), (b) FileBrowser handles loading states, (c) test waits for "New Folder" button confirmation.
+   - **IN PROGRESS**: TC-MFA-03 device approval flow not working in E2E tests. The DeviceWaitingScreen uses `requestApproval()` from `useDeviceApproval` hook, and the DeviceApprovalModal on the primary page polls for pending requests. Need to investigate the `useDeviceApproval` hook to understand polling mechanism.
+   - **INTERMITTENT**: "Network Error" on full suite runs — likely transient, may need retry logic or longer timeouts.
+
+6. All user messages:
+   - The session started with a continuation prompt containing the compaction summary from the previous conversation. The system prompt instructed: "Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on."
+   - No additional user messages were sent during this session — the assistant was working autonomously on the MFA E2E test debugging task.
+
+7. Pending Tasks:
+   - Fix TC-MFA-03 (device approval - approve): DeviceApprovalModal never appears on primary page. Need to investigate `useDeviceApproval` hook polling mechanism and whether context B successfully posts an approval request.
+   - Fix TC-MFA-04 (recovery phrase restore): Not yet run successfully (blocked by TC-MFA-03 in serial suite)
+   - Fix TC-MFA-05 (device approval - deny): Not yet run successfully (blocked by TC-MFA-03)
+   - Address intermittent "Network Error" in full suite runs
+   - Remove debug instrumentation if any remains (nav trap already cleaned up)
+   - Consider whether the Login.tsx `useLocation` change from the previous session is still correct/needed (it IS still needed — it prevents the redirect effect from firing when not on the login page)
+   - Run the full 5-test suite to green
+   - Commit the changes
+
+8. Current Work:
+   The assistant had just read `DeviceWaitingScreen.tsx` to understand how the device approval flow works for TC-MFA-03 debugging. The DeviceWaitingScreen:
+   - Waits for `accessToken` to be available before firing `requestApproval()`
+   - Uses `requestFiredRef` to prevent double-firing
+   - The `useDeviceApproval` hook's `requestApproval` function is what creates the approval request on the backend
+   
+   The assistant was about to investigate the `useDeviceApproval` hook to understand:
+   1. How approval requests are created (the POST to backend)
+   2. How the primary page polls for pending requests
+   3. Why the DeviceApprovalModal isn't showing up on the primary page
+
+9. Optional Next Step:
+   Read the `useDeviceApproval` hook to understand the polling and request creation mechanism, then debug why TC-MFA-03's DeviceApprovalModal never appears on the primary page. The test structure for TC-MFA-03 is:
+   ```typescript
+   test('TC-MFA-03: device approval - approve', async ({ browser }) => {
+     // 1. Ensure primary page is on /files
+     // 2. Create new context B (no localStorage = new device, same wallet identity)
+     const { context: contextB, page: pageB } = await createWalletContext(browser, account);
+     // 3. Login via wallet on context B → should enter REQUIRED_SHARE
+     const resultB = await loginViaWallet(pageB, { timeout: 60_000 });
+     expect(resultB.outcome).toBe('requiredShare');
+     // 4. Wait for DeviceWaitingScreen on context B
+     await expect(pageB.locator('[data-testid="device-waiting"]')).toBeVisible({ timeout: 10_000 });
+     // 5. Wait for DeviceApprovalModal on primary page ← FAILS HERE
+     await waitForDeviceApproval(primaryPage, { timeout: 60_000 });
+   ```
+   The failure is at step 5 — the primary page's DeviceApprovalModal never becomes visible within 60 seconds. Need to check if: (a) context B's approval request was actually posted, (b) the primary page is polling correctly, (c) the polling endpoint returns the request.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.claude/projects/-Users-michael-Code-cipher-box/c8328e0a-366a-46e9-a1b2-518e0d53294e.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically trace through this conversation, which is a continuation from a previous session that ran out of context.
+
+**Previous Session Context (from compaction summary):**
+- Working on E2E MFA flow test coverage for CipherBox (5 serial tests: TC-MFA-01 through TC-MFA-05)
+- TC-MFA-01 was previously failing due to a race condition where `navigate('/files')` was called from login functions in `useAuth.ts`, causing late redirects during MFA enrollment
+- That was fixed by removing `navigate('/files')` from `loginWithWallet`, `loginWithGoogle`, `loginWithEmail` in useAuth.ts
+- TC-MFA-01 and TC-MFA-02 now pass
+- TC-MFA-03 (device approval - approve) was failing - DeviceApprovalModal never appeared on primary page
+- The assistant had just read `DeviceWaitingScreen.tsx` when the previous session ended
+
+**This Session:**
+
+1. The user sent a continuation message to resume work on TC-MFA-03 debugging.
+
+2. The assistant explored the device approval architecture using an Explore agent, finding:
+   - `useDeviceApproval.ts` - Main hook managing both requester and approver sides
+   - `device-approval.service.ts` - API client wrapper
+   - `DeviceApprovalModal.tsx` - Approver UI in AppShell
+   - `DeviceWaitingScreen.tsx` - Requester UI in Login
+   - `device-registry.store.ts` - Zustand store
+
+3. Read `useDeviceApproval.ts` - Key findings:
+   - Requester side: generates ephemeral secp256k1 keypair, creates bulletin board request, polls for status
+   - Approver side: polls GET /device-approval/pending every 5s, ECIES-encrypts factor key for approval
+   - `pollPendingRequests()` has guard `if (isPollingPendingRef.current) return;`
+   - Visibility-based polling control pauses/resumes based on tab visibility
+
+4. Read `DeviceWaitingScreen.tsx` - Key findings:
+   - Waits for `accessToken` before calling `requestApproval()`
+   - Uses `requestFiredRef` to prevent double-firing
+   - Has countdown timer (5 min TTL)
+
+5. Read `DeviceApprovalModal.tsx` - Key findings:
+   - Polling condition: `isAuthenticated && isMfaEnabled && !isRequiredShare && !coreKitRequiredShare`
+   - `checkMfaStatus()` called once via `checkedRef`
+   - Shows one request at a time (queue)
+
+6. Read `useMfa.ts` - Key findings:
+   - `checkMfaStatus()` uses `details.totalFactors > 2` (already fixed from >= 2)
+   - `enableMfa()` calls `useMfaStore.getState().setMfaEnabled(true)` after enrollment
+   - `isMfaEnabled` is a Zustand selector that persists across component mounts
+
+7. Read `useAuth.ts` - Key findings:
+   - REQUIRED_SHARE path gets a TEMPORARY access token: `authApi.login({idToken: cipherboxJwt, publicKey: 'pending-core-kit-${userId}', loginType: 'corekit'})`
+   - `completeRequiredShare()` does the real backend auth after factor input
+
+8. Read routing - Key finding:
+   - AppShell is NOT a shared layout wrapper - each page renders its own `<AppShell>` instance
+   - DeviceApprovalModal remounts on every route change
+   - But Zustand store persists `isMfaEnabled=true` across mounts
+
+9. **BUG FOUND #1**: Login.tsx redirect effect doesn't check `isRequiredShare`:
+   ```tsx
+   useEffect(() => {
+     if (isAuthenticated && location.pathname === '/') {
+       navigate('/files');
+     }
+   }, [isAuthenticated, location.pathname, navigate]);
+   ```
+   When context B gets temp access token (isAuthenticated=true), this redirects to /files, unmounting DeviceWaitingScreen before approval request is created.
+
+10. **FIX APPLIED #1**: Added `!isRequiredShare` to redirect condition in Login.tsx:
+    ```tsx
+    useEffect(() => {
+      if (isAuthenticated && !isRequiredShare && location.pathname === '/') {
+        navigate('/files');
+      }
+    }, [isAuthenticated, isRequiredShare, location.pathname, navigate]);
+    ```
+
+11. First test run after fix: TC-MFA-03 still fails. Screenshots show:
+    - Primary page: normal file browser (no approval modal)
+    - Context B: DeviceWaitingScreen IS visible (fix worked!) BUT shows "Request failed with status code 400"
+
+12. **BUG FOUND #2**: The 400 error is from DTO validation. Investigated the API controller (via Explore agent):
+    - `ephemeralPublicKey` must be hex, exactly 130 chars (uncompressed secp256k1 = 65 bytes)
+    - `deviceId` must be hex, exactly 64 chars
+    - `deviceName` must match `/^[\w\s\-().]+$/`, max 100 chars
+
+13. Found that `@noble/secp256k1` v3.0.0's `keygen()` returns compressed public key (33 bytes = 66 hex chars) by default, but DTO requires 130 hex chars (uncompressed).
+
+14. **FIX APPLIED #2**: Changed `useDeviceApproval.ts` to use uncompressed public key:
+    ```typescript
+    const ephemeral = secp256k1.keygen();
+    ephemeralPrivKeyRef.current = ephemeral.secretKey;
+    const uncompressedPubKey = secp256k1.getPublicKey(ephemeral.secretKey, false);
+    const ephemeralPubKeyHex = bytesToHex(uncompressedPubKey);
+    ```
+
+15. Test run after fix #2: Transient "Network Error" on TC-MFA-01 (Devnet connectivity).
+
+16. Retry: TC-MFA-01 and TC-MFA-02 pass, TC-MFA-03 still fails with 400. Screenshots still show "Request failed with status code 400" on context B.
+
+17. Verified build succeeds with the changes. Checked that the fix is in the file.
+
+18. Added diagnostic instrumentation to TC-MFA-03:
+    - Response listener on pageB to capture device-approval API calls
+    - 5-second wait after DeviceWaitingScreen visible
+    - Console.log of captured API calls
+
+19. Ran full suite with diagnostics. The diagnostic output showed:
+    - Only captured Vite source file responses (HMR loads), NOT actual API requests
+    - This is because the API client uses `baseURL: 'http://localhost:3000'` (direct to API, not through Vite proxy)
+    - The response listener on `pageB` only sees requests through the page's network, which go directly to localhost:3000
+
+20. Checked API client config: `baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3000'`
+    - API requests go directly to localhost:3000, not through Vite's proxy
+    - Vite proxy only handles `/api` path prefix
+
+This is where the conversation currently stands. The key issue is that the `reuseExistingServer: !process.env.CI` setting means the Vite dev server from before the code changes is still running, and HMR may not have picked up the changes to `useDeviceApproval.ts`. The fix is in the source file but the running dev server may still be serving old code.
+
+The assistant was about to investigate why the 400 persists despite the fix - likely the running dev server hasn't picked up the HMR change, or the response listener needs to also capture requests going to localhost:3000.
+
+Files modified in this session:
+1. `apps/web/src/routes/Login.tsx` - Added `!isRequiredShare` to redirect effect
+2. `apps/web/src/hooks/useDeviceApproval.ts` - Changed to uncompressed public key
+3. `tests/e2e/tests/mfa-flows.spec.ts` - Added diagnostic instrumentation to TC-MFA-03
+
+User messages:
+1. Continuation message from previous session context
+2. No additional user messages - the assistant has been working autonomously
+
+The current hypothesis for why the 400 still occurs:
+- The Vite dev server is reused (`reuseExistingServer: !process.env.CI`), and HMR may not have propagated the `useDeviceApproval.ts` changes to the running browser session
+- Context B loads a fresh page, so it should get the latest HMR-updated code... unless HMR failed for this module
+- Need to verify that the actual request body being sent has the correct 130-char ephemeralPublicKey
+
+The response listener approach needs adjustment since API calls go to localhost:3000, not localhost:5173. The listener on `pageB` should still capture cross-origin requests though... Actually, Playwright's `page.on('response')` captures ALL network responses from the page, including those to different origins. So localhost:3000 responses should be captured.
+
+Wait - the diagnostic ran and showed only Vite source file responses. This could mean:
+1. The requestApproval() function never actually called the API (failed before the API call)
+2. OR the API call happened but wasn't captured because the response didn't include "device-approval" in the URL
+3. OR there's a timing issue - the API call hasn't happened within the 5-second wait
+
+Looking at the diagnostic output again - it only captured source file responses. No actual API calls to localhost:3000/device-approval/request. This is suspicious. Maybe the `requestApproval()` function failed before making the API call (e.g., at `secp256k1.getPublicKey(ephemeral.secretKey, false)` if `getPublicKey` isn't available as a direct export).
+
+Actually wait - I need to consider that the Vite dev server reuses the existing server. If the server was started BEFORE the code changes, the HMR should update it. But the `useDeviceApproval.ts` changes might not trigger a proper HMR because the hook is used in multiple places. Let me consider that the old code (with compressed key) is still being served.
+
+The most immediate next step would be to:
+1. Restart the Vite dev server to ensure fresh code
+2. OR add more specific diagnostics (intercept the actual POST request)
+3. OR check if the `secp256k1.getPublicKey` function is properly exported and callable
+
+Summary:
+1. Primary Request and Intent:
+   The user is implementing E2E MFA flow test coverage for CipherBox (5 serial tests: TC-MFA-01 through TC-MFA-05). This session continues debugging TC-MFA-03 (device approval - approve) which fails because the DeviceApprovalModal never appears on the primary page. The previous session fixed TC-MFA-01 (late navigate bug) and TC-MFA-02 now passes. The immediate task is identifying and fixing all bugs preventing TC-MFA-03 through TC-MFA-05 from passing, then getting the full 5-test suite green.
+
+2. Key Technical Concepts:
+   - **@johanneskares/wallet-mock**: EIP-6963 mock wallet for Playwright, auto-approves connect + signMessage
+   - **Web3Auth MPC Core Kit**: DKG on Sapphire Devnet, `enableMFA()` creates device + recovery factors (5-15s per Devnet call)
+   - **REQUIRED_SHARE state**: When MFA is enabled but device factor is missing — the new device needs either device approval or recovery phrase
+   - **Temporary access token**: In REQUIRED_SHARE state, the login flow obtains a temp backend token with placeholder publicKey (`pending-core-kit-${userId}`) so the new device can call bulletin board API endpoints
+   - **Device approval bulletin board**: POST /device-approval/request (new device creates request), GET /device-approval/pending (existing device polls), POST /:requestId/respond (existing device approves/denies)
+   - **ECIES key exchange**: Requester generates ephemeral secp256k1 keypair, approver ECIES-encrypts factor key with requester's ephemeral public key
+   - **@noble/secp256k1 v3.0.0**: `keygen()` returns compressed public key (33 bytes) by default; `getPublicKey(secretKey, false)` returns uncompressed (65 bytes)
+   - **CreateApprovalDto validation**: `ephemeralPublicKey` must be exactly 130 hex chars (uncompressed), `deviceId` must be exactly 64 hex chars, `deviceName` must match `/^[\w\s\-().]+$/`
+   - **AppShell is NOT a shared layout**: Each page renders its own `<AppShell>` instance, so DeviceApprovalModal remounts on every route change. Zustand store persists `isMfaEnabled` across mounts.
+   - **Vite dev server reuse**: `reuseExistingServer: !process.env.CI` in Playwright config; HMR should propagate changes but may not always work
+   - **API client direct connection**: `baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3000'` — API requests go directly to localhost:3000, not through Vite proxy
+
+3. Files and Code Sections:
+
+   - **`apps/web/src/hooks/useDeviceApproval.ts`** (MODIFIED - ephemeral key fix)
+     - Core hook managing both requester and approver sides of device approval
+     - **Bug**: `secp256k1.keygen()` returns compressed public key (33 bytes = 66 hex chars) but DTO requires 130 hex chars (uncompressed)
+     - **Fix applied** at line ~203-208:
+     ```typescript
+     // 1. Generate ephemeral secp256k1 keypair
+     // keygen() returns compressed pubkey (33 bytes) by default, but the
+     // backend DTO requires uncompressed (65 bytes = 130 hex chars).
+     const ephemeral = secp256k1.keygen();
+     ephemeralPrivKeyRef.current = ephemeral.secretKey;
+     const uncompressedPubKey = secp256k1.getPublicKey(ephemeral.secretKey, false);
+     const ephemeralPubKeyHex = bytesToHex(uncompressedPubKey);
+     ```
+     - Approver polling: `pollPendingRequests()` polls GET /device-approval/pending every 5s
+     - Polling condition in DeviceApprovalModal: `isAuthenticated && isMfaEnabled && !isRequiredShare && !coreKitRequiredShare`
+     - Requester polling: polls GET /device-approval/{requestId}/status every 3s
+
+   - **`apps/web/src/routes/Login.tsx`** (MODIFIED - redirect guard for REQUIRED_SHARE)
+     - **Bug**: Redirect effect navigates to /files when `isAuthenticated` becomes true, even in REQUIRED_SHARE state, unmounting DeviceWaitingScreen before approval request is created
+     - **Fix applied** at lines 57-68:
+     ```typescript
+     // Redirect if already authenticated AND still on the login page.
+     // The pathname check prevents a late-firing re-render (e.g. from
+     // setIsLoggingIn(false) in the login finally block) from navigating
+     // to /files after the user has already moved to a different route.
+     // The isRequiredShare check prevents redirecting when the user has a
+     // temp access token but still needs to complete MFA (device approval
+     // or recovery phrase). Without this, the redirect would unmount
+     // DeviceWaitingScreen before the approval request is created.
+     useEffect(() => {
+       if (isAuthenticated && !isRequiredShare && location.pathname === '/') {
+         navigate('/files');
+       }
+     }, [isAuthenticated, isRequiredShare, location.pathname, navigate]);
+     ```
+
+   - **`tests/e2e/tests/mfa-flows.spec.ts`** (MODIFIED - added diagnostics to TC-MFA-03)
+     - Added response listener on pageB to capture device-approval API calls
+     - Added 5-second wait + console.log of captured API calls
+     - Diagnostic output showed NO actual API calls to localhost:3000, only Vite source file loads
+     - Current diagnostic code in TC-MFA-03:
+     ```typescript
+     // DIAGNOSTIC: Capture device-approval API calls from context B
+     const apiCalls: { url: string; status: number; body?: string }[] = [];
+     pageB.on('response', async (response) => {
+       if (response.url().includes('device-approval')) {
+         let body: string | undefined;
+         try { body = await response.text(); } catch { /* stream consumed */ }
+         apiCalls.push({ url: response.url(), status: response.status(), body });
+       }
+     });
+     // ... after DeviceWaitingScreen visible ...
+     await pageB.waitForTimeout(5_000);
+     console.log('[DIAG] device-approval API calls from context B:', JSON.stringify(apiCalls, null, 2));
+     ```
+
+   - **`apps/web/src/hooks/useAuth.ts`** (READ, previously modified)
+     - `navigate('/files')` was removed from all three login functions in previous session
+     - REQUIRED_SHARE path gets temp access token (lines 359-368):
+     ```typescript
+     if (coreKitStatus === 'required_share') {
+       setPendingCipherboxJwt(cipherboxJwt);
+       setPendingAuthMethod('wallet');
+       const tempLoginResponse = await authApi.login({
+         idToken: cipherboxJwt,
+         publicKey: `pending-core-kit-${userId}`,
+         loginType: 'corekit',
+       });
+       setAccessToken(tempLoginResponse.accessToken);
+       return;
+     }
+     ```
+     - `completeRequiredShare()` does the real backend auth after factor input
+
+   - **`apps/web/src/hooks/useMfa.ts`** (READ)
+     - `checkMfaStatus()` already uses `details.totalFactors > 2` (correct)
+     - `enableMfa()` calls `useMfaStore.getState().setMfaEnabled(true)` after enrollment
+
+   - **`apps/web/src/components/mfa/DeviceApprovalModal.tsx`** (READ)
+     - Mounted in each page's AppShell
+     - Checks MFA status once via `checkedRef`, starts polling when conditions met
+     - Polling effect depends on `[isAuthenticated, isMfaEnabled, isRequiredShare, coreKitRequiredShare, pollPendingRequests, stopApproverPolling]`
+
+   - **`apps/web/src/components/mfa/DeviceWaitingScreen.tsx`** (READ)
+     - Waits for `accessToken` before calling `requestApproval()` via useEffect
+     - `requestFiredRef` prevents double-firing
+     - Shows error message from `requestApproval()` failure
+
+   - **`apps/web/src/routes/index.tsx`** (READ)
+     - HashRouter with separate routes: `/` → Login, `/files/:folderId?` → FilesPage, `/settings` → SettingsPage
+     - No shared layout route — each page renders its own AppShell
+
+   - **`apps/web/src/lib/api/client.ts`** (READ)
+     - `baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3000'` — API goes direct to localhost:3000
+
+   - **`apps/web/src/lib/device/info.ts`** (READ)
+     - `detectDeviceInfo()` returns `{ name: "${browserName} on ${osInfo.name}", platform, appVersion, deviceModel }`
+     - Verified "HeadlessChrome on macOS" passes the DTO regex `/^[\w\s\-().]+$/`
+
+   - **`apps/web/src/lib/device/identity.ts`** (READ)
+     - Device Ed25519 keypair stored in IndexedDB
+     - `deviceId` is SHA-256 hash of public key (64 hex chars)
+
+   - **`apps/web/src/hooks/useVisibility.ts`** (READ)
+     - Tracks `document.hidden` via visibilitychange event
+     - Used by useDeviceApproval for approver polling pause/resume
+
+   - **`@noble/secp256k1` v3.0.0** (investigated)
+     - `getPublicKey(privKey, isCompressed = true)` — defaults to compressed (33 bytes)
+     - `keygen()` calls `createKeygen(getPublicKey)` → returns compressed key
+     - Need `getPublicKey(secretKey, false)` for uncompressed (65 bytes = 130 hex chars)
+
+   - **`tests/e2e/playwright.config.ts`** (READ)
+     - `reuseExistingServer: !process.env.CI` — reuses running dev server locally
+     - webServer starts mock IPNS, API, and web app
+
+   - **`packages/crypto/src/utils/encoding.ts`** (READ)
+     - `bytesToHex` returns hex without "0x" prefix — confirmed correct
+
+4. Errors and Fixes:
+
+   - **TC-MFA-03: Login.tsx redirect unmounts DeviceWaitingScreen in REQUIRED_SHARE state**
+     - Root cause: `useEffect` in Login.tsx navigates to /files when `isAuthenticated` becomes true (from temp access token), regardless of `isRequiredShare` state
+     - Fix: Added `!isRequiredShare` to the redirect condition
+     - Status: Fix applied. Screenshot confirms DeviceWaitingScreen now stays visible on context B.
+
+   - **TC-MFA-03: "Request failed with status code 400" on approval request creation**
+     - Root cause: `secp256k1.keygen()` from `@noble/secp256k1` v3.0.0 returns compressed public key (33 bytes = 66 hex chars). Backend DTO requires exactly 130 hex chars (uncompressed = 65 bytes).
+     - Fix: Changed to `secp256k1.getPublicKey(ephemeral.secretKey, false)` for uncompressed key
+     - Status: Fix applied in source file, **but 400 error persists in test runs**. Likely cause: the reused Vite dev server may not have picked up the HMR change, or there's another validation issue.
+
+   - **TC-MFA-01: Transient "Network Error" on full suite runs**
+     - Intermittent Devnet connectivity issue during SIWE flow
+     - No fix applied — retrying usually works
+
+5. Problem Solving:
+
+   **SOLVED:**
+   - Login.tsx redirect in REQUIRED_SHARE state — added `!isRequiredShare` guard
+   - Identified compressed vs uncompressed public key mismatch causing 400
+
+   **IN PROGRESS:**
+   - TC-MFA-03 still fails with 400 despite the uncompressed key fix in source
+   - Diagnostic response listener only captured Vite source loads, no actual API calls to localhost:3000
+   - Possible causes: (a) HMR didn't propagate the change to running browser, (b) the `secp256k1.getPublicKey` call fails at runtime, (c) another DTO validation field is wrong
+   - Just discovered that API requests go to `localhost:3000` directly (not through Vite proxy), so the response listener should still capture them — the fact that it doesn't suggests `requestApproval()` may not be reaching the API call
+
+   **NOT YET ADDRESSED:**
+   - TC-MFA-04 (recovery phrase restore) — blocked by TC-MFA-03 in serial suite
+   - TC-MFA-05 (device approval - deny) — blocked by TC-MFA-03
+   - Remove diagnostic instrumentation from TC-MFA-03 after fixing
+   - Run full 5-test suite to green
+   - Commit all changes
+
+6. All User Messages:
+   - The session started with a continuation prompt from the previous conversation compaction. The system instructed: "Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on."
+   - No additional user messages were sent during this session — the assistant has been working autonomously on TC-MFA-03 debugging.
+
+7. Pending Tasks:
+   - Fix the persistent 400 error in TC-MFA-03's approval request (uncompressed key fix may need dev server restart or further investigation)
+   - Fix TC-MFA-04 (recovery phrase restore) — may work once TC-MFA-03 is fixed
+   - Fix TC-MFA-05 (device approval - deny) — may work once TC-MFA-03 is fixed
+   - Remove diagnostic instrumentation from mfa-flows.spec.ts
+   - Run full 5-test suite to green
+   - Commit all changes (Login.tsx isRequiredShare fix, useDeviceApproval.ts uncompressed key fix, useAuth.ts navigate removal from previous session)
+
+8. Current Work:
+   Debugging why TC-MFA-03's approval request still returns 400 despite the uncompressed public key fix. The last diagnostic run showed that NO actual API requests to `localhost:3000/device-approval/request` were captured by the response listener — only Vite HMR source file loads were captured. This suggests either:
+   1. The HMR-reused Vite dev server is still serving old code (with compressed key)
+   2. `requestApproval()` fails before making the API call (e.g., `secp256k1.getPublicKey` might not be callable)
+   3. The approval request fires after the 5-second diagnostic wait
+
+   Just discovered from reading `client.ts` that `baseURL` is `http://localhost:3000` (direct API, not Vite proxy). Playwright's `page.on('response')` should capture all network responses including cross-origin. The absence of any API responses in the diagnostic output is the key clue.
+
+   Files with uncommitted changes:
+   - `apps/web/src/routes/Login.tsx` — `!isRequiredShare` guard on redirect
+   - `apps/web/src/hooks/useDeviceApproval.ts` — uncompressed public key
+   - `apps/web/src/hooks/useAuth.ts` — removed navigate('/files') from login functions (previous session)
+   - `tests/e2e/tests/mfa-flows.spec.ts` — diagnostic instrumentation (temporary)
+
+9. Optional Next Step:
+   The most productive next step is to investigate why the uncompressed key fix isn't taking effect. Options:
+   1. **Restart the Vite dev server** to ensure fresh code is served (kill existing process, let Playwright start a new one)
+   2. **Add request interception** instead of response listening — intercept the actual POST to `/device-approval/request` to see the request body and verify the ephemeralPublicKey length
+   3. **Check if the dev server HMR timestamp changed** — compare the `?t=` parameter on source file URLs to see if the updated `useDeviceApproval.ts` was picked up
+
+   The immediate task being worked on was described in the conversation context: "Continue with the last task that you were asked to work on" — which is fixing TC-MFA-03 through TC-MFA-05 E2E test failures.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.claude/projects/-Users-michael-Code-cipher-box/c8328e0a-366a-46e9-a1b2-518e0d53294e.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me trace through this conversation chronologically and identify all key details.
+
+**Context from Previous Session (compaction summary):**
+- Working on E2E MFA flow test coverage for CipherBox (5 serial tests: TC-MFA-01 through TC-MFA-05)
+- Previous session fixed: removed `navigate('/files')` from login functions in useAuth.ts, added `!isRequiredShare` guard to Login.tsx redirect
+- TC-MFA-01 and TC-MFA-02 were passing
+- TC-MFA-03 (device approval - approve) was failing
+- Found that `@noble/secp256k1` v3.0.0's `keygen()` returns compressed public key (33 bytes = 66 hex chars) but backend DTO requires 130 hex chars (uncompressed)
+- Fixed `useDeviceApproval.ts` to use `getPublicKey(secretKey, false)` for uncompressed key
+- Diagnostic response listener showed NO API calls to localhost:3000
+- The browser's API calls go to `VITE_API_URL` which was discovered to be the staging API
+
+**This Session (continuation):**
+
+1. Read `useDeviceApproval.ts` to confirm the uncompressed key fix is in place at lines 203-208
+2. Checked `@noble/secp256k1` v3.0.0 exports - confirmed `getPublicKey` exists and works correctly (65 bytes uncompressed = 130 hex chars)
+3. Checked git diff - 11 files modified
+4. Ran `secp256k1` test in Node to verify uncompressed key generation works
+5. Enhanced TC-MFA-03 diagnostics with request/response/console listeners
+6. Killed existing Vite dev server (PID 19554) to force fresh start
+7. Ran tests (TC-MFA-01-03): TC-MFA-01 and TC-MFA-02 passed
+
+**Key Diagnostic Finding from test run:**
+- DeviceWaitingScreen content: "Request sent to your other devices... 5:00" — looks like approval request created successfully
+- BUT: No API calls to localhost:3000 captured by Playwright listeners
+- Console errors: Service worker registration failure (benign), `[useAuth] Wallet login failed: AxiosError`
+- Test still failed at `waitForDeviceApproval(primaryPage, { timeout: 60_000 })` — DeviceApprovalModal never appeared
+
+8. Read DeviceApprovalModal.tsx — polling condition: `isAuthenticated && isMfaEnabled && !isRequiredShare && !coreKitRequiredShare`
+9. Read useMfa.ts — `checkMfaStatus()` checks `coreKit.getKeyDetails().totalFactors > 2`
+10. Read useAuth.ts — REQUIRED_SHARE flow gets temp access token with `pending-core-kit-${userId}` publicKey
+11. Read DeviceWaitingScreen.tsx — default render state shows "Request sent" even in idle status (misleading)
+
+**Critical Discovery: The `[useAuth] Wallet login failed: AxiosError` means the temp access token call FAILED, so `accessToken` was never set, `requestApproval()` was never called**
+
+12. Used Explore agent to find LoginDto validation: `@Matches(/^04[0-9a-fA-F]{128}$/)` — rejects `pending-core-kit-*` format!
+13. The auth service at lines 78-89 has placeholder resolution logic for `pending-core-kit-{verifierId}%` but DTO validation blocks it
+
+**Fix #3: Updated LoginDto regex to accept placeholder:**
+```typescript
+@Matches(/^(04[0-9a-fA-F]{128}|pending-core-kit-.+)$/, {
+  message: 'publicKey must be an uncompressed secp256k1 public key (130 hex chars starting with 04) or a pending-core-kit placeholder',
+})
+```
+
+14. Built API successfully, regenerated API client with `pnpm api:generate`
+15. Killed and restarted API server
+16. Simplified TC-MFA-03 diagnostics
+17. Ran tests — TC-MFA-03 STILL failed with same error
+
+18. Checked context B screenshot — STILL shows "Request failed with status code 400"
+19. Verified the compiled dist file has the DTO fix
+20. Killed and restarted API server again
+21. Manually tested the API: `pending-core-kit-test123` now returns 401 (JWT validation) not 400 (DTO validation) — fix confirmed working
+
+22. Ran tests again — STILL fails with 400!
+
+**Key Discovery: Web app `.env` has `VITE_API_URL=https://api-staging.cipherbox.cc` — browser hits STAGING API, not localhost!**
+
+23. Tried overriding VITE_API_URL in Playwright config command: `VITE_API_URL=http://localhost:3000 pnpm --filter @cipherbox/web dev`
+24. Ran tests — TC-MFA-01 now FAILS because local API uses ephemeral JWT signing key that Core Kit doesn't trust (Core Kit verifier `cipherbox-identity` checks JWKS from staging API)
+
+25. Reverted Playwright config change — browser must stay on staging for SIWE/identity flow
+26. Used Explore agent to understand Core Kit verifier configuration:
+    - Verifier name: `cipherbox-identity` (registered on Web3Auth Dashboard for Sapphire Devnet)
+    - JWKS endpoint: configured on Dashboard, likely pointing to staging API
+    - Local API uses ephemeral RS256 keypair (IDENTITY_JWT_PRIVATE_KEY not set)
+    - Changing to local API breaks Core Kit JWT verification
+
+**Current State:**
+- The browser MUST talk to staging API for Core Kit JWT verification to work
+- The staging API has strict DTO validation that rejects `pending-core-kit-*` placeholder publicKeys
+- The DTO fix is in the local codebase but not deployed to staging
+- Two approaches possible: (1) deploy DTO fix to staging, or (2) find another way
+
+**Files Modified (uncommitted):**
+1. `apps/web/src/routes/Login.tsx` — `!isRequiredShare` guard on redirect effect
+2. `apps/web/src/hooks/useDeviceApproval.ts` — uncompressed public key for ephemeral keypair
+3. `apps/web/src/hooks/useAuth.ts` — removed navigate('/files') from login functions (previous session)
+4. `apps/api/src/auth/dto/login.dto.ts` — relaxed publicKey regex to accept placeholder format
+5. `tests/e2e/tests/mfa-flows.spec.ts` — diagnostic instrumentation (simplified)
+6. `tests/e2e/playwright.config.ts` — was modified then reverted
+7. Various `data-testid` additions to MFA components (from previous sessions)
+8. Generated API client files
+9. `apps/web/src/routes/SettingsPage.tsx` — changes from previous session
+
+**User Messages:**
+The only user message was the initial continuation prompt from the compaction system. No additional user messages were sent — the assistant has been working autonomously throughout this entire session.
+
+Summary:
+1. Primary Request and Intent:
+   The user is implementing E2E MFA flow test coverage for CipherBox (5 serial tests: TC-MFA-01 through TC-MFA-05). This session continues from a previous session that ran out of context. The task is to debug and fix all bugs preventing TC-MFA-03 through TC-MFA-05 from passing, then get the full 5-test suite green. The plan file at `.claude/plans/humming-orbiting-pinwheel.md` describes the full test architecture.
+
+   The test matrix:
+   | Test | What it validates | Status |
+   |------|------------------|--------|
+   | TC-MFA-01 | Wallet login → MFA enrollment wizard → capture recovery phrase | PASSING |
+   | TC-MFA-02 | Settings Security tab reflects MFA enabled state | PASSING |
+   | TC-MFA-03 | New device login → REQUIRED_SHARE → device approval from existing device | FAILING |
+   | TC-MFA-04 | Recovery phrase restore | BLOCKED by TC-MFA-03 |
+   | TC-MFA-05 | Deny approval request | BLOCKED by TC-MFA-03 |
+
+2. Key Technical Concepts:
+   - **Web3Auth MPC Core Kit** on Sapphire Devnet: DKG identity system where `enableMFA()` creates device + recovery factors (5-15s per Devnet call)
+   - **REQUIRED_SHARE state**: When MFA is enabled but device factor is missing — new device needs device approval or recovery phrase
+   - **Temporary access token**: In REQUIRED_SHARE state, login flow obtains temp backend token with placeholder publicKey `pending-core-kit-${userId}` to call bulletin board API endpoints
+   - **Device approval bulletin board**: POST /device-approval/request, GET /device-approval/pending, POST /:requestId/respond
+   - **ECIES key exchange**: Requester generates ephemeral secp256k1 keypair, approver encrypts factor key with requester's ephemeral public key
+   - **@noble/secp256k1 v3.0.0**: `keygen()` returns compressed public key (33 bytes) by default; `getPublicKey(secretKey, false)` returns uncompressed (65 bytes = 130 hex chars)
+   - **LoginDto validation**: `@Matches(/^04[0-9a-fA-F]{128}$/)` requires uncompressed secp256k1 public key (130 hex chars starting with 04)
+   - **VITE_API_URL**: The web app `.env` has `VITE_API_URL=https://api-staging.cipherbox.cc` — ALL browser API calls go to staging, not localhost
+   - **Core Kit verifier**: `cipherbox-identity` verifier on Web3Auth Dashboard validates JWTs against staging API's JWKS endpoint (`/auth/.well-known/jwks.json`). Local API uses ephemeral JWT keys that Core Kit won't trust.
+   - **`@johanneskares/wallet-mock`**: EIP-6963 mock wallet for Playwright, auto-approves connect + signMessage
+   - **AppShell per page**: Each route renders its own `<AppShell>` instance containing DeviceApprovalModal; Zustand stores persist across mounts
+   - **DeviceWaitingScreen default text is misleading**: Shows "Request sent to your other devices" even in idle/requesting status before API call fires
+
+3. Files and Code Sections:
+
+   - **`apps/api/src/auth/dto/login.dto.ts`** (MODIFIED)
+     - Contains `LoginDto` with publicKey validation that was too strict for REQUIRED_SHARE temp auth flow
+     - Fix: relaxed regex to also accept `pending-core-kit-*` placeholder format
+     ```typescript
+     @ApiProperty({
+       description:
+         'secp256k1 public key exported from Core Kit after loginWithJWT (uncompressed, 130 hex chars), ' +
+         'or a placeholder "pending-core-kit-{userId}" for REQUIRED_SHARE temp auth',
+       example: '04abc123...',
+     })
+     @IsString()
+     @IsNotEmpty()
+     @Matches(/^(04[0-9a-fA-F]{128}|pending-core-kit-.+)$/, {
+       message:
+         'publicKey must be an uncompressed secp256k1 public key (130 hex chars starting with 04) ' +
+         'or a pending-core-kit placeholder',
+     })
+     publicKey!: string;
+     ```
+     - **IMPORTANT**: This fix is confirmed working on the LOCAL API but the browser talks to STAGING API which doesn't have this fix yet.
+
+   - **`apps/web/src/hooks/useDeviceApproval.ts`** (MODIFIED - lines 201-208)
+     - Fixed ephemeral keypair generation to use uncompressed public key (65 bytes = 130 hex chars) instead of compressed (33 bytes = 66 hex chars)
+     ```typescript
+     // 1. Generate ephemeral secp256k1 keypair
+     // keygen() returns compressed pubkey (33 bytes) by default, but the
+     // backend DTO requires uncompressed (65 bytes = 130 hex chars).
+     const ephemeral = secp256k1.keygen();
+     ephemeralPrivKeyRef.current = ephemeral.secretKey;
+     const uncompressedPubKey = secp256k1.getPublicKey(ephemeral.secretKey, false);
+     const ephemeralPubKeyHex = bytesToHex(uncompressedPubKey);
+     ```
+     - Also relevant: `requestApproval()` function (line 197-233) - generates ephemeral keypair, gets device identity, creates bulletin board request
+     - `pollPendingRequests()` (line 262-279) - polls GET /device-approval/pending every 5s for approver side
+     - `approveRequest()` (line 285-316) - ECIES-encrypts factor key with requester's ephemeral public key
+
+   - **`apps/web/src/routes/Login.tsx`** (MODIFIED - lines 57-65)
+     - Added `!isRequiredShare` guard to prevent redirect when user has temp access token but still needs MFA completion
+     ```typescript
+     // The isRequiredShare check prevents redirecting when the user has a
+     // temp access token but still needs to complete MFA (device approval
+     // or recovery phrase). Without this, the redirect would unmount
+     // DeviceWaitingScreen before the approval request is created.
+     useEffect(() => {
+       if (isAuthenticated && !isRequiredShare && location.pathname === '/') {
+         navigate('/files');
+       }
+     }, [isAuthenticated, isRequiredShare, location.pathname, navigate]);
+     ```
+     - Also: Login.tsx renders `DeviceWaitingScreen` or `RecoveryInput` when `isRequiredShare` is true (lines 142-168)
+
+   - **`apps/web/src/hooks/useAuth.ts`** (MODIFIED in previous session, READ this session)
+     - `navigate('/files')` removed from `loginWithWallet`, `loginWithGoogle`, `loginWithEmail` (previous session fix)
+     - REQUIRED_SHARE flow at lines 359-370: sets `pendingCipherboxJwt`, gets temp access token with `pending-core-kit-${userId}` publicKey
+     - `completeRequiredShare()` at lines 213-238: completes backend auth with REAL publicKey after factor input, syncs Core Kit status, navigates to /files
+     - Session restoration effect at lines 465-500: restores Core Kit session from localStorage
+
+   - **`apps/web/src/hooks/useMfa.ts`** (READ)
+     - `checkMfaStatus()` at lines 39-60: checks `coreKit.getKeyDetails().totalFactors > 2` (correct threshold)
+     - `enableMfa()` at lines 66-119: calls `coreKit.enableMFA()`, commits changes, updates Zustand store
+     - `inputFactorKey()` at lines 134-142: inputs factor key WITHOUT calling `syncStatus()` (deliberate - see comment)
+     - `recoverWithMnemonic()` at lines 148-173: converts mnemonic to factor key, inputs it, creates device factor
+
+   - **`apps/web/src/components/mfa/DeviceApprovalModal.tsx`** (READ)
+     - Polling condition at line 37: `shouldPoll = isAuthenticated && isMfaEnabled && !isRequiredShare && !coreKitRequiredShare`
+     - `checkMfaStatus()` called once on mount via `checkedRef` (lines 28-33)
+     - Shows one pending request at a time (queue) - line 58-61
+
+   - **`apps/web/src/components/mfa/DeviceWaitingScreen.tsx`** (READ)
+     - Waits for `accessToken` before calling `requestApproval()` (lines 37-55)
+     - `requestFiredRef` prevents double-firing
+     - Default render (idle/requesting/pending) shows "Request sent to your other devices" text — MISLEADING because it shows this even before the API call fires
+
+   - **`apps/api/src/auth/auth.service.ts`** (READ, lines 63-109)
+     - Placeholder publicKey resolution at lines 78-89: finds users with `publicKey LIKE 'pending-core-kit-${verifierId}%'` and updates to real publicKey
+     - User creation at lines 94-96: creates new user if not found
+
+   - **`tests/e2e/tests/mfa-flows.spec.ts`** (MODIFIED)
+     - TC-MFA-03 has simplified diagnostic code: captures device-approval API responses
+     - Full test suite with 5 serial tests using shared browser context for "existing device"
+     - Uses `createWalletContext()` for new device scenarios
+
+   - **`tests/e2e/playwright.config.ts`** (READ, temporarily modified then reverted)
+     - `reuseExistingServer: !process.env.CI` — reuses running dev servers locally
+     - Starts local API, Vite dev server, and mock IPNS service
+     - Was temporarily modified to override `VITE_API_URL` but reverted because it broke Core Kit JWT verification
+
+   - **`apps/web/.env`** (READ)
+     - `VITE_API_URL=https://api-staging.cipherbox.cc` — browser hits staging API
+     - This is the ROOT CAUSE of why the DTO fix doesn't take effect in tests
+
+   - **`tests/e2e/utils/wallet-login-helpers.ts`** (READ)
+     - `loginViaWallet()` drives real wallet → SIWE → Core Kit flow, returns `{outcome: 'success'}` or `{outcome: 'requiredShare'}`
+     - `createWalletContext()` creates new browser context with mock wallet for "new device" scenarios
+
+   - **Web3Auth Core Kit verifier config** (researched via Explore agent)
+     - Verifier name: `cipherbox-identity` (hardcoded)
+     - Network: Sapphire Devnet for dev/staging/CI
+     - JWKS endpoint: configured on Web3Auth Dashboard, points to staging API's `/auth/.well-known/jwks.json`
+     - Local API generates ephemeral RS256 keypair (`IDENTITY_JWT_PRIVATE_KEY` not set)
+     - **This means the browser MUST talk to staging API for Core Kit login to work**
+
+4. Errors and Fixes:
+
+   - **TC-MFA-03: Login.tsx redirect unmounts DeviceWaitingScreen in REQUIRED_SHARE state** (FIXED in previous session):
+     - Root cause: `useEffect` in Login.tsx navigated to /files when `isAuthenticated` became true from temp access token
+     - Fix: Added `!isRequiredShare` to the redirect condition
+     - Status: Confirmed working
+
+   - **TC-MFA-03: Compressed vs uncompressed ephemeral public key** (FIXED in previous session):
+     - Root cause: `secp256k1.keygen()` returns 33-byte compressed key, DTO requires 130-hex-char uncompressed key
+     - Fix: Changed to `secp256k1.getPublicKey(ephemeral.secretKey, false)` for uncompressed (65 bytes = 130 hex chars)
+     - Status: Fix confirmed correct via Node.js test
+
+   - **TC-MFA-03: LoginDto rejects placeholder publicKey `pending-core-kit-*`** (FIXED locally, NOT deployed to staging):
+     - Root cause: `@Matches(/^04[0-9a-fA-F]{128}$/)` rejects `pending-core-kit-${userId}` format
+     - Fix: Updated regex to `/^(04[0-9a-fA-F]{128}|pending-core-kit-.+)$/`
+     - Verified locally: `curl` test shows 401 (JWT validation) instead of 400 (DTO validation)
+     - Status: Fix works on local API, but browser talks to STAGING API which doesn't have the fix
+
+   - **TC-MFA-03: Browser talks to staging API via VITE_API_URL** (ROOT CAUSE, UNRESOLVED):
+     - Root cause: `apps/web/.env` has `VITE_API_URL=https://api-staging.cipherbox.cc`
+     - Attempted fix: Override in Playwright config `VITE_API_URL=http://localhost:3000`
+     - Result: Broke TC-MFA-01 because local API uses ephemeral JWT signing key that Core Kit doesn't trust
+     - Reverted the override — browser must stay on staging for SIWE/identity flow
+     - Status: UNRESOLVED — need to either deploy DTO fix to staging or find alternative approach
+
+   - **API restart not picking up DTO changes** (initially encountered, resolved):
+     - The API dev server needed explicit restart after DTO source changes
+     - Fixed by killing and restarting `pnpm --filter api dev`
+
+5. Problem Solving:
+
+   **SOLVED:**
+   - Login.tsx redirect in REQUIRED_SHARE state — added `!isRequiredShare` guard
+   - Compressed vs uncompressed ephemeral public key — use `getPublicKey(secretKey, false)`
+   - LoginDto DTO validation too strict — relaxed regex (locally)
+   - Identified that "Request sent" text in DeviceWaitingScreen is shown in default/idle state before API call fires (misleading UI)
+
+   **PARTIALLY SOLVED:**
+   - LoginDto fix works locally but NOT on staging where tests actually run
+
+   **IN PROGRESS / UNRESOLVED:**
+   - TC-MFA-03 still fails because browser talks to staging API (which lacks the DTO fix)
+   - The staging API doesn't have the `pending-core-kit-*` placeholder support in LoginDto
+   - Switching VITE_API_URL to localhost breaks Core Kit JWT verification (local API uses ephemeral signing key, Core Kit verifier trusts staging JWKS)
+   - Need to either: (1) deploy DTO fix to staging, (2) configure local API to use staging's JWT private key, or (3) find another approach
+   - TC-MFA-04 and TC-MFA-05 are blocked by TC-MFA-03
+
+6. All User Messages:
+   - "Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on." (This was the system's continuation prompt from the previous conversation compaction, not a direct user message)
+   - No additional user messages were sent during this session — the assistant has been working autonomously on TC-MFA-03 debugging throughout.
+
+7. Pending Tasks:
+   - Resolve the staging API DTO validation issue (deploy fix or find alternative)
+   - Get TC-MFA-03 passing (device approval - approve flow)
+   - Get TC-MFA-04 passing (recovery phrase restore)
+   - Get TC-MFA-05 passing (device approval - deny)
+   - Remove diagnostic instrumentation from mfa-flows.spec.ts
+   - Run full 5-test suite to green
+   - Commit all changes with appropriate commit messages
+
+8. Current Work:
+   Was investigating why TC-MFA-03 still fails despite three bug fixes. Just completed an Explore agent investigation of the Web3Auth Core Kit verifier configuration, which revealed:
+   - The `cipherbox-identity` verifier on Web3Auth Dashboard validates JWTs against staging API's JWKS endpoint
+   - Local API uses ephemeral RS256 keypair that Core Kit doesn't trust
+   - Browser MUST talk to staging API for Core Kit JWT verification
+   - But staging API doesn't have the LoginDto fix that accepts `pending-core-kit-*` placeholder publicKeys
+
+   The last action was reverting the Playwright config `VITE_API_URL` override and researching the Core Kit verifier configuration to understand the constraint.
+
+   Files with uncommitted changes:
+   - `apps/web/src/routes/Login.tsx` — `!isRequiredShare` guard on redirect
+   - `apps/web/src/hooks/useDeviceApproval.ts` — uncompressed public key
+   - `apps/web/src/hooks/useAuth.ts` — removed navigate('/files') from login functions (previous session)
+   - `apps/api/src/auth/dto/login.dto.ts` — relaxed publicKey regex to accept placeholder
+   - `tests/e2e/tests/mfa-flows.spec.ts` — diagnostic instrumentation
+   - Various `data-testid` additions to MFA components
+   - Generated API client files (`apps/web/src/api/`)
+
+9. Optional Next Step:
+   The core blocker is that the browser must talk to the staging API (for Core Kit JWKS trust) but the staging API doesn't have the DTO fix. Possible approaches to unblock:
+   
+   1. **Deploy the DTO fix to staging**: Push the changes to the feature branch, create a staging deployment tag. This is the most straightforward approach since all changes are local and the API build succeeded.
+   
+   2. **Set `IDENTITY_JWT_PRIVATE_KEY` in local API**: If the staging private key is available (check GitHub secrets or staging server), configure the local API to use it so Core Kit trusts local JWTs. Then `VITE_API_URL=http://localhost:3000` would work.
+   
+   3. **Use Vite proxy for selective routing**: Configure Vite's dev server proxy to forward `/auth/login` and `/device-approval/*` to localhost:3000 while letting other routes go to staging. The web app uses `VITE_API_URL` for all requests, but Vite proxy intercepts requests passing through the dev server.
+
+   The task being worked on: debugging and fixing E2E MFA test failures, specifically TC-MFA-03 through TC-MFA-05, continuing from the plan at `.claude/plans/humming-orbiting-pinwheel.md`.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.claude/projects/-Users-michael-Code-cipher-box/c8328e0a-366a-46e9-a1b2-518e0d53294e.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
