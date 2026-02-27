@@ -338,7 +338,7 @@ During the creation of this protocol, the `device_approvals` table was identifie
 - **Migration files:** `apps/api/src/migrations/`
 - **FullSchema baseline:** `apps/api/src/migrations/1700000000000-FullSchema.ts`
 - **Entity files:** `apps/api/src/{module}/entities/*.entity.ts`
-- **TypeORM config:** `apps/api/src/app.module.ts` (lines 83-85 for `synchronize` setting)
+- **TypeORM config:** `apps/api/src/app.module.ts` (lines 85-87 for `synchronize`/`migrations`/`migrationsRun`)
 - **Migration runner:** `apps/api/src/run-migrations.ts`
 - **Deploy workflow:** `.github/workflows/deploy-staging.yml` (line 287)
 - **Metadata Evolution Protocol:** [docs/METADATA_EVOLUTION_PROTOCOL.md](METADATA_EVOLUTION_PROTOCOL.md)
