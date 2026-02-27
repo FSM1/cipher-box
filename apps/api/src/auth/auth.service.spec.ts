@@ -489,11 +489,11 @@ describe('AuthService', () => {
 
       const placeholderUser = {
         id: 'user-id',
-        publicKey: 'pending-core-kit-user-123-1234567890',
+        publicKey: 'pending-core-kit-user-123',
       };
       userRepository.findOne
         .mockResolvedValueOnce(null) // not found by real publicKey
-        .mockResolvedValueOnce(placeholderUser); // found by placeholder
+        .mockResolvedValueOnce(placeholderUser); // found by exact placeholder match
       userRepository.save.mockResolvedValue({
         ...placeholderUser,
         publicKey: 'real-public-key',
@@ -527,11 +527,11 @@ describe('AuthService', () => {
 
       const placeholderUser = {
         id: 'user-id',
-        publicKey: 'pending-core-kit-user-123-1234567890',
+        publicKey: 'pending-core-kit-user-123',
       };
       userRepository.findOne
         .mockResolvedValueOnce(null) // not found by placeholder publicKey
-        .mockResolvedValueOnce(placeholderUser); // found by placeholder Like pattern
+        .mockResolvedValueOnce(placeholderUser); // found by exact placeholder match
       // save should NOT be called for publicKey update (incoming is also a placeholder)
 
       const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'email' };
@@ -546,17 +546,17 @@ describe('AuthService', () => {
       expect(userRepository.save).not.toHaveBeenCalled();
     });
 
-    it('should find existing user by identity for REQUIRED_SHARE temp auth', async () => {
+    it('should find existing user by userId for REQUIRED_SHARE temp auth', async () => {
       const requiredShareDto = {
         idToken: 'cipherbox-jwt',
-        publicKey: 'pending-core-kit-user-123',
+        publicKey: 'pending-core-kit-existing-user-id',
         loginType: 'corekit' as const,
       };
 
       jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
       (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
       (jose.jwtVerify as jest.Mock).mockResolvedValue({
-        payload: { sub: 'user-123', email: 'test@example.com' },
+        payload: { sub: 'existing-user-id', email: 'test@example.com' },
       });
 
       const existingUser = {
@@ -566,36 +566,25 @@ describe('AuthService', () => {
 
       userRepository.findOne
         .mockResolvedValueOnce(null) // not found by placeholder publicKey
-        .mockResolvedValueOnce(null); // not found by placeholder Like pattern
+        .mockResolvedValueOnce(null) // not found by exact placeholder match
+        .mockResolvedValueOnce(existingUser); // found by userId lookup
 
-      // Found by authMethod identifierHash lookup
-      const identifierHash = sha256Hex('test@example.com');
-      const mockAuthMethod = {
-        id: 'am-1',
-        userId: 'existing-user-id',
-        type: 'email',
-        identifierHash,
-        user: existingUser,
-      };
-      authMethodRepository.findOne
-        .mockResolvedValueOnce(mockAuthMethod) // identity lookup with relations
-        .mockResolvedValueOnce(mockAuthMethod) // userId + identifierHash lookup
-        .mockResolvedValueOnce(mockAuthMethod); // userId fallback (not reached)
+      const mockAuthMethod = { id: 'am-1', userId: 'existing-user-id', type: 'email' };
+      authMethodRepository.findOne.mockResolvedValue(mockAuthMethod);
       authMethodRepository.save.mockResolvedValue(mockAuthMethod);
       tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
 
       const result = await service.login(requiredShareDto);
 
       expect(result.isNewUser).toBe(false);
-      // Verify identity lookup was called with correct identifierHash and relations
-      expect(authMethodRepository.findOne).toHaveBeenCalledWith({
-        where: { identifierHash },
-        relations: ['user'],
+      // Verify userId-based lookup was called
+      expect(userRepository.findOne).toHaveBeenCalledWith({
+        where: { id: 'existing-user-id' },
       });
       expect(result.accessToken).toBe('at');
     });
 
-    it('should create new user when REQUIRED_SHARE has no existing identity', async () => {
+    it('should create new user when REQUIRED_SHARE has no existing user', async () => {
       const requiredShareDto = {
         idToken: 'cipherbox-jwt',
         publicKey: 'pending-core-kit-user-456',
@@ -610,13 +599,10 @@ describe('AuthService', () => {
 
       userRepository.findOne
         .mockResolvedValueOnce(null) // not found by placeholder publicKey
-        .mockResolvedValueOnce(null); // not found by placeholder Like pattern
+        .mockResolvedValueOnce(null) // not found by exact placeholder match
+        .mockResolvedValueOnce(null); // not found by userId lookup
 
-      // Not found by identity either (truly new user)
-      authMethodRepository.findOne
-        .mockResolvedValueOnce(null) // identity lookup
-        .mockResolvedValueOnce(null) // userId + identifierHash
-        .mockResolvedValueOnce(null); // userId fallback
+      authMethodRepository.findOne.mockResolvedValue(null);
 
       const newUser = { id: 'new-user-id', publicKey: 'pending-core-kit-user-456' };
       userRepository.save.mockResolvedValue(newUser);

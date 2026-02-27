@@ -76,16 +76,13 @@ export async function enrollMfa(
     .waitFor({ state: 'visible', timeout: 10_000 });
 
   // Wait for loading to finish (enableMFA hits Devnet — can take 10-15s)
-  // Race between: recovery phrase grid (success) vs error div (failure)
+  // Wait for either: recovery phrase grid (success) or error div (failure)
   const gridLocator = page.locator('[data-testid="recovery-phrase-grid"]');
   const errorLocator = page.locator('[data-testid="mfa-wizard-error"]');
 
-  const outcome = await Promise.race([
-    gridLocator.waitFor({ state: 'visible', timeout: enableTimeout }).then(() => 'grid' as const),
-    errorLocator.waitFor({ state: 'visible', timeout: enableTimeout }).then(() => 'error' as const),
-  ]);
+  await gridLocator.or(errorLocator).waitFor({ state: 'visible', timeout: enableTimeout });
 
-  if (outcome === 'error') {
+  if (await errorLocator.isVisible()) {
     const errorText = await errorLocator.textContent();
     throw new Error(`MFA enrollment failed: ${errorText}`);
   }

@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { Repository, IsNull, Like, Not } from 'typeorm';
+import { Repository, IsNull, Not } from 'typeorm';
 import { createECDH, createHash, timingSafeEqual } from 'crypto';
 import * as jose from 'jose';
 import * as argon2 from 'argon2';
@@ -87,12 +87,11 @@ export class AuthService implements OnModuleDestroy {
     //    identifierHash) instead of by publicKey.
     if (!user) {
       const verifierId = payload.verifierId || payload.sub;
-      const identifier = payload.email || payload.sub;
 
       if (verifierId) {
         // A) Check for user with placeholder publicKey (first login completion)
         const placeholderUser = await this.userRepository.findOne({
-          where: { publicKey: Like(`pending-core-kit-${verifierId}%`) },
+          where: { publicKey: `pending-core-kit-${verifierId}` },
         });
         if (placeholderUser) {
           this.logger.log(`Resolving placeholder publicKey for user ${placeholderUser.id}`);
@@ -106,18 +105,18 @@ export class AuthService implements OnModuleDestroy {
         }
       }
 
-      // B) REQUIRED_SHARE temp auth: user has real publicKey, look up by identity
-      if (!user && identifier && loginDto.publicKey.startsWith('pending-core-kit-')) {
-        const identifierHash = this.siweService.hashIdentifier(identifier);
-        const authMethod = await this.authMethodRepository.findOne({
-          where: { identifierHash },
-          relations: ['user'],
+      // B) REQUIRED_SHARE temp auth: user already completed first login (has real
+      //    publicKey), so no placeholder row exists. Look up directly by userId
+      //    from the JWT sub — works for all auth method types (email, Google, wallet).
+      if (!user && payload.sub && loginDto.publicKey.startsWith('pending-core-kit-')) {
+        const existingUser = await this.userRepository.findOne({
+          where: { id: payload.sub },
         });
-        if (authMethod?.user) {
+        if (existingUser) {
           this.logger.log(
-            `REQUIRED_SHARE temp auth: found existing user ${authMethod.user.id} by identity`
+            `REQUIRED_SHARE temp auth: found existing user ${existingUser.id} by userId`
           );
-          user = authMethod.user;
+          user = existingUser;
         }
       }
     }
