@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "e20d33bb4994",
+  "session_id": "c8328e0a-366a-46e9-a1b2-518e0d53294e",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-27T02:47:02.433857Z",
+  "branch": "feat/e2e-mfa-flows",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/components/mfa/DeviceApprovalModal.tsx",
+    "apps/web/src/components/mfa/DeviceWaitingScreen.tsx",
+    "apps/web/src/components/mfa/MfaEnrollmentWizard.tsx",
+    "apps/web/src/components/mfa/RecoveryInput.tsx",
+    "apps/web/src/components/mfa/RecoveryPhraseGrid.tsx",
+    "apps/web/src/components/mfa/SecurityTab.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "2cf3727d9a43",
+  "token_usage": {
+    "input_tokens": 7451,
+    "cache_creation_tokens": 732557,
+    "cache_read_tokens": 27462090,
+    "output_tokens": 71247,
+    "api_call_count": 222
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-27T02:46:59.984569Z",
+    "agent_lines": 93,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 93,
+    "agent_percentage": 100
+  }
+}
