@@ -3,7 +3,7 @@
   "checkpoint_id": "298b5fb3187c",
   "strategy": "manual-commit",
   "branch": "feat/e2e-mfa-flows",
-  "checkpoints_count": 0,
+  "checkpoints_count": 3,
   "files_touched": [
     "apps/web/src/components/mfa/DeviceWaitingScreen.tsx",
     "apps/web/src/hooks/useAuth.ts",
@@ -18,13 +18,20 @@
       "context": "/29/8b5fb3187c/0/context.md",
       "content_hash": "/29/8b5fb3187c/0/content_hash.txt",
       "prompt": "/29/8b5fb3187c/0/prompt.txt"
+    },
+    {
+      "metadata": "/29/8b5fb3187c/1/metadata.json",
+      "transcript": "/29/8b5fb3187c/1/full.jsonl",
+      "context": "/29/8b5fb3187c/1/context.md",
+      "content_hash": "/29/8b5fb3187c/1/content_hash.txt",
+      "prompt": "/29/8b5fb3187c/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 10,
-    "cache_creation_tokens": 18415,
-    "cache_read_tokens": 234290,
-    "output_tokens": 445,
-    "api_call_count": 6
+    "input_tokens": 504,
+    "cache_creation_tokens": 851421,
+    "cache_read_tokens": 38914115,
+    "output_tokens": 72941,
+    "api_call_count": 337
   }
 }
