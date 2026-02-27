@@ -22,15 +22,16 @@ jobs:
         with:
           filters: |
             src:
-              - '**'
-              - '!.planning/**'
-              - '!.learnings/**'
-              - '!docs/**'
-              - '!designs/**'
-              - '!00-Preliminary-R&D/**'
-              - '!.claude/**'
-              - '!**/*.md'
-              - '!LICENSE'
+              - 'apps/**'
+              - 'packages/**'
+              - 'tee-worker/**'
+              - 'tests/**'
+              - 'tools/**'
+              - '.github/**'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'tsconfig*.json'
+              - 'biome.json'
 
   e2e:
     name: E2E Tests
