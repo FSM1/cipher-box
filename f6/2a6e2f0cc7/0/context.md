@@ -72,3 +72,37 @@ Let me chronologically analyze the conversation:
 
 1. **Context from previous conversation**: The summary from the prior session indicates work on PR #213 (feat/e2e-mfa-flows branch) addressing CodeRabbit review comments and JWKS/JWT signing key issues for E2E tests in CI. Key commits were made fixing auth service logic, CI workflow,...
 
+### Prompt 15
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **Context from previous conversation**: The session continues from a prior one working on PR #213 (feat/e2e-mfa-flows branch). Previous session fixed JWKS/JWT signing key issues, mock wallet transport (http() → custom()), and stale MFA status re-read in SecurityTab.tsx.
+
+2. **Sess...
+
+### Prompt 16
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **Context from previous session**: Working on PR #213 (`feat/e2e-mfa-flows` branch). Previous session fixed JWKS/JWT signing, mock wallet transport, and stale MFA status. Commits from prior session: `fe7790ae5` (mock wallet transport fix), `9b4400a5c` (MFA status re-read fix).
+
+2....
+
+### Prompt 17
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation, which is a continuation of a previous session that ran out of context.
+
+## Previous Session Context (from summary)
+- Working on PR #213 (`feat/e2e-mfa-flows` branch)
+- Previous fixes: mock wallet transport, MFA status re-read, scoped tokens for REQUIRED_SHARE temp auth
+- Key discovery...
+
