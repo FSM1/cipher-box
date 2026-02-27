@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "0310757ed1e8",
+  "strategy": "manual-commit",
+  "branch": "feat/e2e-mfa-flows",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/03/10757ed1e8/0/metadata.json",
+      "transcript": "/03/10757ed1e8/0/full.jsonl",
+      "context": "/03/10757ed1e8/0/context.md",
+      "content_hash": "/03/10757ed1e8/0/content_hash.txt",
+      "prompt": "/03/10757ed1e8/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 43911,
+    "cache_read_tokens": 868954,
+    "output_tokens": 2157,
+    "api_call_count": 13
+  }
+}
