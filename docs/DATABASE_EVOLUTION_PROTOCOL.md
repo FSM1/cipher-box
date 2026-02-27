@@ -21,17 +21,17 @@
 
 ## 1. Purpose
 
-CipherBox uses TypeORM with PostgreSQL. In development and test environments, `synchronize: true` auto-creates and alters tables from entity decorators. In staging and production, `synchronize` is **off** -- the schema is managed exclusively by explicit migration files.
+CipherBox uses TypeORM with PostgreSQL. `synchronize` is **off in all environments**. Migrations auto-run on application start via `migrationsRun: true`, so the schema is managed exclusively by explicit migration files everywhere.
 
-This creates a dangerous gap: a developer can add a new `@Entity()`, run the dev server, interact with the new table, write tests that pass, and ship a PR -- all without writing a migration. The missing `CREATE TABLE` only surfaces when the staging deploy fails.
+Previously, `synchronize: true` was enabled in dev/test, which auto-created tables from entity decorators and masked missing migrations. This was changed after a staging deploy failure (see Section 9.1).
 
-This protocol establishes formal rules for database schema evolution to prevent this class of error. It mirrors the structure of the [Metadata Evolution Protocol](METADATA_EVOLUTION_PROTOCOL.md) for consistency.
+This protocol establishes formal rules for database schema evolution to prevent migration gaps. It mirrors the structure of the [Metadata Evolution Protocol](METADATA_EVOLUTION_PROTOCOL.md) for consistency.
 
 ---
 
 ## 2. Guiding Principles
 
-1. **Every `@Entity()` must have a `CREATE TABLE` migration.** `synchronize: true` is a development convenience, not a deployment strategy. If a table exists in an entity file, it must exist in a migration file.
+1. **Every `@Entity()` must have a `CREATE TABLE` migration.** `synchronize` is off in all environments. If a table exists in an entity file but not in a migration file, the dev server will fail on startup.
 
 2. **Migrations must be idempotent.** Use `IF NOT EXISTS` for `CREATE TABLE` / `CREATE INDEX`, `IF EXISTS` for `DROP`, and column-existence checks for `ALTER TABLE ADD COLUMN`. This allows migrations to run safely on databases where `synchronize: true` already created the structure.
 
@@ -231,21 +231,33 @@ All entity files are relative to `apps/api/src/`.
 
 | Aspect                      | Development                    | Test                           | Staging                        | Production                     |
 | --------------------------- | ------------------------------ | ------------------------------ | ------------------------------ | ------------------------------ |
-| `synchronize`               | `true`                         | `true`                         | `false`                        | `false`                        |
-| Schema source               | Entity decorators (auto)       | Entity decorators (auto)       | Migration files only           | Migration files only           |
-| Migration runner            | TypeORM auto-run on connect    | TypeORM auto-run on connect    | `run-migrations.ts` via Docker | `run-migrations.ts` via Docker |
-| Missing migration visible?  | **No** -- table created anyway | **No** -- table created anyway | **Yes** -- deploy fails        | **Yes** -- deploy fails        |
-| `migrations` table tracked? | Yes (but irrelevant)           | Yes (but irrelevant)           | Yes (determines what runs)     | Yes (determines what runs)     |
+| `synchronize`               | `false`                        | `false`                        | `false`                        | `false`                        |
+| Schema source               | Migration files (auto-run)     | Migration files (auto-run)     | Migration files only           | Migration files only           |
+| Migration runner            | `migrationsRun: true` on start | `migrationsRun: true` on start | `run-migrations.ts` via Docker | `run-migrations.ts` via Docker |
+| Missing migration visible?  | **Yes** -- table missing       | **Yes** -- table missing       | **Yes** -- deploy fails        | **Yes** -- deploy fails        |
+| `migrations` table tracked? | Yes (determines what runs)     | Yes (determines what runs)     | Yes (determines what runs)     | Yes (determines what runs)     |
 
-**Configuration source:** `apps/api/src/app.module.ts` lines 83-85:
+**Configuration source:** `apps/api/src/app.module.ts`:
 
 ```typescript
-synchronize: ['development', 'test'].includes(
-  configService.get<string>('NODE_ENV', 'development')
-),
+synchronize: false,
+migrations: [join(__dirname, 'migrations', '*.js')],
+migrationsRun: true,
 ```
 
-**Migration runner:** `apps/api/src/run-migrations.ts` -- standalone script that initializes a `DataSource` with `entities: ['dist/**/*.entity.js']` and `migrations: ['dist/migrations/*.js']`, calls `dataSource.runMigrations()`, and exits.
+`synchronize` is **off in all environments**. Migrations auto-run on application start via `migrationsRun: true`. This ensures missing `CREATE TABLE` migrations surface immediately in dev/test rather than only failing on staging deploys.
+
+**One-time dev database reset:** After this change, existing dev databases created via `synchronize: true` may have tables not tracked in the `migrations` table. Reset with:
+
+```bash
+dropdb cipherbox && createdb cipherbox
+# Restart the API -- migrations will create all tables
+pnpm --filter api dev
+```
+
+**Convenience script:** `pnpm --filter api migrate:dev` runs pending migrations via the TypeORM CLI (useful for running migrations without starting the full app).
+
+**Migration runner (staging/production):** `apps/api/src/run-migrations.ts` -- standalone script that initializes a `DataSource` with `entities: ['dist/**/*.entity.js']` and `migrations: ['dist/migrations/*.js']`, calls `dataSource.runMigrations()`, and exits.
 
 **Deploy workflow:** `.github/workflows/deploy-staging.yml` runs:
 
@@ -260,11 +272,11 @@ This executes before `docker compose up -d`, ensuring migrations complete before
 
 ## 8. Dangerous Patterns
 
-### 8.1 `synchronize: true` Masking Missing Migrations
+### 8.1 `synchronize: true` Masking Missing Migrations (RESOLVED)
 
-**The problem:** In dev/test, TypeORM reads entity decorators and auto-creates tables. A developer adds `@Entity('shares')`, the table appears, tests pass, the PR ships. On staging, the deploy runs `run-migrations.js` -- but no migration creates the `shares` table. The application starts and immediately fails with `relation "shares" does not exist`.
+**The problem:** Previously, `synchronize: true` in dev/test caused TypeORM to auto-create tables from entity decorators. A developer could add `@Entity('shares')`, the table would appear, tests would pass, and the PR would ship -- all without writing a migration. The missing `CREATE TABLE` only surfaced when the staging deploy failed.
 
-**The fix:** Every PR that adds a new `@Entity()` must include a `CREATE TABLE` migration. Code reviewers must check for this. See Section 4.3.
+**The fix:** `synchronize` is now `false` in all environments. Migrations auto-run via `migrationsRun: true`. If a developer adds a new entity without a migration, the dev server fails immediately with `relation does not exist`. Additionally, every PR that adds a new `@Entity()` must include a `CREATE TABLE` migration. Code reviewers must check for this. See Section 4.3.
 
 ### 8.2 Migration Timestamp Ordering
 
