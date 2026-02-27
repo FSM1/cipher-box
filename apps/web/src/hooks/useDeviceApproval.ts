@@ -314,6 +314,8 @@ export function useDeviceApproval() {
   const fetchFilteredPending = useCallback(async () => {
     try {
       const pending = await deviceApprovalApi.getPending();
+      // Guard against in-flight responses resolving after polling stopped
+      if (!isPollingPendingRef.current) return;
       const handled = handledRequestIdsRef.current;
       const filtered =
         handled.size > 0
