@@ -32,8 +32,20 @@ jobs:
               - 'tsconfig*.json'
               - 'biome.json'
             desktop:
-              - 'apps/desktop/**'
-              - 'packages/crypto/**'
+              - 'apps/desktop/src/**'
+              - 'apps/desktop/src-tauri/src/**'
+              - 'apps/desktop/src-tauri/vendor/**'
+              - 'apps/desktop/src-tauri/capabilities/**'
+              - 'apps/desktop/src-tauri/resources/**'
+              - 'apps/desktop/src-tauri/Cargo.toml'
+              - 'apps/desktop/src-tauri/Cargo.lock'
+              - 'apps/desktop/src-tauri/build.rs'
+              - 'apps/desktop/src-tauri/rust-toolchain.toml'
+              - 'apps/desktop/index.html'
+              - 'apps/desktop/vite.config.*'
+              - 'apps/desktop/tsconfig*'
+              - 'packages/crypto/src/**'
+              - 'packages/crypto/tsconfig*'
               - '.github/workflows/ci.yml'
 
   lint:
