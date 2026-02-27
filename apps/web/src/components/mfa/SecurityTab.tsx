@@ -29,8 +29,11 @@ export function SecurityTab() {
 
   const handleEnrollmentComplete = useCallback(() => {
     setShowWizard(false);
-    checkMfaStatus();
-  }, [checkMfaStatus]);
+    // Don't call checkMfaStatus() here — enableMfa() already updated the store
+    // with the correct state. Re-reading from Core Kit's getKeyDetails() can
+    // return stale totalFactors on Sapphire Devnet before propagation completes,
+    // which would overwrite the store back to isMfaEnabled=false.
+  }, []);
 
   const handleEnrollmentCancel = useCallback(() => {
     setShowWizard(false);
