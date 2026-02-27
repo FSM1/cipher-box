@@ -78,15 +78,18 @@ export class AuthController {
 
     if (isDesktop) {
       // Desktop clients: return refreshToken in response body (no cookie)
+      // For scoped temp auth (REQUIRED_SHARE), refreshToken is empty string → omitted
       return {
         accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
+        refreshToken: result.refreshToken || undefined,
         isNewUser: result.isNewUser,
       };
     }
 
-    // Web clients: set refresh token in HTTP-only cookie
-    res.cookie('refresh_token', result.refreshToken, REFRESH_TOKEN_COOKIE_OPTIONS);
+    // Web clients: set refresh token in HTTP-only cookie (skip for scoped temp auth)
+    if (result.refreshToken) {
+      res.cookie('refresh_token', result.refreshToken, REFRESH_TOKEN_COOKIE_OPTIONS);
+    }
 
     return {
       accessToken: result.accessToken,

@@ -113,6 +113,35 @@ describe('TokenService', () => {
       expect(result.refreshToken).toBeDefined();
       expect(typeof result.refreshToken).toBe('string');
     });
+
+    it('should include scope in JWT payload when options.scope is provided', async () => {
+      refreshTokenRepo.save.mockResolvedValue({
+        id: 'token-id',
+        userId: 'user-123',
+        tokenHash: 'hashed',
+        expiresAt: new Date(),
+      });
+
+      await service.createTokens('user-123', 'public-key', {
+        scope: ['device-approval'],
+      });
+
+      expect(jwtService.sign).toHaveBeenCalledWith(
+        { sub: 'user-123', publicKey: 'public-key', scope: ['device-approval'] },
+        { expiresIn: '15m' }
+      );
+    });
+
+    it('should skip refresh token when skipRefreshToken is true', async () => {
+      const result = await service.createTokens('user-123', 'public-key', {
+        scope: ['device-approval'],
+        skipRefreshToken: true,
+      });
+
+      expect(result.accessToken).toBe('mock-jwt-access-token');
+      expect(result.refreshToken).toBe('');
+      expect(refreshTokenRepo.save).not.toHaveBeenCalled();
+    });
   });
 
   describe('rotateRefreshToken', () => {

@@ -584,6 +584,44 @@ describe('AuthService', () => {
       expect(result.accessToken).toBe('at');
     });
 
+    it('should issue scoped tokens for REQUIRED_SHARE temp auth', async () => {
+      const requiredShareDto = {
+        idToken: 'cipherbox-jwt',
+        publicKey: 'pending-core-kit-existing-user-id',
+        loginType: 'corekit' as const,
+      };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({
+        payload: { sub: 'existing-user-id', email: 'test@example.com' },
+      });
+
+      const existingUser = {
+        id: 'existing-user-id',
+        publicKey: '04' + 'a'.repeat(128),
+      };
+
+      userRepository.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(existingUser);
+
+      const mockAuthMethod = { id: 'am-1', userId: 'existing-user-id', type: 'email' };
+      authMethodRepository.findOne.mockResolvedValue(mockAuthMethod);
+      authMethodRepository.save.mockResolvedValue(mockAuthMethod);
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: '' });
+
+      await service.login(requiredShareDto);
+
+      // Verify scoped tokens are issued for REQUIRED_SHARE temp auth
+      expect(tokenService.createTokens).toHaveBeenCalledWith(
+        'existing-user-id',
+        '04' + 'a'.repeat(128),
+        { scope: ['device-approval'], skipRefreshToken: true }
+      );
+    });
+
     it('should create new user when REQUIRED_SHARE has no existing user', async () => {
       const requiredShareDto = {
         idToken: 'cipherbox-jwt',

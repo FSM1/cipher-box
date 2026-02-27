@@ -61,6 +61,6 @@ export class LoginResponseDto {
 // Internal type for service layer (includes refreshToken for cookie)
 export type LoginServiceResult = {
   accessToken: string;
-  refreshToken: string;
+  refreshToken: string; // empty string for scoped temp auth (REQUIRED_SHARE)
   isNewUser: boolean;
 };

@@ -171,7 +171,15 @@ export class AuthService implements OnModuleDestroy {
     await this.authMethodRepository.save(authMethod);
 
     // 5. Create tokens
-    const tokens = await this.tokenService.createTokens(user.id, user.publicKey);
+    // REQUIRED_SHARE temp auth: issue scoped, non-refreshable tokens that only
+    // grant access to the device-approval bulletin board. The new device will
+    // do a second /auth/login with the real publicKey after key reconstruction.
+    const isTempAuth = loginDto.publicKey.startsWith('pending-core-kit-') && !isNewUser;
+    const tokens = await this.tokenService.createTokens(
+      user.id,
+      user.publicKey,
+      isTempAuth ? { scope: ['device-approval'], skipRefreshToken: true } : undefined
+    );
 
     return {
       accessToken: tokens.accessToken,
