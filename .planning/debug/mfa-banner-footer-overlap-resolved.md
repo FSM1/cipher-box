@@ -2,7 +2,8 @@
 status: resolved
 trigger: 'MFA banner footer overlap - banner renders incorrectly in footer area, text wraps badly, overlaps footer'
 created: 2026-02-18T00:00:00Z
-updated: 2026-02-18T00:00:02Z
+updated: 2026-02-27T00:00:00Z
+resolved: 2026-02-27T00:00:00Z
 ---
 
 ## Current Focus
@@ -48,3 +49,19 @@ files_changed:
 
 - apps/web/src/styles/layout.css
 - apps/web/src/App.css
+
+## Commits Merged to Main
+
+| Commit      | PR          | Description                                                                                                                                                                                                                               |
+| ----------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `24d5cd1f7` | #143        | fix(web): align MFA enrollment banner with Pencil design — initial fix adding `banner` grid area row + `grid-area: banner` on `.mfa-prompt` + mobile responsive update                                                                    |
+| `d7e16e866` | (follow-up) | fix(web): remove z-index from MFA banner to unblock user menu dropdown — z-index:2 created a stacking context that intercepted pointer events on the user menu dropdown; removed z-index, grid layout alone handles positioning correctly |
+
+## Verification (2026-02-27)
+
+Confirmed on main (`994803056`):
+
+- `layout.css` lines 22-34: grid-template-areas includes `'banner banner'` row between header and sidebar/main
+- `layout.css` lines 368-376: mobile grid includes `'banner'` row
+- `App.css` lines 2245-2254: `.mfa-prompt` has `grid-area: banner` (no z-index, intentionally removed)
+- `MfaEnrollmentPrompt.tsx` line 89: returns `null` when `!visible || !isAuthenticated || isMfaEnabled`, collapsing the auto-height banner row
