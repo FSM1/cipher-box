@@ -63,14 +63,17 @@ export function SecurityTab() {
   }, []);
 
   return (
-    <div className="security-tab">
+    <div className="security-tab" data-testid="security-tab">
       {/* MFA Status Badge */}
       <div className="security-tab-status">
         <span
           className={`security-tab-status-dot ${isMfaEnabled ? 'enabled' : 'disabled'}`}
           aria-hidden="true"
         />
-        <span className={`security-tab-status-label ${isMfaEnabled ? 'enabled' : 'disabled'}`}>
+        <span
+          className={`security-tab-status-label ${isMfaEnabled ? 'enabled' : 'disabled'}`}
+          data-testid="mfa-status-badge"
+        >
           {isMfaEnabled ? '[ENABLED]' : '[DISABLED]'}
         </span>
       </div>
@@ -104,6 +107,7 @@ export function SecurityTab() {
                 type="button"
                 className="security-tab-enable-btn"
                 onClick={() => setShowWizard(true)}
+                data-testid="mfa-enable-btn"
               >
                 --enable-mfa
               </button>

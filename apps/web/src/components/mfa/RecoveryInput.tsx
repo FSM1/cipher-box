@@ -63,7 +63,7 @@ export function RecoveryInput({ onRecoveryComplete, onBack }: RecoveryInputProps
   );
 
   return (
-    <div className="recovery-input">
+    <div className="recovery-input" data-testid="recovery-input">
       <h2 className="recovery-input-title">{'// enter your recovery phrase'}</h2>
 
       <div className="recovery-input-content">
@@ -73,6 +73,7 @@ export function RecoveryInput({ onRecoveryComplete, onBack }: RecoveryInputProps
 
         <textarea
           className="recovery-input-textarea"
+          data-testid="recovery-textarea"
           value={phrase}
           onChange={(e) => setPhrase(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -86,7 +87,7 @@ export function RecoveryInput({ onRecoveryComplete, onBack }: RecoveryInputProps
         />
 
         {error && (
-          <div className="recovery-input-error" role="alert">
+          <div className="recovery-input-error" role="alert" data-testid="recovery-error">
             {error}
           </div>
         )}
@@ -98,6 +99,7 @@ export function RecoveryInput({ onRecoveryComplete, onBack }: RecoveryInputProps
           className="recovery-input-btn recovery-input-btn-secondary"
           onClick={onBack}
           disabled={isRecovering}
+          data-testid="recovery-back"
         >
           --back
         </button>
@@ -106,6 +108,7 @@ export function RecoveryInput({ onRecoveryComplete, onBack }: RecoveryInputProps
           className="recovery-input-btn recovery-input-btn-primary"
           onClick={handleRecover}
           disabled={isRecovering || !phrase.trim()}
+          data-testid="recovery-submit"
         >
           {isRecovering ? 'recovering...' : '--recover'}
         </button>

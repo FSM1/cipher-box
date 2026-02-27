@@ -84,7 +84,7 @@ export function DeviceWaitingScreen({
   const isWarning = countdown <= COUNTDOWN_WARNING_MS && countdown > 0;
 
   return (
-    <div className="device-waiting">
+    <div className="device-waiting" data-testid="device-waiting">
       <div className="device-waiting-card">
         <h2 className="device-waiting-title">{'// waiting for device approval'}</h2>
 
@@ -118,14 +118,27 @@ function renderContent(
   if (status === 'denied') {
     return (
       <div className="device-waiting-content">
-        <div className="device-waiting-status-message device-waiting-denied">
+        <div
+          className="device-waiting-status-message device-waiting-denied"
+          data-testid="device-waiting-status"
+        >
           Request was denied by another device.
         </div>
         <div className="device-waiting-actions">
-          <button type="button" className="device-waiting-btn" onClick={handleRetry}>
+          <button
+            type="button"
+            className="device-waiting-btn"
+            onClick={handleRetry}
+            data-testid="device-waiting-retry"
+          >
             --retry
           </button>
-          <button type="button" className="device-waiting-link" onClick={onRecoveryFallback}>
+          <button
+            type="button"
+            className="device-waiting-link"
+            onClick={onRecoveryFallback}
+            data-testid="device-waiting-recovery-link"
+          >
             use recovery phrase instead
           </button>
         </div>
@@ -136,14 +149,27 @@ function renderContent(
   if (status === 'expired') {
     return (
       <div className="device-waiting-content">
-        <div className="device-waiting-status-message device-waiting-expired">
+        <div
+          className="device-waiting-status-message device-waiting-expired"
+          data-testid="device-waiting-status"
+        >
           Request expired. No device responded within the time limit.
         </div>
         <div className="device-waiting-actions">
-          <button type="button" className="device-waiting-btn" onClick={handleRetry}>
+          <button
+            type="button"
+            className="device-waiting-btn"
+            onClick={handleRetry}
+            data-testid="device-waiting-retry"
+          >
             --retry
           </button>
-          <button type="button" className="device-waiting-link" onClick={onRecoveryFallback}>
+          <button
+            type="button"
+            className="device-waiting-link"
+            onClick={onRecoveryFallback}
+            data-testid="device-waiting-recovery-link"
+          >
             use recovery phrase instead
           </button>
         </div>
@@ -154,14 +180,27 @@ function renderContent(
   if (status === 'error') {
     return (
       <div className="device-waiting-content">
-        <div className="device-waiting-status-message device-waiting-error">
+        <div
+          className="device-waiting-status-message device-waiting-error"
+          data-testid="device-waiting-status"
+        >
           {approvalError || 'An error occurred.'}
         </div>
         <div className="device-waiting-actions">
-          <button type="button" className="device-waiting-btn" onClick={handleRetry}>
+          <button
+            type="button"
+            className="device-waiting-btn"
+            onClick={handleRetry}
+            data-testid="device-waiting-retry"
+          >
             --retry
           </button>
-          <button type="button" className="device-waiting-link" onClick={onRecoveryFallback}>
+          <button
+            type="button"
+            className="device-waiting-link"
+            onClick={onRecoveryFallback}
+            data-testid="device-waiting-recovery-link"
+          >
             use recovery phrase instead
           </button>
         </div>
@@ -189,10 +228,16 @@ function renderContent(
       <div
         className={`device-waiting-countdown ${isWarning ? 'warning' : ''}`}
         aria-label={`Time remaining: ${timeDisplay}`}
+        data-testid="device-waiting-countdown"
       >
         {countdown > 0 ? timeDisplay : 'expired'}
       </div>
-      <button type="button" className="device-waiting-link" onClick={onRecoveryFallback}>
+      <button
+        type="button"
+        className="device-waiting-link"
+        onClick={onRecoveryFallback}
+        data-testid="device-waiting-recovery-link"
+      >
         use recovery phrase instead
       </button>
     </div>
