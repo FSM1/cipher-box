@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "47b65ee5080c",
+  "strategy": "manual-commit",
+  "branch": "chore/disable-synchronize-true",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/DATABASE_EVOLUTION_PROTOCOL.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/47/b65ee5080c/0/metadata.json",
+      "transcript": "/47/b65ee5080c/0/full.jsonl",
+      "context": "/47/b65ee5080c/0/context.md",
+      "content_hash": "/47/b65ee5080c/0/content_hash.txt",
+      "prompt": "/47/b65ee5080c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 79,
+    "cache_creation_tokens": 96381,
+    "cache_read_tokens": 6069108,
+    "output_tokens": 7879,
+    "api_call_count": 64
+  }
+}

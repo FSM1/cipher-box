@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "47b65ee5080c",
+  "session_id": "2211e959-bda5-488f-a0f4-3ffce1eaea5d",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-27T14:20:01.566353Z",
+  "branch": "chore/disable-synchronize-true",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/DATABASE_EVOLUTION_PROTOCOL.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b73217a56366",
+  "token_usage": {
+    "input_tokens": 79,
+    "cache_creation_tokens": 96381,
+    "cache_read_tokens": 6069108,
+    "output_tokens": 7879,
+    "api_call_count": 64
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-27T14:20:00.384531Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}
