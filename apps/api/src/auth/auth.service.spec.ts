@@ -511,6 +511,128 @@ describe('AuthService', () => {
         expect.objectContaining({ publicKey: 'real-public-key' })
       );
     });
+
+    it('should not overwrite publicKey when placeholder login finds placeholder user', async () => {
+      const placeholderLoginDto = {
+        idToken: 'cipherbox-jwt',
+        publicKey: 'pending-core-kit-user-123',
+        loginType: 'corekit' as const,
+      };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({
+        payload: { sub: 'user-123', email: 'test@example.com' },
+      });
+
+      const placeholderUser = {
+        id: 'user-id',
+        publicKey: 'pending-core-kit-user-123-1234567890',
+      };
+      userRepository.findOne
+        .mockResolvedValueOnce(null) // not found by placeholder publicKey
+        .mockResolvedValueOnce(placeholderUser); // found by placeholder Like pattern
+      // save should NOT be called for publicKey update (incoming is also a placeholder)
+
+      const mockAuthMethod = { id: 'am-1', userId: 'user-id', type: 'email' };
+      authMethodRepository.findOne.mockResolvedValue(mockAuthMethod);
+      authMethodRepository.save.mockResolvedValue(mockAuthMethod);
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      const result = await service.login(placeholderLoginDto);
+
+      expect(result.isNewUser).toBe(false);
+      // Should NOT have called userRepository.save (no publicKey update)
+      expect(userRepository.save).not.toHaveBeenCalled();
+    });
+
+    it('should find existing user by identity for REQUIRED_SHARE temp auth', async () => {
+      const requiredShareDto = {
+        idToken: 'cipherbox-jwt',
+        publicKey: 'pending-core-kit-user-123',
+        loginType: 'corekit' as const,
+      };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({
+        payload: { sub: 'user-123', email: 'test@example.com' },
+      });
+
+      const existingUser = {
+        id: 'existing-user-id',
+        publicKey: '04' + 'a'.repeat(128), // real Core Kit key
+      };
+
+      userRepository.findOne
+        .mockResolvedValueOnce(null) // not found by placeholder publicKey
+        .mockResolvedValueOnce(null); // not found by placeholder Like pattern
+
+      // Found by authMethod identifierHash lookup
+      const identifierHash = sha256Hex('test@example.com');
+      const mockAuthMethod = {
+        id: 'am-1',
+        userId: 'existing-user-id',
+        type: 'email',
+        identifierHash,
+        user: existingUser,
+      };
+      authMethodRepository.findOne
+        .mockResolvedValueOnce(mockAuthMethod) // identity lookup with relations
+        .mockResolvedValueOnce(mockAuthMethod) // userId + identifierHash lookup
+        .mockResolvedValueOnce(mockAuthMethod); // userId fallback (not reached)
+      authMethodRepository.save.mockResolvedValue(mockAuthMethod);
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      const result = await service.login(requiredShareDto);
+
+      expect(result.isNewUser).toBe(false);
+      // Verify identity lookup was called with correct identifierHash and relations
+      expect(authMethodRepository.findOne).toHaveBeenCalledWith({
+        where: { identifierHash },
+        relations: ['user'],
+      });
+      expect(result.accessToken).toBe('at');
+    });
+
+    it('should create new user when REQUIRED_SHARE has no existing identity', async () => {
+      const requiredShareDto = {
+        idToken: 'cipherbox-jwt',
+        publicKey: 'pending-core-kit-user-456',
+        loginType: 'corekit' as const,
+      };
+
+      jwtIssuerService.getJwksData.mockReturnValue({ keys: [] });
+      (jose.createLocalJWKSet as jest.Mock).mockReturnValue('mock-jwks');
+      (jose.jwtVerify as jest.Mock).mockResolvedValue({
+        payload: { sub: 'user-456', email: 'new@example.com' },
+      });
+
+      userRepository.findOne
+        .mockResolvedValueOnce(null) // not found by placeholder publicKey
+        .mockResolvedValueOnce(null); // not found by placeholder Like pattern
+
+      // Not found by identity either (truly new user)
+      authMethodRepository.findOne
+        .mockResolvedValueOnce(null) // identity lookup
+        .mockResolvedValueOnce(null) // userId + identifierHash
+        .mockResolvedValueOnce(null); // userId fallback
+
+      const newUser = { id: 'new-user-id', publicKey: 'pending-core-kit-user-456' };
+      userRepository.save.mockResolvedValue(newUser);
+      const mockAuthMethod = { id: 'am-new', userId: 'new-user-id', type: 'email' };
+      authMethodRepository.save
+        .mockResolvedValueOnce(mockAuthMethod) // safety net create
+        .mockResolvedValueOnce(mockAuthMethod); // lastUsedAt update
+      tokenService.createTokens.mockResolvedValue({ accessToken: 'at', refreshToken: 'rt' });
+
+      const result = await service.login(requiredShareDto);
+
+      expect(result.isNewUser).toBe(true);
+      expect(userRepository.save).toHaveBeenCalledWith({
+        publicKey: 'pending-core-kit-user-456',
+      });
+    });
   });
 
   describe('refresh', () => {
