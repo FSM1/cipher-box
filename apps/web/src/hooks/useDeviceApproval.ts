@@ -56,12 +56,22 @@ export function useDeviceApproval() {
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const requestIdRef = useRef<string | null>(null);
   const ephemeralPrivKeyRef = useRef<Uint8Array | null>(null);
+  // Generation counter to detect stale requestApproval completions.
+  // In React StrictMode, the effect fires twice (mount→unmount→remount), launching
+  // two concurrent requestApproval() calls whose async completions can race.
+  // Each call increments the counter; after each await, the call checks if it's
+  // still the active generation — if not, it cancels itself and returns early.
+  const requestGenRef = useRef(0);
   const requesterPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // --- Existing device (approver) state ---
   const [pendingRequests, setPendingRequests] = useState<PendingApproval[]>([]);
   const isPollingPendingRef = useRef(false);
   const approverPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Track recently approved/denied request IDs to filter out stale polling responses.
+  // Without this, the 5s polling interval can re-add a request that was just handled
+  // if the poll response was already in-flight when the respond API call completed.
+  const handledRequestIdsRef = useRef<Set<string>>(new Set());
 
   /**
    * Zero-fill and clear ephemeral private key from memory.
@@ -193,8 +203,19 @@ export function useDeviceApproval() {
   /**
    * Create an approval request on the bulletin board (new device side).
    * Generates an ephemeral keypair and starts polling.
+   *
+   * Uses a generation counter to handle React StrictMode double-mounting:
+   * the effect fires requestApproval twice in quick succession. Without the
+   * counter, both async calls race to set requestIdRef and start polling.
+   * If the first call's createRequest completes after the second's, it
+   * overwrites the ref and starts polling for a stale request (whose
+   * ephemeral key was already zeroed by cleanup), causing "Key unwrapping
+   * failed" when the approver encrypts the factor key with the stale
+   * request's public key.
    */
   const requestApproval = useCallback(async () => {
+    const gen = ++requestGenRef.current;
+
     setApprovalStatus('requesting');
     setApprovalError(null);
 
@@ -220,12 +241,27 @@ export function useDeviceApproval() {
         ephemeralPublicKey: ephemeralPubKeyHex,
       });
 
+      // 5. Check if this call was superseded by a newer requestApproval()
+      //    (happens in React StrictMode when the effect fires twice).
+      if (gen !== requestGenRef.current) {
+        // Stale: a newer requestApproval already started. Cancel this request
+        // on the backend and bail — the newer call will set its own refs.
+        try {
+          await deviceApprovalApi.cancel(requestId);
+        } catch {
+          /* best-effort */
+        }
+        return;
+      }
+
       requestIdRef.current = requestId;
       setApprovalStatus('pending');
 
-      // 5. Start polling for response
+      // 6. Start polling for response
       startRequesterPolling(requestId);
     } catch (err) {
+      // Only handle errors for the active generation
+      if (gen !== requestGenRef.current) return;
       clearEphemeralKey();
       setApprovalError(err instanceof Error ? err.message : 'Failed to create approval request');
       setApprovalStatus('error');
@@ -235,21 +271,32 @@ export function useDeviceApproval() {
   /**
    * Cancel the pending approval request (new device side).
    * Also called when recovery phrase is used instead (RESEARCH.md Pitfall 5).
+   *
+   * IMPORTANT: All synchronous state cleanup (stop polling, clear ephemeral key,
+   * null refs, reset status) MUST happen BEFORE the async API call. In React
+   * StrictMode, cleanup and setup run in quick succession — if requestApproval()
+   * generates a new ephemeral key between our `await cancel()` and
+   * `clearEphemeralKey()`, we'd zero the NEW key, causing "Key unwrapping failed"
+   * when the approve response arrives.
    */
   const cancelRequest = useCallback(async () => {
     stopRequesterPolling();
+    clearEphemeralKey();
+    setApprovalStatus('idle');
 
-    if (requestIdRef.current) {
+    // Capture and clear requestId synchronously so a concurrent
+    // requestApproval() can safely set a new value on the ref.
+    const requestId = requestIdRef.current;
+    requestIdRef.current = null;
+
+    // Async API cleanup (best-effort, uses captured local variable)
+    if (requestId) {
       try {
-        await deviceApprovalApi.cancel(requestIdRef.current);
+        await deviceApprovalApi.cancel(requestId);
       } catch {
         // Best-effort cleanup -- request may already be expired/cancelled
       }
-      requestIdRef.current = null;
     }
-
-    clearEphemeralKey();
-    setApprovalStatus('idle');
   }, [stopRequesterPolling, clearEphemeralKey]);
 
   // =========================================================================
@@ -266,7 +313,12 @@ export function useDeviceApproval() {
     const poll = async () => {
       try {
         const pending = await deviceApprovalApi.getPending();
-        setPendingRequests(pending);
+        // Filter out requests that were recently approved/denied locally
+        // to prevent stale in-flight poll responses from re-adding them.
+        const handled = handledRequestIdsRef.current;
+        const filtered =
+          handled.size > 0 ? pending.filter((r) => !handled.has(r.requestId!)) : pending;
+        setPendingRequests(filtered);
       } catch {
         // Network error -- continue polling
       }
@@ -309,7 +361,9 @@ export function useDeviceApproval() {
         respondedByDeviceId: deviceIdentity.deviceId,
       });
 
-      // 5. Remove from pending list
+      // 5. Remove from pending list and mark as handled to prevent
+      //    stale polling responses from re-adding it
+      handledRequestIdsRef.current.add(requestId);
       setPendingRequests((prev) => prev.filter((r) => r.requestId !== requestId));
     },
     [coreKit]
@@ -327,7 +381,8 @@ export function useDeviceApproval() {
       respondedByDeviceId: deviceIdentity.deviceId,
     });
 
-    // Remove from pending list
+    // Remove from pending list and mark as handled
+    handledRequestIdsRef.current.add(requestId);
     setPendingRequests((prev) => prev.filter((r) => r.requestId !== requestId));
   }, []);
 
@@ -345,7 +400,10 @@ export function useDeviceApproval() {
         const poll = async () => {
           try {
             const pending = await deviceApprovalApi.getPending();
-            setPendingRequests(pending);
+            const handled = handledRequestIdsRef.current;
+            const filtered =
+              handled.size > 0 ? pending.filter((r) => !handled.has(r.requestId!)) : pending;
+            setPendingRequests(filtered);
           } catch {
             // Network error -- continue polling
           }

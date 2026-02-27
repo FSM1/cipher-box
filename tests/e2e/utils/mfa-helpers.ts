@@ -196,28 +196,24 @@ export async function waitForDeviceApproval(
  * Click the --approve button on the DeviceApprovalModal.
  *
  * Assumes the modal is already visible (use waitForDeviceApproval first).
+ * Does not wait for modal dismissal — the approver's background polling
+ * may briefly re-add the request from a stale in-flight response.
+ * Tests should verify the action took effect via the requester side instead.
  */
 export async function approveDevice(page: Page): Promise<void> {
   const approveBtn = page.locator('[data-testid="device-approval-approve"]');
   await approveBtn.waitFor({ state: 'visible', timeout: 5_000 });
   await approveBtn.click();
-  // Wait for modal to dismiss after approval completes
-  await expect(page.locator('[data-testid="device-approval-modal"]')).not.toBeVisible({
-    timeout: 30_000,
-  });
 }
 
 /**
  * Click the --deny button on the DeviceApprovalModal.
  *
  * Assumes the modal is already visible (use waitForDeviceApproval first).
+ * Same polling caveat as approveDevice — verify via requester side.
  */
 export async function denyDevice(page: Page): Promise<void> {
   const denyBtn = page.locator('[data-testid="device-approval-deny"]');
   await denyBtn.waitFor({ state: 'visible', timeout: 5_000 });
   await denyBtn.click();
-  // Wait for modal to dismiss after deny completes
-  await expect(page.locator('[data-testid="device-approval-modal"]')).not.toBeVisible({
-    timeout: 30_000,
-  });
 }

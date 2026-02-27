@@ -26,11 +26,16 @@ type AuthState = {
   /** User's vault keypair (memory-only, from Core Kit TSS export) */
   vaultKeypair: VaultKeypair | null;
 
+  /** Pending auth info for REQUIRED_SHARE flow (shared across hook instances) */
+  pendingCipherboxJwt: string | null;
+  pendingAuthMethod: string | null;
+
   setAccessToken: (token: string) => void;
   setLastAuthMethod: (method: string) => void;
   setUserEmail: (email: string) => void;
   setTeeKeys: (keys: TeeKeys) => void;
   setVaultKeypair: (keypair: VaultKeypair) => void;
+  setPendingAuth: (jwt: string | null, method: string | null) => void;
   logout: () => void;
 };
 
@@ -45,6 +50,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   /** User's vault keypair (memory-only) */
   vaultKeypair: null,
 
+  /** Pending auth for REQUIRED_SHARE flow */
+  pendingCipherboxJwt: null,
+  pendingAuthMethod: null,
+
   // Actions
   setAccessToken: (token) => set({ accessToken: token, isAuthenticated: true }),
   setLastAuthMethod: (method) => set({ lastAuthMethod: method }),
@@ -53,6 +62,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   /** Store vault keypair from Core Kit TSS export */
   setVaultKeypair: (keypair) => set({ vaultKeypair: keypair }),
+
+  /** Store pending auth info for REQUIRED_SHARE completion */
+  setPendingAuth: (jwt, method) => set({ pendingCipherboxJwt: jwt, pendingAuthMethod: method }),
 
   logout: () => {
     // [SECURITY: MEDIUM-02] Zero-fill sensitive key material before clearing
@@ -72,6 +84,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       userEmail: null,
       teeKeys: null,
       vaultKeypair: null,
+      pendingCipherboxJwt: null,
+      pendingAuthMethod: null,
     });
   },
 }));
