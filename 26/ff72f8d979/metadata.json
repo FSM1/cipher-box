@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "26ff72f8d979",
+  "strategy": "manual-commit",
+  "branch": "feat/e2e-mfa-flows",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/auth/dto/login.dto.ts",
+    "apps/web/src/hooks/useAuth.ts",
+    "apps/web/src/hooks/useDeviceApproval.ts",
+    "apps/web/src/routes/Login.tsx",
+    "apps/web/src/routes/SettingsPage.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/26/ff72f8d979/0/metadata.json",
+      "transcript": "/26/ff72f8d979/0/full.jsonl",
+      "context": "/26/ff72f8d979/0/context.md",
+      "content_hash": "/26/ff72f8d979/0/content_hash.txt",
+      "prompt": "/26/ff72f8d979/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7449,
+    "cache_creation_tokens": 731651,
+    "cache_read_tokens": 27263441,
+    "output_tokens": 71227,
+    "api_call_count": 220
+  }
+}
