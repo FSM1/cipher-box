@@ -83,27 +83,33 @@ $Headers = @{ Authorization = "Bearer $AccessToken" }
 
 # ---- Test 2: Desktop writes file, API verifies vault exists ----
 Write-Host "--- Test 2: Verify vault has content after FUSE write ---"
+$FuseWriteSucceeded = $false
 try {
     Set-Content -Path "$MountPoint\rt-test.txt" -Value "API-visible content" -NoNewline -ErrorAction Stop
     if (-not (Test-Path "$MountPoint\rt-test.txt")) { throw "FUSE write did not materialize at mount path" }
+    $FuseWriteSucceeded = $true
 } catch {
     Test-Fail "FUSE write failed ($_)"
-    $RootIpns = $null
 }
 Start-Sleep -Seconds 5
 
-try {
-    $VaultResponse = Invoke-RestMethod -Uri "$ApiUrl/vault" `
-        -Headers $Headers
+if ($FuseWriteSucceeded) {
+    try {
+        $VaultResponse = Invoke-RestMethod -Uri "$ApiUrl/vault" `
+            -Headers $Headers
 
-    $RootIpns = $VaultResponse.rootIpnsName
-    if ($RootIpns) {
-        Test-Pass "Vault has rootIpnsName after FUSE write ($RootIpns)"
-    } else {
-        Test-Fail "Vault has no rootIpnsName"
+        $RootIpns = $VaultResponse.rootIpnsName
+        if ($RootIpns) {
+            Test-Pass "Vault has rootIpnsName after FUSE write ($RootIpns)"
+        } else {
+            Test-Fail "Vault has no rootIpnsName"
+        }
+    } catch {
+        Test-Fail "Vault API call failed ($_)"
+        $RootIpns = $null
     }
-} catch {
-    Test-Fail "Vault API call failed ($_)"
+} else {
+    Test-Fail "Vault verification skipped (FUSE write failed)"
     $RootIpns = $null
 }
 
