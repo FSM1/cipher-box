@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 11.4 in progress (Cross-Platform E2E Testing)
+**Current focus:** Milestone 2 -- Phase 11.4 COMPLETE (Cross-Platform E2E Testing)
 
 ## Current Position
 
 Phase: 11.4 (Cross-Platform E2E Testing)
-Plan: 1 of 3
-Status: In progress
-Last activity: 2026-02-28 -- Completed 11.4-01-PLAN.md (CI debug artifacts + crypto test vectors)
+Plan: 3 of 3
+Status: Phase complete
+Last activity: 2026-02-28 -- Completed 11.4-03-PLAN.md (e2e-desktop.yml CI workflow)
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 1/3)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 139
+- Total plans completed: 141
 - Average duration: 5.6 min
-- Total execution time: 15.1 hours
+- Total execution time: 15.4 hours
 
 **By Phase (M1 summary):**
 
@@ -45,11 +45,11 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 15     | 4/4   | 35 min  | 8.8 min  |
 | M2 Phase 15.1   | 3/3   | 17 min  | 5.7 min  |
 | M2 Phase 11.3   | 3/3   | 104 min | 34.7 min |
-| M2 Phase 11.4   | 1/3   | 5 min   | 5.0 min  |
+| M2 Phase 11.4   | 3/3   | 20 min  | 6.7 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 5m, 12m, 2m, 90m, 5m
+- Last 5 plans: 2m, 90m, 5m, 10m, 5m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -218,6 +218,8 @@ Recent decisions affecting current work:
 | AutoUnmount removed from Linux mount options                           | 11.3-03   | Requires user_allow_other in /etc/fuse.conf; explicit fusermount3 -u is more portable                                |
 | FOPEN_DIRECT_IO + write_generation for O_TRUNC race                    | 11.3-03   | Linux kernel page cache causes stale reads after truncation; DIRECT_IO bypasses cache for written files              |
 | Green tray icon for Linux, icon_as_template macOS-only                 | 11.3-03   | Black template icons invisible on dark panels; macOS tinting does not work on Linux                                  |
+| ikalnytskyi/action-setup-postgres for cross-platform Postgres          | 11.4-03   | Only action that works on Linux/macOS/Windows without Docker service containers                                      |
+| Separate platform-conditional steps for CI clarity                     | 11.4-03   | Each platform gets own steps for Kubo, Redis, FUSE, API, tests instead of complex conditionals                       |
 
 ### Pending Todos
 
@@ -291,16 +293,17 @@ Recent decisions affecting current work:
 - Phase 12.6 (Per-File IPNS Metadata): COMPLETE -- all 5 plans done (crypto primitives, batch publish backend, frontend service layer, hooks & components, recovery tool + docs)
 - Phase 13 (File Versioning): COMPLETE -- all 5 plans done (version entry types, creation service, desktop FUSE, version history UI, recovery tool + build verification)
 - Phase 11.3 (Linux Desktop): COMPLETE -- 3/3 plans done (Rust platform support, packaging & CI, local UAT 18/18 pass)
+- Phase 11.4 (Cross-Platform E2E Testing): COMPLETE -- 3/3 plans done (CI debug artifacts + crypto vectors, FUSE/API test scripts, e2e-desktop.yml workflow)
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 11.4-01-PLAN.md (CI debug artifacts + crypto test vectors)
+Stopped at: Completed 11.4-03-PLAN.md (e2e-desktop.yml CI workflow)
 Resume file: None
-Next: Plan 02 (E2E test scripts) and Plan 03 (CI E2E workflow) remain in Phase 11.4.
+Next: Phase 11.4 complete. Next phase TBD.
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-28 after Phase 11.4 Plan 01 complete (CI Debug Artifacts + Crypto Test Vectors)_
+_Last updated: 2026-02-28 after Phase 11.4 Plan 03 complete (Desktop E2E CI Workflow)_
