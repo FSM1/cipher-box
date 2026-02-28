@@ -172,6 +172,10 @@ pub struct InodeData {
     pub attr: FileAttrs,
     /// Child inode numbers (for directories only).
     pub children: Option<Vec<u64>>,
+    /// Write generation counter. Incremented on each truncate/overwrite cycle.
+    /// Upload completions carry this value and are only applied if it matches,
+    /// preventing stale uploads from overwriting newer content state.
+    pub write_generation: u64,
 }
 
 // ── InodeTable ────────────────────────────────────────────────────────────────
@@ -217,6 +221,7 @@ impl InodeTable {
             },
             attr: root_attr,
             children: Some(vec![]),
+            write_generation: 0,
         };
 
         let mut inodes = HashMap::new();
@@ -407,6 +412,7 @@ impl InodeTable {
                         },
                         attr,
                         children: existing_children,
+                        write_generation: 0,
                     };
 
                     self.insert(inode);
@@ -567,6 +573,7 @@ impl InodeTable {
                         kind,
                         attr,
                         children: None,
+                        write_generation: 0,
                     };
 
                     self.insert(inode);
@@ -741,6 +748,7 @@ mod tests {
                 nlink: 2,
             },
             children: Some(vec![]),
+            write_generation: 0,
         };
 
         table.insert(data);
@@ -804,6 +812,7 @@ mod tests {
                 nlink: 1,
             },
             children: None,
+            write_generation: 0,
         };
 
         table.insert(data);
