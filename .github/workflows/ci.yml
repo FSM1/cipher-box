@@ -210,7 +210,11 @@ jobs:
       - name: Check for entity/migration drift
         working-directory: apps/api
         run: |
-          pnpm typeorm migration:generate src/migrations/DriftCheck -d src/data-source.ts 2>&1 || true
+          set +e
+          OUTPUT="$(pnpm typeorm migration:generate src/migrations/DriftCheck -d src/data-source.ts 2>&1)"
+          STATUS=$?
+          set -e
+
           if ls src/migrations/*DriftCheck*.ts 1>/dev/null 2>&1; then
             # Our hand-written migrations use explicit constraint/index names, but TypeORM
             # expects auto-generated hash-based names. Filter out cosmetic renames and only
@@ -228,7 +232,21 @@ jobs:
             fi
           else
             echo "No entity/migration drift detected."
+            exit 0
           fi
+
+          # No drift file generated — check if the command actually succeeded
+          if [ "$STATUS" -ne 0 ]; then
+            if echo "$OUTPUT" | grep -q "No changes in database schema were found"; then
+              echo "No entity/migration drift detected."
+              exit 0
+            fi
+            echo "::error::migration:generate failed unexpectedly."
+            echo "$OUTPUT"
+            exit 1
+          fi
+
+          echo "No entity/migration drift detected."
         env:
           DB_HOST: localhost
           DB_PORT: 5432
