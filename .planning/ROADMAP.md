@@ -105,13 +105,18 @@ Plans:
 **Goal**: CipherBox desktop app runs on Linux with native FUSE filesystem integration via libfuse, full feature parity with macOS and Windows (system tray, credential storage, background sync, auto-start, headless mode)
 **Depends on**: Phase 11 (Windows Desktop — platform abstraction layer reused), Phase 11.1 (macOS catch-up), Phase 11.2 (v1 removal)
 **Requirements**: PLAT-01
-**Research flag**: NEEDS `/gsd:research-phase` -- Linux FUSE (libfuse) packaging differences from macOS fuser, AppImage/deb packaging, Linux system tray (libappindicator vs StatusNotifierItem), Linux keyring (Secret Service API), CI Linux runner requirements
+**Research flag**: COMPLETE -- fuser crate reuse confirmed, Linux mount options/unmount, keyring Secret Service API, Tauri Linux bundling (deb+AppImage), CI system dependencies researched
 **Success Criteria** (what must be TRUE):
 
 1. Linux user can install CipherBox via AppImage or .deb, log in, and access a FUSE mount at ~/CipherBox
 2. Background sync, system tray, and keyring storage work on Linux (parity with macOS/Windows)
 3. CI builds and packages Linux desktop app (adds to existing macOS + Windows matrix)
-   **Plans**: TBD
+
+**Plans:** 2 plans
+
+Plans:
+- [ ] 11.3-01-PLAN.md — Rust code: Linux cfg gates for mount options, unmount, tray, registry, platform special files + .cargo/config.toml + Cargo.toml keyring feature
+- [ ] 11.3-02-PLAN.md — tauri.conf.json Linux bundle config (deb + AppImage) + CI workflow (cargo-check-linux + build-desktop-linux jobs)
 
 ### Phase 11.4: Cross-Platform E2E Testing (INSERTED)
 
@@ -503,7 +508,7 @@ Parallel phases:
 | 15.1 Client-Side Search     | M2        | 3/3            | Complete    | 2026-02-24 |
 | 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
 | 11. Windows Desktop         | M2        | 3/3            | Complete    | 2026-02-22 |
-| 11.3 Linux Desktop          | M2        | 0/TBD          | Not started | -          |
+| 11.3 Linux Desktop          | M2        | 0/2            | Not started | -          |
 | 11.4 Cross-Platform E2E     | M2        | 0/TBD          | Not started | -          |
 | 17. AWS Nitro TEE           | M2        | 0/TBD          | Not started | -          |
 | 18. Billing Infrastructure  | M3        | 0/TBD          | Not started | -          |
