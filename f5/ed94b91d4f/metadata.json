@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "f5ed94b91d4f",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-11.3-linux-desktop",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/phases/11.3-linux-desktop/11.3-01-PLAN.md",
+    ".planning/phases/11.3-linux-desktop/11.3-02-PLAN.md",
+    ".planning/phases/11.3-linux-desktop/11.3-RESEARCH.md",
+    "apps/desktop/src-tauri/.cargo/config.toml",
+    "apps/desktop/src-tauri/Cargo.toml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f5/ed94b91d4f/0/metadata.json",
+      "transcript": "/f5/ed94b91d4f/0/full.jsonl",
+      "context": "/f5/ed94b91d4f/0/context.md",
+      "content_hash": "/f5/ed94b91d4f/0/content_hash.txt",
+      "prompt": "/f5/ed94b91d4f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 49278,
+    "cache_read_tokens": 139889,
+    "output_tokens": 1263,
+    "api_call_count": 3
+  }
+}
