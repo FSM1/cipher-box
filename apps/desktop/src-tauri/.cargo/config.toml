@@ -1,10 +1,7 @@
-# FUSE-T pkg-config override — macOS targets only.
-# On Linux, system pkg-config finds libfuse3 automatically via fuse3.pc.
-# On macOS, we need the custom fuse.pc pointing to FUSE-T headers.
-[target.aarch64-apple-darwin.env]
-PKG_CONFIG_PATH = { value = "pkg-config", relative = true, force = true }
-
-[target.x86_64-apple-darwin.env]
+# Custom pkg-config directory for FUSE-T on macOS.
+# Contains fuse.pc (macOS FUSE-T shim). Does NOT contain fuse3.pc,
+# so Linux builds fall through to system pkg-config for libfuse3.
+[env]
 PKG_CONFIG_PATH = { value = "pkg-config", relative = true, force = true }
 
 [target.aarch64-apple-darwin]
