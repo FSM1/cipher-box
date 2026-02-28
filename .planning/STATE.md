@@ -5,22 +5,22 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 11.3 COMPLETE (Linux Desktop)
+**Current focus:** Milestone 2 -- Phase 11.3 in progress (Linux Desktop)
 
 ## Current Position
 
 Phase: 11.3 (Linux Desktop)
-Plan: 2 of 2
-Status: Phase complete
-Last activity: 2026-02-28 -- Completed 11.3-02-PLAN.md (Linux Packaging & CI)
+Plan: 2 of 3
+Status: Plan 03 pending (local build + UAT against staging)
+Last activity: 2026-02-28 -- Added 11.3-03-PLAN.md (local UAT)
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 2/2 COMPLETE)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 2/3)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 139
+- Total plans completed: 137
 - Average duration: 5.5 min
 - Total execution time: 13.5 hours
 
@@ -44,7 +44,7 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 11     | 3/3   | 35 min  | 11.7 min |
 | M2 Phase 15     | 4/4   | 35 min  | 8.8 min  |
 | M2 Phase 15.1   | 3/3   | 17 min  | 5.7 min  |
-| M2 Phase 11.3   | 2/2   | 14 min  | 7.0 min  |
+| M2 Phase 11.3   | 2/3   | 14 min  | 7.0 min  |
 
 **Recent Trend:**
 
@@ -286,15 +286,15 @@ Recent decisions affecting current work:
 - Phase 12.5 (MFA Polishing, UAT & E2E): COMPLETE -- all 3 plans done (SecurityTab wiring, wallet E2E tests, UAT final verification)
 - Phase 12.6 (Per-File IPNS Metadata): COMPLETE -- all 5 plans done (crypto primitives, batch publish backend, frontend service layer, hooks & components, recovery tool + docs)
 - Phase 13 (File Versioning): COMPLETE -- all 5 plans done (version entry types, creation service, desktop FUSE, version history UI, recovery tool + build verification)
-- Phase 11.3 (Linux Desktop): COMPLETE -- 2 plans done (Rust platform support, packaging & CI)
+- Phase 11.3 (Linux Desktop): IN PROGRESS -- 2/3 plans done (Rust platform support, packaging & CI), Plan 03 (local UAT) pending
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Completed 11.3-02-PLAN.md (Linux Packaging & CI)
+Stopped at: Added 11.3-03-PLAN.md (local build + UAT against staging)
 Resume file: None
-Next: Phase 11.3 complete. Next phase TBD.
+Next: Execute 11.3-03 — build, run, and UAT the Linux desktop app locally
 
 ---
 

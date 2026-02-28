@@ -142,7 +142,7 @@ Requirements for production release. Each maps to roadmap phases 12+.
 
 ### Cross-Platform Desktop
 
-- [x] **PLAT-01**: Linux desktop app (Tauri + AppImage/deb, FUSE mount via libfuse)
+- [ ] **PLAT-01**: Linux desktop app (Tauri + AppImage/deb, FUSE mount via libfuse)
 - [x] **PLAT-02**: Windows desktop app (Tauri + MSI/NSIS, virtual drive via WinFsp/Dokany)
 
 ### Cross-Platform E2E Testing
@@ -363,7 +363,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SYNC-05     | Phase 16   | Pending  |
 | SYNC-06     | Phase 16   | Pending  |
 | TEE-06      | Phase 17   | Pending  |
-| PLAT-01     | Phase 11.3 | Complete |
+| PLAT-01     | Phase 11.3 | Pending  |
 | PLAT-02     | Phase 11   | Complete |
 | E2E-01      | Phase 11.4 | Pending  |
 | E2E-02      | Phase 11.4 | Pending  |
