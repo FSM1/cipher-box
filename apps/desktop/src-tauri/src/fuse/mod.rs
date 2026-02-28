@@ -1048,14 +1048,17 @@ pub async fn mount_filesystem(
     let mount_path_clone = mount_path.clone();
 
     // Mount options — platform-specific.
-    // Linux: kernel FUSE supports AutoUnmount and DefaultPermission natively.
+    // Linux: kernel FUSE supports AutoUnmount and DefaultPermissions natively.
     // macOS: FUSE-T (NFS/SMB proxy) requires custom options; AutoUnmount and
-    // DefaultPermission are not supported.
+    // DefaultPermissions are not supported.
+    // Linux: kernel FUSE with libfuse3. We skip AutoUnmount because it
+    // requires allow_other/allow_root, which in turn needs user_allow_other
+    // in /etc/fuse.conf — an extra config step we don't want to impose.
+    // Instead, unmount_filesystem() calls fusermount3 -u directly.
     #[cfg(target_os = "linux")]
     let options = vec![
         MountOption::FSName("CipherBox".to_string()),
-        MountOption::AutoUnmount,
-        MountOption::DefaultPermission,
+        MountOption::DefaultPermissions,
         MountOption::RW,
     ];
 

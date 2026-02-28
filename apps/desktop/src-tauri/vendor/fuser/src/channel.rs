@@ -34,74 +34,86 @@ impl Channel {
 
     /// Receives data up to the capacity of the given buffer (can block).
     ///
-    /// With /dev/fuse, the kernel delivers complete FUSE messages atomically.
-    /// With FUSE-T (macOS), communication happens over a Unix domain socket
-    /// where large messages may arrive in fragments. This method loop-reads
-    /// until the full FUSE message (as declared in the header's `len` field)
-    /// is received.
+    /// Platform behavior:
+    /// - **Linux** (`/dev/fuse`): The kernel delivers complete FUSE messages
+    ///   atomically via a single `read()` call. Simple and efficient.
+    /// - **macOS** (FUSE-T): Communication happens over a Unix domain socket
+    ///   where large messages (>256KB) may arrive in fragments. We peek at
+    ///   the header to learn the expected length, then loop-read until the
+    ///   full message is received.
     pub fn receive(&self, buffer: &mut [u8]) -> io::Result<usize> {
         let fd = self.0.as_raw_fd();
 
-        // With /dev/fuse (Linux kernel), each read() returns exactly one
-        // complete FUSE message atomically. With FUSE-T (macOS), the channel
-        // is a Unix domain socket where:
-        //   - Large messages may arrive in fragments (partial reads)
-        //   - Multiple small messages may be buffered together
-        // We handle both cases by:
-        //   1. Peeking at the header to learn the expected message length
-        //   2. Reading exactly that many bytes (looping if fragmented)
-        // This prevents both short reads and over-reads.
-
-        // Step 1: Peek at the FUSE header to get the message length.
-        // The first 4 bytes of fuse_in_header is the total message length (u32).
-        let mut header_buf = [0u8; 4];
-        let mut header_read = 0usize;
-        while header_read < 4 {
+        // Linux /dev/fuse: each read() returns exactly one complete FUSE
+        // message atomically. A single read() call is all we need.
+        #[cfg(target_os = "linux")]
+        {
             let rc = unsafe {
-                libc::recv(
-                    fd,
-                    header_buf.as_mut_ptr().add(header_read) as *mut c_void,
-                    (4 - header_read) as size_t,
-                    if header_read == 0 { libc::MSG_PEEK } else { 0 },
-                )
+                libc::read(fd, buffer.as_mut_ptr() as *mut c_void, buffer.len() as size_t)
             };
             if rc < 0 {
                 return Err(io::Error::last_os_error());
             }
-            if rc == 0 {
-                return Ok(0); // EOF
-            }
-            if header_read == 0 {
-                // First call was MSG_PEEK — data is still in socket buffer.
-                // We'll read it properly in step 2. Just break to parse length.
-                break;
-            }
-            header_read += rc as usize;
+            return Ok(rc as usize);
         }
 
-        let expected = u32::from_ne_bytes(header_buf) as usize;
-        let to_read = expected.min(buffer.len());
+        // macOS FUSE-T: the channel is a Unix domain socket where large
+        // messages may arrive in fragments. We:
+        //   1. Peek at the header to learn the expected message length
+        //   2. Read exactly that many bytes (looping if fragmented)
+        #[cfg(not(target_os = "linux"))]
+        {
+            // Step 1: Peek at the FUSE header to get the message length.
+            // The first 4 bytes of fuse_in_header is the total message length (u32).
+            let mut header_buf = [0u8; 4];
+            let mut header_read = 0usize;
+            while header_read < 4 {
+                let rc = unsafe {
+                    libc::recv(
+                        fd,
+                        header_buf.as_mut_ptr().add(header_read) as *mut c_void,
+                        (4 - header_read) as size_t,
+                        if header_read == 0 { libc::MSG_PEEK } else { 0 },
+                    )
+                };
+                if rc < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if rc == 0 {
+                    return Ok(0); // EOF
+                }
+                if header_read == 0 {
+                    // First call was MSG_PEEK — data is still in socket buffer.
+                    // We'll read it properly in step 2. Just break to parse length.
+                    break;
+                }
+                header_read += rc as usize;
+            }
 
-        // Step 2: Read exactly `to_read` bytes (the complete FUSE message).
-        let mut total = 0usize;
-        while total < to_read {
-            let rc = unsafe {
-                libc::read(
-                    fd,
-                    buffer.as_mut_ptr().add(total) as *mut c_void,
-                    (to_read - total) as size_t,
-                )
-            };
-            if rc < 0 {
-                return Err(io::Error::last_os_error());
+            let expected = u32::from_ne_bytes(header_buf) as usize;
+            let to_read = expected.min(buffer.len());
+
+            // Step 2: Read exactly `to_read` bytes (the complete FUSE message).
+            let mut total = 0usize;
+            while total < to_read {
+                let rc = unsafe {
+                    libc::read(
+                        fd,
+                        buffer.as_mut_ptr().add(total) as *mut c_void,
+                        (to_read - total) as size_t,
+                    )
+                };
+                if rc < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if rc == 0 {
+                    break; // EOF
+                }
+                total += rc as usize;
             }
-            if rc == 0 {
-                break; // EOF
-            }
-            total += rc as usize;
+
+            Ok(total)
         }
-
-        Ok(total)
     }
 
     /// Returns a sender object for this channel. The sender object can be
