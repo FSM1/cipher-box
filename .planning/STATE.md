@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 15.1 COMPLETE (Client-Side Search)
+**Current focus:** Milestone 2 -- Phase 11.3 COMPLETE (Linux Desktop)
 
 ## Current Position
 
-Phase: 15.1 (Client-Side Search)
-Plan: 3 of 3
+Phase: 11.3 (Linux Desktop)
+Plan: 2 of 2
 Status: Phase complete
-Last activity: 2026-02-27 -- Started todo: E2E MFA flow test coverage
+Last activity: 2026-02-28 -- Completed 11.3-02-PLAN.md (Linux Packaging & CI)
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 2/2 COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 137
+- Total plans completed: 139
 - Average duration: 5.5 min
-- Total execution time: 13.3 hours
+- Total execution time: 13.5 hours
 
 **By Phase (M1 summary):**
 
@@ -44,10 +44,11 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 11     | 3/3   | 35 min  | 11.7 min |
 | M2 Phase 15     | 4/4   | 35 min  | 8.8 min  |
 | M2 Phase 15.1   | 3/3   | 17 min  | 5.7 min  |
+| M2 Phase 11.3   | 2/2   | 14 min  | 7.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 7m, 4m, 8m, 5m, 2m
+- Last 5 plans: 4m, 8m, 5m, 12m, 2m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -211,6 +212,8 @@ Recent decisions affecting current work:
 | Module-level callback for cross-component search rebuild               | 15.1-02   | registerRebuildCallback/triggerSearchIndexRebuild avoids prop drilling from AppShell to FileBrowser                  |
 | Auth state transition watcher for search index cleanup                 | 15.1-02   | useRef tracks prev isAuthenticated; true->false triggers clearIndex; self-contained in useSearch hook                |
 | Unicode file type icons in search results                              | 15.1-02   | Terminal aesthetic consistency; no additional icon library needed                                                    |
+| WinFsp resource glob left as-is for Linux builds                       | 11.3-02   | Placeholder MSI tracked in git; glob matches harmlessly on all platforms                                             |
+| ubuntu-22.04 pinned for Linux CI (not ubuntu-latest)                   | 11.3-02   | Ensures glibc 2.35 compatibility; prevents drift to 24.04                                                            |
 
 ### Pending Todos
 
@@ -283,16 +286,17 @@ Recent decisions affecting current work:
 - Phase 12.5 (MFA Polishing, UAT & E2E): COMPLETE -- all 3 plans done (SecurityTab wiring, wallet E2E tests, UAT final verification)
 - Phase 12.6 (Per-File IPNS Metadata): COMPLETE -- all 5 plans done (crypto primitives, batch publish backend, frontend service layer, hooks & components, recovery tool + docs)
 - Phase 13 (File Versioning): COMPLETE -- all 5 plans done (version entry types, creation service, desktop FUSE, version history UI, recovery tool + build verification)
+- Phase 11.3 (Linux Desktop): COMPLETE -- 2 plans done (Rust platform support, packaging & CI)
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
-Last session: 2026-02-26
-Stopped at: Completed quick task 022 (Fix MFA status detection false positive)
+Last session: 2026-02-28
+Stopped at: Completed 11.3-02-PLAN.md (Linux Packaging & CI)
 Resume file: None
-Next: Quick task 022 complete. Next phase TBD.
+Next: Phase 11.3 complete. Next phase TBD.
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-26 after quick task 022 complete (Fix MFA status detection false positive)_
+_Last updated: 2026-02-28 after Phase 11.3 Plan 02 complete (Linux Packaging & CI)_
