@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "461a8e62468f",
+  "session_id": "98814c0e-6456-4183-a41c-4c49f5dee23d",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-28T17:26:34.224326Z",
+  "branch": "chore/add-pr-review-skill",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".claude/commands/resolve-pr-reviews.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f441de8076a7",
+  "token_usage": {
+    "input_tokens": 11,
+    "cache_creation_tokens": 47595,
+    "cache_read_tokens": 302526,
+    "output_tokens": 2143,
+    "api_call_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-28T17:26:33.616776Z",
+    "agent_lines": 8,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 8,
+    "agent_percentage": 100
+  }
+}
