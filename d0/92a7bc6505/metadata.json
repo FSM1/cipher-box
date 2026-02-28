@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "d092a7bc6505",
+  "strategy": "manual-commit",
+  "branch": "chore/ci-migration-drift-check",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/ci.yml",
+    ".planning/todos/done/2026-02-27-ci-migration-drift-check.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d0/92a7bc6505/0/metadata.json",
+      "transcript": "/d0/92a7bc6505/0/full.jsonl",
+      "context": "/d0/92a7bc6505/0/context.md",
+      "content_hash": "/d0/92a7bc6505/0/content_hash.txt",
+      "prompt": "/d0/92a7bc6505/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 17,
+    "cache_creation_tokens": 25001,
+    "cache_read_tokens": 625123,
+    "output_tokens": 3280,
+    "api_call_count": 13
+  }
+}

@@ -1,0 +1,57 @@
+Implement the following plan:
+
+# Plan: CI Migration Drift Check
+
+## Context
+
+Missing `CREATE TABLE` migrations can slip through — a developer adds/modifies an entity but forgets to generate a migration. This was the exact bug that hit in Phase 14 (PR #186). The fix: add a CI job that compares entity decorators against the migrated schema and fails if they diverge.
+
+Follows the same pattern as the existing `api-spec` job that verifies the OpenAPI client is up to date.
+
+## Changes
+
+### File: `.github/workflows/ci.yml`
+
+Add a new `migration-check` job:
+
+- **Depends on:** `changes` (skip if no src changes, same condition as `api-spec`)
+- **Services:** Postgres only (no IPFS needed — entities/migrations don't touch IPFS)
+- **Steps:**
+  1. Checkout, setup pnpm/node, install deps (same boilerplate as other jobs)
+  2. Run existing migrations: `pnpm --filter @cipherbox/api migration:run`
+  3. Run `migration:generate` to a temp file: `pnpm --filter @cipherbox/api typeorm migration:generate src/migrations/DriftCheck -d src/data-source.ts`
+  4. Check if generated file has actual schema changes (non-empty migration body means drift)
+  5. If drift detected, fail with a clear message telling the developer to generate a migration
+
+- **Position in pipeline:** Parallel with `api-spec` and `test` (needs `changes` only). Add to `build` job's `needs` list so build won't proceed if migrations are out of sync.
+- **Environment variables:** Same DB vars as `api-spec` job (DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD, DB_DATABASE, NODE_ENV=test)
+
+### Detection logic
+
+TypeORM `migration:generate` creates a file with an `up()` method. If entities match the schema, it outputs "No changes in database schema were found". If there's drift, it creates a `.ts` file. So the check is:
+
+```bash
+# migration:generate exits 0 and prints "No changes" when schema matches
+# It exits 0 and creates a file when there's drift
+# Check if the file was created
+if [ -f src/migrations/*DriftCheck*.ts ]; then
+  echo "ERROR: Entity/migration drift detected!"
+  echo "Entities define schema changes not covered by migrations."
+  echo "Run: pnpm --filter @cipherbox/api typeorm migration:generate src/migrations/<Name> -d src/data-source.ts"
+  cat src/migrations/*DriftCheck*.ts
+  exit 1
+fi
+```
+
+## Verification
+
+1. Push branch, verify the new `migration-check` job appears in CI
+2. It should pass on current codebase (no drift)
+3. To test failure mode: locally add a dummy column to an entity, run `migration:generate`, confirm it detects the drift
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.claude/projects/-Users-michael-Code-cipher-box/5ea25bc8-66ee-4cca-ba77-d67058f49f4a.jsonl
+
+---
+
+ok great lets get  pr for this up
