@@ -125,7 +125,7 @@ Plans:
 **Goal**: Validate that each desktop client (Windows, macOS, Linux) can round-trip correctly against the API and web client — proving cross-platform data integrity, encryption compatibility, and sync correctness without requiring cross-runner coordination
 **Depends on**: Phase 11 (Windows Desktop), Phase 11.1 (macOS Desktop Catch-Up), Phase 11.3 (Linux Desktop — all platform clients must exist)
 **Requirements**: E2E-01, E2E-02, E2E-03, E2E-04, E2E-05
-**Research flag**: NEEDS `/gsd:research-phase` -- Native Postgres/IPFS installation on macOS + Windows CI runners, Tauri command-level testing without full GUI, CI matrix strategy for shared test suite across 3 platforms
+**Research flag**: COMPLETE -- Native Postgres/IPFS/Redis installation patterns, ikalnytskyi/action-setup-postgres, Kubo prebuilt binaries, FUSE driver CI installs, workflow_run trigger, debug binary artifact strategy researched
 **Success Criteria** (what must be TRUE):
 
 1. Each platform CI runner (Windows, macOS, Linux) can start a local backend stack (API + Postgres + IPFS) using native installs (no Docker on macOS/Windows)
@@ -135,7 +135,13 @@ Plans:
 5. IPNS sync round-trip works: metadata published by one client is resolved correctly by another client on the same runner
 6. CI test matrix runs all 3 platforms with shared test definitions (no per-platform test duplication)
 
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+
+- [ ] 11.4-01-PLAN.md — CI debug binary artifact upload + cross-platform crypto test vector fixtures
+- [ ] 11.4-02-PLAN.md — FUSE file I/O test scripts + API round-trip test scripts (bash + PowerShell)
+- [ ] 11.4-03-PLAN.md — e2e-desktop.yml workflow: 3-platform matrix with native service installs, binary download, headless auth, test execution
 
 ### Phase 12: Core Kit Identity Provider Foundation
 
@@ -511,7 +517,7 @@ Parallel phases:
 | 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
 | 11. Windows Desktop         | M2        | 3/3            | Complete    | 2026-02-22 |
 | 11.3 Linux Desktop          | M2        | 3/3            | Complete    | 2026-02-28 |
-| 11.4 Cross-Platform E2E     | M2        | 0/TBD          | Not started | -          |
+| 11.4 Cross-Platform E2E     | M2        | 0/3            | Not started | -          |
 | 17. AWS Nitro TEE           | M2        | 0/TBD          | Not started | -          |
 | 18. Billing Infrastructure  | M3        | 0/TBD          | Not started | -          |
 | 19. Team Accounts           | M3        | 0/TBD          | Not started | -          |
