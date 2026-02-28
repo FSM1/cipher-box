@@ -48,7 +48,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 
 - [x] **Phase 11: Windows Desktop** - Windows desktop app with WinFsp virtual filesystem (Tauri + NSIS installer)
 - [x] **Phase 11.1: macOS Desktop Catch-Up** - Close all desktop gaps from Phases 12-12.6 before cross-platform expansion (INSERTED)
-- [ ] **Phase 11.3: Linux Desktop** - Linux desktop app with libfuse FUSE mount (Tauri + AppImage/deb) (INSERTED)
+- [x] **Phase 11.3: Linux Desktop** - Linux desktop app with libfuse FUSE mount (Tauri + AppImage/deb) (INSERTED)
 - [ ] **Phase 11.4: Cross-Platform E2E Testing** - Validate each desktop client against API/web with native Postgres + IPFS per runner (INSERTED)
 - [x] **Phase 12: Core Kit Identity Provider Foundation** - Replace PnP Modal SDK with MPC Core Kit, CipherBox as identity provider
 - [x] **Phase 12.1: AES-CTR Streaming Encryption** - AES-256-CTR for media files with byte-range decryption and in-browser playback (INSERTED)
@@ -115,8 +115,8 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 11.3-01-PLAN.md — Rust code: Linux cfg gates for mount options, unmount, tray, registry, platform special files + .cargo/config.toml + Cargo.toml keyring feature
-- [ ] 11.3-02-PLAN.md — tauri.conf.json Linux bundle config (deb + AppImage) + CI workflow (cargo-check-linux + build-desktop-linux jobs)
+- [x] 11.3-01-PLAN.md — Rust code: Linux cfg gates for mount options, unmount, tray, registry, platform special files + .cargo/config.toml + Cargo.toml keyring feature
+- [x] 11.3-02-PLAN.md — tauri.conf.json Linux bundle config (deb + AppImage) + CI workflow (cargo-check-linux + build-desktop-linux jobs)
 
 ### Phase 11.4: Cross-Platform E2E Testing (INSERTED)
 
@@ -508,7 +508,7 @@ Parallel phases:
 | 15.1 Client-Side Search     | M2        | 3/3            | Complete    | 2026-02-24 |
 | 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
 | 11. Windows Desktop         | M2        | 3/3            | Complete    | 2026-02-22 |
-| 11.3 Linux Desktop          | M2        | 0/2            | Not started | -          |
+| 11.3 Linux Desktop          | M2        | 2/2            | Complete    | 2026-02-28 |
 | 11.4 Cross-Platform E2E     | M2        | 0/TBD          | Not started | -          |
 | 17. AWS Nitro TEE           | M2        | 0/TBD          | Not started | -          |
 | 18. Billing Infrastructure  | M3        | 0/TBD          | Not started | -          |
