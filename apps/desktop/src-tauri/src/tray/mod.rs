@@ -42,7 +42,7 @@ pub fn build_tray(app: &AppHandle) -> Result<(), String> {
     let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../../icons/icon.ico"))
         .map_err(|e| format!("Failed to load tray icon: {}", e))?;
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../../icons/tray-icon@2x.png"))
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../../icons/tray-icon-linux@2x.png"))
         .map_err(|e| format!("Failed to load tray icon: {}", e))?;
 
     let _tray = TrayIconBuilder::with_id(TRAY_ID)
@@ -50,7 +50,7 @@ pub fn build_tray(app: &AppHandle) -> Result<(), String> {
         .show_menu_on_left_click(true)
         .tooltip("CipherBox")
         .icon(tray_icon)
-        .icon_as_template(true)
+        .icon_as_template(cfg!(target_os = "macos"))
         .on_menu_event(move |app, event| {
             handle_menu_event(app, event.id().as_ref());
         })
