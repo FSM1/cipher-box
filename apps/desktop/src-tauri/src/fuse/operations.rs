@@ -58,6 +58,7 @@ mod implementation {
     /// Returns true if this filename is a platform-specific special file
     /// that should never be created, synced, or shown in directory listings.
     fn is_platform_special(name: &str) -> bool {
+        // macOS
         name.starts_with("._")
             || name == ".DS_Store"
             || name == ".Trashes"
@@ -71,9 +72,14 @@ mod implementation {
             || name == ".ql_disablecache"
             || name == ".ql_disablethumbnails"
             || name == "DCIM"
+        // Windows
             || name == "Thumbs.db"
             || name == "desktop.ini"
-            || name == ".directory"
+        // Linux
+            || name == ".directory"             // KDE directory metadata
+            || name.starts_with(".Trash-")      // Per-user trash dirs (.Trash-1000)
+            || name == ".gvfs"                  // GNOME Virtual File System
+            || name == ".xdg-volume-info"       // XDG volume info
     }
 
     /// Detect MIME type from file extension.

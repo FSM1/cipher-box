@@ -847,10 +847,13 @@ pub async fn mount_filesystem(
         }
     }
 
-    // Prevent Spotlight from indexing the mount (creates .metadata_never_index)
-    let never_index = mount_path.join(".metadata_never_index");
-    if !never_index.exists() {
-        let _ = std::fs::File::create(&never_index);
+    // Prevent Spotlight from indexing the mount (macOS only)
+    #[cfg(target_os = "macos")]
+    {
+        let never_index = mount_path.join(".metadata_never_index");
+        if !never_index.exists() {
+            let _ = std::fs::File::create(&never_index);
+        }
     }
 
     // Create temp directory for write buffering
@@ -1044,15 +1047,24 @@ pub async fn mount_filesystem(
 
     let mount_path_clone = mount_path.clone();
 
-    // Mount options
-    // Note: AutoUnmount and DefaultPermissions removed for FUSE-T compatibility.
-    // FUSE-T is NFS-based and does not support kernel-level permission checks
-    // or fusermount3-based auto-unmount.
-    // FUSE-T mount options:
-    // - backend=smb: Use SMB instead of NFS backend. NFS has a known macOS kernel
-    //   bug where WRITE RPCs never reach the FUSE-T server for newly created files,
-    //   causing permanent process hangs. SMB backend avoids this entirely.
+    // Mount options — platform-specific.
+    // Linux: kernel FUSE supports AutoUnmount and DefaultPermission natively.
+    // macOS: FUSE-T (NFS/SMB proxy) requires custom options; AutoUnmount and
+    // DefaultPermission are not supported.
+    #[cfg(target_os = "linux")]
     let options = vec![
+        MountOption::FSName("CipherBox".to_string()),
+        MountOption::AutoUnmount,
+        MountOption::DefaultPermission,
+        MountOption::RW,
+    ];
+
+    #[cfg(target_os = "macos")]
+    let options = vec![
+        // FUSE-T mount options:
+        // - backend=smb: Use SMB instead of NFS backend. NFS has a known macOS kernel
+        //   bug where WRITE RPCs never reach the FUSE-T server for newly created files,
+        //   causing permanent process hangs. SMB backend avoids this entirely.
         MountOption::FSName("CipherBox".to_string()),
         MountOption::CUSTOM("volname=CipherBox".to_string()),
         MountOption::CUSTOM("noappledouble".to_string()),
@@ -1151,5 +1163,71 @@ pub fn unmount_filesystem() -> Result<(), String> {
                 mount_path.display()
             ))
         }
+    }
+}
+
+/// Unmount the FUSE filesystem (Linux only).
+///
+/// Tries fusermount3 -u first (preferred, no root needed), then fusermount -u
+/// (FUSE 2 compat), then umount as last resort (may need privileges).
+#[cfg(all(feature = "fuse", target_os = "linux"))]
+pub fn unmount_filesystem() -> Result<(), String> {
+    let mount_path = mount_point();
+    log::info!("Unmounting CipherBoxFS at {}", mount_path.display());
+
+    // Clean up temp directory
+    let temp_dir = std::env::temp_dir().join("cipherbox");
+    if temp_dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&temp_dir) {
+            log::warn!("Failed to clean temp directory: {}", e);
+        }
+    }
+
+    let mount_str = mount_path.to_str().unwrap();
+
+    // Try fusermount3 first (preferred, doesn't require root)
+    let status = std::process::Command::new("fusermount3")
+        .args(["-u", mount_str])
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            log::info!("FUSE filesystem unmounted via fusermount3");
+            return Ok(());
+        }
+        _ => {
+            log::info!("fusermount3 failed, trying fusermount (FUSE 2 compat)");
+        }
+    }
+
+    // Fallback to fusermount (FUSE 2 compat)
+    let status = std::process::Command::new("fusermount")
+        .args(["-u", mount_str])
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            log::info!("FUSE filesystem unmounted via fusermount");
+            return Ok(());
+        }
+        _ => {
+            log::info!("fusermount failed, trying umount (may need privileges)");
+        }
+    }
+
+    // Last resort: umount (may require privileges)
+    let status = std::process::Command::new("umount")
+        .arg(mount_str)
+        .status()
+        .map_err(|e| format!("Failed to run umount: {}", e))?;
+
+    if status.success() {
+        log::info!("FUSE filesystem unmounted via umount");
+        Ok(())
+    } else {
+        Err(format!(
+            "Failed to unmount {} — close file managers and retry",
+            mount_path.display()
+        ))
     }
 }

@@ -159,6 +159,15 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
                     log::error!("Failed to open CipherBox in Explorer: {}", e);
                 }
             }
+            #[cfg(target_os = "linux")]
+            {
+                if let Err(e) = std::process::Command::new("xdg-open")
+                    .arg(mount_point.to_str().unwrap_or_default())
+                    .spawn()
+                {
+                    log::error!("Failed to open CipherBox in file manager: {}", e);
+                }
+            }
         }
         "sync" => {
             // Trigger immediate sync via the SyncDaemon channel stored in AppState
