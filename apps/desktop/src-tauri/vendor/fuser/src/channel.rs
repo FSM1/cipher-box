@@ -65,15 +65,15 @@ impl Channel {
         {
             // Step 1: Peek at the FUSE header to get the message length.
             // The first 4 bytes of fuse_in_header is the total message length (u32).
+            // Loop until we've peeked all 4 bytes (MSG_PEEK doesn't consume data).
             let mut header_buf = [0u8; 4];
-            let mut header_read = 0usize;
-            while header_read < 4 {
+            loop {
                 let rc = unsafe {
                     libc::recv(
                         fd,
-                        header_buf.as_mut_ptr().add(header_read) as *mut c_void,
-                        (4 - header_read) as size_t,
-                        if header_read == 0 { libc::MSG_PEEK } else { 0 },
+                        header_buf.as_mut_ptr() as *mut c_void,
+                        4 as size_t,
+                        libc::MSG_PEEK,
                     )
                 };
                 if rc < 0 {
@@ -82,16 +82,24 @@ impl Channel {
                 if rc == 0 {
                     return Ok(0); // EOF
                 }
-                if header_read == 0 {
-                    // First call was MSG_PEEK — data is still in socket buffer.
-                    // We'll read it properly in step 2. Just break to parse length.
+                if rc as usize >= 4 {
                     break;
                 }
-                header_read += rc as usize;
+                // Less than 4 bytes available — data still arriving, retry.
             }
 
             let expected = u32::from_ne_bytes(header_buf) as usize;
-            let to_read = expected.min(buffer.len());
+            if expected > buffer.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "FUSE message ({} bytes) exceeds receive buffer ({} bytes)",
+                        expected,
+                        buffer.len()
+                    ),
+                ));
+            }
+            let to_read = expected;
 
             // Step 2: Read exactly `to_read` bytes (the complete FUSE message).
             let mut total = 0usize;
