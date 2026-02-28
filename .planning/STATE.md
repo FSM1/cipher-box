@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 11.3 in progress (Linux Desktop)
+**Current focus:** Milestone 2 -- Phase 11.3 complete (Linux Desktop)
 
 ## Current Position
 
 Phase: 11.3 (Linux Desktop)
-Plan: 2 of 3
-Status: Plan 03 pending (local build + UAT against staging)
-Last activity: 2026-02-28 -- Added 11.3-03-PLAN.md (local UAT)
+Plan: 3 of 3
+Status: Phase complete
+Last activity: 2026-02-28 -- Completed 11.3-03-PLAN.md (local build + UAT, 18/18 pass)
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 2/3)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 137
-- Average duration: 5.5 min
-- Total execution time: 13.5 hours
+- Total plans completed: 138
+- Average duration: 5.6 min
+- Total execution time: 15.0 hours
 
 **By Phase (M1 summary):**
 
@@ -44,11 +44,11 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 11     | 3/3   | 35 min  | 11.7 min |
 | M2 Phase 15     | 4/4   | 35 min  | 8.8 min  |
 | M2 Phase 15.1   | 3/3   | 17 min  | 5.7 min  |
-| M2 Phase 11.3   | 2/3   | 14 min  | 7.0 min  |
+| M2 Phase 11.3   | 3/3   | 104 min | 34.7 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 8m, 5m, 12m, 2m
+- Last 5 plans: 8m, 5m, 12m, 2m, 90m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -214,6 +214,9 @@ Recent decisions affecting current work:
 | Unicode file type icons in search results                              | 15.1-02   | Terminal aesthetic consistency; no additional icon library needed                                                    |
 | WinFsp resource glob left as-is for Linux builds                       | 11.3-02   | Placeholder MSI tracked in git; glob matches harmlessly on all platforms                                             |
 | ubuntu-22.04 pinned for Linux CI (not ubuntu-latest)                   | 11.3-02   | Ensures glibc 2.35 compatibility; prevents drift to 24.04                                                            |
+| AutoUnmount removed from Linux mount options                           | 11.3-03   | Requires user_allow_other in /etc/fuse.conf; explicit fusermount3 -u is more portable                                |
+| FOPEN_DIRECT_IO + write_generation for O_TRUNC race                    | 11.3-03   | Linux kernel page cache causes stale reads after truncation; DIRECT_IO bypasses cache for written files              |
+| Green tray icon for Linux, icon_as_template macOS-only                 | 11.3-03   | Black template icons invisible on dark panels; macOS tinting does not work on Linux                                  |
 
 ### Pending Todos
 
@@ -286,17 +289,17 @@ Recent decisions affecting current work:
 - Phase 12.5 (MFA Polishing, UAT & E2E): COMPLETE -- all 3 plans done (SecurityTab wiring, wallet E2E tests, UAT final verification)
 - Phase 12.6 (Per-File IPNS Metadata): COMPLETE -- all 5 plans done (crypto primitives, batch publish backend, frontend service layer, hooks & components, recovery tool + docs)
 - Phase 13 (File Versioning): COMPLETE -- all 5 plans done (version entry types, creation service, desktop FUSE, version history UI, recovery tool + build verification)
-- Phase 11.3 (Linux Desktop): IN PROGRESS -- 2/3 plans done (Rust platform support, packaging & CI), Plan 03 (local UAT) pending
+- Phase 11.3 (Linux Desktop): COMPLETE -- 3/3 plans done (Rust platform support, packaging & CI, local UAT 18/18 pass)
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
 Last session: 2026-02-28
-Stopped at: Added 11.3-03-PLAN.md (local build + UAT against staging)
+Stopped at: Completed 11.3-03-PLAN.md (Linux UAT 18/18 pass, Phase 11.3 complete)
 Resume file: None
-Next: Execute 11.3-03 — build, run, and UAT the Linux desktop app locally
+Next: All three desktop platforms validated (macOS, Windows, Linux). Ready for next phase.
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-28 after Phase 11.3 Plan 02 complete (Linux Packaging & CI)_
+_Last updated: 2026-02-28 after Phase 11.3 Plan 03 complete (Linux Local Build & UAT)_
