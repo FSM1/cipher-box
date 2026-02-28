@@ -512,6 +512,16 @@ jobs:
           tauriScript: pnpm tauri
           args: -- --no-default-features --features winfsp
 
+      - name: Build debug binary for E2E
+        run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features winfsp
+
+      - name: Upload debug desktop binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-debug-windows
+          path: apps/desktop/src-tauri/target/debug/cipherbox-desktop.exe
+          retention-days: 1
+
   build-desktop-macos:
     name: Build macOS Desktop
     needs: [changes, cargo-check-macos, typecheck]
@@ -557,6 +567,16 @@ jobs:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
           args: -- --no-default-features --features fuse
+
+      - name: Build debug binary for E2E
+        run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features fuse
+
+      - name: Upload debug desktop binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-debug-macos
+          path: apps/desktop/src-tauri/target/debug/cipherbox-desktop
+          retention-days: 1
 
   build-desktop-linux:
     name: Build Linux Desktop
@@ -613,3 +633,13 @@ jobs:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
           args: -- --no-default-features --features fuse
+
+      - name: Build debug binary for E2E
+        run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features fuse
+
+      - name: Upload debug desktop binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-debug-linux
+          path: apps/desktop/src-tauri/target/debug/cipherbox-desktop
+          retention-days: 1
