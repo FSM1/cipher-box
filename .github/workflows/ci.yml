@@ -571,6 +571,8 @@ jobs:
 
       - name: Build debug binary for E2E
         run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features fuse
+        env:
+          PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
 
       - name: Upload debug desktop binary
         uses: actions/upload-artifact@v4
