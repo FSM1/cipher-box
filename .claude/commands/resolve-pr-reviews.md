@@ -17,10 +17,13 @@ If no PR exists for the current branch, stop and inform the user.
 Use the GraphQL `reviewThreads` query to get threads with `isResolved` status:
 
 ```bash
-gh api graphql -f query='
+REPO_OWNER=$(gh repo view --json owner --jq '.owner.login')
+REPO_NAME=$(gh repo view --json name --jq '.name')
+
+gh api graphql -f query="
 {
-  repository(owner: "FSM1", name: "cipher-box") {
-    pullRequest(number: PR_NUMBER) {
+  repository(owner: \"$REPO_OWNER\", name: \"$REPO_NAME\") {
+    pullRequest(number: $PR_NUMBER) {
       reviewThreads(first: 100) {
         nodes {
           id
@@ -39,7 +42,7 @@ gh api graphql -f query='
       }
     }
   }
-}'
+}"
 ```
 
 Filter to only unresolved threads. If none, report "No unresolved review threads" and stop.
@@ -102,7 +105,7 @@ For each thread, reply explaining what was done, then resolve:
 Reply via REST (use `--field` not `-f` for `in_reply_to` — must be integer):
 
 ```bash
-gh api repos/FSM1/cipher-box/pulls/$PR_NUMBER/comments \
+gh api repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/comments \
   --field in_reply_to=COMMENT_ID \
   --raw-field body='...'
 ```
