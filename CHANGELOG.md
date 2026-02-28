@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/FSM1/cipher-box/compare/v0.19.5...v0.20.0) (2026-02-28)
+
+
+### Features
+
+* Linux desktop app with FUSE mount ([#220](https://github.com/FSM1/cipher-box/issues/220)) ([0f7cf95](https://github.com/FSM1/cipher-box/commit/0f7cf95d1ac5b672d4fb592bb78cdf723ff10f70))
+
 ## [0.19.5](https://github.com/FSM1/cipher-box/compare/v0.19.4...v0.19.5) (2026-02-27)
 
 
