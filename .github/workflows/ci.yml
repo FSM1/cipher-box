@@ -162,6 +162,73 @@ jobs:
           git diff --exit-code packages/api-client/openapi.json || (echo "OpenAPI spec is out of date. Run 'pnpm api:generate' and commit changes." && exit 1)
           git diff --exit-code apps/web/src/api/ || (echo "Generated API client is out of date. Run 'pnpm api:generate' and commit changes." && exit 1)
 
+  migration-check:
+    name: Migration Drift Check
+    needs: [changes]
+    if: |
+      github.event_name == 'push' || needs.changes.outputs.src == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cipherbox_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run existing migrations
+        run: pnpm --filter @cipherbox/api migration:run
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USERNAME: postgres
+          DB_PASSWORD: postgres
+          DB_DATABASE: cipherbox_test
+          NODE_ENV: test
+
+      - name: Check for entity/migration drift
+        working-directory: apps/api
+        run: |
+          pnpm typeorm migration:generate src/migrations/DriftCheck -d src/data-source.ts 2>&1 || true
+          if ls src/migrations/*DriftCheck*.ts 1>/dev/null 2>&1; then
+            echo "::error::Entity/migration drift detected! Entities define schema changes not covered by migrations."
+            echo ""
+            echo "Generated migration contents:"
+            cat src/migrations/*DriftCheck*.ts
+            echo ""
+            echo "Fix: Run 'pnpm --filter @cipherbox/api migration:generate src/migrations/<Name>' and commit the result."
+            exit 1
+          fi
+          echo "No entity/migration drift detected."
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USERNAME: postgres
+          DB_PASSWORD: postgres
+          DB_DATABASE: cipherbox_test
+          NODE_ENV: test
+
   test:
     name: Test
     needs: [changes, lint, typecheck]
@@ -235,7 +302,7 @@ jobs:
 
   build:
     name: Build
-    needs: [changes, lint, typecheck, api-spec, test]
+    needs: [changes, lint, typecheck, api-spec, test, migration-check]
     if: |
       !failure() && !cancelled() &&
       (github.event_name == 'push' || needs.changes.outputs.src == 'true')
