@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "63025519d048",
+  "session_id": "98814c0e-6456-4183-a41c-4c49f5dee23d",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-28T17:36:52.974821Z",
+  "branch": "feat/phase-11.4-cross-platform-e2e",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/11.4-cross-platform-e2e-testing/11.4-CONTEXT.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "deb62bdbb288",
+  "checkpoint_transcript_start": 102,
+  "transcript_lines_at_start": 102,
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 59681,
+    "cache_read_tokens": 3576156,
+    "output_tokens": 9305,
+    "api_call_count": 39
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-28T17:36:52.463818Z",
+    "agent_lines": 72,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 72,
+    "agent_percentage": 100
+  }
+}
