@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "2da25e26c658",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-11.3-linux-desktop",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/fuse/mod.rs",
+    "apps/desktop/src-tauri/src/fuse/operations.rs",
+    "apps/desktop/src-tauri/src/registry/mod.rs",
+    "apps/desktop/src-tauri/src/tray/mod.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2d/a25e26c658/0/metadata.json",
+      "transcript": "/2d/a25e26c658/0/full.jsonl",
+      "context": "/2d/a25e26c658/0/context.md",
+      "content_hash": "/2d/a25e26c658/0/content_hash.txt",
+      "prompt": "/2d/a25e26c658/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5,
+    "cache_creation_tokens": 72117,
+    "cache_read_tokens": 139616,
+    "output_tokens": 577,
+    "api_call_count": 3
+  }
+}
