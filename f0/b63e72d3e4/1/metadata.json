@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "f0b63e72d3e4",
+  "session_id": "ac8e2648-831c-44a5-b964-6bd15d8860af",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-28T15:56:06.440845Z",
+  "branch": "chore/ci-migration-drift-check",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "067e166bc14c",
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 23078,
+    "cache_read_tokens": 456381,
+    "output_tokens": 1854,
+    "api_call_count": 10
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-28T15:56:05.565452Z",
+    "agent_lines": 0,
+    "human_added": 18,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 18,
+    "agent_percentage": 0
+  }
+}
