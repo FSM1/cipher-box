@@ -11,6 +11,7 @@ mod implementation {
     use fuser::{
         FileType, Filesystem, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
         ReplyEntry, ReplyEmpty, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request,
+        consts::FOPEN_DIRECT_IO,
     };
     use std::ffi::OsStr;
     use std::sync::atomic::Ordering;
@@ -694,9 +695,10 @@ mod implementation {
             _flags: Option<u32>,
             reply: ReplyAttr,
         ) {
+            log::debug!("setattr: ino={} size={:?} fh={:?}", ino, size, fh);
             // Handle truncate if size is specified
             if let Some(new_size) = size {
-                // Truncate temp file if file handle exists
+                // Truncate temp file if file handle exists (explicit fh)
                 if let Some(fh_id) = fh {
                     if let Some(handle) = self.open_files.get_mut(&fh_id) {
                         if handle.temp_path.is_some() {
@@ -708,17 +710,44 @@ mod implementation {
                             handle.dirty = true;
                         }
                     }
+                } else {
+                    // No explicit fh — Linux kernel calls setattr(size=0) with
+                    // fh=None for O_TRUNC. Find the open writable handle for
+                    // this inode and truncate its temp file.
+                    let matching_fh: Option<u64> = self.open_files.iter()
+                        .find(|(_, h)| h.ino == ino && h.temp_path.is_some())
+                        .map(|(id, _)| *id);
+                    if let Some(fh_id) = matching_fh {
+                        if let Some(handle) = self.open_files.get_mut(&fh_id) {
+                            if let Err(e) = handle.truncate(new_size) {
+                                log::error!("Truncate (no-fh) failed for ino {}: {}", ino, e);
+                                reply.error(libc::EIO);
+                                return;
+                            }
+                            handle.dirty = true;
+                        }
+                    }
                 }
 
-                // Update inode size
+                // Update inode size and bump write_generation on truncate-to-zero
                 if let Some(inode) = self.inodes.get_mut(ino) {
                     inode.attr.size = new_size;
                     inode.attr.blocks = (new_size + 511) / 512;
                     inode.attr.mtime = SystemTime::now();
 
-                    // Also update InodeKind::File size
-                    if let InodeKind::File { size: ref mut s, .. } = inode.kind {
-                        *s = new_size;
+                    if new_size == 0 {
+                        // Truncate to zero: clear CID and bump generation to
+                        // invalidate any in-flight uploads from previous cycle.
+                        inode.write_generation += 1;
+                        if let InodeKind::File { size: ref mut s, cid: ref mut c, .. } = inode.kind {
+                            *s = 0;
+                            *c = String::new();
+                        }
+                    } else {
+                        // Non-zero truncate: just update size
+                        if let InodeKind::File { size: ref mut s, .. } = inode.kind {
+                            *s = new_size;
+                        }
                     }
 
                     reply.attr(&ttl_for_is_dir(inode.attr.is_dir), &inode.attr.to_fuse_attr(current_uid(), current_gid()));
@@ -1017,6 +1046,7 @@ mod implementation {
                 },
                 attr,
                 children: None,
+                write_generation: 0,
             };
 
             self.inodes.insert(inode);
@@ -1084,11 +1114,42 @@ mod implementation {
             let (cid, encrypted_file_key, iv, encryption_mode) = file_info.unwrap();
             let access_mode = flags & libc::O_ACCMODE;
 
+            log::debug!(
+                "open: ino={} flags=0x{:x} access_mode=0x{:x} O_TRUNC={} cid={}",
+                ino, flags, access_mode, (flags & libc::O_TRUNC) != 0, &cid
+            );
+
             if access_mode == libc::O_WRONLY || access_mode == libc::O_RDWR {
                 // Writable open: create temp file
-                // If existing file (has CID), pre-populate with decrypted content.
-                // Try content cache first (populated by readdir proactive prefetch).
-                let existing_content = if !cid.is_empty() {
+                // If O_TRUNC is set, skip pre-populating existing content and
+                // reset inode size to 0 (shell `>` redirect uses O_TRUNC).
+                let is_trunc = (flags & libc::O_TRUNC) != 0;
+
+                // Check inode size BEFORE fetching. If setattr(size=0) was
+                // called by the kernel (O_TRUNC handling with DefaultPermissions),
+                // the inode size is already 0 and we should NOT pre-populate.
+                let inode_size = self.inodes.get(ino)
+                    .map(|i| i.attr.size)
+                    .unwrap_or(0);
+
+                let existing_content = if is_trunc || inode_size == 0 {
+                    // O_TRUNC or already-truncated (via setattr): create empty temp file.
+                    // Bump write_generation so stale uploads from previous cycles are
+                    // ignored by drain_upload_completions. Clear CID to mark as pending.
+                    if let Some(inode) = self.inodes.get_mut(ino) {
+                        inode.attr.size = 0;
+                        inode.attr.blocks = 0;
+                        inode.attr.mtime = SystemTime::now();
+                        inode.write_generation += 1;
+                        if let InodeKind::File { size: ref mut s, cid: ref mut c, .. } = inode.kind {
+                            *s = 0;
+                            *c = String::new();
+                        }
+                    }
+                    None
+                } else if !cid.is_empty() {
+                    // Non-truncate writable open: pre-populate with existing content.
+                    // Try content cache first (populated by readdir proactive prefetch).
                     self.drain_content_prefetches();
                     if let Some(cached) = self.content_cache.get(&cid) {
                         Some(cached.to_vec())
@@ -1114,7 +1175,11 @@ mod implementation {
                 ) {
                     Ok(handle) => {
                         self.open_files.insert(fh, handle);
-                        reply.opened(fh, 0);
+                        // FOPEN_DIRECT_IO bypasses kernel page cache. Essential on
+                        // Linux to prevent stale reads after overwrite (kernel would
+                        // serve cached pages from the old content). On macOS, FUSE-T
+                        // handles caching via its NFS/SMB layer so this is harmless.
+                        reply.opened(fh, FOPEN_DIRECT_IO);
                     }
                     Err(e) => {
                         log::error!("Failed to create write handle: {}", e);
@@ -1184,7 +1249,7 @@ mod implementation {
 
                 let fh = self.next_fh.fetch_add(1, Ordering::SeqCst);
                 self.open_files.insert(fh, OpenFileHandle::new_read(ino));
-                reply.opened(fh, 0);
+                reply.opened(fh, FOPEN_DIRECT_IO);
             }
         }
 
@@ -1256,12 +1321,18 @@ mod implementation {
                 .map(|h| h.temp_path.is_some())
                 .unwrap_or(false);
 
+            log::debug!(
+                "read: ino={} fh={} offset={} size={} has_temp={}",
+                ino, fh, offset, size, has_temp
+            );
+
             if has_temp {
                 // Read from temp file
                 match self.open_files.get(&fh) {
                     Some(handle) => {
                         match handle.read_at(offset, size) {
                             Ok(data) => {
+                                log::debug!("read: temp file returned {} bytes", data.len());
                                 reply.data(&data);
                                 return;
                             }
@@ -1623,6 +1694,11 @@ mod implementation {
                         // Cache plaintext so reads work before upload completes
                         self.pending_content.insert(ino, plaintext);
 
+                        // Capture write generation for stale upload detection
+                        let write_gen = self.inodes.get(ino)
+                            .map(|i| i.write_generation)
+                            .unwrap_or(0);
+
                         // Get parent inode + folder key for metadata publish queue and FileMetadata encryption
                         let parent_ino = self.inodes.get(ino)
                             .map(|i| i.parent_ino)
@@ -1672,6 +1748,7 @@ mod implementation {
                                     parent_ino,
                                     old_file_cid,
                                     pruned_cids,
+                                    write_generation: write_gen,
                                 });
 
                                 // 3. Publish per-file FileMetadata to file's own IPNS record
@@ -1898,6 +1975,7 @@ mod implementation {
                     },
                     attr,
                     children: Some(vec![]),
+                    write_generation: 0,
                 };
 
                 self.inodes.insert(inode);

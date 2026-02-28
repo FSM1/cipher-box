@@ -90,6 +90,9 @@ pub struct UploadComplete {
     pub old_file_cid: Option<String>,
     /// CIDs of pruned versions (exceeded MAX_VERSIONS_PER_FILE) to unpin.
     pub pruned_cids: Vec<String>,
+    /// Write generation at the time this upload was started.
+    /// Used to skip stale uploads from previous open/write/release cycles.
+    pub write_generation: u64,
 }
 
 /// Entry in the debounced publish queue.
@@ -582,12 +585,19 @@ impl CipherBoxFS {
                 result.ino,
                 result.new_cid
             );
-            // Update inode CID from empty to real
+            // Update inode CID — only if write_generation matches.
+            // This prevents stale uploads from overwriting newer content state
+            // (e.g., TC01 upload completing after TC02 has truncated+rewritten).
             if let Some(inode) = self.inodes.get_mut(result.ino) {
-                if let inode::InodeKind::File { ref mut cid, .. } = inode.kind {
-                    if cid.is_empty() {
+                if inode.write_generation == result.write_generation {
+                    if let inode::InodeKind::File { ref mut cid, .. } = inode.kind {
                         *cid = result.new_cid.clone();
                     }
+                } else {
+                    log::debug!(
+                        "Skipping stale upload for ino {} (gen {} != current {})",
+                        result.ino, result.write_generation, inode.write_generation
+                    );
                 }
             }
             // Move plaintext from pending_content to content_cache
