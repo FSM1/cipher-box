@@ -1526,6 +1526,7 @@ pub(crate) mod implementation {
                                         parent_ino,
                                         old_file_cid,
                                         pruned_cids,
+                                        write_generation: 0, // TODO: pass actual generation for Windows
                                     },
                                 );
 
@@ -1932,6 +1933,7 @@ pub(crate) mod implementation {
                         },
                         attr: attr.clone(),
                         children: Some(vec![]),
+                        write_generation: 0,
                     };
 
                     fs.inodes.insert(inode);
@@ -2228,6 +2230,7 @@ pub(crate) mod implementation {
                     },
                     attr: attr.clone(),
                     children: None,
+                    write_generation: 0,
                 };
 
                 fs.inodes.insert(inode);

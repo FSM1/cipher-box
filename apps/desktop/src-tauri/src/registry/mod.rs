@@ -54,7 +54,7 @@ pub async fn register_device(
         device_id: device_id.clone(),
         public_key: hex::encode(public_key),
         name: get_device_name(),
-        platform: DevicePlatform::Macos,
+        platform: get_device_platform(),
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         device_model: get_device_model(),
         ip_hash: String::new(), // Not tracked for desktop
@@ -202,12 +202,31 @@ fn get_device_name() -> String {
         .unwrap_or_else(|_| "CipherBox Desktop".to_string())
 }
 
-/// Get a device model string.
+/// Get the device platform enum for the current OS.
+fn get_device_platform() -> DevicePlatform {
+    #[cfg(target_os = "macos")]
+    { DevicePlatform::Macos }
+    #[cfg(target_os = "windows")]
+    { DevicePlatform::Windows }
+    #[cfg(target_os = "linux")]
+    { DevicePlatform::Linux }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    { DevicePlatform::Web }
+}
+
+/// Get a device model string for the current platform.
 ///
-/// Returns a generic "macOS Desktop" string. Could be enhanced with
+/// Returns a platform-specific generic string. Could be enhanced with
 /// `sysinfo` crate for specific model names (e.g., "MacBook Pro").
 fn get_device_model() -> String {
-    "macOS Desktop".to_string()
+    #[cfg(target_os = "macos")]
+    { "macOS Desktop".to_string() }
+    #[cfg(target_os = "windows")]
+    { "Windows Desktop".to_string() }
+    #[cfg(target_os = "linux")]
+    { "Linux Desktop".to_string() }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    { "Desktop".to_string() }
 }
 
 /// Get the current time in milliseconds since Unix epoch.
@@ -336,7 +355,12 @@ mod tests {
     #[test]
     fn test_get_device_model() {
         let model = get_device_model();
+        #[cfg(target_os = "macos")]
         assert_eq!(model, "macOS Desktop");
+        #[cfg(target_os = "windows")]
+        assert_eq!(model, "Windows Desktop");
+        #[cfg(target_os = "linux")]
+        assert_eq!(model, "Linux Desktop");
     }
 
     #[test]

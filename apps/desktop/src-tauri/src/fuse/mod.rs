@@ -90,6 +90,9 @@ pub struct UploadComplete {
     pub old_file_cid: Option<String>,
     /// CIDs of pruned versions (exceeded MAX_VERSIONS_PER_FILE) to unpin.
     pub pruned_cids: Vec<String>,
+    /// Write generation at the time this upload was started.
+    /// Used to skip stale uploads from previous open/write/release cycles.
+    pub write_generation: u64,
 }
 
 /// Entry in the debounced publish queue.
@@ -582,12 +585,19 @@ impl CipherBoxFS {
                 result.ino,
                 result.new_cid
             );
-            // Update inode CID from empty to real
+            // Update inode CID — only if write_generation matches.
+            // This prevents stale uploads from overwriting newer content state
+            // (e.g., TC01 upload completing after TC02 has truncated+rewritten).
             if let Some(inode) = self.inodes.get_mut(result.ino) {
-                if let inode::InodeKind::File { ref mut cid, .. } = inode.kind {
-                    if cid.is_empty() {
+                if inode.write_generation == result.write_generation {
+                    if let inode::InodeKind::File { ref mut cid, .. } = inode.kind {
                         *cid = result.new_cid.clone();
                     }
+                } else {
+                    log::debug!(
+                        "Skipping stale upload for ino {} (gen {} != current {})",
+                        result.ino, result.write_generation, inode.write_generation
+                    );
                 }
             }
             // Move plaintext from pending_content to content_cache
@@ -847,10 +857,13 @@ pub async fn mount_filesystem(
         }
     }
 
-    // Prevent Spotlight from indexing the mount (creates .metadata_never_index)
-    let never_index = mount_path.join(".metadata_never_index");
-    if !never_index.exists() {
-        let _ = std::fs::File::create(&never_index);
+    // Prevent Spotlight from indexing the mount (macOS only)
+    #[cfg(target_os = "macos")]
+    {
+        let never_index = mount_path.join(".metadata_never_index");
+        if !never_index.exists() {
+            let _ = std::fs::File::create(&never_index);
+        }
     }
 
     // Create temp directory for write buffering
@@ -1044,15 +1057,27 @@ pub async fn mount_filesystem(
 
     let mount_path_clone = mount_path.clone();
 
-    // Mount options
-    // Note: AutoUnmount and DefaultPermissions removed for FUSE-T compatibility.
-    // FUSE-T is NFS-based and does not support kernel-level permission checks
-    // or fusermount3-based auto-unmount.
-    // FUSE-T mount options:
-    // - backend=smb: Use SMB instead of NFS backend. NFS has a known macOS kernel
-    //   bug where WRITE RPCs never reach the FUSE-T server for newly created files,
-    //   causing permanent process hangs. SMB backend avoids this entirely.
+    // Mount options — platform-specific.
+    // Linux: kernel FUSE supports AutoUnmount and DefaultPermissions natively.
+    // macOS: FUSE-T (NFS/SMB proxy) requires custom options; AutoUnmount and
+    // DefaultPermissions are not supported.
+    // Linux: kernel FUSE with libfuse3. We skip AutoUnmount because it
+    // requires allow_other/allow_root, which in turn needs user_allow_other
+    // in /etc/fuse.conf — an extra config step we don't want to impose.
+    // Instead, unmount_filesystem() calls fusermount3 -u directly.
+    #[cfg(target_os = "linux")]
     let options = vec![
+        MountOption::FSName("CipherBox".to_string()),
+        MountOption::DefaultPermissions,
+        MountOption::RW,
+    ];
+
+    #[cfg(target_os = "macos")]
+    let options = vec![
+        // FUSE-T mount options:
+        // - backend=smb: Use SMB instead of NFS backend. NFS has a known macOS kernel
+        //   bug where WRITE RPCs never reach the FUSE-T server for newly created files,
+        //   causing permanent process hangs. SMB backend avoids this entirely.
         MountOption::FSName("CipherBox".to_string()),
         MountOption::CUSTOM("volname=CipherBox".to_string()),
         MountOption::CUSTOM("noappledouble".to_string()),
@@ -1151,5 +1176,71 @@ pub fn unmount_filesystem() -> Result<(), String> {
                 mount_path.display()
             ))
         }
+    }
+}
+
+/// Unmount the FUSE filesystem (Linux only).
+///
+/// Tries fusermount3 -u first (preferred, no root needed), then fusermount -u
+/// (FUSE 2 compat), then umount as last resort (may need privileges).
+#[cfg(all(feature = "fuse", target_os = "linux"))]
+pub fn unmount_filesystem() -> Result<(), String> {
+    let mount_path = mount_point();
+    log::info!("Unmounting CipherBoxFS at {}", mount_path.display());
+
+    // Clean up temp directory
+    let temp_dir = std::env::temp_dir().join("cipherbox");
+    if temp_dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&temp_dir) {
+            log::warn!("Failed to clean temp directory: {}", e);
+        }
+    }
+
+    let mount_str = mount_path.to_str().unwrap();
+
+    // Try fusermount3 first (preferred, doesn't require root)
+    let status = std::process::Command::new("fusermount3")
+        .args(["-u", mount_str])
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            log::info!("FUSE filesystem unmounted via fusermount3");
+            return Ok(());
+        }
+        _ => {
+            log::info!("fusermount3 failed, trying fusermount (FUSE 2 compat)");
+        }
+    }
+
+    // Fallback to fusermount (FUSE 2 compat)
+    let status = std::process::Command::new("fusermount")
+        .args(["-u", mount_str])
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            log::info!("FUSE filesystem unmounted via fusermount");
+            return Ok(());
+        }
+        _ => {
+            log::info!("fusermount failed, trying umount (may need privileges)");
+        }
+    }
+
+    // Last resort: umount (may require privileges)
+    let status = std::process::Command::new("umount")
+        .arg(mount_str)
+        .status()
+        .map_err(|e| format!("Failed to run umount: {}", e))?;
+
+    if status.success() {
+        log::info!("FUSE filesystem unmounted via umount");
+        Ok(())
+    } else {
+        Err(format!(
+            "Failed to unmount {} — close file managers and retry",
+            mount_path.display()
+        ))
     }
 }

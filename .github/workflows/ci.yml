@@ -417,6 +417,45 @@ jobs:
         working-directory: apps/desktop/src-tauri
         run: cargo check --no-default-features --features fuse
 
+  cargo-check-linux:
+    name: Cargo Check (Linux)
+    needs: [changes, lint]
+    if: |
+      !failure() && !cancelled() &&
+      (github.event_name == 'push' || needs.changes.outputs.desktop == 'true')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libxdo-dev \
+            libfuse3-dev \
+            pkg-config \
+            build-essential
+
+      - name: Install Rust toolchain
+        run: rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: linux-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: linux-cargo-
+
+      - name: Cargo check with fuse feature
+        working-directory: apps/desktop/src-tauri
+        run: cargo check --no-default-features --features fuse
+
   build-desktop-windows:
     name: Build Windows Desktop
     needs: [changes, cargo-check-windows, typecheck]
@@ -497,6 +536,62 @@ jobs:
             apps/desktop/src-tauri/target
           key: macos-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: macos-cargo-
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build crypto package
+        run: pnpm --filter @cipherbox/crypto build
+
+      - uses: tauri-apps/tauri-action@v0
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          args: -- --no-default-features --features fuse
+
+  build-desktop-linux:
+    name: Build Linux Desktop
+    needs: [changes, cargo-check-linux, typecheck]
+    if: |
+      !failure() && !cancelled() &&
+      (github.event_name == 'push' || needs.changes.outputs.desktop == 'true')
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libxdo-dev \
+            libfuse3-dev \
+            pkg-config \
+            build-essential
+
+      - name: Install Rust toolchain
+        run: rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: linux-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: linux-cargo-
 
       - uses: pnpm/action-setup@v4
         with:
