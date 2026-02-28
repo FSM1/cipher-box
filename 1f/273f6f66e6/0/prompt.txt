@@ -1,0 +1,1254 @@
+Unknown skill: resolve-pr-reviews
+
+---
+
+<bash-input>git add --all</bash-input>
+
+---
+
+<bash-stdout></bash-stdout><bash-stderr></bash-stderr>
+
+---
+
+<bash-input>git commit -m "move to correct folder for skills"</bash-input>
+
+---
+
+<bash-stdout>[STARTED] Backing up original state...
+[COMPLETED] Backed up original state in git stash (7ea42f4e5)
+[STARTED] Running tasks for staged files...
+[STARTED] package.json — 1 file
+[STARTED] *.{ts,tsx,js,jsx} — 0 files
+[STARTED] *.{json,yml,yaml} — 0 files
+[STARTED] *.md — 1 file
+[SKIPPED] *.{ts,tsx,js,jsx} — no files
+[SKIPPED] *.{json,yml,yaml} — no files
+[STARTED] markdownlint --fix
+[COMPLETED] markdownlint --fix
+[STARTED] prettier --write
+[COMPLETED] prettier --write
+[COMPLETED] *.md — 1 file
+[COMPLETED] package.json — 1 file
+[COMPLETED] Running tasks for staged files...
+[STARTED] Applying modifications from tasks...
+[COMPLETED] Applying modifications from tasks...
+[STARTED] Cleaning up temporary files...
+[COMPLETED] Cleaning up temporary files...
+[chore/add-pr-review-skill 62064bf73] move to correct folder for skills
+ 1 file changed, 0 insertions(+), 0 deletions(-)
+ rename .claude/{skills => commands}/resolve-pr-reviews.md (100%)</bash-stdout><bash-stderr></bash-stderr>
+
+---
+
+git push
+
+---
+
+# Resolve PR Review Comments
+
+Resolve all open review comments on the current PR from any automated reviewer (CodeRabbit, GitHub Copilot, etc.) or human reviewers.
+
+## Workflow
+
+### 1. Identify the PR
+
+```bash
+PR_NUMBER=$(gh pr view --json number --jq '.number')
+```
+
+If no PR exists for the current branch, stop and inform the user.
+
+### 2. Fetch all unresolved review threads
+
+Use the GraphQL `reviewThreads` query to get threads with `isResolved` status:
+
+```bash
+gh api graphql -f query='
+{
+  repository(owner: "FSM1", name: "cipher-box") {
+    pullRequest(number: PR_NUMBER) {
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          comments(first: 10) {
+            nodes {
+              id
+              author { login }
+              body
+              path
+              line
+              createdAt
+            }
+          }
+        }
+      }
+    }
+  }
+}'
+```
+
+Filter to only unresolved threads. If none, report "No unresolved review threads" and stop.
+
+### 3. Triage each comment
+
+For each unresolved thread, read the comment and the referenced code. Categorize as:
+
+- **Valid fix needed** — the comment identifies a real bug, security issue, or meaningful improvement
+- **Already addressed** — the issue was fixed in a later commit on this branch
+- **Not applicable** — the suggestion doesn't apply (explain why)
+
+### 4. Implement fixes
+
+For all "valid fix needed" comments:
+
+1. Read the referenced file and understand the context
+2. Implement the fix
+3. Track which thread the fix addresses
+
+Do NOT:
+
+- Make unrelated changes or refactors
+- Add features beyond what the comment requests
+- Increase timeouts or add retries as a first approach — fix root causes
+
+### 5. Run tests locally
+
+After ALL fixes are implemented:
+
+```bash
+# Type check
+pnpm typecheck
+
+# Run relevant unit tests
+pnpm test
+
+# If E2E-relevant changes were made, run E2E tests too
+cd tests/e2e && pnpm exec playwright test
+```
+
+Do NOT proceed to commit until tests pass. If tests fail, fix the failures first.
+
+### 6. Commit and push
+
+```bash
+git add <specific-files>
+git commit -m "fix: address PR review comments"
+git push
+```
+
+### 7. Reply to and resolve each thread
+
+For each thread, reply explaining what was done, then resolve:
+
+- **Fixed comments**: Reply with what was changed and where, then resolve
+- **Already addressed**: Reply explaining which commit addressed it, then resolve
+- **Not applicable**: Reply with clear reasoning for not making changes, then resolve
+
+Reply via REST (use `--field` not `-f` for `in_reply_to` — must be integer):
+
+```bash
+gh api repos/FSM1/cipher-box/pulls/$PR_NUMBER/comments \
+  --field in_reply_to=COMMENT_ID \
+  --raw-field body='...'
+```
+
+Resolve via GraphQL (can batch multiple):
+
+```bash
+gh api graphql -f query='
+mutation {
+  resolveReviewThread(input: {threadId: "THREAD_ID"}) {
+    thread { isResolved }
+  }
+}'
+```
+
+### 8. Report summary
+
+Print a summary table:
+
+- Thread count resolved
+- Fixes made (with file:line references)
+- Comments marked as already addressed or not applicable
+
+---
+
+<objective>
+Check project progress, summarize recent work and what's ahead, then intelligently route to the next action - either executing an existing plan or creating the next one.
+
+Provides situational awareness before continuing work.
+</objective>
+
+
+<process>
+
+<step name="verify">
+**Verify planning structure exists:**
+
+If no `.planning/` directory:
+
+```
+No planning structure found.
+
+Run /gsd:new-project to start a new project.
+```
+
+Exit.
+
+If missing STATE.md: suggest `/gsd:new-project`.
+
+**If ROADMAP.md missing but PROJECT.md exists:**
+
+This means a milestone was completed and archived. Go to **Route F** (between milestones).
+
+If missing both ROADMAP.md and PROJECT.md: suggest `/gsd:new-project`.
+</step>
+
+<step name="load">
+**Load full project context:**
+
+- Read `.planning/STATE.md` for living memory (position, decisions, issues)
+- Read `.planning/ROADMAP.md` for phase structure and objectives
+- Read `.planning/PROJECT.md` for current state (What This Is, Core Value, Requirements)
+  </step>
+
+<step name="recent">
+**Gather recent work context:**
+
+- Find the 2-3 most recent SUMMARY.md files
+- Extract from each: what was accomplished, key decisions, any issues logged
+- This shows "what we've been working on"
+  </step>
+
+<step name="position">
+**Parse current position:**
+
+- From STATE.md: current phase, plan number, status
+- Calculate: total plans, completed plans, remaining plans
+- Note any blockers or concerns
+- Check for CONTEXT.md: For phases without PLAN.md files, check if `{phase}-CONTEXT.md` exists in phase directory
+- Count pending todos: `ls .planning/todos/pending/*.md 2>/dev/null | wc -l`
+- Check for active debug sessions: `ls .planning/debug/*.md 2>/dev/null | grep -v resolved | wc -l`
+  </step>
+
+<step name="report">
+**Present rich status report:**
+
+```
+# [Project Name]
+
+**Progress:** [████████░░] 8/10 plans complete
+
+## Recent Work
+- [Phase X, Plan Y]: [what was accomplished - 1 line]
+- [Phase X, Plan Z]: [what was accomplished - 1 line]
+
+## Current Position
+Phase [N] of [total]: [phase-name]
+Plan [M] of [phase-total]: [status]
+CONTEXT: [✓ if CONTEXT.md exists | - if not]
+
+## Key Decisions Made
+- [decision 1 from STATE.md]
+- [decision 2]
+
+## Blockers/Concerns
+- [any blockers or concerns from STATE.md]
+
+## Pending Todos
+- [count] pending — /gsd:check-todos to review
+
+## Active Debug Sessions
+- [count] active — /gsd:debug to continue
+(Only show this section if count > 0)
+
+## What's Next
+[Next phase/plan objective from ROADMAP]
+```
+
+</step>
+
+<step name="route">
+**Determine next action based on verified counts.**
+
+**Step 1: Count plans, summaries, and issues in current phase**
+
+List files in the current phase directory:
+
+```bash
+ls -1 .planning/phases/[current-phase-dir]/*-PLAN.md 2>/dev/null | wc -l
+ls -1 .planning/phases/[current-phase-dir]/*-SUMMARY.md 2>/dev/null | wc -l
+ls -1 .planning/phases/[current-phase-dir]/*-UAT.md 2>/dev/null | wc -l
+```
+
+State: "This phase has {X} plans, {Y} summaries."
+
+**Step 1.5: Check for unaddressed UAT gaps**
+
+Check for UAT.md files with status "diagnosed" (has gaps needing fixes).
+
+```bash
+# Check for diagnosed UAT with gaps
+grep -l "status: diagnosed" .planning/phases/[current-phase-dir]/*-UAT.md 2>/dev/null
+```
+
+Track:
+- `uat_with_gaps`: UAT.md files with status "diagnosed" (gaps need fixing)
+
+**Step 2: Route based on counts**
+
+| Condition | Meaning | Action |
+|-----------|---------|--------|
+| uat_with_gaps > 0 | UAT gaps need fix plans | Go to **Route E** |
+| summaries < plans | Unexecuted plans exist | Go to **Route A** |
+| summaries = plans AND plans > 0 | Phase complete | Go to Step 3 |
+| plans = 0 | Phase not yet planned | Go to **Route B** |
+
+---
+
+**Route A: Unexecuted plan exists**
+
+Find the first PLAN.md without matching SUMMARY.md.
+Read its `<objective>` section.
+
+```
+---
+
+## ▶ Next Up
+
+**{phase}-{plan}: [Plan Name]** — [objective summary from PLAN.md]
+
+`/gsd:execute-phase {phase}`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+```
+
+---
+
+**Route B: Phase needs planning**
+
+Check if `{phase}-CONTEXT.md` exists in phase directory.
+
+**If CONTEXT.md exists:**
+
+```
+---
+
+## ▶ Next Up
+
+**Phase {N}: {Name}** — {Goal from ROADMAP.md}
+<sub>✓ Context gathered, ready to plan</sub>
+
+`/gsd:plan-phase {phase-number}`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+```
+
+**If CONTEXT.md does NOT exist:**
+
+```
+---
+
+## ▶ Next Up
+
+**Phase {N}: {Name}** — {Goal from ROADMAP.md}
+
+`/gsd:discuss-phase {phase}` — gather context and clarify approach
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:plan-phase {phase}` — skip discussion, plan directly
+- `/gsd:list-phase-assumptions {phase}` — see Claude's assumptions
+
+---
+```
+
+---
+
+**Route E: UAT gaps need fix plans**
+
+UAT.md exists with gaps (diagnosed issues). User needs to plan fixes.
+
+```
+---
+
+## ⚠ UAT Gaps Found
+
+**{phase}-UAT.md** has {N} gaps requiring fixes.
+
+`/gsd:plan-phase {phase} --gaps`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:execute-phase {phase}` — execute phase plans
+- `/gsd:verify-work {phase}` — run more UAT testing
+
+---
+```
+
+---
+
+**Step 3: Check milestone status (only when phase complete)**
+
+Read ROADMAP.md and identify:
+1. Current phase number
+2. All phase numbers in the current milestone section
+
+Count total phases and identify the highest phase number.
+
+State: "Current phase is {X}. Milestone has {N} phases (highest: {Y})."
+
+**Route based on milestone status:**
+
+| Condition | Meaning | Action |
+|-----------|---------|--------|
+| current phase < highest phase | More phases remain | Go to **Route C** |
+| current phase = highest phase | Milestone complete | Go to **Route D** |
+
+---
+
+**Route C: Phase complete, more phases remain**
+
+Read ROADMAP.md to get the next phase's name and goal.
+
+```
+---
+
+## ✓ Phase {Z} Complete
+
+## ▶ Next Up
+
+**Phase {Z+1}: {Name}** — {Goal from ROADMAP.md}
+
+`/gsd:discuss-phase {Z+1}` — gather context and clarify approach
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:plan-phase {Z+1}` — skip discussion, plan directly
+- `/gsd:verify-work {Z}` — user acceptance test before continuing
+
+---
+```
+
+---
+
+**Route D: Milestone complete**
+
+```
+---
+
+## 🎉 Milestone Complete
+
+All {N} phases finished!
+
+## ▶ Next Up
+
+**Complete Milestone** — archive and prepare for next
+
+`/gsd:complete-milestone`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:verify-work` — user acceptance test before completing milestone
+
+---
+```
+
+---
+
+**Route F: Between milestones (ROADMAP.md missing, PROJECT.md exists)**
+
+A milestone was completed and archived. Ready to start the next milestone cycle.
+
+Read MILESTONES.md to find the last completed milestone version.
+
+```
+---
+
+## ✓ Milestone v{X.Y} Complete
+
+Ready to plan the next milestone.
+
+## ▶ Next Up
+
+**Start Next Milestone** — questioning → research → requirements → roadmap
+
+`/gsd:new-milestone`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+```
+
+</step>
+
+<step name="edge_cases">
+**Handle edge cases:**
+
+- Phase complete but next phase not planned → offer `/gsd:plan-phase [next]`
+- All work complete → offer milestone completion
+- Blockers present → highlight before offering to continue
+- Handoff file exists → mention it, offer `/gsd:resume-work`
+  </step>
+
+</process>
+
+<success_criteria>
+
+- [ ] Rich context provided (recent work, decisions, issues)
+- [ ] Current position clear with visual progress
+- [ ] What's next clearly explained
+- [ ] Smart routing: /gsd:execute-phase if plans exist, /gsd:plan-phase if not
+- [ ] User confirms before any action
+- [ ] Seamless handoff to appropriate gsd command
+      </success_criteria>
+
+---
+
+/clear
+
+---
+
+/gsd:discuss-phase 11.4
+
+---
+
+<objective>
+Extract implementation decisions that downstream agents need — researcher and planner will use CONTEXT.md to know what to investigate and what choices are locked.
+
+**How it works:**
+
+1. Analyze the phase to identify gray areas (UI, UX, behavior, etc.)
+2. **For UI phases:** Generate design mockups via Pencil MCP to visualize options
+3. Present gray areas — user selects which to discuss
+4. Deep-dive each selected area until satisfied
+5. Create CONTEXT.md with decisions that guide research and planning
+
+**Output:** `{phase}-CONTEXT.md` — decisions clear enough that downstream agents can act without asking the user again
+
+**For UI phases, also outputs:** Design mockups in Pencil file (in "Draft: Phase X" frame)
+</objective>
+
+<execution_context>
+@./.claude/get-shit-done/workflows/discuss-phase.md
+@./.claude/get-shit-done/templates/context.md
+</execution_context>
+
+<context>
+Phase number: 11.4 (required)
+
+**Load project state:**
+@.planning/STATE.md
+
+**Load roadmap:**
+@.planning/ROADMAP.md
+</context>
+
+<process>
+1. Validate phase number (error if missing or not in roadmap)
+2. **Create phase branch** — Create `feat/phase-{number}-{slug}` branch for all phase work
+3. Check if CONTEXT.md exists (offer update/view/skip if yes)
+4. **Analyze phase** — Identify domain and generate phase-specific gray areas
+5. **Detect UI phase** — If phase involves UI, prepare for design mockup generation
+6. **Present gray areas** — Multi-select: which to discuss? (NO skip option)
+7. **Deep-dive each area** — 4 questions per area, then offer more/next
+8. **For UI phases: Generate design mockups** — Create visual options in Pencil for user to choose
+9. **Write CONTEXT.md** — Sections match areas discussed, include approved designs
+10. Offer next steps (research or plan)
+
+**CRITICAL: Scope guardrail**
+
+- Phase boundary from ROADMAP.md is FIXED
+- Discussion clarifies HOW to implement, not WHETHER to add more
+- If user suggests new capabilities: "That's its own phase. I'll note it for later."
+- Capture deferred ideas — don't lose them, don't act on them
+
+**Domain-aware gray areas:**
+Gray areas depend on what's being built. Analyze the phase goal:
+
+- Something users SEE → layout, density, interactions, states
+- Something users CALL → responses, errors, auth, versioning
+- Something users RUN → output format, flags, modes, error handling
+- Something users READ → structure, tone, depth, flow
+- Something being ORGANIZED → criteria, grouping, naming, exceptions
+
+Generate 3-4 **phase-specific** gray areas, not generic categories.
+
+**UI Phase Detection:**
+Check if phase involves UI work:
+
+- Phase name contains: "UI", "restyle", "design", "layout", "component", "page", "view"
+- Phase goal mentions: visual, styling, interface, appearance, frontend, display
+- Phase involves: user-facing changes, screens, forms, dialogs
+
+If UI phase detected, enable Pencil MCP design ideation workflow.
+
+**Probing depth:**
+
+- Ask 4 questions per area before checking
+- "More questions about [area], or move to next?"
+- If more → ask 4 more, check again
+- After all areas → "Ready to create context?"
+- **For UI phases:** "Would you like me to generate design mockups based on our discussion?"
+
+**Do NOT ask about (Claude handles these):**
+
+- Technical implementation
+- Architecture choices
+- Performance concerns
+- Scope expansion
+  </process>
+
+<success_criteria>
+
+- Gray areas identified through intelligent analysis
+- User chose which areas to discuss
+- Each selected area explored until satisfied
+- Scope creep redirected to deferred ideas
+- CONTEXT.md captures decisions, not vague vision
+- User knows next steps
+  </success_criteria>
+
+---
+
+sorry can we redo that whole process - not sure why all the questions were skipped
+
+---
+
+/clear
+
+---
+
+/gsd:plan-phase 11.4
+
+---
+
+<execution_context>
+@./.claude/get-shit-done/references/ui-brand.md
+</execution_context>
+
+<objective>
+Create executable phase prompts (PLAN.md files) for a roadmap phase with integrated research and verification.
+
+**Default flow:** Research (if needed) → Plan → Verify → Done
+
+**Orchestrator role:** Parse arguments, validate phase, research domain (unless skipped or exists), spawn gsd-planner agent, verify plans with gsd-plan-checker, iterate until plans pass or max iterations reached, present results.
+
+**Why subagents:** Research and planning burn context fast. Verification uses fresh context. User sees the flow between agents in main context.
+</objective>
+
+<context>
+Phase number: 11.4 (optional - auto-detects next unplanned phase if not provided)
+
+**Flags:**
+- `--research` — Force re-research even if RESEARCH.md exists
+- `--skip-research` — Skip research entirely, go straight to planning
+- `--gaps` — Gap closure mode (reads VERIFICATION.md, skips research)
+- `--skip-verify` — Skip planner → checker verification loop
+
+Normalize phase input in step 2 before any directory lookups.
+</context>
+
+<process>
+
+## 1. Validate Environment
+
+```bash
+ls .planning/ 2>/dev/null
+```
+
+**If not found:** Error - user should run `/gsd:new-project` first.
+
+## 2. Parse and Normalize Arguments
+
+Extract from 11.4:
+
+- Phase number (integer or decimal like `2.1`)
+- `--research` flag to force re-research
+- `--skip-research` flag to skip research
+- `--gaps` flag for gap closure mode
+- `--skip-verify` flag to bypass verification loop
+
+**If no phase number:** Detect next unplanned phase from roadmap.
+
+**Normalize phase to zero-padded format:**
+
+```bash
+# Normalize phase number (8 → 08, but preserve decimals like 2.1 → 02.1)
+if [[ "$PHASE" =~ ^[0-9]+$ ]]; then
+  PHASE=$(printf "%02d" "$PHASE")
+elif [[ "$PHASE" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
+  PHASE=$(printf "%02d.%s" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}")
+fi
+```
+
+**Check for existing research and plans:**
+
+```bash
+ls .planning/phases/${PHASE}-*/*-RESEARCH.md 2>/dev/null
+ls .planning/phases/${PHASE}-*/*-PLAN.md 2>/dev/null
+```
+
+## 3. Validate Phase
+
+```bash
+grep -A5 "Phase ${PHASE}:" .planning/ROADMAP.md 2>/dev/null
+```
+
+**If not found:** Error with available phases. **If found:** Extract phase number, name, description.
+
+## 4. Ensure Phase Directory Exists
+
+```bash
+# PHASE is already normalized (08, 02.1, etc.) from step 2
+PHASE_DIR=$(ls -d .planning/phases/${PHASE}-* 2>/dev/null | head -1)
+if [ -z "$PHASE_DIR" ]; then
+  # Create phase directory from roadmap name
+  PHASE_NAME=$(grep "Phase ${PHASE}:" .planning/ROADMAP.md | sed 's/.*Phase [0-9]*: //' | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+  mkdir -p ".planning/phases/${PHASE}-${PHASE_NAME}"
+  PHASE_DIR=".planning/phases/${PHASE}-${PHASE_NAME}"
+fi
+```
+
+## 5. Handle Research
+
+**If `--gaps` flag:** Skip research (gap closure uses VERIFICATION.md instead).
+
+**If `--skip-research` flag:** Skip to step 6.
+
+**Otherwise:**
+
+Check for existing research:
+
+```bash
+ls "${PHASE_DIR}"/*-RESEARCH.md 2>/dev/null
+```
+
+**If RESEARCH.md exists AND `--research` flag NOT set:**
+- Display: `Using existing research: ${PHASE_DIR}/${PHASE}-RESEARCH.md`
+- Skip to step 6
+
+**If RESEARCH.md missing OR `--research` flag set:**
+
+Display stage banner:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► RESEARCHING PHASE {X}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+◆ Spawning researcher...
+```
+
+Proceed to spawn researcher
+
+### Spawn gsd-phase-researcher
+
+Gather context for research prompt:
+
+```bash
+# Get phase description from roadmap
+PHASE_DESC=$(grep -A3 "Phase ${PHASE}:" .planning/ROADMAP.md)
+
+# Get requirements if they exist
+REQUIREMENTS=$(cat .planning/REQUIREMENTS.md 2>/dev/null | grep -A100 "## Requirements" | head -50)
+
+# Get prior decisions from STATE.md
+DECISIONS=$(grep -A20 "### Decisions Made" .planning/STATE.md 2>/dev/null)
+
+# Get phase context if exists
+PHASE_CONTEXT=$(cat "${PHASE_DIR}/${PHASE}-CONTEXT.md" 2>/dev/null)
+```
+
+Fill research prompt and spawn:
+
+```markdown
+<objective>
+Research how to implement Phase {phase_number}: {phase_name}
+
+Answer: "What do I need to know to PLAN this phase well?"
+</objective>
+
+<context>
+**Phase description:**
+{phase_description}
+
+**Requirements (if any):**
+{requirements}
+
+**Prior decisions:**
+{decisions}
+
+**Phase context (if any):**
+{phase_context}
+</context>
+
+<output>
+Write research findings to: {phase_dir}/{phase}-RESEARCH.md
+</output>
+```
+
+```
+Task(
+  prompt=research_prompt,
+  subagent_type="gsd-phase-researcher",
+  description="Research Phase {phase}"
+)
+```
+
+### Handle Researcher Return
+
+**`## RESEARCH COMPLETE`:**
+- Display: `Research complete. Proceeding to planning...`
+- Continue to step 6
+
+**`## RESEARCH BLOCKED`:**
+- Display blocker information
+- Offer: 1) Provide more context, 2) Skip research and plan anyway, 3) Abort
+- Wait for user response
+
+## 6. Check Existing Plans
+
+```bash
+ls "${PHASE_DIR}"/*-PLAN.md 2>/dev/null
+```
+
+**If exists:** Offer: 1) Continue planning (add more plans), 2) View existing, 3) Replan from scratch. Wait for response.
+
+## 7. Gather Context Paths
+
+Identify context files for the planner agent:
+
+```bash
+# Required
+STATE=.planning/STATE.md
+ROADMAP=.planning/ROADMAP.md
+REQUIREMENTS=.planning/REQUIREMENTS.md
+
+# Optional (created by earlier steps or commands)
+CONTEXT="${PHASE_DIR}/${PHASE}-CONTEXT.md"
+RESEARCH="${PHASE_DIR}/${PHASE}-RESEARCH.md"
+VERIFICATION="${PHASE_DIR}/${PHASE}-VERIFICATION.md"
+UAT="${PHASE_DIR}/${PHASE}-UAT.md"
+```
+
+## 8. Spawn gsd-planner Agent
+
+Display stage banner:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► PLANNING PHASE {X}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+◆ Spawning planner...
+```
+
+Fill prompt and spawn:
+
+```markdown
+<planning_context>
+
+**Phase:** {phase_number}
+**Mode:** {standard | gap_closure}
+
+**Project State:**
+@.planning/STATE.md
+
+**Roadmap:**
+@.planning/ROADMAP.md
+
+**Requirements (if exists):**
+@.planning/REQUIREMENTS.md
+
+**Phase Context (if exists):**
+@.planning/phases/{phase_dir}/{phase}-CONTEXT.md
+
+**Research (if exists):**
+@.planning/phases/{phase_dir}/{phase}-RESEARCH.md
+
+**Gap Closure (if --gaps mode):**
+@.planning/phases/{phase_dir}/{phase}-VERIFICATION.md
+@.planning/phases/{phase_dir}/{phase}-UAT.md
+
+</planning_context>
+
+<downstream_consumer>
+Output consumed by /gsd:execute-phase
+Plans must be executable prompts with:
+
+- Frontmatter (wave, depends_on, files_modified, autonomous)
+- Tasks in XML format
+- Verification criteria
+- must_haves for goal-backward verification
+</downstream_consumer>
+
+<quality_gate>
+Before returning PLANNING COMPLETE:
+
+- [ ] PLAN.md files created in phase directory
+- [ ] Each plan has valid frontmatter
+- [ ] Tasks are specific and actionable
+- [ ] Dependencies correctly identified
+- [ ] Waves assigned for parallel execution
+- [ ] must_haves derived from phase goal
+</quality_gate>
+```
+
+```
+Task(
+  prompt=filled_prompt,
+  subagent_type="gsd-planner",
+  description="Plan Phase {phase}"
+)
+```
+
+## 9. Handle Planner Return
+
+Parse planner output:
+
+**`## PLANNING COMPLETE`:**
+- Display: `Planner created {N} plan(s). Files on disk.`
+- If `--skip-verify`: Skip to step 13
+- Otherwise: Proceed to step 10
+
+**`## CHECKPOINT REACHED`:**
+- Present to user, get response, spawn continuation (see step 12)
+
+**`## PLANNING INCONCLUSIVE`:**
+- Show what was attempted
+- Offer: Add context, Retry, Manual
+- Wait for user response
+
+## 10. Spawn gsd-plan-checker Agent
+
+Display:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► VERIFYING PLANS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+◆ Spawning plan checker...
+```
+
+Fill checker prompt and spawn:
+
+```markdown
+<verification_context>
+
+**Phase:** {phase_number}
+**Phase Goal:** {goal from ROADMAP}
+
+**Plans to verify:**
+@.planning/phases/{phase_dir}/*-PLAN.md
+
+**Requirements (if exists):**
+@.planning/REQUIREMENTS.md
+
+</verification_context>
+
+<expected_output>
+Return one of:
+- ## VERIFICATION PASSED — all checks pass
+- ## ISSUES FOUND — structured issue list
+</expected_output>
+```
+
+```
+Task(
+  prompt=checker_prompt,
+  subagent_type="gsd-plan-checker",
+  description="Verify Phase {phase} plans"
+)
+```
+
+## 11. Handle Checker Return
+
+**If `## VERIFICATION PASSED`:**
+- Display: `Plans verified. Ready for execution.`
+- Proceed to step 13
+
+**If `## ISSUES FOUND`:**
+- Display: `Checker found issues:`
+- List issues from checker output
+- Check iteration count
+- Proceed to step 12
+
+## 12. Revision Loop (Max 3 Iterations)
+
+Track: `iteration_count` (starts at 1 after initial plan + check)
+
+**If iteration_count < 3:**
+
+Display: `Sending back to planner for revision... (iteration {N}/3)`
+
+Spawn gsd-planner with revision prompt:
+
+```markdown
+<revision_context>
+
+**Phase:** {phase_number}
+**Mode:** revision
+
+**Existing plans:**
+@.planning/phases/{phase_dir}/*-PLAN.md
+
+**Checker issues:**
+{structured_issues_from_checker}
+
+</revision_context>
+
+<instructions>
+Read existing PLAN.md files. Make targeted updates to address checker issues.
+Do NOT replan from scratch unless issues are fundamental.
+Return what changed.
+</instructions>
+```
+
+```
+Task(
+  prompt=revision_prompt,
+  subagent_type="gsd-planner",
+  description="Revise Phase {phase} plans"
+)
+```
+
+- After planner returns → spawn checker again (step 10)
+- Increment iteration_count
+
+**If iteration_count >= 3:**
+
+Display: `Max iterations reached. {N} issues remain:`
+- List remaining issues
+
+Offer options:
+1. Force proceed (execute despite issues)
+2. Provide guidance (user gives direction, retry)
+3. Abandon (exit planning)
+
+Wait for user response.
+
+## 13. Present Final Status
+
+Route to `<offer_next>`.
+
+</process>
+
+<offer_next>
+Output this markdown directly (not as a code block):
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► PHASE {X} PLANNED ✓
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Phase {X}: {Name}** — {N} plan(s) in {M} wave(s)
+
+| Wave | Plans | What it builds |
+|------|-------|----------------|
+| 1    | 01, 02 | [objectives] |
+| 2    | 03     | [objective]  |
+
+Research: {Completed | Used existing | Skipped}
+Verification: {Passed | Passed with override | Skipped}
+
+───────────────────────────────────────────────────────────────
+
+## ▶ Next Up
+
+**Execute Phase {X}** — run all {N} plans
+
+/gsd:execute-phase {X}
+
+<sub>/clear first → fresh context window</sub>
+
+───────────────────────────────────────────────────────────────
+
+**Also available:**
+- cat .planning/phases/{phase-dir}/*-PLAN.md — review plans
+- /gsd:plan-phase {X} --research — re-research first
+
+───────────────────────────────────────────────────────────────
+</offer_next>
+
+<success_criteria>
+- [ ] .planning/ directory validated
+- [ ] Phase validated against roadmap
+- [ ] Phase directory created if needed
+- [ ] Research completed (unless --skip-research or --gaps or exists)
+- [ ] gsd-phase-researcher spawned if research needed
+- [ ] Existing plans checked
+- [ ] gsd-planner spawned with context (including RESEARCH.md if available)
+- [ ] Plans created (PLANNING COMPLETE or CHECKPOINT handled)
+- [ ] gsd-plan-checker spawned (unless --skip-verify)
+- [ ] Verification passed OR user override OR max iterations with user decision
+- [ ] User sees status between agent spawns
+- [ ] User knows next steps (execute or review)
+</success_criteria>
+
+---
+
+/clear
+
+---
+
+/gsd:execute-phase 11.4
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. User started on branch `chore/add-pr-review-skill` and ran `/remote-control` which failed for `resolve-pr-reviews` skill. They manually moved the file from `.claude/skills/` to `.claude/commands/` and committed. Then asked to push.
+
+2. I pushed to `chore/add-pr-review-skill`.
+
+3. User ran `/resolve-pr-reviews` skill - I followed the workflow to resolve PR review comments on PR #222. Found 2 CodeRabbit comments about hardcoded repo values in the skill file. Fixed both, committed, pushed, replied to threads, and resolved them via GraphQL.
+
+4. User ran `/gsd:progress` - I loaded project state and presented a rich status report showing Phase 11.3 complete, 138 plans done, 3 remaining M2 phases (11.4, 16, 17).
+
+5. User ran `/clear` then `/gsd:discuss-phase 11.4` - The first attempt had a bug where all AskUserQuestion calls were auto-answered/skipped without user input. User said "sorry can we redo that whole process - not sure why all the questions were skipped".
+
+6. I reset the commit, cleaned up, and redid the discussion properly. This time questions worked. User selected all 4 areas to discuss. Key decisions captured:
+   - CI stack: Native installs per runner, fresh backend per run, cached cargo binary, smart trigger with path filters
+   - Test execution: FUSE mount file ops, install FUSE drivers on all 3 runners, Tauri app in test mode, dev-key auth
+   - Interop: Full data round-trip via API, both static vectors + live tests, both GCM and CTR, skip ECIES
+   - Test org: Shared fixtures in git, desktop-side tests only, Claude discretion on test location and reporting
+
+7. Created and committed CONTEXT.md at `.planning/phases/11.4-cross-platform-e2e-testing/11.4-CONTEXT.md`.
+
+8. User ran `/clear` then `/gsd:plan-phase 11.4`. I:
+   - Created branch `feat/phase-11.4-cross-platform-e2e` from main
+   - Spawned gsd-phase-researcher agent → produced 663-line RESEARCH.md
+   - Key research findings: debug build required (--dev-key is cfg(debug_assertions)), Redis hidden dep, all building blocks exist
+   - 1Password signing failed once, retry succeeded
+   - Committed research
+   - Spawned gsd-planner agent → created 3 plans in 2 waves
+   - Plans already committed by planner agent
+   - Spawned gsd-plan-checker → VERIFICATION PASSED on all 6 dimensions
+
+9. User ran `/clear` then `/gsd:execute-phase 11.4`. This is where we are now - the execute-phase workflow has loaded and I need to start executing the 3 plans across 2 waves.
+
+Current state:
+- Branch: `feat/phase-11.4-cross-platform-e2e`
+- Phase directory: `.planning/phases/11.4-cross-platform-e2e-testing/`
+- 3 plans: 11.4-01-PLAN.md, 11.4-02-PLAN.md, 11.4-03-PLAN.md
+- Wave 1: Plans 01, 02 (parallel)
+- Wave 2: Plan 03 (depends on 01 and 02)
+- No plans have SUMMARY.md yet (none executed)
+
+The plans:
+- Plan 01 (Wave 1): CI debug binary artifact upload + crypto test vector fixtures
+- Plan 02 (Wave 1): FUSE file I/O test scripts + API round-trip scripts (bash + PowerShell)
+- Plan 03 (Wave 2): e2e-desktop.yml workflow: 3-platform matrix
+
+Key commits on branch:
+- b84f994d0 docs(11.4): capture phase context
+- 3f9891829 docs(11.4): add phase research
+- e35bed812 docs(11.4): create phase plan for cross-platform desktop E2E testing
+
+Summary:
+1. Primary Request and Intent:
+   The user is executing the GSD (Get Shit Done) workflow for Phase 11.4: Cross-Platform E2E Testing. The full flow has been: `/gsd:progress` → `/gsd:discuss-phase 11.4` → `/gsd:plan-phase 11.4` → `/gsd:execute-phase 11.4`. The current task is executing 3 plans across 2 waves that create CI infrastructure to validate desktop clients (macOS, Windows, Linux) against the API/web client.
+
+2. Key Technical Concepts:
+   - Cross-platform CI E2E testing (macOS, Windows, Linux runners)
+   - Native Postgres/IPFS/Redis installs per CI platform (no Docker on macOS/Windows)
+   - FUSE mount file operations as primary test level (FUSE-T macOS, WinFsp Windows, libfuse3 Linux)
+   - Debug build required: `--dev-key` flag is `#[cfg(debug_assertions)]` only
+   - `ikalnytskyi/action-setup-postgres@v8` for cross-platform Postgres
+   - Kubo prebuilt binary for IPFS
+   - `GabrielBB/xvfb-action` for Linux headless Tauri
+   - Separate `e2e-desktop.yml` workflow triggered by `workflow_run`
+   - Static crypto test vectors (AES-GCM + AES-CTR) in JSON fixtures + live API round-trips
+   - Dev-key auth (`POST /auth/test-login`) for CI authentication
+   - Redis is hidden API dependency (BullMQ)
+   - Cached cargo-built debug binary from existing build jobs via `actions/upload-artifact`
+
+3. Files and Code Sections:
+   - `.claude/commands/resolve-pr-reviews.md`
+     - PR review resolver skill, moved from `.claude/skills/` to `.claude/commands/`
+     - Fixed hardcoded `FSM1/cipher-box` with dynamic `$REPO_OWNER/$REPO_NAME` variables
+     - Switched GraphQL query from single to double quotes for variable interpolation
+   - `.planning/phases/11.4-cross-platform-e2e-testing/11.4-CONTEXT.md`
+     - Captured user decisions from discuss-phase: native installs, FUSE mount testing, full API round-trip, smart CI triggers, shared fixtures
+   - `.planning/phases/11.4-cross-platform-e2e-testing/11.4-RESEARCH.md` (663 lines)
+     - Comprehensive research: CI stack patterns, debug build strategy, test execution model, workflow architecture, code examples, pitfalls
+   - `.planning/phases/11.4-cross-platform-e2e-testing/11.4-01-PLAN.md` (Wave 1)
+     - CI debug binary artifact upload to existing build jobs + crypto test vector JSON fixtures
+     - 2 tasks, files: `.github/workflows/ci.yml`, `tests/e2e-desktop/fixtures/crypto/*.json`
+   - `.planning/phases/11.4-cross-platform-e2e-testing/11.4-02-PLAN.md` (Wave 1)
+     - FUSE file I/O test scripts + API round-trip scripts (bash + PowerShell)
+     - 2 tasks, 8 files: `tests/e2e-desktop/scripts/*.sh` and `*.ps1`
+   - `.planning/phases/11.4-cross-platform-e2e-testing/11.4-03-PLAN.md` (Wave 2, depends on 01+02)
+     - `e2e-desktop.yml` workflow: 3-platform matrix with native service installs, binary download, headless auth, test execution
+     - 1 task, 1 file: `.github/workflows/e2e-desktop.yml`
+
+4. Errors and fixes:
+   - AskUserQuestion silently auto-answering: First run of `/gsd:discuss-phase 11.4` had all questions skipped/auto-answered. User noticed and asked to redo. Fix: Reset the commit (`git reset --soft HEAD~1`), cleaned up files, and restarted the entire discussion process. Second attempt worked correctly.
+   - 1Password SSH agent signing failure: `git commit` failed with "1Password: failed to fill whole buffer". Fix: Retried the commit and it succeeded on second attempt. This is a known intermittent issue per project memory.
+
+5. Problem Solving:
+   - Resolved 2 CodeRabbit PR review comments on PR #222 (hardcoded repo values + variable interpolation)
+   - Successfully completed full GSD workflow pipeline: progress → discuss → plan → (now) execute
+   - Plan verification passed all 6 dimensions (requirement coverage, task completeness, dependency correctness, key links, scope sanity, verification derivation)
+
+6. All user messages:
+   - (Initial remote-control and manual git operations for skill file move)
+   - "git push"
+   - "/resolve-pr-reviews" (skill invocation)
+   - "/gsd:progress"
+   - "/clear /gsd:discuss-phase 11.4"
+   - "sorry can we redo that whole process - not sure why all the questions were skipped"
+   - (Multiple AskUserQuestion answers during redo: all 4 areas selected, native installs, fresh backend, smart trigger, cargo build cached, FUSE mount ops, install FUSE on CI, Tauri app in test mode, dev-key auth, full API round-trip, both vectors + live, both GCM and CTR, skip ECIES, you decide on test location, shared fixtures in git, you decide on failure reports, desktop-side tests only, create context)
+   - "/clear /gsd:plan-phase 11.4"
+   - "/clear"
+   - "/gsd:execute-phase 11.4"
+
+7. Pending Tasks:
+   - Execute Phase 11.4 plans (3 plans, 2 waves) — this is the active task
+   - After execution: verify phase goal, update roadmap/state/requirements, offer next steps
+
+8. Current Work:
+   The `/gsd:execute-phase 11.4` workflow has just been initiated. The execute-phase skill has loaded and all context (ROADMAP.md, STATE.md, workflow instructions) has been read. I am on branch `feat/phase-11.4-cross-platform-e2e` with 3 plan files ready.
+
+   **Next steps in the workflow:**
+   1. Validate phase exists and discover plans (3 plans, 0 completed)
+   2. Group by wave (Wave 1: 01+02 parallel, Wave 2: 03)
+   3. Present wave structure to user
+   4. Execute Wave 1: Spawn 2 `gsd-executor` agents in parallel for Plans 01 and 02
+   5. After Wave 1: Execute Wave 2: Spawn 1 `gsd-executor` agent for Plan 03
+   6. Aggregate results, verify phase goal, update state, offer next steps
+
+   Key commits on branch so far:
+   - `b84f994d0` docs(11.4): capture phase context
+   - `3f9891829` docs(11.4): add phase research  
+   - `e35bed812` docs(11.4): create phase plan for cross-platform desktop E2E testing
+
+9. Optional Next Step:
+   Begin executing the phase by validating the phase directory, discovering incomplete plans, grouping them by wave, and spawning Wave 1 executors (Plans 01 and 02 in parallel). Per the execute-phase workflow: "Spawn all autonomous agents in wave simultaneously: Use Task tool with multiple parallel calls."
+
+   The user's most recent explicit request was `/gsd:execute-phase 11.4` and the workflow instructions say to validate, discover plans, group by wave, then spawn gsd-executor agents.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.claude/projects/-Users-michael-Code-cipher-box/98814c0e-6456-4183-a41c-4c49f5dee23d.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+ok try and commit again. I will unlock 1pass
