@@ -12,9 +12,10 @@
 
 param(
     [string]$MountPoint = "$env:USERPROFILE\CipherBox",
-    [string]$ApiUrl = "http://localhost:3000",
-    [string]$TestSecret = "e2e-test-secret-ci-only"
+    [string]$ApiUrl = "http://localhost:3000"
 )
+
+$TestSecret = if ($env:TEST_SECRET) { $env:TEST_SECRET } else { "e2e-test-secret-ci-only" }
 
 $ErrorActionPreference = "Continue"
 
@@ -82,7 +83,13 @@ $Headers = @{ Authorization = "Bearer $AccessToken" }
 
 # ---- Test 2: Desktop writes file, API verifies vault exists ----
 Write-Host "--- Test 2: Verify vault has content after FUSE write ---"
-Set-Content -Path "$MountPoint\rt-test.txt" -Value "API-visible content" -NoNewline
+try {
+    Set-Content -Path "$MountPoint\rt-test.txt" -Value "API-visible content" -NoNewline -ErrorAction Stop
+    if (-not (Test-Path "$MountPoint\rt-test.txt")) { throw "FUSE write did not materialize at mount path" }
+} catch {
+    Test-Fail "FUSE write failed ($_)"
+    $RootIpns = $null
+}
 Start-Sleep -Seconds 5
 
 try {

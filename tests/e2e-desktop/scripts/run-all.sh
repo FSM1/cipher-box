@@ -56,7 +56,7 @@ echo ""
 # ---- Step 3: API round-trip ----
 echo "--- Step 3: API round-trip ---"
 set +e
-bash "$SCRIPT_DIR/test-round-trip.sh" "$MOUNT_POINT" "$API_URL" "$TEST_SECRET"
+TEST_SECRET="$TEST_SECRET" bash "$SCRIPT_DIR/test-round-trip.sh" "$MOUNT_POINT" "$API_URL"
 RT_FAILURES=$?
 set -e
 

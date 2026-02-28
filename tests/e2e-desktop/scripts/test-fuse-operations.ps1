@@ -133,7 +133,11 @@ if (-not (Test-Path "$MountPoint\e2e-folder")) {
 Write-Host "--- Test 9: Cleanup ---"
 Remove-Item -Path $MountBinary -Force -ErrorAction SilentlyContinue
 Remove-Item -Path $TempBinary -Force -ErrorAction SilentlyContinue
-Test-Pass "Cleanup"
+if ((-not (Test-Path $MountBinary)) -and (-not (Test-Path $TempBinary))) {
+    Test-Pass "Cleanup"
+} else {
+    Test-Fail "Cleanup (artifacts still exist)"
+}
 
 # ---- Summary ----
 Write-Host ""

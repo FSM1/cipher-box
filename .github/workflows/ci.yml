@@ -521,6 +521,7 @@ jobs:
           name: desktop-debug-windows
           path: apps/desktop/src-tauri/target/debug/cipherbox-desktop.exe
           retention-days: 1
+          if-no-files-found: error
 
   build-desktop-macos:
     name: Build macOS Desktop
@@ -577,6 +578,7 @@ jobs:
           name: desktop-debug-macos
           path: apps/desktop/src-tauri/target/debug/cipherbox-desktop
           retention-days: 1
+          if-no-files-found: error
 
   build-desktop-linux:
     name: Build Linux Desktop
@@ -643,3 +645,4 @@ jobs:
           name: desktop-debug-linux
           path: apps/desktop/src-tauri/target/debug/cipherbox-desktop
           retention-days: 1
+          if-no-files-found: error

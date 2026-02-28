@@ -41,7 +41,7 @@
       "version": "v1",
       "cid": "bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4",
       "fileKeyEncrypted": "deadbeef",
-      "fileIv": "aabbccdd",
+      "fileIv": "aabbccddeeff001122334455aabbccdd",
       "size": 1024,
       "mimeType": "video/mp4",
       "encryptionMode": "CTR",

@@ -54,7 +54,11 @@ jobs:
         id: find-run
         run: |
           RUN_ID=$(gh run list --workflow=ci.yml --branch=main --status=success --limit=1 --json databaseId --jq '.[0].databaseId')
-          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "No successful CI run found on main branch." >&2
+            exit 1
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -96,13 +100,19 @@ jobs:
           ipfs init
           ipfs daemon &
           # Wait for daemon readiness
+          READY=0
           for i in $(seq 1 30); do
             if curl -s http://localhost:5001/api/v0/id > /dev/null 2>&1; then
               echo "IPFS daemon ready"
+              READY=1
               break
             fi
             sleep 1
           done
+          if [ "$READY" -ne 1 ]; then
+            echo "IPFS daemon did not become ready in time." >&2
+            exit 1
+          fi
 
       - name: Install Kubo (IPFS) (Windows)
         if: runner.os == 'Windows'
@@ -117,13 +127,16 @@ jobs:
           ipfs init
           Start-Process -FilePath "ipfs" -ArgumentList "daemon" -NoNewWindow
           # Wait for daemon readiness
+          $ready = $false
           for ($i = 0; $i -lt 30; $i++) {
             try {
               $null = Invoke-WebRequest -Uri "http://localhost:5001/api/v0/id" -ErrorAction Stop
               Write-Host "IPFS daemon ready"
+              $ready = $true
               break
             } catch { Start-Sleep -Seconds 1 }
           }
+          if (-not $ready) { throw "IPFS daemon did not become ready in time." }
 
       - name: Install Redis (macOS)
         if: runner.os == 'macOS'
@@ -244,13 +257,19 @@ jobs:
           cd apps/api
           node dist/main.js &
           # Wait for API readiness
+          READY=0
           for i in $(seq 1 30); do
             if curl -s http://localhost:3000/health > /dev/null 2>&1; then
               echo "API ready"
+              READY=1
               break
             fi
             sleep 1
           done
+          if [ "$READY" -ne 1 ]; then
+            echo "API did not become ready in time." >&2
+            exit 1
+          fi
         env:
           NODE_ENV: test
           DB_HOST: localhost
@@ -291,13 +310,16 @@ jobs:
           $env:IDENTITY_JWT_PRIVATE_KEY = "${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}"
           Start-Process -FilePath node -ArgumentList "dist/main.js" -WorkingDirectory "apps/api" -NoNewWindow
           # Wait for API readiness
+          $ready = $false
           for ($i = 0; $i -lt 30; $i++) {
             try {
               $null = Invoke-WebRequest -Uri "http://localhost:3000/health" -ErrorAction Stop
               Write-Host "API ready"
+              $ready = $true
               break
             } catch { Start-Sleep -Seconds 1 }
           }
+          if (-not $ready) { throw "API did not become ready in time." }
 
       # --- Desktop launch + test execution ---
 
@@ -311,8 +333,10 @@ jobs:
           DEV_KEY=$(openssl rand -hex 32)
           ./desktop-binary/cipherbox-desktop --dev-key $DEV_KEY &
           DESKTOP_PID=$!
+          set +e
           bash tests/e2e-desktop/scripts/run-all.sh
           TEST_EXIT=$?
+          set -e
           kill $DESKTOP_PID 2>/dev/null || true
           diskutil unmount force $HOME/CipherBox 2>/dev/null || true
           exit $TEST_EXIT
@@ -329,8 +353,10 @@ jobs:
             DEV_KEY=$(openssl rand -hex 32)
             ./desktop-binary/cipherbox-desktop --dev-key $DEV_KEY &
             DESKTOP_PID=$!
+            set +e
             bash tests/e2e-desktop/scripts/run-all.sh
             TEST_EXIT=$?
+            set -e
             kill $DESKTOP_PID 2>/dev/null || true
             fusermount3 -u $HOME/CipherBox 2>/dev/null || true
             exit $TEST_EXIT

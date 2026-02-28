@@ -56,7 +56,8 @@ Write-Host ""
 Write-Host "--- Step 3: API round-trip ---"
 $RtExitCode = 0
 try {
-    & "$PSScriptRoot\test-round-trip.ps1" -MountPoint $MountPoint -ApiUrl $ApiUrl -TestSecret $TestSecret
+    $env:TEST_SECRET = $TestSecret
+    & "$PSScriptRoot\test-round-trip.ps1" -MountPoint $MountPoint -ApiUrl $ApiUrl
     $RtExitCode = $LASTEXITCODE
 } catch {
     $RtExitCode = 1

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 
 # test-fuse-operations.sh -- Exercise FUSE mount file I/O operations.
 #

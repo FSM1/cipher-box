@@ -19,9 +19,12 @@ $Elapsed = 0
 Write-Host "Waiting for mount at $MountPoint (timeout: ${Timeout}s)..."
 
 while ($Elapsed -lt $Timeout) {
-    if (Test-Path $MountPoint) {
-        Write-Host "PASS: Mount detected at $MountPoint"
-        exit 0
+    if (Test-Path -LiteralPath $MountPoint) {
+        $item = Get-Item -LiteralPath $MountPoint -Force
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            Write-Host "PASS: Mount detected at $MountPoint"
+            exit 0
+        }
     }
 
     Start-Sleep -Seconds $Interval

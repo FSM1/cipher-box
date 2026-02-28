@@ -20,7 +20,7 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
   # Check that the mount point directory exists AND that something is mounted there.
   # macOS (FUSE-T SMB backend) shows "smbfs" in mount output; Linux shows "fuse".
   # We grep for the mount path itself for cross-platform consistency.
-  if [ -d "$MOUNT_POINT" ] && mount | grep -q "$MOUNT_POINT"; then
+  if [ -d "$MOUNT_POINT" ] && mount | grep -F -q -- "$MOUNT_POINT"; then
     echo "PASS: Mount detected at $MOUNT_POINT"
     exit 0
   fi

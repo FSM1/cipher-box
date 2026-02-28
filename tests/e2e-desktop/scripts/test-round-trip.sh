@@ -15,7 +15,7 @@ set -euo pipefail
 
 MP="${1:-$HOME/CipherBox}"
 API_URL="${2:-http://localhost:3000}"
-SECRET="${3:-e2e-test-secret-ci-only}"
+SECRET="${TEST_SECRET:-e2e-test-secret-ci-only}"
 TEST_EMAIL="e2e-desktop-rt-$(date +%s)@test.local"
 
 PASS=0
@@ -39,15 +39,16 @@ echo ""
 
 # ---- Test 1: Authenticate via test-login ----
 echo "--- Test 1: Authenticate via test-login ---"
-AUTH_RESPONSE=$(curl -s -X POST "$API_URL/auth/test-login" \
+AUTH_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 30 -X POST "$API_URL/auth/test-login" \
   -H "Content-Type: application/json" \
-  -d "{\"email\":\"$TEST_EMAIL\",\"secret\":\"$SECRET\"}")
+  -d "{\"email\":\"$TEST_EMAIL\",\"secret\":\"$SECRET\"}" 2>&1) || true
 
 ACCESS_TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.accessToken // empty')
 if [ -n "$ACCESS_TOKEN" ]; then
   pass "Authenticate via test-login"
 else
-  fail "Authenticate via test-login (response: $AUTH_RESPONSE)"
+  AUTH_ERROR=$(echo "$AUTH_RESPONSE" | jq -r '.message // .error // empty' 2>/dev/null || echo "non-JSON response")
+  fail "Authenticate via test-login (error: $AUTH_ERROR)"
   echo "FATAL: Cannot proceed without authentication."
   echo ""
   echo "=== API Round-Trip Results ==="
@@ -62,21 +63,22 @@ echo "--- Test 2: Verify vault has content after FUSE write ---"
 echo "API-visible content" > "$MP/rt-test.txt"
 sleep 5
 
-VAULT_RESPONSE=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
-  "$API_URL/vault")
+VAULT_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 30 -H "Authorization: Bearer $ACCESS_TOKEN" \
+  "$API_URL/vault" 2>&1) || true
 
 ROOT_IPNS=$(echo "$VAULT_RESPONSE" | jq -r '.rootIpnsName // empty')
 if [ -n "$ROOT_IPNS" ] && [ "$ROOT_IPNS" != "null" ]; then
   pass "Vault has rootIpnsName after FUSE write ($ROOT_IPNS)"
 else
-  fail "Vault has no rootIpnsName (response: $VAULT_RESPONSE)"
+  VAULT_ERROR=$(echo "$VAULT_RESPONSE" | jq -r '.message // .error // empty' 2>/dev/null || echo "non-JSON response")
+  fail "Vault has no rootIpnsName (error: $VAULT_ERROR)"
 fi
 
 # ---- Test 3: Verify IPNS resolve returns data ----
 echo "--- Test 3: Verify IPNS resolve returns CID ---"
 if [ -n "$ROOT_IPNS" ] && [ "$ROOT_IPNS" != "null" ]; then
-  IPNS_RESPONSE=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
-    "$API_URL/ipns/$ROOT_IPNS/resolve")
+  IPNS_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 30 -H "Authorization: Bearer $ACCESS_TOKEN" \
+    "$API_URL/ipns/$ROOT_IPNS/resolve" 2>&1) || true
 
   # The resolve response should contain a CID (starts with "bafy" or "Qm" or similar)
   RESOLVED_CID=$(echo "$IPNS_RESPONSE" | jq -r '.cid // .value // empty' 2>/dev/null || echo "")
@@ -84,7 +86,8 @@ if [ -n "$ROOT_IPNS" ] && [ "$ROOT_IPNS" != "null" ]; then
     pass "IPNS resolve returned CID ($RESOLVED_CID)"
   else
     # Even if parsing fails, the response itself may be valid
-    fail "IPNS resolve did not return expected CID (response: $IPNS_RESPONSE)"
+    IPNS_ERROR=$(echo "$IPNS_RESPONSE" | jq -r '.message // .error // empty' 2>/dev/null || echo "non-JSON response")
+    fail "IPNS resolve did not return expected CID (error: $IPNS_ERROR)"
   fi
 else
   fail "IPNS resolve skipped (no rootIpnsName)"
