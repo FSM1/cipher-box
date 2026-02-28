@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "a9df03e4a06d",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-11.3-linux-desktop",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a9/df03e4a06d/0/metadata.json",
+      "transcript": "/a9/df03e4a06d/0/full.jsonl",
+      "context": "/a9/df03e4a06d/0/context.md",
+      "content_hash": "/a9/df03e4a06d/0/content_hash.txt",
+      "prompt": "/a9/df03e4a06d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3393,
+    "cache_creation_tokens": 296986,
+    "cache_read_tokens": 7001843,
+    "output_tokens": 28234,
+    "api_call_count": 87
+  }
+}

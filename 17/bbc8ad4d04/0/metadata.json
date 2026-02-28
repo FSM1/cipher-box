@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "17bbc8ad4d04",
+  "session_id": "8c64ca29-4a22-46fb-a4c0-240d06d7e884",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-28T13:06:29.48142818Z",
+  "branch": "feat/phase-11.3-linux-desktop",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/phases/11.3-linux-desktop/11.3-01-SUMMARY.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "69bf6c70039e",
+  "checkpoint_transcript_start": 578,
+  "transcript_lines_at_start": 578,
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 6178,
+    "cache_read_tokens": 1022497,
+    "output_tokens": 3497,
+    "api_call_count": 14
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-28T13:06:28.552339979Z",
+    "agent_lines": 37,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 37,
+    "agent_percentage": 100
+  }
+}

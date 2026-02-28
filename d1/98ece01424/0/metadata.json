@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "d198ece01424",
+  "session_id": "8c64ca29-4a22-46fb-a4c0-240d06d7e884",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-28T13:12:42.383464975Z",
+  "branch": "feat/phase-11.3-linux-desktop",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/desktop/src-tauri/Cargo.lock"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "69bf6c70039e",
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 129395,
+    "cache_read_tokens": 1536295,
+    "output_tokens": 6437,
+    "api_call_count": 23
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-28T13:12:41.311846889Z",
+    "agent_lines": 42,
+    "human_added": 210,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 252,
+    "agent_percentage": 16.666666666666664
+  }
+}

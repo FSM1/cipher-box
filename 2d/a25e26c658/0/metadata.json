@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "2da25e26c658",
+  "session_id": "8c64ca29-4a22-46fb-a4c0-240d06d7e884",
+  "strategy": "manual-commit",
+  "created_at": "2026-02-28T12:40:35.326855273Z",
+  "branch": "feat/phase-11.3-linux-desktop",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/fuse/mod.rs",
+    "apps/desktop/src-tauri/src/fuse/operations.rs",
+    "apps/desktop/src-tauri/src/registry/mod.rs",
+    "apps/desktop/src-tauri/src/tray/mod.rs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "9e2ff38057f9",
+  "checkpoint_transcript_start": 190,
+  "transcript_lines_at_start": 190,
+  "token_usage": {
+    "input_tokens": 5,
+    "cache_creation_tokens": 72117,
+    "cache_read_tokens": 139616,
+    "output_tokens": 577,
+    "api_call_count": 3
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-02-28T12:40:34.568838423Z",
+    "agent_lines": 134,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 134,
+    "agent_percentage": 100
+  }
+}

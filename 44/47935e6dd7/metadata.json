@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "4447935e6dd7",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-11.3-linux-desktop",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "apps/desktop/src-tauri/icons/tray-icon-linux.png",
+    "apps/desktop/src-tauri/icons/tray-icon-linux@2x.png",
+    "apps/desktop/src-tauri/src/tray/mod.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/44/47935e6dd7/0/metadata.json",
+      "transcript": "/44/47935e6dd7/0/full.jsonl",
+      "context": "/44/47935e6dd7/0/context.md",
+      "content_hash": "/44/47935e6dd7/0/content_hash.txt",
+      "prompt": "/44/47935e6dd7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 3393,
+    "cache_creation_tokens": 296986,
+    "cache_read_tokens": 7001843,
+    "output_tokens": 28234,
+    "api_call_count": 87
+  }
+}
