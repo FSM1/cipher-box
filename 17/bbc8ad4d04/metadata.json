@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.8",
+  "checkpoint_id": "17bbc8ad4d04",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-11.3-linux-desktop",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/phases/11.3-linux-desktop/11.3-01-SUMMARY.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/17/bbc8ad4d04/0/metadata.json",
+      "transcript": "/17/bbc8ad4d04/0/full.jsonl",
+      "context": "/17/bbc8ad4d04/0/context.md",
+      "content_hash": "/17/bbc8ad4d04/0/content_hash.txt",
+      "prompt": "/17/bbc8ad4d04/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 6178,
+    "cache_read_tokens": 1022497,
+    "output_tokens": 3497,
+    "api_call_count": 14
+  }
+}
