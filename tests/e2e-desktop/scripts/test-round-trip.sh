@@ -69,7 +69,7 @@ for attempt in $(seq 1 12); do
   sleep 5
   VAULT_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 30 -H "Authorization: Bearer $ACCESS_TOKEN" \
     "$API_URL/vault" 2>&1) || true
-  ROOT_IPNS=$(echo "$VAULT_RESPONSE" | jq -r '.rootIpnsName // empty')
+  ROOT_IPNS=$(echo "$VAULT_RESPONSE" | jq -r '.rootIpnsName // empty' 2>/dev/null || echo "")
   if [ -n "$ROOT_IPNS" ] && [ "$ROOT_IPNS" != "null" ]; then
     break
   fi
