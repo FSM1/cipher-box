@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "fdcae8003e0c",
+  "strategy": "manual-commit",
+  "branch": "fix/winfsp-registry-key",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/deploy-staging.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fd/cae8003e0c/0/metadata.json",
+      "transcript": "/fd/cae8003e0c/0/full.jsonl",
+      "context": "/fd/cae8003e0c/0/context.md",
+      "content_hash": "/fd/cae8003e0c/0/content_hash.txt",
+      "prompt": "/fd/cae8003e0c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 4962,
+    "cache_read_tokens": 1135130,
+    "output_tokens": 1629,
+    "api_call_count": 8
+  }
+}
