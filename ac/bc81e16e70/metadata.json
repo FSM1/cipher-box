@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "acbc81e16e70",
+  "strategy": "manual-commit",
+  "branch": "fix/desktop-e2e-ci-round3",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/fuse/windows/operations.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ac/bc81e16e70/0/metadata.json",
+      "transcript": "/ac/bc81e16e70/0/full.jsonl",
+      "context": "/ac/bc81e16e70/0/context.md",
+      "content_hash": "/ac/bc81e16e70/0/content_hash.txt",
+      "prompt": "/ac/bc81e16e70/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 542,
+    "cache_creation_tokens": 744050,
+    "cache_read_tokens": 52118605,
+    "output_tokens": 175165,
+    "api_call_count": 453
+  }
+}
