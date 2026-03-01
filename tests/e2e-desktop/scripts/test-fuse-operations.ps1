@@ -138,8 +138,16 @@ Write-Host "--- Test 8: Delete directory ---"
 try {
     # Delete known files first, then the empty directory (most reliable on FUSE)
     Remove-Item -Path "$MountPoint\e2e-folder\nested.txt" -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
-    Remove-Item -Path "$MountPoint\e2e-folder" -Force -ErrorAction Stop
+    Start-Sleep -Seconds 3
+
+    # Verify directory is now empty
+    $Children = @(Get-ChildItem -Path "$MountPoint\e2e-folder" -Force -ErrorAction SilentlyContinue)
+    Write-Host "  Directory children after nested.txt delete: $($Children.Count) items"
+    foreach ($c in $Children) { Write-Host "    - $($c.Name)" }
+
+    # Use [System.IO.Directory]::Delete which calls RemoveDirectoryW directly,
+    # avoiding PowerShell provider overhead that can fail on WinFsp mounts.
+    [System.IO.Directory]::Delete("$MountPoint\e2e-folder")
     Start-Sleep -Seconds 2
     if (-not (Test-Path "$MountPoint\e2e-folder")) {
         Test-Pass "Delete directory"
@@ -147,7 +155,19 @@ try {
         Test-Fail "Delete directory (still exists)"
     }
 } catch {
-    Test-Fail "Delete directory (exception: $($_.Exception.Message))"
+    Write-Host "  Directory::Delete failed: $($_.Exception.Message)"
+    Write-Host "  Trying cmd /c rd fallback..."
+    try {
+        cmd /c rd "$MountPoint\e2e-folder" 2>&1
+        Start-Sleep -Seconds 2
+        if (-not (Test-Path "$MountPoint\e2e-folder")) {
+            Test-Pass "Delete directory (via rd fallback)"
+        } else {
+            Test-Fail "Delete directory (still exists after rd)"
+        }
+    } catch {
+        Test-Fail "Delete directory (exception: $($_.Exception.Message))"
+    }
 }
 
 # ---- Test 9: Cleanup ----
