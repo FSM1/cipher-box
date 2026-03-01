@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.2](https://github.com/FSM1/cipher-box/compare/v0.21.1...v0.21.2) (2026-03-01)
+
+
+### Bug Fixes
+
+* **ci:** fix Windows desktop staging build and add Linux desktop build ([#232](https://github.com/FSM1/cipher-box/issues/232)) ([62d8319](https://github.com/FSM1/cipher-box/commit/62d8319079dbca3289c0bf401ea241e1b84eee2a))
+
 ## [0.21.1](https://github.com/FSM1/cipher-box/compare/v0.21.0...v0.21.1) (2026-03-01)
 
 
