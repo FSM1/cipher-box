@@ -125,7 +125,10 @@ jobs:
           ref: ${{ inputs.staging_tag || github.ref_name }}
 
       - name: Install FUSE-T
-        run: brew install --cask fuse-t
+        run: |
+          brew install --cask fuse-t
+          sudo mkdir -p /usr/local/lib/pkgconfig
+          sudo ln -sf "/Library/Application Support/fuse-t/pkgconfig/fuse-t.pc" /usr/local/lib/pkgconfig/fuse.pc
 
       - uses: pnpm/action-setup@v4
         with:
