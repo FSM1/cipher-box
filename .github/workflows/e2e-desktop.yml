@@ -181,7 +181,7 @@ jobs:
           # Wait for daemon readiness
           READY=0
           for i in $(seq 1 30); do
-            if curl -s http://localhost:5001/api/v0/id > /dev/null 2>&1; then
+            if curl -sf -X POST http://localhost:5001/api/v0/id > /dev/null 2>&1; then
               echo "IPFS daemon ready"
               READY=1
               break
@@ -209,7 +209,7 @@ jobs:
           $ready = $false
           for ($i = 0; $i -lt 30; $i++) {
             try {
-              $null = Invoke-WebRequest -Uri "http://localhost:5001/api/v0/id" -ErrorAction Stop
+              $null = Invoke-WebRequest -Uri "http://localhost:5001/api/v0/id" -Method Post -ErrorAction Stop
               Write-Host "IPFS daemon ready"
               $ready = $true
               break
