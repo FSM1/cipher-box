@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "33dc8f99742a",
+  "session_id": "7b209e16-82c7-433e-8ee2-1aa340150c32",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-01T13:04:56.972024Z",
+  "branch": "fix/desktop-e2e-ci-round3",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/debug/desktop-e2e-ci-all-platforms.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e28294b44721",
+  "token_usage": {
+    "input_tokens": 554,
+    "cache_creation_tokens": 755825,
+    "cache_read_tokens": 53104861,
+    "output_tokens": 179768,
+    "api_call_count": 465
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-01T13:04:51.693205Z",
+    "agent_lines": 0,
+    "human_added": 416,
+    "human_modified": 13,
+    "human_removed": 0,
+    "total_committed": 416,
+    "agent_percentage": 0
+  }
+}
