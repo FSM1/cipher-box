@@ -136,9 +136,9 @@ try {
 # ---- Test 8: Delete directory ----
 Write-Host "--- Test 8: Delete directory ---"
 try {
-    # Delete contents first, then the directory itself (more reliable on FUSE)
-    Get-ChildItem -Path "$MountPoint\e2e-folder" -Recurse -Force -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction Stop
-    Start-Sleep -Seconds 1
+    # Delete known files first, then the empty directory (most reliable on FUSE)
+    Remove-Item -Path "$MountPoint\e2e-folder\nested.txt" -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
     Remove-Item -Path "$MountPoint\e2e-folder" -Force -ErrorAction Stop
     Start-Sleep -Seconds 2
     if (-not (Test-Path "$MountPoint\e2e-folder")) {
