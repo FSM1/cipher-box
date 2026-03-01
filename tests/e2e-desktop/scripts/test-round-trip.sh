@@ -92,7 +92,7 @@ if [ -n "$ROOT_IPNS" ] && [ "$ROOT_IPNS" != "null" ]; then
   for attempt in $(seq 1 12); do
     sleep 2
     IPNS_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 30 -H "Authorization: Bearer $ACCESS_TOKEN" \
-      "$API_URL/ipns/$ROOT_IPNS/resolve" 2>&1) || true
+      "$API_URL/ipns/resolve?ipnsName=$ROOT_IPNS" 2>&1) || true
     RESOLVED_CID=$(echo "$IPNS_RESPONSE" | jq -r '.cid // .value // empty' 2>/dev/null || echo "")
     if [ -n "$RESOLVED_CID" ] && [ "$RESOLVED_CID" != "null" ]; then
       break

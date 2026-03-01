@@ -122,7 +122,7 @@ if ($RootIpns) {
     for ($attempt = 1; $attempt -le 12 -and -not $ResolvedCid; $attempt++) {
         Start-Sleep -Seconds 2
         try {
-            $IpnsResponse = Invoke-RestMethod -Uri "$ApiUrl/ipns/$RootIpns/resolve" -Headers $Headers
+            $IpnsResponse = Invoke-RestMethod -Uri "$ApiUrl/ipns/resolve?ipnsName=$RootIpns" -Headers $Headers
             $ResolvedCid = if ($IpnsResponse.cid) { $IpnsResponse.cid } else { $IpnsResponse.value }
         } catch {
             Write-Host "  IPNS resolve attempt $attempt failed: $_"
