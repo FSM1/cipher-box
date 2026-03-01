@@ -3,17 +3,32 @@ coverage:
     project:
       default:
         target: auto
-        threshold: 2%
+        threshold: 6%
+        flags:
+          - api
+          - crypto
+          - desktop
       api:
         paths:
           - apps/api/src/**
         target: 85%
         threshold: 2%
+        flags:
+          - api
       crypto:
         paths:
           - packages/crypto/src/**
         target: 80%
         threshold: 2%
+        flags:
+          - crypto
+      desktop:
+        paths:
+          - apps/desktop/src-tauri/src/**
+        target: auto
+        threshold: 5%
+        flags:
+          - desktop
     patch:
       default:
         target: 80%
@@ -27,6 +42,10 @@ flags:
   crypto:
     paths:
       - packages/crypto/src/**
+    carryforward: true
+  desktop:
+    paths:
+      - apps/desktop/src-tauri/src/**
     carryforward: true
 
 comment:

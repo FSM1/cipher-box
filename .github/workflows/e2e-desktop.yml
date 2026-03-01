@@ -6,74 +6,151 @@ on:
     types: [completed]
     branches: [main]
   workflow_dispatch:
-    inputs:
-      run_id:
-        description: 'CI workflow run ID to download artifacts from (optional, uses latest if empty)'
-        required: false
-        type: string
 
 permissions:
   actions: read
+  pull-requests: read
 
 jobs:
+  changes:
+    name: Detect Changes
+    # Skip change detection for workflow_dispatch (always run)
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      desktop: ${{ steps.filter.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            desktop:
+              - 'apps/desktop/src/**'
+              - 'apps/desktop/src-tauri/src/**'
+              - 'apps/desktop/src-tauri/vendor/**'
+              - 'apps/desktop/src-tauri/capabilities/**'
+              - 'apps/desktop/src-tauri/resources/**'
+              - 'apps/desktop/src-tauri/Cargo.toml'
+              - 'apps/desktop/src-tauri/Cargo.lock'
+              - 'apps/desktop/src-tauri/build.rs'
+              - 'apps/desktop/src-tauri/rust-toolchain.toml'
+              - 'apps/desktop/index.html'
+              - 'apps/desktop/vite.config.*'
+              - 'apps/desktop/tsconfig*'
+              - 'packages/crypto/src/**'
+              - 'packages/crypto/tsconfig*'
+              - '.github/workflows/e2e-desktop.yml'
+
   e2e-desktop:
     name: Desktop E2E (${{ matrix.platform }})
+    needs: [changes]
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+      always() && !cancelled() &&
+      (
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'workflow_run' &&
+          github.event.workflow_run.conclusion == 'success' &&
+          needs.changes.outputs.desktop == 'true'
+        )
+      )
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: macos
             os: macos-latest
-            artifact: desktop-debug-macos
             fuse-feature: fuse
-            shell: bash
+            binary-name: cipherbox-desktop
           - platform: windows
             os: windows-latest
-            artifact: desktop-debug-windows
             fuse-feature: winfsp
-            shell: powershell
+            binary-name: cipherbox-desktop.exe
           - platform: linux
             os: ubuntu-22.04
-            artifact: desktop-debug-linux
             fuse-feature: fuse
-            shell: bash
+            binary-name: cipherbox-desktop
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
 
-      # --- Download desktop binary from CI build ---
+      # --- Install FUSE driver (needed for both build and test) ---
 
-      - name: Find latest CI run ID
-        if: github.event_name == 'workflow_dispatch' && inputs.run_id == ''
-        id: find-run
-        shell: bash
+      - name: Install FUSE-T (macOS)
+        if: runner.os == 'macOS'
         run: |
-          RUN_ID=$(gh run list --workflow=ci.yml --branch=main --status=success --limit=1 --json databaseId --jq '.[0].databaseId')
-          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "No successful CI run found on main branch." >&2
+          brew install --cask fuse-t
+          sudo mkdir -p /usr/local/lib/pkgconfig
+          FUSE_T_PC="/Library/Application Support/fuse-t/pkgconfig/fuse-t.pc"
+          if [ ! -f "$FUSE_T_PC" ]; then
+            FUSE_T_PC=$(find /Library /usr/local /opt/homebrew -name "fuse-t.pc" 2>/dev/null | head -1)
+          fi
+          if [ -z "$FUSE_T_PC" ] || [ ! -f "$FUSE_T_PC" ]; then
+            echo "::error::fuse-t.pc not found after FUSE-T installation"
             exit 1
           fi
-          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          sudo cp "$FUSE_T_PC" /usr/local/lib/pkgconfig/fuse.pc
+          sudo sed -i '' 's/^Version:.*/Version: 2.9.9/' /usr/local/lib/pkgconfig/fuse.pc
 
-      - name: Download debug binary
-        uses: actions/download-artifact@v4
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libxdo-dev \
+            libfuse3-dev \
+            fuse3 \
+            pkg-config \
+            build-essential
+          sudo modprobe fuse || true
+
+      - name: Install WinFsp (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
+          $out = "winfsp.msi"
+          $expectedHash = "073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A"
+          Invoke-WebRequest -Uri $url -OutFile $out
+          $actualHash = (Get-FileHash $out -Algorithm SHA256).Hash
+          if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
+          Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
+
+      # --- Build debug binary ---
+
+      - name: Install Rust toolchain
+        run: rustup default stable
+
+      - uses: actions/cache@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: desktop-binary/
-          run-id: ${{ inputs.run_id || steps.find-run.outputs.run_id || github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: ${{ matrix.platform }}-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: ${{ matrix.platform }}-cargo-
 
-      - name: Make binary executable
-        if: runner.os != 'Windows'
-        run: chmod +x desktop-binary/cipherbox-desktop
+      - name: Create WinFsp MSI placeholder for resource glob (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: New-Item -ItemType File -Force -Path "apps/desktop/src-tauri/resources/winfsp-placeholder.msi"
+
+      - name: Build debug binary
+        run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features ${{ matrix.fuse-feature }}
+        env:
+          PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
 
       # --- Install backend services ---
 
@@ -148,7 +225,6 @@ jobs:
       - name: Install Redis (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
           sudo apt-get install -y redis-server
           sudo systemctl start redis-server
 
@@ -159,33 +235,6 @@ jobs:
           choco install redis-64 -y
           Start-Process redis-server -NoNewWindow
           Start-Sleep -Seconds 3
-
-      # --- Install FUSE driver ---
-
-      - name: Install FUSE-T (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install --cask fuse-t
-          sudo mkdir -p /usr/local/lib/pkgconfig
-          sudo ln -sf "/Library/Application Support/fuse-t/pkgconfig/fuse-t.pc" /usr/local/lib/pkgconfig/fuse.pc
-
-      - name: Install FUSE and Tauri deps (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get install -y libfuse3-dev fuse3 libwebkit2gtk-4.1-0 libayatana-appindicator3-1
-          sudo modprobe fuse || true
-
-      - name: Install WinFsp (Windows)
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          $url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
-          $out = "winfsp.msi"
-          $expectedHash = "073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A"
-          Invoke-WebRequest -Uri $url -OutFile $out
-          $actualHash = (Get-FileHash $out -Algorithm SHA256).Hash
-          if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
-          Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
 
       # --- Setup Node.js + pnpm ---
 
@@ -334,8 +383,10 @@ jobs:
           export VITE_API_URL=http://localhost:3000
           export VITE_TEST_LOGIN_SECRET=e2e-test-secret-ci-only
           export RUST_LOG=info
+          BINARY=apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }}
+          chmod +x "$BINARY"
           DEV_KEY=$(openssl rand -hex 32)
-          ./desktop-binary/cipherbox-desktop --dev-key $DEV_KEY &
+          "$BINARY" --dev-key $DEV_KEY &
           DESKTOP_PID=$!
           set +e
           bash tests/e2e-desktop/scripts/run-all.sh
@@ -354,8 +405,10 @@ jobs:
             export VITE_API_URL=http://localhost:3000
             export VITE_TEST_LOGIN_SECRET=e2e-test-secret-ci-only
             export RUST_LOG=info
+            BINARY=apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }}
+            chmod +x "$BINARY"
             DEV_KEY=$(openssl rand -hex 32)
-            ./desktop-binary/cipherbox-desktop --dev-key $DEV_KEY &
+            "$BINARY" --dev-key $DEV_KEY &
             DESKTOP_PID=$!
             set +e
             bash tests/e2e-desktop/scripts/run-all.sh
@@ -373,8 +426,9 @@ jobs:
           $env:VITE_API_URL = "http://localhost:3000"
           $env:VITE_TEST_LOGIN_SECRET = "e2e-test-secret-ci-only"
           $env:RUST_LOG = "info"
+          $BINARY = "apps\desktop\src-tauri\target\debug\${{ matrix.binary-name }}"
           $DEV_KEY = -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
-          $proc = Start-Process -FilePath ".\desktop-binary\cipherbox-desktop.exe" -ArgumentList "--dev-key",$DEV_KEY -PassThru -NoNewWindow
+          $proc = Start-Process -FilePath $BINARY -ArgumentList "--dev-key",$DEV_KEY -PassThru -NoNewWindow
           & "$PWD\tests\e2e-desktop\scripts\run-all.ps1"
           $testExit = $LASTEXITCODE
           Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
