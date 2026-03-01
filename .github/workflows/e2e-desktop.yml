@@ -261,6 +261,18 @@ jobs:
         shell: powershell
         run: |
           choco install redis-64 -y
+          # Refresh PATH to include chocolatey-installed binaries
+          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User") + ";" + $env:PATH
+          $redisServer = Get-Command redis-server -ErrorAction SilentlyContinue
+          if (-not $redisServer) {
+            # Fallback: search common install locations
+            $found = Get-ChildItem -Path "C:\ProgramData\chocolatey" -Recurse -Filter "redis-server.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) {
+              $env:PATH = "$($found.DirectoryName);$env:PATH"
+            } else {
+              throw "redis-server.exe not found after installation"
+            }
+          }
           Start-Process redis-server -NoNewWindow
           Start-Sleep -Seconds 3
 
@@ -398,11 +410,21 @@ jobs:
           export CIPHERBOX_API_URL=http://localhost:3000
           export VITE_API_URL=http://localhost:3000
           export VITE_TEST_LOGIN_SECRET=e2e-test-secret-ci-only
-          export RUST_LOG=info
+          export RUST_LOG=debug
+          # Verify API is reachable before starting desktop
+          echo "Pre-flight: checking API health..."
+          curl -sf http://localhost:3000/health && echo " OK" || echo " FAILED"
+          echo "Pre-flight: checking test-login endpoint..."
+          curl -sf -X POST http://localhost:3000/auth/test-login \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"preflight@test.local","secret":"e2e-test-secret-ci-only"}' \
+            && echo " OK" || echo " FAILED (expected if endpoint requires specific format)"
           BINARY=apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }}
           chmod +x "$BINARY"
           # Verify rpath was set
           otool -l "$BINARY" | grep -A2 LC_RPATH || echo "WARNING: No LC_RPATH found"
+          # Verify frontend assets are embedded
+          ls -la apps/desktop/dist/ || echo "WARNING: dist directory missing"
           DEV_KEY=$(openssl rand -hex 32)
           "$BINARY" --dev-key $DEV_KEY > /tmp/cipherbox-desktop.log 2>&1 &
           DESKTOP_PID=$!
@@ -424,12 +446,17 @@ jobs:
           CIPHERBOX_API_URL: http://localhost:3000
           VITE_API_URL: http://localhost:3000
           VITE_TEST_LOGIN_SECRET: e2e-test-secret-ci-only
-          RUST_LOG: info
+          RUST_LOG: debug
           DISPLAY: ':99'
           WEBKIT_DISABLE_DMABUF_RENDERER: '1'
         run: |
           # Verify FUSE is available
           ls -la /dev/fuse || echo "WARNING: /dev/fuse not found"
+          # Verify API is reachable
+          echo "Pre-flight: checking API health..."
+          curl -sf http://localhost:3000/health && echo " OK" || echo " FAILED"
+          # Verify frontend assets exist
+          ls -la apps/desktop/dist/ || echo "WARNING: dist directory missing"
           Xvfb :99 -screen 0 1024x768x24 &
           sleep 1
           BINARY=apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }}

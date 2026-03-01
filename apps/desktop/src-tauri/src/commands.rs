@@ -476,7 +476,10 @@ pub async fn start_sync_daemon(
 /// directly with a synthetic identity token or via the test-login endpoint.
 #[tauri::command]
 pub async fn get_dev_key(state: State<'_, AppState>) -> Result<Option<String>, String> {
-    Ok(state.dev_key.read().await.clone())
+    log::info!("get_dev_key invoked by webview");
+    let key = state.dev_key.read().await.clone();
+    log::info!("get_dev_key returning: has_key={}", key.is_some());
+    Ok(key)
 }
 
 /// Handle test-login authentication (debug builds only).

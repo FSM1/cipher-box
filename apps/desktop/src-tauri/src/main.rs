@@ -150,6 +150,13 @@ fn main() {
                     .center()
                     .resizable(false)
                     .visible(false)
+                    .on_page_load(|webview, payload| {
+                        log::info!(
+                            "Webview page load: url={}, event={:?}",
+                            payload.url(),
+                            payload.event()
+                        );
+                    })
                     .build()
                     .map_err(|e| {
                         log::error!("Failed to create dev-key webview: {}", e);
