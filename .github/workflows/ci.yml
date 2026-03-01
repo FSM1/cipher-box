@@ -525,6 +525,9 @@ jobs:
           fi
           echo "Found fuse-t.pc at: $FUSE_T_PC"
           sudo cp "$FUSE_T_PC" /usr/local/lib/pkgconfig/fuse.pc
+          # FUSE-T reports its product version (1.x) but implements the FUSE 2.9 API.
+          # fuser's build.rs requires fuse >= 2.6.0, so fix the version to match.
+          sudo sed -i '' 's/^Version:.*/Version: 2.9.9/' /usr/local/lib/pkgconfig/fuse.pc
 
       - name: Install Rust toolchain
         run: rustup default stable
