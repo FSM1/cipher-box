@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "d998c0e33a58",
+  "strategy": "manual-commit",
+  "branch": "fix/consolidate-desktop-e2e-pipeline",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d9/98c0e33a58/0/metadata.json",
+      "transcript": "/d9/98c0e33a58/0/full.jsonl",
+      "context": "/d9/98c0e33a58/0/context.md",
+      "content_hash": "/d9/98c0e33a58/0/content_hash.txt",
+      "prompt": "/d9/98c0e33a58/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 5785,
+    "cache_read_tokens": 1159581,
+    "output_tokens": 2831,
+    "api_call_count": 8
+  }
+}
