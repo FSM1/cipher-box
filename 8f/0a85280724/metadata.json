@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "8f0a85280724",
+  "strategy": "manual-commit",
+  "branch": "fix/desktop-e2e-ci-round3",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/e2e-desktop.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8f/0a85280724/0/metadata.json",
+      "transcript": "/8f/0a85280724/0/full.jsonl",
+      "context": "/8f/0a85280724/0/context.md",
+      "content_hash": "/8f/0a85280724/0/content_hash.txt",
+      "prompt": "/8f/0a85280724/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 176,
+    "cache_creation_tokens": 135570,
+    "cache_read_tokens": 11316583,
+    "output_tokens": 44038,
+    "api_call_count": 99
+  }
+}
