@@ -866,16 +866,32 @@ pub(crate) mod implementation {
             _extra_buffer: Option<&[u8]>,
             file_info: &mut FileInfo,
         ) -> Result<(), FspError> {
+            log::info!(
+                "overwrite() called for ino={} fh={}",
+                context.ino,
+                context.fh
+            );
             let mut fs = self.inner.lock().unwrap();
 
             // Truncate the open file handle to zero length
             if let Some(handle) = fs.open_files.get_mut(&context.fh) {
-                if handle.temp_path.is_some() {
+                let has_temp = handle.temp_path.is_some();
+                log::info!(
+                    "overwrite: handle found, has_temp_path={}",
+                    has_temp
+                );
+                if has_temp {
                     handle
                         .truncate(0)
                         .map_err(|_| status_io_device_error())?;
                     handle.dirty = true;
+                    log::info!("overwrite: truncated to 0");
                 }
+            } else {
+                log::warn!(
+                    "overwrite: no handle found for fh={}",
+                    context.fh
+                );
             }
 
             // Update inode size to 0
@@ -1108,7 +1124,7 @@ pub(crate) mod implementation {
             context: &Self::FileContext,
             buffer: &[u8],
             offset: u64,
-            _write_to_end_of_file: bool,
+            write_to_end_of_file: bool,
             _constrained_io: bool,
             file_info: &mut FileInfo,
         ) -> Result<u32, FspError> {
@@ -1121,10 +1137,28 @@ pub(crate) mod implementation {
                 None => return Err(status_invalid_handle()),
             };
 
-            match handle.write_at(offset as i64, buffer) {
+            // Determine actual write offset
+            let actual_offset = if write_to_end_of_file {
+                // Write to end of file: use the current file size
+                let file_size = fs
+                    .inodes
+                    .get(ino)
+                    .map(|i| i.attr.size)
+                    .unwrap_or(0);
+                log::info!(
+                    "write: write_to_end_of_file=true, using offset={} (file_size={})",
+                    file_size,
+                    file_size
+                );
+                file_size
+            } else {
+                offset
+            };
+
+            match handle.write_at(actual_offset as i64, buffer) {
                 Ok(written) => {
                     // Update inode size if write extends the file
-                    let new_end = offset + buffer.len() as u64;
+                    let new_end = actual_offset + buffer.len() as u64;
                     if let Some(inode) = fs.inodes.get_mut(ino) {
                         if new_end > inode.attr.size {
                             inode.attr.size = new_end;
