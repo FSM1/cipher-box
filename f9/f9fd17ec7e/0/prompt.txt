@@ -1,0 +1,81 @@
+Implement the following plan:
+
+# Consolidate Desktop Build + E2E Pipeline
+
+## Context
+
+The `e2e-desktop.yml` workflow downloads debug binaries uploaded by CI's `build-desktop-*` jobs. When CI skips those builds (no desktop file changes), the E2E workflow fails with "Artifact not found." This cross-workflow artifact dependency is fragile.
+
+The fix: make `e2e-desktop.yml` self-contained — it builds its own debug binaries, runs E2E tests, and only then builds release binaries. Remove the debug build jobs from `ci.yml`.
+
+## Changes
+
+### 1. Remove debug build jobs from `ci.yml`
+
+Delete these 3 jobs (lines 462–596):
+- `build-desktop-windows`
+- `build-desktop-macos`
+- `build-desktop-linux`
+
+**Keep** `cargo-check-{windows,macos,linux}` — those provide fast PR validation and don't produce artifacts.
+
+### 2. Restructure `e2e-desktop.yml` into 3 jobs
+
+```
+changes → e2e-desktop (matrix: macos/linux/windows, build+test combined)
+```
+
+**Job 1: `changes`**
+- Checkout + `dorny/paths-filter` with same `desktop:` filters from ci.yml
+- Output: `desktop` (true/false)
+
+**Job 2: `e2e-desktop` (matrix: macos/linux/windows)**
+- Gate: `changes.outputs.desktop == 'true'` OR `workflow_dispatch`
+- Combined build + test in one job (eliminates artifact passing for debug binary)
+- Steps:
+  1. Checkout
+  2. Install FUSE driver (platform-specific, reuse existing steps)
+  3. Install Rust + cargo cache
+  4. `cargo build` (debug) — same commands as current ci.yml build jobs
+  5. Install backend services (postgres, redis, IPFS — reuse existing steps)
+  6. pnpm install + build packages
+  7. Create .env files, run migrations
+  8. Start API + mock IPNS routing
+  9. Run E2E tests (reuse existing platform-specific test steps)
+  10. Upload logs on failure
+
+### 3. Trigger adjustments
+
+Keep existing triggers:
+- `workflow_run` on CI completion (main branch, success only)
+- `workflow_dispatch` (remove `run_id` input since we no longer download from CI)
+
+For `workflow_dispatch`: skip change detection, always run.
+
+### 4. Release builds (out of scope, future)
+
+Production binaries (`.exe`, `.dmg`, `.deb`) should be built on staging tags only (in `deploy-staging.yml` or a dedicated desktop release workflow). Not part of this change.
+
+## Files Modified
+
+- `.github/workflows/ci.yml` — remove 3 `build-desktop-*` jobs (~135 lines)
+- `.github/workflows/e2e-desktop.yml` — restructure into changes → e2e → release pipeline
+
+## Verification
+
+1. Push to main with desktop changes → CI runs cargo-check, E2E workflow detects changes → builds debug binaries → runs E2E tests
+2. Push to main with NO desktop changes → E2E workflow skips entirely (`changes.outputs.desktop=false`)
+3. Manual `workflow_dispatch` → always runs full pipeline (skips change detection)
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.claude/projects/-Users-michael-Code-cipher-box/479326ad-f403-4715-8f04-521ef7f188fe.jsonl
+
+---
+
+ok 2 things:
+- the branch has already been merged, so this needs to be pushed to a new branch
+- Are there any tests for the rust code, and could running these be included in the CI workflow, obviously gated to the cargo checks passing. Would need to check coverage and al
+
+---
+
+ship it
