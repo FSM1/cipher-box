@@ -1,0 +1,389 @@
+name: Desktop E2E Tests
+
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'CI workflow run ID to download artifacts from (optional, uses latest if empty)'
+        required: false
+        type: string
+
+permissions:
+  actions: read
+
+jobs:
+  e2e-desktop:
+    name: Desktop E2E (${{ matrix.platform }})
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            os: macos-latest
+            artifact: desktop-debug-macos
+            fuse-feature: fuse
+            shell: bash
+          - platform: windows
+            os: windows-latest
+            artifact: desktop-debug-windows
+            fuse-feature: winfsp
+            shell: powershell
+          - platform: linux
+            os: ubuntu-22.04
+            artifact: desktop-debug-linux
+            fuse-feature: fuse
+            shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # --- Download desktop binary from CI build ---
+
+      - name: Find latest CI run ID
+        if: github.event_name == 'workflow_dispatch' && inputs.run_id == ''
+        id: find-run
+        run: |
+          RUN_ID=$(gh run list --workflow=ci.yml --branch=main --status=success --limit=1 --json databaseId --jq '.[0].databaseId')
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "No successful CI run found on main branch." >&2
+            exit 1
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download debug binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: desktop-binary/
+          run-id: ${{ inputs.run_id || steps.find-run.outputs.run_id || github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Make binary executable
+        if: runner.os != 'Windows'
+        run: chmod +x desktop-binary/cipherbox-desktop
+
+      # --- Install backend services ---
+
+      - name: Setup PostgreSQL
+        uses: ikalnytskyi/action-setup-postgres@v8
+        with:
+          username: postgres
+          password: postgres
+          database: cipherbox_test
+          postgres-version: '16'
+        id: postgres
+
+      - name: Install Kubo (IPFS)
+        if: runner.os != 'Windows'
+        run: |
+          KUBO_VERSION="v0.34.0"
+          if [ "$(uname)" = "Darwin" ]; then
+            ARCH="darwin-$(uname -m | sed 's/arm64/arm64/' | sed 's/x86_64/amd64/')"
+          else
+            ARCH="linux-amd64"
+          fi
+          wget -q "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_${ARCH}.tar.gz"
+          tar -xzf "kubo_${KUBO_VERSION}_${ARCH}.tar.gz"
+          sudo ./kubo/install.sh
+          ipfs init
+          ipfs daemon &
+          # Wait for daemon readiness
+          READY=0
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:5001/api/v0/id > /dev/null 2>&1; then
+              echo "IPFS daemon ready"
+              READY=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$READY" -ne 1 ]; then
+            echo "IPFS daemon did not become ready in time." >&2
+            exit 1
+          fi
+
+      - name: Install Kubo (IPFS) (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $version = "v0.34.0"
+          Invoke-WebRequest -Uri "https://dist.ipfs.tech/kubo/$version/kubo_${version}_windows-amd64.zip" -OutFile kubo.zip
+          Expand-Archive -Path kubo.zip -DestinationPath .
+          $env:PATH = "$PWD\kubo;$env:PATH"
+          [Environment]::SetEnvironmentVariable("PATH", "$PWD\kubo;$env:PATH", "Process")
+          echo "$PWD\kubo" | Out-File -FilePath $env:GITHUB_PATH -Append
+          ipfs init
+          Start-Process -FilePath "ipfs" -ArgumentList "daemon" -NoNewWindow
+          # Wait for daemon readiness
+          $ready = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            try {
+              $null = Invoke-WebRequest -Uri "http://localhost:5001/api/v0/id" -ErrorAction Stop
+              Write-Host "IPFS daemon ready"
+              $ready = $true
+              break
+            } catch { Start-Sleep -Seconds 1 }
+          }
+          if (-not $ready) { throw "IPFS daemon did not become ready in time." }
+
+      - name: Install Redis (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install redis
+          brew services start redis
+
+      - name: Install Redis (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y redis-server
+          sudo systemctl start redis-server
+
+      - name: Install Redis (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          choco install redis-64 -y
+          Start-Process redis-server -NoNewWindow
+          Start-Sleep -Seconds 3
+
+      # --- Install FUSE driver ---
+
+      - name: Install FUSE-T (macOS)
+        if: runner.os == 'macOS'
+        run: brew install --cask fuse-t
+
+      - name: Install FUSE and Tauri deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y libfuse3-dev fuse3 libwebkit2gtk-4.1-0 libayatana-appindicator3-1
+          sudo modprobe fuse || true
+
+      - name: Install WinFsp (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
+          $out = "winfsp.msi"
+          $expectedHash = "073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A"
+          Invoke-WebRequest -Uri $url -OutFile $out
+          $actualHash = (Get-FileHash $out -Algorithm SHA256).Hash
+          if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
+          Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
+
+      # --- Setup Node.js + pnpm ---
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build mock-ipns-routing
+        run: cd tools/mock-ipns-routing && npm install && npm run build
+
+      - name: Build packages
+        run: pnpm --filter @cipherbox/crypto --filter @cipherbox/api build
+
+      # --- Configuration ---
+
+      - name: Create API .env
+        shell: bash
+        run: |
+          cat > apps/api/.env << 'ENVEOF'
+          NODE_ENV=test
+          DB_HOST=localhost
+          DB_PORT=5432
+          DB_USERNAME=postgres
+          DB_PASSWORD=postgres
+          DB_DATABASE=cipherbox_test
+          JWT_SECRET=e2e-desktop-jwt-secret-key
+          CORS_ALLOWED_ORIGINS=http://localhost:5173
+          IPFS_PROVIDER=local
+          IPFS_LOCAL_API_URL=http://localhost:5001
+          IPFS_LOCAL_GATEWAY_URL=http://localhost:8080
+          DELEGATED_ROUTING_URL=http://localhost:3001
+          REDIS_HOST=localhost
+          REDIS_PORT=6379
+          TEST_LOGIN_SECRET=e2e-test-secret-ci-only
+          ENVEOF
+          echo "IDENTITY_JWT_PRIVATE_KEY=${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}" >> apps/api/.env
+
+      - name: Create desktop .env
+        shell: bash
+        run: |
+          cat > apps/desktop/.env << 'ENVEOF'
+          VITE_API_URL=http://localhost:3000
+          VITE_TEST_LOGIN_SECRET=e2e-test-secret-ci-only
+          ENVEOF
+
+      # --- Database + API startup ---
+
+      - name: Run migrations
+        run: pnpm --filter @cipherbox/api migration:run
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USERNAME: postgres
+          DB_PASSWORD: postgres
+          DB_DATABASE: cipherbox_test
+          NODE_ENV: test
+
+      - name: Start mock IPNS routing
+        shell: bash
+        run: node tools/mock-ipns-routing/dist/index.js &
+
+      - name: Start API server
+        if: runner.os != 'Windows'
+        run: |
+          cd apps/api
+          node dist/main.js &
+          # Wait for API readiness
+          READY=0
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:3000/health > /dev/null 2>&1; then
+              echo "API ready"
+              READY=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$READY" -ne 1 ]; then
+            echo "API did not become ready in time." >&2
+            exit 1
+          fi
+        env:
+          NODE_ENV: test
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USERNAME: postgres
+          DB_PASSWORD: postgres
+          DB_DATABASE: cipherbox_test
+          JWT_SECRET: e2e-desktop-jwt-secret-key
+          CORS_ALLOWED_ORIGINS: http://localhost:5173
+          IPFS_PROVIDER: local
+          IPFS_LOCAL_API_URL: http://localhost:5001
+          IPFS_LOCAL_GATEWAY_URL: http://localhost:8080
+          DELEGATED_ROUTING_URL: http://localhost:3001
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
+          TEST_LOGIN_SECRET: e2e-test-secret-ci-only
+          IDENTITY_JWT_PRIVATE_KEY: ${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}
+
+      - name: Start API server (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:NODE_ENV = "test"
+          $env:DB_HOST = "localhost"
+          $env:DB_PORT = "5432"
+          $env:DB_USERNAME = "postgres"
+          $env:DB_PASSWORD = "postgres"
+          $env:DB_DATABASE = "cipherbox_test"
+          $env:JWT_SECRET = "e2e-desktop-jwt-secret-key"
+          $env:CORS_ALLOWED_ORIGINS = "http://localhost:5173"
+          $env:IPFS_PROVIDER = "local"
+          $env:IPFS_LOCAL_API_URL = "http://localhost:5001"
+          $env:IPFS_LOCAL_GATEWAY_URL = "http://localhost:8080"
+          $env:DELEGATED_ROUTING_URL = "http://localhost:3001"
+          $env:REDIS_HOST = "localhost"
+          $env:REDIS_PORT = "6379"
+          $env:TEST_LOGIN_SECRET = "e2e-test-secret-ci-only"
+          $env:IDENTITY_JWT_PRIVATE_KEY = "${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}"
+          Start-Process -FilePath node -ArgumentList "dist/main.js" -WorkingDirectory "apps/api" -NoNewWindow
+          # Wait for API readiness
+          $ready = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            try {
+              $null = Invoke-WebRequest -Uri "http://localhost:3000/health" -ErrorAction Stop
+              Write-Host "API ready"
+              $ready = $true
+              break
+            } catch { Start-Sleep -Seconds 1 }
+          }
+          if (-not $ready) { throw "API did not become ready in time." }
+
+      # --- Desktop launch + test execution ---
+
+      - name: Run desktop E2E tests (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          export CIPHERBOX_API_URL=http://localhost:3000
+          export VITE_API_URL=http://localhost:3000
+          export VITE_TEST_LOGIN_SECRET=e2e-test-secret-ci-only
+          export RUST_LOG=info
+          DEV_KEY=$(openssl rand -hex 32)
+          ./desktop-binary/cipherbox-desktop --dev-key $DEV_KEY &
+          DESKTOP_PID=$!
+          set +e
+          bash tests/e2e-desktop/scripts/run-all.sh
+          TEST_EXIT=$?
+          set -e
+          kill $DESKTOP_PID 2>/dev/null || true
+          diskutil unmount force $HOME/CipherBox 2>/dev/null || true
+          exit $TEST_EXIT
+
+      - name: Run desktop E2E tests (Linux)
+        if: runner.os == 'Linux'
+        uses: GabrielBB/xvfb-action@v1
+        with:
+          run: |
+            export CIPHERBOX_API_URL=http://localhost:3000
+            export VITE_API_URL=http://localhost:3000
+            export VITE_TEST_LOGIN_SECRET=e2e-test-secret-ci-only
+            export RUST_LOG=info
+            DEV_KEY=$(openssl rand -hex 32)
+            ./desktop-binary/cipherbox-desktop --dev-key $DEV_KEY &
+            DESKTOP_PID=$!
+            set +e
+            bash tests/e2e-desktop/scripts/run-all.sh
+            TEST_EXIT=$?
+            set -e
+            kill $DESKTOP_PID 2>/dev/null || true
+            fusermount3 -u $HOME/CipherBox 2>/dev/null || true
+            exit $TEST_EXIT
+
+      - name: Run desktop E2E tests (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:CIPHERBOX_API_URL = "http://localhost:3000"
+          $env:VITE_API_URL = "http://localhost:3000"
+          $env:VITE_TEST_LOGIN_SECRET = "e2e-test-secret-ci-only"
+          $env:RUST_LOG = "info"
+          $DEV_KEY = -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
+          $proc = Start-Process -FilePath ".\desktop-binary\cipherbox-desktop.exe" -ArgumentList "--dev-key",$DEV_KEY -PassThru -NoNewWindow
+          & "$PWD\tests\e2e-desktop\scripts\run-all.ps1"
+          $testExit = $LASTEXITCODE
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          exit $testExit
+
+      # --- Failure artifacts ---
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-desktop-logs-${{ matrix.platform }}
+          path: |
+            apps/api/*.log
+            ~/Library/Logs/fuse-t/fuse-t.log
+          retention-days: 7

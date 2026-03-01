@@ -461,7 +461,8 @@ jobs:
     needs: [changes, cargo-check-windows, typecheck]
     if: |
       !failure() && !cancelled() &&
-      (github.event_name == 'push' || needs.changes.outputs.desktop == 'true')
+      github.event_name == 'push' &&
+      needs.changes.outputs.desktop == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -491,33 +492,24 @@ jobs:
           key: windows-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: windows-cargo-
 
-      - uses: pnpm/action-setup@v4
+      - name: Build debug binary for E2E
+        run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features winfsp
+
+      - name: Upload debug desktop binary
+        uses: actions/upload-artifact@v4
         with:
-          version: 10
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build crypto package
-        run: pnpm --filter @cipherbox/crypto build
-
-      - uses: tauri-apps/tauri-action@v0
-        with:
-          projectPath: apps/desktop
-          tauriScript: pnpm tauri
-          args: -- --no-default-features --features winfsp
+          name: desktop-debug-windows
+          path: apps/desktop/src-tauri/target/debug/cipherbox-desktop.exe
+          retention-days: 1
+          if-no-files-found: error
 
   build-desktop-macos:
     name: Build macOS Desktop
     needs: [changes, cargo-check-macos, typecheck]
     if: |
       !failure() && !cancelled() &&
-      (github.event_name == 'push' || needs.changes.outputs.desktop == 'true')
+      github.event_name == 'push' &&
+      needs.changes.outputs.desktop == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -537,33 +529,26 @@ jobs:
           key: macos-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: macos-cargo-
 
-      - uses: pnpm/action-setup@v4
+      - name: Build debug binary for E2E
+        run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features fuse
+        env:
+          PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
+
+      - name: Upload debug desktop binary
+        uses: actions/upload-artifact@v4
         with:
-          version: 10
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build crypto package
-        run: pnpm --filter @cipherbox/crypto build
-
-      - uses: tauri-apps/tauri-action@v0
-        with:
-          projectPath: apps/desktop
-          tauriScript: pnpm tauri
-          args: -- --no-default-features --features fuse
+          name: desktop-debug-macos
+          path: apps/desktop/src-tauri/target/debug/cipherbox-desktop
+          retention-days: 1
+          if-no-files-found: error
 
   build-desktop-linux:
     name: Build Linux Desktop
     needs: [changes, cargo-check-linux, typecheck]
     if: |
       !failure() && !cancelled() &&
-      (github.event_name == 'push' || needs.changes.outputs.desktop == 'true')
+      github.event_name == 'push' &&
+      needs.changes.outputs.desktop == 'true'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -593,23 +578,13 @@ jobs:
           key: linux-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: linux-cargo-
 
-      - uses: pnpm/action-setup@v4
+      - name: Build debug binary for E2E
+        run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features fuse
+
+      - name: Upload debug desktop binary
+        uses: actions/upload-artifact@v4
         with:
-          version: 10
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build crypto package
-        run: pnpm --filter @cipherbox/crypto build
-
-      - uses: tauri-apps/tauri-action@v0
-        with:
-          projectPath: apps/desktop
-          tauriScript: pnpm tauri
-          args: -- --no-default-features --features fuse
+          name: desktop-debug-linux
+          path: apps/desktop/src-tauri/target/debug/cipherbox-desktop
+          retention-days: 1
+          if-no-files-found: error
