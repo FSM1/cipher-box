@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "ba5b944ef0de",
+  "strategy": "manual-commit",
+  "branch": "fix/macos-fuse-t-pkgconfig",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/e2e-desktop.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ba/5b944ef0de/0/metadata.json",
+      "transcript": "/ba/5b944ef0de/0/full.jsonl",
+      "context": "/ba/5b944ef0de/0/context.md",
+      "content_hash": "/ba/5b944ef0de/0/content_hash.txt",
+      "prompt": "/ba/5b944ef0de/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 217,
+    "cache_creation_tokens": 245769,
+    "cache_read_tokens": 19128195,
+    "output_tokens": 52815,
+    "api_call_count": 195
+  }
+}
