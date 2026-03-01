@@ -40,6 +40,49 @@ pub(crate) mod implementation {
     /// Total storage quota in bytes (500 MiB).
     const QUOTA_BYTES: u64 = 500 * 1024 * 1024;
 
+    /// Permissive self-relative security descriptor granting FILE_ALL_ACCESS
+    /// to Everyone (S-1-1-0). CipherBox is single-user; encryption is the real
+    /// access control, so we grant full NTFS permissions.
+    ///
+    /// Layout: 20-byte header, 28-byte DACL (one ACE), 12-byte Owner, 12-byte Group.
+    ///
+    /// Without a valid descriptor, WinFsp's `FspFileSystemOpenCheck()` strips
+    /// DELETE access from `GrantedAccess` when `SecurityDescriptorSize == 0`,
+    /// which prevents directory deletion via `Remove-Item` / `RemoveDirectory()`.
+    static PERMISSIVE_SD: [u8; 72] = [
+        // ── SECURITY_DESCRIPTOR header (20 bytes) ──
+        0x01,                   // Revision
+        0x00,                   // Sbz1
+        0x04, 0x80,             // Control: SE_SELF_RELATIVE | SE_DACL_PRESENT
+        0x30, 0x00, 0x00, 0x00, // OwnerOffset = 48
+        0x3C, 0x00, 0x00, 0x00, // GroupOffset = 60
+        0x00, 0x00, 0x00, 0x00, // SaclOffset = 0 (none)
+        0x14, 0x00, 0x00, 0x00, // DaclOffset = 20
+        // ── ACL header (8 bytes) ──
+        0x02,                   // AclRevision
+        0x00,                   // Sbz1
+        0x1C, 0x00,             // AclSize = 28
+        0x01, 0x00,             // AceCount = 1
+        0x00, 0x00,             // Sbz2
+        // ── ACCESS_ALLOWED_ACE (20 bytes) ──
+        0x00,                   // AceType = ACCESS_ALLOWED
+        0x00,                   // AceFlags
+        0x14, 0x00,             // AceSize = 20
+        0xFF, 0x01, 0x1F, 0x00, // Mask = FILE_ALL_ACCESS (0x001F01FF)
+        // SID: S-1-1-0 (Everyone)
+        0x01, 0x01,             // Revision, SubAuthorityCount
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x01, // IdentifierAuthority
+        0x00, 0x00, 0x00, 0x00, // SubAuthority[0]
+        // ── Owner SID: S-1-1-0 (12 bytes) ──
+        0x01, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00,
+        // ── Group SID: S-1-1-0 (12 bytes) ──
+        0x01, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+
     /// Maximum number of past versions to keep per file.
     const MAX_VERSIONS_PER_FILE: usize = 10;
 
@@ -627,7 +670,7 @@ pub(crate) mod implementation {
         fn get_security_by_name(
             &self,
             file_name: &U16CStr,
-            _security_descriptor: Option<&mut [c_void]>,
+            security_descriptor: Option<&mut [c_void]>,
             _find_reparse_point: impl FnOnce(&U16CStr) -> Option<FileSecurity>,
         ) -> Result<FileSecurity, FspError> {
             let path = file_name.to_string_lossy();
@@ -649,12 +692,27 @@ pub(crate) mod implementation {
 
             let info = fill_file_info(&inode.attr);
 
-            // Use a permissive default security descriptor.
-            // CipherBox is single-user, encryption is the real access control.
+            // Write permissive security descriptor into the buffer if provided.
+            // CipherBox is single-user — encryption is the real access control.
+            //
+            // Returning a valid descriptor (instead of sz=0) is required so that
+            // WinFsp's FspFileSystemOpenCheck grants DELETE access for directories.
+            if let Some(buf) = security_descriptor {
+                if buf.len() >= PERMISSIVE_SD.len() {
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            PERMISSIVE_SD.as_ptr(),
+                            buf.as_mut_ptr() as *mut u8,
+                            PERMISSIVE_SD.len(),
+                        );
+                    }
+                }
+            }
+
             Ok(FileSecurity {
                 attributes: info.file_attributes,
                 reparse: false,
-                sz_security_descriptor: 0,
+                sz_security_descriptor: PERMISSIVE_SD.len() as u64,
             })
         }
 
@@ -1214,6 +1272,26 @@ pub(crate) mod implementation {
                 .ok_or(status_object_name_not_found())?;
             *file_info = fill_file_info(&inode.attr);
             Ok(())
+        }
+
+        // -- get_security --
+        fn get_security(
+            &self,
+            _context: &Self::FileContext,
+            security_descriptor: Option<&mut [c_void]>,
+        ) -> Result<u64, FspError> {
+            if let Some(buf) = security_descriptor {
+                if buf.len() >= PERMISSIVE_SD.len() {
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            PERMISSIVE_SD.as_ptr(),
+                            buf.as_mut_ptr() as *mut u8,
+                            PERMISSIVE_SD.len(),
+                        );
+                    }
+                }
+            }
+            Ok(PERMISSIVE_SD.len() as u64)
         }
 
         // -- set_basic_info --
@@ -2547,10 +2625,17 @@ pub(crate) mod implementation {
         // -- set_delete --
         fn set_delete(
             &self,
-            _context: &Self::FileContext,
-            _file_name: &U16CStr,
-            _delete_file: bool,
+            context: &Self::FileContext,
+            file_name: &U16CStr,
+            delete_file: bool,
         ) -> Result<(), FspError> {
+            log::info!(
+                "set_delete() ino={} fh={} path={} delete={}",
+                context.ino,
+                context.fh,
+                file_name.to_string_lossy(),
+                delete_file,
+            );
             // Mark for deletion. Actual deletion happens in cleanup().
             // WinFsp handles the pending-delete semantics for us.
             Ok(())
