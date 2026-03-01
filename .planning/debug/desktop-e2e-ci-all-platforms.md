@@ -2,17 +2,17 @@
 status: fixing
 trigger: 'Desktop E2E tests fail on all three platforms in CI'
 created: 2026-03-01T04:00:00Z
-updated: 2026-03-01T05:30:00Z
+updated: 2026-03-01T07:00:00Z
 branch: fix/desktop-e2e-ci-round3
 ---
 
 ## Current Focus
 
-hypothesis: WinFsp DLL not found because winfsp crate missing "system" feature (registry lookup disabled)
-test: Enable "system" feature + add WinFsp bin to PATH
-expecting: winfsp_init() finds DLL via registry, mount succeeds, all Windows tests pass
-next_action: Push round 9 fixes, trigger CI
-ci_run: pending (round 9)
+hypothesis: WinFsp set_file_size ignores set_allocation_size=true truncation (overwrite broken)
+test: Handle set_allocation_size=true with new_size=0 as truncation + clear CID
+expecting: PowerShell Set-Content correctly overwrites file content on Windows
+next_action: CI round 14 running (commit 432334b06)
+ci_run: pending (round 14)
 
 ## Symptoms
 
@@ -196,13 +196,64 @@ calls the `overwrite()` method which should truncate the file. Without it, the d
 returns `STATUS_INVALID_DEVICE_REQUEST` and the file is opened via `open()` instead,
 preserving existing content.
 
-### Round 10 — CI run pending
+### Round 10 Results — CI run 22537802342 (commit 0eb13b9a2)
+
+Added `overwrite()` callback in WinFsp operations.
+
+- ✅ macOS: ALL TESTS PASSED!
+- ✅ Linux: ALL TESTS PASSED!
+- ❌ Windows: Overwrite test still FAILS (got: 'Hello from CIModified content')
+  - `overwrite()` callback never called — confirmed by absence of log messages
+  - WinFsp dispatches overwrite differently than expected
+
+### Round 11 — Skipped (compile error caught before CI)
+
+Added `write_to_end_of_file` fix but introduced borrow checker error E0502.
+
+### Round 12 Results — CI run 22543415514 (commit f88b80191)
+
+Fixed `write_to_end_of_file` handling (read file_size before mutable borrow).
+
+- ❌ Build FAILED: `error[E0502]: cannot borrow fs as immutable because it is also borrowed as mutable`
+  - Mutable borrow of `fs.open_files.get_mut(&fh)` at line 1135 conflicts with
+    immutable borrow of `fs.inodes.get(ino)` at line 1143
+  - Fix: read `current_file_size` from `fs.inodes` BEFORE getting mutable handle
+
+### Round 13 Results — CI run 22543670556 (commit 1b9d3ca4b)
+
+Fixed borrow checker error. Added comprehensive diagnostic logging to all WinFsp
+callbacks: open(), create(), overwrite(), write(), set_file_size(), cleanup(), close().
+
+- ✅ macOS: ALL TESTS PASSED!
+- ✅ Linux: ALL TESTS PASSED!
+- ❌ Windows: Overwrite test still FAILS — but now we have FULL diagnostic logs!
+
+**SMOKING GUN from diagnostic logs (Test 4: Overwrite file)**:
+
+```text
+open() path=\e2e-test.txt create_options=0x01400060 granted_access=0x00120196  (fh=30)
+set_file_size() ino=2 fh=30 new_size=0 set_allocation_size=true              ← IGNORED!
+cleanup() ino=2 fh=30 flags=0x000000F2
+close() ino=2 fh=30
+open() path=\e2e-test.txt create_options=0x03400060 granted_access=0x0012019F  (fh=38)
+write() ino=2 fh=38 len=16 offset=13 write_to_end_of_file=false              ← offset=13 (old size!)
+cleanup() ino=2 fh=38 flags=0x000000F2
+close() ino=2 fh=38
+```
+
+**Root cause**: `set_file_size()` had `if !set_allocation_size { ... }` which IGNORED
+calls with `set_allocation_size=true`. WinFsp's overwrite mechanism sends
+`set_file_size(new_size=0, set_allocation_size=true)` to truncate files. The inode size
+stayed at 13, so the next write went to offset 13 instead of 0.
+
+### Round 14 — CI run pending (commit 432334b06)
 
 Applied fixes:
 
-- Implement `overwrite()` callback in WinFsp operations (truncates file to 0)
+- Handle `set_allocation_size=true` with `new_size=0` as truncation signal
+- Clear CID when truncating to 0 (prevents stale IPFS content re-download on next open)
 
-### Root Cause 3 (fixing round 8): WinFsp init kills process silently
+### Root Cause 3 (fixed round 8): WinFsp init kills process silently
 
 `winfsp::winfsp_init_or_die()` calls `std::process::exit()` when the WinFsp DLL
 can't be found at runtime. Unlike `panic!()`, `process::exit()` skips all
@@ -210,6 +261,30 @@ destructors, logging, and error handlers. The process just vanishes.
 
 Fix: Use `winfsp::winfsp_init()` which returns `Result`, and propagate the error
 properly so it appears in both Rust logs and JS error reporting.
+
+### Root Cause 4 (fixed round 9): WinFsp DLL not found (missing "system" feature)
+
+The `winfsp` crate needs `features = ["system"]` to enable registry-based DLL lookup.
+Without it, only local PATH lookup is tried — and CI doesn't have WinFsp's bin dir in PATH.
+
+Fix: Add `features = ["system"]` to winfsp dependency in Cargo.toml.
+
+### Root Cause 5 (fixing round 14): set_file_size ignores allocation truncation
+
+WinFsp's overwrite mechanism (PowerShell `Set-Content`) works in TWO phases:
+
+1. Open file → `set_file_size(new_size=0, set_allocation_size=true)` → close
+2. Open file → `write(offset=0, data)` → close
+
+Our `set_file_size()` had `if !set_allocation_size { ... }` which IGNORED the
+truncation in phase 1. The inode size stayed at the old value, so phase 2's write
+went to the old offset instead of 0, producing append behavior.
+
+Additionally, clearing the CID on truncate-to-0 prevents subsequent `open()` from
+re-downloading stale IPFS content into the new temp file.
+
+Fix: `let should_truncate = !set_allocation_size || (set_allocation_size && new_size == 0)`
+plus `cid.clear()` when new_size == 0.
 
 ## Fixes Applied (all commits on fix/desktop-e2e-ci-round3)
 
@@ -235,12 +310,18 @@ properly so it appears in both Rust logs and JS error reporting.
 | 18  | Replace winfsp_init_or_die with winfsp_init   | c76d97b15 | ✅              |
 | 19  | Windows test step: bash + log capture         | c76d97b15 | ✅              |
 | 20  | WinFsp mount step-by-step logging             | c76d97b15 | ✅              |
-| 21  | Enable winfsp "system" feature (registry DLL) | pending   | 🔄 pending      |
+| 21  | Enable winfsp "system" feature (registry DLL) | 03039f2c6 | ✅              |
 | 22  | Add WinFsp bin dir to PATH in CI              | 03039f2c6 | ✅              |
-| 23  | Implement WinFsp overwrite() callback         | pending   | 🔄 pending      |
+| 23  | Implement WinFsp overwrite() callback         | 0eb13b9a2 | ✅ (not called) |
+| 24  | Fix write_to_end_of_file offset handling      | f88b80191 | ✅              |
+| 25  | Fix borrow checker in write()                 | 1b9d3ca4b | ✅              |
+| 26  | Add comprehensive diagnostic logging          | 1b9d3ca4b | ✅ (diagnostic) |
+| 27  | Handle set_allocation_size=true truncation    | 432334b06 | 🔄 testing      |
+| 28  | Clear CID on truncate-to-0                    | 432334b06 | 🔄 testing      |
 
 ## Open Questions
 
-1. Is the WinFsp DLL discoverable at runtime on the CI runner? (registry key present?)
-2. If winfsp_init() fails, what's the actual error? (DLL not found? Wrong arch?)
+1. ~~Is the WinFsp DLL discoverable at runtime on the CI runner?~~ YES — fixed with "system" feature
+2. ~~If winfsp_init() fails, what's the actual error?~~ ERROR_DELAY_LOAD_FAILED (1285) — DLL not found
 3. Can we remove diagnostic logging after CI passes?
+4. Should overwrite() callback be removed since WinFsp never calls it? (Keep for now as documentation)
