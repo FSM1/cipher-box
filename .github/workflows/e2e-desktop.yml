@@ -53,6 +53,7 @@ jobs:
         github.event_name == 'workflow_dispatch' ||
         (
           github.event_name == 'workflow_run' &&
+          github.event.workflow_run.event == 'push' &&
           github.event.workflow_run.conclusion == 'success' &&
           needs.changes.outputs.desktop == 'true'
         )
@@ -172,7 +173,7 @@ jobs:
           else
             ARCH="linux-amd64"
           fi
-          wget -q "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_${ARCH}.tar.gz"
+          curl -fsSL -o "kubo_${KUBO_VERSION}_${ARCH}.tar.gz" "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_${ARCH}.tar.gz"
           tar -xzf "kubo_${KUBO_VERSION}_${ARCH}.tar.gz"
           sudo ./kubo/install.sh
           ipfs init
@@ -180,7 +181,7 @@ jobs:
           # Wait for daemon readiness
           READY=0
           for i in $(seq 1 30); do
-            if curl -s http://localhost:5001/api/v0/id > /dev/null 2>&1; then
+            if curl -sf -X POST http://localhost:5001/api/v0/id > /dev/null 2>&1; then
               echo "IPFS daemon ready"
               READY=1
               break
@@ -208,7 +209,7 @@ jobs:
           $ready = $false
           for ($i = 0; $i -lt 30; $i++) {
             try {
-              $null = Invoke-WebRequest -Uri "http://localhost:5001/api/v0/id" -ErrorAction Stop
+              $null = Invoke-WebRequest -Uri "http://localhost:5001/api/v0/id" -Method Post -ErrorAction Stop
               Write-Host "IPFS daemon ready"
               $ready = $true
               break
@@ -399,24 +400,26 @@ jobs:
       - name: Run desktop E2E tests (Linux)
         if: runner.os == 'Linux'
         uses: GabrielBB/xvfb-action@v1
+        env:
+          CIPHERBOX_API_URL: http://localhost:3000
+          VITE_API_URL: http://localhost:3000
+          VITE_TEST_LOGIN_SECRET: e2e-test-secret-ci-only
+          RUST_LOG: info
         with:
-          run: |
-            export CIPHERBOX_API_URL=http://localhost:3000
-            export VITE_API_URL=http://localhost:3000
-            export VITE_TEST_LOGIN_SECRET=e2e-test-secret-ci-only
-            export RUST_LOG=info
-            BINARY=apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }}
-            chmod +x "$BINARY"
-            DEV_KEY=$(openssl rand -hex 32)
+          run: >-
+            bash -c '
+            BINARY=apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }};
+            chmod +x "$BINARY";
+            DEV_KEY=$(openssl rand -hex 32);
             "$BINARY" --dev-key $DEV_KEY &
-            DESKTOP_PID=$!
-            set +e
-            bash tests/e2e-desktop/scripts/run-all.sh
-            TEST_EXIT=$?
-            set -e
-            kill $DESKTOP_PID 2>/dev/null || true
-            fusermount3 -u $HOME/CipherBox 2>/dev/null || true
-            exit $TEST_EXIT
+            DESKTOP_PID=$!;
+            set +e;
+            bash tests/e2e-desktop/scripts/run-all.sh;
+            TEST_EXIT=$?;
+            set -e;
+            kill $DESKTOP_PID 2>/dev/null || true;
+            fusermount3 -u $HOME/CipherBox 2>/dev/null || true;
+            exit $TEST_EXIT'
 
       - name: Run desktop E2E tests (Windows)
         if: runner.os == 'Windows'
