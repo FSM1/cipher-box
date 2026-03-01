@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "95a5ce2468fd",
+  "strategy": "manual-commit",
+  "branch": "fix/staging-desktop-builds",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/deploy-staging.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/95/a5ce2468fd/0/metadata.json",
+      "transcript": "/95/a5ce2468fd/0/full.jsonl",
+      "context": "/95/a5ce2468fd/0/context.md",
+      "content_hash": "/95/a5ce2468fd/0/content_hash.txt",
+      "prompt": "/95/a5ce2468fd/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 64,
+    "cache_creation_tokens": 273785,
+    "cache_read_tokens": 5059497,
+    "output_tokens": 14666,
+    "api_call_count": 52
+  }
+}
