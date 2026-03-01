@@ -77,56 +77,72 @@ if ($Modified.Trim() -eq "Modified content") {
 
 # ---- Test 5: Binary file round-trip ----
 Write-Host "--- Test 5: Binary file round-trip ---"
-$TempBinary = "$env:TEMP\e2e-binary.bin"
-$MountBinary = "$MountPoint\e2e-binary.bin"
-$Bytes = New-Object byte[] (256 * 1024)
-[System.Security.Cryptography.RandomNumberGenerator]::Fill($Bytes)
-[System.IO.File]::WriteAllBytes($TempBinary, $Bytes)
-Copy-Item -Path $TempBinary -Destination $MountBinary
-Start-Sleep -Seconds 5
-$HashOrig = (Get-FileHash -Path $TempBinary -Algorithm SHA256).Hash
-$HashMount = (Get-FileHash -Path $MountBinary -Algorithm SHA256).Hash
-if ($HashOrig -eq $HashMount) {
-    Test-Pass "Binary file round-trip (256KB)"
-} else {
-    Test-Fail "Binary file round-trip (orig: $HashOrig, mount: $HashMount)"
+try {
+    $TempBinary = "$env:TEMP\e2e-binary.bin"
+    $MountBinary = "$MountPoint\e2e-binary.bin"
+    $Bytes = New-Object byte[] (256 * 1024)
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($Bytes)
+    [System.IO.File]::WriteAllBytes($TempBinary, $Bytes)
+    Copy-Item -Path $TempBinary -Destination $MountBinary -ErrorAction Stop
+    Start-Sleep -Seconds 5
+    $HashOrig = (Get-FileHash -Path $TempBinary -Algorithm SHA256).Hash
+    $HashMount = (Get-FileHash -Path $MountBinary -Algorithm SHA256).Hash
+    if ($HashOrig -eq $HashMount) {
+        Test-Pass "Binary file round-trip (256KB)"
+    } else {
+        Test-Fail "Binary file round-trip (orig: $HashOrig, mount: $HashMount)"
+    }
+} catch {
+    Test-Fail "Binary file round-trip (exception: $($_.Exception.Message))"
 }
 
 # ---- Test 6: Rename file ----
 Write-Host "--- Test 6: Rename file ---"
-Move-Item -Path "$MountPoint\e2e-test.txt" -Destination "$MountPoint\e2e-renamed.txt" -Force
-Start-Sleep -Seconds 2
-$OldExists = Test-Path "$MountPoint\e2e-test.txt"
-$NewExists = Test-Path "$MountPoint\e2e-renamed.txt"
-if (-not $OldExists -and $NewExists) {
-    $Renamed = Get-Content -Path "$MountPoint\e2e-renamed.txt" -Raw
-    if ($Renamed.Trim() -eq "Modified content") {
-        Test-Pass "Rename file"
+try {
+    Move-Item -Path "$MountPoint\e2e-test.txt" -Destination "$MountPoint\e2e-renamed.txt" -Force -ErrorAction Stop
+    Start-Sleep -Seconds 2
+    $OldExists = Test-Path "$MountPoint\e2e-test.txt"
+    $NewExists = Test-Path "$MountPoint\e2e-renamed.txt"
+    if (-not $OldExists -and $NewExists) {
+        $Renamed = Get-Content -Path "$MountPoint\e2e-renamed.txt" -Raw
+        if ($Renamed.Trim() -eq "Modified content") {
+            Test-Pass "Rename file"
+        } else {
+            Test-Fail "Rename file (content changed: '$Renamed')"
+        }
     } else {
-        Test-Fail "Rename file (content changed: '$Renamed')"
+        Test-Fail "Rename file (old exists: $OldExists, new exists: $NewExists)"
     }
-} else {
-    Test-Fail "Rename file (old exists: $OldExists, new exists: $NewExists)"
+} catch {
+    Test-Fail "Rename file (exception: $($_.Exception.Message))"
 }
 
 # ---- Test 7: Delete file ----
 Write-Host "--- Test 7: Delete file ---"
-Remove-Item -Path "$MountPoint\e2e-renamed.txt" -Force
-Start-Sleep -Seconds 2
-if (-not (Test-Path "$MountPoint\e2e-renamed.txt")) {
-    Test-Pass "Delete file"
-} else {
-    Test-Fail "Delete file (still exists)"
+try {
+    Remove-Item -Path "$MountPoint\e2e-renamed.txt" -Force -ErrorAction Stop
+    Start-Sleep -Seconds 2
+    if (-not (Test-Path "$MountPoint\e2e-renamed.txt")) {
+        Test-Pass "Delete file"
+    } else {
+        Test-Fail "Delete file (still exists)"
+    }
+} catch {
+    Test-Fail "Delete file (exception: $($_.Exception.Message))"
 }
 
 # ---- Test 8: Delete directory ----
 Write-Host "--- Test 8: Delete directory ---"
-Remove-Item -Path "$MountPoint\e2e-folder" -Recurse -Force
-Start-Sleep -Seconds 2
-if (-not (Test-Path "$MountPoint\e2e-folder")) {
-    Test-Pass "Delete directory"
-} else {
-    Test-Fail "Delete directory (still exists)"
+try {
+    Remove-Item -Path "$MountPoint\e2e-folder" -Recurse -Force -ErrorAction Stop
+    Start-Sleep -Seconds 2
+    if (-not (Test-Path "$MountPoint\e2e-folder")) {
+        Test-Pass "Delete directory"
+    } else {
+        Test-Fail "Delete directory (still exists)"
+    }
+} catch {
+    Test-Fail "Delete directory (exception: $($_.Exception.Message))"
 }
 
 # ---- Test 9: Cleanup ----
