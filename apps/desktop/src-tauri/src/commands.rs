@@ -482,6 +482,14 @@ pub async fn get_dev_key(state: State<'_, AppState>) -> Result<Option<String>, S
     Ok(key)
 }
 
+/// Log a JS error from the webview to the Rust logger.
+/// Used in CI to surface webview errors that would otherwise be invisible.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub fn log_js_error(context: String, message: String) {
+    log::error!("[webview-js] {}: {}", context, message);
+}
+
 /// Handle test-login authentication (debug builds only).
 ///
 /// Called from the webview after a successful `POST /auth/test-login` response.

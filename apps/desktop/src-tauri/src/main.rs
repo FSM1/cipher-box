@@ -189,6 +189,7 @@ fn main() {
                     commands::open_oauth_popup,
                     commands::get_dev_key,
                     commands::handle_test_login_complete,
+                    commands::log_js_error,
                 ]
             }
             #[cfg(not(debug_assertions))]

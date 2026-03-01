@@ -303,7 +303,7 @@ jobs:
           DB_PASSWORD=postgres
           DB_DATABASE=cipherbox_test
           JWT_SECRET=e2e-desktop-jwt-secret-key
-          CORS_ALLOWED_ORIGINS=http://localhost:5173
+          CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:1420
           IPFS_PROVIDER=local
           IPFS_LOCAL_API_URL=http://localhost:5001
           IPFS_LOCAL_GATEWAY_URL=http://localhost:8080
@@ -365,7 +365,7 @@ jobs:
           DB_PASSWORD: postgres
           DB_DATABASE: cipherbox_test
           JWT_SECRET: e2e-desktop-jwt-secret-key
-          CORS_ALLOWED_ORIGINS: http://localhost:5173
+          CORS_ALLOWED_ORIGINS: http://localhost:5173,http://localhost:1420
           IPFS_PROVIDER: local
           IPFS_LOCAL_API_URL: http://localhost:5001
           IPFS_LOCAL_GATEWAY_URL: http://localhost:8080
@@ -386,7 +386,7 @@ jobs:
           $env:DB_PASSWORD = "postgres"
           $env:DB_DATABASE = "cipherbox_test"
           $env:JWT_SECRET = "e2e-desktop-jwt-secret-key"
-          $env:CORS_ALLOWED_ORIGINS = "http://localhost:5173"
+          $env:CORS_ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:1420"
           $env:IPFS_PROVIDER = "local"
           $env:IPFS_LOCAL_API_URL = "http://localhost:5001"
           $env:IPFS_LOCAL_GATEWAY_URL = "http://localhost:8080"

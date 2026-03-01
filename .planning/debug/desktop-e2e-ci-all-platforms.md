@@ -2,22 +2,22 @@
 status: fixing
 trigger: 'Desktop E2E tests fail on all three platforms in CI'
 created: 2026-03-01T04:00:00Z
-updated: 2026-03-01T05:05:00Z
+updated: 2026-03-01T05:30:00Z
 branch: fix/desktop-e2e-ci-round3
 ---
 
 ## Current Focus
 
-hypothesis: Debug binary uses devUrl (<http://localhost:1420>) not embedded frontendDist
-test: Start `vite preview --port 1420` before binary launch on all platforms
-expecting: Webview loads real frontend, JS auth flow runs, mount appears
-next_action: Analyze CI run results
-ci_run: pending (just triggered round 4)
+hypothesis: CORS blocks fetch from webview (origin localhost:1420) to API (localhost:3000)
+test: Add <http://localhost:1420> to CORS_ALLOWED_ORIGINS + add JS error reporting to Rust
+expecting: Fetch succeeds, handle_test_login_complete called, mount appears
+next_action: Push round 5 fixes, trigger CI
+ci_run: pending (round 5)
 
 ## Symptoms
 
 expected: All desktop E2E tests pass on macOS, Linux, and Windows in CI
-actual: All three platforms fail — binary starts, webview created, but mount never appears
+actual: All three platforms fail — JS runs, get_dev_key succeeds, but auth flow fails silently
 reproduction: workflow_dispatch on fix/desktop-e2e-ci-round3
 
 ## Timeline
@@ -47,13 +47,30 @@ Applied fixes: diagnostic logging (on_page_load, get_dev_key logging, RUST_LOG=d
 - `get_dev_key` never called (confirms JS not executing)
 - Pre-flight: API health check passed
 
-### Round 4 — CI run pending (commit a236637e7)
+### Round 4 — CI run 22536393479 (commits a236637e7, 928918a47)
 
-Applied fix: Start `vite preview --port 1420` before binary launch on all platforms
+Applied fixes: Vite preview server on :1420, Memurai for Windows Redis
 
-- Uses pre-built dist from earlier Vite build step
-- Serves on port 1420 (what debug binary's devUrl expects)
-- Also fixed Windows Redis PATH refresh
+- ✅ macOS: Page loads! JS executes! `get_dev_key` called and returned `has_key=true`!
+- ✅ Linux: Same — page loaded, JS executed, `get_dev_key` returned `has_key=true`
+- ❌ macOS+Linux: After `get_dev_key` returns, NO more Rust logs for 90s → mount timeout
+  - `handle_test_login_complete` never called
+  - JS enters `handleDevKeyAuth()` → `fetch(localhost:3000/auth/test-login)` → **silently fails**
+  - Error caught by `catch(err)` → logged to `console.error` → INVISIBLE (no way to see webview console)
+- ❌ Windows: Memurai fix not tested yet (pushed after round 4 triggered)
+
+**Root cause of round 4 failure**: CORS! The API's `CORS_ALLOWED_ORIGINS` is `http://localhost:5173`.
+The webview loads from `http://localhost:1420`. The cross-origin fetch to `http://localhost:3000`
+is blocked because the API doesn't include `:1420` in its allowed origins.
+
+### Round 5 — CI run pending
+
+Applied fixes:
+
+- Add `http://localhost:1420` to `CORS_ALLOWED_ORIGINS` (API .env, macOS/Linux env, Windows env)
+- Add `log_js_error` Tauri command so JS errors are visible in Rust logs
+- Add step-by-step logging inside `handleDevKeyAuth()` (logStep calls)
+- Add error reporting in catch handler (calls `log_js_error` instead of just `console.error`)
 
 ## Eliminated
 
@@ -74,31 +91,27 @@ Applied fix: Start `vite preview --port 1420` before binary launch on all platfo
   evidence: Not the cause. WEBKIT_DISABLE_DMABUF_RENDERER=1 added but mount still failed.
 
 - hypothesis: WASM import failure in auth.ts
-  evidence: Not the cause (yet). Page loads `http://localhost:1420/` which returns nothing —
-  JS never even has a chance to fail. If the dev server fix works but auth fails, WASM may
-  become relevant.
+  evidence: Not the cause (yet). JS loads and get_dev_key runs. handleDevKeyAuth starts
+  but fetch fails — likely CORS, not WASM.
 
-## Root Cause (confirmed)
+- hypothesis: Debug binary uses devUrl not frontendDist
+  evidence: CONFIRMED AND FIXED in round 4 with vite preview on :1420. JS now runs.
+
+## Root Causes (layered)
+
+### Root Cause 1 (fixed round 4): Debug builds use devUrl
 
 **Tauri debug builds use `devUrl` (<http://localhost:1420>), not embedded `frontendDist`.**
 
-In `tauri.conf.json`:
+Fix: Start `vite preview --port 1420` before the binary.
 
-```json
-{
-  "devUrl": "http://localhost:1420",
-  "frontendDist": "../dist"
-}
-```
+### Root Cause 2 (fixing round 5): CORS blocks auth flow
 
-When built with `cargo build` (debug profile), Tauri generates code that makes the webview
-load from `devUrl`. Only release builds or `tauri build` embed assets from `frontendDist`.
+The webview's origin is `http://localhost:1420`. The API's `CORS_ALLOWED_ORIGINS` only includes
+`http://localhost:5173`. The `fetch()` to `http://localhost:3000/auth/test-login` is a cross-origin
+request that gets blocked by CORS policy. The error is caught silently by the JS try-catch.
 
-In CI, no Vite dev server was running on port 1420 → webview loaded empty page → no JS →
-no auth → no mount.
-
-**Fix:** Start `vite preview --port 1420` before the binary. This serves the pre-built
-frontend (same bundle that vite build produced earlier) on the port the debug binary expects.
+Fix: Add `http://localhost:1420` to `CORS_ALLOWED_ORIGINS` in all 3 places in the CI workflow.
 
 ## Fixes Applied (all commits on fix/desktop-e2e-ci-round3)
 
@@ -113,11 +126,15 @@ frontend (same bundle that vite build produced earlier) on the port the debug bi
 | 7   | Add on_page_load webview callback            | 5d3ce6e26 | ✅ (diagnostic) |
 | 8   | Add logging to get_dev_key                   | 5d3ce6e26 | ✅ (diagnostic) |
 | 9   | Fix Windows Redis PATH refresh               | 5d3ce6e26 | ✅              |
-| 10  | Start Vite preview server on :1420           | a236637e7 | 🔄 pending CI   |
+| 10  | Start Vite preview server on :1420           | a236637e7 | ✅              |
+| 11  | Switch Windows Redis to Memurai              | 928918a47 | 🔄 pending CI   |
+| 12  | Add localhost:1420 to CORS_ALLOWED_ORIGINS   | pending   | 🔄 pending      |
+| 13  | Add log_js_error Tauri command               | pending   | 🔄 pending      |
+| 14  | Add step logging in handleDevKeyAuth         | pending   | 🔄 pending      |
 
 ## Open Questions
 
-1. Will `vite preview --port 1420` correctly serve the pre-built frontend?
-2. Will the WASM modules in auth.ts load correctly in the webview?
-3. Will the test-login API call succeed from the webview?
-4. Windows: will the Redis PATH fix work with the refreshenv approach?
+1. Will CORS fix resolve the silent auth failure? (high confidence yes)
+2. Will the WASM modules in auth.ts static imports cause issues?
+3. Will handle_test_login_complete → FUSE mount succeed in CI?
+4. Windows: will Memurai + Vite preview + CORS fix work together?

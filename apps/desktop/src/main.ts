@@ -65,11 +65,12 @@ async function init(): Promise<void> {
       handleAuthSuccess(appDiv);
       return;
     } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       console.error('Dev-key auth failed:', err);
+      // Report to Rust logger so CI can see webview errors
+      invoke('log_js_error', { context: 'handleDevKeyAuth', message: msg }).catch(() => {});
       if (appDiv) {
-        appDiv.innerHTML = errorHtml(
-          err instanceof Error ? err.message : 'Dev-key authentication failed'
-        );
+        appDiv.innerHTML = errorHtml(msg || 'Dev-key authentication failed');
       }
       return;
     }
@@ -567,6 +568,13 @@ function handleAuthSuccess(appDiv: HTMLElement | null): void {
  * the user record so vault ECIES operations succeed.
  */
 async function handleDevKeyAuth(_devKeyHex: string): Promise<void> {
+  const logStep = (step: string) =>
+    invoke('log_js_error', { context: 'handleDevKeyAuth', message: `STEP: ${step}` }).catch(
+      () => {}
+    );
+
+  await logStep('start');
+
   const testLoginSecret = import.meta.env.VITE_TEST_LOGIN_SECRET;
   if (!testLoginSecret) {
     throw new Error(
@@ -574,6 +582,8 @@ async function handleDevKeyAuth(_devKeyHex: string): Promise<void> {
         "Dev-key mode requires a test-login secret matching the API's TEST_LOGIN_SECRET."
     );
   }
+
+  await logStep(`fetching ${API_BASE}/auth/test-login`);
 
   const resp = await fetch(`${API_BASE}/auth/test-login`, {
     method: 'POST',
@@ -584,12 +594,16 @@ async function handleDevKeyAuth(_devKeyHex: string): Promise<void> {
     }),
   });
 
+  await logStep(`fetch complete, status=${resp.status}`);
+
   if (!resp.ok) {
     const body = await resp.text().catch(() => '');
     throw new Error(`Test-login failed (${resp.status}): ${body}`);
   }
 
   const data = await resp.json();
+
+  await logStep('calling handle_test_login_complete');
 
   // Call handle_test_login_complete with the server-issued tokens and keypair.
   // Uses accessToken (not idToken) and privateKeyHex from test-login response
@@ -600,6 +614,8 @@ async function handleDevKeyAuth(_devKeyHex: string): Promise<void> {
     privateKeyHex: data.privateKeyHex,
     isNewUser: data.isNewUser,
   });
+
+  await logStep('handle_test_login_complete done');
 }
 
 // --- Helper functions ---
