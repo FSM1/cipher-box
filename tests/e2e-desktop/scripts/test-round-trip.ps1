@@ -21,7 +21,8 @@ $TestSecret = if ($env:TEST_SECRET) { $env:TEST_SECRET } else { "e2e-test-secret
 
 $ErrorActionPreference = "Continue"
 
-$TestEmail = "e2e-desktop-rt-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())@test.local"
+# Use the same email as the dev-key auth flow so we query the same user's vault
+$TestEmail = "dev-key@cipherbox.local"
 
 $Pass = 0
 $Fail = 0
@@ -121,7 +122,7 @@ if ($RootIpns) {
     for ($attempt = 1; $attempt -le 12 -and -not $ResolvedCid; $attempt++) {
         Start-Sleep -Seconds 2
         try {
-            $IpnsResponse = Invoke-RestMethod -Uri "$ApiUrl/ipns/$RootIpns/resolve" -Headers $Headers
+            $IpnsResponse = Invoke-RestMethod -Uri "$ApiUrl/ipns/resolve?ipnsName=$RootIpns" -Headers $Headers
             $ResolvedCid = if ($IpnsResponse.cid) { $IpnsResponse.cid } else { $IpnsResponse.value }
         } catch {
             Write-Host "  IPNS resolve attempt $attempt failed: $_"

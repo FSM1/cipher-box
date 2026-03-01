@@ -40,6 +40,49 @@ pub(crate) mod implementation {
     /// Total storage quota in bytes (500 MiB).
     const QUOTA_BYTES: u64 = 500 * 1024 * 1024;
 
+    /// Permissive self-relative security descriptor granting FILE_ALL_ACCESS
+    /// to Everyone (S-1-1-0). CipherBox is single-user; encryption is the real
+    /// access control, so we grant full NTFS permissions.
+    ///
+    /// Layout: 20-byte header, 28-byte DACL (one ACE), 12-byte Owner, 12-byte Group.
+    ///
+    /// Without a valid descriptor, WinFsp's `FspFileSystemOpenCheck()` strips
+    /// DELETE access from `GrantedAccess` when `SecurityDescriptorSize == 0`,
+    /// which prevents directory deletion via `Remove-Item` / `RemoveDirectory()`.
+    static PERMISSIVE_SD: [u8; 72] = [
+        // ── SECURITY_DESCRIPTOR header (20 bytes) ──
+        0x01,                   // Revision
+        0x00,                   // Sbz1
+        0x04, 0x80,             // Control: SE_SELF_RELATIVE | SE_DACL_PRESENT
+        0x30, 0x00, 0x00, 0x00, // OwnerOffset = 48
+        0x3C, 0x00, 0x00, 0x00, // GroupOffset = 60
+        0x00, 0x00, 0x00, 0x00, // SaclOffset = 0 (none)
+        0x14, 0x00, 0x00, 0x00, // DaclOffset = 20
+        // ── ACL header (8 bytes) ──
+        0x02,                   // AclRevision
+        0x00,                   // Sbz1
+        0x1C, 0x00,             // AclSize = 28
+        0x01, 0x00,             // AceCount = 1
+        0x00, 0x00,             // Sbz2
+        // ── ACCESS_ALLOWED_ACE (20 bytes) ──
+        0x00,                   // AceType = ACCESS_ALLOWED
+        0x00,                   // AceFlags
+        0x14, 0x00,             // AceSize = 20
+        0xFF, 0x01, 0x1F, 0x00, // Mask = FILE_ALL_ACCESS (0x001F01FF)
+        // SID: S-1-1-0 (Everyone)
+        0x01, 0x01,             // Revision, SubAuthorityCount
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x01, // IdentifierAuthority
+        0x00, 0x00, 0x00, 0x00, // SubAuthority[0]
+        // ── Owner SID: S-1-1-0 (12 bytes) ──
+        0x01, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00,
+        // ── Group SID: S-1-1-0 (12 bytes) ──
+        0x01, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+
     /// Maximum number of past versions to keep per file.
     const MAX_VERSIONS_PER_FILE: usize = 10;
 
@@ -627,7 +670,7 @@ pub(crate) mod implementation {
         fn get_security_by_name(
             &self,
             file_name: &U16CStr,
-            _security_descriptor: Option<&mut [c_void]>,
+            security_descriptor: Option<&mut [c_void]>,
             _find_reparse_point: impl FnOnce(&U16CStr) -> Option<FileSecurity>,
         ) -> Result<FileSecurity, FspError> {
             let path = file_name.to_string_lossy();
@@ -649,12 +692,27 @@ pub(crate) mod implementation {
 
             let info = fill_file_info(&inode.attr);
 
-            // Use a permissive default security descriptor.
-            // CipherBox is single-user, encryption is the real access control.
+            // Write permissive security descriptor into the buffer if provided.
+            // CipherBox is single-user — encryption is the real access control.
+            //
+            // Returning a valid descriptor (instead of sz=0) is required so that
+            // WinFsp's FspFileSystemOpenCheck grants DELETE access for directories.
+            if let Some(buf) = security_descriptor {
+                if buf.len() >= PERMISSIVE_SD.len() {
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            PERMISSIVE_SD.as_ptr(),
+                            buf.as_mut_ptr() as *mut u8,
+                            PERMISSIVE_SD.len(),
+                        );
+                    }
+                }
+            }
+
             Ok(FileSecurity {
                 attributes: info.file_attributes,
                 reparse: false,
-                sz_security_descriptor: 0,
+                sz_security_descriptor: PERMISSIVE_SD.len() as u64,
             })
         }
 
@@ -662,11 +720,17 @@ pub(crate) mod implementation {
         fn open(
             &self,
             file_name: &U16CStr,
-            _create_options: u32,
+            create_options: u32,
             granted_access: u32,
             file_info: &mut OpenFileInfo,
         ) -> Result<Self::FileContext, FspError> {
             let path = file_name.to_string_lossy();
+            log::info!(
+                "open() path={} create_options=0x{:08X} granted_access=0x{:08X}",
+                path,
+                create_options,
+                granted_access
+            );
             let mut fs = self.inner.lock().unwrap();
 
             // Drain pending completions
@@ -853,8 +917,61 @@ pub(crate) mod implementation {
             }
         }
 
+        // -- overwrite --
+        // Called when Windows opens an existing file with FILE_OVERWRITE or
+        // FILE_OVERWRITE_IF disposition (e.g., PowerShell Set-Content, CreateFile
+        // with CREATE_ALWAYS). Truncates the file to zero length.
+        fn overwrite(
+            &self,
+            context: &Self::FileContext,
+            _file_attributes: u32,
+            _replace_file_attributes: bool,
+            _allocation_size: u64,
+            _extra_buffer: Option<&[u8]>,
+            file_info: &mut FileInfo,
+        ) -> Result<(), FspError> {
+            log::info!(
+                "overwrite() called for ino={} fh={}",
+                context.ino,
+                context.fh
+            );
+            let mut fs = self.inner.lock().unwrap();
+
+            // Truncate the open file handle to zero length
+            if let Some(handle) = fs.open_files.get_mut(&context.fh) {
+                let has_temp = handle.temp_path.is_some();
+                log::info!(
+                    "overwrite: handle found, has_temp_path={}",
+                    has_temp
+                );
+                if has_temp {
+                    handle
+                        .truncate(0)
+                        .map_err(|_| status_io_device_error())?;
+                    handle.dirty = true;
+                    log::info!("overwrite: truncated to 0");
+                }
+            } else {
+                log::warn!(
+                    "overwrite: no handle found for fh={}",
+                    context.fh
+                );
+            }
+
+            // Update inode size to 0
+            if let Some(inode) = fs.inodes.get_mut(context.ino) {
+                inode.attr.size = 0;
+                inode.attr.mtime = SystemTime::now();
+                inode.attr.ctime = SystemTime::now();
+                *file_info = fill_file_info(&inode.attr);
+            }
+
+            Ok(())
+        }
+
         // -- close --
         fn close(&self, context: Self::FileContext) {
+            log::info!("close() ino={} fh={}", context.ino, context.fh);
             // close() (IRP_MJ_CLOSE) may be deferred indefinitely by the Windows
             // cache manager. All data flushing happens in cleanup() (IRP_MJ_CLEANUP)
             // which fires immediately when the user-mode handle is closed.
@@ -1072,7 +1189,7 @@ pub(crate) mod implementation {
             context: &Self::FileContext,
             buffer: &[u8],
             offset: u64,
-            _write_to_end_of_file: bool,
+            write_to_end_of_file: bool,
             _constrained_io: bool,
             file_info: &mut FileInfo,
         ) -> Result<u32, FspError> {
@@ -1080,15 +1197,37 @@ pub(crate) mod implementation {
             let fh = context.fh;
             let ino = context.ino;
 
+            // Read file size before getting mutable handle (avoids borrow conflict)
+            let current_file_size = fs
+                .inodes
+                .get(ino)
+                .map(|i| i.attr.size)
+                .unwrap_or(0);
+
+            // Determine actual write offset
+            let actual_offset = if write_to_end_of_file {
+                log::info!(
+                    "write() ino={} fh={} len={} write_to_end_of_file=true offset_param={} using file_size={}",
+                    ino, fh, buffer.len(), offset, current_file_size
+                );
+                current_file_size
+            } else {
+                log::info!(
+                    "write() ino={} fh={} len={} offset={} write_to_end_of_file=false",
+                    ino, fh, buffer.len(), offset
+                );
+                offset
+            };
+
             let handle = match fs.open_files.get_mut(&fh) {
                 Some(h) => h,
                 None => return Err(status_invalid_handle()),
             };
 
-            match handle.write_at(offset as i64, buffer) {
+            match handle.write_at(actual_offset as i64, buffer) {
                 Ok(written) => {
                     // Update inode size if write extends the file
-                    let new_end = offset + buffer.len() as u64;
+                    let new_end = actual_offset + buffer.len() as u64;
                     if let Some(inode) = fs.inodes.get_mut(ino) {
                         if new_end > inode.attr.size {
                             inode.attr.size = new_end;
@@ -1135,6 +1274,26 @@ pub(crate) mod implementation {
             Ok(())
         }
 
+        // -- get_security --
+        fn get_security(
+            &self,
+            _context: &Self::FileContext,
+            security_descriptor: Option<&mut [c_void]>,
+        ) -> Result<u64, FspError> {
+            if let Some(buf) = security_descriptor {
+                if buf.len() >= PERMISSIVE_SD.len() {
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            PERMISSIVE_SD.as_ptr(),
+                            buf.as_mut_ptr() as *mut u8,
+                            PERMISSIVE_SD.len(),
+                        );
+                    }
+                }
+            }
+            Ok(PERMISSIVE_SD.len() as u64)
+        }
+
         // -- set_basic_info --
         fn set_basic_info(
             &self,
@@ -1173,9 +1332,28 @@ pub(crate) mod implementation {
             set_allocation_size: bool,
             _file_info: &mut FileInfo,
         ) -> Result<(), FspError> {
+            log::info!(
+                "set_file_size() ino={} fh={} new_size={} set_allocation_size={}",
+                context.ino,
+                context.fh,
+                new_size,
+                set_allocation_size
+            );
             let mut fs = self.inner.lock().unwrap();
 
-            if !set_allocation_size {
+            // WinFsp calls set_file_size for both end-of-file changes
+            // (set_allocation_size=false) and allocation size changes
+            // (set_allocation_size=true). For overwrite operations (e.g.,
+            // PowerShell Set-Content), WinFsp sends set_allocation_size=true
+            // with new_size=0 to signal file truncation. We must handle both.
+            //
+            // For non-zero allocation size changes on a file that's already
+            // large enough, we skip (no sparse file support). But for
+            // truncation to 0, we always apply it.
+            let should_truncate = !set_allocation_size
+                || (set_allocation_size && new_size == 0);
+
+            if should_truncate {
                 // Truncate the temp file if writable handle exists
                 if let Some(handle) = fs.open_files.get_mut(&context.fh) {
                     if handle.temp_path.is_some() {
@@ -1183,6 +1361,10 @@ pub(crate) mod implementation {
                             .truncate(new_size)
                             .map_err(|_| status_io_device_error())?;
                         handle.dirty = true;
+                        log::info!(
+                            "set_file_size: truncated temp file to {} bytes",
+                            new_size
+                        );
                     }
                 }
 
@@ -1192,15 +1374,22 @@ pub(crate) mod implementation {
                     inode.attr.blocks = (new_size + 511) / 512;
                     inode.attr.mtime = SystemTime::now();
                     if let InodeKind::File {
-                        size: ref mut s, ..
+                        size: ref mut s,
+                        cid: ref mut c,
+                        ..
                     } = inode.kind
                     {
                         *s = new_size;
+                        // Clear CID when truncating to 0 so that subsequent
+                        // open() calls don't re-download stale IPFS content
+                        // into the temp file.
+                        if new_size == 0 {
+                            c.clear();
+                        }
                     }
                     *_file_info = fill_file_info(&inode.attr);
                 }
             }
-            // For allocation size changes, we just ignore (no sparse file support)
 
             Ok(())
         }
@@ -1216,6 +1405,12 @@ pub(crate) mod implementation {
             _file_name: Option<&U16CStr>,
             flags: u32,
         ) {
+            log::info!(
+                "cleanup() ino={} fh={} flags=0x{:08X}",
+                context.ino,
+                context.fh,
+                flags
+            );
             let mut fs = self.inner.lock().unwrap();
             let ino = context.ino;
             let fh = context.fh;
@@ -1834,7 +2029,7 @@ pub(crate) mod implementation {
             &self,
             file_name: &U16CStr,
             create_options: u32,
-            _granted_access: u32,
+            granted_access: u32,
             _file_attributes: u32,
             _security_descriptor: Option<&[c_void]>,
             _allocation_size: u64,
@@ -1843,6 +2038,12 @@ pub(crate) mod implementation {
             file_info: &mut OpenFileInfo,
         ) -> Result<Self::FileContext, FspError> {
             let path = file_name.to_string_lossy();
+            log::info!(
+                "create() path={} create_options=0x{:08X} granted_access=0x{:08X}",
+                path,
+                create_options,
+                granted_access
+            );
             let (parent_path, name) = split_path(&path);
 
             if name.is_empty() {
@@ -2424,10 +2625,17 @@ pub(crate) mod implementation {
         // -- set_delete --
         fn set_delete(
             &self,
-            _context: &Self::FileContext,
-            _file_name: &U16CStr,
-            _delete_file: bool,
+            context: &Self::FileContext,
+            file_name: &U16CStr,
+            delete_file: bool,
         ) -> Result<(), FspError> {
+            log::info!(
+                "set_delete() ino={} fh={} path={} delete={}",
+                context.ino,
+                context.fh,
+                file_name.to_string_lossy(),
+                delete_file,
+            );
             // Mark for deletion. Actual deletion happens in cleanup().
             // WinFsp handles the pending-delete semantics for us.
             Ok(())

@@ -435,9 +435,15 @@ mod mount_impl {
         };
 
         // Initialize WinFsp runtime
-        let _init = winfsp::winfsp_init_or_die();
+        // NOTE: winfsp_init_or_die() calls std::process::exit() on failure,
+        // killing the process silently. Use winfsp_init() instead for proper error handling.
+        log::info!("Initializing WinFsp runtime...");
+        let _init = winfsp::winfsp_init()
+            .map_err(|e| format!("WinFsp initialization failed (is WinFsp installed?): {:?}", e))?;
+        log::info!("WinFsp runtime initialized successfully");
 
         // Create volume params
+        log::info!("Creating WinFsp volume params...");
         let mut volume_params = winfsp::host::VolumeParams::new();
         volume_params
             .filesystem_name("CipherBox")
@@ -445,19 +451,23 @@ mod mount_impl {
             .case_sensitive_search(false) // Windows convention
             .case_preserved_names(true);
 
+        log::info!("Creating WinFsp FileSystemHost...");
         let mut host = winfsp::host::FileSystemHost::new(
             volume_params,
             context,
         )
         .map_err(|e| format!("Failed to create WinFsp host: {:?}", e))?;
+        log::info!("WinFsp FileSystemHost created");
 
         // Set mount point
         let mount_str = mount_path
             .to_str()
             .ok_or("Mount path is not valid UTF-8")?
             .to_string();
+        log::info!("Mounting WinFsp at {}...", mount_str);
         host.mount(&mount_str)
             .map_err(|e| format!("Failed to set WinFsp mount point: {:?}", e))?;
+        log::info!("WinFsp mount point set successfully");
 
         // Set up stop signal for clean shutdown (replaced on each mount for remount support)
         let stop_signal = Arc::new(std::sync::atomic::AtomicBool::new(false));

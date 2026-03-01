@@ -41,6 +41,7 @@ try {
     & "$PSScriptRoot\test-fuse-operations.ps1" -MountPoint $MountPoint
     $FuseExitCode = $LASTEXITCODE
 } catch {
+    Write-Host "FUSE test script error: $($_.Exception.Message)"
     $FuseExitCode = 1
 }
 

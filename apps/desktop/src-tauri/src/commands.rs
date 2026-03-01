@@ -476,7 +476,18 @@ pub async fn start_sync_daemon(
 /// directly with a synthetic identity token or via the test-login endpoint.
 #[tauri::command]
 pub async fn get_dev_key(state: State<'_, AppState>) -> Result<Option<String>, String> {
-    Ok(state.dev_key.read().await.clone())
+    log::info!("get_dev_key invoked by webview");
+    let key = state.dev_key.read().await.clone();
+    log::info!("get_dev_key returning: has_key={}", key.is_some());
+    Ok(key)
+}
+
+/// Log a JS error from the webview to the Rust logger.
+/// Used in CI to surface webview errors that would otherwise be invisible.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub fn log_js_error(context: String, message: String) {
+    log::error!("[webview-js] {}: {}", context, message);
 }
 
 /// Handle test-login authentication (debug builds only).

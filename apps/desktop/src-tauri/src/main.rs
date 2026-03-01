@@ -150,6 +150,13 @@ fn main() {
                     .center()
                     .resizable(false)
                     .visible(false)
+                    .on_page_load(|webview, payload| {
+                        log::info!(
+                            "Webview page load: url={}, event={:?}",
+                            payload.url(),
+                            payload.event()
+                        );
+                    })
                     .build()
                     .map_err(|e| {
                         log::error!("Failed to create dev-key webview: {}", e);
@@ -182,6 +189,7 @@ fn main() {
                     commands::open_oauth_popup,
                     commands::get_dev_key,
                     commands::handle_test_login_complete,
+                    commands::log_js_error,
                 ]
             }
             #[cfg(not(debug_assertions))]
