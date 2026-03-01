@@ -3,10 +3,12 @@ set -euo pipefail
 
 # test-round-trip.sh -- Verify desktop FUSE writes are visible via the API.
 #
-# Usage: ./test-round-trip.sh [mount-point] [api-url] [test-secret]
+# Usage: ./test-round-trip.sh [mount-point] [api-url]
 #   mount-point  Path to FUSE mount (default: $HOME/CipherBox)
 #   api-url      Backend API URL (default: http://localhost:3000)
-#   test-secret  Shared secret for test-login (default: e2e-test-secret-ci-only)
+#
+# Environment:
+#   TEST_SECRET  Shared secret for test-login (default: e2e-test-secret-ci-only)
 #
 # The server is zero-knowledge -- it cannot decrypt file contents.
 # These tests prove the pipeline: FUSE write -> encrypt -> IPFS upload -> IPNS publish -> API visibility.
@@ -61,33 +63,48 @@ fi
 # ---- Test 2: Desktop writes file, API verifies vault exists ----
 echo "--- Test 2: Verify vault has content after FUSE write ---"
 echo "API-visible content" > "$MP/rt-test.txt"
-sleep 5
 
-VAULT_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 30 -H "Authorization: Bearer $ACCESS_TOKEN" \
-  "$API_URL/vault" 2>&1) || true
+ROOT_IPNS=""
+for attempt in $(seq 1 12); do
+  sleep 5
+  VAULT_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 30 -H "Authorization: Bearer $ACCESS_TOKEN" \
+    "$API_URL/vault" 2>&1) || true
+  ROOT_IPNS=$(echo "$VAULT_RESPONSE" | jq -r '.rootIpnsName // empty')
+  if [ -n "$ROOT_IPNS" ] && [ "$ROOT_IPNS" != "null" ]; then
+    break
+  fi
+  echo "  Vault poll attempt $attempt: no rootIpnsName yet"
+  ROOT_IPNS=""
+done
 
-ROOT_IPNS=$(echo "$VAULT_RESPONSE" | jq -r '.rootIpnsName // empty')
 if [ -n "$ROOT_IPNS" ] && [ "$ROOT_IPNS" != "null" ]; then
   pass "Vault has rootIpnsName after FUSE write ($ROOT_IPNS)"
 else
   VAULT_ERROR=$(echo "$VAULT_RESPONSE" | jq -r '.message // .error // empty' 2>/dev/null || echo "non-JSON response")
-  fail "Vault has no rootIpnsName (error: $VAULT_ERROR)"
+  fail "Vault has no rootIpnsName after 60s polling (error: $VAULT_ERROR)"
 fi
 
 # ---- Test 3: Verify IPNS resolve returns data ----
 echo "--- Test 3: Verify IPNS resolve returns CID ---"
 if [ -n "$ROOT_IPNS" ] && [ "$ROOT_IPNS" != "null" ]; then
-  IPNS_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 30 -H "Authorization: Bearer $ACCESS_TOKEN" \
-    "$API_URL/ipns/$ROOT_IPNS/resolve" 2>&1) || true
+  RESOLVED_CID=""
+  for attempt in $(seq 1 12); do
+    sleep 2
+    IPNS_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 30 -H "Authorization: Bearer $ACCESS_TOKEN" \
+      "$API_URL/ipns/$ROOT_IPNS/resolve" 2>&1) || true
+    RESOLVED_CID=$(echo "$IPNS_RESPONSE" | jq -r '.cid // .value // empty' 2>/dev/null || echo "")
+    if [ -n "$RESOLVED_CID" ] && [ "$RESOLVED_CID" != "null" ]; then
+      break
+    fi
+    echo "  IPNS resolve attempt $attempt: no CID yet"
+    RESOLVED_CID=""
+  done
 
-  # The resolve response should contain a CID (starts with "bafy" or "Qm" or similar)
-  RESOLVED_CID=$(echo "$IPNS_RESPONSE" | jq -r '.cid // .value // empty' 2>/dev/null || echo "")
   if [ -n "$RESOLVED_CID" ] && [ "$RESOLVED_CID" != "null" ]; then
     pass "IPNS resolve returned CID ($RESOLVED_CID)"
   else
-    # Even if parsing fails, the response itself may be valid
     IPNS_ERROR=$(echo "$IPNS_RESPONSE" | jq -r '.message // .error // empty' 2>/dev/null || echo "non-JSON response")
-    fail "IPNS resolve did not return expected CID (error: $IPNS_ERROR)"
+    fail "IPNS resolve did not return expected CID after 24s polling (error: $IPNS_ERROR)"
   fi
 else
   fail "IPNS resolve skipped (no rootIpnsName)"

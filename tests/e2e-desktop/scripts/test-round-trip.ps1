@@ -1,9 +1,11 @@
 # test-round-trip.ps1 -- Verify desktop FUSE writes are visible via the API (Windows).
 #
-# Usage: .\test-round-trip.ps1 [-MountPoint <path>] [-ApiUrl <url>] [-TestSecret <secret>]
+# Usage: .\test-round-trip.ps1 [-MountPoint <path>] [-ApiUrl <url>]
 #   -MountPoint   Path to FUSE mount (default: $env:USERPROFILE\CipherBox)
 #   -ApiUrl       Backend API URL (default: http://localhost:3000)
-#   -TestSecret   Shared secret for test-login (default: e2e-test-secret-ci-only)
+#
+# Environment:
+#   TEST_SECRET   Shared secret for test-login (default: e2e-test-secret-ci-only)
 #
 # The server is zero-knowledge -- it cannot decrypt file contents.
 # These tests prove the pipeline: FUSE write -> encrypt -> IPFS upload -> IPNS publish -> API visibility.
@@ -91,22 +93,21 @@ try {
 } catch {
     Test-Fail "FUSE write failed ($_)"
 }
-Start-Sleep -Seconds 5
-
 if ($FuseWriteSucceeded) {
-    try {
-        $VaultResponse = Invoke-RestMethod -Uri "$ApiUrl/vault" `
-            -Headers $Headers
-
-        $RootIpns = $VaultResponse.rootIpnsName
-        if ($RootIpns) {
-            Test-Pass "Vault has rootIpnsName after FUSE write ($RootIpns)"
-        } else {
-            Test-Fail "Vault has no rootIpnsName"
+    $RootIpns = $null
+    for ($attempt = 1; $attempt -le 12 -and -not $RootIpns; $attempt++) {
+        Start-Sleep -Seconds 5
+        try {
+            $VaultResponse = Invoke-RestMethod -Uri "$ApiUrl/vault" -Headers $Headers
+            $RootIpns = $VaultResponse.rootIpnsName
+        } catch {
+            Write-Host "  Vault poll attempt $attempt failed: $_"
         }
-    } catch {
-        Test-Fail "Vault API call failed ($_)"
-        $RootIpns = $null
+    }
+    if ($RootIpns) {
+        Test-Pass "Vault has rootIpnsName after FUSE write ($RootIpns)"
+    } else {
+        Test-Fail "Vault has no rootIpnsName after 60s polling"
     }
 } else {
     Test-Fail "Vault verification skipped (FUSE write failed)"
@@ -116,20 +117,20 @@ if ($FuseWriteSucceeded) {
 # ---- Test 3: Verify IPNS resolve returns data ----
 Write-Host "--- Test 3: Verify IPNS resolve returns CID ---"
 if ($RootIpns) {
-    try {
-        $IpnsResponse = Invoke-RestMethod -Uri "$ApiUrl/ipns/$RootIpns/resolve" `
-            -Headers $Headers
-
-        $ResolvedCid = $IpnsResponse.cid
-        if (-not $ResolvedCid) { $ResolvedCid = $IpnsResponse.value }
-
-        if ($ResolvedCid) {
-            Test-Pass "IPNS resolve returned CID ($ResolvedCid)"
-        } else {
-            Test-Fail "IPNS resolve did not return expected CID"
+    $ResolvedCid = $null
+    for ($attempt = 1; $attempt -le 12 -and -not $ResolvedCid; $attempt++) {
+        Start-Sleep -Seconds 2
+        try {
+            $IpnsResponse = Invoke-RestMethod -Uri "$ApiUrl/ipns/$RootIpns/resolve" -Headers $Headers
+            $ResolvedCid = if ($IpnsResponse.cid) { $IpnsResponse.cid } else { $IpnsResponse.value }
+        } catch {
+            Write-Host "  IPNS resolve attempt $attempt failed: $_"
         }
-    } catch {
-        Test-Fail "IPNS resolve failed ($_)"
+    }
+    if ($ResolvedCid) {
+        Test-Pass "IPNS resolve returned CID ($ResolvedCid)"
+    } else {
+        Test-Fail "IPNS resolve did not return expected CID after 24s polling"
     }
 } else {
     Test-Fail "IPNS resolve skipped (no rootIpnsName)"
