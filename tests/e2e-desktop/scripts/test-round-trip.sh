@@ -18,7 +18,8 @@ set -euo pipefail
 MP="${1:-$HOME/CipherBox}"
 API_URL="${2:-http://localhost:3000}"
 SECRET="${TEST_SECRET:-e2e-test-secret-ci-only}"
-TEST_EMAIL="e2e-desktop-rt-$(date +%s)@test.local"
+# Use the same email as the dev-key auth flow so we query the same user's vault
+TEST_EMAIL="dev-key@cipherbox.local"
 
 PASS=0
 FAIL=0

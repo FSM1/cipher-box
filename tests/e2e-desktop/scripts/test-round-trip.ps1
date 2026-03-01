@@ -21,7 +21,8 @@ $TestSecret = if ($env:TEST_SECRET) { $env:TEST_SECRET } else { "e2e-test-secret
 
 $ErrorActionPreference = "Continue"
 
-$TestEmail = "e2e-desktop-rt-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())@test.local"
+# Use the same email as the dev-key auth flow so we query the same user's vault
+$TestEmail = "dev-key@cipherbox.local"
 
 $Pass = 0
 $Fail = 0

@@ -128,13 +128,32 @@ Fix: Add `http://localhost:1420` to `CORS_ALLOWED_ORIGINS` in all 3 places in th
 | 9   | Fix Windows Redis PATH refresh               | 5d3ce6e26 | ✅              |
 | 10  | Start Vite preview server on :1420           | a236637e7 | ✅              |
 | 11  | Switch Windows Redis to Memurai              | 928918a47 | 🔄 pending CI   |
-| 12  | Add localhost:1420 to CORS_ALLOWED_ORIGINS   | pending   | 🔄 pending      |
-| 13  | Add log_js_error Tauri command               | pending   | 🔄 pending      |
-| 14  | Add step logging in handleDevKeyAuth         | pending   | 🔄 pending      |
+| 12  | Add localhost:1420 to CORS_ALLOWED_ORIGINS   | 1271df5ff | ✅              |
+| 13  | Add log_js_error Tauri command               | 1271df5ff | ✅              |
+| 14  | Add step logging in handleDevKeyAuth         | 1271df5ff | ✅              |
+| 15  | Fix TEST_EMAIL to <dev-key@cipherbox.local>  | pending   | 🔄 pending      |
+
+### Round 5 Results — CI run 22536602620 (commit 1271df5ff)
+
+CORS fix WORKED! Auth flow completes on macOS AND Linux!
+
+- ✅ macOS: JS auth flow logged all steps — fetch status=200, handle_test_login_complete done
+- ✅ macOS: FUSE mount detected! All 9 FUSE I/O tests PASSED!
+- ✅ Linux: Same — mount detected, all 9 FUSE I/O tests PASSED!
+- ❌ macOS+Linux: API round-trip Test 2 FAIL — "Vault has no rootIpnsName after 60s polling"
+  - Root cause: test-round-trip.sh creates a NEW random user email, not <dev-key@cipherbox.local>
+  - The FUSE mount belongs to <dev-key@cipherbox.local>, but the test checks a different user's vault
+  - Fix: change TEST_EMAIL to <dev-key@cipherbox.local>
+- ❌ Windows: still in progress (cargo build is slow on Windows runners)
+
+### Round 6 — CI run pending
+
+Applied fix:
+
+- Change TEST_EMAIL in test-round-trip.sh and test-round-trip.ps1 to <dev-key@cipherbox.local>
 
 ## Open Questions
 
-1. Will CORS fix resolve the silent auth failure? (high confidence yes)
-2. Will the WASM modules in auth.ts static imports cause issues?
-3. Will handle_test_login_complete → FUSE mount succeed in CI?
-4. Windows: will Memurai + Vite preview + CORS fix work together?
+1. Will the correct test email fix the API round-trip tests?
+2. Windows: will Memurai + CORS + correct email work together?
+3. Can we remove diagnostic logging (log_js_error, on_page_load) after CI passes?
