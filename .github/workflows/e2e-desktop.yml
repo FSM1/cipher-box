@@ -163,7 +163,10 @@ jobs:
 
       - name: Install FUSE-T (macOS)
         if: runner.os == 'macOS'
-        run: brew install --cask fuse-t
+        run: |
+          brew install --cask fuse-t
+          sudo mkdir -p /usr/local/lib/pkgconfig
+          sudo ln -sf "/Library/Application Support/fuse-t/pkgconfig/fuse-t.pc" /usr/local/lib/pkgconfig/fuse.pc
 
       - name: Install FUSE and Tauri deps (Linux)
         if: runner.os == 'Linux'
