@@ -52,6 +52,7 @@ jobs:
       - name: Find latest CI run ID
         if: github.event_name == 'workflow_dispatch' && inputs.run_id == ''
         id: find-run
+        shell: bash
         run: |
           RUN_ID=$(gh run list --workflow=ci.yml --branch=main --status=success --limit=1 --json databaseId --jq '.[0].databaseId')
           if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
