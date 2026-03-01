@@ -402,7 +402,16 @@ jobs:
         run: |
           brew install --cask fuse-t
           sudo mkdir -p /usr/local/lib/pkgconfig
-          sudo ln -sf "/Library/Application Support/fuse-t/pkgconfig/fuse-t.pc" /usr/local/lib/pkgconfig/fuse.pc
+          FUSE_T_PC="/Library/Application Support/fuse-t/pkgconfig/fuse-t.pc"
+          if [ ! -f "$FUSE_T_PC" ]; then
+            FUSE_T_PC=$(find /Library /usr/local /opt/homebrew -name "fuse-t.pc" 2>/dev/null | head -1)
+          fi
+          if [ -z "$FUSE_T_PC" ] || [ ! -f "$FUSE_T_PC" ]; then
+            echo "::error::fuse-t.pc not found after FUSE-T installation"
+            exit 1
+          fi
+          sudo cp "$FUSE_T_PC" /usr/local/lib/pkgconfig/fuse.pc
+          sudo sed -i '' 's/^Version:.*/Version: 2.9.9/' /usr/local/lib/pkgconfig/fuse.pc
 
       - name: Install Rust toolchain
         run: rustup default stable
@@ -419,6 +428,8 @@ jobs:
       - name: Cargo check with fuse feature
         working-directory: apps/desktop/src-tauri
         run: cargo check --no-default-features --features fuse
+        env:
+          PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
 
   cargo-check-linux:
     name: Cargo Check (Linux)
