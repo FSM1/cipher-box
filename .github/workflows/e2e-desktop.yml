@@ -128,6 +128,16 @@ jobs:
           $actualHash = (Get-FileHash $out -Algorithm SHA256).Hash
           if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
           Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
+          # Verify WinFsp installed and add bin to PATH for DLL discovery
+          $winfspDir = (Get-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -ErrorAction SilentlyContinue).InstallDir
+          if ($winfspDir) {
+            Write-Host "WinFsp installed at: $winfspDir"
+            $binDir = Join-Path $winfspDir "bin"
+            Write-Host "Adding to PATH: $binDir"
+            echo "$binDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          } else {
+            Write-Host "WARNING: WinFsp registry key not found after install"
+          }
 
       # --- Setup Node.js + pnpm (needed for frontend build before cargo) ---
 

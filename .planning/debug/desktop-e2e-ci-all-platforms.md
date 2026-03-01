@@ -8,11 +8,11 @@ branch: fix/desktop-e2e-ci-round3
 
 ## Current Focus
 
-hypothesis: winfsp_init_or_die() calls process::exit() killing the binary silently on Windows
-test: Replace with winfsp_init() + proper error handling, capture binary logs on Windows
-expecting: Either WinFsp inits successfully and mount works, or we get a clear error message
-next_action: Push round 8 fixes, trigger CI
-ci_run: pending (round 8)
+hypothesis: WinFsp DLL not found because winfsp crate missing "system" feature (registry lookup disabled)
+test: Enable "system" feature + add WinFsp bin to PATH
+expecting: winfsp_init() finds DLL via registry, mount succeeds, all Windows tests pass
+next_action: Push round 9 fixes, trigger CI
+ci_run: pending (round 9)
 
 ## Symptoms
 
@@ -156,14 +156,32 @@ despite the MSI being installed.
 Additionally, the Windows test step used PowerShell `Start-Process -NoNewWindow`
 which doesn't redirect binary output to a file. Binary error messages were lost.
 
-### Round 8 — CI run pending
+### Round 8 Results — CI run 22537324561 (commit c76d97b15)
+
+winfsp_init fix confirmed the root cause!
+
+- ✅ macOS: ALL TESTS PASSED!
+- ✅ Linux: ALL TESTS PASSED!
+- ❌ Windows: Clear error now visible in binary log:
+
+  ```text
+  Filesystem mount failed: WinFsp initialization failed (is WinFsp installed?): WIN32(1285)
+  ```
+
+  WIN32(1285) = ERROR_DELAY_LOAD_FAILED — the WinFsp DLL can't be found at runtime.
+
+  Root cause: `winfsp` crate dependency has no `features = ["system"]`. Without
+  the `system` feature, `load_system_winfsp()` (which reads the registry to find
+  the DLL path) is disabled. Only `load_local_winfsp()` is tried, which looks for
+  `winfsp-x64.dll` in PATH/current dir — and the WinFsp bin dir is not in PATH.
+
+### Round 9 — CI run pending
 
 Applied fixes:
 
-- Replace `winfsp_init_or_die()` with `winfsp_init()` + proper error handling and logging
-- Add step-by-step logging around WinFsp host creation, mount, and dispatcher start
-- Switch Windows test step to bash with log file capture (like macOS/Linux)
-- Always dump binary log on Windows (even on success) for diagnostics
+- Enable `system` feature on winfsp dependency in Cargo.toml (enables registry lookup)
+- Add WinFsp bin dir to PATH in CI workflow (belt-and-suspenders)
+- Verify WinFsp installation in CI with registry check
 
 ### Root Cause 3 (fixing round 8): WinFsp init kills process silently
 
@@ -176,28 +194,30 @@ properly so it appears in both Rust logs and JS error reporting.
 
 ## Fixes Applied (all commits on fix/desktop-e2e-ci-round3)
 
-| #   | Fix                                          | Commit    | Status          |
-| --- | -------------------------------------------- | --------- | --------------- |
-| 1   | Move Node.js/pnpm setup BEFORE cargo build   | 10deba393 | ✅              |
-| 2   | Add "Build desktop frontend" step            | 10deba393 | ✅              |
-| 3   | Add install_name_tool rpath for macOS        | 10deba393 | ✅              |
-| 4   | Switch Windows Kubo to bash+curl --retry     | 10deba393 | ✅              |
-| 5   | Add WEBKIT_DISABLE_DMABUF_RENDERER=1 (Linux) | 10deba393 | ✅              |
-| 6   | Capture binary logs on failure               | 10deba393 | ✅              |
-| 7   | Add on_page_load webview callback            | 5d3ce6e26 | ✅ (diagnostic) |
-| 8   | Add logging to get_dev_key                   | 5d3ce6e26 | ✅ (diagnostic) |
-| 9   | Fix Windows Redis PATH refresh               | 5d3ce6e26 | ✅              |
-| 10  | Start Vite preview server on :1420           | a236637e7 | ✅              |
-| 11  | Switch Windows Redis to Memurai              | 928918a47 | ✅              |
-| 12  | Add localhost:1420 to CORS_ALLOWED_ORIGINS   | 1271df5ff | ✅              |
-| 13  | Add log_js_error Tauri command               | 1271df5ff | ✅              |
-| 14  | Add step logging in handleDevKeyAuth         | 1271df5ff | ✅              |
-| 15  | Fix TEST_EMAIL to <dev-key@cipherbox.local>  | 893ab7d78 | ✅              |
-| 16  | Fix IPNS resolve URL in round-trip tests     | 8c9a83464 | ✅              |
-| 17  | Switch Windows API startup to bash+curl      | 8c9a83464 | ✅              |
-| 18  | Replace winfsp_init_or_die with winfsp_init  | pending   | 🔄 pending      |
-| 19  | Windows test step: bash + log capture        | pending   | 🔄 pending      |
-| 20  | WinFsp mount step-by-step logging            | pending   | 🔄 pending      |
+| #   | Fix                                           | Commit    | Status          |
+| --- | --------------------------------------------- | --------- | --------------- |
+| 1   | Move Node.js/pnpm setup BEFORE cargo build    | 10deba393 | ✅              |
+| 2   | Add "Build desktop frontend" step             | 10deba393 | ✅              |
+| 3   | Add install_name_tool rpath for macOS         | 10deba393 | ✅              |
+| 4   | Switch Windows Kubo to bash+curl --retry      | 10deba393 | ✅              |
+| 5   | Add WEBKIT_DISABLE_DMABUF_RENDERER=1 (Linux)  | 10deba393 | ✅              |
+| 6   | Capture binary logs on failure                | 10deba393 | ✅              |
+| 7   | Add on_page_load webview callback             | 5d3ce6e26 | ✅ (diagnostic) |
+| 8   | Add logging to get_dev_key                    | 5d3ce6e26 | ✅ (diagnostic) |
+| 9   | Fix Windows Redis PATH refresh                | 5d3ce6e26 | ✅              |
+| 10  | Start Vite preview server on :1420            | a236637e7 | ✅              |
+| 11  | Switch Windows Redis to Memurai               | 928918a47 | ✅              |
+| 12  | Add localhost:1420 to CORS_ALLOWED_ORIGINS    | 1271df5ff | ✅              |
+| 13  | Add log_js_error Tauri command                | 1271df5ff | ✅              |
+| 14  | Add step logging in handleDevKeyAuth          | 1271df5ff | ✅              |
+| 15  | Fix TEST_EMAIL to <dev-key@cipherbox.local>   | 893ab7d78 | ✅              |
+| 16  | Fix IPNS resolve URL in round-trip tests      | 8c9a83464 | ✅              |
+| 17  | Switch Windows API startup to bash+curl       | 8c9a83464 | ✅              |
+| 18  | Replace winfsp_init_or_die with winfsp_init   | c76d97b15 | ✅              |
+| 19  | Windows test step: bash + log capture         | c76d97b15 | ✅              |
+| 20  | WinFsp mount step-by-step logging             | c76d97b15 | ✅              |
+| 21  | Enable winfsp "system" feature (registry DLL) | pending   | 🔄 pending      |
+| 22  | Add WinFsp bin dir to PATH in CI              | pending   | 🔄 pending      |
 
 ## Open Questions
 
