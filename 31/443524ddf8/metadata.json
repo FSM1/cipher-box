@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "31443524ddf8",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-11.4-cross-platform-e2e",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/e2e-desktop/scripts/test-round-trip.ps1",
+    "tests/e2e-desktop/scripts/test-round-trip.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/31/443524ddf8/0/metadata.json",
+      "transcript": "/31/443524ddf8/0/full.jsonl",
+      "context": "/31/443524ddf8/0/context.md",
+      "content_hash": "/31/443524ddf8/0/content_hash.txt",
+      "prompt": "/31/443524ddf8/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 134,
+    "cache_creation_tokens": 200898,
+    "cache_read_tokens": 12189853,
+    "output_tokens": 39352,
+    "api_call_count": 120
+  }
+}
