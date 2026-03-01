@@ -35,44 +35,60 @@ Write-Host ""
 
 # ---- Test 1: Create and read text file ----
 Write-Host "--- Test 1: Create and read text file ---"
-Set-Content -Path "$MountPoint\e2e-test.txt" -Value "Hello from CI" -NoNewline
-Start-Sleep -Seconds 3
-$Content = Get-Content -Path "$MountPoint\e2e-test.txt" -Raw
-if ($Content.Trim() -eq "Hello from CI") {
-    Test-Pass "Create and read text file"
-} else {
-    Test-Fail "Create and read text file (got: '$Content')"
+try {
+    Set-Content -Path "$MountPoint\e2e-test.txt" -Value "Hello from CI" -NoNewline -ErrorAction Stop
+    Start-Sleep -Seconds 3
+    $Content = Get-Content -Path "$MountPoint\e2e-test.txt" -Raw -ErrorAction Stop
+    if ($null -ne $Content -and $Content.Trim() -eq "Hello from CI") {
+        Test-Pass "Create and read text file"
+    } else {
+        Test-Fail "Create and read text file (got: '$Content')"
+    }
+} catch {
+    Test-Fail "Create and read text file (exception: $($_.Exception.Message))"
 }
 
 # ---- Test 2: Create directory ----
 Write-Host "--- Test 2: Create directory ---"
-New-Item -ItemType Directory -Path "$MountPoint\e2e-folder" -Force | Out-Null
-if (Test-Path "$MountPoint\e2e-folder" -PathType Container) {
-    Test-Pass "Create directory"
-} else {
-    Test-Fail "Create directory"
+try {
+    New-Item -ItemType Directory -Path "$MountPoint\e2e-folder" -Force -ErrorAction Stop | Out-Null
+    if (Test-Path "$MountPoint\e2e-folder" -PathType Container) {
+        Test-Pass "Create directory"
+    } else {
+        Test-Fail "Create directory"
+    }
+} catch {
+    Test-Fail "Create directory (exception: $($_.Exception.Message))"
 }
 
 # ---- Test 3: Write file in subdirectory ----
 Write-Host "--- Test 3: Write file in subdirectory ---"
-Set-Content -Path "$MountPoint\e2e-folder\nested.txt" -Value "Nested content" -NoNewline
-Start-Sleep -Seconds 3
-$Nested = Get-Content -Path "$MountPoint\e2e-folder\nested.txt" -Raw
-if ($Nested.Trim() -eq "Nested content") {
-    Test-Pass "Write file in subdirectory"
-} else {
-    Test-Fail "Write file in subdirectory (got: '$Nested')"
+try {
+    Set-Content -Path "$MountPoint\e2e-folder\nested.txt" -Value "Nested content" -NoNewline -ErrorAction Stop
+    Start-Sleep -Seconds 3
+    $Nested = Get-Content -Path "$MountPoint\e2e-folder\nested.txt" -Raw -ErrorAction Stop
+    if ($null -ne $Nested -and $Nested.Trim() -eq "Nested content") {
+        Test-Pass "Write file in subdirectory"
+    } else {
+        Test-Fail "Write file in subdirectory (got: '$Nested')"
+    }
+} catch {
+    Test-Fail "Write file in subdirectory (exception: $($_.Exception.Message))"
 }
 
 # ---- Test 4: Overwrite file (modify) ----
 Write-Host "--- Test 4: Overwrite file ---"
-Set-Content -Path "$MountPoint\e2e-test.txt" -Value "Modified content" -NoNewline
-Start-Sleep -Seconds 3
-$Modified = Get-Content -Path "$MountPoint\e2e-test.txt" -Raw
-if ($Modified.Trim() -eq "Modified content") {
-    Test-Pass "Overwrite file"
-} else {
-    Test-Fail "Overwrite file (got: '$Modified')"
+try {
+    Set-Content -Path "$MountPoint\e2e-test.txt" -Value "Modified content" -NoNewline -ErrorAction Stop
+    Start-Sleep -Seconds 5
+    $Modified = Get-Content -Path "$MountPoint\e2e-test.txt" -Raw -ErrorAction Stop
+    if ($null -ne $Modified -and $Modified.Trim() -eq "Modified content") {
+        Test-Pass "Overwrite file"
+    } else {
+        Test-Fail "Overwrite file (got: '$Modified')"
+    }
+} catch {
+    Test-Fail "Overwrite file (exception: $($_.Exception.Message))"
 }
 
 # ---- Test 5: Binary file round-trip ----

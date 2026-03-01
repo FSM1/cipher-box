@@ -682,16 +682,8 @@ pub(crate) mod implementation {
                 return Err(status_object_name_not_found());
             }
 
-            let (ino, _parent_ino) = match resolve_path(&fs, &path) {
-                Some(result) => result,
-                None => {
-                    log::info!(
-                        "get_security_by_name() path={} -> NOT FOUND",
-                        path
-                    );
-                    return Err(status_object_name_not_found());
-                }
-            };
+            let (ino, _parent_ino) = resolve_path(&fs, &path)
+                .ok_or(status_object_name_not_found())?;
 
             let inode = fs
                 .inodes
@@ -699,7 +691,6 @@ pub(crate) mod implementation {
                 .ok_or(status_object_name_not_found())?;
 
             let info = fill_file_info(&inode.attr);
-            let has_sd_buf = security_descriptor.is_some();
 
             // Write permissive security descriptor into the buffer if provided.
             // CipherBox is single-user — encryption is the real access control.
@@ -717,15 +708,6 @@ pub(crate) mod implementation {
                     }
                 }
             }
-
-            log::info!(
-                "get_security_by_name() path={} ino={} attrs=0x{:08X} sd_buf={} sd_sz={}",
-                path,
-                ino,
-                info.file_attributes,
-                has_sd_buf,
-                PERMISSIVE_SD.len(),
-            );
 
             Ok(FileSecurity {
                 attributes: info.file_attributes,
@@ -1901,18 +1883,6 @@ pub(crate) mod implementation {
             // Return current entries
             let parent_ino = inode.parent_ino;
             let children = inode.children.clone().unwrap_or_default();
-
-            // Log directory listing for debugging
-            let child_names: Vec<String> = children
-                .iter()
-                .filter_map(|&c| fs.inodes.get(c).map(|i| i.name.clone()))
-                .collect();
-            log::info!(
-                "read_directory() ino={} children_inos={:?} children_names={:?}",
-                ino,
-                children,
-                child_names,
-            );
 
             // Collect all directory entries into a Vec
             let mut entries: Vec<(U16CString, FileInfo)> = Vec::new();
