@@ -129,6 +129,31 @@ jobs:
           if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
           Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
 
+      # --- Setup Node.js + pnpm (needed for frontend build before cargo) ---
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # --- Build desktop frontend (Tauri embeds from frontendDist) ---
+
+      - name: Build desktop frontend
+        run: |
+          pnpm --filter @cipherbox/crypto build
+          cd apps/desktop
+          pnpm vite build
+        env:
+          VITE_API_URL: http://localhost:3000
+          VITE_TEST_LOGIN_SECRET: e2e-test-secret-ci-only
+
       # --- Build debug binary ---
 
       - name: Install Rust toolchain
@@ -152,6 +177,10 @@ jobs:
         run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features ${{ matrix.fuse-feature }}
         env:
           PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
+
+      - name: Fix rpath for FUSE-T (macOS)
+        if: runner.os == 'macOS'
+        run: install_name_tool -add_rpath /usr/local/lib apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }} || true
 
       # --- Install backend services ---
 
@@ -196,28 +225,24 @@ jobs:
 
       - name: Install Kubo (IPFS) (Windows)
         if: runner.os == 'Windows'
-        shell: powershell
+        shell: bash
         run: |
-          $version = "v0.34.0"
-          Invoke-WebRequest -Uri "https://dist.ipfs.tech/kubo/$version/kubo_${version}_windows-amd64.zip" -OutFile kubo.zip
-          Expand-Archive -Path kubo.zip -DestinationPath .
-          $env:PATH = "$PWD\kubo;$env:PATH"
-          [Environment]::SetEnvironmentVariable("PATH", "$PWD\kubo;$env:PATH", "Process")
-          echo "$PWD\kubo" | Out-File -FilePath $env:GITHUB_PATH -Append
+          KUBO_VERSION="v0.34.0"
+          curl -fsSL --retry 3 --retry-delay 5 \
+            "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_windows-amd64.zip" \
+            -o kubo.zip
+          unzip -q kubo.zip
+          echo "$PWD/kubo" >> "$GITHUB_PATH"
+          export PATH="$PWD/kubo:$PATH"
           ipfs init
-          Start-Process -FilePath "ipfs" -ArgumentList "daemon" -NoNewWindow
-          # Wait for daemon readiness
-          $ready = $false
-          for ($i = 0; $i -lt 30; $i++) {
-            $result = curl.exe -sf -X POST http://localhost:5001/api/v0/id 2>$null
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host "IPFS daemon ready"
-              $ready = $true
+          ipfs daemon &
+          for i in $(seq 1 30); do
+            if curl -sf -X POST http://localhost:5001/api/v0/id > /dev/null 2>&1; then
+              echo "IPFS daemon ready"
               break
-            }
-            Start-Sleep -Seconds 1
-          }
-          if (-not $ready) { throw "IPFS daemon did not become ready in time." }
+            fi
+            sleep 1
+          done
 
       - name: Install Redis (macOS)
         if: runner.os == 'macOS'
@@ -239,25 +264,13 @@ jobs:
           Start-Process redis-server -NoNewWindow
           Start-Sleep -Seconds 3
 
-      # --- Setup Node.js + pnpm ---
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      # --- Build backend packages ---
 
       - name: Build mock-ipns-routing
         run: cd tools/mock-ipns-routing && npm install && npm run build
 
-      - name: Build packages
-        run: pnpm --filter @cipherbox/crypto --filter @cipherbox/api build
+      - name: Build API
+        run: pnpm --filter @cipherbox/api build
 
       # --- Configuration ---
 
@@ -388,13 +401,19 @@ jobs:
           export RUST_LOG=info
           BINARY=apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }}
           chmod +x "$BINARY"
+          # Verify rpath was set
+          otool -l "$BINARY" | grep -A2 LC_RPATH || echo "WARNING: No LC_RPATH found"
           DEV_KEY=$(openssl rand -hex 32)
-          "$BINARY" --dev-key $DEV_KEY &
+          "$BINARY" --dev-key $DEV_KEY > /tmp/cipherbox-desktop.log 2>&1 &
           DESKTOP_PID=$!
           set +e
           bash tests/e2e-desktop/scripts/run-all.sh
           TEST_EXIT=$?
           set -e
+          if [ "$TEST_EXIT" -ne 0 ]; then
+            echo "=== Desktop binary log ==="
+            cat /tmp/cipherbox-desktop.log 2>/dev/null || echo "(no log file)"
+          fi
           kill $DESKTOP_PID 2>/dev/null || true
           diskutil unmount force $HOME/CipherBox 2>/dev/null || true
           exit $TEST_EXIT
@@ -407,18 +426,25 @@ jobs:
           VITE_TEST_LOGIN_SECRET: e2e-test-secret-ci-only
           RUST_LOG: info
           DISPLAY: ':99'
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
         run: |
+          # Verify FUSE is available
+          ls -la /dev/fuse || echo "WARNING: /dev/fuse not found"
           Xvfb :99 -screen 0 1024x768x24 &
           sleep 1
           BINARY=apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }}
           chmod +x "$BINARY"
           DEV_KEY=$(openssl rand -hex 32)
-          "$BINARY" --dev-key $DEV_KEY &
+          "$BINARY" --dev-key $DEV_KEY > /tmp/cipherbox-desktop.log 2>&1 &
           DESKTOP_PID=$!
           set +e
           bash tests/e2e-desktop/scripts/run-all.sh
           TEST_EXIT=$?
           set -e
+          if [ "$TEST_EXIT" -ne 0 ]; then
+            echo "=== Desktop binary log ==="
+            cat /tmp/cipherbox-desktop.log 2>/dev/null || echo "(no log file)"
+          fi
           kill $DESKTOP_PID 2>/dev/null || true
           fusermount3 -u $HOME/CipherBox 2>/dev/null || true
           exit $TEST_EXIT
@@ -449,4 +475,5 @@ jobs:
           path: |
             apps/api/*.log
             ~/Library/Logs/fuse-t/fuse-t.log
+            /tmp/cipherbox-desktop.log
           retention-days: 7
