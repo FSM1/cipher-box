@@ -459,13 +459,12 @@ jobs:
         working-directory: apps/desktop/src-tauri
         run: cargo check --no-default-features --features fuse
 
-  build-desktop-windows:
-    name: Build Windows Desktop
-    needs: [changes, cargo-check-windows, typecheck]
+  cargo-test-windows:
+    name: Cargo Test (Windows)
+    needs: [changes, cargo-check-windows]
     if: |
       !failure() && !cancelled() &&
-      github.event_name == 'push' &&
-      needs.changes.outputs.desktop == 'true'
+      needs.cargo-check-windows.result == 'success'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -474,14 +473,16 @@ jobs:
         shell: powershell
         run: |
           $url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
-          $resourceDir = "${{ github.workspace }}/apps/desktop/src-tauri/resources"
-          $out = "$resourceDir/winfsp-2.1.25156.msi"
+          $out = "winfsp.msi"
           $expectedHash = "073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A"
-          New-Item -ItemType Directory -Force -Path $resourceDir
           Invoke-WebRequest -Uri $url -OutFile $out
           $actualHash = (Get-FileHash $out -Algorithm SHA256).Hash
           if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
           Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
+
+      - name: Create WinFsp MSI placeholder for resource glob
+        shell: powershell
+        run: New-Item -ItemType File -Force -Path "apps/desktop/src-tauri/resources/winfsp-placeholder.msi"
 
       - name: Install Rust toolchain
         run: rustup default stable
@@ -495,24 +496,15 @@ jobs:
           key: windows-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: windows-cargo-
 
-      - name: Build debug binary for E2E
-        run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features winfsp
+      - name: Run Rust tests
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features winfsp
 
-      - name: Upload debug desktop binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-debug-windows
-          path: apps/desktop/src-tauri/target/debug/cipherbox-desktop.exe
-          retention-days: 1
-          if-no-files-found: error
-
-  build-desktop-macos:
-    name: Build macOS Desktop
-    needs: [changes, cargo-check-macos, typecheck]
+  cargo-test-macos:
+    name: Cargo Test (macOS)
+    needs: [changes, cargo-check-macos]
     if: |
       !failure() && !cancelled() &&
-      github.event_name == 'push' &&
-      needs.changes.outputs.desktop == 'true'
+      needs.cargo-check-macos.result == 'success'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -535,26 +527,17 @@ jobs:
           key: macos-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: macos-cargo-
 
-      - name: Build debug binary for E2E
-        run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features fuse
+      - name: Run Rust tests
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features fuse
         env:
           PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
 
-      - name: Upload debug desktop binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-debug-macos
-          path: apps/desktop/src-tauri/target/debug/cipherbox-desktop
-          retention-days: 1
-          if-no-files-found: error
-
-  build-desktop-linux:
-    name: Build Linux Desktop
-    needs: [changes, cargo-check-linux, typecheck]
+  cargo-test-linux:
+    name: Cargo Test + Coverage (Linux)
+    needs: [changes, cargo-check-linux]
     if: |
       !failure() && !cancelled() &&
-      github.event_name == 'push' &&
-      needs.changes.outputs.desktop == 'true'
+      needs.cargo-check-linux.result == 'success'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -584,13 +567,19 @@ jobs:
           key: linux-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: linux-cargo-
 
-      - name: Build debug binary for E2E
-        run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features fuse
+      - uses: taiki-e/install-action@cargo-llvm-cov
 
-      - name: Upload debug desktop binary
-        uses: actions/upload-artifact@v4
+      - name: Run Rust tests with coverage
+        run: >-
+          cargo llvm-cov
+          --manifest-path apps/desktop/src-tauri/Cargo.toml
+          --no-default-features --features fuse
+          --lcov --output-path desktop-lcov.info
+
+      - name: Upload desktop coverage to Codecov
+        uses: codecov/codecov-action@v5
         with:
-          name: desktop-debug-linux
-          path: apps/desktop/src-tauri/target/debug/cipherbox-desktop
-          retention-days: 1
-          if-no-files-found: error
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: desktop-lcov.info
+          flags: desktop
+          fail_ci_if_error: false
