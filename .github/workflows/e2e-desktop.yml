@@ -260,21 +260,27 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: |
-          choco install redis-64 -y
-          # Refresh PATH to include chocolatey-installed binaries
-          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User") + ";" + $env:PATH
-          $redisServer = Get-Command redis-server -ErrorAction SilentlyContinue
-          if (-not $redisServer) {
-            # Fallback: search common install locations
-            $found = Get-ChildItem -Path "C:\ProgramData\chocolatey" -Recurse -Filter "redis-server.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($found) {
-              $env:PATH = "$($found.DirectoryName);$env:PATH"
-            } else {
-              throw "redis-server.exe not found after installation"
-            }
+          choco install memurai-developer -y --no-progress
+          # Memurai installs as a Windows service and starts automatically
+          $svc = Get-Service -Name "Memurai" -ErrorAction SilentlyContinue
+          if ($svc -and $svc.Status -eq "Running") {
+            Write-Host "Memurai service is running"
+          } else {
+            # Fallback: start service manually
+            Start-Service -Name "Memurai" -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 3
           }
-          Start-Process redis-server -NoNewWindow
-          Start-Sleep -Seconds 3
+          # Verify Redis is responding
+          $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + $env:PATH
+          $ready = $false
+          for ($i = 0; $i -lt 10; $i++) {
+            try {
+              $result = & redis-cli ping 2>$null
+              if ($result -eq "PONG") { $ready = $true; break }
+            } catch {}
+            Start-Sleep -Seconds 1
+          }
+          if ($ready) { Write-Host "Redis (Memurai) ready" } else { Write-Host "WARNING: Redis may not be ready" }
 
       # --- Build backend packages ---
 
