@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "0ff9e48ac739",
+  "session_id": "1b8263ab-75b1-4fc4-89b3-b65382131fba",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-01T01:59:41.31397Z",
+  "branch": "fix/consolidate-desktop-e2e-pipeline",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ec86ce075093",
+  "checkpoint_transcript_start": 230,
+  "transcript_lines_at_start": 230,
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 2307,
+    "cache_read_tokens": 657077,
+    "output_tokens": 1174,
+    "api_call_count": 6
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-01T01:59:40.732266Z",
+    "agent_lines": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 4,
+    "agent_percentage": 100
+  }
+}
