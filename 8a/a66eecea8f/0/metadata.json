@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "8aa66eecea8f",
+  "session_id": "68a258cc-353f-4c72-ae9e-2cdc8e1348d1",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-01T03:54:00.281855Z",
+  "branch": "fix/desktop-e2e-ci-round2",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/e2e-desktop.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "db6d43f1f1a8",
+  "checkpoint_transcript_start": 400,
+  "transcript_lines_at_start": 400,
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 49473,
+    "cache_read_tokens": 2984165,
+    "output_tokens": 12788,
+    "api_call_count": 26
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-01T03:53:59.239589Z",
+    "agent_lines": 37,
+    "human_added": 24,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 61,
+    "agent_percentage": 60.65573770491803
+  }
+}
