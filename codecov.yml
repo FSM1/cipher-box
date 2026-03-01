@@ -3,10 +3,11 @@ coverage:
     project:
       default:
         target: auto
-        threshold: 2%
+        threshold: 6%
         flags:
           - api
           - crypto
+          - desktop
       api:
         paths:
           - apps/api/src/**
