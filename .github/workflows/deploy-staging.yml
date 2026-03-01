@@ -184,6 +184,18 @@ jobs:
           $actualHash = (Get-FileHash $out -Algorithm SHA256).Hash
           if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
           Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
+          # winfsp-sys build.rs reads HKLM\SOFTWARE\WOW6432Node\WinFsp\InstallDir
+          # to find headers/libs. The MSI doesn't reliably write this key on CI runners.
+          $installDir = "C:\Program Files (x86)\WinFsp"
+          if (!(Test-Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp")) {
+            New-Item -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Force | Out-Null
+          }
+          New-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name "InstallDir" -Value $installDir -PropertyType String -Force | Out-Null
+          # Verify
+          $regVal = Get-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name "InstallDir" -ErrorAction SilentlyContinue
+          Write-Host "WinFsp InstallDir registry: $($regVal.InstallDir)"
+          if (!(Test-Path "$installDir\lib")) { throw "WinFsp lib directory not found at $installDir\lib" }
+          if (!(Test-Path "$installDir\inc")) { throw "WinFsp inc directory not found at $installDir\inc" }
 
       - name: Install Rust toolchain
         run: rustup default stable
@@ -219,10 +231,6 @@ jobs:
           VITE_API_URL: ${{ vars.STAGING_API_URL }}
           VITE_ENVIRONMENT: staging
           VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
-          # winfsp-sys build script checks registry for WinFsp install dir.
-          # MSI install registry writes may not be visible to Cargo process;
-          # set explicit path as reliable fallback.
-          WINFSP_INSTALL_DIR: 'C:\Program Files (x86)\WinFsp'
         with:
           projectPath: apps/desktop
           tauriScript: pnpm tauri
