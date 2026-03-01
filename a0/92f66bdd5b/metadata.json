@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "a092f66bdd5b",
+  "strategy": "manual-commit",
+  "branch": "fix/desktop-e2e-ci-round3",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/debug/desktop-e2e-ci-all-platforms.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a0/92f66bdd5b/0/metadata.json",
+      "transcript": "/a0/92f66bdd5b/0/full.jsonl",
+      "context": "/a0/92f66bdd5b/0/context.md",
+      "content_hash": "/a0/92f66bdd5b/0/content_hash.txt",
+      "prompt": "/a0/92f66bdd5b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 233,
+    "cache_creation_tokens": 213865,
+    "cache_read_tokens": 16442865,
+    "output_tokens": 61354,
+    "api_call_count": 154
+  }
+}
