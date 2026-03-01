@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.3](https://github.com/FSM1/cipher-box/compare/v0.21.2...v0.21.3) (2026-03-01)
+
+
+### Bug Fixes
+
+* **ci:** write WinFsp registry key for winfsp-sys build script ([#234](https://github.com/FSM1/cipher-box/issues/234)) ([db84431](https://github.com/FSM1/cipher-box/commit/db84431691f55fbeda3e3fbba21bd714231b73a6))
+
 ## [0.21.2](https://github.com/FSM1/cipher-box/compare/v0.21.1...v0.21.2) (2026-03-01)
 
 
