@@ -404,27 +404,32 @@ jobs:
 
       # --- Desktop launch + test execution ---
 
+      - name: Start frontend dev server
+        if: runner.os != 'Windows'
+        run: |
+          cd apps/desktop
+          pnpm vite preview --port 1420 &
+          # Wait for dev server
+          for i in $(seq 1 15); do
+            if curl -sf http://localhost:1420 > /dev/null 2>&1; then
+              echo "Frontend dev server ready on :1420"
+              break
+            fi
+            sleep 1
+          done
+        env:
+          VITE_API_URL: http://localhost:3000
+          VITE_TEST_LOGIN_SECRET: e2e-test-secret-ci-only
+
       - name: Run desktop E2E tests (macOS)
         if: runner.os == 'macOS'
         run: |
           export CIPHERBOX_API_URL=http://localhost:3000
           export VITE_API_URL=http://localhost:3000
           export VITE_TEST_LOGIN_SECRET=e2e-test-secret-ci-only
-          export RUST_LOG=debug
-          # Verify API is reachable before starting desktop
-          echo "Pre-flight: checking API health..."
-          curl -sf http://localhost:3000/health && echo " OK" || echo " FAILED"
-          echo "Pre-flight: checking test-login endpoint..."
-          curl -sf -X POST http://localhost:3000/auth/test-login \
-            -H 'Content-Type: application/json' \
-            -d '{"email":"preflight@test.local","secret":"e2e-test-secret-ci-only"}' \
-            && echo " OK" || echo " FAILED (expected if endpoint requires specific format)"
+          export RUST_LOG=info
           BINARY=apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }}
           chmod +x "$BINARY"
-          # Verify rpath was set
-          otool -l "$BINARY" | grep -A2 LC_RPATH || echo "WARNING: No LC_RPATH found"
-          # Verify frontend assets are embedded
-          ls -la apps/desktop/dist/ || echo "WARNING: dist directory missing"
           DEV_KEY=$(openssl rand -hex 32)
           "$BINARY" --dev-key $DEV_KEY > /tmp/cipherbox-desktop.log 2>&1 &
           DESKTOP_PID=$!
@@ -446,17 +451,10 @@ jobs:
           CIPHERBOX_API_URL: http://localhost:3000
           VITE_API_URL: http://localhost:3000
           VITE_TEST_LOGIN_SECRET: e2e-test-secret-ci-only
-          RUST_LOG: debug
+          RUST_LOG: info
           DISPLAY: ':99'
           WEBKIT_DISABLE_DMABUF_RENDERER: '1'
         run: |
-          # Verify FUSE is available
-          ls -la /dev/fuse || echo "WARNING: /dev/fuse not found"
-          # Verify API is reachable
-          echo "Pre-flight: checking API health..."
-          curl -sf http://localhost:3000/health && echo " OK" || echo " FAILED"
-          # Verify frontend assets exist
-          ls -la apps/desktop/dist/ || echo "WARNING: dist directory missing"
           Xvfb :99 -screen 0 1024x768x24 &
           sleep 1
           BINARY=apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }}
@@ -475,6 +473,23 @@ jobs:
           kill $DESKTOP_PID 2>/dev/null || true
           fusermount3 -u $HOME/CipherBox 2>/dev/null || true
           exit $TEST_EXIT
+
+      - name: Start frontend dev server (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cd apps/desktop
+          npx vite preview --port 1420 &
+          for i in $(seq 1 15); do
+            if curl -sf http://localhost:1420 > /dev/null 2>&1; then
+              echo "Frontend dev server ready on :1420"
+              break
+            fi
+            sleep 1
+          done
+        env:
+          VITE_API_URL: http://localhost:3000
+          VITE_TEST_LOGIN_SECRET: e2e-test-secret-ci-only
 
       - name: Run desktop E2E tests (Windows)
         if: runner.os == 'Windows'
