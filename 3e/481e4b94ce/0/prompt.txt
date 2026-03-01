@@ -1,0 +1,805 @@
+<objective>
+Check project progress, summarize recent work and what's ahead, then intelligently route to the next action - either executing an existing plan or creating the next one.
+
+Provides situational awareness before continuing work.
+</objective>
+
+
+<process>
+
+<step name="verify">
+**Verify planning structure exists:**
+
+If no `.planning/` directory:
+
+```
+No planning structure found.
+
+Run /gsd:new-project to start a new project.
+```
+
+Exit.
+
+If missing STATE.md: suggest `/gsd:new-project`.
+
+**If ROADMAP.md missing but PROJECT.md exists:**
+
+This means a milestone was completed and archived. Go to **Route F** (between milestones).
+
+If missing both ROADMAP.md and PROJECT.md: suggest `/gsd:new-project`.
+</step>
+
+<step name="load">
+**Load full project context:**
+
+- Read `.planning/STATE.md` for living memory (position, decisions, issues)
+- Read `.planning/ROADMAP.md` for phase structure and objectives
+- Read `.planning/PROJECT.md` for current state (What This Is, Core Value, Requirements)
+  </step>
+
+<step name="recent">
+**Gather recent work context:**
+
+- Find the 2-3 most recent SUMMARY.md files
+- Extract from each: what was accomplished, key decisions, any issues logged
+- This shows "what we've been working on"
+  </step>
+
+<step name="position">
+**Parse current position:**
+
+- From STATE.md: current phase, plan number, status
+- Calculate: total plans, completed plans, remaining plans
+- Note any blockers or concerns
+- Check for CONTEXT.md: For phases without PLAN.md files, check if `{phase}-CONTEXT.md` exists in phase directory
+- Count pending todos: `ls .planning/todos/pending/*.md 2>/dev/null | wc -l`
+- Check for active debug sessions: `ls .planning/debug/*.md 2>/dev/null | grep -v resolved | wc -l`
+  </step>
+
+<step name="report">
+**Present rich status report:**
+
+```
+# [Project Name]
+
+**Progress:** [████████░░] 8/10 plans complete
+
+## Recent Work
+- [Phase X, Plan Y]: [what was accomplished - 1 line]
+- [Phase X, Plan Z]: [what was accomplished - 1 line]
+
+## Current Position
+Phase [N] of [total]: [phase-name]
+Plan [M] of [phase-total]: [status]
+CONTEXT: [✓ if CONTEXT.md exists | - if not]
+
+## Key Decisions Made
+- [decision 1 from STATE.md]
+- [decision 2]
+
+## Blockers/Concerns
+- [any blockers or concerns from STATE.md]
+
+## Pending Todos
+- [count] pending — /gsd:check-todos to review
+
+## Active Debug Sessions
+- [count] active — /gsd:debug to continue
+(Only show this section if count > 0)
+
+## What's Next
+[Next phase/plan objective from ROADMAP]
+```
+
+</step>
+
+<step name="route">
+**Determine next action based on verified counts.**
+
+**Step 1: Count plans, summaries, and issues in current phase**
+
+List files in the current phase directory:
+
+```bash
+ls -1 .planning/phases/[current-phase-dir]/*-PLAN.md 2>/dev/null | wc -l
+ls -1 .planning/phases/[current-phase-dir]/*-SUMMARY.md 2>/dev/null | wc -l
+ls -1 .planning/phases/[current-phase-dir]/*-UAT.md 2>/dev/null | wc -l
+```
+
+State: "This phase has {X} plans, {Y} summaries."
+
+**Step 1.5: Check for unaddressed UAT gaps**
+
+Check for UAT.md files with status "diagnosed" (has gaps needing fixes).
+
+```bash
+# Check for diagnosed UAT with gaps
+grep -l "status: diagnosed" .planning/phases/[current-phase-dir]/*-UAT.md 2>/dev/null
+```
+
+Track:
+- `uat_with_gaps`: UAT.md files with status "diagnosed" (gaps need fixing)
+
+**Step 2: Route based on counts**
+
+| Condition | Meaning | Action |
+|-----------|---------|--------|
+| uat_with_gaps > 0 | UAT gaps need fix plans | Go to **Route E** |
+| summaries < plans | Unexecuted plans exist | Go to **Route A** |
+| summaries = plans AND plans > 0 | Phase complete | Go to Step 3 |
+| plans = 0 | Phase not yet planned | Go to **Route B** |
+
+---
+
+**Route A: Unexecuted plan exists**
+
+Find the first PLAN.md without matching SUMMARY.md.
+Read its `<objective>` section.
+
+```
+---
+
+## ▶ Next Up
+
+**{phase}-{plan}: [Plan Name]** — [objective summary from PLAN.md]
+
+`/gsd:execute-phase {phase}`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+```
+
+---
+
+**Route B: Phase needs planning**
+
+Check if `{phase}-CONTEXT.md` exists in phase directory.
+
+**If CONTEXT.md exists:**
+
+```
+---
+
+## ▶ Next Up
+
+**Phase {N}: {Name}** — {Goal from ROADMAP.md}
+<sub>✓ Context gathered, ready to plan</sub>
+
+`/gsd:plan-phase {phase-number}`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+```
+
+**If CONTEXT.md does NOT exist:**
+
+```
+---
+
+## ▶ Next Up
+
+**Phase {N}: {Name}** — {Goal from ROADMAP.md}
+
+`/gsd:discuss-phase {phase}` — gather context and clarify approach
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:plan-phase {phase}` — skip discussion, plan directly
+- `/gsd:list-phase-assumptions {phase}` — see Claude's assumptions
+
+---
+```
+
+---
+
+**Route E: UAT gaps need fix plans**
+
+UAT.md exists with gaps (diagnosed issues). User needs to plan fixes.
+
+```
+---
+
+## ⚠ UAT Gaps Found
+
+**{phase}-UAT.md** has {N} gaps requiring fixes.
+
+`/gsd:plan-phase {phase} --gaps`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:execute-phase {phase}` — execute phase plans
+- `/gsd:verify-work {phase}` — run more UAT testing
+
+---
+```
+
+---
+
+**Step 3: Check milestone status (only when phase complete)**
+
+Read ROADMAP.md and identify:
+1. Current phase number
+2. All phase numbers in the current milestone section
+
+Count total phases and identify the highest phase number.
+
+State: "Current phase is {X}. Milestone has {N} phases (highest: {Y})."
+
+**Route based on milestone status:**
+
+| Condition | Meaning | Action |
+|-----------|---------|--------|
+| current phase < highest phase | More phases remain | Go to **Route C** |
+| current phase = highest phase | Milestone complete | Go to **Route D** |
+
+---
+
+**Route C: Phase complete, more phases remain**
+
+Read ROADMAP.md to get the next phase's name and goal.
+
+```
+---
+
+## ✓ Phase {Z} Complete
+
+## ▶ Next Up
+
+**Phase {Z+1}: {Name}** — {Goal from ROADMAP.md}
+
+`/gsd:discuss-phase {Z+1}` — gather context and clarify approach
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:plan-phase {Z+1}` — skip discussion, plan directly
+- `/gsd:verify-work {Z}` — user acceptance test before continuing
+
+---
+```
+
+---
+
+**Route D: Milestone complete**
+
+```
+---
+
+## 🎉 Milestone Complete
+
+All {N} phases finished!
+
+## ▶ Next Up
+
+**Complete Milestone** — archive and prepare for next
+
+`/gsd:complete-milestone`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:verify-work` — user acceptance test before completing milestone
+
+---
+```
+
+---
+
+**Route F: Between milestones (ROADMAP.md missing, PROJECT.md exists)**
+
+A milestone was completed and archived. Ready to start the next milestone cycle.
+
+Read MILESTONES.md to find the last completed milestone version.
+
+```
+---
+
+## ✓ Milestone v{X.Y} Complete
+
+Ready to plan the next milestone.
+
+## ▶ Next Up
+
+**Start Next Milestone** — questioning → research → requirements → roadmap
+
+`/gsd:new-milestone`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+```
+
+</step>
+
+<step name="edge_cases">
+**Handle edge cases:**
+
+- Phase complete but next phase not planned → offer `/gsd:plan-phase [next]`
+- All work complete → offer milestone completion
+- Blockers present → highlight before offering to continue
+- Handoff file exists → mention it, offer `/gsd:resume-work`
+  </step>
+
+</process>
+
+<success_criteria>
+
+- [ ] Rich context provided (recent work, decisions, issues)
+- [ ] Current position clear with visual progress
+- [ ] What's next clearly explained
+- [ ] Smart routing: /gsd:execute-phase if plans exist, /gsd:plan-phase if not
+- [ ] User confirms before any action
+- [ ] Seamless handoff to appropriate gsd command
+      </success_criteria>
+
+---
+
+<objective>
+List all pending todos, allow selection, load full context for the selected todo, and route to appropriate action.
+
+Enables reviewing captured ideas and deciding what to work on next.
+</objective>
+
+<context>
+@.planning/STATE.md
+@.planning/ROADMAP.md
+</context>
+
+<process>
+
+<step name="check_exist">
+```bash
+TODO_COUNT=$(ls .planning/todos/pending/*.md 2>/dev/null | wc -l | tr -d ' ')
+echo "Pending todos: $TODO_COUNT"
+```
+
+If count is 0:
+```
+No pending todos.
+
+Todos are captured during work sessions with /gsd:add-todo.
+
+---
+
+Would you like to:
+
+1. Continue with current phase (/gsd:progress)
+2. Add a todo now (/gsd:add-todo)
+```
+
+Exit.
+</step>
+
+<step name="parse_filter">
+Check for area filter in arguments:
+- `/gsd:check-todos` → show all
+- `/gsd:check-todos api` → filter to area:api only
+</step>
+
+<step name="list_todos">
+```bash
+for file in .planning/todos/pending/*.md; do
+  created=$(grep "^created:" "$file" | cut -d' ' -f2)
+  title=$(grep "^title:" "$file" | cut -d':' -f2- | xargs)
+  area=$(grep "^area:" "$file" | cut -d' ' -f2)
+  echo "$created|$title|$area|$file"
+done | sort
+```
+
+Apply area filter if specified. Display as numbered list:
+
+```
+Pending Todos:
+
+1. Add auth token refresh (api, 2d ago)
+2. Fix modal z-index issue (ui, 1d ago)
+3. Refactor database connection pool (database, 5h ago)
+
+---
+
+Reply with a number to view details, or:
+- `/gsd:check-todos [area]` to filter by area
+- `q` to exit
+```
+
+Format age as relative time.
+</step>
+
+<step name="handle_selection">
+Wait for user to reply with a number.
+
+If valid: load selected todo, proceed.
+If invalid: "Invalid selection. Reply with a number (1-[N]) or `q` to exit."
+</step>
+
+<step name="load_context">
+Read the todo file completely. Display:
+
+```
+## [title]
+
+**Area:** [area]
+**Created:** [date] ([relative time] ago)
+**Files:** [list or "None"]
+
+### Problem
+[problem section content]
+
+### Solution
+[solution section content]
+```
+
+If `files` field has entries, read and briefly summarize each.
+</step>
+
+<step name="check_roadmap">
+```bash
+ls .planning/ROADMAP.md 2>/dev/null && echo "Roadmap exists"
+```
+
+If roadmap exists:
+1. Check if todo's area matches an upcoming phase
+2. Check if todo's files overlap with a phase's scope
+3. Note any match for action options
+</step>
+
+<step name="offer_actions">
+**If todo maps to a roadmap phase:**
+
+Use AskUserQuestion:
+- header: "Action"
+- question: "This todo relates to Phase [N]: [name]. What would you like to do?"
+- options:
+  - "Work on it now" — move to done, start working
+  - "Add to phase plan" — include when planning Phase [N]
+  - "Brainstorm approach" — think through before deciding
+  - "Put it back" — return to list
+
+**If no roadmap match:**
+
+Use AskUserQuestion:
+- header: "Action"
+- question: "What would you like to do with this todo?"
+- options:
+  - "Work on it now" — move to done, start working
+  - "Create a phase" — /gsd:add-phase with this scope
+  - "Brainstorm approach" — think through before deciding
+  - "Put it back" — return to list
+</step>
+
+<step name="execute_action">
+**Work on it now:**
+```bash
+mv ".planning/todos/pending/[filename]" ".planning/todos/done/"
+```
+Update STATE.md todo count. Present problem/solution context. Begin work or ask how to proceed.
+
+**Add to phase plan:**
+Note todo reference in phase planning notes. Keep in pending. Return to list or exit.
+
+**Create a phase:**
+Display: `/gsd:add-phase [description from todo]`
+Keep in pending. User runs command in fresh context.
+
+**Brainstorm approach:**
+Keep in pending. Start discussion about problem and approaches.
+
+**Put it back:**
+Return to list_todos step.
+</step>
+
+<step name="update_state">
+After any action that changes todo count:
+
+```bash
+ls .planning/todos/pending/*.md 2>/dev/null | wc -l
+```
+
+Update STATE.md "### Pending Todos" section if exists.
+</step>
+
+<step name="git_commit">
+If todo was moved to done/, commit the change:
+
+```bash
+git add .planning/todos/done/[filename]
+git rm --cached .planning/todos/pending/[filename] 2>/dev/null || true
+[ -f .planning/STATE.md ] && git add .planning/STATE.md
+git commit -m "$(cat <<'EOF'
+docs: start work on todo - [title]
+
+Moved to done/, beginning implementation.
+EOF
+)"
+```
+
+Confirm: "Committed: docs: start work on todo - [title]"
+</step>
+
+</process>
+
+<output>
+- Moved todo to `.planning/todos/done/` (if "Work on it now")
+- Updated `.planning/STATE.md` (if todo count changed)
+</output>
+
+<anti_patterns>
+- Don't delete todos — move to done/ when work begins
+- Don't start work without moving to done/ first
+- Don't create plans from this command — route to /gsd:plan-phase or /gsd:add-phase
+</anti_patterns>
+
+<success_criteria>
+- [ ] All pending todos listed with title, area, age
+- [ ] Area filter applied if specified
+- [ ] Selected todo's full context loaded
+- [ ] Roadmap context checked for phase match
+- [ ] Appropriate actions offered
+- [ ] Selected action executed
+- [ ] STATE.md updated if todo count changed
+- [ ] Changes committed to git (if todo moved to done/)
+</success_criteria>
+
+---
+
+7
+
+---
+
+The user just ran /insights to generate a usage report analyzing their Claude Code sessions.
+
+Here is the full insights data:
+{
+  "project_areas": {
+    "areas": [
+      {
+        "name": "MFA (Multi-Factor Authentication) Implementation",
+        "session_count": 12,
+        "description": "Building and debugging a full MFA authentication flow including security tab UI, SIWE domain validation, e2e test coverage, and auth service hardening. Claude Code was used extensively for iterative bug fixing (e.g., React StrictMode double-mounting race conditions), meeting test coverage thresholds, addressing multiple rounds of CodeRabbit PR review comments, and debugging staging environment issues with CORS and JWKS mismatches."
+      },
+      {
+        "name": "CI/CD Pipeline Optimization",
+        "session_count": 14,
+        "description": "Implementing path-based CI skipping for docs-only PRs, fixing Release Please workflow filters, adding Windows build steps, migration drift checks, and debugging flaky test failures in CI. Claude Code was used to edit YAML workflow files, debug dorny/paths-filter negation pattern issues, fix ts-node tsconfig compilation errors, and iteratively resolve CI failures across multiple push-and-check cycles."
+      },
+      {
+        "name": "User-to-User Sharing & Link Sharing Features",
+        "session_count": 18,
+        "description": "Designing, planning, and executing Phase 14 (User-to-User Sharing) and Phase 15 (Link Sharing) including structured design discussions, automated multi-wave plan generation, security reviews, and full implementation with e2e tests. Claude Code orchestrated subagent-based plan execution, built multi-account test fixtures and page objects, fixed silent re-wrapping bugs in shared folder uploads, and addressed extensive CodeRabbit review feedback across dozens of PR threads."
+      },
+      {
+        "name": "Client-Side Search Implementation",
+        "session_count": 5,
+        "description": "Designing and building a client-side search feature including gap-closure planning, implementation with Playwright verification, and UI refinements like fixing selected item border styling. Claude Code was used through custom GSD planning commands to generate and verify implementation plans, execute feature builds, and handle design file cleanup despite cascading deletion issues requiring component rebuilds."
+      },
+      {
+        "name": "E2E Test Infrastructure & Debugging",
+        "session_count": 12,
+        "description": "Diagnosing and fixing sequential e2e test failures across CI runs, stabilizing flaky tests with auto-retrying assertions, building comprehensive sharing flow test suites, and resolving stale IPNS resolution issues. Claude Code proved particularly effective at diagnosing root causes across multiple failure types (compressed key formats, loading state race conditions, about:blank URL bugs, stale search indexes) and iteratively pushing fixes through CI validation cycles."
+      }
+    ]
+  },
+  "interaction_style": {
+    "narrative": "You are a **high-velocity, production-oriented developer** who uses Claude Code as a core part of your daily workflow across 251 sessions in just 30 days — averaging over 8 sessions per day with 540 commits. Your dominant pattern is **delegating entire workflows end-to-end**: you point Claude at PR review comments, CI failures, or phase execution tasks and expect it to research, implement, test, commit, and push autonomously. Your top goal category is git_operations (38 sessions), followed by documentation and bug fixes, revealing that you treat Claude as a **full-cycle development partner** rather than just a code generator. You lean heavily on Bash (5,427 calls) and Read (2,683 calls), indicating you trust Claude to navigate your codebase, run tests, and interact with CI/git infrastructure directly. The heavy use of Task/TaskUpdate (627 combined) shows you've built custom orchestration commands — like your GSD plan-phase workflow — that let Claude manage multi-plan, multi-wave feature rollouts with minimal hand-holding.\n\nYour interaction style is **iterative and corrective rather than upfront-specifying**. You let Claude run with broad directives but intervene sharply when it takes a wrong approach — you rejected a blind CI skip strategy, flagged a leaky SIWE abstraction, corrected assumptions about Pinata vs Kubo, and called out Claude for pushing before running E2E tests. The friction data tells a clear story: 43 instances of \"wrong_approach\" and 36 of \"buggy_code\" didn't stop you — you just course-corrected and kept going. Your satisfaction numbers confirm this works for you (224 likely satisfied + 57 satisfied out of 322 rated sessions). You occasionally interrupt sessions (several \"partially_achieved\" outcomes from interruptions), suggesting you **context-switch frequently** and expect to pick work back up later rather than blocking on completion.\n\nWhat's most striking is the **scale and ambition of your delegated tasks**. You're not asking for one-off functions — you're having Claude execute entire project phases (Phase 14 User-to-User Sharing with 6 plans across 4 waves, Phase 15 link sharing with security reviews), build comprehensive E2E testing infrastructure with multi-account fixtures, implement GDPR account deletion with IPFS cleanup, and resolve dozens of CodeRabbit review comments in single sessions. Your 49 multi-file change successes and 21 good debugging instances show Claude delivering real value at this scale. You treat debugging as a **collaborative iterative loop** — like the MFA StrictMode race condition that took three hypothesis iterations, or the sequential E2E failures across 4 CI runs that Claude methodically diagnosed one by one from 89 to 98+ passing tests.",
+    "key_pattern": "You operate as a high-throughput technical lead who delegates entire feature phases, CI pipelines, and PR review cycles to Claude, intervening only with sharp corrections when it takes the wrong approach."
+  },
+  "what_works": {
+    "intro": "You're a power user running 251 sessions over a month with a 65% full-achievement rate, driving a complex encrypted/IPFS-based application through major feature phases with impressive systematic rigor.",
+    "impressive_workflows": [
+      {
+        "title": "Structured Multi-Phase Feature Delivery",
+        "description": "You've built a sophisticated GSD (Get Stuff Done) workflow with custom commands for planning, research, verification, and execution across multi-wave feature phases like User-to-User Sharing and Link Sharing. Your approach of breaking large features into numbered plans with wave-based ordering, running automated verification, and extracting learnings after each phase shows a mature engineering process that treats Claude as a true orchestration layer rather than just a code assistant."
+      },
+      {
+        "title": "Relentless CI and E2E Stabilization",
+        "description": "You systematically chase down CI failures and flaky E2E tests across multiple iterations, diagnosing root causes like React StrictMode double-mounting race conditions, stale IPNS resolution, compressed key format issues, and loading state races. Rather than accepting intermittent failures, you push through sequential debugging cycles — in one session fixing four distinct failures across four CI runs to go from 89 to 98+ passing tests — demonstrating a commitment to build reliability that compounds over time."
+      },
+      {
+        "title": "Thorough PR Review Loop Management",
+        "description": "You've turned CodeRabbit PR review resolution into a well-oiled workflow, routinely having Claude address batches of 5-9 review comments in a single session, fix the code, commit, push, and reply to each thread. Across sessions you resolved dozens of review threads covering critical bugs, security issues, TOCTOU races, and API schema improvements, effectively using Claude as a high-throughput code review response engine integrated directly into your git workflow."
+      }
+    ]
+  },
+  "friction_analysis": {
+    "intro": "Your sessions show a recurring pattern of Claude taking wrong initial approaches, requiring multiple iterations to fix issues, and not validating work before pushing — costing you significant debugging time across your 251 sessions.",
+    "categories": [
+      {
+        "category": "Wrong Initial Approach Requiring Course Correction",
+        "description": "Claude frequently chose an incorrect strategy on the first attempt, and you had to intervene to redirect. You could reduce this by front-loading constraints and preferred patterns in your prompts or CLAUDE.md — for example, specifying that CI changes should use smart path filtering rather than blanket skips, or that environment-specific logic belongs in config layers not controllers.",
+        "examples": [
+          "Claude tried to blindly skip all CI for release-please PRs instead of making path filters smarter, which you had to reject and redirect — burning a full iteration cycle",
+          "Claude used dorny/paths-filter negation patterns that don't work as expected, and also chose that action without checking the repo's allowed actions list, requiring you to manually fix the allowlist"
+        ]
+      },
+      {
+        "category": "Pushing Code Without Local Validation First",
+        "description": "Claude repeatedly pushed changes or committed code without running tests locally, leading to avoidable CI failures and multiple fix-push-wait cycles. You should instruct Claude to always run the relevant test suite before committing, especially for E2E and coverage-sensitive changes.",
+        "examples": [
+          "Claude pushed E2E test fixes without running them locally first, and you had to explicitly prompt it to do so — the first stabilization attempt then still failed in CI due to race conditions, requiring a second round",
+          "Auth service coverage came in at 82.35% against an 84% threshold after the initial changes, requiring additional test cases in a follow-up — a local coverage check would have caught this before the push"
+        ]
+      },
+      {
+        "category": "Multi-Iteration Debugging From Treating Symptoms Instead of Root Causes",
+        "description": "Claude often spent multiple attempts fixing surface-level symptoms before identifying the actual root cause, costing you significant time in longer sessions. You could mitigate this by prompting Claude to diagnose root causes before implementing fixes, especially for flaky tests and environment issues.",
+        "examples": [
+          "The MFA StrictMode double-mounting bug took three iterations — an effect ref fix, then a cancel fix, before finally landing on a generation counter approach that addressed the actual race condition",
+          "E2E test failures were initially addressed by increasing timeouts rather than diagnosing the real problem (stale IPNS resolution), and Claude also started the dev server on the wrong port, compounding the wasted debugging time"
+        ]
+      }
+    ]
+  },
+  "suggestions": {
+    "claude_md_additions": [
+      {
+        "addition": "Always run E2E tests locally before pushing commits, especially for test-related or UI changes. Never push without verifying tests pass first.",
+        "why": "Multiple sessions show Claude pushing changes before running tests, requiring the user to prompt for local test runs, and then needing additional fix cycles when CI fails.",
+        "prompt_scaffold": "Add under a ## Workflow Rules or ## Testing section at the top level of CLAUDE.md"
+      },
+      {
+        "addition": "When fixing CI failures or flaky tests, diagnose the root cause first rather than applying surface-level fixes like increasing timeouts. Iterate on the actual underlying issue.",
+        "why": "Several sessions show Claude's first fix attempts addressing symptoms (e.g., timeout increases, effect ref fixes) rather than root causes, requiring 2-3 iterations to get it right.",
+        "prompt_scaffold": "Add under ## Debugging or ## Testing section"
+      },
+      {
+        "addition": "When addressing CodeRabbit PR review comments, fix all valid comments, commit, push, and reply to each thread to resolve it. Do this systematically file-by-file.",
+        "why": "Addressing CodeRabbit reviews is one of the most frequent tasks (22+ sessions) and Claude handles it well when systematic — codifying this avoids missed comments.",
+        "prompt_scaffold": "Add under ## PR Reviews or ## Code Review section"
+      },
+      {
+        "addition": "Never commit changes to a branch that has already been merged. Always verify the branch status before committing. If the target branch is merged, create a new branch from main.",
+        "why": "At least one session had Claude commit a todo to an already-merged branch, requiring manual cleanup by the user.",
+        "prompt_scaffold": "Add under ## Git Workflow section"
+      },
+      {
+        "addition": "For CI workflow changes: do not use dorny/paths-filter negation patterns (they don't work as expected). Use positive path matching or native git diff approaches. Also check the repo's GitHub Actions allowlist before adding new actions.",
+        "why": "Multiple sessions had friction with dorny/paths-filter negation patterns and action allowlist issues — this keeps recurring across CI-related work.",
+        "prompt_scaffold": "Add under ## CI/CD section"
+      },
+      {
+        "addition": "This project uses: TypeScript (primary), Rust, YAML for CI, CSS. The stack includes Vite (dev server on port 5173), TypeORM for DB, Playwright for E2E tests, and Pinata (not local Kubo) for IPFS pinning. Web3Auth is used for auth with SIWE domain validation.",
+        "why": "Claude made incorrect assumptions about the stack multiple times (wrong dev server port, Pinata vs Kubo, .env.local overrides with Vite caching) — having this in CLAUDE.md prevents repeated corrections.",
+        "prompt_scaffold": "Add under ## Project Context or ## Stack section near the top of CLAUDE.md"
+      },
+      {
+        "addition": "When proposing CI optimizations, prefer targeted/smart approaches (e.g., smarter path filters) over blanket skips. Never skip all CI for a PR category without user approval.",
+        "why": "Claude tried to blindly skip all CI for release-please PRs which the user rejected — the user prefers surgical CI changes.",
+        "prompt_scaffold": "Add under ## CI/CD section"
+      }
+    ],
+    "features_to_try": [
+      {
+        "feature": "Hooks",
+        "one_liner": "Auto-run shell commands at specific lifecycle events like pre-commit or post-edit.",
+        "why_for_you": "Your top friction points are buggy_code (36) and wrong_approach (43), and Claude frequently pushes without running tests. A pre-push hook that auto-runs E2E tests or lint checks would catch these issues before they hit CI, saving you entire debug cycles.",
+        "example_code": "// .claude/settings.json\n{\n  \"hooks\": {\n    \"pre_tool_call\": [\n      {\n        \"matcher\": \"Bash(git push*)\",\n        \"command\": \"echo 'REMINDER: Have you run E2E tests locally? Run: npx playwright test'\"\n      }\n    ],\n    \"post_tool_call\": [\n      {\n        \"matcher\": \"Edit(*.ts)\",\n        \"command\": \"npx tsc --noEmit --pretty 2>&1 | head -20\"\n      }\n    ]\n  }\n}"
+      },
+      {
+        "feature": "Custom Skills",
+        "one_liner": "Reusable prompt workflows triggered with a single /command.",
+        "why_for_you": "You already use custom GSD planning commands and have highly repetitive workflows: addressing CodeRabbit reviews (22+ sessions), fixing CI failures (7 sessions), and PR creation. Custom skills for /review-fix, /fix-ci, and /pr would standardize these and eliminate the need to re-explain the workflow each time.",
+        "example_code": "# .claude/skills/fix-reviews/SKILL.md\n## Fix CodeRabbit PR Review Comments\n1. Read all pending CodeRabbit review comments on the current PR using `gh pr view --json reviews`\n2. Triage each comment: identify valid vs. nitpick\n3. For each valid comment, apply the fix in the relevant file\n4. Run `npx playwright test` to verify no regressions\n5. Commit all fixes with message: \"fix: address CodeRabbit review comments\"\n6. Push to the current branch\n7. Reply to each resolved review thread using `gh api`\n8. Report summary of what was fixed vs. dismissed"
+      },
+      {
+        "feature": "Headless Mode",
+        "one_liner": "Run Claude non-interactively from scripts and CI/CD pipelines.",
+        "why_for_you": "With 540 commits and 38 git_operations sessions, plus 7 fix_ci_failures sessions, you could automate the most repetitive parts: have CI auto-trigger Claude to fix lint errors or coverage gaps before you even see the failure. Your CodeRabbit review workflow is also a prime candidate for semi-automated headless runs.",
+        "example_code": "# In your CI workflow or as a local script:\n# Auto-fix CI coverage gaps:\nclaude -p \"The CI coverage threshold check failed. Read the coverage report, identify uncovered branches in changed files, add minimal tests to meet the 84% threshold, then commit with message 'test: improve coverage for CI'\" --allowedTools \"Edit,Read,Bash,Grep\"\n\n# Auto-address CodeRabbit comments:\nclaude -p \"Address all valid CodeRabbit review comments on the current PR. Fix each issue, run tests, commit, push, and reply to each thread.\" --allowedTools \"Edit,Read,Bash,Grep,Glob\""
+      }
+    ],
+    "usage_patterns": [
+      {
+        "title": "Root-Cause-First Debugging Protocol",
+        "suggestion": "Establish an explicit debugging protocol that requires root cause identification before applying fixes, to reduce the 2-3 iteration cycles you're experiencing.",
+        "detail": "Your friction data shows 43 wrong_approach and 36 buggy_code incidents. Sessions like the StrictMode double-mounting bug (3 iterations), the stale IPNS resolution (timeout fix first, root cause second), and the ts-node tsconfig issue all follow the same pattern: Claude tries a surface fix, it fails, tries another, then finally finds the root cause. By adding a CLAUDE.md instruction to always articulate the root cause hypothesis before writing any fix code, you'd likely cut these iteration cycles in half.",
+        "copyable_prompt": "Before fixing this, please: 1) State your hypothesis for the root cause, 2) Identify evidence that supports or contradicts it, 3) Propose the minimal fix that addresses the root cause specifically. Do NOT apply timeout increases or retry wrappers unless the root cause is genuinely timing-related."
+      },
+      {
+        "title": "Pre-Push Test Gate",
+        "suggestion": "Always require local test verification before any git push to avoid the CI-fail-fix-push-repeat cycle that appears in 10+ sessions.",
+        "detail": "Your sessions frequently show a pattern: Claude makes changes, pushes to the PR, CI fails, then you spend another round fixing. In at least 5 documented cases, the user had to explicitly ask Claude to run tests before pushing. With 540 commits across 251 sessions, even a small percentage of avoidable CI failures costs significant time. Making 'run tests then push' the default would compress your feedback loop significantly.",
+        "copyable_prompt": "Fix the issue, then run the full E2E test suite locally with `npx playwright test`. Only push after all tests pass. If any test fails, fix it before pushing. Show me the test results summary."
+      },
+      {
+        "title": "Batch CodeRabbit Reviews Into Single Sessions",
+        "suggestion": "Consolidate your CodeRabbit review response workflow into a structured single-pass approach to reduce the back-and-forth across multiple sessions.",
+        "detail": "You have 22+ sessions dedicated to PR reviews (resolve_pr_reviews: 8, code_review_response: 7, address_code_review_comments: 7). These are your second most common task category. Many sessions handle the same PR across multiple rounds. By creating a skill that systematically processes all comments, categorizes them (bug fix, style, architectural), applies fixes in priority order, and runs tests once at the end, you'd reduce the number of sessions needed per PR from 2-3 to 1.",
+        "copyable_prompt": "List all unresolved CodeRabbit review comments on this PR. Categorize each as: critical (bugs/security), important (logic/architecture), or minor (style/naming). Fix all critical and important issues first, then minor ones. Run the full test suite once after all fixes. Commit with a clear summary of what was addressed. Push and reply to each review thread."
+      }
+    ]
+  },
+  "on_the_horizon": {
+    "intro": "Your Claude Code usage reveals a power user driving 540 commits across 476 hours with a 65% full-achievement rate — but friction patterns around wrong approaches, buggy code, and CI iteration loops point to massive gains from more autonomous, test-driven workflows.",
+    "opportunities": [
+      {
+        "title": "Autonomous CI Fix Loops With Parallel Agents",
+        "whats_possible": "Your top friction sources — buggy code (36 instances) and wrong approach (43 instances) — often compound during CI debugging, where Claude pushes a fix, waits for CI, then iterates again. Parallel Task agents could simultaneously investigate multiple hypotheses (race conditions, config issues, coverage gaps) and converge on the correct fix in a single cycle instead of 3-4 sequential pushes. With 7 fix_ci_failures sessions and multiple multi-round debugging sagas (like the StrictMode double-mount taking 3 iterations), autonomous test-loop agents could cut your CI fix time by 60%+.",
+        "how_to_try": "Use Claude Code's Task tool to spawn parallel sub-agents that each run tests locally, diagnose independently, and report back before any push. Combine with a CLAUDE.md instruction requiring local test verification before every commit.",
+        "copyable_prompt": "I need you to fix all failing CI checks on this branch. Before pushing anything, use the Task tool to spawn 3 parallel sub-agents: (1) one that runs the full e2e test suite locally and categorizes each failure by root cause, (2) one that analyzes the CI logs and git diff to identify which recent changes likely broke things, and (3) one that checks test coverage thresholds and identifies any gaps. Wait for all three to report back, synthesize their findings, implement fixes, run the full test suite locally to confirm everything passes, and only then commit and push. If any test still fails after your fix, iterate locally — do NOT push until you have a green local run."
+      },
+      {
+        "title": "Self-Correcting PR Review Resolution Pipeline",
+        "whats_possible": "You have 22 sessions dedicated to PR review responses (resolve_pr_reviews + code_review_response + address_code_review_comments), making it your second-largest workflow after git operations. Claude already resolves CodeRabbit threads effectively, but friction data shows premature pushes without local tests, phantom state entries, and commits to wrong branches. An autonomous pipeline could fetch all open review comments, categorize them by type (bug, style, security), implement fixes with local verification, and batch-push — turning your current multi-session review cycles into single autonomous runs.",
+        "how_to_try": "Create a custom slash command or CLAUDE.md workflow that chains: fetch PR comments → categorize → spawn Task agents per category → verify locally → commit → reply to threads. Claude Code's GitHub CLI integration handles the full loop.",
+        "copyable_prompt": "Analyze all open CodeRabbit and reviewer comments on PR #XXX. For each comment: (1) categorize it as bug-fix, style/refactor, security, or test-gap, (2) assess whether the suggestion is valid or should be discussed. Then implement all valid fixes — spawn a separate Task sub-agent for each category to work in parallel. After all sub-agents complete, run the full test suite (unit + e2e) locally. Only if all tests pass, commit the changes with a clear message grouping fixes by category, push, and reply to each resolved PR thread with a brief explanation of what was changed. For any comment you disagree with, draft a reply explaining your reasoning and ask me before posting."
+      },
+      {
+        "title": "Automated Phase Execution With Test Gates",
+        "whats_possible": "Your GSD plan-phase workflow is already impressive — Phase 14 executed 6 plans across 4 waves autonomously, and Phase 15 planning completed research-to-verification in one session. But interrupted sessions and coverage threshold failures show the gap: phases should gate each wave on passing tests and coverage thresholds before advancing. Imagine kicking off a full phase execution that autonomously builds features wave-by-wave, runs e2e tests after each wave, fixes failures inline, checks coverage, and only advances when gates pass — turning your 476-hour month into dramatically higher throughput.",
+        "how_to_try": "Enhance your GSD execute-phase workflow to include explicit test gates between waves using Task sub-agents. Claude Code can orchestrate wave execution → test run → coverage check → fix loop → next wave as a fully autonomous pipeline.",
+        "copyable_prompt": "Execute Phase XX using the GSD framework with the following autonomous workflow: For each wave in sequence: (1) Spawn a Task sub-agent for each plan in the wave to implement in parallel, (2) After all plans in the wave complete, run the full test suite (unit + e2e) and check coverage thresholds, (3) If any tests fail or coverage drops below thresholds, diagnose and fix before proceeding — iterate up to 3 times, (4) Only advance to the next wave after all gates pass, (5) After each wave, update STATE.md and commit progress. If a wave fails all 3 fix attempts, stop and report what's blocking. At the end, generate a summary of what was built, tests added, coverage delta, and any remaining gaps. Do not ask me questions unless you're blocked — make reasonable decisions and document your reasoning."
+      }
+    ]
+  },
+  "fun_ending": {
+    "headline": "Claude deleted a parent UI container and accidentally nuked all its children, then had to rebuild an entire search palette screen from scratch",
+    "detail": "While cleaning up a Pencil design file, Claude deleted a parent container not realizing the deletion would cascade to all child elements — forcing it to rebuild the search palette screen from nothing. A classic 'rm -rf' moment, but for design files."
+  },
+  "at_a_glance": {
+    "whats_working": "You've built an impressive structured workflow with custom GSD commands that break large features into multi-wave plans with automated research, planning, and verification — this is a sophisticated use of Claude as an orchestration layer. Your PR review resolution loop is also very effective, routinely having Claude address batches of CodeRabbit comments, fix code, push, and reply to threads in single sessions. The sequential E2E debugging sessions where you pushed through four distinct failure types in one sitting to go from 89 to 98+ passing tests show real tenacity.",
+    "whats_hindering": "On Claude's side, it frequently picks the wrong initial approach (blanket CI skips instead of smart path filtering, treating symptoms instead of root causes in flaky tests) which costs you multiple iteration cycles before landing on the right fix. On your side, Claude often pushes code without running tests locally first, leading to avoidable CI-fail-fix-push-repeat loops — and when you do interrupt long planning sessions, it suggests the planning phase may be running longer than you'd like before getting to implementation.",
+    "quick_wins": "Try setting up **hooks** to auto-run your test suite before every commit — this would eliminate the recurring pattern of pushing untested code and waiting for CI to catch issues. You could also create a **custom slash command** that encodes your root-cause-first debugging protocol, so Claude always diagnoses before fixing rather than iterating through surface-level attempts.",
+    "ambitious_workflows": "As models get more capable, your GSD phase execution workflow is perfectly positioned to become fully autonomous — imagine kicking off a phase that builds each wave, runs e2e tests, fixes failures inline, checks coverage thresholds, and only advances when gates pass, all without your intervention. Your PR review resolution workflow could similarly become a single **headless pipeline** that fetches all open review comments, categorizes them, implements fixes with local test verification, and batch-pushes — collapsing what currently takes multiple sessions into one autonomous run."
+  }
+}
+
+Report URL: file:///Users/michael/.claude/usage-data/report.html
+HTML file: /Users/michael/.claude/usage-data/report.html
+Facets directory: /Users/michael/.claude/usage-data/facets
+
+Here is what the user sees:
+# Claude Code Insights
+
+273 sessions total · 251 analyzed · 2,507 messages · 476h · 540 commits
+2026-01-30 to 2026-03-01
+
+## At a Glance
+
+**What's working:** You've built an impressive structured workflow with custom GSD commands that break large features into multi-wave plans with automated research, planning, and verification — this is a sophisticated use of Claude as an orchestration layer. Your PR review resolution loop is also very effective, routinely having Claude address batches of CodeRabbit comments, fix code, push, and reply to threads in single sessions. The sequential E2E debugging sessions where you pushed through four distinct failure types in one sitting to go from 89 to 98+ passing tests show real tenacity. See _Impressive Things You Did_.
+
+**What's hindering you:** On Claude's side, it frequently picks the wrong initial approach (blanket CI skips instead of smart path filtering, treating symptoms instead of root causes in flaky tests) which costs you multiple iteration cycles before landing on the right fix. On your side, Claude often pushes code without running tests locally first, leading to avoidable CI-fail-fix-push-repeat loops — and when you do interrupt long planning sessions, it suggests the planning phase may be running longer than you'd like before getting to implementation. See _Where Things Go Wrong_.
+
+**Quick wins to try:** Try setting up **hooks** to auto-run your test suite before every commit — this would eliminate the recurring pattern of pushing untested code and waiting for CI to catch issues. You could also create a **custom slash command** that encodes your root-cause-first debugging protocol, so Claude always diagnoses before fixing rather than iterating through surface-level attempts. See _Features to Try_.
+
+**Ambitious workflows:** As models get more capable, your GSD phase execution workflow is perfectly positioned to become fully autonomous — imagine kicking off a phase that builds each wave, runs e2e tests, fixes failures inline, checks coverage thresholds, and only advances when gates pass, all without your intervention. Your PR review resolution workflow could similarly become a single **headless pipeline** that fetches all open review comments, categorizes them, implements fixes with local test verification, and batch-pushes — collapsing what currently takes multiple sessions into one autonomous run. See _On the Horizon_.
+
+Your full shareable insights report is ready: file:///Users/michael/.claude/usage-data/report.html
+
+Now output the following message exactly:
+
+<message>
+Your shareable insights report is ready:
+file:///Users/michael/.claude/usage-data/report.html
+
+Want to dig into any section or try one of the suggestions?
+</message>
+
+---
+
+can oyu open that folder in finder?
+
+---
+
+just noticed that the latest staging release did not run the linux desktop build job. https://github.com/FSM1/cipher-box/actions/runs/22548921610
+
+---
+
+ok so for item 1, the build was working perfectly fine in the previous release, so I would like to understand better what changed since then in the staging release or tauri package side, before spending a lot of time chasing imaginary things.
+
+for the 2nd issue, yeah please add the linux build to the staging release pipeline.
+
+---
+
+latest windows build still fails https://github.com/FSM1/cipher-box/actions/runs/22554381479/job/65329613114

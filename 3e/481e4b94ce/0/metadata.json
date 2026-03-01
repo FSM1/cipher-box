@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "3e481e4b94ce",
+  "session_id": "4069ab24-8a63-4fbb-bbd3-a108488b35f6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-01T22:58:35.067824Z",
+  "branch": "fix/staging-desktop-builds",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/deploy-staging.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "2050f4b86c49",
+  "checkpoint_transcript_start": 342,
+  "transcript_lines_at_start": 342,
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 10608,
+    "cache_read_tokens": 1872137,
+    "output_tokens": 3669,
+    "api_call_count": 14
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-01T22:58:33.55372Z",
+    "agent_lines": 12,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 12,
+    "agent_percentage": 100
+  }
+}
