@@ -853,6 +853,42 @@ pub(crate) mod implementation {
             }
         }
 
+        // -- overwrite --
+        // Called when Windows opens an existing file with FILE_OVERWRITE or
+        // FILE_OVERWRITE_IF disposition (e.g., PowerShell Set-Content, CreateFile
+        // with CREATE_ALWAYS). Truncates the file to zero length.
+        fn overwrite(
+            &self,
+            context: &Self::FileContext,
+            _file_attributes: u32,
+            _replace_file_attributes: bool,
+            _allocation_size: u64,
+            _extra_buffer: Option<&[u8]>,
+            file_info: &mut FileInfo,
+        ) -> Result<(), FspError> {
+            let mut fs = self.inner.lock().unwrap();
+
+            // Truncate the open file handle to zero length
+            if let Some(handle) = fs.open_files.get_mut(&context.fh) {
+                if handle.temp_path.is_some() {
+                    handle
+                        .truncate(0)
+                        .map_err(|_| status_io_device_error())?;
+                    handle.dirty = true;
+                }
+            }
+
+            // Update inode size to 0
+            if let Some(inode) = fs.inodes.get_mut(context.ino) {
+                inode.attr.size = 0;
+                inode.attr.mtime = SystemTime::now();
+                inode.attr.ctime = SystemTime::now();
+                *file_info = fill_file_info(&inode.attr);
+            }
+
+            Ok(())
+        }
+
         // -- close --
         fn close(&self, context: Self::FileContext) {
             // close() (IRP_MJ_CLOSE) may be deferred indefinitely by the Windows

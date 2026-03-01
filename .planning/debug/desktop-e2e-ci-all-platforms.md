@@ -175,13 +175,32 @@ winfsp_init fix confirmed the root cause!
   the DLL path) is disabled. Only `load_local_winfsp()` is tried, which looks for
   `winfsp-x64.dll` in PATH/current dir — and the WinFsp bin dir is not in PATH.
 
-### Round 9 — CI run pending
+### Round 9 Results — CI run 22537575319 (commit 03039f2c6)
+
+WinFsp system feature fix WORKED! Mount succeeds on Windows!
+
+- ✅ macOS: ALL TESTS PASSED!
+- ✅ Linux: ALL TESTS PASSED!
+- ✅ Windows: WinFsp initialized, mounted, filesystem working!
+  - PASS: Mount detected
+  - PASS: Create and read text file
+  - PASS: Create directory
+  - PASS: Write file in subdirectory
+  - **FAIL**: Overwrite file (got: 'Hello from CIModified content' — no truncation)
+  - PASS: API Test 1-3 ALL PASSED!
+  - Total: 1 failure
+
+**Root cause of overwrite failure**: Missing `overwrite()` callback in WinFsp operations.
+When Windows calls `CreateFile` with `CREATE_ALWAYS` (PowerShell `Set-Content`), WinFsp
+calls the `overwrite()` method which should truncate the file. Without it, the default
+returns `STATUS_INVALID_DEVICE_REQUEST` and the file is opened via `open()` instead,
+preserving existing content.
+
+### Round 10 — CI run pending
 
 Applied fixes:
 
-- Enable `system` feature on winfsp dependency in Cargo.toml (enables registry lookup)
-- Add WinFsp bin dir to PATH in CI workflow (belt-and-suspenders)
-- Verify WinFsp installation in CI with registry check
+- Implement `overwrite()` callback in WinFsp operations (truncates file to 0)
 
 ### Root Cause 3 (fixing round 8): WinFsp init kills process silently
 
@@ -217,7 +236,8 @@ properly so it appears in both Rust logs and JS error reporting.
 | 19  | Windows test step: bash + log capture         | c76d97b15 | ✅              |
 | 20  | WinFsp mount step-by-step logging             | c76d97b15 | ✅              |
 | 21  | Enable winfsp "system" feature (registry DLL) | pending   | 🔄 pending      |
-| 22  | Add WinFsp bin dir to PATH in CI              | pending   | 🔄 pending      |
+| 22  | Add WinFsp bin dir to PATH in CI              | 03039f2c6 | ✅              |
+| 23  | Implement WinFsp overwrite() callback         | pending   | 🔄 pending      |
 
 ## Open Questions
 
