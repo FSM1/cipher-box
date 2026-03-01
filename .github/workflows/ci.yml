@@ -529,8 +529,6 @@ jobs:
 
       - name: Run Rust tests
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features fuse
-        env:
-          PKG_CONFIG_PATH: /opt/homebrew/lib/pkgconfig:/usr/local/lib/pkgconfig
 
   cargo-test-linux:
     name: Cargo Test + Coverage (Linux)
