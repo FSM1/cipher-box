@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "b084d20ef948",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-11.4-cross-platform-e2e",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b0/84d20ef948/0/metadata.json",
+      "transcript": "/b0/84d20ef948/0/full.jsonl",
+      "context": "/b0/84d20ef948/0/context.md",
+      "content_hash": "/b0/84d20ef948/0/content_hash.txt",
+      "prompt": "/b0/84d20ef948/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 39806,
+    "cache_read_tokens": 2381348,
+    "output_tokens": 8887,
+    "api_call_count": 18
+  }
+}
