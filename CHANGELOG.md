@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.21.0](https://github.com/FSM1/cipher-box/compare/v0.20.0...v0.21.0) (2026-03-01)
+
+
+### Features
+
+* cross-platform desktop E2E testing - phase 11.4 ([#223](https://github.com/FSM1/cipher-box/issues/223)) ([c8329c6](https://github.com/FSM1/cipher-box/commit/c8329c65dc0a94eb50e22764d8a524f9e5ba3790))
+
+
+### Bug Fixes
+
+* **ci:** consolidate desktop E2E pipeline and add Rust tests ([#227](https://github.com/FSM1/cipher-box/issues/227)) ([52159dc](https://github.com/FSM1/cipher-box/commit/52159dc3ea229cb54f4ddbbcd48fb477c5bbd857))
+* **ci:** symlink FUSE-T pkgconfig as fuse.pc for macOS builds ([#225](https://github.com/FSM1/cipher-box/issues/225)) ([f2cfb0f](https://github.com/FSM1/cipher-box/commit/f2cfb0f5d61d5a8ffcb7f6c246c0861607563a90))
+* **ci:** use bash shell for find-run step in e2e-desktop ([#226](https://github.com/FSM1/cipher-box/issues/226)) ([a6e1c4c](https://github.com/FSM1/cipher-box/commit/a6e1c4c1b3088bfb3be4e484ed567bf1ae0cc9d9))
+* **ci:** use bash shell for find-run step in e2e-desktop workflow ([a6e1c4c](https://github.com/FSM1/cipher-box/commit/a6e1c4c1b3088bfb3be4e484ed567bf1ae0cc9d9))
+
 ## [0.20.0](https://github.com/FSM1/cipher-box/compare/v0.19.5...v0.20.0) (2026-02-28)
 
 
