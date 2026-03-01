@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "1dfc03e50560",
+  "session_id": "68a258cc-353f-4c72-ae9e-2cdc8e1348d1",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-01T03:01:09.750245Z",
+  "branch": "fix/consolidate-desktop-e2e-pipeline",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "codecov.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "aef2d58a97bb",
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 34188,
+    "cache_read_tokens": 581033,
+    "output_tokens": 2844,
+    "api_call_count": 14
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-01T03:01:09.09528Z",
+    "agent_lines": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 100
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "1dfc03e50560",
+  "strategy": "manual-commit",
+  "branch": "fix/consolidate-desktop-e2e-pipeline",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "codecov.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1d/fc03e50560/0/metadata.json",
+      "transcript": "/1d/fc03e50560/0/full.jsonl",
+      "context": "/1d/fc03e50560/0/context.md",
+      "content_hash": "/1d/fc03e50560/0/content_hash.txt",
+      "prompt": "/1d/fc03e50560/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 34188,
+    "cache_read_tokens": 581033,
+    "output_tokens": 2844,
+    "api_call_count": 14
+  }
+}
