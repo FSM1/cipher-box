@@ -81,7 +81,9 @@ try {
     $TempBinary = "$env:TEMP\e2e-binary.bin"
     $MountBinary = "$MountPoint\e2e-binary.bin"
     $Bytes = New-Object byte[] (256 * 1024)
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($Bytes)
+    $Rng = [System.Security.Cryptography.RNGCryptoServiceProvider]::new()
+    $Rng.GetBytes($Bytes)
+    $Rng.Dispose()
     [System.IO.File]::WriteAllBytes($TempBinary, $Bytes)
     Copy-Item -Path $TempBinary -Destination $MountBinary -ErrorAction Stop
     Start-Sleep -Seconds 5
@@ -134,7 +136,10 @@ try {
 # ---- Test 8: Delete directory ----
 Write-Host "--- Test 8: Delete directory ---"
 try {
-    Remove-Item -Path "$MountPoint\e2e-folder" -Recurse -Force -ErrorAction Stop
+    # Delete contents first, then the directory itself (more reliable on FUSE)
+    Get-ChildItem -Path "$MountPoint\e2e-folder" -Recurse -Force -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction Stop
+    Start-Sleep -Seconds 1
+    Remove-Item -Path "$MountPoint\e2e-folder" -Force -ErrorAction Stop
     Start-Sleep -Seconds 2
     if (-not (Test-Path "$MountPoint\e2e-folder")) {
         Test-Pass "Delete directory"
