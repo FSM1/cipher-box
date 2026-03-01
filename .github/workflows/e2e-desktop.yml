@@ -164,34 +164,35 @@ jobs:
           postgres-version: '16'
         id: postgres
 
-      - name: Install Kubo (IPFS)
-        if: runner.os != 'Windows'
+      - name: Install Kubo (IPFS) (macOS)
+        if: runner.os == 'macOS'
         run: |
-          KUBO_VERSION="v0.34.0"
-          if [ "$(uname)" = "Darwin" ]; then
-            ARCH="darwin-$(uname -m | sed 's/arm64/arm64/' | sed 's/x86_64/amd64/')"
-          else
-            ARCH="linux-amd64"
-          fi
-          curl -fsSL -o "kubo_${KUBO_VERSION}_${ARCH}.tar.gz" "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_${ARCH}.tar.gz"
-          tar -xzf "kubo_${KUBO_VERSION}_${ARCH}.tar.gz"
-          sudo ./kubo/install.sh
+          brew install kubo
           ipfs init
           ipfs daemon &
-          # Wait for daemon readiness
-          READY=0
           for i in $(seq 1 30); do
             if curl -sf -X POST http://localhost:5001/api/v0/id > /dev/null 2>&1; then
               echo "IPFS daemon ready"
-              READY=1
               break
             fi
             sleep 1
           done
-          if [ "$READY" -ne 1 ]; then
-            echo "IPFS daemon did not become ready in time." >&2
-            exit 1
-          fi
+
+      - name: Install Kubo (IPFS) (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          KUBO_VERSION="v0.34.0"
+          curl -fsSL "https://dist.ipfs.tech/kubo/${KUBO_VERSION}/kubo_${KUBO_VERSION}_linux-amd64.tar.gz" | tar -xz
+          sudo ./kubo/install.sh
+          ipfs init
+          ipfs daemon &
+          for i in $(seq 1 30); do
+            if curl -sf -X POST http://localhost:5001/api/v0/id > /dev/null 2>&1; then
+              echo "IPFS daemon ready"
+              break
+            fi
+            sleep 1
+          done
 
       - name: Install Kubo (IPFS) (Windows)
         if: runner.os == 'Windows'
@@ -208,12 +209,13 @@ jobs:
           # Wait for daemon readiness
           $ready = $false
           for ($i = 0; $i -lt 30; $i++) {
-            try {
-              $null = Invoke-WebRequest -Uri "http://localhost:5001/api/v0/id" -Method Post -ErrorAction Stop
+            $result = curl.exe -sf -X POST http://localhost:5001/api/v0/id 2>$null
+            if ($LASTEXITCODE -eq 0) {
               Write-Host "IPFS daemon ready"
               $ready = $true
               break
-            } catch { Start-Sleep -Seconds 1 }
+            }
+            Start-Sleep -Seconds 1
           }
           if (-not $ready) { throw "IPFS daemon did not become ready in time." }
 
@@ -399,27 +401,27 @@ jobs:
 
       - name: Run desktop E2E tests (Linux)
         if: runner.os == 'Linux'
-        uses: GabrielBB/xvfb-action@v1
         env:
           CIPHERBOX_API_URL: http://localhost:3000
           VITE_API_URL: http://localhost:3000
           VITE_TEST_LOGIN_SECRET: e2e-test-secret-ci-only
           RUST_LOG: info
-        with:
-          run: >-
-            bash -c '
-            BINARY=apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }};
-            chmod +x "$BINARY";
-            DEV_KEY=$(openssl rand -hex 32);
-            "$BINARY" --dev-key $DEV_KEY &
-            DESKTOP_PID=$!;
-            set +e;
-            bash tests/e2e-desktop/scripts/run-all.sh;
-            TEST_EXIT=$?;
-            set -e;
-            kill $DESKTOP_PID 2>/dev/null || true;
-            fusermount3 -u $HOME/CipherBox 2>/dev/null || true;
-            exit $TEST_EXIT'
+          DISPLAY: ':99'
+        run: |
+          Xvfb :99 -screen 0 1024x768x24 &
+          sleep 1
+          BINARY=apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }}
+          chmod +x "$BINARY"
+          DEV_KEY=$(openssl rand -hex 32)
+          "$BINARY" --dev-key $DEV_KEY &
+          DESKTOP_PID=$!
+          set +e
+          bash tests/e2e-desktop/scripts/run-all.sh
+          TEST_EXIT=$?
+          set -e
+          kill $DESKTOP_PID 2>/dev/null || true
+          fusermount3 -u $HOME/CipherBox 2>/dev/null || true
+          exit $TEST_EXIT
 
       - name: Run desktop E2E tests (Windows)
         if: runner.os == 'Windows'
