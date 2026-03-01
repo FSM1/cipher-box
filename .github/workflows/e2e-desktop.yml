@@ -504,19 +504,26 @@ jobs:
 
       - name: Run desktop E2E tests (Windows)
         if: runner.os == 'Windows'
-        shell: powershell
+        shell: bash
         run: |
-          $env:CIPHERBOX_API_URL = "http://localhost:3000"
-          $env:VITE_API_URL = "http://localhost:3000"
-          $env:VITE_TEST_LOGIN_SECRET = "e2e-test-secret-ci-only"
-          $env:RUST_LOG = "info"
-          $BINARY = "apps\desktop\src-tauri\target\debug\${{ matrix.binary-name }}"
-          $DEV_KEY = -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
-          $proc = Start-Process -FilePath $BINARY -ArgumentList "--dev-key",$DEV_KEY -PassThru -NoNewWindow
-          & "$PWD\tests\e2e-desktop\scripts\run-all.ps1"
-          $testExit = $LASTEXITCODE
-          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-          exit $testExit
+          BINARY="apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }}"
+          DEV_KEY=$(openssl rand -hex 32)
+          LOGFILE="$RUNNER_TEMP/cipherbox-desktop.log"
+          "$BINARY" --dev-key "$DEV_KEY" > "$LOGFILE" 2>&1 &
+          DESKTOP_PID=$!
+          set +e
+          powershell -File "$PWD/tests/e2e-desktop/scripts/run-all.ps1"
+          TEST_EXIT=$?
+          set -e
+          echo "=== Desktop binary log ==="
+          cat "$LOGFILE" 2>/dev/null || echo "(no log file)"
+          kill $DESKTOP_PID 2>/dev/null || true
+          exit $TEST_EXIT
+        env:
+          CIPHERBOX_API_URL: http://localhost:3000
+          VITE_API_URL: http://localhost:3000
+          VITE_TEST_LOGIN_SECRET: e2e-test-secret-ci-only
+          RUST_LOG: info
 
       # --- Failure artifacts ---
 
@@ -529,4 +536,5 @@ jobs:
             apps/api/*.log
             ~/Library/Logs/fuse-t/fuse-t.log
             /tmp/cipherbox-desktop.log
+            ${{ runner.temp }}/cipherbox-desktop.log
           retention-days: 7

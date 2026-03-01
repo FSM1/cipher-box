@@ -8,11 +8,11 @@ branch: fix/desktop-e2e-ci-round3
 
 ## Current Focus
 
-hypothesis: CORS blocks fetch from webview (origin localhost:1420) to API (localhost:3000)
-test: Add <http://localhost:1420> to CORS_ALLOWED_ORIGINS + add JS error reporting to Rust
-expecting: Fetch succeeds, handle_test_login_complete called, mount appears
-next_action: Push round 5 fixes, trigger CI
-ci_run: pending (round 5)
+hypothesis: winfsp_init_or_die() calls process::exit() killing the binary silently on Windows
+test: Replace with winfsp_init() + proper error handling, capture binary logs on Windows
+expecting: Either WinFsp inits successfully and mount works, or we get a clear error message
+next_action: Push round 8 fixes, trigger CI
+ci_run: pending (round 8)
 
 ## Symptoms
 
@@ -113,28 +113,6 @@ request that gets blocked by CORS policy. The error is caught silently by the JS
 
 Fix: Add `http://localhost:1420` to `CORS_ALLOWED_ORIGINS` in all 3 places in the CI workflow.
 
-## Fixes Applied (all commits on fix/desktop-e2e-ci-round3)
-
-| #   | Fix                                          | Commit    | Status          |
-| --- | -------------------------------------------- | --------- | --------------- |
-| 1   | Move Node.js/pnpm setup BEFORE cargo build   | 10deba393 | ✅              |
-| 2   | Add "Build desktop frontend" step            | 10deba393 | ✅              |
-| 3   | Add install_name_tool rpath for macOS        | 10deba393 | ✅              |
-| 4   | Switch Windows Kubo to bash+curl --retry     | 10deba393 | ✅              |
-| 5   | Add WEBKIT_DISABLE_DMABUF_RENDERER=1 (Linux) | 10deba393 | ✅              |
-| 6   | Capture binary logs on failure               | 10deba393 | ✅              |
-| 7   | Add on_page_load webview callback            | 5d3ce6e26 | ✅ (diagnostic) |
-| 8   | Add logging to get_dev_key                   | 5d3ce6e26 | ✅ (diagnostic) |
-| 9   | Fix Windows Redis PATH refresh               | 5d3ce6e26 | ✅              |
-| 10  | Start Vite preview server on :1420           | a236637e7 | ✅              |
-| 11  | Switch Windows Redis to Memurai              | 928918a47 | 🔄 pending CI   |
-| 12  | Add localhost:1420 to CORS_ALLOWED_ORIGINS   | 1271df5ff | ✅              |
-| 13  | Add log_js_error Tauri command               | 1271df5ff | ✅              |
-| 14  | Add step logging in handleDevKeyAuth         | 1271df5ff | ✅              |
-| 15  | Fix TEST_EMAIL to <dev-key@cipherbox.local>  | 893ab7d78 | ✅              |
-| 16  | Fix IPNS resolve URL in round-trip tests     | pending   | 🔄 pending      |
-| 17  | Switch Windows API startup to bash+curl      | pending   | 🔄 pending      |
-
 ### Round 5 Results — CI run 22536602620 (commit 1271df5ff)
 
 CORS fix WORKED! Auth flow completes on macOS AND Linux!
@@ -158,15 +136,71 @@ Test email fix worked — Test 2 (vault rootIpnsName) now passes!
   - Test calls `GET /ipns/$ROOT_IPNS/resolve` but API expects `GET /ipns/resolve?ipnsName=$ROOT_IPNS`
 - ❌ Windows: API health check timeout (PowerShell Invoke-WebRequest fails)
 
-### Round 7 — CI run pending
+### Round 7 Results — CI run 22536972742 (commit 8c9a83464)
+
+IPNS resolve fix + Windows API bash+curl worked!
+
+- ✅ macOS: ALL TESTS PASSED! FUSE 9/9, API Tests 1-3 ALL PASSED!
+- ✅ Linux: ALL TESTS PASSED! FUSE 9/9, API Tests 1-3 ALL PASSED!
+- ❌ Windows: Auth flow completes perfectly (all STEP logs show success)
+  - Binary logs: vault init OK, root folder pre-populated OK
+  - Then SILENT DEATH — no more Rust logs after "Root folder pre-populated successfully"
+  - "WinFsp filesystem starting at" never logged
+  - Mount not detected after 90s
+
+**Root cause of round 7 Windows failure**: `winfsp::winfsp_init_or_die()` calls
+`std::process::exit()` on failure (not panic!). This kills the entire process
+silently with no error log. The WinFsp DLL likely can't be loaded at runtime
+despite the MSI being installed.
+
+Additionally, the Windows test step used PowerShell `Start-Process -NoNewWindow`
+which doesn't redirect binary output to a file. Binary error messages were lost.
+
+### Round 8 — CI run pending
 
 Applied fixes:
 
-- Fix IPNS resolve URL in test-round-trip.sh and test-round-trip.ps1
-- Switch Windows API startup step from PowerShell to bash+curl
+- Replace `winfsp_init_or_die()` with `winfsp_init()` + proper error handling and logging
+- Add step-by-step logging around WinFsp host creation, mount, and dispatcher start
+- Switch Windows test step to bash with log file capture (like macOS/Linux)
+- Always dump binary log on Windows (even on success) for diagnostics
+
+### Root Cause 3 (fixing round 8): WinFsp init kills process silently
+
+`winfsp::winfsp_init_or_die()` calls `std::process::exit()` when the WinFsp DLL
+can't be found at runtime. Unlike `panic!()`, `process::exit()` skips all
+destructors, logging, and error handlers. The process just vanishes.
+
+Fix: Use `winfsp::winfsp_init()` which returns `Result`, and propagate the error
+properly so it appears in both Rust logs and JS error reporting.
+
+## Fixes Applied (all commits on fix/desktop-e2e-ci-round3)
+
+| #   | Fix                                          | Commit    | Status          |
+| --- | -------------------------------------------- | --------- | --------------- |
+| 1   | Move Node.js/pnpm setup BEFORE cargo build   | 10deba393 | ✅              |
+| 2   | Add "Build desktop frontend" step            | 10deba393 | ✅              |
+| 3   | Add install_name_tool rpath for macOS        | 10deba393 | ✅              |
+| 4   | Switch Windows Kubo to bash+curl --retry     | 10deba393 | ✅              |
+| 5   | Add WEBKIT_DISABLE_DMABUF_RENDERER=1 (Linux) | 10deba393 | ✅              |
+| 6   | Capture binary logs on failure               | 10deba393 | ✅              |
+| 7   | Add on_page_load webview callback            | 5d3ce6e26 | ✅ (diagnostic) |
+| 8   | Add logging to get_dev_key                   | 5d3ce6e26 | ✅ (diagnostic) |
+| 9   | Fix Windows Redis PATH refresh               | 5d3ce6e26 | ✅              |
+| 10  | Start Vite preview server on :1420           | a236637e7 | ✅              |
+| 11  | Switch Windows Redis to Memurai              | 928918a47 | ✅              |
+| 12  | Add localhost:1420 to CORS_ALLOWED_ORIGINS   | 1271df5ff | ✅              |
+| 13  | Add log_js_error Tauri command               | 1271df5ff | ✅              |
+| 14  | Add step logging in handleDevKeyAuth         | 1271df5ff | ✅              |
+| 15  | Fix TEST_EMAIL to <dev-key@cipherbox.local>  | 893ab7d78 | ✅              |
+| 16  | Fix IPNS resolve URL in round-trip tests     | 8c9a83464 | ✅              |
+| 17  | Switch Windows API startup to bash+curl      | 8c9a83464 | ✅              |
+| 18  | Replace winfsp_init_or_die with winfsp_init  | pending   | 🔄 pending      |
+| 19  | Windows test step: bash + log capture        | pending   | 🔄 pending      |
+| 20  | WinFsp mount step-by-step logging            | pending   | 🔄 pending      |
 
 ## Open Questions
 
-1. Will IPNS resolve work with mock-ipns-routing in CI? (may need DB-cached CID fallback)
-2. Windows: will bash+curl health check work?
+1. Is the WinFsp DLL discoverable at runtime on the CI runner? (registry key present?)
+2. If winfsp_init() fails, what's the actual error? (DLL not found? Wrong arch?)
 3. Can we remove diagnostic logging after CI passes?
