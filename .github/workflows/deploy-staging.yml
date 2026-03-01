@@ -191,8 +191,11 @@ jobs:
             New-Item -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Force | Out-Null
           }
           New-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name "InstallDir" -Value $installDir -PropertyType String -Force | Out-Null
-          # Verify
-          $regVal = Get-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name "InstallDir" -ErrorAction SilentlyContinue
+          # Verify registry key was written correctly
+          $regVal = Get-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\WinFsp" -Name "InstallDir" -ErrorAction Stop
+          if (-not $regVal.InstallDir -or $regVal.InstallDir -ne $installDir) {
+            throw "WinFsp InstallDir registry mismatch: expected '$installDir', got '$($regVal.InstallDir)'"
+          }
           Write-Host "WinFsp InstallDir registry: $($regVal.InstallDir)"
           if (!(Test-Path "$installDir\lib")) { throw "WinFsp lib directory not found at $installDir\lib" }
           if (!(Test-Path "$installDir\inc")) { throw "WinFsp inc directory not found at $installDir\inc" }
