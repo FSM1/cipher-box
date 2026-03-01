@@ -1263,7 +1263,19 @@ pub(crate) mod implementation {
             );
             let mut fs = self.inner.lock().unwrap();
 
-            if !set_allocation_size {
+            // WinFsp calls set_file_size for both end-of-file changes
+            // (set_allocation_size=false) and allocation size changes
+            // (set_allocation_size=true). For overwrite operations (e.g.,
+            // PowerShell Set-Content), WinFsp sends set_allocation_size=true
+            // with new_size=0 to signal file truncation. We must handle both.
+            //
+            // For non-zero allocation size changes on a file that's already
+            // large enough, we skip (no sparse file support). But for
+            // truncation to 0, we always apply it.
+            let should_truncate = !set_allocation_size
+                || (set_allocation_size && new_size == 0);
+
+            if should_truncate {
                 // Truncate the temp file if writable handle exists
                 if let Some(handle) = fs.open_files.get_mut(&context.fh) {
                     if handle.temp_path.is_some() {
@@ -1271,6 +1283,10 @@ pub(crate) mod implementation {
                             .truncate(new_size)
                             .map_err(|_| status_io_device_error())?;
                         handle.dirty = true;
+                        log::info!(
+                            "set_file_size: truncated temp file to {} bytes",
+                            new_size
+                        );
                     }
                 }
 
@@ -1280,15 +1296,22 @@ pub(crate) mod implementation {
                     inode.attr.blocks = (new_size + 511) / 512;
                     inode.attr.mtime = SystemTime::now();
                     if let InodeKind::File {
-                        size: ref mut s, ..
+                        size: ref mut s,
+                        cid: ref mut c,
+                        ..
                     } = inode.kind
                     {
                         *s = new_size;
+                        // Clear CID when truncating to 0 so that subsequent
+                        // open() calls don't re-download stale IPFS content
+                        // into the temp file.
+                        if new_size == 0 {
+                            c.clear();
+                        }
                     }
                     *_file_info = fill_file_info(&inode.attr);
                 }
             }
-            // For allocation size changes, we just ignore (no sparse file support)
 
             Ok(())
         }
