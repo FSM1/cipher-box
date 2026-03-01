@@ -1,0 +1,881 @@
+# Resolve PR Review Comments
+
+Resolve all open review comments on the current PR from any automated reviewer (CodeRabbit, GitHub Copilot, etc.) or human reviewers.
+
+## Workflow
+
+### 1. Identify the PR
+
+```bash
+PR_NUMBER=$(gh pr view --json number --jq '.number')
+```
+
+If no PR exists for the current branch, stop and inform the user.
+
+### 2. Fetch all unresolved review threads
+
+Use the GraphQL `reviewThreads` query to get threads with `isResolved` status:
+
+```bash
+REPO_OWNER=$(gh repo view --json owner --jq '.owner.login')
+REPO_NAME=$(gh repo view --json name --jq '.name')
+
+gh api graphql -f query="
+{
+  repository(owner: \"$REPO_OWNER\", name: \"$REPO_NAME\") {
+    pullRequest(number: $PR_NUMBER) {
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          comments(first: 10) {
+            nodes {
+              id
+              author { login }
+              body
+              path
+              line
+              createdAt
+            }
+          }
+        }
+      }
+    }
+  }
+}"
+```
+
+Filter to only unresolved threads. If none, report "No unresolved review threads" and stop.
+
+### 3. Triage each comment
+
+For each unresolved thread, read the comment and the referenced code. Categorize as:
+
+- **Valid fix needed** — the comment identifies a real bug, security issue, or meaningful improvement
+- **Already addressed** — the issue was fixed in a later commit on this branch
+- **Not applicable** — the suggestion doesn't apply (explain why)
+
+### 4. Implement fixes
+
+For all "valid fix needed" comments:
+
+1. Read the referenced file and understand the context
+2. Implement the fix
+3. Track which thread the fix addresses
+
+Do NOT:
+
+- Make unrelated changes or refactors
+- Add features beyond what the comment requests
+- Increase timeouts or add retries as a first approach — fix root causes
+
+### 5. Run tests locally
+
+After ALL fixes are implemented:
+
+```bash
+# Type check
+pnpm typecheck
+
+# Run relevant unit tests
+pnpm test
+
+# If E2E-relevant changes were made, run E2E tests too
+cd tests/e2e && pnpm exec playwright test
+```
+
+Do NOT proceed to commit until tests pass. If tests fail, fix the failures first.
+
+### 6. Commit and push
+
+```bash
+git add <specific-files>
+git commit -m "fix: address PR review comments"
+git push
+```
+
+### 7. Reply to and resolve each thread
+
+For each thread, reply explaining what was done, then resolve:
+
+- **Fixed comments**: Reply with what was changed and where, then resolve
+- **Already addressed**: Reply explaining which commit addressed it, then resolve
+- **Not applicable**: Reply with clear reasoning for not making changes, then resolve
+
+Reply via REST (use `--field` not `-f` for `in_reply_to` — must be integer):
+
+```bash
+gh api repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/comments \
+  --field in_reply_to=COMMENT_ID \
+  --raw-field body='...'
+```
+
+Resolve via GraphQL (can batch multiple):
+
+```bash
+gh api graphql -f query='
+mutation {
+  resolveReviewThread(input: {threadId: "THREAD_ID"}) {
+    thread { isResolved }
+  }
+}'
+```
+
+### 8. Report summary
+
+Print a summary table:
+
+- Thread count resolved
+- Fixes made (with file:line references)
+- Comments marked as already addressed or not applicable
+
+---
+
+# Resolve PR Review Comments
+
+Resolve all open review comments on the current PR from any automated reviewer (CodeRabbit, GitHub Copilot, etc.) or human reviewers.
+
+## Workflow
+
+### 1. Identify the PR
+
+```bash
+PR_NUMBER=$(gh pr view --json number --jq '.number')
+```
+
+If no PR exists for the current branch, stop and inform the user.
+
+### 2. Fetch all unresolved review threads
+
+Use the GraphQL `reviewThreads` query to get threads with `isResolved` status:
+
+```bash
+REPO_OWNER=$(gh repo view --json owner --jq '.owner.login')
+REPO_NAME=$(gh repo view --json name --jq '.name')
+
+gh api graphql -f query="
+{
+  repository(owner: \"$REPO_OWNER\", name: \"$REPO_NAME\") {
+    pullRequest(number: $PR_NUMBER) {
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          comments(first: 10) {
+            nodes {
+              id
+              author { login }
+              body
+              path
+              line
+              createdAt
+            }
+          }
+        }
+      }
+    }
+  }
+}"
+```
+
+Filter to only unresolved threads. If none, report "No unresolved review threads" and stop.
+
+### 3. Triage each comment
+
+For each unresolved thread, read the comment and the referenced code. Categorize as:
+
+- **Valid fix needed** — the comment identifies a real bug, security issue, or meaningful improvement
+- **Already addressed** — the issue was fixed in a later commit on this branch
+- **Not applicable** — the suggestion doesn't apply (explain why)
+
+### 4. Implement fixes
+
+For all "valid fix needed" comments:
+
+1. Read the referenced file and understand the context
+2. Implement the fix
+3. Track which thread the fix addresses
+
+Do NOT:
+
+- Make unrelated changes or refactors
+- Add features beyond what the comment requests
+- Increase timeouts or add retries as a first approach — fix root causes
+
+### 5. Run tests locally
+
+After ALL fixes are implemented:
+
+```bash
+# Type check
+pnpm typecheck
+
+# Run relevant unit tests
+pnpm test
+
+# If E2E-relevant changes were made, run E2E tests too
+cd tests/e2e && pnpm exec playwright test
+```
+
+Do NOT proceed to commit until tests pass. If tests fail, fix the failures first.
+
+### 6. Commit and push
+
+```bash
+git add <specific-files>
+git commit -m "fix: address PR review comments"
+git push
+```
+
+### 7. Reply to and resolve each thread
+
+For each thread, reply explaining what was done, then resolve:
+
+- **Fixed comments**: Reply with what was changed and where, then resolve
+- **Already addressed**: Reply explaining which commit addressed it, then resolve
+- **Not applicable**: Reply with clear reasoning for not making changes, then resolve
+
+Reply via REST (use `--field` not `-f` for `in_reply_to` — must be integer):
+
+```bash
+gh api repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/comments \
+  --field in_reply_to=COMMENT_ID \
+  --raw-field body='...'
+```
+
+Resolve via GraphQL (can batch multiple):
+
+```bash
+gh api graphql -f query='
+mutation {
+  resolveReviewThread(input: {threadId: "THREAD_ID"}) {
+    thread { isResolved }
+  }
+}'
+```
+
+### 8. Report summary
+
+Print a summary table:
+
+- Thread count resolved
+- Fixes made (with file:line references)
+- Comments marked as already addressed or not applicable
+
+---
+
+at which point does this e2e test run? is it part of the normal CI flow?
+
+---
+
+# Resolve PR Review Comments
+
+Resolve all open review comments on the current PR from any automated reviewer (CodeRabbit, GitHub Copilot, etc.) or human reviewers.
+
+## Workflow
+
+### 1. Identify the PR
+
+```bash
+PR_NUMBER=$(gh pr view --json number --jq '.number')
+```
+
+If no PR exists for the current branch, stop and inform the user.
+
+### 2. Fetch all unresolved review threads
+
+Use the GraphQL `reviewThreads` query to get threads with `isResolved` status:
+
+```bash
+REPO_OWNER=$(gh repo view --json owner --jq '.owner.login')
+REPO_NAME=$(gh repo view --json name --jq '.name')
+
+gh api graphql -f query="
+{
+  repository(owner: \"$REPO_OWNER\", name: \"$REPO_NAME\") {
+    pullRequest(number: $PR_NUMBER) {
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          comments(first: 10) {
+            nodes {
+              id
+              author { login }
+              body
+              path
+              line
+              createdAt
+            }
+          }
+        }
+      }
+    }
+  }
+}"
+```
+
+Filter to only unresolved threads. If none, report "No unresolved review threads" and stop.
+
+### 3. Triage each comment
+
+For each unresolved thread, read the comment and the referenced code. Categorize as:
+
+- **Valid fix needed** — the comment identifies a real bug, security issue, or meaningful improvement
+- **Already addressed** — the issue was fixed in a later commit on this branch
+- **Not applicable** — the suggestion doesn't apply (explain why)
+
+### 4. Implement fixes
+
+For all "valid fix needed" comments:
+
+1. Read the referenced file and understand the context
+2. Implement the fix
+3. Track which thread the fix addresses
+
+Do NOT:
+
+- Make unrelated changes or refactors
+- Add features beyond what the comment requests
+- Increase timeouts or add retries as a first approach — fix root causes
+
+### 5. Run tests locally
+
+After ALL fixes are implemented:
+
+```bash
+# Type check
+pnpm typecheck
+
+# Run relevant unit tests
+pnpm test
+
+# If E2E-relevant changes were made, run E2E tests too
+cd tests/e2e && pnpm exec playwright test
+```
+
+Do NOT proceed to commit until tests pass. If tests fail, fix the failures first.
+
+### 6. Commit and push
+
+```bash
+git add <specific-files>
+git commit -m "fix: address PR review comments"
+git push
+```
+
+### 7. Reply to and resolve each thread
+
+For each thread, reply explaining what was done, then resolve:
+
+- **Fixed comments**: Reply with what was changed and where, then resolve
+- **Already addressed**: Reply explaining which commit addressed it, then resolve
+- **Not applicable**: Reply with clear reasoning for not making changes, then resolve
+
+Reply via REST (use `--field` not `-f` for `in_reply_to` — must be integer):
+
+```bash
+gh api repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/comments \
+  --field in_reply_to=COMMENT_ID \
+  --raw-field body='...'
+```
+
+Resolve via GraphQL (can batch multiple):
+
+```bash
+gh api graphql -f query='
+mutation {
+  resolveReviewThread(input: {threadId: "THREAD_ID"}) {
+    thread { isResolved }
+  }
+}'
+```
+
+### 8. Report summary
+
+Print a summary table:
+
+- Thread count resolved
+- Fixes made (with file:line references)
+- Comments marked as already addressed or not applicable
+
+---
+
+could you set the build linux desktop task as required?
+
+---
+
+ok now fogire out why the macos build failed on CI
+
+---
+
+Ok the macos build is failing on the debug build step. One thing I didn't realise is that having these debug build steps in the main ci workflow is really slowing things down.
+
+Maybe it makes sense to implement something like this:
+PR CI only runs the cargo checks (if changes are detected)
+once merged to main, run the debug build, execute the e2e desktop suite of test, and only if these pass, then build the production releases. Happy to hear alternative proposals.
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **First /resolve-pr-reviews**: User invoked the skill to resolve PR review comments on PR #223 (branch `feat/phase-11.4-cross-platform-e2e`). I found 14 unresolved CodeRabbit threads across CI workflows and E2E test scripts. All were valid fixes. I implemented all 14, committed as `e48b169`, pushed, replied to and resolved all threads.
+
+2. **Second /resolve-pr-reviews**: A new 15th thread appeared from CodeRabbit about FUSE write failure not skipping vault verification in test-round-trip.ps1. I fixed it by adding a `$FuseWriteSucceeded` flag, committed as `887827f`, pushed, replied and resolved.
+
+3. **User asked about E2E test timing**: "at which point does this e2e test run? is it part of the normal CI flow?" I explained it's NOT part of normal PR CI - it runs after CI succeeds on main (via workflow_run trigger) or via manual dispatch.
+
+4. **Third /resolve-pr-reviews**: No new unresolved threads found. All 15 resolved.
+
+5. **User asked to set Linux build as required**: "could you set the build linux desktop task as required?" I used the GitHub API to add "Build Linux Desktop" to required status checks on the main branch.
+
+6. **User asked to investigate macOS build failure**: "ok now figure out why the macos build failed on CI". I investigated and found the root cause: FUSE-T installs `fuse.pc` to `/usr/local/lib/pkgconfig/` which isn't in the default pkg-config search path on macOS ARM64 GitHub runners. The tauri-action release build succeeded due to cached target artifacts, but the debug build step ran the fuser build script fresh and failed. I added `PKG_CONFIG_PATH: /usr/local/lib/pkgconfig` to the debug build step, committed as `01274b9`, pushed.
+
+7. **User proposed CI restructuring**: User noted the debug build steps are slowing down CI and proposed: PR CI only runs cargo checks, once merged to main run debug build → E2E desktop tests → only if pass build production releases. I entered plan mode, explored the full CI pipeline structure, and designed a plan.
+
+8. **Plan approved and execution started**: The plan was to:
+   - Remove tauri-action from desktop build jobs (redundant with deploy-staging.yml)
+   - Gate desktop build jobs to only run on push to main (not PRs)
+   - Update branch protection rules to remove build checks
+   
+9. **Current work**: I was actively implementing the plan. I had completed:
+   - Removing tauri-action + pnpm/node/crypto steps from all 3 desktop build jobs (Windows, macOS, Linux)
+   - Changing if-conditions to `github.event_name == 'push' && needs.changes.outputs.desktop == 'true'`
+   - YAML validation passed
+   
+   Still pending:
+   - Task #2 (remove tauri-action) was in_progress but edits are done
+   - Task #3 (gate to push only) was pending but edits are done (combined with task 2)
+   - Task #4 (update branch protection rules) is pending
+   - Need to commit, push, and update branch protection
+
+Let me trace all the specific files and changes:
+
+**ci.yml changes (cumulative across the conversation):**
+- Added `if-no-files-found: error` to 3 upload-artifact steps
+- Added `PKG_CONFIG_PATH: /usr/local/lib/pkgconfig` to macOS debug build
+- Removed tauri-action steps from all 3 desktop build jobs
+- Removed pnpm/node/install/crypto build steps (only needed for tauri-action)
+- Changed if-conditions on build-desktop-{windows,macos,linux} from `(github.event_name == 'push' || needs.changes.outputs.desktop == 'true')` to `github.event_name == 'push' && needs.changes.outputs.desktop == 'true'`
+
+**e2e-desktop.yml changes:**
+- Added null/empty check for CI run ID
+- Added timeout failure to all 4 readiness polling loops
+- Added `set +e` around run-all.sh in macOS and Linux test steps
+
+**Test script changes:**
+- metadata-vectors.json: Fixed fileIv from 4 bytes to 16 bytes for CTR mode
+- run-all.ps1: Pass secret via env instead of parameter
+- run-all.sh: Pass secret via env prefix instead of $3
+- test-fuse-operations.ps1: Validate cleanup post-conditions
+- test-fuse-operations.sh: Removed -e from set flags
+- test-round-trip.ps1: Added FUSE write error handling + $FuseWriteSucceeded gate
+- test-round-trip.sh: Added curl timeouts, sanitized API responses in failure messages
+- wait-for-mount.ps1: Added ReparsePoint check for WinFsp mount detection
+- wait-for-mount.sh: Changed to fixed-string grep matching
+
+**Commits made:**
+1. `e48b169` - fix(11.4): address PR review comments for cross-platform E2E (14 fixes)
+2. `887827f` - fix(11.4): gate vault verification on FUSE write success
+3. `01274b9` - fix(ci): set PKG_CONFIG_PATH for macOS debug desktop build
+
+**Branch protection changes:**
+- Added "Build Linux Desktop" to required status checks
+- Need to REMOVE "Build macOS Desktop", "Build Windows Desktop", "Build Linux Desktop" (all 3)
+
+The task list shows:
+- Task #1: completed (14 CodeRabbit reviews)
+- Task #2: in_progress (remove tauri-action) - edits done, not committed
+- Task #3: pending (gate to push only) - edits done (combined with #2), not committed
+- Task #4: pending (update branch protection rules) - not started
+
+Summary:
+1. Primary Request and Intent:
+   - **Resolve PR review comments** on PR #223 (branch `feat/phase-11.4-cross-platform-e2e`) — ran 3 times, resolving 15 total CodeRabbit threads
+   - **Set "Build Linux Desktop" as a required status check** on the main branch
+   - **Investigate why the macOS desktop build failed** on CI
+   - **Restructure the CI pipeline** to speed up PR CI: remove full desktop builds from PRs (keep cargo checks only), build debug binaries only on push to main, and remove redundant tauri-action release builds from ci.yml since deploy-staging.yml already handles production releases
+
+2. Key Technical Concepts:
+   - GitHub Actions workflow architecture: `ci.yml`, `e2e-desktop.yml`, `deploy-staging.yml`
+   - `workflow_run` trigger — e2e-desktop.yml triggers after CI succeeds on main, not on PRs
+   - `tauri-apps/tauri-action@v0` — builds release Tauri binaries, redundant in ci.yml since deploy-staging.yml has its own
+   - `pkg-config` and `PKG_CONFIG_PATH` — FUSE-T installs `fuse.pc` to `/usr/local/lib/pkgconfig/` which isn't in default search path on macOS ARM64 GitHub runners
+   - Cargo build caching — cached `target/` directory from previous runs can mask build issues (release artifacts cached, debug builds fresh)
+   - Branch protection required status checks via GitHub API
+   - GraphQL API for resolving PR review threads
+   - Secret hygiene — passing secrets via environment variables instead of command-line arguments
+
+3. Files and Code Sections:
+
+   - **`.github/workflows/ci.yml`** — Main CI workflow, heavily modified
+     - Added `if-no-files-found: error` to 3 upload-artifact steps
+     - Added `PKG_CONFIG_PATH: /usr/local/lib/pkgconfig` env to macOS debug build step
+     - **Most recent changes (in progress, not yet committed):** Removed tauri-action steps and pnpm/node/crypto prerequisites from all 3 desktop build jobs. Changed if-conditions from `(github.event_name == 'push' || needs.changes.outputs.desktop == 'true')` to `github.event_name == 'push' && needs.changes.outputs.desktop == 'true'`. The new Windows build job structure:
+     ```yaml
+     build-desktop-windows:
+       name: Build Windows Desktop
+       needs: [changes, cargo-check-windows, typecheck]
+       if: |
+         !failure() && !cancelled() &&
+         github.event_name == 'push' &&
+         needs.changes.outputs.desktop == 'true'
+       runs-on: windows-latest
+       steps:
+         - uses: actions/checkout@v4
+         - name: Install WinFsp
+           # ... (unchanged)
+         - name: Install Rust toolchain
+           run: rustup default stable
+         - uses: actions/cache@v4
+           # ... (unchanged)
+         - name: Build debug binary for E2E
+           run: cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features winfsp
+         - name: Upload debug desktop binary
+           uses: actions/upload-artifact@v4
+           with:
+             name: desktop-debug-windows
+             path: apps/desktop/src-tauri/target/debug/cipherbox-desktop.exe
+             retention-days: 1
+             if-no-files-found: error
+     ```
+     - macOS and Linux follow the same pattern (tauri-action + pnpm/node removed, only debug build + upload kept)
+     - YAML validation passed after edits
+
+   - **`.github/workflows/e2e-desktop.yml`** — Desktop E2E test workflow
+     - Added null/empty check for CI run ID with early exit
+     - Added timeout failure (`READY=0`/`$ready=$false` pattern) to all 4 readiness polling loops
+     - Added `set +e`/`set -e` around `run-all.sh` in macOS and Linux test steps
+
+   - **`tests/e2e-desktop/fixtures/crypto/metadata-vectors.json`**
+     - Fixed `fileIv` from `"aabbccdd"` (4 bytes) to `"aabbccddeeff001122334455aabbccdd"` (16 bytes for CTR mode)
+
+   - **`tests/e2e-desktop/scripts/run-all.ps1`** — Changed to pass secret via `$env:TEST_SECRET` instead of `-TestSecret` parameter
+
+   - **`tests/e2e-desktop/scripts/run-all.sh`** — Changed from `bash "$SCRIPT_DIR/test-round-trip.sh" "$MOUNT_POINT" "$API_URL" "$TEST_SECRET"` to `TEST_SECRET="$TEST_SECRET" bash "$SCRIPT_DIR/test-round-trip.sh" "$MOUNT_POINT" "$API_URL"`
+
+   - **`tests/e2e-desktop/scripts/test-fuse-operations.ps1`** — Cleanup now validates post-conditions before PASS
+
+   - **`tests/e2e-desktop/scripts/test-fuse-operations.sh`** — Changed `set -euo pipefail` to `set -uo pipefail`
+
+   - **`tests/e2e-desktop/scripts/test-round-trip.ps1`** — Removed `-TestSecret` parameter, reads from `$env:TEST_SECRET`. Added FUSE write error handling with `$FuseWriteSucceeded` flag to gate vault verification.
+
+   - **`tests/e2e-desktop/scripts/test-round-trip.sh`** — Changed `SECRET="${3:-...}"` to `SECRET="${TEST_SECRET:-...}"`. Added `-fsS --connect-timeout 5 --max-time 30` to all curl calls. Sanitized API responses in failure messages (extract `.message`/`.error` via jq instead of logging full response).
+
+   - **`tests/e2e-desktop/scripts/wait-for-mount.ps1`** — Added ReparsePoint attribute check for WinFsp mount detection
+
+   - **`tests/e2e-desktop/scripts/wait-for-mount.sh`** — Changed `grep -q` to `grep -F -q --` for literal path matching
+
+4. Errors and Fixes:
+   - **macOS CI build failure** (`Build debug binary for E2E` step):
+     - Error: `The system library 'fuse' required by crate 'fuser' was not found. The PKG_CONFIG_PATH environment variable is not set.`
+     - Root cause: FUSE-T installs `fuse.pc` to `/usr/local/lib/pkgconfig/` which isn't in default search path on macOS ARM64 GitHub runners. The tauri-action release build succeeded because it used cached `target/` artifacts (build script already ran in a previous CI run), but the debug build step needed to run the fuser build script fresh.
+     - Fix: Added `PKG_CONFIG_PATH: /usr/local/lib/pkgconfig` env var to the debug build step (committed as `01274b9`)
+     - Further fix: Removing tauri-action entirely (current work) eliminates the confusing situation where one build succeeds via cache while the other fails
+
+5. Problem Solving:
+   - Resolved 15 CodeRabbit review comments across 11 files (CI hardening, secret handling, timeout failures, IV length, cleanup validation, curl timeouts, response sanitization, mount detection improvements)
+   - Diagnosed macOS CI failure by analyzing GitHub Actions logs, tracing through vendored fuser build.rs, understanding pkg-config search behavior on ARM64 runners
+   - Designed CI pipeline restructuring to eliminate redundant builds and speed up PR CI
+
+6. All User Messages:
+   - `/resolve-pr-reviews` (first invocation)
+   - `/resolve-pr-reviews` (second invocation, caught the 15th thread from new CodeRabbit review)
+   - "at which point does this e2e test run? is it part of the normal CI flow?"
+   - `/resolve-pr-reviews` (third invocation, confirmed 0 unresolved)
+   - "could you set the build linux desktop task as required?"
+   - "ok now figure out why the macos build failed on CI"
+   - "Ok the macos build is failing on the debug build step. One thing I didn't realise is that having these debug build steps in the main ci workflow is really slowing things down. Maybe it makes sense to implement something like this: PR CI only runs the cargo checks (if changes are detected) once merged to main, run the debug build, execute the e2e desktop suite of test, and only if these pass, then build the production releases. Happy to hear alternative proposals."
+
+7. Pending Tasks:
+   - **Task #2** (in_progress): Remove tauri-action from desktop build jobs — edits done, needs commit
+   - **Task #3** (pending): Gate desktop builds to push only — edits done (combined with #2), needs commit
+   - **Task #4** (pending): Update branch protection rules — remove "Build macOS Desktop", "Build Windows Desktop", "Build Linux Desktop" from required status checks
+
+8. Current Work:
+   I was in the middle of implementing the approved CI restructuring plan. I had completed all edits to `.github/workflows/ci.yml`:
+   - Removed `tauri-action`, `pnpm/action-setup`, `actions/setup-node`, `pnpm install`, and `pnpm --filter @cipherbox/crypto build` steps from all 3 desktop build jobs (Windows, macOS, Linux)
+   - Changed the `if` conditions on all 3 `build-desktop-*` jobs from `(github.event_name == 'push' || needs.changes.outputs.desktop == 'true')` to `github.event_name == 'push' && needs.changes.outputs.desktop == 'true'`
+   - YAML validation passed
+   
+   **Not yet done:** committing these changes, pushing, and updating branch protection rules (removing the 3 Build Desktop checks from required status checks since they won't run on PRs anymore).
+
+9. Optional Next Step:
+   Complete the CI restructuring by:
+   1. Committing the ci.yml changes and pushing
+   2. Updating branch protection rules to remove "Build macOS Desktop", "Build Windows Desktop", "Build Linux Desktop" from required status checks (the `Cargo Check` jobs remain required)
+   3. Marking tasks #2, #3, #4 as completed
+   
+   This directly continues the approved plan from the user's request: "PR CI only runs the cargo checks (if changes are detected) once merged to main, run the debug build, execute the e2e desktop suite of test"
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.claude/projects/-Users-michael-Code-cipher-box/1ba15f43-9017-4023-a674-4b49e4ba6219.jsonl
+Please continue the conversation from where we left off without asking the user any further questions. Continue with the last task that you were asked to work on.
+
+---
+
+# Resolve PR Review Comments
+
+Resolve all open review comments on the current PR from any automated reviewer (CodeRabbit, GitHub Copilot, etc.) or human reviewers.
+
+## Workflow
+
+### 1. Identify the PR
+
+```bash
+PR_NUMBER=$(gh pr view --json number --jq '.number')
+```
+
+If no PR exists for the current branch, stop and inform the user.
+
+### 2. Fetch all unresolved review threads
+
+Use the GraphQL `reviewThreads` query to get threads with `isResolved` status:
+
+```bash
+REPO_OWNER=$(gh repo view --json owner --jq '.owner.login')
+REPO_NAME=$(gh repo view --json name --jq '.name')
+
+gh api graphql -f query="
+{
+  repository(owner: \"$REPO_OWNER\", name: \"$REPO_NAME\") {
+    pullRequest(number: $PR_NUMBER) {
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          comments(first: 10) {
+            nodes {
+              id
+              author { login }
+              body
+              path
+              line
+              createdAt
+            }
+          }
+        }
+      }
+    }
+  }
+}"
+```
+
+Filter to only unresolved threads. If none, report "No unresolved review threads" and stop.
+
+### 3. Triage each comment
+
+For each unresolved thread, read the comment and the referenced code. Categorize as:
+
+- **Valid fix needed** — the comment identifies a real bug, security issue, or meaningful improvement
+- **Already addressed** — the issue was fixed in a later commit on this branch
+- **Not applicable** — the suggestion doesn't apply (explain why)
+
+### 4. Implement fixes
+
+For all "valid fix needed" comments:
+
+1. Read the referenced file and understand the context
+2. Implement the fix
+3. Track which thread the fix addresses
+
+Do NOT:
+
+- Make unrelated changes or refactors
+- Add features beyond what the comment requests
+- Increase timeouts or add retries as a first approach — fix root causes
+
+### 5. Run tests locally
+
+After ALL fixes are implemented:
+
+```bash
+# Type check
+pnpm typecheck
+
+# Run relevant unit tests
+pnpm test
+
+# If E2E-relevant changes were made, run E2E tests too
+cd tests/e2e && pnpm exec playwright test
+```
+
+Do NOT proceed to commit until tests pass. If tests fail, fix the failures first.
+
+### 6. Commit and push
+
+```bash
+git add <specific-files>
+git commit -m "fix: address PR review comments"
+git push
+```
+
+### 7. Reply to and resolve each thread
+
+For each thread, reply explaining what was done, then resolve:
+
+- **Fixed comments**: Reply with what was changed and where, then resolve
+- **Already addressed**: Reply explaining which commit addressed it, then resolve
+- **Not applicable**: Reply with clear reasoning for not making changes, then resolve
+
+Reply via REST (use `--field` not `-f` for `in_reply_to` — must be integer):
+
+```bash
+gh api repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/comments \
+  --field in_reply_to=COMMENT_ID \
+  --raw-field body='...'
+```
+
+Resolve via GraphQL (can batch multiple):
+
+```bash
+gh api graphql -f query='
+mutation {
+  resolveReviewThread(input: {threadId: "THREAD_ID"}) {
+    thread { isResolved }
+  }
+}'
+```
+
+### 8. Report summary
+
+Print a summary table:
+
+- Thread count resolved
+- Fixes made (with file:line references)
+- Comments marked as already addressed or not applicable
+
+---
+
+# Resolve PR Review Comments
+
+Resolve all open review comments on the current PR from any automated reviewer (CodeRabbit, GitHub Copilot, etc.) or human reviewers.
+
+## Workflow
+
+### 1. Identify the PR
+
+```bash
+PR_NUMBER=$(gh pr view --json number --jq '.number')
+```
+
+If no PR exists for the current branch, stop and inform the user.
+
+### 2. Fetch all unresolved review threads
+
+Use the GraphQL `reviewThreads` query to get threads with `isResolved` status:
+
+```bash
+REPO_OWNER=$(gh repo view --json owner --jq '.owner.login')
+REPO_NAME=$(gh repo view --json name --jq '.name')
+
+gh api graphql -f query="
+{
+  repository(owner: \"$REPO_OWNER\", name: \"$REPO_NAME\") {
+    pullRequest(number: $PR_NUMBER) {
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          comments(first: 10) {
+            nodes {
+              id
+              author { login }
+              body
+              path
+              line
+              createdAt
+            }
+          }
+        }
+      }
+    }
+  }
+}"
+```
+
+Filter to only unresolved threads. If none, report "No unresolved review threads" and stop.
+
+### 3. Triage each comment
+
+For each unresolved thread, read the comment and the referenced code. Categorize as:
+
+- **Valid fix needed** — the comment identifies a real bug, security issue, or meaningful improvement
+- **Already addressed** — the issue was fixed in a later commit on this branch
+- **Not applicable** — the suggestion doesn't apply (explain why)
+
+### 4. Implement fixes
+
+For all "valid fix needed" comments:
+
+1. Read the referenced file and understand the context
+2. Implement the fix
+3. Track which thread the fix addresses
+
+Do NOT:
+
+- Make unrelated changes or refactors
+- Add features beyond what the comment requests
+- Increase timeouts or add retries as a first approach — fix root causes
+
+### 5. Run tests locally
+
+After ALL fixes are implemented:
+
+```bash
+# Type check
+pnpm typecheck
+
+# Run relevant unit tests
+pnpm test
+
+# If E2E-relevant changes were made, run E2E tests too
+cd tests/e2e && pnpm exec playwright test
+```
+
+Do NOT proceed to commit until tests pass. If tests fail, fix the failures first.
+
+### 6. Commit and push
+
+```bash
+git add <specific-files>
+git commit -m "fix: address PR review comments"
+git push
+```
+
+### 7. Reply to and resolve each thread
+
+For each thread, reply explaining what was done, then resolve:
+
+- **Fixed comments**: Reply with what was changed and where, then resolve
+- **Already addressed**: Reply explaining which commit addressed it, then resolve
+- **Not applicable**: Reply with clear reasoning for not making changes, then resolve
+
+Reply via REST (use `--field` not `-f` for `in_reply_to` — must be integer):
+
+```bash
+gh api repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/comments \
+  --field in_reply_to=COMMENT_ID \
+  --raw-field body='...'
+```
+
+Resolve via GraphQL (can batch multiple):
+
+```bash
+gh api graphql -f query='
+mutation {
+  resolveReviewThread(input: {threadId: "THREAD_ID"}) {
+    thread { isResolved }
+  }
+}'
+```
+
+### 8. Report summary
+
+Print a summary table:
+
+- Thread count resolved
+- Fixes made (with file:line references)
+- Comments marked as already addressed or not applicable
