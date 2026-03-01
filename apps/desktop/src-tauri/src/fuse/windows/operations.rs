@@ -662,11 +662,17 @@ pub(crate) mod implementation {
         fn open(
             &self,
             file_name: &U16CStr,
-            _create_options: u32,
+            create_options: u32,
             granted_access: u32,
             file_info: &mut OpenFileInfo,
         ) -> Result<Self::FileContext, FspError> {
             let path = file_name.to_string_lossy();
+            log::info!(
+                "open() path={} create_options=0x{:08X} granted_access=0x{:08X}",
+                path,
+                create_options,
+                granted_access
+            );
             let mut fs = self.inner.lock().unwrap();
 
             // Drain pending completions
@@ -907,6 +913,7 @@ pub(crate) mod implementation {
 
         // -- close --
         fn close(&self, context: Self::FileContext) {
+            log::info!("close() ino={} fh={}", context.ino, context.fh);
             // close() (IRP_MJ_CLOSE) may be deferred indefinitely by the Windows
             // cache manager. All data flushing happens in cleanup() (IRP_MJ_CLEANUP)
             // which fires immediately when the user-mode handle is closed.
@@ -1132,27 +1139,31 @@ pub(crate) mod implementation {
             let fh = context.fh;
             let ino = context.ino;
 
-            let handle = match fs.open_files.get_mut(&fh) {
-                Some(h) => h,
-                None => return Err(status_invalid_handle()),
-            };
+            // Read file size before getting mutable handle (avoids borrow conflict)
+            let current_file_size = fs
+                .inodes
+                .get(ino)
+                .map(|i| i.attr.size)
+                .unwrap_or(0);
 
             // Determine actual write offset
             let actual_offset = if write_to_end_of_file {
-                // Write to end of file: use the current file size
-                let file_size = fs
-                    .inodes
-                    .get(ino)
-                    .map(|i| i.attr.size)
-                    .unwrap_or(0);
                 log::info!(
-                    "write: write_to_end_of_file=true, using offset={} (file_size={})",
-                    file_size,
-                    file_size
+                    "write() ino={} fh={} len={} write_to_end_of_file=true offset_param={} using file_size={}",
+                    ino, fh, buffer.len(), offset, current_file_size
                 );
-                file_size
+                current_file_size
             } else {
+                log::info!(
+                    "write() ino={} fh={} len={} offset={} write_to_end_of_file=false",
+                    ino, fh, buffer.len(), offset
+                );
                 offset
+            };
+
+            let handle = match fs.open_files.get_mut(&fh) {
+                Some(h) => h,
+                None => return Err(status_invalid_handle()),
             };
 
             match handle.write_at(actual_offset as i64, buffer) {
@@ -1243,6 +1254,13 @@ pub(crate) mod implementation {
             set_allocation_size: bool,
             _file_info: &mut FileInfo,
         ) -> Result<(), FspError> {
+            log::info!(
+                "set_file_size() ino={} fh={} new_size={} set_allocation_size={}",
+                context.ino,
+                context.fh,
+                new_size,
+                set_allocation_size
+            );
             let mut fs = self.inner.lock().unwrap();
 
             if !set_allocation_size {
@@ -1286,6 +1304,12 @@ pub(crate) mod implementation {
             _file_name: Option<&U16CStr>,
             flags: u32,
         ) {
+            log::info!(
+                "cleanup() ino={} fh={} flags=0x{:08X}",
+                context.ino,
+                context.fh,
+                flags
+            );
             let mut fs = self.inner.lock().unwrap();
             let ino = context.ino;
             let fh = context.fh;
@@ -1904,7 +1928,7 @@ pub(crate) mod implementation {
             &self,
             file_name: &U16CStr,
             create_options: u32,
-            _granted_access: u32,
+            granted_access: u32,
             _file_attributes: u32,
             _security_descriptor: Option<&[c_void]>,
             _allocation_size: u64,
@@ -1913,6 +1937,12 @@ pub(crate) mod implementation {
             file_info: &mut OpenFileInfo,
         ) -> Result<Self::FileContext, FspError> {
             let path = file_name.to_string_lossy();
+            log::info!(
+                "create() path={} create_options=0x{:08X} granted_access=0x{:08X}",
+                path,
+                create_options,
+                granted_access
+            );
             let (parent_path, name) = split_path(&path);
 
             if name.is_empty() {
