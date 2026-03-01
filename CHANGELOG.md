@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.21.1](https://github.com/FSM1/cipher-box/compare/v0.21.0...v0.21.1) (2026-03-01)
+
+
+### Bug Fixes
+
+* **ci:** fix desktop E2E failures on macOS and Linux ([#228](https://github.com/FSM1/cipher-box/issues/228)) ([dbc4e3d](https://github.com/FSM1/cipher-box/commit/dbc4e3d4459268b03f293dc90f2abb29c6382ae6))
+* **ci:** fix desktop E2E on all three platforms ([#230](https://github.com/FSM1/cipher-box/issues/230)) ([232e7e8](https://github.com/FSM1/cipher-box/commit/232e7e8fecc90f9ddb808d77801a5c1791113609))
+* desktop E2E tests pass on all platforms ([#231](https://github.com/FSM1/cipher-box/issues/231)) ([30bbaa4](https://github.com/FSM1/cipher-box/commit/30bbaa4f39af4edaa26fd2200d8faea496ee17e4))
+
 ## [0.21.0](https://github.com/FSM1/cipher-box/compare/v0.20.0...v0.21.0) (2026-03-01)
 
 
