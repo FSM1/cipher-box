@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "8785990bc6b9",
+  "strategy": "manual-commit",
+  "branch": "refactor/tier-2-structural-splits",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/scripts/generate-openapi.ts",
+    "apps/api/src/auth/services/auth-method.service.ts",
+    "apps/api/src/auth/services/test-auth.service.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/87/85990bc6b9/0/metadata.json",
+      "transcript": "/87/85990bc6b9/0/full.jsonl",
+      "context": "/87/85990bc6b9/0/context.md",
+      "content_hash": "/87/85990bc6b9/0/content_hash.txt",
+      "prompt": "/87/85990bc6b9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 31141,
+    "cache_read_tokens": 167669,
+    "output_tokens": 944,
+    "api_call_count": 2
+  }
+}
