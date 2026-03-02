@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.21.7](https://github.com/FSM1/cipher-box/compare/v0.21.6...v0.21.7) (2026-03-02)
+
+
+### Bug Fixes
+
+* **ci:** resolve parent SHA for paths-filter base in desktop E2E ([e5afc27](https://github.com/FSM1/cipher-box/commit/e5afc279b81af5afd6204fd2cd741b814b08ff03))
+* **ci:** resolve parent SHA for paths-filter in desktop E2E ([#242](https://github.com/FSM1/cipher-box/issues/242)) ([e5afc27](https://github.com/FSM1/cipher-box/commit/e5afc279b81af5afd6204fd2cd741b814b08ff03))
+
 ## [0.21.6](https://github.com/FSM1/cipher-box/compare/v0.21.5...v0.21.6) (2026-03-02)
 
 
