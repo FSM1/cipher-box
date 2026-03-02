@@ -25,7 +25,7 @@ pub(crate) mod implementation {
     use widestring::U16CStr;
     use winfsp::FspError;
 
-    use crate::fuse::inode::{FileAttrs, InodeKind, ROOT_INO};
+    use crate::fuse::inode::{FileAttrs, ROOT_INO};
     use crate::fuse::CipherBoxFS;
 
     // Re-export is_windows_special so sub-modules can import from here

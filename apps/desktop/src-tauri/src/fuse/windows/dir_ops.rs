@@ -4,7 +4,7 @@
 
 #[cfg(feature = "winfsp")]
 pub(crate) mod implementation {
-    use winfsp::filesystem::{DirInfo, DirMarker, FileInfo};
+    use winfsp::filesystem::{DirInfo, DirMarker, FileInfo, WideNameInfo};
     use widestring::U16CString;
     use winfsp::FspError;
 
