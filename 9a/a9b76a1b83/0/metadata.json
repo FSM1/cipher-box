@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "9aa9b76a1b83",
+  "session_id": "bf782b2f-e367-4b3e-983f-f44a69c91c4d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-02T19:28:19.718516Z",
+  "branch": "refactor/tier-2-structural-splits",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/shares/invites.controller.spec.ts",
+    "apps/api/src/shares/invites.controller.ts",
+    "apps/api/src/shares/share-invite.service.ts",
+    "apps/api/src/shares/share-invites.controller.spec.ts",
+    "apps/api/src/shares/share-invites.controller.ts",
+    "apps/api/src/shares/shares.module.ts",
+    "apps/api/src/shares/shares.service.spec.ts",
+    "apps/api/src/shares/shares.service.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ed968ad8d213",
+  "token_usage": {
+    "input_tokens": 174,
+    "cache_creation_tokens": 302911,
+    "cache_read_tokens": 19870750,
+    "output_tokens": 50919,
+    "api_call_count": 162
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-02T19:28:16.080664Z",
+    "agent_lines": 0,
+    "human_added": 43,
+    "human_modified": 813,
+    "human_removed": 0,
+    "total_committed": 304,
+    "agent_percentage": 0
+  }
+}

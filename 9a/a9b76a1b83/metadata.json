@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "9aa9b76a1b83",
+  "strategy": "manual-commit",
+  "branch": "refactor/tier-2-structural-splits",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/shares/invites.controller.spec.ts",
+    "apps/api/src/shares/invites.controller.ts",
+    "apps/api/src/shares/share-invite.service.ts",
+    "apps/api/src/shares/share-invites.controller.spec.ts",
+    "apps/api/src/shares/share-invites.controller.ts",
+    "apps/api/src/shares/shares.module.ts",
+    "apps/api/src/shares/shares.service.spec.ts",
+    "apps/api/src/shares/shares.service.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9a/a9b76a1b83/0/metadata.json",
+      "transcript": "/9a/a9b76a1b83/0/full.jsonl",
+      "context": "/9a/a9b76a1b83/0/context.md",
+      "content_hash": "/9a/a9b76a1b83/0/content_hash.txt",
+      "prompt": "/9a/a9b76a1b83/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 174,
+    "cache_creation_tokens": 302911,
+    "cache_read_tokens": 19870750,
+    "output_tokens": 50919,
+    "api_call_count": 162
+  }
+}
