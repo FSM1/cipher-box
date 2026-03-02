@@ -3,7 +3,7 @@
   "checkpoint_id": "69873ea7ce71",
   "strategy": "manual-commit",
   "branch": "fix/ci-e2e-gating",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     ".github/workflows/e2e-desktop.yml"
   ],
@@ -14,13 +14,20 @@
       "context": "/69/873ea7ce71/0/context.md",
       "content_hash": "/69/873ea7ce71/0/content_hash.txt",
       "prompt": "/69/873ea7ce71/0/prompt.txt"
+    },
+    {
+      "metadata": "/69/873ea7ce71/1/metadata.json",
+      "transcript": "/69/873ea7ce71/1/full.jsonl",
+      "context": "/69/873ea7ce71/1/context.md",
+      "content_hash": "/69/873ea7ce71/1/content_hash.txt",
+      "prompt": "/69/873ea7ce71/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 10,
-    "cache_creation_tokens": 4005,
-    "cache_read_tokens": 740611,
-    "output_tokens": 2023,
-    "api_call_count": 8
+    "input_tokens": 646,
+    "cache_creation_tokens": 900935,
+    "cache_read_tokens": 62030221,
+    "output_tokens": 206707,
+    "api_call_count": 547
   }
 }
