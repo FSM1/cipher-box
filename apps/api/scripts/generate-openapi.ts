@@ -17,6 +17,8 @@ import { AppController } from '../src/app.controller';
 import { AppService } from '../src/app.service';
 import { AuthController } from '../src/auth/auth.controller';
 import { AuthService } from '../src/auth/auth.service';
+import { AuthMethodService } from '../src/auth/services/auth-method.service';
+import { TestAuthService } from '../src/auth/services/test-auth.service';
 import { Web3AuthVerifierService } from '../src/auth/services/web3auth-verifier.service';
 import { TokenService } from '../src/auth/services/token.service';
 import { JwtIssuerService } from '../src/auth/services/jwt-issuer.service';
@@ -36,6 +38,7 @@ import { SharesController } from '../src/shares/shares.controller';
 import { InvitesController } from '../src/shares/invites.controller';
 import { ShareInvitesController } from '../src/shares/share-invites.controller';
 import { SharesService } from '../src/shares/shares.service';
+import { ShareInviteService } from '../src/shares/share-invite.service';
 import { Share } from '../src/shares/entities/share.entity';
 import { ShareKey } from '../src/shares/entities/share-key.entity';
 import { ShareInvite } from '../src/shares/entities/share-invite.entity';
@@ -113,6 +116,14 @@ const mockConfigService = {
       useValue: {},
     },
     {
+      provide: AuthMethodService,
+      useValue: {},
+    },
+    {
+      provide: TestAuthService,
+      useValue: {},
+    },
+    {
       provide: Web3AuthVerifierService,
       useValue: {},
     },
@@ -154,6 +165,10 @@ const mockConfigService = {
     },
     {
       provide: SharesService,
+      useValue: {},
+    },
+    {
+      provide: ShareInviteService,
       useValue: {},
     },
     {

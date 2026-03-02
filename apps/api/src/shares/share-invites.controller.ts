@@ -15,7 +15,7 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { SharesService } from './shares.service';
+import { ShareInviteService } from './share-invite.service';
 import { CreateInviteDto } from './dto/create-invite.dto';
 import { InviteResponseDto } from './dto/invite-response.dto';
 import { RequestWithUser } from '../common/types';
@@ -29,7 +29,7 @@ import { RequestWithUser } from '../common/types';
 @UseGuards(JwtAuthGuard, ThrottlerGuard)
 @Controller('shares/invites')
 export class ShareInvitesController {
-  constructor(private readonly sharesService: SharesService) {}
+  constructor(private readonly shareInviteService: ShareInviteService) {}
 
   /**
    * Create a new invite link for sharing a file or folder.
@@ -61,7 +61,7 @@ export class ShareInvitesController {
     expiresAt: Date;
     createdAt: Date;
   }> {
-    const invite = await this.sharesService.createInvite(req.user.id, dto);
+    const invite = await this.shareInviteService.createInvite(req.user.id, dto);
     return {
       id: invite.id,
       token: invite.token,
@@ -111,7 +111,7 @@ export class ShareInvitesController {
       createdAt: Date;
     }>
   > {
-    const invites = await this.sharesService.getInvitesForItem(req.user.id, ipnsName);
+    const invites = await this.shareInviteService.getInvitesForItem(req.user.id, ipnsName);
     return invites.map((inv) => ({
       id: inv.id,
       token: inv.token,
@@ -144,6 +144,6 @@ export class ShareInvitesController {
     @Request() req: RequestWithUser,
     @Param('inviteId', ParseUUIDPipe) inviteId: string
   ): Promise<void> {
-    await this.sharesService.revokeInvite(inviteId, req.user.id);
+    await this.shareInviteService.revokeInvite(inviteId, req.user.id);
   }
 }

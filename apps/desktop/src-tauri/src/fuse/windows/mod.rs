@@ -4,6 +4,12 @@
 //! The `operations` module implements the `FileSystemContext` trait.
 
 #[cfg(feature = "winfsp")]
+mod read_ops;
+#[cfg(feature = "winfsp")]
+mod write_ops;
+#[cfg(feature = "winfsp")]
+mod dir_ops;
+#[cfg(feature = "winfsp")]
 pub mod operations;
 
 #[cfg(feature = "winfsp")]

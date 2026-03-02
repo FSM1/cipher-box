@@ -6,6 +6,8 @@ import { ConfigService } from '@nestjs/config';
 import { AuthController } from './auth.controller';
 import { IdentityController } from './controllers/identity.controller';
 import { AuthService } from './auth.service';
+import { AuthMethodService } from './services/auth-method.service';
+import { TestAuthService } from './services/test-auth.service';
 import { Web3AuthVerifierService } from './services/web3auth-verifier.service';
 import { TokenService } from './services/token.service';
 import { JwtIssuerService } from './services/jwt-issuer.service';
@@ -35,6 +37,8 @@ import { IpfsModule } from '../ipfs/ipfs.module';
   controllers: [AuthController, IdentityController],
   providers: [
     AuthService,
+    AuthMethodService,
+    TestAuthService,
     Web3AuthVerifierService,
     TokenService,
     JwtIssuerService,
@@ -43,6 +47,6 @@ import { IpfsModule } from '../ipfs/ipfs.module';
     SiweService,
     JwtStrategy,
   ],
-  exports: [AuthService, JwtModule],
+  exports: [AuthService, AuthMethodService, TestAuthService, JwtModule],
 })
 export class AuthModule {}

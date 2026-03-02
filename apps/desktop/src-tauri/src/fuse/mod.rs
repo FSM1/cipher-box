@@ -17,6 +17,12 @@ pub mod file_handle;
 pub(crate) mod helpers;
 pub mod inode;
 #[cfg(feature = "fuse")]
+mod read_ops;
+#[cfg(feature = "fuse")]
+mod write_ops;
+#[cfg(feature = "fuse")]
+mod dir_ops;
+#[cfg(feature = "fuse")]
 pub mod operations;
 #[cfg(feature = "winfsp")]
 pub mod windows;

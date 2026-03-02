@@ -11,7 +11,7 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { SharesService } from './shares.service';
+import { ShareInviteService } from './share-invite.service';
 import { ClaimInviteDto } from './dto/claim-invite.dto';
 import {
   InviteStatusResponseDto,
@@ -28,7 +28,7 @@ import { ParseTokenPipe } from '../common/pipes/parse-token.pipe';
 @ApiTags('invites')
 @Controller('invites')
 export class InvitesController {
-  constructor(private readonly sharesService: SharesService) {}
+  constructor(private readonly shareInviteService: ShareInviteService) {}
 
   /**
    * PUBLIC: No auth required -- returns only the invite status.
@@ -53,7 +53,7 @@ export class InvitesController {
   async getInviteStatus(
     @Param('token', ParseTokenPipe) token: string
   ): Promise<{ status: string }> {
-    const result = await this.sharesService.getInviteStatus(token);
+    const result = await this.shareInviteService.getInviteStatus(token);
     if (!result || result.status !== 'active') {
       throw new NotFoundException();
     }
@@ -94,7 +94,7 @@ export class InvitesController {
     ipnsName: string;
     itemName: string;
   }> {
-    const invite = await this.sharesService.getInviteForClaim(token);
+    const invite = await this.shareInviteService.getInviteForClaim(token);
 
     if (!invite) {
       throw new NotFoundException('Invite not found or expired');
@@ -137,6 +137,6 @@ export class InvitesController {
     @Param('token', ParseTokenPipe) token: string,
     @Body() dto: ClaimInviteDto
   ): Promise<{ shareId: string }> {
-    return this.sharesService.claimInvite(token, req.user.id, dto);
+    return this.shareInviteService.claimInvite(token, req.user.id, dto);
   }
 }

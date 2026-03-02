@@ -3,6 +3,8 @@ import { UnauthorizedException } from '@nestjs/common';
 import { Response, Request as ExpressRequest } from 'express';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { AuthMethodService } from './services/auth-method.service';
+import { TestAuthService } from './services/test-auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { LoginDto } from './dto/login.dto';
@@ -12,6 +14,7 @@ import { MetricsService } from '../metrics/metrics.service';
 describe('AuthController', () => {
   let controller: AuthController;
   let authService: jest.Mocked<AuthService>;
+  let authMethodService: jest.Mocked<AuthMethodService>;
   let mockResponse: jest.Mocked<Response>;
   let mockWebRequest: ExpressRequest;
 
@@ -27,9 +30,18 @@ describe('AuthController', () => {
       refresh: jest.fn(),
       refreshByToken: jest.fn(),
       logout: jest.fn(),
+    };
+
+    // Create mock AuthMethodService
+    const mockAuthMethodService = {
       getLinkedMethods: jest.fn(),
       linkMethod: jest.fn(),
       unlinkMethod: jest.fn(),
+    };
+
+    // Create mock TestAuthService
+    const mockTestAuthService = {
+      testLogin: jest.fn(),
     };
 
     // Create mock Response object for cookie handling
@@ -55,6 +67,14 @@ describe('AuthController', () => {
           useValue: mockAuthService,
         },
         {
+          provide: AuthMethodService,
+          useValue: mockAuthMethodService,
+        },
+        {
+          provide: TestAuthService,
+          useValue: mockTestAuthService,
+        },
+        {
           provide: MetricsService,
           useValue: mockMetricsService,
         },
@@ -68,6 +88,7 @@ describe('AuthController', () => {
 
     controller = module.get<AuthController>(AuthController);
     authService = module.get(AuthService);
+    authMethodService = module.get(AuthMethodService);
   });
 
   afterEach(() => {
@@ -417,7 +438,7 @@ describe('AuthController', () => {
   });
 
   describe('getMethods', () => {
-    it('should call authService.getLinkedMethods with user.id', async () => {
+    it('should call authMethodService.getLinkedMethods with user.id', async () => {
       const mockRequest = {
         user: mockUser,
       } as unknown as Request & { user: typeof mockUser };
@@ -432,11 +453,11 @@ describe('AuthController', () => {
         },
       ];
 
-      authService.getLinkedMethods.mockResolvedValue(mockMethods);
+      authMethodService.getLinkedMethods.mockResolvedValue(mockMethods);
 
       await controller.getMethods(mockRequest);
 
-      expect(authService.getLinkedMethods).toHaveBeenCalledWith('user-uuid-123');
+      expect(authMethodService.getLinkedMethods).toHaveBeenCalledWith('user-uuid-123');
     });
 
     it('should return array of auth methods', async () => {
@@ -461,7 +482,7 @@ describe('AuthController', () => {
         },
       ];
 
-      authService.getLinkedMethods.mockResolvedValue(mockMethods);
+      authMethodService.getLinkedMethods.mockResolvedValue(mockMethods);
 
       const result = await controller.getMethods(mockRequest);
 
@@ -473,10 +494,10 @@ describe('AuthController', () => {
   describe('linkMethod', () => {
     const linkDto: LinkMethodDto = {
       idToken: 'mock-link-token',
-      loginType: 'corekit',
+      loginType: 'google',
     };
 
-    it('should call authService.linkMethod with user.id and linkDto', async () => {
+    it('should call authMethodService.linkMethod with user.id and linkDto', async () => {
       const mockRequest = {
         user: mockUser,
       } as unknown as Request & { user: typeof mockUser };
@@ -491,11 +512,11 @@ describe('AuthController', () => {
         },
       ];
 
-      authService.linkMethod.mockResolvedValue(mockMethods);
+      authMethodService.linkMethod.mockResolvedValue(mockMethods);
 
       await controller.linkMethod(mockRequest, linkDto);
 
-      expect(authService.linkMethod).toHaveBeenCalledWith('user-uuid-123', linkDto);
+      expect(authMethodService.linkMethod).toHaveBeenCalledWith('user-uuid-123', linkDto);
     });
 
     it('should return updated methods array', async () => {
@@ -520,7 +541,7 @@ describe('AuthController', () => {
         },
       ];
 
-      authService.linkMethod.mockResolvedValue(mockMethods);
+      authMethodService.linkMethod.mockResolvedValue(mockMethods);
 
       const result = await controller.linkMethod(mockRequest, linkDto);
 
@@ -529,18 +550,21 @@ describe('AuthController', () => {
   });
 
   describe('unlinkMethod', () => {
-    it('should call authService.unlinkMethod with user.id and methodId', async () => {
+    it('should call authMethodService.unlinkMethod with user.id and methodId', async () => {
       const mockRequest = {
         user: mockUser,
       } as unknown as Request & { user: typeof mockUser };
 
       const unlinkDto = { methodId: 'method-to-unlink' };
 
-      authService.unlinkMethod.mockResolvedValue(undefined);
+      authMethodService.unlinkMethod.mockResolvedValue(undefined);
 
       await controller.unlinkMethod(mockRequest, unlinkDto);
 
-      expect(authService.unlinkMethod).toHaveBeenCalledWith('user-uuid-123', 'method-to-unlink');
+      expect(authMethodService.unlinkMethod).toHaveBeenCalledWith(
+        'user-uuid-123',
+        'method-to-unlink'
+      );
     });
 
     it('should return { success: true }', async () => {
@@ -550,7 +574,7 @@ describe('AuthController', () => {
 
       const unlinkDto = { methodId: 'method-to-unlink' };
 
-      authService.unlinkMethod.mockResolvedValue(undefined);
+      authMethodService.unlinkMethod.mockResolvedValue(undefined);
 
       const result = await controller.unlinkMethod(mockRequest, unlinkDto);
 

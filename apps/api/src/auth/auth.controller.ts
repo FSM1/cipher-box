@@ -16,6 +16,8 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { Response, Request as ExpressRequest } from 'express';
 import { AuthService } from './auth.service';
+import { AuthMethodService } from './services/auth-method.service';
+import { TestAuthService } from './services/test-auth.service';
 import { LoginDto, LoginResponseDto } from './dto/login.dto';
 import { TokenResponseDto, DesktopRefreshDto, LogoutResponseDto } from './dto/token.dto';
 import { TestLoginDto, TestLoginResponseDto } from './dto/test-login.dto';
@@ -50,6 +52,8 @@ const REFRESH_TOKEN_COOKIE_OPTIONS = {
 export class AuthController {
   constructor(
     private authService: AuthService,
+    private authMethodService: AuthMethodService,
+    private testAuthService: TestAuthService,
     private readonly metricsService: MetricsService
   ) {}
 
@@ -213,7 +217,7 @@ export class AuthController {
   })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async getMethods(@Request() req: RequestWithUser): Promise<AuthMethodResponseDto[]> {
-    return this.authService.getLinkedMethods(req.user.id);
+    return this.authMethodService.getLinkedMethods(req.user.id);
   }
 
   @Post('link')
@@ -232,7 +236,7 @@ export class AuthController {
     @Request() req: RequestWithUser,
     @Body() linkDto: LinkMethodDto
   ): Promise<AuthMethodResponseDto[]> {
-    return this.authService.linkMethod(req.user.id, linkDto);
+    return this.authMethodService.linkMethod(req.user.id, linkDto);
   }
 
   @Post('unlink')
@@ -251,7 +255,7 @@ export class AuthController {
     @Request() req: RequestWithUser,
     @Body() unlinkDto: UnlinkMethodDto
   ): Promise<UnlinkMethodResponseDto> {
-    await this.authService.unlinkMethod(req.user.id, unlinkDto.methodId);
+    await this.authMethodService.unlinkMethod(req.user.id, unlinkDto.methodId);
     return { success: true };
   }
 
@@ -273,7 +277,7 @@ export class AuthController {
     @Body() dto: TestLoginDto,
     @Res({ passthrough: true }) res: Response
   ): Promise<TestLoginResponseDto> {
-    const result = await this.authService.testLogin(dto.email, dto.secret);
+    const result = await this.testAuthService.testLogin(dto.email, dto.secret);
     this.metricsService.authLogins.inc({
       method: 'test',
       new_user: String(result.isNewUser),
