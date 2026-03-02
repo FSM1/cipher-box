@@ -1,0 +1,69 @@
+# Debug Skill
+
+Help the user debug an issue they're encountering in this current Claude Code session.
+
+## Session Debug Log
+
+The debug log for the current session is at: `/Users/michael/.claude/debug/8eb73e0c-4b6a-4587-982b-f003ddd3af78.txt`
+
+Total lines: 51
+
+### Last 20 lines
+
+```
+2026-03-02T22:58:36.988Z [DEBUG] High write ratio: blit=606, write=695 (53.4% writes), screen=16x122
+2026-03-02T22:58:37.041Z [DEBUG] High write ratio: blit=606, write=695 (53.4% writes), screen=16x122
+2026-03-02T22:58:37.059Z [DEBUG] High write ratio: blit=488, write=706 (59.1% writes), screen=16x122
+2026-03-02T22:58:37.095Z [DEBUG] High write ratio: blit=606, write=696 (53.5% writes), screen=16x122
+2026-03-02T22:58:37.147Z [DEBUG] High write ratio: blit=606, write=696 (53.5% writes), screen=16x122
+2026-03-02T22:58:37.199Z [DEBUG] High write ratio: blit=488, write=707 (59.2% writes), screen=16x122
+2026-03-02T22:58:37.329Z [DEBUG] AutoUpdaterWrapper: Installation type: native
+2026-03-02T22:58:37.798Z [DEBUG] Checking for native installer update to version 2.1.63
+2026-03-02T22:58:37.798Z [DEBUG] Found 2.1.63 at /Users/michael/.local/bin/claude, skipping install
+2026-03-02T22:58:40.901Z [DEBUG] Hooks: Checking initial response for async: {"systemMessage":"\n\nPowered by Entire:\n  This conversation will be linked to your next commit."}
+2026-03-02T22:58:40.901Z [DEBUG] Hooks: Parsed initial response: {"systemMessage":"\n\nPowered by Entire:\n  This conversation will be linked to your next commit."}
+2026-03-02T22:58:40.901Z [DEBUG] Hooks: Initial response is not async, continuing normal processing
+2026-03-02T22:58:40.912Z [DEBUG] Successfully parsed and validated hook JSON output
+2026-03-02T22:58:40.913Z [DEBUG] Hook SessionStart:clear (SessionStart) success:
+{"systemMessage":"\n\nPowered by Entire:\n  This conversation will be linked to your next commit."}
+2026-03-02T22:58:40.914Z [DEBUG] FileHistory: Added snapshot for 18af9160-83fe-4a05-b0fe-5fcb081f0c9b, tracking 0 files
+2026-03-02T22:58:40.914Z [DEBUG] [useDeferredValue] Messages deferred by 6 (0→6)
+2026-03-02T22:58:40.919Z [DEBUG] [useDeferredValue] Messages deferred by 6 (0→6)
+2026-03-02T22:58:40.922Z [DEBUG] Stopped caffeinate, allowing sleep
+
+```
+
+For additional context, grep for [ERROR] and [WARN] lines across the full file.
+
+## Issue Description
+
+https://github.com/FSM1/cipher-box/actions/runs/22589542873/job/65477118050 web e2e test failure in sharing 7.3
+
+## Settings
+
+Remember that settings are in:
+* user - /Users/michael/.claude/settings.json
+* project - /Users/michael/Code/cipher-box/.claude/settings.json
+* local - /Users/michael/Code/cipher-box/.claude/settings.local.json
+
+## Instructions
+
+1. Review the user's issue description
+2. The last 20 lines show the debug file format. Look for [ERROR] and [WARN] entries, stack traces, and failure patterns across the file
+3. Consider launching the claude-code-guide subagent to understand the relevate Claude Code features
+4. Explain what you found in plain language
+5. Suggest concrete fixes or next steps
+
+---
+
+yeah please go ahead
+
+---
+
+lets get back to main.
+
+the release please e2e test gating works, but it fails as soon as the PR is opened, since the e2e test is still executing. After waiting for the test execution to finish and manually retrying the check, it passed.
+
+---
+
+Would it be possible to add a `detect-changes` step that determines the changes between the previous version tag and the current one being created, and based on that, determines whether the desktop-e2e tests need to be checked, rather than just checking based on whether the latest commit to main has a desktop-e2e run.
