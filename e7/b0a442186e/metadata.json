@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "e7b0a442186e",
+  "strategy": "manual-commit",
+  "branch": "refactor/quick-wins",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/REFACTORING.md",
+    "apps/api/src/app.module.ts",
+    "apps/api/src/auth/auth.service.spec.ts",
+    "apps/api/src/auth/auth.service.ts",
+    "apps/api/src/auth/controllers/identity.controller.spec.ts",
+    "apps/api/src/auth/controllers/identity.controller.ts",
+    "apps/api/src/auth/services/email-otp.service.spec.ts",
+    "apps/api/src/auth/services/email-otp.service.ts",
+    "apps/api/src/common/redis.module.ts",
+    "apps/api/src/ipns/delegated-routing.client.ts",
+    "apps/api/src/ipns/ipns.module.ts",
+    "apps/api/src/ipns/ipns.service.spec.ts",
+    "apps/api/src/ipns/ipns.service.ts",
+    "apps/api/src/republish/republish.module.ts",
+    "apps/api/src/republish/republish.service.spec.ts",
+    "apps/api/src/republish/republish.service.ts",
+    "apps/desktop/src-tauri/src/fuse/constants.rs",
+    "apps/desktop/src-tauri/src/fuse/helpers.rs",
+    "apps/desktop/src-tauri/src/fuse/mod.rs",
+    "apps/desktop/src-tauri/src/fuse/operations.rs",
+    "apps/desktop/src-tauri/src/fuse/windows/mod.rs",
+    "apps/desktop/src-tauri/src/fuse/windows/operations.rs",
+    "apps/web/src/components/file-browser/FileBrowser.tsx",
+    "apps/web/src/components/file-browser/SharedFileBrowser.tsx",
+    "apps/web/src/hooks/useDialogState.ts",
+    "apps/web/src/utils/fileTypes.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e7/b0a442186e/0/metadata.json",
+      "transcript": "/e7/b0a442186e/0/full.jsonl",
+      "context": "/e7/b0a442186e/0/context.md",
+      "content_hash": "/e7/b0a442186e/0/content_hash.txt",
+      "prompt": "/e7/b0a442186e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 216,
+    "cache_creation_tokens": 338572,
+    "cache_read_tokens": 18136445,
+    "output_tokens": 64390,
+    "api_call_count": 153
+  }
+}
