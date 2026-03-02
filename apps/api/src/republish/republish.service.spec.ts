@@ -1,11 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ConfigService } from '@nestjs/config';
 import { RepublishService } from './republish.service';
 import { IpnsRepublishSchedule } from './republish-schedule.entity';
 import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
 import { TeeService, RepublishResult } from '../tee/tee.service';
 import { TeeKeyStateService } from '../tee/tee-key-state.service';
+import { DelegatedRoutingClient } from '../ipns/delegated-routing.client';
 
 // atob is not available in all Node.js test environments
 global.atob = (str: string) => Buffer.from(str, 'base64').toString('binary');
@@ -16,12 +16,7 @@ describe('RepublishService', () => {
   let folderIpnsRepository: jest.Mocked<Record<string, jest.Mock>>;
   let teeService: jest.Mocked<Partial<TeeService>>;
   let teeKeyStateService: jest.Mocked<Partial<TeeKeyStateService>>;
-  let fetchMock: jest.Mock;
-
-  // Make delay() resolve instantly
-  let setTimeoutSpy: jest.SpyInstance;
-
-  const DELEGATED_ROUTING_URL = 'https://delegated-ipfs.dev';
+  let mockDelegatedRoutingClient: { publish: jest.Mock; resolve: jest.Mock };
 
   function createMockEntry(overrides: Partial<IpnsRepublishSchedule> = {}): IpnsRepublishSchedule {
     return {
@@ -58,14 +53,6 @@ describe('RepublishService', () => {
   }
 
   beforeEach(async () => {
-    fetchMock = jest.fn();
-    global.fetch = fetchMock;
-
-    setTimeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation((cb: () => void) => {
-      cb();
-      return 0 as unknown as NodeJS.Timeout;
-    });
-
     const mockScheduleRepo = {
       find: jest.fn(),
       findOne: jest.fn(),
@@ -88,13 +75,9 @@ describe('RepublishService', () => {
       getCurrentState: jest.fn(),
     };
 
-    const mockConfigService = {
-      get: jest.fn((key: string, defaultValue?: string) => {
-        const config: Record<string, string> = {
-          DELEGATED_ROUTING_URL: DELEGATED_ROUTING_URL,
-        };
-        return config[key] ?? defaultValue;
-      }),
+    mockDelegatedRoutingClient = {
+      publish: jest.fn().mockResolvedValue(undefined),
+      resolve: jest.fn().mockResolvedValue(null),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -104,7 +87,7 @@ describe('RepublishService', () => {
         { provide: getRepositoryToken(FolderIpns), useValue: mockFolderIpnsRepo },
         { provide: TeeService, useValue: mockTeeService },
         { provide: TeeKeyStateService, useValue: mockTeeKeyStateService },
-        { provide: ConfigService, useValue: mockConfigService },
+        { provide: DelegatedRoutingClient, useValue: mockDelegatedRoutingClient },
       ],
     }).compile();
 
@@ -117,21 +100,7 @@ describe('RepublishService', () => {
 
   afterEach(() => {
     jest.clearAllMocks();
-    setTimeoutSpy.mockRestore();
   });
-
-  // ---------------------------------------------------------------------------
-  // Helper to create a mock fetch Response
-  // ---------------------------------------------------------------------------
-  function mockResponse(status = 200, headers: Record<string, string> = {}): Response {
-    return {
-      ok: status >= 200 && status < 300,
-      status,
-      headers: {
-        get: jest.fn((key: string) => headers[key] || null),
-      },
-    } as unknown as Response;
-  }
 
   // ===========================================================================
   // getDueEntries()
@@ -202,8 +171,8 @@ describe('RepublishService', () => {
       };
       teeService.republish!.mockResolvedValue([teeResult]);
 
-      // publishSignedRecord -- mock successful fetch
-      fetchMock.mockResolvedValue(mockResponse(200));
+      // publishSignedRecord -- delegated routing succeeds
+      mockDelegatedRoutingClient.publish.mockResolvedValue(undefined);
 
       // scheduleRepository.save on success
       scheduleRepository.save.mockResolvedValue(entry);
@@ -302,8 +271,8 @@ describe('RepublishService', () => {
       };
       teeService.republish!.mockResolvedValue([teeResult]);
 
-      // publishSignedRecord fails after all retries
-      fetchMock.mockRejectedValue(new Error('Network error'));
+      // publishSignedRecord fails -- delegated routing throws
+      mockDelegatedRoutingClient.publish.mockRejectedValue(new Error('Network error'));
       scheduleRepository.save.mockResolvedValue({});
 
       const result = await service.processRepublishBatch();
@@ -333,7 +302,7 @@ describe('RepublishService', () => {
       };
       teeService.republish!.mockResolvedValue([teeResult]);
 
-      fetchMock.mockResolvedValue(mockResponse(200));
+      mockDelegatedRoutingClient.publish.mockResolvedValue(undefined);
       scheduleRepository.save.mockResolvedValue(entry);
       folderIpnsRepository.update.mockResolvedValue({ affected: 1 });
 
@@ -418,7 +387,7 @@ describe('RepublishService', () => {
         .republish!.mockResolvedValueOnce(firstBatchResults)
         .mockResolvedValueOnce(secondBatchResults);
 
-      fetchMock.mockResolvedValue(mockResponse(200));
+      mockDelegatedRoutingClient.publish.mockResolvedValue(undefined);
       scheduleRepository.save.mockResolvedValue({});
       folderIpnsRepository.update.mockResolvedValue({ affected: 1 });
 
@@ -436,88 +405,41 @@ describe('RepublishService', () => {
     const ipnsName = 'k51test123';
     const signedRecordBase64 = Buffer.from('signed-record-bytes').toString('base64');
 
-    it('should succeed on first attempt with 200 response', async () => {
-      fetchMock.mockResolvedValue(mockResponse(200));
+    it('should succeed when delegated routing client succeeds', async () => {
+      mockDelegatedRoutingClient.publish.mockResolvedValue(undefined);
 
       await expect(
         service.publishSignedRecord(ipnsName, signedRecordBase64)
       ).resolves.toBeUndefined();
 
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(fetchMock).toHaveBeenCalledWith(
-        `${DELEGATED_ROUTING_URL}/routing/v1/ipns/${ipnsName}`,
-        expect.objectContaining({
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/vnd.ipfs.ipns-record' },
-        })
+      expect(mockDelegatedRoutingClient.publish).toHaveBeenCalledTimes(1);
+      expect(mockDelegatedRoutingClient.publish).toHaveBeenCalledWith(
+        ipnsName,
+        expect.any(Uint8Array)
       );
     });
 
-    it('should retry on 429 rate limit and succeed on second attempt', async () => {
-      fetchMock
-        .mockResolvedValueOnce(mockResponse(429, { 'Retry-After': '2' }))
-        .mockResolvedValueOnce(mockResponse(200));
-
-      await expect(
-        service.publishSignedRecord(ipnsName, signedRecordBase64)
-      ).resolves.toBeUndefined();
-
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-    });
-
-    it('should use exponential backoff when 429 has no Retry-After header', async () => {
-      fetchMock.mockResolvedValueOnce(mockResponse(429)).mockResolvedValueOnce(mockResponse(200));
-
-      await expect(
-        service.publishSignedRecord(ipnsName, signedRecordBase64)
-      ).resolves.toBeUndefined();
-
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-    });
-
-    it('should throw after non-200, non-429 response after all retries', async () => {
-      fetchMock.mockResolvedValue(mockResponse(500));
-
-      await expect(service.publishSignedRecord(ipnsName, signedRecordBase64)).rejects.toThrow(
-        'Delegated routing returned 500'
-      );
-    });
-
-    it('should retry on network error and throw after all retries', async () => {
-      fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
+    it('should propagate error when delegated routing client throws', async () => {
+      mockDelegatedRoutingClient.publish.mockRejectedValue(new Error('ECONNREFUSED'));
 
       await expect(service.publishSignedRecord(ipnsName, signedRecordBase64)).rejects.toThrow(
         'ECONNREFUSED'
       );
 
-      // 3 attempts total (maxPublishRetries = 3)
-      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(mockDelegatedRoutingClient.publish).toHaveBeenCalledTimes(1);
     });
 
-    it('should succeed after intermittent network error', async () => {
-      fetchMock
-        .mockRejectedValueOnce(new Error('Timeout'))
-        .mockResolvedValueOnce(mockResponse(200));
+    it('should decode base64 record to Uint8Array before publishing', async () => {
+      mockDelegatedRoutingClient.publish.mockResolvedValue(undefined);
 
-      await expect(
-        service.publishSignedRecord(ipnsName, signedRecordBase64)
-      ).resolves.toBeUndefined();
+      await service.publishSignedRecord(ipnsName, signedRecordBase64);
 
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-    });
-
-    it('should throw generic error if lastError is null after retries', async () => {
-      // This covers the edge case where the loop finishes without setting lastError
-      // In practice this should not happen, but the code has a fallback
-      // We can test by having all attempts return 429 (which does `continue`, not `throw`)
-      fetchMock.mockResolvedValue(mockResponse(429));
-
-      // After 3 attempts of 429, the loop ends. The last iteration's 429 does `continue`
-      // but doesn't set lastError. However it calls delay and loops. After max retries,
-      // it falls through. Since 429 does `continue` instead of throw, lastError stays null.
-      await expect(service.publishSignedRecord(ipnsName, signedRecordBase64)).rejects.toThrow(
-        'Publish failed after retries'
-      );
+      const passedBytes = mockDelegatedRoutingClient.publish.mock.calls[0][1] as Uint8Array;
+      // Verify the bytes match the original string
+      const decoded = Array.from(passedBytes)
+        .map((b) => String.fromCharCode(b))
+        .join('');
+      expect(decoded).toBe('signed-record-bytes');
     });
   });
 
@@ -820,7 +742,7 @@ describe('RepublishService', () => {
         newSequenceNumber: '6',
       };
       teeService.republish!.mockResolvedValue([teeResult]);
-      fetchMock.mockResolvedValue(mockResponse(200));
+      mockDelegatedRoutingClient.publish.mockResolvedValue(undefined);
       scheduleRepository.save.mockResolvedValue(entry);
 
       // folderIpns update throws -- should not affect result
@@ -834,41 +756,17 @@ describe('RepublishService', () => {
   });
 
   // ===========================================================================
-  // Constructor / config
+  // Constructor / delegated routing delegation
   // ===========================================================================
   describe('constructor', () => {
-    it('should use default delegated routing URL when not configured', async () => {
-      const moduleDefaults: TestingModule = await Test.createTestingModule({
-        providers: [
-          RepublishService,
-          {
-            provide: getRepositoryToken(IpnsRepublishSchedule),
-            useValue: { find: jest.fn().mockResolvedValue([]) },
-          },
-          {
-            provide: getRepositoryToken(FolderIpns),
-            useValue: { update: jest.fn() },
-          },
-          { provide: TeeService, useValue: { republish: jest.fn() } },
-          { provide: TeeKeyStateService, useValue: { getCurrentState: jest.fn() } },
-          {
-            provide: ConfigService,
-            useValue: {
-              get: jest.fn((_key: string, defaultValue?: string) => defaultValue),
-            },
-          },
-        ],
-      }).compile();
+    it('should delegate publishing to DelegatedRoutingClient', async () => {
+      mockDelegatedRoutingClient.publish.mockResolvedValue(undefined);
 
-      const defaultService = moduleDefaults.get<RepublishService>(RepublishService);
+      await service.publishSignedRecord('k51test', Buffer.from('test').toString('base64'));
 
-      // Trigger a publish to check the URL used
-      fetchMock.mockResolvedValue(mockResponse(200));
-      await defaultService.publishSignedRecord('k51test', Buffer.from('test').toString('base64'));
-
-      expect(fetchMock).toHaveBeenCalledWith(
-        'https://delegated-ipfs.dev/routing/v1/ipns/k51test',
-        expect.any(Object)
+      expect(mockDelegatedRoutingClient.publish).toHaveBeenCalledWith(
+        'k51test',
+        expect.any(Uint8Array)
       );
     });
   });

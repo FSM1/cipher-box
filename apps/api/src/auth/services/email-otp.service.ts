@@ -1,15 +1,16 @@
 import {
+  Inject,
   Injectable,
   UnauthorizedException,
   BadRequestException,
   Logger,
-  OnModuleDestroy,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import * as argon2 from 'argon2';
 import { randomInt } from 'crypto';
 import sgMail from '@sendgrid/mail';
+import { REDIS_CLIENT } from '../../common/redis.module';
 
 /** OTP validity in seconds */
 const OTP_TTL = 300; // 5 minutes
@@ -21,20 +22,15 @@ const MAX_SEND_ATTEMPTS = 5;
 const MAX_VERIFY_ATTEMPTS = 5;
 
 @Injectable()
-export class EmailOtpService implements OnModuleDestroy {
+export class EmailOtpService {
   private readonly logger = new Logger(EmailOtpService.name);
-  private readonly redis: Redis;
   private readonly sendgridConfigured: boolean;
   private readonly sendgridFromEmail: string;
 
-  constructor(config: ConfigService) {
-    this.redis = new Redis({
-      host: config.get('REDIS_HOST', 'localhost'),
-      port: config.get<number>('REDIS_PORT', 6379),
-      password: config.get('REDIS_PASSWORD', undefined),
-      lazyConnect: true,
-    });
-
+  constructor(
+    config: ConfigService,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis
+  ) {
     const apiKey = config.get<string>('SENDGRID_API_KEY', '');
     this.sendgridFromEmail = config.get<string>('SENDGRID_FROM_EMAIL', 'noreply@cipherbox.cc');
 
@@ -46,10 +42,6 @@ export class EmailOtpService implements OnModuleDestroy {
       this.sendgridConfigured = false;
       this.logger.log('SendGrid not configured — OTP codes will be logged in dev mode only');
     }
-  }
-
-  async onModuleDestroy(): Promise<void> {
-    await this.redis.quit();
   }
 
   /**

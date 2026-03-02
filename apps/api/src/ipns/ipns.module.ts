@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { IpnsController } from './ipns.controller';
 import { IpnsService } from './ipns.service';
+import { DelegatedRoutingClient } from './delegated-routing.client';
 import { FolderIpns } from './entities/folder-ipns.entity';
 import { RepublishModule } from '../republish/republish.module';
 
@@ -13,7 +14,7 @@ import { RepublishModule } from '../republish/republish.module';
     forwardRef(() => RepublishModule),
   ],
   controllers: [IpnsController],
-  providers: [IpnsService],
-  exports: [IpnsService],
+  providers: [IpnsService, DelegatedRoutingClient],
+  exports: [IpnsService, DelegatedRoutingClient],
 })
 export class IpnsModule {}

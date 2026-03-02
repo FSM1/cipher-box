@@ -9,8 +9,12 @@
 
 pub mod cache;
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub(crate) mod constants;
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub mod decrypt;
 pub mod file_handle;
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub(crate) mod helpers;
 pub mod inode;
 #[cfg(feature = "fuse")]
 pub mod operations;

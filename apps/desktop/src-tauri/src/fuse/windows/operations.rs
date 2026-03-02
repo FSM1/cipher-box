@@ -23,6 +23,10 @@ pub(crate) mod implementation {
     use widestring::{U16CStr, U16CString};
     use winfsp::FspError;
 
+    use crate::fuse::constants::{
+        CONTENT_DOWNLOAD_TIMEOUT, MAX_VERSIONS_PER_FILE, QUOTA_BYTES, VERSION_COOLDOWN_MS,
+    };
+    use crate::fuse::helpers::{is_windows_special, mime_from_extension};
     use crate::fuse::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
     use crate::fuse::file_handle::OpenFileHandle;
     use crate::fuse::CipherBoxFS;
@@ -36,9 +40,6 @@ pub(crate) mod implementation {
     fn status_directory_not_empty() -> FspError { FspError::NTSTATUS(0xC0000101_u32 as i32) }
     fn status_invalid_handle() -> FspError { FspError::NTSTATUS(0xC0000008_u32 as i32) }
     fn status_io_device_error() -> FspError { FspError::IO(std::io::ErrorKind::Other) }
-
-    /// Total storage quota in bytes (500 MiB).
-    const QUOTA_BYTES: u64 = 500 * 1024 * 1024;
 
     /// Permissive self-relative security descriptor granting FILE_ALL_ACCESS
     /// to Everyone (S-1-1-0). CipherBox is single-user; encryption is the real
@@ -82,15 +83,6 @@ pub(crate) mod implementation {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
         0x00, 0x00, 0x00, 0x00,
     ];
-
-    /// Maximum number of past versions to keep per file.
-    const MAX_VERSIONS_PER_FILE: usize = 10;
-
-    /// Cooldown period for desktop FUSE version creation (15 minutes in milliseconds).
-    const VERSION_COOLDOWN_MS: u64 = 15 * 60 * 1000;
-
-    /// Maximum time for file content download in open().
-    const CONTENT_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 
     // ── WinFsp Context Types ───────────────────────────────────────────────
 
@@ -147,26 +139,6 @@ pub(crate) mod implementation {
         }
     }
 
-    // ── Platform Special File Filter ───────────────────────────────────────
-
-    /// Returns true if this filename is a Windows-specific special file
-    /// that should never be created, synced, or shown in directory listings.
-    fn is_windows_special(name: &str) -> bool {
-        let lower = name.to_lowercase();
-        matches!(
-            lower.as_str(),
-            "desktop.ini"
-                | "thumbs.db"
-                | "$recycle.bin"
-                | "system volume information"
-                | "recycler"
-                | "pagefile.sys"
-                | "swapfile.sys"
-                | "hiberfil.sys"
-        ) || lower.contains(":zone.identifier")
-            || lower.starts_with('$')
-    }
-
     // ── FileInfo Conversion ────────────────────────────────────────────────
 
     /// Convert a SystemTime to Windows FILETIME (100-nanosecond intervals
@@ -215,55 +187,6 @@ pub(crate) mod implementation {
     }
 
     // ── Helper functions ───────────────────────────────────────────────────
-
-    /// Detect MIME type from file extension.
-    fn mime_from_extension(filename: &str) -> String {
-        let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
-        match ext.as_str() {
-            "jpg" | "jpeg" => "image/jpeg",
-            "png" => "image/png",
-            "gif" => "image/gif",
-            "webp" => "image/webp",
-            "svg" => "image/svg+xml",
-            "bmp" => "image/bmp",
-            "ico" => "image/x-icon",
-            "pdf" => "application/pdf",
-            "mp4" => "video/mp4",
-            "webm" => "video/webm",
-            "mov" => "video/quicktime",
-            "avi" => "video/x-msvideo",
-            "mkv" => "video/x-matroska",
-            "mp3" => "audio/mpeg",
-            "wav" => "audio/wav",
-            "ogg" => "audio/ogg",
-            "flac" => "audio/flac",
-            "aac" => "audio/aac",
-            "txt" => "text/plain",
-            "html" | "htm" => "text/html",
-            "css" => "text/css",
-            "js" => "application/javascript",
-            "json" => "application/json",
-            "xml" => "application/xml",
-            "zip" => "application/zip",
-            "gz" | "gzip" => "application/gzip",
-            "tar" => "application/x-tar",
-            "doc" => "application/msword",
-            "docx" => {
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            }
-            "xls" => "application/vnd.ms-excel",
-            "xlsx" => {
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            }
-            "ppt" => "application/vnd.ms-powerpoint",
-            "pptx" => {
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-            }
-            "md" => "text/markdown",
-            _ => "application/octet-stream",
-        }
-        .to_string()
-    }
 
     /// Fetch, decrypt, and return file content synchronously.
     fn fetch_and_decrypt_file_content(
@@ -446,84 +369,6 @@ pub(crate) mod implementation {
         Ok(())
     }
 
-    /// Decrypt folder metadata fetched from IPFS (v2 only).
-    /// Self-contained implementation (does not depend on fuse::operations module).
-    fn decrypt_metadata_from_ipfs(
-        encrypted_bytes: &[u8],
-        folder_key: &[u8],
-    ) -> Result<crate::crypto::folder::FolderMetadata, String> {
-        #[derive(serde::Deserialize)]
-        struct EncryptedFolderMetadata {
-            iv: String,
-            data: String,
-        }
-
-        let encrypted: EncryptedFolderMetadata =
-            serde_json::from_slice(encrypted_bytes)
-                .map_err(|e| format!("Failed to parse encrypted metadata JSON: {}", e))?;
-
-        let iv_bytes = hex::decode(&encrypted.iv)
-            .map_err(|_| "Invalid metadata IV hex".to_string())?;
-        if iv_bytes.len() != 12 {
-            return Err(format!("Invalid IV length: {} (expected 12)", iv_bytes.len()));
-        }
-        let iv: [u8; 12] = iv_bytes.try_into().unwrap();
-
-        use base64::Engine;
-        let ciphertext = base64::engine::general_purpose::STANDARD
-            .decode(&encrypted.data)
-            .map_err(|e| format!("Invalid metadata base64: {}", e))?;
-
-        let folder_key_arr: [u8; 32] = folder_key
-            .try_into()
-            .map_err(|_| "Invalid folder key length".to_string())?;
-
-        // Reconstruct sealed format: IV || ciphertext (includes tag)
-        let mut sealed = Vec::with_capacity(12 + ciphertext.len());
-        sealed.extend_from_slice(&iv);
-        sealed.extend_from_slice(&ciphertext);
-
-        crate::crypto::folder::decrypt_folder_metadata(&sealed, &folder_key_arr)
-            .map_err(|e| format!("Metadata decryption failed: {}", e))
-    }
-
-    /// Decrypt per-file metadata fetched from IPFS.
-    /// Self-contained implementation (does not depend on fuse::operations module).
-    fn decrypt_file_metadata_from_ipfs(
-        encrypted_bytes: &[u8],
-        folder_key: &[u8; 32],
-    ) -> Result<crate::crypto::folder::FileMetadata, String> {
-        #[derive(serde::Deserialize)]
-        struct EncryptedFolderMetadata {
-            iv: String,
-            data: String,
-        }
-
-        let encrypted: EncryptedFolderMetadata =
-            serde_json::from_slice(encrypted_bytes)
-                .map_err(|e| format!("Failed to parse encrypted file metadata JSON: {}", e))?;
-
-        let iv_bytes = hex::decode(&encrypted.iv)
-            .map_err(|_| "Invalid file metadata IV hex".to_string())?;
-        if iv_bytes.len() != 12 {
-            return Err(format!("Invalid IV length: {} (expected 12)", iv_bytes.len()));
-        }
-        let iv: [u8; 12] = iv_bytes.try_into().unwrap();
-
-        use base64::Engine;
-        let ciphertext = base64::engine::general_purpose::STANDARD
-            .decode(&encrypted.data)
-            .map_err(|e| format!("Invalid file metadata base64: {}", e))?;
-
-        // Reconstruct sealed format: IV || ciphertext (includes tag)
-        let mut sealed = Vec::with_capacity(12 + ciphertext.len());
-        sealed.extend_from_slice(&iv);
-        sealed.extend_from_slice(&ciphertext);
-
-        crate::crypto::folder::decrypt_file_metadata(&sealed, folder_key)
-            .map_err(|e| format!("File metadata decryption failed: {}", e))
-    }
-
     /// Helper: Fetch, decrypt, and populate a folder's children (blocking).
     fn fetch_and_populate_folder(
         fs: &mut CipherBoxFS,
@@ -547,7 +392,7 @@ pub(crate) mod implementation {
 
         let (encrypted_bytes, cid) = result;
         let metadata =
-            decrypt_metadata_from_ipfs(&encrypted_bytes, &folder_key_owned)?;
+            crate::fuse::decrypt::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &folder_key_owned)?;
         fs.metadata_cache
             .set(&ipns_name.to_string(), metadata.clone(), cid);
         fs.inodes.populate_folder(
@@ -595,7 +440,7 @@ pub(crate) mod implementation {
 
             match resolve_result {
                 Ok(encrypted_bytes) => {
-                    match decrypt_file_metadata_from_ipfs(
+                    match crate::fuse::decrypt::decrypt_file_metadata_from_ipfs_public(
                         &encrypted_bytes,
                         &folder_key_arr,
                     ) {
@@ -1845,7 +1690,7 @@ pub(crate) mod implementation {
                             .await
                             {
                                 Ok(encrypted_bytes) => {
-                                    match decrypt_metadata_from_ipfs(
+                                    match crate::fuse::decrypt::decrypt_metadata_from_ipfs_public(
                                         &encrypted_bytes,
                                         &folder_key,
                                     ) {

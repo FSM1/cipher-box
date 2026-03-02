@@ -1,12 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ConfigService } from '@nestjs/config';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
 import { IpnsService } from './ipns.service';
 import { FolderIpns } from './entities/folder-ipns.entity';
 import { PublishIpnsDto } from './dto';
 import { User } from '../auth/entities/user.entity';
 import { RepublishService } from '../republish/republish.service';
+import { DelegatedRoutingClient } from './delegated-routing.client';
 import { parseIpnsRecord } from './ipns-record-parser';
 
 jest.mock('./ipns-record-parser');
@@ -20,8 +20,9 @@ describe('IpnsService', () => {
     create: jest.Mock;
     save: jest.Mock;
   };
-  let mockConfigService: {
-    get: jest.Mock;
+  let mockDelegatedRoutingClient: {
+    publish: jest.Mock;
+    resolve: jest.Mock;
   };
 
   // Test data
@@ -31,7 +32,6 @@ describe('IpnsService', () => {
   const testRecord = btoa('test-ipns-record-bytes'); // base64 encoded
   const testEncryptedIpnsPrivateKey = 'a'.repeat(128); // 64 bytes hex
   const testKeyEpoch = 1;
-  const testDelegatedRoutingUrl = 'https://test-delegated.example.com';
 
   const mockFolderEntity: FolderIpns = {
     id: 'folder-id-1',
@@ -47,14 +47,7 @@ describe('IpnsService', () => {
     user: {} as User,
   };
 
-  // Mock fetch
-  const mockFetch = jest.fn();
-
   beforeEach(async () => {
-    // Reset fetch mock
-    mockFetch.mockReset();
-    global.fetch = mockFetch;
-
     mockFolderIpnsRepo = {
       findOne: jest.fn(),
       find: jest.fn(),
@@ -62,13 +55,9 @@ describe('IpnsService', () => {
       save: jest.fn(),
     };
 
-    mockConfigService = {
-      get: jest.fn().mockImplementation((key: string, defaultValue?: string) => {
-        if (key === 'DELEGATED_ROUTING_URL') {
-          return testDelegatedRoutingUrl;
-        }
-        return defaultValue;
-      }),
+    mockDelegatedRoutingClient = {
+      publish: jest.fn().mockResolvedValue(undefined),
+      resolve: jest.fn().mockResolvedValue(null),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -79,8 +68,8 @@ describe('IpnsService', () => {
           useValue: mockFolderIpnsRepo,
         },
         {
-          provide: ConfigService,
-          useValue: mockConfigService,
+          provide: DelegatedRoutingClient,
+          useValue: mockDelegatedRoutingClient,
         },
         {
           provide: RepublishService,
@@ -98,15 +87,6 @@ describe('IpnsService', () => {
     jest.clearAllMocks();
   });
 
-  describe('constructor', () => {
-    it('should use delegated routing URL from config', () => {
-      expect(mockConfigService.get).toHaveBeenCalledWith(
-        'DELEGATED_ROUTING_URL',
-        'https://delegated-ipfs.dev'
-      );
-    });
-  });
-
   describe('publishRecord', () => {
     const createDto = (overrides?: Partial<PublishIpnsDto>): PublishIpnsDto => ({
       ipnsName: testIpnsName,
@@ -119,7 +99,6 @@ describe('IpnsService', () => {
 
     it('should publish record for new folder successfully', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
-      mockFetch.mockResolvedValue({ ok: true });
       mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '0' });
       mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '0' });
 
@@ -128,18 +107,14 @@ describe('IpnsService', () => {
       expect(result.success).toBe(true);
       expect(result.ipnsName).toBe(testIpnsName);
       expect(result.sequenceNumber).toBe('0');
-      expect(mockFetch).toHaveBeenCalledWith(
-        `${testDelegatedRoutingUrl}/routing/v1/ipns/${testIpnsName}`,
-        expect.objectContaining({
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/vnd.ipfs.ipns-record' },
-        })
+      expect(mockDelegatedRoutingClient.publish).toHaveBeenCalledWith(
+        testIpnsName,
+        expect.any(Uint8Array)
       );
     });
 
     it('should publish record for existing folder and increment sequence', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
-      mockFetch.mockResolvedValue({ ok: true });
       mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '6' });
 
       const result = await service.publishRecord(
@@ -164,7 +139,6 @@ describe('IpnsService', () => {
 
     it('should allow publishing without encryptedIpnsPrivateKey for new folder (Phase 6 - TEE optional)', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
-      mockFetch.mockResolvedValue({ ok: true });
       mockFolderIpnsRepo.create.mockReturnValue({
         ...mockFolderEntity,
         sequenceNumber: '0',
@@ -193,7 +167,6 @@ describe('IpnsService', () => {
 
     it('should allow publishing without keyEpoch for new folder (Phase 6 - TEE optional)', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
-      mockFetch.mockResolvedValue({ ok: true });
       mockFolderIpnsRepo.create.mockReturnValue({
         ...mockFolderEntity,
         sequenceNumber: '0',
@@ -222,90 +195,19 @@ describe('IpnsService', () => {
     it('should succeed and save to DB even on delegated routing failure', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
       mockFolderIpnsRepo.save.mockResolvedValue(mockFolderEntity);
-      mockFetch.mockResolvedValue({
-        ok: false,
-        status: 500,
-        text: () => Promise.resolve('Internal Server Error'),
-      });
+      mockDelegatedRoutingClient.publish.mockRejectedValue(
+        new HttpException('Failed to publish', HttpStatus.BAD_GATEWAY)
+      );
 
       const result = await service.publishRecord(testUserId, createDto());
       expect(result.success).toBe(true);
       expect(mockFolderIpnsRepo.save).toHaveBeenCalled();
     });
 
-    it('should retry on rate limiting (429) with Retry-After header', async () => {
-      mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: false,
-          status: 429,
-          headers: { get: () => '1' }, // 1 second retry
-        })
-        .mockResolvedValueOnce({ ok: true });
-      mockFolderIpnsRepo.save.mockResolvedValue(mockFolderEntity);
-
-      // Mock delay to speed up test
-      jest.spyOn(global, 'setTimeout').mockImplementation((cb: () => void) => {
-        cb();
-        return 0 as unknown as NodeJS.Timeout;
-      });
-
-      const result = await service.publishRecord(testUserId, createDto());
-
-      expect(result.success).toBe(true);
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-    });
-
-    it('should retry on rate limiting (429) without Retry-After header', async () => {
-      mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: false,
-          status: 429,
-          headers: { get: () => null }, // No Retry-After
-        })
-        .mockResolvedValueOnce({ ok: true });
-      mockFolderIpnsRepo.save.mockResolvedValue(mockFolderEntity);
-
-      jest.spyOn(global, 'setTimeout').mockImplementation((cb: () => void) => {
-        cb();
-        return 0 as unknown as NodeJS.Timeout;
-      });
-
-      const result = await service.publishRecord(testUserId, createDto());
-
-      expect(result.success).toBe(true);
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-    });
-
-    it('should retry on network errors with exponential backoff', async () => {
-      mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
-      mockFetch
-        .mockRejectedValueOnce(new Error('Network error'))
-        .mockRejectedValueOnce(new Error('Network error'))
-        .mockResolvedValueOnce({ ok: true });
-      mockFolderIpnsRepo.save.mockResolvedValue(mockFolderEntity);
-
-      jest.spyOn(global, 'setTimeout').mockImplementation((cb: () => void) => {
-        cb();
-        return 0 as unknown as NodeJS.Timeout;
-      });
-
-      const result = await service.publishRecord(testUserId, createDto());
-
-      expect(result.success).toBe(true);
-      expect(mockFetch).toHaveBeenCalledTimes(3);
-    });
-
-    it('should succeed and save to DB even after max retries on network errors', async () => {
+    it('should succeed and save to DB even when delegated routing throws network error', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
       mockFolderIpnsRepo.save.mockResolvedValue(mockFolderEntity);
-      mockFetch.mockRejectedValue(new Error('Network error'));
-
-      jest.spyOn(global, 'setTimeout').mockImplementation((cb: () => void) => {
-        cb();
-        return 0 as unknown as NodeJS.Timeout;
-      });
+      mockDelegatedRoutingClient.publish.mockRejectedValue(new Error('Network error'));
 
       const result = await service.publishRecord(testUserId, createDto());
       expect(result.success).toBe(true);
@@ -314,7 +216,6 @@ describe('IpnsService', () => {
 
     it('should update encrypted key on key rotation for existing folder', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue({ ...mockFolderEntity });
-      mockFetch.mockResolvedValue({ ok: true });
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
 
       const newKeyEpoch = 2;
@@ -339,7 +240,6 @@ describe('IpnsService', () => {
     it('should not update encrypted key if only keyEpoch is provided', async () => {
       const originalEntity = { ...mockFolderEntity };
       mockFolderIpnsRepo.findOne.mockResolvedValue(originalEntity);
-      mockFetch.mockResolvedValue({ ok: true });
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
 
       await service.publishRecord(
@@ -410,7 +310,6 @@ describe('IpnsService', () => {
   describe('upsertFolderIpns (tested through publishRecord)', () => {
     it('should create new folder with correct fields', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
-      mockFetch.mockResolvedValue({ ok: true });
       mockFolderIpnsRepo.create.mockReturnValue({
         userId: testUserId,
         ipnsName: testIpnsName,
@@ -447,7 +346,6 @@ describe('IpnsService', () => {
     it('should increment sequence number for existing folder', async () => {
       const existingFolder = { ...mockFolderEntity, sequenceNumber: '10' };
       mockFolderIpnsRepo.findOne.mockResolvedValue(existingFolder);
-      mockFetch.mockResolvedValue({ ok: true });
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
 
       await service.publishRecord(testUserId, {
@@ -470,7 +368,6 @@ describe('IpnsService', () => {
         sequenceNumber: '9007199254740991', // MAX_SAFE_INTEGER
       };
       mockFolderIpnsRepo.findOne.mockResolvedValue(largeSeqFolder);
-      mockFetch.mockResolvedValue({ ok: true });
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
 
       await service.publishRecord(testUserId, {
@@ -492,7 +389,6 @@ describe('IpnsService', () => {
         updatedAt: new Date('2020-01-01'),
       };
       mockFolderIpnsRepo.findOne.mockResolvedValue(existingFolder);
-      mockFetch.mockResolvedValue({ ok: true });
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve(entity));
 
       const beforeTest = new Date();
@@ -510,28 +406,13 @@ describe('IpnsService', () => {
   });
 
   describe('resolveRecord', () => {
-    let setTimeoutSpy: jest.SpyInstance;
-
     beforeEach(() => {
-      setTimeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation((cb: () => void) => {
-        cb();
-        return 0 as unknown as NodeJS.Timeout;
-      });
       mockParseIpnsRecord.mockReset();
     });
 
-    afterEach(() => {
-      setTimeoutSpy.mockRestore();
-    });
-
     it('should resolve IPNS name to CID successfully', async () => {
-      // Mock fetch returning binary data
-      const mockRecordBytes = new Uint8Array([1, 2, 3]); // Placeholder bytes
-      mockFetch.mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
-      });
-      // Mock unmarshalIpnsRecord to return parsed record
+      const mockRecordBytes = new Uint8Array([1, 2, 3]);
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
       mockParseIpnsRecord.mockReturnValue({
         value: '/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
         sequence: 5n,
@@ -542,21 +423,12 @@ describe('IpnsService', () => {
       expect(result).not.toBeNull();
       expect(result!.cid).toBe('bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi');
       expect(result!.sequenceNumber).toBe('5');
-      expect(mockFetch).toHaveBeenCalledWith(
-        `${testDelegatedRoutingUrl}/routing/v1/ipns/${testIpnsName}`,
-        expect.objectContaining({
-          method: 'GET',
-          headers: { Accept: 'application/vnd.ipfs.ipns-record' },
-        })
-      );
+      expect(mockDelegatedRoutingClient.resolve).toHaveBeenCalledWith(testIpnsName);
     });
 
     it('should include base64-encoded signature fields when parser returns them', async () => {
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
-      mockFetch.mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
-      });
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
       const sigBytes = new Uint8Array(64).fill(0xab);
       const dataBytes = new Uint8Array(48).fill(0xcd);
       const pubKeyBytes = new Uint8Array(32).fill(0xef);
@@ -578,10 +450,7 @@ describe('IpnsService', () => {
 
     it('should omit signature fields when parser does not return them', async () => {
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
-      mockFetch.mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
-      });
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
       mockParseIpnsRecord.mockReturnValue({
         value: '/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
         sequence: 1n,
@@ -596,114 +465,31 @@ describe('IpnsService', () => {
     });
 
     it('should return null for 404 (IPNS name not found)', async () => {
-      mockFetch.mockResolvedValue({
-        ok: false,
-        status: 404,
-      });
+      // DelegatedRoutingClient.resolve() returns null for 404
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(null);
 
       const result = await service.resolveRecord(testIpnsName);
 
       expect(result).toBeNull();
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-    });
-
-    it('should retry on rate limiting (429) with Retry-After header', async () => {
-      const mockRecordBytes = new Uint8Array([1, 2, 3]);
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: false,
-          status: 429,
-          headers: { get: () => '1' },
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
-        });
-      mockParseIpnsRecord.mockReturnValue({
-        value: '/ipfs/bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi',
-        sequence: 10n,
-      });
-
-      const result = await service.resolveRecord(testIpnsName);
-
-      expect(result).not.toBeNull();
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-    });
-
-    it('should retry on rate limiting (429) without Retry-After header', async () => {
-      const mockRecordBytes = new Uint8Array([1, 2, 3]);
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: false,
-          status: 429,
-          headers: { get: () => null },
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
-        });
-      mockParseIpnsRecord.mockReturnValue({
-        value: '/ipfs/bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi',
-        sequence: 10n,
-      });
-
-      const result = await service.resolveRecord(testIpnsName);
-
-      expect(result).not.toBeNull();
-      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockDelegatedRoutingClient.resolve).toHaveBeenCalledTimes(1);
     });
 
     it('should return null for non-retryable HTTP errors (500) with no DB cache', async () => {
-      mockFetch.mockResolvedValue({
-        ok: false,
-        status: 500,
-        text: () => Promise.resolve('Internal Server Error'),
-      });
+      // DelegatedRoutingClient throws BAD_GATEWAY on server errors
+      mockDelegatedRoutingClient.resolve.mockRejectedValue(
+        new HttpException('Failed to resolve', HttpStatus.BAD_GATEWAY)
+      );
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
 
       const result = await service.resolveRecord(testIpnsName);
       expect(result).toBeNull();
     });
 
-    it('should return null for 400 errors with no DB cache', async () => {
-      mockFetch.mockResolvedValue({
-        ok: false,
-        status: 400,
-        text: () => Promise.resolve('Bad Request'),
-      });
-
-      const result = await service.resolveRecord(testIpnsName);
-      expect(result).toBeNull();
-    });
-
-    it('should retry on network errors with exponential backoff', async () => {
-      const mockRecordBytes = new Uint8Array([1, 2, 3]);
-      mockFetch
-        .mockRejectedValueOnce(new Error('Network error'))
-        .mockRejectedValueOnce(new Error('Network error'))
-        .mockResolvedValueOnce({
-          ok: true,
-          arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
-        });
-      mockParseIpnsRecord.mockReturnValue({
-        value: '/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
-        sequence: 1n,
-      });
-
-      const result = await service.resolveRecord(testIpnsName);
-
-      expect(result).not.toBeNull();
-      expect(mockFetch).toHaveBeenCalledTimes(3);
-    });
-
-    it('should return null after max retries on network errors with no DB cache', async () => {
-      mockFetch.mockRejectedValue(new Error('Network error'));
-
-      const result = await service.resolveRecord(testIpnsName);
-      expect(result).toBeNull();
-    });
-
-    it('should return null for non-Error exceptions during resolve with no DB cache', async () => {
-      mockFetch.mockRejectedValue('string error');
+    it('should return null for BAD_GATEWAY errors with no DB cache', async () => {
+      mockDelegatedRoutingClient.resolve.mockRejectedValue(
+        new HttpException('Failed to resolve', HttpStatus.BAD_GATEWAY)
+      );
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
 
       const result = await service.resolveRecord(testIpnsName);
       expect(result).toBeNull();
@@ -711,10 +497,7 @@ describe('IpnsService', () => {
 
     it('should parse CID from record with Qm prefix (CIDv0)', async () => {
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
-      mockFetch.mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
-      });
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
       mockParseIpnsRecord.mockReturnValue({
         value: '/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG',
         sequence: 1n,
@@ -728,10 +511,7 @@ describe('IpnsService', () => {
 
     it('should parse CID from record with bafk prefix', async () => {
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
-      mockFetch.mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
-      });
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
       mockParseIpnsRecord.mockReturnValue({
         value: '/ipfs/bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi',
         sequence: 1n,
@@ -745,26 +525,20 @@ describe('IpnsService', () => {
 
     it('should return null for invalid record without CID and no DB cache', async () => {
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
-      mockFetch.mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
-      });
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
       mockParseIpnsRecord.mockReturnValue({
         value: 'invalid-record-without-cid',
         sequence: 1n,
       });
 
-      // The parsing throws BAD_GATEWAY, which falls through to DB cache → null
+      // The parsing throws BAD_GATEWAY, which falls through to DB cache -> null
       const result = await service.resolveRecord(testIpnsName);
       expect(result).toBeNull();
     });
 
     it('should extract sequence number from IPNS record', async () => {
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
-      mockFetch.mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
-      });
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
       mockParseIpnsRecord.mockReturnValue({
         value: '/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
         sequence: 42n,
@@ -778,10 +552,7 @@ describe('IpnsService', () => {
 
     it('should default to sequence "0" when not present', async () => {
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
-      mockFetch.mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
-      });
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
       mockParseIpnsRecord.mockReturnValue({
         value: '/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
         sequence: undefined, // Missing sequence
@@ -795,25 +566,20 @@ describe('IpnsService', () => {
 
     it('should return null on unmarshal errors with no DB cache', async () => {
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
-      mockFetch.mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
-      });
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
       mockParseIpnsRecord.mockImplementation(() => {
         throw new Error('Invalid protobuf');
       });
 
-      // Parse error → BAD_GATEWAY → falls through to DB cache → null
+      // Parse error -> BAD_GATEWAY -> falls through to DB cache -> null
       const result = await service.resolveRecord(testIpnsName);
       expect(result).toBeNull();
     });
 
-    it('should fall back to DB-cached CID when delegated routing returns 502', async () => {
-      mockFetch.mockResolvedValue({
-        ok: false,
-        status: 500,
-        text: () => Promise.resolve('Internal Server Error'),
-      });
+    it('should fall back to DB-cached CID when delegated routing returns BAD_GATEWAY', async () => {
+      mockDelegatedRoutingClient.resolve.mockRejectedValue(
+        new HttpException('Failed to resolve', HttpStatus.BAD_GATEWAY)
+      );
       const cachedFolder = {
         ...mockFolderEntity,
         latestCid: 'bafyCACHED',
@@ -831,8 +597,10 @@ describe('IpnsService', () => {
       });
     });
 
-    it('should fall back to DB-cached CID after max retries on network errors', async () => {
-      mockFetch.mockRejectedValue(new Error('Network error'));
+    it('should fall back to DB-cached CID after delegated routing network errors', async () => {
+      mockDelegatedRoutingClient.resolve.mockRejectedValue(
+        new HttpException('Failed to resolve after retries', HttpStatus.BAD_GATEWAY)
+      );
       const cachedFolder = {
         ...mockFolderEntity,
         latestCid: 'bafyCACHED2',
@@ -848,11 +616,9 @@ describe('IpnsService', () => {
     });
 
     it('should return null when routing fails and no DB cache exists', async () => {
-      mockFetch.mockResolvedValue({
-        ok: false,
-        status: 500,
-        text: () => Promise.resolve('Internal Server Error'),
-      });
+      mockDelegatedRoutingClient.resolve.mockRejectedValue(
+        new HttpException('Failed to resolve', HttpStatus.BAD_GATEWAY)
+      );
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
 
       const result = await service.resolveRecord(testIpnsName);
@@ -860,11 +626,9 @@ describe('IpnsService', () => {
     });
 
     it('should return null when routing fails and DB cache has no CID', async () => {
-      mockFetch.mockResolvedValue({
-        ok: false,
-        status: 500,
-        text: () => Promise.resolve('Internal Server Error'),
-      });
+      mockDelegatedRoutingClient.resolve.mockRejectedValue(
+        new HttpException('Failed to resolve', HttpStatus.BAD_GATEWAY)
+      );
       mockFolderIpnsRepo.findOne.mockResolvedValue({
         ...mockFolderEntity,
         latestCid: null,
@@ -876,10 +640,7 @@ describe('IpnsService', () => {
 
     it('should fall back to DB on parse errors (BAD_GATEWAY)', async () => {
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
-      mockFetch.mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
-      });
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
       mockParseIpnsRecord.mockImplementation(() => {
         throw new Error('Invalid protobuf');
       });
@@ -890,7 +651,7 @@ describe('IpnsService', () => {
       };
       mockFolderIpnsRepo.findOne.mockResolvedValue(cachedFolder);
 
-      // Parse error → BAD_GATEWAY → falls through to DB cache
+      // Parse error -> BAD_GATEWAY -> falls through to DB cache
       const result = await service.resolveRecord(testIpnsName);
       expect(result).not.toBeNull();
       expect(result!.cid).toBe('bafyCACHED_PARSE');
@@ -900,10 +661,7 @@ describe('IpnsService', () => {
     it('should prefer DB cache when it has a higher sequence number than network', async () => {
       // Network returns stale record (seq 3)
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
-      mockFetch.mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
-      });
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
       mockParseIpnsRecord.mockReturnValue({
         value: '/ipfs/bafySTALE',
         sequence: 3n,
@@ -925,10 +683,7 @@ describe('IpnsService', () => {
 
     it('should prefer network result when it has equal or higher sequence than DB', async () => {
       const mockRecordBytes = new Uint8Array([1, 2, 3]);
-      mockFetch.mockResolvedValue({
-        ok: true,
-        arrayBuffer: () => Promise.resolve(mockRecordBytes.buffer),
-      });
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
       mockParseIpnsRecord.mockReturnValue({
         value: '/ipfs/bafyNETWORK',
         sequence: 10n,
@@ -950,23 +705,13 @@ describe('IpnsService', () => {
   });
 
   describe('delegated routing failures are non-fatal', () => {
-    let setTimeoutSpy: jest.SpyInstance;
-
     beforeEach(() => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
       mockFolderIpnsRepo.save.mockResolvedValue(mockFolderEntity);
-      setTimeoutSpy = jest.spyOn(global, 'setTimeout').mockImplementation((cb: () => void) => {
-        cb();
-        return 0 as unknown as NodeJS.Timeout;
-      });
-    });
-
-    afterEach(() => {
-      setTimeoutSpy.mockRestore();
     });
 
     it('should succeed when delegated routing rejects with string error', async () => {
-      mockFetch.mockRejectedValue('string error');
+      mockDelegatedRoutingClient.publish.mockRejectedValue('string error');
 
       const result = await service.publishRecord(testUserId, {
         ipnsName: testIpnsName,
@@ -977,12 +722,10 @@ describe('IpnsService', () => {
       expect(mockFolderIpnsRepo.save).toHaveBeenCalled();
     });
 
-    it('should succeed when delegated routing returns non-429 HTTP errors', async () => {
-      mockFetch.mockResolvedValue({
-        ok: false,
-        status: 400,
-        text: () => Promise.resolve('Bad Request'),
-      });
+    it('should succeed when delegated routing returns BAD_GATEWAY', async () => {
+      mockDelegatedRoutingClient.publish.mockRejectedValue(
+        new HttpException('Failed to publish', HttpStatus.BAD_GATEWAY)
+      );
 
       const result = await service.publishRecord(testUserId, {
         ipnsName: testIpnsName,
@@ -993,12 +736,8 @@ describe('IpnsService', () => {
       expect(mockFolderIpnsRepo.save).toHaveBeenCalled();
     });
 
-    it('should succeed when delegated routing returns 503', async () => {
-      mockFetch.mockResolvedValue({
-        ok: false,
-        status: 503,
-        text: () => Promise.resolve('Sensitive internal error details'),
-      });
+    it('should succeed when delegated routing throws network error', async () => {
+      mockDelegatedRoutingClient.publish.mockRejectedValue(new Error('ECONNREFUSED'));
 
       const result = await service.publishRecord(testUserId, {
         ipnsName: testIpnsName,

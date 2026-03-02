@@ -3,19 +3,14 @@ import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
 import { EmailOtpService } from './email-otp.service';
 
-// Mock ioredis
+// Mock Redis instance (injected via REDIS_CLIENT token)
 const mockRedis = {
   get: jest.fn(),
   setex: jest.fn(),
   del: jest.fn(),
   incr: jest.fn(),
   expire: jest.fn(),
-  quit: jest.fn(),
 };
-
-jest.mock('ioredis', () => {
-  return jest.fn().mockImplementation(() => mockRedis);
-});
 
 // Mock @sendgrid/mail — use require() to get mock reference after jest.mock hoisting
 jest.mock('@sendgrid/mail', () => ({
@@ -34,7 +29,10 @@ describe('EmailOtpService', () => {
 
   beforeEach(() => {
     configService = { get: jest.fn().mockReturnValue(undefined) };
-    service = new EmailOtpService(configService as unknown as ConfigService);
+    service = new EmailOtpService(
+      configService as unknown as ConfigService,
+      mockRedis as unknown as import('ioredis').default
+    );
     jest.clearAllMocks();
   });
 
@@ -106,7 +104,10 @@ describe('EmailOtpService', () => {
           return defaultValue;
         }),
       };
-      const sgService = new EmailOtpService(sgConfigService as unknown as ConfigService);
+      const sgService = new EmailOtpService(
+        sgConfigService as unknown as ConfigService,
+        mockRedis as unknown as import('ioredis').default
+      );
 
       mockRedis.get.mockResolvedValueOnce(null); // rate limit check
       mockRedis.incr.mockResolvedValueOnce(1);
@@ -143,7 +144,10 @@ describe('EmailOtpService', () => {
           return defaultValue;
         }),
       };
-      const sgService = new EmailOtpService(sgConfigService as unknown as ConfigService);
+      const sgService = new EmailOtpService(
+        sgConfigService as unknown as ConfigService,
+        mockRedis as unknown as import('ioredis').default
+      );
 
       mockRedis.get.mockResolvedValueOnce(null); // rate limit check
       mockRedis.incr.mockResolvedValueOnce(1);
@@ -222,14 +226,6 @@ describe('EmailOtpService', () => {
       await service.verifyOtp('test@example.com', '123456');
 
       expect(mockRedis.expire).toHaveBeenCalledWith('otp-verify-attempts:test@example.com', 300);
-    });
-  });
-
-  describe('onModuleDestroy', () => {
-    it('should quit redis connection', async () => {
-      await service.onModuleDestroy();
-
-      expect(mockRedis.quit).toHaveBeenCalled();
     });
   });
 });

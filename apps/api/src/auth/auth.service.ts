@@ -5,7 +5,6 @@ import {
   UnauthorizedException,
   BadRequestException,
   ForbiddenException,
-  OnModuleDestroy,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -14,6 +13,7 @@ import { createECDH, createHash, timingSafeEqual } from 'crypto';
 import * as jose from 'jose';
 import * as argon2 from 'argon2';
 import Redis from 'ioredis';
+import { REDIS_CLIENT } from '../common/redis.module';
 import { User } from './entities/user.entity';
 import { AuthMethod } from './entities/auth-method.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
@@ -28,9 +28,8 @@ import { RefreshServiceResult, LogoutResponseDto } from './dto/token.dto';
 import { LinkMethodDto, AuthMethodResponseDto } from './dto/link-method.dto';
 
 @Injectable()
-export class AuthService implements OnModuleDestroy {
+export class AuthService {
   private readonly logger = new Logger(AuthService.name);
-  private readonly redis: Redis;
 
   constructor(
     private configService: ConfigService,
@@ -46,19 +45,10 @@ export class AuthService implements OnModuleDestroy {
     @InjectRepository(PinnedCid)
     private pinnedCidRepository: Repository<PinnedCid>,
     @Inject(IPFS_PROVIDER)
-    private ipfsProvider: IpfsProvider
-  ) {
-    this.redis = new Redis({
-      host: configService.get('REDIS_HOST', 'localhost'),
-      port: configService.get<number>('REDIS_PORT', 6379),
-      password: configService.get('REDIS_PASSWORD', undefined),
-      lazyConnect: true,
-    });
-  }
-
-  async onModuleDestroy(): Promise<void> {
-    await this.redis.quit();
-  }
+    private ipfsProvider: IpfsProvider,
+    @Inject(REDIS_CLIENT)
+    private readonly redis: Redis
+  ) {}
 
   async login(loginDto: LoginDto): Promise<LoginServiceResult> {
     // 1. Verify CipherBox-issued JWT.

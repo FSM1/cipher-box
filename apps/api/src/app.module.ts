@@ -7,6 +7,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { RedisModule } from './common/redis.module';
 import { HealthModule } from './health/health.module';
 import { MetricsModule, HttpMetricsInterceptor } from './metrics';
 import { AuthModule } from './auth/auth.module';
@@ -92,6 +93,7 @@ import { Share, ShareKey, ShareInvite } from './shares/entities';
       }),
       inject: [ConfigService],
     }),
+    RedisModule,
     MetricsModule,
     HealthModule,
     AuthModule,
