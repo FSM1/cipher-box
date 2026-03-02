@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "3e6b7cae79df",
+  "strategy": "manual-commit",
+  "branch": "fix/sharing-test-7.3-preview-to-edit",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/e2e/tests/sharing-workflow.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3e/6b7cae79df/0/metadata.json",
+      "transcript": "/3e/6b7cae79df/0/full.jsonl",
+      "context": "/3e/6b7cae79df/0/context.md",
+      "content_hash": "/3e/6b7cae79df/0/content_hash.txt",
+      "prompt": "/3e/6b7cae79df/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 98095,
+    "cache_read_tokens": 1753044,
+    "output_tokens": 10925,
+    "api_call_count": 27
+  }
+}

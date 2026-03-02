@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "3e6b7cae79df",
+  "session_id": "8eb73e0c-4b6a-4587-982b-f003ddd3af78",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-02T23:05:51.675957Z",
+  "branch": "fix/sharing-test-7.3-preview-to-edit",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/e2e/tests/sharing-workflow.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e386ccf0e58f",
+  "token_usage": {
+    "input_tokens": 32,
+    "cache_creation_tokens": 98095,
+    "cache_read_tokens": 1753044,
+    "output_tokens": 10925,
+    "api_call_count": 27
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-02T23:05:51.224506Z",
+    "agent_lines": 7,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 7,
+    "agent_percentage": 100
+  }
+}
