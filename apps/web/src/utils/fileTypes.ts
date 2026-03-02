@@ -122,15 +122,9 @@ export function isVideoFile(name: string): boolean {
   return ext !== null && VIDEO_EXTENSIONS.has(ext);
 }
 
-/** Check if a filename is any previewable type (image, PDF, audio, video, text). */
+/** Check if a filename is any previewable type (image, PDF, audio, video). */
 export function isPreviewableFile(name: string): boolean {
-  return (
-    isImageFile(name) ||
-    isPdfFile(name) ||
-    isAudioFile(name) ||
-    isVideoFile(name) ||
-    isTextFile(name)
-  );
+  return isImageFile(name) || isPdfFile(name) || isAudioFile(name) || isVideoFile(name);
 }
 
 /** Type guard: narrows FolderChild to FilePointer by checking type discriminant. */
