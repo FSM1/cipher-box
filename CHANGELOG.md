@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.8](https://github.com/FSM1/cipher-box/compare/v0.21.7...v0.21.8) (2026-03-02)
+
+
+### Bug Fixes
+
+* **ci:** use explicit SHA for paths-filter ref in desktop E2E ([#244](https://github.com/FSM1/cipher-box/issues/244)) ([24570e8](https://github.com/FSM1/cipher-box/commit/24570e8b5f5d90dd44ee2fa7df9901fd3499cac9))
+
 ## [0.21.7](https://github.com/FSM1/cipher-box/compare/v0.21.6...v0.21.7) (2026-03-02)
 
 
