@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "827bf8c1cb47",
+  "strategy": "manual-commit",
+  "branch": "refactor/tier-2-structural-splits",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/commands/mod.rs",
+    "apps/desktop/src-tauri/src/commands/util.rs",
+    "apps/desktop/src-tauri/src/commands/vault.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/82/7bf8c1cb47/0/metadata.json",
+      "transcript": "/82/7bf8c1cb47/0/full.jsonl",
+      "context": "/82/7bf8c1cb47/0/context.md",
+      "content_hash": "/82/7bf8c1cb47/0/content_hash.txt",
+      "prompt": "/82/7bf8c1cb47/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 75,
+    "cache_creation_tokens": 173573,
+    "cache_read_tokens": 6903668,
+    "output_tokens": 29906,
+    "api_call_count": 65
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "827bf8c1cb47",
+  "session_id": "bf782b2f-e367-4b3e-983f-f44a69c91c4d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-02T18:49:17.229751Z",
+  "branch": "refactor/tier-2-structural-splits",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/commands/mod.rs",
+    "apps/desktop/src-tauri/src/commands/util.rs",
+    "apps/desktop/src-tauri/src/commands/vault.rs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ed968ad8d213",
+  "token_usage": {
+    "input_tokens": 75,
+    "cache_creation_tokens": 173573,
+    "cache_read_tokens": 6903668,
+    "output_tokens": 29906,
+    "api_call_count": 65
+  }
+}
