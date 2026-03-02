@@ -35,7 +35,7 @@ export class AuthMethodService {
   /**
    * Get all linked auth methods for a user.
    * Returns identifierDisplay (human-readable) for all method types.
-   * Falls back to identifier if identifierDisplay is not set.
+   * Falls back to '[redacted]' if identifierDisplay is not set.
    */
   async getLinkedMethods(userId: string): Promise<AuthMethodResponseDto[]> {
     const methods = await this.authMethodRepository.find({

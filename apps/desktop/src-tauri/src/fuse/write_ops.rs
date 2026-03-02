@@ -230,6 +230,11 @@ pub(crate) mod implementation {
             Err(e) => {
                 log::error!("Failed to create temp file for new file: {}", e);
                 fs.inodes.remove(ino);
+                if let Some(parent_inode) = fs.inodes.get_mut(parent) {
+                    if let Some(ref mut children) = parent_inode.children {
+                        children.retain(|&child| child != ino);
+                    }
+                }
                 reply.error(libc::EIO);
                 return;
             }
