@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "36cb997696e4",
+  "session_id": "43c3a0d1-8928-4603-b06f-a4286d896a4d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-02T00:52:13.890965Z",
+  "branch": "fix/winfsp-msi-path",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/deploy-staging.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "c8d74b67736c",
+  "checkpoint_transcript_start": 85,
+  "transcript_lines_at_start": 85,
+  "token_usage": {
+    "input_tokens": 15,
+    "cache_creation_tokens": 14571,
+    "cache_read_tokens": 796667,
+    "output_tokens": 4013,
+    "api_call_count": 13
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-02T00:52:13.021752Z",
+    "agent_lines": 22,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 22,
+    "agent_percentage": 100
+  }
+}

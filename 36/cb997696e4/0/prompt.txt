@@ -1,0 +1,9 @@
+ok lets get back to main and pull in latest
+
+---
+
+yeah push it and create a PR
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/22556321440/job/65335471146 linux desktop build is failing for some reason. windows seems to be getting much further
