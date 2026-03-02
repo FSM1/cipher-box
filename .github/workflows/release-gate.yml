@@ -1,0 +1,55 @@
+name: Release Gate
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  verify-e2e:
+    name: Verify E2E Passed
+    # Only run on release-please PRs
+    if: startsWith(github.head_ref, 'release-please--')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify E2E tests passed on main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get the latest commit on main (the base the release PR targets)
+          MAIN_SHA=$(gh api repos/${{ github.repository }}/git/ref/heads/main --jq '.object.sha')
+          echo "Latest main commit: ${MAIN_SHA}"
+
+          # Web E2E must exist and pass
+          E2E_CONCLUSION=$(gh run list --repo ${{ github.repository }} \
+            --workflow=e2e.yml --branch=main --limit=10 \
+            --json headSha,conclusion \
+            --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].conclusion")
+
+          if [ -z "$E2E_CONCLUSION" ]; then
+            echo "::error::No E2E test run found for main (${MAIN_SHA}). E2E must pass before releasing."
+            exit 1
+          fi
+          if [ "$E2E_CONCLUSION" != "success" ]; then
+            echo "::error::E2E Tests did not pass on main (conclusion: ${E2E_CONCLUSION})"
+            exit 1
+          fi
+          echo "Web E2E: passed"
+
+          # Desktop E2E — block only if it ran and failed
+          DESKTOP_CONCLUSION=$(gh run list --repo ${{ github.repository }} \
+            --workflow=e2e-desktop.yml --branch=main --limit=10 \
+            --json headSha,conclusion \
+            --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].conclusion")
+
+          if [ -n "$DESKTOP_CONCLUSION" ] && [ "$DESKTOP_CONCLUSION" != "success" ]; then
+            echo "::error::Desktop E2E Tests did not pass on main (conclusion: ${DESKTOP_CONCLUSION})"
+            exit 1
+          fi
+          if [ -z "$DESKTOP_CONCLUSION" ]; then
+            echo "Desktop E2E: no run for this commit (skipped)"
+          else
+            echo "Desktop E2E: passed"
+          fi
+
+          echo "All E2E gates passed — release is safe to merge."
