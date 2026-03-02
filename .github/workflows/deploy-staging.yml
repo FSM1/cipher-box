@@ -113,8 +113,28 @@ jobs:
           path: apps/web/dist/
           retention-days: 1
 
+  create-desktop-release:
+    name: Create Desktop Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ inputs.staging_tag || github.ref_name }}"
+          BODY="Staging build for ${TAG}. macOS (unsigned - right-click > Open to launch), Windows (unsigned - click \"More info\" > \"Run anyway\"), and Linux (AppImage/deb)."
+          # Create the release if it doesn't exist yet; ignore error if it does
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "CipherBox Desktop ${TAG}" \
+            --notes "$BODY" \
+            --prerelease 2>/dev/null || true
+
   build-desktop:
     name: Build Desktop App (macOS)
+    needs: [create-desktop-release]
     runs-on: macos-latest
     environment: staging
     permissions:
@@ -163,6 +183,7 @@ jobs:
 
   build-desktop-windows:
     name: Build Desktop App (Windows)
+    needs: [create-desktop-release]
     runs-on: windows-latest
     environment: staging
     permissions:
@@ -250,6 +271,7 @@ jobs:
 
   build-desktop-linux:
     name: Build Desktop App (Linux)
+    needs: [create-desktop-release]
     runs-on: ubuntu-22.04
     environment: staging
     permissions:
