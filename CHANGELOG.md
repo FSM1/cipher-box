@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.21.5](https://github.com/FSM1/cipher-box/compare/v0.21.4...v0.21.5) (2026-03-02)
+
+
+### Bug Fixes
+
+* **ci:** pre-create GitHub release to avoid desktop build race ([#238](https://github.com/FSM1/cipher-box/issues/238)) ([37e46ec](https://github.com/FSM1/cipher-box/commit/37e46ec07f93855060962a1b987532515a059f25))
+* **ci:** pre-create GitHub release to avoid race between desktop builds ([37e46ec](https://github.com/FSM1/cipher-box/commit/37e46ec07f93855060962a1b987532515a059f25))
+
 ## [0.21.4](https://github.com/FSM1/cipher-box/compare/v0.21.3...v0.21.4) (2026-03-02)
 
 
