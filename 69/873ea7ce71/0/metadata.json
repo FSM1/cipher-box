@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "69873ea7ce71",
+  "session_id": "43c3a0d1-8928-4603-b06f-a4286d896a4d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-02T01:40:00.067473Z",
+  "branch": "fix/ci-e2e-gating",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/e2e-desktop.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "4d618102880c",
+  "checkpoint_transcript_start": 387,
+  "transcript_lines_at_start": 387,
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 4005,
+    "cache_read_tokens": 740611,
+    "output_tokens": 2023,
+    "api_call_count": 8
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-02T01:39:59.085654Z",
+    "agent_lines": 0,
+    "human_added": 4,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 4,
+    "agent_percentage": 0
+  }
+}
