@@ -75,7 +75,7 @@ jobs:
     needs: detect-changes
     if: startsWith(github.head_ref, 'release-please--')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     steps:
       - name: Wait for Web E2E and verify it passed
         env:
