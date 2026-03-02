@@ -11,8 +11,9 @@ jobs:
     # Only run on release-please PRs
     if: startsWith(github.head_ref, 'release-please--')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - name: Verify E2E tests passed on main
+      - name: Wait for E2E tests and verify they passed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -20,16 +21,31 @@ jobs:
           MAIN_SHA=$(gh api repos/${{ github.repository }}/git/ref/heads/main --jq '.object.sha')
           echo "Latest main commit: ${MAIN_SHA}"
 
-          # Web E2E must exist and pass
-          E2E_CONCLUSION=$(gh run list --repo ${{ github.repository }} \
-            --workflow=e2e.yml --branch=main --limit=10 \
-            --json headSha,conclusion \
-            --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].conclusion")
+          # Poll for the Web E2E run to complete (it triggers on the same push)
+          MAX_ATTEMPTS=30
+          POLL_INTERVAL=30
+          echo "Waiting for Web E2E run to complete (polling every ${POLL_INTERVAL}s, max ${MAX_ATTEMPTS} attempts)..."
 
-          if [ -z "$E2E_CONCLUSION" ]; then
-            echo "::error::No E2E test run found for main (${MAIN_SHA}). E2E must pass before releasing."
-            exit 1
-          fi
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            E2E_CONCLUSION=$(gh run list --repo ${{ github.repository }} \
+              --workflow=e2e.yml --branch=main --limit=10 \
+              --json headSha,conclusion,status \
+              --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].conclusion")
+
+            if [ -n "$E2E_CONCLUSION" ]; then
+              echo "Web E2E completed with conclusion: ${E2E_CONCLUSION}"
+              break
+            fi
+
+            if [ "$attempt" -eq "$MAX_ATTEMPTS" ]; then
+              echo "::error::Web E2E run did not complete within $(( MAX_ATTEMPTS * POLL_INTERVAL / 60 )) minutes for main (${MAIN_SHA})."
+              exit 1
+            fi
+
+            echo "Attempt ${attempt}/${MAX_ATTEMPTS}: E2E still running, waiting ${POLL_INTERVAL}s..."
+            sleep $POLL_INTERVAL
+          done
+
           if [ "$E2E_CONCLUSION" != "success" ]; then
             echo "::error::E2E Tests did not pass on main (conclusion: ${E2E_CONCLUSION})"
             exit 1
