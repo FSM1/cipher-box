@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.6](https://github.com/FSM1/cipher-box/compare/v0.21.5...v0.21.6) (2026-03-02)
+
+
+### Bug Fixes
+
+* **ci:** fix desktop E2E warnings and gate staging on E2E results ([#240](https://github.com/FSM1/cipher-box/issues/240)) ([fec66f7](https://github.com/FSM1/cipher-box/commit/fec66f747428b1a4a9a129aaadb7c51d19514cec))
+
 ## [0.21.5](https://github.com/FSM1/cipher-box/compare/v0.21.4...v0.21.5) (2026-03-02)
 
 
