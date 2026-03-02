@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "9d44913d2677",
+  "strategy": "manual-commit",
+  "branch": "refactor/tier-2-structural-splits",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/api/src/auth/services/auth-method.service.ts",
+    "apps/desktop/src-tauri/src/fuse/write_ops.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9d/44913d2677/0/metadata.json",
+      "transcript": "/9d/44913d2677/0/full.jsonl",
+      "context": "/9d/44913d2677/0/context.md",
+      "content_hash": "/9d/44913d2677/0/content_hash.txt",
+      "prompt": "/9d/44913d2677/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 260,
+    "cache_creation_tokens": 637317,
+    "cache_read_tokens": 27609369,
+    "output_tokens": 70014,
+    "api_call_count": 239
+  }
+}
