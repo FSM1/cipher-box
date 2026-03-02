@@ -671,7 +671,30 @@ pub(crate) mod implementation {
 
         // If destination exists, handle replacement
         if let Some(dest_ino) = fs.inodes.find_child(newparent, newname_str) {
+            // Self-replace (rename "a" to "a" in same dir): no-op
+            if dest_ino == source_ino {
+                reply.ok();
+                return;
+            }
+
             if let Some(dest_inode) = fs.inodes.get(dest_ino) {
+                // Validate kind compatibility (POSIX: can't replace file with dir or vice versa)
+                let source_is_dir = fs.inodes.get(source_ino)
+                    .map(|i| matches!(i.kind, InodeKind::Root { .. } | InodeKind::Folder { .. }))
+                    .unwrap_or(false);
+                let dest_is_dir = matches!(
+                    dest_inode.kind,
+                    InodeKind::Root { .. } | InodeKind::Folder { .. }
+                );
+                if source_is_dir && !dest_is_dir {
+                    reply.error(libc::ENOTDIR);
+                    return;
+                }
+                if !source_is_dir && dest_is_dir {
+                    reply.error(libc::EISDIR);
+                    return;
+                }
+
                 match &dest_inode.kind {
                     InodeKind::Folder { .. } => {
                         if let Some(ref children) = dest_inode.children {
