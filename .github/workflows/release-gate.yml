@@ -6,14 +6,75 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
+  detect-changes:
+    name: Detect Changes Since Last Release
+    if: startsWith(github.head_ref, 'release-please--')
+    runs-on: ubuntu-latest
+    outputs:
+      desktop: ${{ steps.check.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for desktop-related changes since last release
+        id: check
+        run: |
+          # Find the latest non-staging release tag
+          PREV_TAG=$(git tag --list 'v*' --sort=-v:refname \
+            | grep -v 'staging' \
+            | head -1)
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "No previous release tag found — assuming desktop changed"
+            echo "desktop=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Previous release tag: ${PREV_TAG}"
+          echo "Diffing ${PREV_TAG}..HEAD"
+
+          # Desktop-related path patterns (mirrored from e2e-desktop.yml)
+          DESKTOP_PATTERNS=(
+            'apps/desktop/src/'
+            'apps/desktop/src-tauri/src/'
+            'apps/desktop/src-tauri/vendor/'
+            'apps/desktop/src-tauri/capabilities/'
+            'apps/desktop/src-tauri/resources/'
+            'apps/desktop/src-tauri/Cargo.toml'
+            'apps/desktop/src-tauri/Cargo.lock'
+            'apps/desktop/src-tauri/build.rs'
+            'apps/desktop/src-tauri/rust-toolchain.toml'
+            'apps/desktop/index.html'
+            'apps/desktop/vite.config.'
+            'apps/desktop/tsconfig'
+            'packages/crypto/src/'
+            'packages/crypto/tsconfig'
+            '.github/workflows/e2e-desktop.yml'
+          )
+
+          CHANGED_FILES=$(git diff --name-only "${PREV_TAG}..HEAD")
+          DESKTOP_CHANGED=false
+
+          for pattern in "${DESKTOP_PATTERNS[@]}"; do
+            if echo "$CHANGED_FILES" | grep -q "$pattern"; then
+              echo "Desktop change detected matching pattern: ${pattern}"
+              DESKTOP_CHANGED=true
+              break
+            fi
+          done
+
+          echo "desktop=${DESKTOP_CHANGED}" >> "$GITHUB_OUTPUT"
+          echo "Desktop changes detected: ${DESKTOP_CHANGED}"
+
   verify-e2e:
     name: Verify E2E Passed
-    # Only run on release-please PRs
+    needs: detect-changes
     if: startsWith(github.head_ref, 'release-please--')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Wait for E2E tests and verify they passed
+      - name: Wait for Web E2E and verify it passed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -52,20 +113,48 @@ jobs:
           fi
           echo "Web E2E: passed"
 
-          # Desktop E2E — block only if it ran and failed
-          DESKTOP_CONCLUSION=$(gh run list --repo ${{ github.repository }} \
-            --workflow=e2e-desktop.yml --branch=main --limit=10 \
-            --json headSha,conclusion \
-            --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].conclusion")
+      - name: Check Desktop E2E (if desktop changed)
+        if: needs.detect-changes.outputs.desktop == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          MAIN_SHA=$(gh api repos/${{ github.repository }}/git/ref/heads/main --jq '.object.sha')
+          echo "Desktop changes detected — verifying Desktop E2E"
 
-          if [ -n "$DESKTOP_CONCLUSION" ] && [ "$DESKTOP_CONCLUSION" != "success" ]; then
+          # Poll for Desktop E2E to complete (it chains off CI, so starts later)
+          MAX_ATTEMPTS=40
+          POLL_INTERVAL=30
+          echo "Waiting for Desktop E2E run to complete (polling every ${POLL_INTERVAL}s, max ${MAX_ATTEMPTS} attempts)..."
+
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            DESKTOP_CONCLUSION=$(gh run list --repo ${{ github.repository }} \
+              --workflow=e2e-desktop.yml --branch=main --limit=10 \
+              --json headSha,conclusion,status \
+              --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].conclusion")
+
+            if [ -n "$DESKTOP_CONCLUSION" ]; then
+              echo "Desktop E2E completed with conclusion: ${DESKTOP_CONCLUSION}"
+              break
+            fi
+
+            if [ "$attempt" -eq "$MAX_ATTEMPTS" ]; then
+              echo "::error::Desktop E2E run did not complete within $(( MAX_ATTEMPTS * POLL_INTERVAL / 60 )) minutes for main (${MAIN_SHA})."
+              exit 1
+            fi
+
+            echo "Attempt ${attempt}/${MAX_ATTEMPTS}: Desktop E2E still running, waiting ${POLL_INTERVAL}s..."
+            sleep $POLL_INTERVAL
+          done
+
+          if [ "$DESKTOP_CONCLUSION" != "success" ]; then
             echo "::error::Desktop E2E Tests did not pass on main (conclusion: ${DESKTOP_CONCLUSION})"
             exit 1
           fi
-          if [ -z "$DESKTOP_CONCLUSION" ]; then
-            echo "Desktop E2E: no run for this commit (skipped)"
-          else
-            echo "Desktop E2E: passed"
-          fi
+          echo "Desktop E2E: passed"
 
-          echo "All E2E gates passed — release is safe to merge."
+      - name: Skip Desktop E2E (no desktop changes)
+        if: needs.detect-changes.outputs.desktop != 'true'
+        run: echo "No desktop-related changes since last release — skipping Desktop E2E gate"
+
+      - name: Summary
+        run: echo "All E2E gates passed — release is safe to merge."
