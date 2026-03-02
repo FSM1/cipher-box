@@ -17,6 +17,8 @@ import { AppController } from '../src/app.controller';
 import { AppService } from '../src/app.service';
 import { AuthController } from '../src/auth/auth.controller';
 import { AuthService } from '../src/auth/auth.service';
+import { AuthMethodService } from '../src/auth/services/auth-method.service';
+import { TestAuthService } from '../src/auth/services/test-auth.service';
 import { Web3AuthVerifierService } from '../src/auth/services/web3auth-verifier.service';
 import { TokenService } from '../src/auth/services/token.service';
 import { JwtIssuerService } from '../src/auth/services/jwt-issuer.service';
@@ -110,6 +112,14 @@ const mockConfigService = {
     AppService,
     {
       provide: AuthService,
+      useValue: {},
+    },
+    {
+      provide: AuthMethodService,
+      useValue: {},
+    },
+    {
+      provide: TestAuthService,
       useValue: {},
     },
     {
