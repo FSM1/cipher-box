@@ -31,7 +31,7 @@ jobs:
         id: filter
         with:
           base: ${{ steps.parent.outputs.sha }}
-          ref: HEAD
+          ref: ${{ github.event.workflow_run.head_sha }}
           filters: |
             desktop:
               - 'apps/desktop/src/**'
