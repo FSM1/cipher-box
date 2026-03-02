@@ -458,11 +458,11 @@ test.describe.serial('Sharing Workflow', () => {
       .getFolderItem(postShareFileName)
       .waitFor({ state: 'visible', timeout: 15000 });
 
-    // Right-click and preview the text file
+    // Right-click and open the text file via Edit (opens read-only for shared files)
     await charlieSharedBrowser.rightClickFolderItem(postShareFileName);
     const charlieContextMenu = new ContextMenuPage(charlie.page);
     await charlieContextMenu.waitForOpen();
-    await charlieContextMenu.clickPreview();
+    await charlieContextMenu.clickEdit();
 
     // The text editor dialog should open in read-only mode
     const editorDialog = charlie.page.locator('.text-editor-modal');
@@ -617,12 +617,12 @@ test.describe.serial('Sharing Workflow', () => {
     await bobSharedBrowser.rightClickFolderItem(folderFile1Name);
     await bobContextMenu.waitForOpen();
 
-    // Verify Preview option is available for text files
+    // Verify Edit option is available for text files (opens read-only for shared files)
     const options = await bobContextMenu.getVisibleOptions();
-    expect(options).toContain('Preview');
+    expect(options).toContain('Edit');
 
-    // Click Preview to open text viewer
-    await bobContextMenu.clickPreview();
+    // Click Edit to open text viewer (read-only in shared context)
+    await bobContextMenu.clickEdit();
 
     // Wait for the text editor modal to appear
     const modal = bob.page.locator('.text-editor-modal');
@@ -711,8 +711,8 @@ test.describe.serial('Sharing Workflow', () => {
     // but Rename and Delete should NOT be present
     const options = await bobContextMenu.getVisibleOptions();
     expect(options).toContain('Edit');
-    expect(options).toContain('Preview');
     expect(options).toContain('Download');
+    expect(options).not.toContain('Preview');
     expect(options).not.toContain('Rename');
     expect(options).not.toContain('Delete');
 
