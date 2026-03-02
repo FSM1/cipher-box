@@ -176,14 +176,18 @@ jobs:
         shell: powershell
         run: |
           $url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
-          $resourceDir = "${{ github.workspace }}/apps/desktop/src-tauri/resources"
-          $out = "$resourceDir/winfsp-2.1.25156.msi"
+          # Use Join-Path to produce proper Windows backslash paths —
+          # msiexec.exe treats '/' as a flag prefix, so forward slashes in
+          # the file path cause "package could not be opened" errors.
+          $resourceDir = Join-Path "${{ github.workspace }}" "apps\desktop\src-tauri\resources"
+          $out = Join-Path $resourceDir "winfsp-2.1.25156.msi"
           $expectedHash = "073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A"
           New-Item -ItemType Directory -Force -Path $resourceDir
           Invoke-WebRequest -Uri $url -OutFile $out
           $actualHash = (Get-FileHash $out -Algorithm SHA256).Hash
           if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
-          Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
+          $proc = Start-Process msiexec.exe -ArgumentList "/i","`"$out`"","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow -PassThru
+          if ($proc.ExitCode -ne 0) { throw "msiexec failed with exit code $($proc.ExitCode)" }
           # winfsp-sys build.rs reads HKLM\SOFTWARE\WOW6432Node\WinFsp\InstallDir
           # to find headers/libs. The MSI doesn't reliably write this key on CI runners.
           $installDir = "C:\Program Files (x86)\WinFsp"
