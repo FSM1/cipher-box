@@ -61,7 +61,9 @@ describe('DelegatedRoutingClient', () => {
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
       const [url, init] = mockFetch.mock.calls[0];
-      expect(url).toBe(`https://routing.example.com/routing/v1/ipns/${ipnsName}`);
+      expect(url).toBe(
+        `https://routing.example.com/routing/v1/ipns/${encodeURIComponent(ipnsName)}`
+      );
       expect(init.method).toBe('PUT');
       expect(init.headers['Content-Type']).toBe('application/vnd.ipfs.ipns-record');
     });
@@ -157,7 +159,9 @@ describe('DelegatedRoutingClient', () => {
       expect(result).toBeInstanceOf(Uint8Array);
       expect(mockFetch).toHaveBeenCalledTimes(1);
       const [url, init] = mockFetch.mock.calls[0];
-      expect(url).toBe(`https://routing.example.com/routing/v1/ipns/${ipnsName}`);
+      expect(url).toBe(
+        `https://routing.example.com/routing/v1/ipns/${encodeURIComponent(ipnsName)}`
+      );
       expect(init.method).toBe('GET');
       expect(init.headers.Accept).toBe('application/vnd.ipfs.ipns-record');
     });
@@ -247,6 +251,19 @@ describe('DelegatedRoutingClient', () => {
 
       // Fallback for attempt 0: min(1000 * 2^0, 30000) = 1000ms
       expect(delaySpy).toHaveBeenCalledWith(1000);
+    });
+
+    it('encodes ipnsName in URL to handle reserved characters', async () => {
+      const weirdName = 'k51+special/chars?here';
+      mockFetch.mockResolvedValueOnce(createMockResponse(200));
+
+      await client.publish(weirdName, new Uint8Array([1]));
+
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).toBe(
+        `https://routing.example.com/routing/v1/ipns/${encodeURIComponent(weirdName)}`
+      );
+      expect(url).not.toContain('?here');
     });
 
     it('parses HTTP-date Retry-After format', async () => {

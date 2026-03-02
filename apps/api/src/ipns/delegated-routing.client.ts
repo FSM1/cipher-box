@@ -22,29 +22,37 @@ export class DelegatedRoutingClient {
    * Throws HttpException (BAD_GATEWAY) on persistent failures.
    */
   async publish(ipnsName: string, recordBytes: Uint8Array): Promise<void> {
-    const url = `${this.delegatedRoutingUrl}/routing/v1/ipns/${ipnsName}`;
+    const url = `${this.delegatedRoutingUrl}/routing/v1/ipns/${encodeURIComponent(ipnsName)}`;
 
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
       try {
-        const response = await this.fetchWithTimeout(url, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/vnd.ipfs.ipns-record',
+        const { ok, status, retryAfter, errorText } = await this.fetchWithTimeout(
+          url,
+          {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/vnd.ipfs.ipns-record',
+            },
+            body: recordBytes as unknown as BodyInit,
           },
-          body: recordBytes as unknown as BodyInit,
-        });
+          async (response) => ({
+            ok: response.ok,
+            status: response.status,
+            retryAfter: response.headers.get('Retry-After'),
+            errorText: !response.ok && response.status !== 429 ? await response.text() : '',
+          })
+        );
 
-        if (response.ok) {
+        if (ok) {
           this.logger.log(`IPNS record published successfully for ${ipnsName}`);
           return;
         }
 
         // Handle rate limiting
-        if (response.status === 429) {
+        if (status === 429) {
           if (attempt < this.maxRetries - 1) {
-            const retryAfter = response.headers.get('Retry-After');
             const delayMs = this.getRetryDelayMs(retryAfter, attempt);
 
             this.logger.warn(`Rate limited on IPNS publish, retrying in ${delayMs}ms`);
@@ -55,11 +63,8 @@ export class DelegatedRoutingClient {
 
         // Non-retryable HTTP error
         // [SECURITY: MEDIUM-11] Log full error details but don't expose to client
-        const errorText = await response.text();
-        this.logger.error(
-          `Delegated routing returned ${response.status} for ${ipnsName}: ${errorText}`
-        );
-        throw new Error(`Delegated routing returned ${response.status}`);
+        this.logger.error(`Delegated routing returned ${status} for ${ipnsName}: ${errorText}`);
+        throw new Error(`Delegated routing returned ${status}`);
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
 
@@ -102,33 +107,45 @@ export class DelegatedRoutingClient {
    * Throws HttpException (BAD_GATEWAY) on routing failures.
    */
   async resolve(ipnsName: string): Promise<Uint8Array | null> {
-    const url = `${this.delegatedRoutingUrl}/routing/v1/ipns/${ipnsName}`;
+    const url = `${this.delegatedRoutingUrl}/routing/v1/ipns/${encodeURIComponent(ipnsName)}`;
 
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
       try {
-        const response = await this.fetchWithTimeout(url, {
-          method: 'GET',
-          headers: {
-            Accept: 'application/vnd.ipfs.ipns-record',
+        const { ok, status, retryAfter, data, errorText } = await this.fetchWithTimeout(
+          url,
+          {
+            method: 'GET',
+            headers: {
+              Accept: 'application/vnd.ipfs.ipns-record',
+            },
           },
-        });
+          async (response) => ({
+            ok: response.ok,
+            status: response.status,
+            retryAfter: response.headers.get('Retry-After'),
+            data: response.ok ? new Uint8Array(await response.arrayBuffer()) : null,
+            errorText:
+              !response.ok && response.status !== 404 && response.status !== 429
+                ? await response.text()
+                : '',
+          })
+        );
 
         // 404 means IPNS name not found - not an error
-        if (response.status === 404) {
+        if (status === 404) {
           this.logger.debug(`IPNS name not found: ${ipnsName}`);
           return null;
         }
 
-        if (response.ok) {
-          return new Uint8Array(await response.arrayBuffer());
+        if (ok) {
+          return data;
         }
 
         // Handle rate limiting
-        if (response.status === 429) {
+        if (status === 429) {
           if (attempt < this.maxRetries - 1) {
-            const retryAfter = response.headers.get('Retry-After');
             const delayMs = this.getRetryDelayMs(retryAfter, attempt);
 
             this.logger.warn(`Rate limited on IPNS resolve, retrying in ${delayMs}ms`);
@@ -139,11 +156,10 @@ export class DelegatedRoutingClient {
 
         // Non-retryable error
         // [SECURITY: MEDIUM-11] Log full error details but don't expose to client
-        const errorText = await response.text();
         this.logger.error(
-          `Delegated routing resolution returned ${response.status} for ${ipnsName}: ${errorText}`
+          `Delegated routing resolution returned ${status} for ${ipnsName}: ${errorText}`
         );
-        throw new Error(`Delegated routing returned ${response.status}`);
+        throw new Error(`Delegated routing returned ${status}`);
       } catch (error) {
         // Re-throw HttpException immediately (e.g., parsing errors) - don't retry
         if (error instanceof HttpException) {
@@ -185,11 +201,16 @@ export class DelegatedRoutingClient {
     );
   }
 
-  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  private async fetchWithTimeout<T>(
+    url: string,
+    init: RequestInit,
+    consume: (response: Response) => Promise<T>
+  ): Promise<T> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
     try {
-      return await fetch(url, { ...init, signal: controller.signal });
+      const response = await fetch(url, { ...init, signal: controller.signal });
+      return await consume(response);
     } finally {
       clearTimeout(timeout);
     }
