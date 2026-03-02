@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.21.4](https://github.com/FSM1/cipher-box/compare/v0.21.3...v0.21.4) (2026-03-02)
+
+
+### Bug Fixes
+
+* **ci:** use backslash paths for msiexec in WinFsp install ([#236](https://github.com/FSM1/cipher-box/issues/236)) ([2d3ec01](https://github.com/FSM1/cipher-box/commit/2d3ec0166d44a6d3823f81caa612fe1cb714cb4f))
+
 ## [0.21.3](https://github.com/FSM1/cipher-box/compare/v0.21.2...v0.21.3) (2026-03-01)
 
 
