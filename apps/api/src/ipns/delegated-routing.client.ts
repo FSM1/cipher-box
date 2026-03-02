@@ -1,6 +1,14 @@
 import { Injectable, HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+/** Typed error for non-retryable HTTP responses from the delegated routing API. */
+class DelegatedRoutingHttpError extends Error {
+  constructor(public readonly status: number) {
+    super(`Delegated routing returned ${status}`);
+    this.name = 'DelegatedRoutingHttpError';
+  }
+}
+
 @Injectable()
 export class DelegatedRoutingClient {
   private readonly logger = new Logger(DelegatedRoutingClient.name);
@@ -64,21 +72,18 @@ export class DelegatedRoutingClient {
         // Non-retryable HTTP error
         // [SECURITY: MEDIUM-11] Log full error details but don't expose to client
         this.logger.error(`Delegated routing returned ${status} for ${ipnsName}: ${errorText}`);
-        throw new Error(`Delegated routing returned ${status}`);
+        throw new DelegatedRoutingHttpError(status);
       } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-
-        // Only retry on network errors, not on HTTP errors
-        if (
-          lastError.message.includes('Delegated routing returned') &&
-          !lastError.message.includes('429')
-        ) {
+        // Non-retryable HTTP error — surface immediately
+        if (error instanceof DelegatedRoutingHttpError) {
           // [SECURITY: MEDIUM-11] Generic error message to avoid leaking internal details
           throw new HttpException(
             'Failed to publish IPNS record to routing network',
             HttpStatus.BAD_GATEWAY
           );
         }
+
+        lastError = error instanceof Error ? error : new Error(String(error));
 
         // Exponential backoff for network errors
         if (attempt < this.maxRetries - 1) {
@@ -159,26 +164,23 @@ export class DelegatedRoutingClient {
         this.logger.error(
           `Delegated routing resolution returned ${status} for ${ipnsName}: ${errorText}`
         );
-        throw new Error(`Delegated routing returned ${status}`);
+        throw new DelegatedRoutingHttpError(status);
       } catch (error) {
         // Re-throw HttpException immediately (e.g., parsing errors) - don't retry
         if (error instanceof HttpException) {
           throw error;
         }
 
-        lastError = error instanceof Error ? error : new Error(String(error));
-
-        // Only retry on network errors, not on HTTP errors
-        if (
-          lastError.message.includes('Delegated routing returned') &&
-          !lastError.message.includes('429')
-        ) {
+        // Non-retryable HTTP error — surface immediately
+        if (error instanceof DelegatedRoutingHttpError) {
           // [SECURITY: MEDIUM-11] Generic error message to avoid leaking internal details
           throw new HttpException(
             'Failed to resolve IPNS name from routing network',
             HttpStatus.BAD_GATEWAY
           );
         }
+
+        lastError = error instanceof Error ? error : new Error(String(error));
 
         // Exponential backoff for network errors
         if (attempt < this.maxRetries - 1) {

@@ -1,4 +1,4 @@
-import { Module, Logger, OnModuleInit, forwardRef } from '@nestjs/common';
+import { Module, Logger, OnModuleInit } from '@nestjs/common';
 import { BullModule, InjectQueue } from '@nestjs/bullmq';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
@@ -6,7 +6,7 @@ import { Queue } from 'bullmq';
 import { IpnsRepublishSchedule } from './republish-schedule.entity';
 import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
 import { TeeModule } from '../tee/tee.module';
-import { IpnsModule } from '../ipns/ipns.module';
+import { DelegatedRoutingModule } from '../ipns/delegated-routing.module';
 import { RepublishService } from './republish.service';
 import { RepublishProcessor } from './republish.processor';
 import { RepublishHealthController } from './republish-health.controller';
@@ -17,7 +17,7 @@ import { RepublishHealthController } from './republish-health.controller';
     TypeOrmModule.forFeature([IpnsRepublishSchedule, FolderIpns]),
     TeeModule,
     ConfigModule,
-    forwardRef(() => IpnsModule),
+    DelegatedRoutingModule,
   ],
   providers: [RepublishService, RepublishProcessor],
   controllers: [RepublishHealthController],
