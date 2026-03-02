@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "3e45dac158b1",
+  "session_id": "2c76dfdd-a9da-4034-988c-e4133ffa902f",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-02T14:59:13.290334Z",
+  "branch": "refactor/quick-wins",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "codecov.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "30f05b268de8",
+  "token_usage": {
+    "input_tokens": 58,
+    "cache_creation_tokens": 43479,
+    "cache_read_tokens": 376293,
+    "output_tokens": 1249,
+    "api_call_count": 10
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-02T14:59:12.520794Z",
+    "agent_lines": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "agent_percentage": 100
+  }
+}

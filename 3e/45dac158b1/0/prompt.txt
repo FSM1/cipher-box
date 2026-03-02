@@ -1,0 +1,5 @@
+can we change the codecov patch comparison to just be informational? all other project configs should remain as required.
+
+---
+
+ok please push this up
