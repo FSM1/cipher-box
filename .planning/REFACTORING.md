@@ -45,35 +45,35 @@
 
 ### 2.1 Split `useFolder.ts` (1,262 lines) into 3 hooks
 
-- [ ] **Status:** TODO
+- [x] **Status:** DONE
 - **Files:** `apps/web/src/hooks/useFolder.ts`
 - **Problem:** 11 async operations with identical try/catch/setState boilerplate (repeated 11x), `resolveFolderById` pattern (repeated 10x), lazy IPNS migration block (repeated 3x)
 - **Fix:** Split into `useFolderMutations`, `useFileOperations`, `useFileVersions`; extract `withLoading()` wrapper and `resolveFolderById()` helper
 
 ### 2.2 Split `AuthService` (669 lines, 8 injected deps)
 
-- [ ] **Status:** TODO
+- [x] **Status:** DONE
 - **Files:** `apps/api/src/auth/auth.service.ts`
 - **Problem:** 6 distinct responsibilities, cross-domain dependencies (IPFS/Pinata in auth)
 - **Fix:** Split into `AuthService` (core), `AuthMethodService`, `AccountService`, `TestAuthService`
 
 ### 2.3 Split `SharesService` (569 lines)
 
-- [ ] **Status:** TODO
+- [x] **Status:** DONE
 - **Files:** `apps/api/src/shares/shares.service.ts`
 - **Problem:** Natural seam at line 334 (`// Invite link methods`); controllers already split but service is monolith
 - **Fix:** Extract `ShareInviteService` for invite methods
 
 ### 2.4 Split `commands.rs` (907 lines) into modules
 
-- [ ] **Status:** TODO
+- [x] **Status:** DONE
 - **Files:** `apps/desktop/src-tauri/src/commands.rs`
 - **Problem:** All Tauri IPC commands in one file, `parse_private_key_hex` duplicated 3x
 - **Fix:** Split into `commands/auth.rs`, `commands/vault.rs`, `commands/sync.rs`, `commands/debug.rs`, `commands/oauth.rs`
 
 ### 2.5 Split FUSE operations by category
 
-- [ ] **Status:** TODO
+- [x] **Status:** DONE
 - **Files:** `fuse/operations.rs`, `fuse/windows/operations.rs`
 - **Problem:** Each file >2,600 lines with all filesystem callbacks mixed together
 - **Fix:** Split into `read_ops.rs`, `write_ops.rs`, `dir_ops.rs` for each platform
