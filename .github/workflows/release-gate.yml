@@ -60,7 +60,7 @@ jobs:
           DESKTOP_CHANGED=false
 
           for pattern in "${DESKTOP_PATTERNS[@]}"; do
-            if echo "$CHANGED_FILES" | grep -q "$pattern"; then
+            if echo "$CHANGED_FILES" | grep -Fq "$pattern"; then
               echo "Desktop change detected matching pattern: ${pattern}"
               DESKTOP_CHANGED=true
               break
@@ -94,7 +94,7 @@ jobs:
             E2E_CONCLUSION=$(gh run list --repo ${{ github.repository }} \
               --workflow=e2e.yml --branch=main --limit=10 \
               --json headSha,conclusion,status \
-              --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].conclusion")
+              --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].conclusion // empty")
 
             if [ -n "$E2E_CONCLUSION" ]; then
               echo "Web E2E completed with conclusion: ${E2E_CONCLUSION}"
@@ -129,7 +129,7 @@ jobs:
           HEAD_STATUS=$(gh run list --repo ${{ github.repository }} \
             --workflow=e2e-desktop.yml --branch=main --limit=5 \
             --json headSha,conclusion,status \
-            --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].status")
+            --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].status // empty")
 
           if [ -n "$HEAD_STATUS" ]; then
             echo "Desktop E2E run exists for HEAD — polling until complete..."
@@ -140,7 +140,7 @@ jobs:
               CONCLUSION=$(gh run list --repo ${{ github.repository }} \
                 --workflow=e2e-desktop.yml --branch=main --limit=5 \
                 --json headSha,conclusion,status \
-                --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].conclusion")
+                --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].conclusion // empty")
 
               if [ -n "$CONCLUSION" ]; then
                 if [ "$CONCLUSION" != "success" ]; then
@@ -161,9 +161,9 @@ jobs:
             done
           fi
 
-          # No desktop E2E run for HEAD — find the most recent successful run
-          # since the last release tag (desktop code unchanged since that run)
-          echo "No Desktop E2E run for HEAD — checking for recent successful run since ${PREV_TAG}..."
+          # No desktop E2E run for HEAD — find the most recent run in the
+          # release range and verify it succeeded (covers desktop state at HEAD)
+          echo "No Desktop E2E run for HEAD — checking for recent run since ${PREV_TAG}..."
 
           # Get commit SHAs in the release range
           RANGE_COMMITS=$(gh api "repos/${{ github.repository }}/compare/${PREV_TAG}...${MAIN_SHA}" \
@@ -174,25 +174,40 @@ jobs:
             exit 1
           fi
 
-          # Get recent successful desktop E2E run SHAs
-          SUCCESSFUL_SHAS=$(gh run list --repo ${{ github.repository }} \
+          # Get recent desktop E2E runs (newest first) and find the most recent
+          # one whose commit is within the release range
+          RUNS=$(gh run list --repo ${{ github.repository }} \
             --workflow=e2e-desktop.yml --branch=main --limit=20 \
             --json headSha,conclusion \
-            --jq '[.[] | select(.conclusion == "success")].headSha | join("\n")')
+            --jq '.[] | "\(.headSha) \(.conclusion)"')
 
-          FOUND=false
-          for sha in $SUCCESSFUL_SHAS; do
-            if echo "$RANGE_COMMITS" | grep -q "$sha"; then
-              echo "Desktop E2E: passed (successful run at ${sha}, within release range)"
-              FOUND=true
+          LATEST_IN_RANGE_SHA=""
+          LATEST_IN_RANGE_CONCLUSION=""
+
+          while IFS=" " read -r sha conclusion; do
+            if [ -z "$sha" ]; then
+              continue
+            fi
+            if echo "$RANGE_COMMITS" | grep -Fq "$sha"; then
+              LATEST_IN_RANGE_SHA="$sha"
+              LATEST_IN_RANGE_CONCLUSION="$conclusion"
               break
             fi
-          done
+          done <<EOF
+          $RUNS
+          EOF
 
-          if [ "$FOUND" != "true" ]; then
-            echo "::error::No successful Desktop E2E run found for any commit in ${PREV_TAG}..HEAD. Desktop code changed but was never verified."
+          if [ -z "$LATEST_IN_RANGE_SHA" ]; then
+            echo "::error::No Desktop E2E run found for any commit in ${PREV_TAG}..HEAD. Desktop code changed but was never verified."
             exit 1
           fi
+
+          if [ "$LATEST_IN_RANGE_CONCLUSION" != "success" ]; then
+            echo "::error::Most recent Desktop E2E run in range (at ${LATEST_IN_RANGE_SHA}) did not succeed (conclusion: ${LATEST_IN_RANGE_CONCLUSION})."
+            exit 1
+          fi
+
+          echo "Desktop E2E: passed (most recent in-range run at ${LATEST_IN_RANGE_SHA} succeeded)"
 
       - name: Skip Desktop E2E (no desktop changes)
         if: needs.detect-changes.outputs.desktop != 'true'
