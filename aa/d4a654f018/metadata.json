@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "aad4a654f018",
+  "strategy": "manual-commit",
+  "branch": "fix/winfsp-msi-path",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/deploy-staging.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/aa/d4a654f018/0/metadata.json",
+      "transcript": "/aa/d4a654f018/0/full.jsonl",
+      "context": "/aa/d4a654f018/0/context.md",
+      "content_hash": "/aa/d4a654f018/0/content_hash.txt",
+      "prompt": "/aa/d4a654f018/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 24801,
+    "cache_read_tokens": 631222,
+    "output_tokens": 3442,
+    "api_call_count": 14
+  }
+}
