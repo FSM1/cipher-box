@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "2b30c684b7fc",
+  "strategy": "manual-commit",
+  "branch": "fix/release-gate-wait-for-e2e",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/e2e-desktop.yml",
+    ".github/workflows/release-gate.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2b/30c684b7fc/0/metadata.json",
+      "transcript": "/2b/30c684b7fc/0/full.jsonl",
+      "context": "/2b/30c684b7fc/0/context.md",
+      "content_hash": "/2b/30c684b7fc/0/content_hash.txt",
+      "prompt": "/2b/30c684b7fc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 25,
+    "cache_creation_tokens": 27104,
+    "cache_read_tokens": 2751923,
+    "output_tokens": 13441,
+    "api_call_count": 23
+  }
+}
