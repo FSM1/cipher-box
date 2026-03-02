@@ -20,87 +20,6 @@ mod mount_impl {
     };
     use crate::state::AppState;
 
-    /// Decrypt folder metadata fetched from IPFS (v2 only).
-    /// Self-contained implementation for Windows mount pre-population.
-    fn decrypt_metadata_from_ipfs(
-        encrypted_bytes: &[u8],
-        folder_key: &[u8],
-    ) -> Result<crate::crypto::folder::FolderMetadata, String> {
-        #[derive(serde::Deserialize)]
-        struct EncryptedFolderMetadata {
-            iv: String,
-            data: String,
-        }
-
-        let encrypted: EncryptedFolderMetadata =
-            serde_json::from_slice(encrypted_bytes)
-                .map_err(|e| format!("Failed to parse encrypted metadata JSON: {}", e))?;
-
-        let iv_bytes =
-            hex::decode(&encrypted.iv).map_err(|_| "Invalid metadata IV hex".to_string())?;
-        if iv_bytes.len() != 12 {
-            return Err(format!(
-                "Invalid IV length: {} (expected 12)",
-                iv_bytes.len()
-            ));
-        }
-        let iv: [u8; 12] = iv_bytes.try_into().unwrap();
-
-        use base64::Engine;
-        let ciphertext = base64::engine::general_purpose::STANDARD
-            .decode(&encrypted.data)
-            .map_err(|e| format!("Invalid metadata base64: {}", e))?;
-
-        let folder_key_arr: [u8; 32] = folder_key
-            .try_into()
-            .map_err(|_| "Invalid folder key length".to_string())?;
-
-        let mut sealed = Vec::with_capacity(12 + ciphertext.len());
-        sealed.extend_from_slice(&iv);
-        sealed.extend_from_slice(&ciphertext);
-
-        crate::crypto::folder::decrypt_folder_metadata(&sealed, &folder_key_arr)
-            .map_err(|e| format!("Metadata decryption failed: {}", e))
-    }
-
-    /// Decrypt per-file metadata fetched from IPFS.
-    fn decrypt_file_metadata_from_ipfs(
-        encrypted_bytes: &[u8],
-        folder_key: &[u8; 32],
-    ) -> Result<crate::crypto::folder::FileMetadata, String> {
-        #[derive(serde::Deserialize)]
-        struct EncryptedFolderMetadata {
-            iv: String,
-            data: String,
-        }
-
-        let encrypted: EncryptedFolderMetadata =
-            serde_json::from_slice(encrypted_bytes)
-                .map_err(|e| format!("Failed to parse encrypted file metadata JSON: {}", e))?;
-
-        let iv_bytes = hex::decode(&encrypted.iv)
-            .map_err(|_| "Invalid file metadata IV hex".to_string())?;
-        if iv_bytes.len() != 12 {
-            return Err(format!(
-                "Invalid IV length: {} (expected 12)",
-                iv_bytes.len()
-            ));
-        }
-        let iv: [u8; 12] = iv_bytes.try_into().unwrap();
-
-        use base64::Engine;
-        let ciphertext = base64::engine::general_purpose::STANDARD
-            .decode(&encrypted.data)
-            .map_err(|e| format!("Invalid file metadata base64: {}", e))?;
-
-        let mut sealed = Vec::with_capacity(12 + ciphertext.len());
-        sealed.extend_from_slice(&iv);
-        sealed.extend_from_slice(&ciphertext);
-
-        crate::crypto::folder::decrypt_file_metadata(&sealed, folder_key)
-            .map_err(|e| format!("File metadata decryption failed: {}", e))
-    }
-
     /// Global handle to the WinFsp stop signal for clean shutdown.
     /// Replaced on each mount so remount after unmount works correctly.
     static WINFSP_STOP: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>> = Mutex::new(None);
@@ -173,7 +92,7 @@ mod mount_impl {
 
         match fetch_result {
             Ok((encrypted_bytes, cid)) => {
-                match decrypt_metadata_from_ipfs(&encrypted_bytes, &root_folder_key) {
+                match crate::fuse::decrypt::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &root_folder_key) {
                     Ok(metadata) => {
                         metadata_cache.set(&root_ipns_name, metadata.clone(), cid);
 
@@ -214,7 +133,7 @@ mod mount_impl {
                                             .await;
                                             match fp_result {
                                                 Ok(enc_bytes) => {
-                                                    match decrypt_file_metadata_from_ipfs(
+                                                    match crate::fuse::decrypt::decrypt_file_metadata_from_ipfs_public(
                                                         &enc_bytes, &fk,
                                                     ) {
                                                         Ok(fm) => {
@@ -291,7 +210,7 @@ mod mount_impl {
                                     .await;
                                     match sub_result {
                                         Ok((enc_bytes, sub_cid)) => {
-                                            match decrypt_metadata_from_ipfs(&enc_bytes, sub_key) {
+                                            match crate::fuse::decrypt::decrypt_metadata_from_ipfs_public(&enc_bytes, sub_key) {
                                                 Ok(sub_metadata) => {
                                                     metadata_cache.set(
                                                         sub_ipns,
@@ -340,7 +259,7 @@ mod mount_impl {
                                                                         .await;
                                                                         match fp_result {
                                                                             Ok(enc_bytes) => {
-                                                                                match decrypt_file_metadata_from_ipfs(&enc_bytes, &sk) {
+                                                                                match crate::fuse::decrypt::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &sk) {
                                                                                     Ok(fm) => {
                                                                                         inodes.resolve_file_pointer(
                                                                                             *fp_ino,

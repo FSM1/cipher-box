@@ -45,6 +45,7 @@ import { AuthMethod } from '../src/auth/entities/auth-method.entity';
 import { RefreshToken } from '../src/auth/entities/refresh-token.entity';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
+import { REDIS_CLIENT } from '../src/common/redis.module';
 
 // Mock providers for OpenAPI generation - these won't be called
 const mockRepository = {
@@ -167,6 +168,10 @@ const mockConfigService = {
     mockShareInviteRepository,
     mockJwtService,
     mockConfigService,
+    {
+      provide: REDIS_CLIENT,
+      useValue: {},
+    },
   ],
 })
 class OpenApiGeneratorModule {}

@@ -14,16 +14,13 @@ import { AuthMethod } from './entities/auth-method.entity';
 import { RefreshToken } from './entities/refresh-token.entity';
 import { PinnedCid } from '../vault/entities/pinned-cid.entity';
 import { IPFS_PROVIDER } from '../ipfs/providers/ipfs-provider.interface';
+import { REDIS_CLIENT } from '../common/redis.module';
 
-// Mock ioredis to prevent real Redis connections in tests
 const mockRedisInstance = {
   del: jest.fn().mockResolvedValue(1),
   set: jest.fn().mockResolvedValue('OK'),
   quit: jest.fn().mockResolvedValue('OK'),
 };
-jest.mock('ioredis', () => {
-  return jest.fn().mockImplementation(() => mockRedisInstance);
-});
 
 /** Helper: compute expected SHA-256 hex hash */
 function sha256Hex(value: string): string {
@@ -127,6 +124,7 @@ describe('AuthService', () => {
         { provide: getRepositoryToken(RefreshToken), useValue: mockRefreshTokenRepo },
         { provide: getRepositoryToken(PinnedCid), useValue: mockPinnedCidRepo },
         { provide: IPFS_PROVIDER, useValue: mockIpfsProvider },
+        { provide: REDIS_CLIENT, useValue: mockRedisInstance },
       ],
     }).compile();
 

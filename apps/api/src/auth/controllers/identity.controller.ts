@@ -6,18 +6,18 @@ import {
   Header,
   HttpCode,
   HttpStatus,
+  Inject,
   Logger,
   UnauthorizedException,
-  OnModuleDestroy,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { UseGuards } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import { parseSiweMessage } from 'viem/siwe';
+import { REDIS_CLIENT } from '../../common/redis.module';
 import { JwtIssuerService } from '../services/jwt-issuer.service';
 import { GoogleOAuthService } from '../services/google-oauth.service';
 import { EmailOtpService } from '../services/email-otp.service';
@@ -35,32 +35,21 @@ import {
 
 @ApiTags('Identity')
 @Controller('auth')
-export class IdentityController implements OnModuleDestroy {
+export class IdentityController {
   private readonly logger = new Logger(IdentityController.name);
-  private readonly redis: Redis;
 
   constructor(
     private jwtIssuerService: JwtIssuerService,
     private googleOAuthService: GoogleOAuthService,
     private emailOtpService: EmailOtpService,
     private siweService: SiweService,
-    private configService: ConfigService,
     @InjectRepository(User)
     private userRepository: Repository<User>,
     @InjectRepository(AuthMethod)
-    private authMethodRepository: Repository<AuthMethod>
-  ) {
-    this.redis = new Redis({
-      host: this.configService.get('REDIS_HOST', 'localhost'),
-      port: this.configService.get<number>('REDIS_PORT', 6379),
-      password: this.configService.get('REDIS_PASSWORD', undefined),
-      lazyConnect: true,
-    });
-  }
-
-  async onModuleDestroy(): Promise<void> {
-    await this.redis.quit();
-  }
+    private authMethodRepository: Repository<AuthMethod>,
+    @Inject(REDIS_CLIENT)
+    private readonly redis: Redis
+  ) {}
 
   @Get('.well-known/jwks.json')
   @Header('Cache-Control', 'public, max-age=3600')

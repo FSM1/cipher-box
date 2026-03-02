@@ -9,9 +9,18 @@
  */
 
 import { useState, useCallback, type MouseEvent } from 'react';
-import type { FolderChild, FilePointer } from '@cipherbox/crypto';
+import type { FolderChild } from '@cipherbox/crypto';
 import { useSharedNavigation, type SharedListItem } from '../../hooks/useSharedNavigation';
 import { useContextMenu } from '../../hooks/useContextMenu';
+import {
+  isFilePointer,
+  isTextFile,
+  isImageFile,
+  isPdfFile,
+  isAudioFile,
+  isVideoFile,
+  isPreviewableFile,
+} from '../../utils/fileTypes';
 import { ContextMenu } from './ContextMenu';
 import { DetailsDialog } from './DetailsDialog';
 import { ImagePreviewDialog } from './ImagePreviewDialog';
@@ -20,139 +29,6 @@ import { AudioPlayerDialog } from './AudioPlayerDialog';
 import { VideoPlayerDialog } from './VideoPlayerDialog';
 import { TextEditorDialog } from './TextEditorDialog';
 import '../../styles/shared-browser.css';
-
-/** Extensions recognized as text-editable files. */
-const TEXT_EXTENSIONS = new Set([
-  '.txt',
-  '.md',
-  '.json',
-  '.yaml',
-  '.yml',
-  '.toml',
-  '.xml',
-  '.csv',
-  '.log',
-  '.env',
-  '.sh',
-  '.bash',
-  '.zsh',
-  '.fish',
-  '.ps1',
-  '.bat',
-  '.cmd',
-  '.ini',
-  '.cfg',
-  '.conf',
-  '.html',
-  '.htm',
-  '.css',
-  '.scss',
-  '.less',
-  '.js',
-  '.mjs',
-  '.cjs',
-  '.ts',
-  '.mts',
-  '.cts',
-  '.jsx',
-  '.tsx',
-  '.py',
-  '.rb',
-  '.rs',
-  '.go',
-  '.java',
-  '.c',
-  '.cpp',
-  '.h',
-  '.hpp',
-  '.sql',
-  '.graphql',
-  '.gitignore',
-  '.editorconfig',
-]);
-
-/** Well-known extensionless text filenames. */
-const TEXT_FILENAMES = new Set([
-  'dockerfile',
-  'makefile',
-  'rakefile',
-  'gemfile',
-  'procfile',
-  'vagrantfile',
-]);
-
-function isTextFile(name: string): boolean {
-  const lower = name.toLowerCase();
-  if (TEXT_EXTENSIONS.has(lower)) return true;
-  if (TEXT_FILENAMES.has(lower)) return true;
-  const lastDot = lower.lastIndexOf('.');
-  if (lastDot === -1) return false;
-  return TEXT_EXTENSIONS.has(lower.slice(lastDot));
-}
-
-/** Extensions recognized as previewable image files. */
-const IMAGE_EXTENSIONS = new Set([
-  '.png',
-  '.jpg',
-  '.jpeg',
-  '.gif',
-  '.webp',
-  '.svg',
-  '.bmp',
-  '.ico',
-  '.avif',
-]);
-
-/** Extensions recognized as PDF files. */
-const PDF_EXTENSIONS = new Set(['.pdf']);
-
-/** Extensions recognized as playable audio files. */
-const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac']);
-
-/** Extensions recognized as playable video files. */
-const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.mkv']);
-
-function isImageFile(name: string): boolean {
-  const lower = name.toLowerCase();
-  const lastDot = lower.lastIndexOf('.');
-  if (lastDot === -1) return false;
-  return IMAGE_EXTENSIONS.has(lower.slice(lastDot));
-}
-
-function isPdfFile(name: string): boolean {
-  const lower = name.toLowerCase();
-  const lastDot = lower.lastIndexOf('.');
-  if (lastDot === -1) return false;
-  return PDF_EXTENSIONS.has(lower.slice(lastDot));
-}
-
-function isAudioFile(name: string): boolean {
-  const lower = name.toLowerCase();
-  const lastDot = lower.lastIndexOf('.');
-  if (lastDot === -1) return false;
-  return AUDIO_EXTENSIONS.has(lower.slice(lastDot));
-}
-
-function isVideoFile(name: string): boolean {
-  const lower = name.toLowerCase();
-  const lastDot = lower.lastIndexOf('.');
-  if (lastDot === -1) return false;
-  return VIDEO_EXTENSIONS.has(lower.slice(lastDot));
-}
-
-function isPreviewableFile(name: string): boolean {
-  return (
-    isImageFile(name) ||
-    isPdfFile(name) ||
-    isAudioFile(name) ||
-    isVideoFile(name) ||
-    isTextFile(name)
-  );
-}
-
-function isFilePointer(item: FolderChild): item is FilePointer {
-  return item.type === 'file';
-}
 
 /**
  * Truncate a public key for display: 0x{first4}...{last4}

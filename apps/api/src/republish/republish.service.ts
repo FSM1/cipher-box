@@ -1,11 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, LessThanOrEqual } from 'typeorm';
-import { ConfigService } from '@nestjs/config';
 import { IpnsRepublishSchedule } from './republish-schedule.entity';
 import { FolderIpns } from '../ipns/entities/folder-ipns.entity';
 import { TeeService, RepublishEntry, RepublishResult } from '../tee/tee.service';
 import { TeeKeyStateService } from '../tee/tee-key-state.service';
+import { DelegatedRoutingClient } from '../ipns/delegated-routing.client';
 
 /** Max entries per TEE request -- increased for per-file IPNS scalability (file records are smaller payloads) */
 const BATCH_SIZE = 100;
@@ -25,9 +25,6 @@ const BASE_BACKOFF_SECONDS = 30;
 @Injectable()
 export class RepublishService {
   private readonly logger = new Logger(RepublishService.name);
-  private readonly delegatedRoutingUrl: string;
-  private readonly maxPublishRetries = 3;
-  private readonly publishBaseDelayMs = 1000;
 
   constructor(
     @InjectRepository(IpnsRepublishSchedule)
@@ -36,13 +33,8 @@ export class RepublishService {
     private readonly folderIpnsRepository: Repository<FolderIpns>,
     private readonly teeService: TeeService,
     private readonly teeKeyStateService: TeeKeyStateService,
-    private readonly configService: ConfigService
-  ) {
-    this.delegatedRoutingUrl = this.configService.get<string>(
-      'DELEGATED_ROUTING_URL',
-      'https://delegated-ipfs.dev'
-    );
-  }
+    private readonly delegatedRouting: DelegatedRoutingClient
+  ) {}
 
   /**
    * Query entries that are due for republishing.
@@ -206,51 +198,9 @@ export class RepublishService {
    * Publish a signed IPNS record to delegated routing with retries.
    */
   async publishSignedRecord(ipnsName: string, signedRecordBase64: string): Promise<void> {
-    const url = `${this.delegatedRoutingUrl}/routing/v1/ipns/${ipnsName}`;
     const recordBytes = Uint8Array.from(atob(signedRecordBase64), (c) => c.charCodeAt(0));
-
-    let lastError: Error | null = null;
-
-    for (let attempt = 0; attempt < this.maxPublishRetries; attempt++) {
-      try {
-        const response = await fetch(url, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/vnd.ipfs.ipns-record',
-          },
-          body: recordBytes as unknown as BodyInit,
-        });
-
-        if (response.ok) {
-          this.logger.debug(`Signed IPNS record published for ${ipnsName}`);
-          return;
-        }
-
-        if (response.status === 429) {
-          const retryAfter = response.headers.get('Retry-After');
-          const delayMs = retryAfter
-            ? parseInt(retryAfter, 10) * 1000
-            : this.publishBaseDelayMs * Math.pow(2, attempt);
-          this.logger.warn(`Rate limited on republish for ${ipnsName}, retrying in ${delayMs}ms`);
-          await this.delay(delayMs);
-          continue;
-        }
-
-        throw new Error(`Delegated routing returned ${response.status}`);
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-
-        if (attempt < this.maxPublishRetries - 1) {
-          const delayMs = this.publishBaseDelayMs * Math.pow(2, attempt);
-          this.logger.warn(
-            `Republish attempt ${attempt + 1} failed for ${ipnsName}, retrying in ${delayMs}ms`
-          );
-          await this.delay(delayMs);
-        }
-      }
-    }
-
-    throw lastError || new Error('Publish failed after retries');
+    await this.delegatedRouting.publish(ipnsName, recordBytes);
+    this.logger.debug(`Signed IPNS record published for ${ipnsName}`);
   }
 
   /**
@@ -438,9 +388,5 @@ export class RepublishService {
    */
   private nextRepublishTime(): Date {
     return new Date(Date.now() + REPUBLISH_INTERVAL_HOURS * 60 * 60 * 1000);
-  }
-
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

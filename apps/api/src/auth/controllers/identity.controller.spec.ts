@@ -1,7 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { ThrottlerGuard } from '@nestjs/throttler';
-import { ConfigService } from '@nestjs/config';
 import { UnauthorizedException } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { IdentityController } from './identity.controller';
@@ -11,15 +10,14 @@ import { EmailOtpService } from '../services/email-otp.service';
 import { SiweService } from '../services/siwe.service';
 import { User } from '../entities/user.entity';
 import { AuthMethod } from '../entities/auth-method.entity';
+import { REDIS_CLIENT } from '../../common/redis.module';
 
-// Mock ioredis
+// Mock Redis instance (injected via REDIS_CLIENT token)
 const mockRedis = {
   set: jest.fn(),
   get: jest.fn(),
   del: jest.fn(),
-  quit: jest.fn(),
 };
-jest.mock('ioredis', () => jest.fn(() => mockRedis));
 
 // Mock viem/siwe
 const mockParseSiweMessage = jest.fn();
@@ -82,15 +80,6 @@ describe('IdentityController', () => {
       save: jest.fn(),
     };
 
-    const mockConfigService = {
-      get: jest.fn((key: string, defaultValue?: unknown) => {
-        if (key === 'REDIS_HOST') return 'localhost';
-        if (key === 'REDIS_PORT') return 6379;
-        if (key === 'REDIS_PASSWORD') return undefined;
-        return defaultValue;
-      }),
-    };
-
     const module: TestingModule = await Test.createTestingModule({
       controllers: [IdentityController],
       providers: [
@@ -98,7 +87,7 @@ describe('IdentityController', () => {
         { provide: GoogleOAuthService, useValue: mockGoogleOAuthService },
         { provide: EmailOtpService, useValue: mockEmailOtpService },
         { provide: SiweService, useValue: mockSiweService },
-        { provide: ConfigService, useValue: mockConfigService },
+        { provide: REDIS_CLIENT, useValue: mockRedis },
         { provide: getRepositoryToken(User), useValue: mockUserRepo },
         {
           provide: getRepositoryToken(AuthMethod),

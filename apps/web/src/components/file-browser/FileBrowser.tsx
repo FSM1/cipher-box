@@ -16,6 +16,16 @@ import { useSyncPolling } from '../../hooks/useSyncPolling';
 import { triggerSearchIndexRebuild } from '../../hooks/useSearch';
 import { useDeviceRegistrySync } from '../../hooks/useDeviceRegistrySync';
 import { useDropUpload, isExternalFileDrag } from '../../hooks/useDropUpload';
+import { useDialogState } from '../../hooks/useDialogState';
+import {
+  isFilePointer,
+  isPreviewableFile,
+  isTextFile,
+  isImageFile,
+  isPdfFile,
+  isAudioFile,
+  isVideoFile,
+} from '../../utils/fileTypes';
 import { useVaultStore } from '../../stores/vault.store';
 import { useFolderStore } from '../../stores/folder.store';
 import { useSyncStore } from '../../stores/sync.store';
@@ -41,155 +51,6 @@ import { Breadcrumbs } from './Breadcrumbs';
 import { SyncIndicator } from './SyncIndicator';
 import { OfflineBanner } from './OfflineBanner';
 import { SelectionActionBar } from './SelectionActionBar';
-
-/**
- * Type guard for file pointers.
- * Narrows FolderChild to FilePointer by checking type discriminant.
- */
-function isFilePointer(item: FolderChild): item is FilePointer {
-  return item.type === 'file';
-}
-
-/** Extensions recognized as editable text files. */
-const TEXT_EXTENSIONS = new Set([
-  '.txt',
-  '.md',
-  '.json',
-  '.yaml',
-  '.yml',
-  '.xml',
-  '.csv',
-  '.log',
-  '.env',
-  '.toml',
-  '.ini',
-  '.cfg',
-  '.conf',
-  '.sh',
-  '.bash',
-  '.zsh',
-  '.fish',
-  '.html',
-  '.css',
-  '.js',
-  '.ts',
-  '.jsx',
-  '.tsx',
-  '.py',
-  '.rb',
-  '.rs',
-  '.go',
-  '.java',
-  '.c',
-  '.cpp',
-  '.h',
-  '.hpp',
-  '.sql',
-  '.graphql',
-  '.gitignore',
-  '.editorconfig',
-]);
-
-/** Well-known extensionless text filenames. */
-const TEXT_FILENAMES = new Set([
-  'dockerfile',
-  'makefile',
-  'rakefile',
-  'gemfile',
-  'procfile',
-  'vagrantfile',
-]);
-
-/**
- * Check if a filename has a text-editable extension.
- */
-function isTextFile(name: string): boolean {
-  const lower = name.toLowerCase();
-  // Handle dotfiles like .gitignore, .editorconfig
-  if (TEXT_EXTENSIONS.has(lower)) return true;
-  // Handle well-known extensionless filenames like Dockerfile, Makefile
-  if (TEXT_FILENAMES.has(lower)) return true;
-  const lastDot = lower.lastIndexOf('.');
-  if (lastDot === -1) return false;
-  return TEXT_EXTENSIONS.has(lower.slice(lastDot));
-}
-
-/** Extensions recognized as previewable image files. */
-const IMAGE_EXTENSIONS = new Set([
-  '.png',
-  '.jpg',
-  '.jpeg',
-  '.gif',
-  '.webp',
-  '.svg',
-  '.bmp',
-  '.ico',
-  '.avif',
-]);
-
-/**
- * Check if a filename has a previewable image extension.
- */
-function isImageFile(name: string): boolean {
-  const lower = name.toLowerCase();
-  const lastDot = lower.lastIndexOf('.');
-  if (lastDot === -1) return false;
-  return IMAGE_EXTENSIONS.has(lower.slice(lastDot));
-}
-
-/** Extensions recognized as PDF files. */
-const PDF_EXTENSIONS = new Set(['.pdf']);
-
-/** Extensions recognized as playable audio files. */
-const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.ogg', '.m4a', '.flac']);
-
-/** Extensions recognized as playable video files. */
-const VIDEO_EXTENSIONS = new Set(['.mp4', '.webm', '.mov', '.mkv']);
-
-/**
- * Check if a filename has a PDF extension.
- */
-function isPdfFile(name: string): boolean {
-  const lower = name.toLowerCase();
-  const lastDot = lower.lastIndexOf('.');
-  if (lastDot === -1) return false;
-  return PDF_EXTENSIONS.has(lower.slice(lastDot));
-}
-
-/**
- * Check if a filename has a playable audio extension.
- */
-function isAudioFile(name: string): boolean {
-  const lower = name.toLowerCase();
-  const lastDot = lower.lastIndexOf('.');
-  if (lastDot === -1) return false;
-  return AUDIO_EXTENSIONS.has(lower.slice(lastDot));
-}
-
-/**
- * Check if a filename has a playable video extension.
- */
-function isVideoFile(name: string): boolean {
-  const lower = name.toLowerCase();
-  const lastDot = lower.lastIndexOf('.');
-  if (lastDot === -1) return false;
-  return VIDEO_EXTENSIONS.has(lower.slice(lastDot));
-}
-
-/**
- * Check if a filename is any previewable type (image, PDF, audio, video).
- */
-function isPreviewableFile(name: string): boolean {
-  return isImageFile(name) || isPdfFile(name) || isAudioFile(name) || isVideoFile(name);
-}
-
-/**
- * Dialog state for rename/delete operations.
- */
-type DialogState = {
-  open: boolean;
-  item: FolderChild | null;
-};
 
 /**
  * Main file browser container component.
@@ -430,27 +291,19 @@ export function FileBrowser() {
   const multiSelectActive = selectedIds.size > 0;
 
   // Dialog states
-  const [confirmDialog, setConfirmDialog] = useState<DialogState>({ open: false, item: null });
-  const [renameDialog, setRenameDialog] = useState<DialogState>({ open: false, item: null });
-  const [moveDialog, setMoveDialog] = useState<DialogState>({ open: false, item: null });
-  const [detailsDialog, setDetailsDialog] = useState<DialogState>({ open: false, item: null });
-  const [editorDialog, setEditorDialog] = useState<DialogState>({ open: false, item: null });
-  const [imagePreviewDialog, setImagePreviewDialog] = useState<DialogState>({
-    open: false,
-    item: null,
-  });
-  const [pdfPreviewDialog, setPdfPreviewDialog] = useState<DialogState>({
-    open: false,
-    item: null,
-  });
-  const [audioPlayerDialog, setAudioPlayerDialog] = useState<DialogState>({
-    open: false,
-    item: null,
-  });
-  const [videoPlayerDialog, setVideoPlayerDialog] = useState<DialogState>({
-    open: false,
-    item: null,
-  });
+  const [confirmDialog, openConfirmDialog, closeConfirmDialog] = useDialogState<FolderChild>();
+  const [renameDialog, openRenameDialog, closeRenameDialog] = useDialogState<FolderChild>();
+  const [moveDialog, openMoveDialog, closeMoveDialog] = useDialogState<FolderChild>();
+  const [detailsDialog, openDetailsDialog, closeDetailsDialog] = useDialogState<FolderChild>();
+  const [editorDialog, openEditorDialog, closeEditorDialog] = useDialogState<FolderChild>();
+  const [imagePreviewDialog, openImagePreviewDialog, closeImagePreviewDialog] =
+    useDialogState<FolderChild>();
+  const [pdfPreviewDialog, openPdfPreviewDialog, closePdfPreviewDialog] =
+    useDialogState<FolderChild>();
+  const [audioPlayerDialog, openAudioPlayerDialog, closeAudioPlayerDialog] =
+    useDialogState<FolderChild>();
+  const [videoPlayerDialog, openVideoPlayerDialog, closeVideoPlayerDialog] =
+    useDialogState<FolderChild>();
   const [createFolderDialogOpen, setCreateFolderDialogOpen] = useState(false);
   const [shareItem, setShareItem] = useState<FolderChild | null>(null);
 
@@ -600,45 +453,33 @@ export function FileBrowser() {
 
   // Open rename dialog
   const handleRenameClick = useCallback(() => {
-    if (contextMenu.item) {
-      setRenameDialog({ open: true, item: contextMenu.item });
-    }
-  }, [contextMenu.item]);
+    if (contextMenu.item) openRenameDialog(contextMenu.item);
+  }, [contextMenu.item, openRenameDialog]);
 
   // Open delete confirmation dialog
   const handleDeleteClick = useCallback(() => {
-    if (contextMenu.item) {
-      setConfirmDialog({ open: true, item: contextMenu.item });
-    }
-  }, [contextMenu.item]);
+    if (contextMenu.item) openConfirmDialog(contextMenu.item);
+  }, [contextMenu.item, openConfirmDialog]);
 
   // Open move dialog
   const handleMoveClick = useCallback(() => {
-    if (contextMenu.item) {
-      setMoveDialog({ open: true, item: contextMenu.item });
-    }
-  }, [contextMenu.item]);
+    if (contextMenu.item) openMoveDialog(contextMenu.item);
+  }, [contextMenu.item, openMoveDialog]);
 
   // Open details dialog
   const handleDetailsClick = useCallback(() => {
-    if (contextMenu.item) {
-      setDetailsDialog({ open: true, item: contextMenu.item });
-    }
-  }, [contextMenu.item]);
+    if (contextMenu.item) openDetailsDialog(contextMenu.item);
+  }, [contextMenu.item, openDetailsDialog]);
 
   // Open share dialog
   const handleShareClick = useCallback(() => {
-    if (contextMenu.item) {
-      setShareItem(contextMenu.item);
-    }
+    if (contextMenu.item) setShareItem(contextMenu.item);
   }, [contextMenu.item]);
 
   // Open text editor dialog
   const handleEditClick = useCallback(() => {
-    if (contextMenu.item) {
-      setEditorDialog({ open: true, item: contextMenu.item });
-    }
-  }, [contextMenu.item]);
+    if (contextMenu.item) openEditorDialog(contextMenu.item);
+  }, [contextMenu.item, openEditorDialog]);
 
   // Open preview dialog (routes to correct dialog based on file type)
   const handlePreviewClick = useCallback(() => {
@@ -646,15 +487,21 @@ export function FileBrowser() {
     if (!item || !isFilePointer(item)) return;
     const name = item.name;
     if (isImageFile(name)) {
-      setImagePreviewDialog({ open: true, item });
+      openImagePreviewDialog(item);
     } else if (isPdfFile(name)) {
-      setPdfPreviewDialog({ open: true, item });
+      openPdfPreviewDialog(item);
     } else if (isAudioFile(name)) {
-      setAudioPlayerDialog({ open: true, item });
+      openAudioPlayerDialog(item);
     } else if (isVideoFile(name)) {
-      setVideoPlayerDialog({ open: true, item });
+      openVideoPlayerDialog(item);
     }
-  }, [contextMenu.item]);
+  }, [
+    contextMenu.item,
+    openImagePreviewDialog,
+    openPdfPreviewDialog,
+    openAudioPlayerDialog,
+    openVideoPlayerDialog,
+  ]);
 
   // --- Batch action handlers ---
 
@@ -758,12 +605,12 @@ export function FileBrowser() {
 
       try {
         await renameItem(item.id, item.type, newName, currentFolderId);
-        setRenameDialog({ open: false, item: null });
+        closeRenameDialog();
       } catch (err) {
         console.error('Rename failed:', err);
       }
     },
-    [renameDialog.item, renameItem, currentFolderId]
+    [renameDialog.item, renameItem, currentFolderId, closeRenameDialog]
   );
 
   // Confirm delete
@@ -773,11 +620,11 @@ export function FileBrowser() {
 
     try {
       await deleteItem(item.id, item.type, currentFolderId);
-      setConfirmDialog({ open: false, item: null });
+      closeConfirmDialog();
     } catch (err) {
       console.error('Delete failed:', err);
     }
-  }, [confirmDialog.item, deleteItem, currentFolderId]);
+  }, [confirmDialog.item, deleteItem, currentFolderId, closeConfirmDialog]);
 
   // Confirm move
   const handleMoveConfirm = useCallback(
@@ -787,53 +634,17 @@ export function FileBrowser() {
 
       try {
         await moveItem(item.id, item.type, currentFolderId, destinationFolderId);
-        setMoveDialog({ open: false, item: null });
+        closeMoveDialog();
       } catch (err) {
         console.error('Move failed:', err);
       }
     },
-    [moveDialog.item, moveItem, currentFolderId]
+    [moveDialog.item, moveItem, currentFolderId, closeMoveDialog]
   );
 
-  // Close dialogs
-  const closeConfirmDialog = useCallback(() => {
-    setConfirmDialog({ open: false, item: null });
-  }, []);
-
-  const closeRenameDialog = useCallback(() => {
-    setRenameDialog({ open: false, item: null });
-  }, []);
-
-  const closeMoveDialog = useCallback(() => {
-    setMoveDialog({ open: false, item: null });
-  }, []);
-
-  const closeDetailsDialog = useCallback(() => {
-    setDetailsDialog({ open: false, item: null });
-  }, []);
-
+  // Close share dialog
   const closeShareDialog = useCallback(() => {
     setShareItem(null);
-  }, []);
-
-  const closeEditorDialog = useCallback(() => {
-    setEditorDialog({ open: false, item: null });
-  }, []);
-
-  const closeImagePreviewDialog = useCallback(() => {
-    setImagePreviewDialog({ open: false, item: null });
-  }, []);
-
-  const closePdfPreviewDialog = useCallback(() => {
-    setPdfPreviewDialog({ open: false, item: null });
-  }, []);
-
-  const closeAudioPlayerDialog = useCallback(() => {
-    setAudioPlayerDialog({ open: false, item: null });
-  }, []);
-
-  const closeVideoPlayerDialog = useCallback(() => {
-    setVideoPlayerDialog({ open: false, item: null });
   }, []);
 
   // Create folder handlers
