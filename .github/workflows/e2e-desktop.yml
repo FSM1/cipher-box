@@ -24,10 +24,14 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 2
+      - name: Resolve parent commit SHA
+        id: parent
+        run: echo "sha=$(git rev-parse HEAD~1)" >> "$GITHUB_OUTPUT"
       - uses: dorny/paths-filter@v3
         id: filter
         with:
-          base: HEAD~1
+          base: ${{ steps.parent.outputs.sha }}
+          ref: HEAD
           filters: |
             desktop:
               - 'apps/desktop/src/**'
