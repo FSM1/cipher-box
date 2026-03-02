@@ -7,6 +7,7 @@ export class DelegatedRoutingClient {
   private readonly delegatedRoutingUrl: string;
   private readonly maxRetries = 3;
   private readonly baseDelayMs = 1000;
+  private readonly requestTimeoutMs = 10_000;
 
   constructor(private readonly configService: ConfigService) {
     this.delegatedRoutingUrl = this.configService.get<string>(
@@ -26,7 +27,7 @@ export class DelegatedRoutingClient {
 
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
       try {
-        const response = await fetch(url, {
+        const response = await this.fetchWithTimeout(url, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/vnd.ipfs.ipns-record',
@@ -42,9 +43,7 @@ export class DelegatedRoutingClient {
         // Handle rate limiting
         if (response.status === 429) {
           const retryAfter = response.headers.get('Retry-After');
-          const delayMs = retryAfter
-            ? parseInt(retryAfter, 10) * 1000
-            : this.baseDelayMs * Math.pow(2, attempt);
+          const delayMs = this.getRetryDelayMs(retryAfter, attempt);
 
           this.logger.warn(`Rate limited on IPNS publish, retrying in ${delayMs}ms`);
           await this.delay(delayMs);
@@ -106,7 +105,7 @@ export class DelegatedRoutingClient {
 
     for (let attempt = 0; attempt < this.maxRetries; attempt++) {
       try {
-        const response = await fetch(url, {
+        const response = await this.fetchWithTimeout(url, {
           method: 'GET',
           headers: {
             Accept: 'application/vnd.ipfs.ipns-record',
@@ -126,9 +125,7 @@ export class DelegatedRoutingClient {
         // Handle rate limiting
         if (response.status === 429) {
           const retryAfter = response.headers.get('Retry-After');
-          const delayMs = retryAfter
-            ? parseInt(retryAfter, 10) * 1000
-            : this.baseDelayMs * Math.pow(2, attempt);
+          const delayMs = this.getRetryDelayMs(retryAfter, attempt);
 
           this.logger.warn(`Rate limited on IPNS resolve, retrying in ${delayMs}ms`);
           await this.delay(delayMs);
@@ -181,6 +178,33 @@ export class DelegatedRoutingClient {
       'Failed to resolve IPNS name from routing network after multiple attempts',
       HttpStatus.BAD_GATEWAY
     );
+  }
+
+  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private getRetryDelayMs(retryAfter: string | null, attempt: number): number {
+    const fallback = this.baseDelayMs * Math.pow(2, attempt);
+    if (!retryAfter) return fallback;
+
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return seconds * 1000;
+    }
+
+    const retryAt = Date.parse(retryAfter);
+    if (!Number.isNaN(retryAt)) {
+      return Math.max(0, retryAt - Date.now());
+    }
+
+    return fallback;
   }
 
   private delay(ms: number): Promise<void> {
