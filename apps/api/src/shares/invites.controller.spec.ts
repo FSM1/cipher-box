@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { InvitesController } from './invites.controller';
-import { SharesService } from './shares.service';
+import { ShareInviteService } from './share-invite.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ShareInvite } from './entities/share-invite.entity';
 import { User } from '../auth/entities/user.entity';
@@ -50,7 +50,7 @@ describe('InvitesController', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [InvitesController],
-      providers: [{ provide: SharesService, useValue: mockSharesService }],
+      providers: [{ provide: ShareInviteService, useValue: mockSharesService }],
     })
       .overrideGuard(JwtAuthGuard)
       .useValue({ canActivate: () => true })

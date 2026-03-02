@@ -38,6 +38,7 @@ import { SharesController } from '../src/shares/shares.controller';
 import { InvitesController } from '../src/shares/invites.controller';
 import { ShareInvitesController } from '../src/shares/share-invites.controller';
 import { SharesService } from '../src/shares/shares.service';
+import { ShareInviteService } from '../src/shares/share-invite.service';
 import { Share } from '../src/shares/entities/share.entity';
 import { ShareKey } from '../src/shares/entities/share-key.entity';
 import { ShareInvite } from '../src/shares/entities/share-invite.entity';
@@ -164,6 +165,10 @@ const mockConfigService = {
     },
     {
       provide: SharesService,
+      useValue: {},
+    },
+    {
+      provide: ShareInviteService,
       useValue: {},
     },
     {
