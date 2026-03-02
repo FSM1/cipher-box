@@ -1,8 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
@@ -73,7 +71,7 @@ jobs:
     name: Typecheck
     needs: [changes]
     if: |
-      github.event_name == 'push' || needs.changes.outputs.src == 'true'
+      needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -97,7 +95,7 @@ jobs:
     name: Verify API Spec & Client
     needs: [changes]
     if: |
-      github.event_name == 'push' || needs.changes.outputs.src == 'true'
+      needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -166,7 +164,7 @@ jobs:
     name: Migration Drift Check
     needs: [changes]
     if: |
-      github.event_name == 'push' || needs.changes.outputs.src == 'true'
+      needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -257,7 +255,7 @@ jobs:
     needs: [changes, lint, typecheck]
     if: |
       !failure() && !cancelled() &&
-      (github.event_name == 'push' || needs.changes.outputs.src == 'true')
+      needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -328,7 +326,7 @@ jobs:
     needs: [changes, lint, typecheck, api-spec, test, migration-check]
     if: |
       !failure() && !cancelled() &&
-      (github.event_name == 'push' || needs.changes.outputs.src == 'true')
+      needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -353,7 +351,7 @@ jobs:
     needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
-      (github.event_name == 'push' || needs.changes.outputs.desktop == 'true')
+      needs.changes.outputs.desktop == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -393,7 +391,7 @@ jobs:
     needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
-      (github.event_name == 'push' || needs.changes.outputs.desktop == 'true')
+      needs.changes.outputs.desktop == 'true'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -436,7 +434,7 @@ jobs:
     needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
-      (github.event_name == 'push' || needs.changes.outputs.desktop == 'true')
+      needs.changes.outputs.desktop == 'true'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
