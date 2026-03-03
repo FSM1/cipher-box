@@ -5,22 +5,22 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 11.4 COMPLETE (Cross-Platform E2E Testing)
+**Current focus:** Milestone 2 -- Phase 16 IN PROGRESS (Advanced Sync)
 
 ## Current Position
 
-Phase: 11.4 (Cross-Platform E2E Testing) -- VERIFIED COMPLETE
-Plan: 3 of 3
-Status: Phase verified (13/13 must-haves)
-Last activity: 2026-02-28 -- Phase 11.4 verified and complete
+Phase: 16 (Advanced Sync)
+Plan: 1 of 5
+Status: In progress
+Last activity: 2026-03-03 -- Completed 16-01-PLAN.md (Optimistic Concurrency Control)
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE, Phase 16: 1/5)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 141
+- Total plans completed: 142
 - Average duration: 5.6 min
 - Total execution time: 15.4 hours
 
@@ -46,10 +46,11 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 15.1   | 3/3   | 17 min  | 5.7 min  |
 | M2 Phase 11.3   | 3/3   | 104 min | 34.7 min |
 | M2 Phase 11.4   | 3/3   | 20 min  | 6.7 min  |
+| M2 Phase 16     | 1/5   | 2 min   | 2.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 2m, 90m, 5m, 10m, 5m
+- Last 5 plans: 90m, 5m, 10m, 5m, 2m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -220,6 +221,9 @@ Recent decisions affecting current work:
 | Green tray icon for Linux, icon_as_template macOS-only                 | 11.3-03   | Black template icons invisible on dark panels; macOS tinting does not work on Linux                                  |
 | ikalnytskyi/action-setup-postgres for cross-platform Postgres          | 11.4-03   | Only action that works on Linux/macOS/Windows without Docker service containers                                      |
 | Separate platform-conditional steps for CI clarity                     | 11.4-03   | Each platform gets own steps for Kubo, Redis, FUSE, API, tests instead of complex conditionals                       |
+| Application-level read-compare-write for optimistic concurrency        | 16-01     | Sufficient for v1; TOCTOU mitigated by per-folder publish lock + sequential single-user API requests                 |
+| Backward compat: omitting expectedSequenceNumber = unconditional       | 16-01     | Existing clients and TEE republishes unaffected by new conflict detection                                            |
+| Batch publish aborts entirely on folder conflict                       | 16-01     | Clear signal for client to re-sync; no partial success ambiguity                                                     |
 
 ### Pending Todos
 
@@ -283,7 +287,7 @@ Recent decisions affecting current work:
 - Phase 14 (Sharing): COMPLETE -- research done, 6 plans created, all 6 executed
 - Phase 15 (Link Sharing): COMPLETE -- ephemeral key bridge pattern, HashRouter fragment handling, unauthenticated endpoint design researched; 4 plans created
 - Phase 15.1 (Client-Side Search): COMPLETE -- 3 plans done (search index service, search UI & integration, E2E search tests)
-- Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
+- Phase 16 (Advanced Sync): IN PROGRESS -- 1/5 plans complete (optimistic concurrency control)
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
 - Phase 12.1 (AES-CTR Streaming): COMPLETE -- all 4 plans done (CTR crypto primitives, streaming upload pipeline, service worker decrypt proxy, media playback integration)
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
@@ -298,10 +302,10 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-02-28
-Stopped at: Phase 11.4 verified complete
+Last session: 2026-03-03
+Stopped at: Completed 16-01-PLAN.md (Optimistic Concurrency Control)
 Resume file: None
-Next: Phase 16 (Advanced Sync) or Phase 17 (AWS Nitro TEE)
+Next: 16-02-PLAN.md (Web client sync service with conflict handling)
 
 ---
 
