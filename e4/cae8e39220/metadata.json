@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "e4cae8e39220",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-16-advanced-sync",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/fuse/mod.rs",
+    "apps/desktop/src-tauri/src/fuse/windows/write_ops.rs",
+    "apps/desktop/src-tauri/src/fuse/write_ops.rs",
+    "apps/web/src/hooks/folder-helpers.ts",
+    "apps/web/src/hooks/useFileOperations.ts",
+    "apps/web/src/hooks/useFolderMutations.ts",
+    "tests/e2e-desktop/scripts/test-conflict-detection.ps1",
+    "tests/e2e-desktop/scripts/test-conflict-detection.sh",
+    "tests/e2e/tests/conflict-detection.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e4/cae8e39220/0/metadata.json",
+      "transcript": "/e4/cae8e39220/0/full.jsonl",
+      "context": "/e4/cae8e39220/0/context.md",
+      "content_hash": "/e4/cae8e39220/0/content_hash.txt",
+      "prompt": "/e4/cae8e39220/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7179,
+    "cache_creation_tokens": 93922,
+    "cache_read_tokens": 5389800,
+    "output_tokens": 26461,
+    "api_call_count": 54
+  }
+}
