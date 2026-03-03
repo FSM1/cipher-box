@@ -1,0 +1,137 @@
+Implement the following plan:
+
+# Plan: Make Release Gate Required & Unify E2E Verification
+
+## Context
+
+The release gate (`release-gate.yml`) has sophisticated E2E verification logic (polling, desktop change detection, `run_executed_tests` check). Meanwhile, `tag-staging.yml` has a simpler, weaker version of the same check (lines 34-66) that doesn't verify desktop E2E jobs actually executed. We need to:
+
+1. Unify the verification logic so both workflows use the same checks
+2. Make the release gate a required status check on the release-please PR
+
+## Approach: Reusable Workflow
+
+Extract the E2E verification into a reusable workflow (`verify-e2e.yml`) called by both `release-gate.yml` and `tag-staging.yml`.
+
+## Files to modify
+
+- **Create:** `.github/workflows/verify-e2e.yml` — reusable workflow with the full verification logic
+- **Modify:** `.github/workflows/release-gate.yml` — slim down to call verify-e2e.yml
+- **Modify:** `.github/workflows/tag-staging.yml` — replace simple E2E check with call to verify-e2e.yml
+
+## Step 1: Create `verify-e2e.yml` (reusable workflow)
+
+```yaml
+name: Verify E2E
+on:
+  workflow_call:
+    inputs:
+      commit_sha:
+        description: 'Commit SHA to verify E2E tests for'
+        required: true
+        type: string
+```
+
+**Jobs:**
+1. `detect-changes` — takes `commit_sha`, diffs from latest release tag to that commit, outputs `desktop` and `prev_tag`
+2. `verify-e2e` — full Web E2E + Desktop E2E verification (polling, `run_executed_tests`, fallback range search)
+
+The logic is lifted directly from the current `release-gate.yml` with one change: instead of `gh api repos/.../git/ref/heads/main` to get the SHA, it uses `inputs.commit_sha`.
+
+## Step 2: Slim down `release-gate.yml`
+
+```yaml
+name: Release Gate
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+jobs:
+  get-main-sha:
+    name: Get Main SHA
+    if: startsWith(github.head_ref, 'release-please--')
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - name: Get latest main commit
+        id: sha
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHA=$(gh api repos/${{ github.repository }}/git/ref/heads/main --jq '.object.sha')
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: Verify E2E Passed
+    needs: get-main-sha
+    if: startsWith(github.head_ref, 'release-please--')
+    uses: ./.github/workflows/verify-e2e.yml
+    with:
+      commit_sha: ${{ needs.get-main-sha.outputs.sha }}
+```
+
+The `if: startsWith(...)` ensures non-release-please PRs skip the check (GitHub treats skipped required checks as satisfied).
+
+## Step 3: Update `tag-staging.yml`
+
+Replace the "Verify E2E tests passed" step (lines 34-66) with a call to the reusable workflow:
+
+```yaml
+jobs:
+  verify-e2e:
+    name: Verify E2E
+    uses: ./.github/workflows/verify-e2e.yml
+    with:
+      commit_sha: <resolved from release tag>
+
+  tag-staging:
+    name: Create Staging Tag
+    needs: verify-e2e
+    ...
+```
+
+Need to resolve the tag to a commit SHA first. Options:
+- Add a small `resolve-tag` job that does `git rev-parse` and outputs the SHA
+- Or pass the tag to verify-e2e.yml and let it resolve internally
+
+I'll add a `resolve-tag` job since verify-e2e.yml should work with commit SHAs generically.
+
+## Step 4: Add branch protection (manual / gh API)
+
+After merging, use `gh api` to add the release gate check as required:
+- Check name will be "Verify E2E Passed / Verify E2E" (caller job name / called workflow job name)
+- Actually need to verify the exact check name after first run
+
+Note: This step should be done manually after the workflow changes are merged and the check names are confirmed.
+
+## Verification
+
+1. Create PR, verify release-gate.yml calls verify-e2e.yml correctly
+2. Check that non-release-please PRs skip the checks (no failures)
+3. After merge, manually trigger tag-staging.yml and verify it runs the full E2E check
+4. Note the exact check names from a run, then configure branch protection
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.claude/projects/-Users-michael-Code-cipher-box/9bb1ef99-35c4-4cfd-9ec1-d5b3c4819628.jsonl
+
+---
+
+ok this is a chore type pr, to be created as such
+
+---
+
+I would be configuring tag protection I am guessing not branch protection right?
+
+---
+
+ok, I think that maybe it makes more sense to actually have the `create staging tag` workflow to just run the full suite of web and desktop e2e tests, since it is not as time sensitive an operation.
+
+---
+
+is there a real need for the verify-e2e.yml, if its only used in the release-gate workflow? would it not make sense to just keep it as part of that workflow as is?
+
+---
+
+all pushed up to the branch?

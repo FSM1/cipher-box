@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "8e8faf6e56bf",
+  "strategy": "manual-commit",
+  "branch": "feat/unify-e2e-verification",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/e2e-desktop.yml",
+    ".github/workflows/e2e.yml",
+    ".github/workflows/verify-e2e.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8e/8faf6e56bf/0/metadata.json",
+      "transcript": "/8e/8faf6e56bf/0/full.jsonl",
+      "context": "/8e/8faf6e56bf/0/context.md",
+      "content_hash": "/8e/8faf6e56bf/0/content_hash.txt",
+      "prompt": "/8e/8faf6e56bf/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 24,
+    "cache_creation_tokens": 17666,
+    "cache_read_tokens": 1252733,
+    "output_tokens": 6908,
+    "api_call_count": 16
+  }
+}
