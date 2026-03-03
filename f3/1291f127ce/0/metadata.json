@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "f31291f127ce",
+  "session_id": "4df4fe75-007e-479d-98ea-2206ff4e433f",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-03T13:16:28.835052Z",
+  "branch": "feat/phase-16-advanced-sync",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/e2e/page-objects/file-browser/upload-zone.page.ts",
+    "tests/e2e/tests/conflict-detection.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b391651b0ae8",
+  "token_usage": {
+    "input_tokens": 2262,
+    "cache_creation_tokens": 375006,
+    "cache_read_tokens": 12306513,
+    "output_tokens": 36024,
+    "api_call_count": 109
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-03T13:16:25.462542Z",
+    "agent_lines": 19,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 19,
+    "agent_percentage": 100
+  }
+}

@@ -1,0 +1,999 @@
+<execution_context>
+@./.claude/get-shit-done/references/ui-brand.md
+</execution_context>
+
+<objective>
+Create executable phase prompts (PLAN.md files) for a roadmap phase with integrated research and verification.
+
+**Default flow:** Research (if needed) → Plan → Verify → Done
+
+**Orchestrator role:** Parse arguments, validate phase, research domain (unless skipped or exists), spawn gsd-planner agent, verify plans with gsd-plan-checker, iterate until plans pass or max iterations reached, present results.
+
+**Why subagents:** Research and planning burn context fast. Verification uses fresh context. User sees the flow between agents in main context.
+</objective>
+
+<context>
+Phase number: 16 (optional - auto-detects next unplanned phase if not provided)
+
+**Flags:**
+- `--research` — Force re-research even if RESEARCH.md exists
+- `--skip-research` — Skip research entirely, go straight to planning
+- `--gaps` — Gap closure mode (reads VERIFICATION.md, skips research)
+- `--skip-verify` — Skip planner → checker verification loop
+
+Normalize phase input in step 2 before any directory lookups.
+</context>
+
+<process>
+
+## 1. Validate Environment
+
+```bash
+ls .planning/ 2>/dev/null
+```
+
+**If not found:** Error - user should run `/gsd:new-project` first.
+
+## 2. Parse and Normalize Arguments
+
+Extract from 16:
+
+- Phase number (integer or decimal like `2.1`)
+- `--research` flag to force re-research
+- `--skip-research` flag to skip research
+- `--gaps` flag for gap closure mode
+- `--skip-verify` flag to bypass verification loop
+
+**If no phase number:** Detect next unplanned phase from roadmap.
+
+**Normalize phase to zero-padded format:**
+
+```bash
+# Normalize phase number (8 → 08, but preserve decimals like 2.1 → 02.1)
+if [[ "$PHASE" =~ ^[0-9]+$ ]]; then
+  PHASE=$(printf "%02d" "$PHASE")
+elif [[ "$PHASE" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
+  PHASE=$(printf "%02d.%s" "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}")
+fi
+```
+
+**Check for existing research and plans:**
+
+```bash
+ls .planning/phases/${PHASE}-*/*-RESEARCH.md 2>/dev/null
+ls .planning/phases/${PHASE}-*/*-PLAN.md 2>/dev/null
+```
+
+## 3. Validate Phase
+
+```bash
+grep -A5 "Phase ${PHASE}:" .planning/ROADMAP.md 2>/dev/null
+```
+
+**If not found:** Error with available phases. **If found:** Extract phase number, name, description.
+
+## 4. Ensure Phase Directory Exists
+
+```bash
+# PHASE is already normalized (08, 02.1, etc.) from step 2
+PHASE_DIR=$(ls -d .planning/phases/${PHASE}-* 2>/dev/null | head -1)
+if [ -z "$PHASE_DIR" ]; then
+  # Create phase directory from roadmap name
+  PHASE_NAME=$(grep "Phase ${PHASE}:" .planning/ROADMAP.md | sed 's/.*Phase [0-9]*: //' | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+  mkdir -p ".planning/phases/${PHASE}-${PHASE_NAME}"
+  PHASE_DIR=".planning/phases/${PHASE}-${PHASE_NAME}"
+fi
+```
+
+## 5. Handle Research
+
+**If `--gaps` flag:** Skip research (gap closure uses VERIFICATION.md instead).
+
+**If `--skip-research` flag:** Skip to step 6.
+
+**Otherwise:**
+
+Check for existing research:
+
+```bash
+ls "${PHASE_DIR}"/*-RESEARCH.md 2>/dev/null
+```
+
+**If RESEARCH.md exists AND `--research` flag NOT set:**
+- Display: `Using existing research: ${PHASE_DIR}/${PHASE}-RESEARCH.md`
+- Skip to step 6
+
+**If RESEARCH.md missing OR `--research` flag set:**
+
+Display stage banner:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► RESEARCHING PHASE {X}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+◆ Spawning researcher...
+```
+
+Proceed to spawn researcher
+
+### Spawn gsd-phase-researcher
+
+Gather context for research prompt:
+
+```bash
+# Get phase description from roadmap
+PHASE_DESC=$(grep -A3 "Phase ${PHASE}:" .planning/ROADMAP.md)
+
+# Get requirements if they exist
+REQUIREMENTS=$(cat .planning/REQUIREMENTS.md 2>/dev/null | grep -A100 "## Requirements" | head -50)
+
+# Get prior decisions from STATE.md
+DECISIONS=$(grep -A20 "### Decisions Made" .planning/STATE.md 2>/dev/null)
+
+# Get phase context if exists
+PHASE_CONTEXT=$(cat "${PHASE_DIR}/${PHASE}-CONTEXT.md" 2>/dev/null)
+```
+
+Fill research prompt and spawn:
+
+```markdown
+<objective>
+Research how to implement Phase {phase_number}: {phase_name}
+
+Answer: "What do I need to know to PLAN this phase well?"
+</objective>
+
+<context>
+**Phase description:**
+{phase_description}
+
+**Requirements (if any):**
+{requirements}
+
+**Prior decisions:**
+{decisions}
+
+**Phase context (if any):**
+{phase_context}
+</context>
+
+<output>
+Write research findings to: {phase_dir}/{phase}-RESEARCH.md
+</output>
+```
+
+```
+Task(
+  prompt=research_prompt,
+  subagent_type="gsd-phase-researcher",
+  description="Research Phase {phase}"
+)
+```
+
+### Handle Researcher Return
+
+**`## RESEARCH COMPLETE`:**
+- Display: `Research complete. Proceeding to planning...`
+- Continue to step 6
+
+**`## RESEARCH BLOCKED`:**
+- Display blocker information
+- Offer: 1) Provide more context, 2) Skip research and plan anyway, 3) Abort
+- Wait for user response
+
+## 6. Check Existing Plans
+
+```bash
+ls "${PHASE_DIR}"/*-PLAN.md 2>/dev/null
+```
+
+**If exists:** Offer: 1) Continue planning (add more plans), 2) View existing, 3) Replan from scratch. Wait for response.
+
+## 7. Gather Context Paths
+
+Identify context files for the planner agent:
+
+```bash
+# Required
+STATE=.planning/STATE.md
+ROADMAP=.planning/ROADMAP.md
+REQUIREMENTS=.planning/REQUIREMENTS.md
+
+# Optional (created by earlier steps or commands)
+CONTEXT="${PHASE_DIR}/${PHASE}-CONTEXT.md"
+RESEARCH="${PHASE_DIR}/${PHASE}-RESEARCH.md"
+VERIFICATION="${PHASE_DIR}/${PHASE}-VERIFICATION.md"
+UAT="${PHASE_DIR}/${PHASE}-UAT.md"
+```
+
+## 8. Spawn gsd-planner Agent
+
+Display stage banner:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► PLANNING PHASE {X}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+◆ Spawning planner...
+```
+
+Fill prompt and spawn:
+
+```markdown
+<planning_context>
+
+**Phase:** {phase_number}
+**Mode:** {standard | gap_closure}
+
+**Project State:**
+@.planning/STATE.md
+
+**Roadmap:**
+@.planning/ROADMAP.md
+
+**Requirements (if exists):**
+@.planning/REQUIREMENTS.md
+
+**Phase Context (if exists):**
+@.planning/phases/{phase_dir}/{phase}-CONTEXT.md
+
+**Research (if exists):**
+@.planning/phases/{phase_dir}/{phase}-RESEARCH.md
+
+**Gap Closure (if --gaps mode):**
+@.planning/phases/{phase_dir}/{phase}-VERIFICATION.md
+@.planning/phases/{phase_dir}/{phase}-UAT.md
+
+</planning_context>
+
+<downstream_consumer>
+Output consumed by /gsd:execute-phase
+Plans must be executable prompts with:
+
+- Frontmatter (wave, depends_on, files_modified, autonomous)
+- Tasks in XML format
+- Verification criteria
+- must_haves for goal-backward verification
+</downstream_consumer>
+
+<quality_gate>
+Before returning PLANNING COMPLETE:
+
+- [ ] PLAN.md files created in phase directory
+- [ ] Each plan has valid frontmatter
+- [ ] Tasks are specific and actionable
+- [ ] Dependencies correctly identified
+- [ ] Waves assigned for parallel execution
+- [ ] must_haves derived from phase goal
+</quality_gate>
+```
+
+```
+Task(
+  prompt=filled_prompt,
+  subagent_type="gsd-planner",
+  description="Plan Phase {phase}"
+)
+```
+
+## 9. Handle Planner Return
+
+Parse planner output:
+
+**`## PLANNING COMPLETE`:**
+- Display: `Planner created {N} plan(s). Files on disk.`
+- If `--skip-verify`: Skip to step 13
+- Otherwise: Proceed to step 10
+
+**`## CHECKPOINT REACHED`:**
+- Present to user, get response, spawn continuation (see step 12)
+
+**`## PLANNING INCONCLUSIVE`:**
+- Show what was attempted
+- Offer: Add context, Retry, Manual
+- Wait for user response
+
+## 10. Spawn gsd-plan-checker Agent
+
+Display:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► VERIFYING PLANS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+◆ Spawning plan checker...
+```
+
+Fill checker prompt and spawn:
+
+```markdown
+<verification_context>
+
+**Phase:** {phase_number}
+**Phase Goal:** {goal from ROADMAP}
+
+**Plans to verify:**
+@.planning/phases/{phase_dir}/*-PLAN.md
+
+**Requirements (if exists):**
+@.planning/REQUIREMENTS.md
+
+</verification_context>
+
+<expected_output>
+Return one of:
+- ## VERIFICATION PASSED — all checks pass
+- ## ISSUES FOUND — structured issue list
+</expected_output>
+```
+
+```
+Task(
+  prompt=checker_prompt,
+  subagent_type="gsd-plan-checker",
+  description="Verify Phase {phase} plans"
+)
+```
+
+## 11. Handle Checker Return
+
+**If `## VERIFICATION PASSED`:**
+- Display: `Plans verified. Ready for execution.`
+- Proceed to step 13
+
+**If `## ISSUES FOUND`:**
+- Display: `Checker found issues:`
+- List issues from checker output
+- Check iteration count
+- Proceed to step 12
+
+## 12. Revision Loop (Max 3 Iterations)
+
+Track: `iteration_count` (starts at 1 after initial plan + check)
+
+**If iteration_count < 3:**
+
+Display: `Sending back to planner for revision... (iteration {N}/3)`
+
+Spawn gsd-planner with revision prompt:
+
+```markdown
+<revision_context>
+
+**Phase:** {phase_number}
+**Mode:** revision
+
+**Existing plans:**
+@.planning/phases/{phase_dir}/*-PLAN.md
+
+**Checker issues:**
+{structured_issues_from_checker}
+
+</revision_context>
+
+<instructions>
+Read existing PLAN.md files. Make targeted updates to address checker issues.
+Do NOT replan from scratch unless issues are fundamental.
+Return what changed.
+</instructions>
+```
+
+```
+Task(
+  prompt=revision_prompt,
+  subagent_type="gsd-planner",
+  description="Revise Phase {phase} plans"
+)
+```
+
+- After planner returns → spawn checker again (step 10)
+- Increment iteration_count
+
+**If iteration_count >= 3:**
+
+Display: `Max iterations reached. {N} issues remain:`
+- List remaining issues
+
+Offer options:
+1. Force proceed (execute despite issues)
+2. Provide guidance (user gives direction, retry)
+3. Abandon (exit planning)
+
+Wait for user response.
+
+## 13. Present Final Status
+
+Route to `<offer_next>`.
+
+</process>
+
+<offer_next>
+Output this markdown directly (not as a code block):
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► PHASE {X} PLANNED ✓
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Phase {X}: {Name}** — {N} plan(s) in {M} wave(s)
+
+| Wave | Plans | What it builds |
+|------|-------|----------------|
+| 1    | 01, 02 | [objectives] |
+| 2    | 03     | [objective]  |
+
+Research: {Completed | Used existing | Skipped}
+Verification: {Passed | Passed with override | Skipped}
+
+───────────────────────────────────────────────────────────────
+
+## ▶ Next Up
+
+**Execute Phase {X}** — run all {N} plans
+
+/gsd:execute-phase {X}
+
+<sub>/clear first → fresh context window</sub>
+
+───────────────────────────────────────────────────────────────
+
+**Also available:**
+- cat .planning/phases/{phase-dir}/*-PLAN.md — review plans
+- /gsd:plan-phase {X} --research — re-research first
+
+───────────────────────────────────────────────────────────────
+</offer_next>
+
+<success_criteria>
+- [ ] .planning/ directory validated
+- [ ] Phase validated against roadmap
+- [ ] Phase directory created if needed
+- [ ] Research completed (unless --skip-research or --gaps or exists)
+- [ ] gsd-phase-researcher spawned if research needed
+- [ ] Existing plans checked
+- [ ] gsd-planner spawned with context (including RESEARCH.md if available)
+- [ ] Plans created (PLANNING COMPLETE or CHECKPOINT handled)
+- [ ] gsd-plan-checker spawned (unless --skip-verify)
+- [ ] Verification passed OR user override OR max iterations with user decision
+- [ ] User sees status between agent spawns
+- [ ] User knows next steps (execute or review)
+</success_criteria>
+
+---
+
+question: does the plan include thorough e2e test cases for all the changed behaviors? Does the requirement of ensuring this functionality is covered by e2e tests change the implementation plan at all?
+
+---
+
+/clear
+
+---
+
+/gsd:execute-phase 16
+
+---
+
+<objective>
+Execute all plans in a phase using wave-based parallel execution.
+
+Orchestrator stays lean: discover plans, analyze dependencies, group into waves, spawn subagents, collect results. Each subagent loads the full execute-plan context and handles its own plan.
+
+Context budget: ~15% orchestrator, 100% fresh per subagent.
+</objective>
+
+<execution_context>
+@./.claude/get-shit-done/references/ui-brand.md
+@./.claude/get-shit-done/workflows/execute-phase.md
+</execution_context>
+
+<context>
+Phase: 16
+
+**Flags:**
+
+- `--gaps-only` — Execute only gap closure plans (plans with `gap_closure: true` in frontmatter). Use after verify-work creates fix plans.
+
+@.planning/ROADMAP.md
+@.planning/STATE.md
+</context>
+
+<process>
+1. **Validate phase exists**
+   - Find phase directory matching argument
+   - Count PLAN.md files
+   - Error if no plans found
+
+2. **Discover plans**
+   - List all \*-PLAN.md files in phase directory
+   - Check which have \*-SUMMARY.md (already complete)
+   - If `--gaps-only`: filter to only plans with `gap_closure: true`
+   - Build list of incomplete plans
+
+3. **Group by wave**
+   - Read `wave` from each plan's frontmatter
+   - Group plans by wave number
+   - Report wave structure to user
+
+4. **Execute waves**
+   For each wave in order:
+   - Spawn `gsd-executor` for each plan in wave (parallel Task calls)
+   - Wait for completion (Task blocks)
+   - Verify SUMMARYs created
+   - Proceed to next wave
+
+5. **Aggregate results**
+   - Collect summaries from all plans
+   - Report phase completion status
+
+6. **Commit any orchestrator corrections**
+   Check for uncommitted changes before verification:
+
+   ```bash
+   git status --porcelain
+   ```
+
+   **If changes exist:** Orchestrator made corrections between executor completions. Commit them:
+
+   ```bash
+   git add -u && git commit -m "fix({phase}): orchestrator corrections"
+   ```
+
+   **If clean:** Continue to verification.
+
+7. **Verify phase goal**
+   - Spawn `gsd-verifier` subagent with phase directory and goal
+   - Verifier checks must_haves against actual codebase (not SUMMARY claims)
+   - Creates VERIFICATION.md with detailed report
+   - Route by status:
+     - `passed` → continue to step 8
+     - `human_needed` → present items, get approval or feedback
+     - `gaps_found` → present gaps, offer `/gsd:plan-phase {X} --gaps`
+
+8. **Design sync check (UI phases only)**
+   - Detect UI phase using keyword heuristic on phase name/goal
+   - Only if UI phase AND `designs/*.pen` exists
+   - Ask: "UI phase complete. Sync design file to match implementation?" → Yes / Skip
+   - If yes: run `/design:sync` defaulting to "update design to match code"
+   - Non-blocking — phase completion continues regardless
+
+9. **Update roadmap and state**
+   - Update ROADMAP.md, STATE.md
+
+10. **Update requirements**
+    Mark phase requirements as Complete:
+    - Read ROADMAP.md, find this phase's `Requirements:` line (e.g., "AUTH-01, AUTH-02")
+    - Read REQUIREMENTS.md traceability table
+    - For each REQ-ID in this phase: change Status from "Pending" to "Complete"
+    - Write updated REQUIREMENTS.md
+    - Skip if: REQUIREMENTS.md doesn't exist, or phase has no Requirements line
+
+11. **Commit phase completion**
+    Bundle all phase metadata updates in one commit:
+    - Stage: `git add .planning/ROADMAP.md .planning/STATE.md`
+    - Stage REQUIREMENTS.md if updated: `git add .planning/REQUIREMENTS.md`
+    - Commit: `docs({phase}): complete {phase-name} phase`
+
+12. **Offer next steps** - Route to next action (see `<offer_next>`)
+    </process>
+
+<offer_next>
+Output this markdown directly (not as a code block). Route based on status:
+
+| Status                 | Route                                              |
+| ---------------------- | -------------------------------------------------- |
+| `gaps_found`           | Route C (gap closure)                              |
+| `human_needed`         | Present checklist, then re-route based on approval |
+| `passed` + more phases | Route A (next phase)                               |
+| `passed` + last phase  | Route B (milestone complete)                       |
+
+---
+
+**Route A: Phase verified, more phases remain**
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GSD ► PHASE {Z} COMPLETE ✓
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Phase {Z}: {Name}**
+
+{Y} plans executed
+Goal verified ✓
+
+───────────────────────────────────────────────────────────────
+
+## ▶ Next Up
+
+**Phase {Z+1}: {Name}** — {Goal from ROADMAP.md}
+
+/gsd:discuss-phase {Z+1} — gather context and clarify approach
+
+<sub>/clear first → fresh context window</sub>
+
+───────────────────────────────────────────────────────────────
+
+**Also available:**
+
+- /gsd:plan-phase {Z+1} — skip discussion, plan directly
+- /gsd:verify-work {Z} — manual acceptance testing before continuing
+
+───────────────────────────────────────────────────────────────
+
+---
+
+**Route B: Phase verified, milestone complete**
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GSD ► MILESTONE COMPLETE 🎉
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**v1.0**
+
+{N} phases completed
+All phase goals verified ✓
+
+───────────────────────────────────────────────────────────────
+
+## ▶ Next Up
+
+**Audit milestone** — verify requirements, cross-phase integration, E2E flows
+
+/gsd:audit-milestone
+
+<sub>/clear first → fresh context window</sub>
+
+───────────────────────────────────────────────────────────────
+
+**Also available:**
+
+- /gsd:verify-work — manual acceptance testing
+- /gsd:complete-milestone — skip audit, archive directly
+
+───────────────────────────────────────────────────────────────
+
+---
+
+**Route C: Gaps found — need additional planning**
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GSD ► PHASE {Z} GAPS FOUND ⚠
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Phase {Z}: {Name}**
+
+Score: {N}/{M} must-haves verified
+Report: .planning/phases/{phase_dir}/{phase}-VERIFICATION.md
+
+### What's Missing
+
+{Extract gap summaries from VERIFICATION.md}
+
+───────────────────────────────────────────────────────────────
+
+## ▶ Next Up
+
+**Plan gap closure** — create additional plans to complete the phase
+
+/gsd:plan-phase {Z} --gaps
+
+<sub>/clear first → fresh context window</sub>
+
+───────────────────────────────────────────────────────────────
+
+**Also available:**
+
+- cat .planning/phases/{phase_dir}/{phase}-VERIFICATION.md — see full report
+- /gsd:verify-work {Z} — manual testing before planning
+
+───────────────────────────────────────────────────────────────
+
+---
+
+After user runs /gsd:plan-phase {Z} --gaps:
+
+1. Planner reads VERIFICATION.md gaps
+2. Creates plans 04, 05, etc. to close gaps
+3. User runs /gsd:execute-phase {Z} again
+4. Execute-phase runs incomplete plans (04, 05...)
+5. Verifier runs again → loop until passed
+   </offer_next>
+
+<wave_execution>
+**Parallel spawning:**
+
+Spawn all plans in a wave with a single message containing multiple Task calls:
+
+```
+Task(prompt="Execute plan at {plan_01_path}\n\nPlan: @{plan_01_path}\nProject state: @.planning/STATE.md", subagent_type="gsd-executor")
+Task(prompt="Execute plan at {plan_02_path}\n\nPlan: @{plan_02_path}\nProject state: @.planning/STATE.md", subagent_type="gsd-executor")
+Task(prompt="Execute plan at {plan_03_path}\n\nPlan: @{plan_03_path}\nProject state: @.planning/STATE.md", subagent_type="gsd-executor")
+```
+
+All three run in parallel. Task tool blocks until all complete.
+
+**No polling.** No background agents. No TaskOutput loops.
+</wave_execution>
+
+<checkpoint_handling>
+Plans with `autonomous: false` have checkpoints. The execute-phase.md workflow handles the full checkpoint flow:
+
+- Subagent pauses at checkpoint, returns structured state
+- Orchestrator presents to user, collects response
+- Spawns fresh continuation agent (not resume)
+
+See `@./.claude/get-shit-done/workflows/execute-phase.md` step `checkpoint_handling` for complete details.
+</checkpoint_handling>
+
+<deviation_rules>
+During execution, handle discoveries automatically:
+
+1. **Auto-fix bugs** - Fix immediately, document in Summary
+2. **Auto-add critical** - Security/correctness gaps, add and document
+3. **Auto-fix blockers** - Can't proceed without fix, do it and document
+4. **Ask about architectural** - Major structural changes, stop and ask user
+
+Only rule 4 requires user intervention.
+</deviation_rules>
+
+<commit_rules>
+**Per-Task Commits:**
+
+After each task completes:
+
+1. Stage only files modified by that task
+2. Commit with format: `{type}({phase}-{plan}): {task-name}`
+3. Types: feat, fix, test, refactor, perf, chore
+4. Record commit hash for SUMMARY.md
+
+**Plan Metadata Commit:**
+
+After all tasks in a plan complete:
+
+1. Stage plan artifacts only: PLAN.md, SUMMARY.md
+2. Commit with format: `docs({phase}-{plan}): complete [plan-name] plan`
+3. NO code files (already committed per-task)
+
+**Phase Completion Commit:**
+
+After all plans in phase complete (step 7):
+
+1. Stage: ROADMAP.md, STATE.md, REQUIREMENTS.md (if updated), VERIFICATION.md
+2. Commit with format: `docs({phase}): complete {phase-name} phase`
+3. Bundles all phase-level state updates in one commit
+
+**NEVER use:**
+
+- `git add .`
+- `git add -A`
+- `git add src/` or any broad directory
+
+**Always stage files individually.**
+</commit_rules>
+
+<success_criteria>
+
+- [ ] All incomplete plans in phase executed
+- [ ] Each plan has SUMMARY.md
+- [ ] Phase goal verified (must_haves checked against codebase)
+- [ ] VERIFICATION.md created in phase directory
+- [ ] STATE.md reflects phase completion
+- [ ] ROADMAP.md updated
+- [ ] REQUIREMENTS.md updated (phase requirements marked Complete)
+- [ ] User informed of next steps
+      </success_criteria>
+
+---
+
+can you try the commit again. I will approve the 1pass request.
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Analysis:
+Let me chronologically analyze the conversation:
+
+1. **Initial Context Loading**: The conversation starts with system reminders loading project state files (STATE.md, ROADMAP.md, REQUIREMENTS.md, CLAUDE.md, ui-brand.md). This is a CipherBox project - a zero-knowledge encrypted cloud storage platform using IPFS/IPNS and Web3Auth.
+
+2. **User Request: `/gsd:plan-phase 16`**: The user invoked the GSD plan-phase skill for Phase 16 (Advanced Sync). This triggers the orchestrator workflow.
+
+3. **Phase 16 Context**: Phase 16 was rescoped from the original roadmap. Originally it included conflict detection, offline queue, and idempotent replay. It was rescoped to conflict detection only via API-level optimistic concurrency on IPNS folder publishes. Offline queue and idempotent replay deferred to M3.
+
+4. **Research Phase**: A gsd-phase-researcher agent was spawned. Key findings:
+   - No new libraries needed
+   - Core change is a single optional field: `expectedSequenceNumber`
+   - 10 web publish call sites and 6 desktop publish call sites identified
+   - Batch publish needs restructuring for conflict detection
+   - DB-level atomicity recommended over application-level
+
+5. **Initial Planning**: A gsd-planner agent created 3 plans in 2 waves:
+   - Wave 1: Plan 16-01 (API optimistic concurrency)
+   - Wave 2: Plan 16-02 (Web client), Plan 16-03 (Desktop client)
+
+6. **First Verification**: gsd-plan-checker passed with informational notes.
+
+7. **User Question about E2E Tests**: The user asked: "does the plan include thorough e2e test cases for all the changed behaviors? Does the requirement of ensuring this functionality is covered by e2e tests change the implementation plan at all?"
+
+8. **E2E Test Gap Identified**: I found the plans had zero E2E tests - only API unit tests and build checks.
+
+9. **User Response to E2E Question**: User selected "Add Plan 04 for E2E tests" and added: "what about testing the conflict resolution behavior on the desktop clients? there are already desktop-e2e tests that test round-tripping data, so it should be possible to simulate various conflict scenarios there as well."
+
+10. **Plans 04 and 05 Added**: The planner created:
+    - Plan 16-04: Web E2E Tests (Playwright)
+    - Plan 16-05: Desktop E2E Tests (bash/PowerShell)
+
+11. **Second Verification (Issues Found)**: The checker found 2 blockers and 4 warnings:
+    - Blocker 1: Plan 03 desktop retry re-encrypts SAME metadata instead of re-fetching remote state
+    - Blocker 2: Plan 02 doesn't address `checkAndRotateIfNeeded` conflict handling
+    - Warning: Plan 02 Task 2 too dense, subfolder re-sync not detailed, dummy record warning, write_ops.rs missing from files_modified
+
+12. **Revision**: Planner addressed all 6 issues.
+
+13. **Third Verification**: All checks passed.
+
+14. **User Request: `/gsd:execute-phase 16`**: User cleared context and invoked execution.
+
+15. **Wave 1 Execution**: Plan 16-01 spawned. Hit 1Password SSH agent issue - couldn't sign commits from subagent process.
+
+16. **Checkpoint**: Presented to user - all code staged but commit blocked.
+
+17. **User Response**: "can you try the commit again. I will approve the 1pass request."
+
+18. **Commit Succeeded**: `0272fef93` - Task 1 committed. Then resumed executor for Task 2 (unit tests).
+
+19. **Plan 16-01 Complete**: 3 commits total (Task 1, Task 2 tests, SUMMARY/docs).
+
+20. **Wave 2 Execution**: All 4 plans spawned in parallel with sonnet model:
+    - 16-02: Web client - 3 tasks, 4 commits
+    - 16-03: Desktop client - 2 tasks, 3 commits
+    - 16-04: Web E2E - 1 task, 2 commits
+    - 16-05: Desktop E2E - 2 tasks, 3 commits
+
+21. **Verification**: gsd-verifier confirmed 3/3 must-haves against actual codebase.
+
+22. **Phase Completion**: Updated STATE.md, ROADMAP.md, REQUIREMENTS.md. Committed `19dcff8c0`.
+
+23. **Current state**: Phase 16 is complete. Next up is Phase 17 (AWS Nitro TEE).
+
+Key files modified across all plans:
+- API: `apps/api/src/ipns/dto/publish.dto.ts`, `ipns.service.ts`, `ipns.controller.ts`, `ipns.service.spec.ts`
+- Web: `apps/web/src/lib/errors.ts`, `services/ipns.service.ts`, `services/folder.service.ts`, `hooks/useFolderMutations.ts`, `hooks/useFileOperations.ts`, `stores/sync.store.ts`, `components/file-browser/SyncIndicator.tsx`, `App.css`
+- Desktop: `apps/desktop/src-tauri/src/api/ipns.rs`, `fuse/mod.rs`, `fuse/write_ops.rs`, `fuse/operations.rs`, `fuse/windows/write_ops.rs`, `fuse/windows/operations.rs`
+- E2E Web: `tests/e2e/utils/conflict-helpers.ts`, `tests/e2e/tests/conflict-detection.spec.ts`
+- E2E Desktop: `tests/e2e-desktop/scripts/test-conflict-detection.sh`, `.ps1`, `run-all.sh`, `run-all.ps1`
+- Planning: STATE.md, ROADMAP.md, REQUIREMENTS.md, VERIFICATION.md, 5 SUMMARY.md files
+
+Summary:
+1. Primary Request and Intent:
+   The user requested planning and execution of Phase 16 (Advanced Sync) of the CipherBox project. This phase implements conflict detection via API-level optimistic concurrency on IPNS folder publishes. The scope was rescoped from the original roadmap — offline queue (SYNC-05) and idempotent replay (SYNC-06) were deferred to Milestone 3, leaving only SYNC-04 (conflict detection). The user explicitly requested E2E test coverage for both web and desktop platforms after reviewing initial plans, which led to adding 2 additional plans (16-04 and 16-05). The full workflow was: `/gsd:plan-phase 16` → review → add E2E tests → revision for blockers → `/gsd:execute-phase 16` → verification → phase completion.
+
+2. Key Technical Concepts:
+   - **Optimistic concurrency control**: Client sends `expectedSequenceNumber` with publish requests; API compares against stored value in `folder_ipns` table
+   - **HTTP 409 Conflict response**: API returns `{ message, currentSequenceNumber }` when sequence mismatch detected
+   - **Single retry with jitter**: On conflict, client re-syncs folder metadata from remote, re-applies local mutation, adds 100-500ms jitter, retries once. Persistent conflict surfaces error.
+   - **Additive merge on desktop**: `merge_folder_children()` uses HashMap-based diff to preserve changes from both devices during conflict resolution
+   - **Folder-only conflict detection**: Per-file IPNS uses last-write-wins; versioning (Phase 13) is the safety net
+   - **Backward compatibility**: `expectedSequenceNumber` is optional — absent means unconditional publish (TEE republish, per-file publishes, old clients)
+   - **Batch publish conflict**: If any folder record in a batch conflicts, entire batch fails with 409
+   - **`checkAndRotateIfNeeded` handling**: Lazy key rotation catches 409, returns new key, defers metadata re-encryption to next sync cycle
+   - **E2E conflict simulation**: `bumpServerSequence` helper publishes without `expectedSequenceNumber` (unconditional) to advance server-side sequence, making client's local state stale
+
+3. Files and Code Sections:
+
+   - **`apps/api/src/ipns/dto/publish.dto.ts`**
+     - Added optional `expectedSequenceNumber` field to `PublishIpnsDto` and `PublishIpnsEntryDto`
+     - Foundation for the entire conflict detection protocol
+
+   - **`apps/api/src/ipns/ipns.service.ts`**
+     - Added `ConflictException` import, conflict check in `upsertFolderIpns` (BigInt comparison at lines 177-189)
+     - Threaded `expectedSequenceNumber` through `publishRecord` and `publishBatch`
+     - Batch re-throws `ConflictException` to fail entire batch
+
+   - **`apps/api/src/ipns/ipns.controller.ts`**
+     - Added 409 Conflict `@ApiResponse` to both publish endpoints
+
+   - **`apps/api/src/ipns/ipns.service.spec.ts`**
+     - 5 new unit tests in `describe('conflict detection')`: stale rejection (409), matching acceptance, backward compat (no field), batch folder conflict, batch folder success
+     - All 44 tests pass
+
+   - **`apps/web/src/lib/errors.ts`**
+     - `isConflictError()` detects HTTP 409 from Orval's custom-instance error shape (`.status === 409`)
+
+   - **`apps/web/src/services/ipns.service.ts`**
+     - Both `createAndPublishIpnsRecord` and `batchPublishIpnsRecords` accept and forward `expectedSequenceNumber`
+
+   - **`apps/web/src/services/folder.service.ts`**
+     - `updateFolderMetadata` passes pre-increment sequence as `expectedSequenceNumber` (line 271)
+     - `buildFolderIpnsRecord` includes it in folder batch records
+     - `checkAndRotateIfNeeded` catches 409, logs warning, returns new key, defers metadata re-publish
+
+   - **`apps/web/src/hooks/useFolderMutations.ts`**
+     - All 6 mutation handlers (create, rename, move, moveItems, delete, deleteItems) wrap with conflict retry
+     - `resyncFolder()` helper re-resolves specific folder's IPNS, fetches fresh metadata, updates store
+
+   - **`apps/web/src/hooks/useFileOperations.ts`**
+     - `addFile`/`addFiles` catch 409 on batch publish and retry
+
+   - **`apps/web/src/stores/sync.store.ts`**
+     - `'conflict'` SyncStatus type, `conflictMessage`, `setConflict()`, `clearConflict()` actions
+
+   - **`apps/web/src/components/file-browser/SyncIndicator.tsx`**
+     - Amber spinning icon during conflict re-sync with `conflictMessage` as tooltip (line 32)
+
+   - **`apps/web/src/App.css`**
+     - `.sync-indicator-icon--conflict` CSS class with amber color (line 2361)
+
+   - **`apps/desktop/src-tauri/src/api/ipns.rs`**
+     - `PublishResult` enum with `Success` and `Conflict { current_sequence_number }` variants (lines 10-18)
+     - `expected_sequence_number: Option<String>` on `IpnsPublishRequest` (skip_serializing_if = None)
+     - `publish_ipns` returns `Result<PublishResult, String>` — 409 parsed to `Conflict`
+
+   - **`apps/desktop/src-tauri/src/fuse/mod.rs`**
+     - `merge_folder_children()`: additive merge using IPNS name as stable key (lines 375-453)
+     - `spawn_metadata_publish` sends `expected_sequence_number: Some(seq)` and handles 409 with full re-sync + merge + retry
+
+   - **`apps/desktop/src-tauri/src/fuse/write_ops.rs`** (+ windows variant)
+     - All `IpnsPublishRequest` construction sites updated: folder=`Some(seq)`, file/vault/registry=`None`
+
+   - **`tests/e2e/utils/conflict-helpers.ts`**
+     - `bumpServerSequence` helper: calls `POST /ipns/publish` without `expectedSequenceNumber` to unconditionally increment server sequence
+     - JSDoc notes about expected delegated routing warning from dummy base64 record
+
+   - **`tests/e2e/tests/conflict-detection.spec.ts`**
+     - Test 1: Upload file with stale sequence → conflict → re-sync → retry → file appears
+     - Test 2: Create folder with stale parent sequence → same flow
+     - Test 3 (negative): Per-file IPNS update doesn't trigger conflict detection
+
+   - **`tests/e2e-desktop/scripts/test-conflict-detection.sh`** (+ `.ps1`)
+     - `bump_server_sequence` helper (bash) / `Invoke-BumpServerSequence` (PowerShell)
+     - Test 1: Write file via FUSE, bump seq, write second file → both readable after 15s
+     - Test 2: mkdir via FUSE, bump seq, nested file → both accessible
+
+   - **`tests/e2e-desktop/scripts/run-all.sh`** (+ `.ps1`)
+     - Added Step 4 (conflict detection) with failure count aggregation
+
+   - **Planning files updated**: `.planning/STATE.md`, `.planning/ROADMAP.md`, `.planning/REQUIREMENTS.md`, `.planning/phases/16-advanced-sync/16-VERIFICATION.md`
+
+4. Errors and fixes:
+   - **1Password SSH agent unavailable for commit signing**:
+     - The gsd-executor subagent couldn't access the 1Password SSH signing agent (`/Applications/1Password.app/Contents/MacOS/op-ssh-sign`) from the subprocess
+     - This is a known issue documented in MEMORY.md — GSD agent subprocesses can't access 1Password SSH agent
+     - Three commit attempts failed with `error: 1Password: failed to fill whole buffer`
+     - Fix: Presented checkpoint to user, user said "can you try the commit again. I will approve the 1pass request." I committed from the orchestrator level (not subagent) and user approved the 1Password prompt. Commit succeeded as `0272fef93`.
+     - Then resumed execution with a fresh executor agent that had the Task 1 commit hash.
+
+   - **Plan verification blockers (caught during planning, before execution)**:
+     - Blocker 1: Plan 03 desktop retry re-encrypted SAME metadata instead of re-fetching remote state — would overwrite other device's changes. Fixed by changing to: re-fetch remote → merge local mutation onto fresh children → retry.
+     - Blocker 2: Plan 02 didn't address `checkAndRotateIfNeeded` (lazy key rotation). Fixed by adding Part B to Task 2 wrapping in try/catch for 409.
+     - Warning: Plan 02 Task 2 too dense (6 files). Fixed by splitting into Task 2 (services) and Task 3 (hooks + store + UI).
+     - Warning: Subfolder re-sync path not detailed. Fixed by specifying full path: resolve IPNS → fetch CID → decrypt with folder key → update store.
+
+5. Problem Solving:
+   - **Missing E2E tests**: User identified that initial 3-plan design had no E2E tests. Added Plans 16-04 (Playwright web) and 16-05 (bash/PowerShell desktop) to properly test conflict detection behavior end-to-end.
+   - **Desktop retry strategy flaw**: Plan checker identified that desktop client would detect conflicts but then overwrite anyway (re-encrypting same metadata). Fixed to re-fetch remote state and merge before retrying, matching web client approach.
+   - **Parallel execution coordination**: Wave 2 had 4 plans running in parallel. E2E test plans (04, 05) were written based on expected behavior specs rather than depending on implementation details from Plans 02/03 which were executing simultaneously.
+
+6. All user messages:
+   - `/gsd:plan-phase 16` (initial request to plan Phase 16)
+   - "question: does the plan include thorough e2e test cases for all the changed behaviors? Does the requirement of ensuring this functionality is covered by e2e tests change the implementation plan at all?"
+   - Selected "Add Plan 04 for E2E tests (Recommended)" with note: "the web side sounds good. what about testing the conflict resolution behavior on the desktop clients? there are already desktop-e2e tests that test round-tripping data, so it should be possible to simulate various conflict scenarios there as well."
+   - `/gsd:execute-phase 16` (request to execute the phase)
+   - "can you try the commit again. I will approve the 1pass request."
+
+7. Pending Tasks:
+   - None explicitly pending. Phase 16 is fully complete and verified.
+
+8. Current Work:
+   Phase 16 (Advanced Sync) has been fully planned, executed, verified, and completed. The final commit was `19dcff8c0` which updated ROADMAP.md, STATE.md, REQUIREMENTS.md (SYNC-04 marked Complete), and created VERIFICATION.md. The phase achieved 3/3 must-haves verified against actual codebase:
+   1. Conflict detection via sequence number mismatch (API 409)
+   2. Automatic re-sync and single retry on both web and desktop clients
+   3. Persistent conflicts surface error without infinite loops
+
+   Total commits on `feat/phase-16-advanced-sync` branch: ~15 commits across 5 plans plus phase completion.
+
+9. Optional Next Step:
+   The phase completion banner suggested: **Phase 17: AWS Nitro TEE** — `/gsd:discuss-phase 17`. However, the user has not explicitly requested this. The user's last explicit task (execute Phase 16) is complete. No next step should be taken without user confirmation.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.claude/projects/-Users-michael-Code-cipher-box/4df4fe75-007e-479d-98ea-2206ff4e433f.jsonl
+
+---
+
+can you run the new e2e tests (both desktop and web) locally to ensure everything passes. The full stack will need to be brought up locally, with the api pointed at 192.168.133.114 for all docker services (postgres, redis, ipfs).

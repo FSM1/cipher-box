@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "f31291f127ce",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-16-advanced-sync",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/e2e/page-objects/file-browser/upload-zone.page.ts",
+    "tests/e2e/tests/conflict-detection.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f3/1291f127ce/0/metadata.json",
+      "transcript": "/f3/1291f127ce/0/full.jsonl",
+      "context": "/f3/1291f127ce/0/context.md",
+      "content_hash": "/f3/1291f127ce/0/content_hash.txt",
+      "prompt": "/f3/1291f127ce/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2262,
+    "cache_creation_tokens": 375006,
+    "cache_read_tokens": 12306513,
+    "output_tokens": 36024,
+    "api_call_count": 109
+  }
+}
