@@ -224,6 +224,10 @@ Recent decisions affecting current work:
 | Application-level read-compare-write for optimistic concurrency        | 16-01     | Sufficient for v1; TOCTOU mitigated by per-folder publish lock + sequential single-user API requests                 |
 | Backward compat: omitting expectedSequenceNumber = unconditional       | 16-01     | Existing clients and TEE republishes unaffected by new conflict detection                                            |
 | Batch publish aborts entirely on folder conflict                       | 16-01     | Clear signal for client to re-sync; no partial success ambiguity                                                     |
+| isConflictError checks .status === 409 on Error object (not wrapper)   | 16-02     | Orval custom-instance attaches status as property on thrown Error; no response wrapper needed                        |
+| handleUpdateFile no conflict detection (file-only publish)             | 16-02     | File content update publishes only per-file IPNS; no folder metadata touched, no 409 possible from that path         |
+| resyncFolder helper: resolveIpnsRecord + fetchAndDecryptMetadata       | 16-02     | Re-sync works for root and subfolders identically; called with specific folder's ipnsName (not hardcoded root)       |
+| Single retry with 100-500ms jitter on 409 conflict                     | 16-02     | Breaks symmetry between concurrent clients; persistent conflict after retry surfaces error to user                   |
 | bumpServerSequence uses unconditional publish (omit expectedSeq)       | 16-04     | Simpler than matching exact sequence for bump; no IPNS key material needed in tests                                  |
 | Dummy base64 record for test sequence bumps (delegated routing warn)   | 16-04     | Only DB sequence bump needed; delegated routing warning expected and documented                                      |
 | PublishResult enum (Success/Conflict) returned by Rust publish_ipns    | 16-03     | Compiler enforces exhaustive match; no silent failure possible on conflict detection                                 |
@@ -292,7 +296,7 @@ Recent decisions affecting current work:
 - Phase 14 (Sharing): COMPLETE -- research done, 6 plans created, all 6 executed
 - Phase 15 (Link Sharing): COMPLETE -- ephemeral key bridge pattern, HashRouter fragment handling, unauthenticated endpoint design researched; 4 plans created
 - Phase 15.1 (Client-Side Search): COMPLETE -- 3 plans done (search index service, search UI & integration, E2E search tests)
-- Phase 16 (Advanced Sync): IN PROGRESS -- 4/5 plans complete (optimistic concurrency, web client conflict handling, desktop FUSE, E2E tests)
+- Phase 16 (Advanced Sync): COMPLETE -- 5/5 plans done (API optimistic concurrency, web client conflict handling, desktop FUSE conflict, E2E web tests, E2E desktop tests)
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
 - Phase 12.1 (AES-CTR Streaming): COMPLETE -- all 4 plans done (CTR crypto primitives, streaming upload pipeline, service worker decrypt proxy, media playback integration)
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
