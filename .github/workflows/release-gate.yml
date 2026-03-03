@@ -163,8 +163,7 @@ jobs:
                   exit 1
                 fi
                 # Verify the e2e-desktop jobs actually ran (not skipped)
-                run_executed_tests "$HEAD_RUN_ID"
-                rc=$?
+                run_executed_tests "$HEAD_RUN_ID" && rc=0 || rc=$?
                 if [ "$rc" -eq 2 ]; then
                   exit 1
                 elif [ "$rc" -eq 0 ]; then
@@ -228,8 +227,7 @@ jobs:
                 break
               fi
               # Success run — verify tests actually executed
-              run_executed_tests "$run_id"
-              rc=$?
+              run_executed_tests "$run_id" && rc=0 || rc=$?
               if [ "$rc" -eq 2 ]; then
                 exit 1
               elif [ "$rc" -eq 0 ]; then
