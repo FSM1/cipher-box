@@ -1425,3 +1425,243 @@ pub fn unmount_filesystem() -> Result<(), String> {
         ))
     }
 }
+
+#[cfg(test)]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+mod tests {
+    use super::merge_folder_children;
+    use crate::crypto::folder::{FilePointer, FolderChild, FolderEntry, FolderMetadata};
+
+    // ── Helpers ───────────────────────────────────────────────────────────
+
+    fn make_folder(ipns: &str, name: &str) -> FolderChild {
+        FolderChild::Folder(FolderEntry {
+            id: format!("id-{}", name),
+            name: name.to_string(),
+            ipns_name: ipns.to_string(),
+            folder_key_encrypted: "encrypted-key".to_string(),
+            ipns_private_key_encrypted: "encrypted-ipns-key".to_string(),
+            created_at: 1000,
+            modified_at: 2000,
+        })
+    }
+
+    fn make_file(ipns: &str, name: &str) -> FolderChild {
+        FolderChild::File(FilePointer {
+            id: format!("id-{}", name),
+            name: name.to_string(),
+            file_meta_ipns_name: ipns.to_string(),
+            ipns_private_key_encrypted: None,
+            created_at: 1000,
+            modified_at: 2000,
+        })
+    }
+
+    fn metadata(children: Vec<FolderChild>) -> FolderMetadata {
+        FolderMetadata {
+            version: "v2".to_string(),
+            children,
+        }
+    }
+
+    fn child_ipns(child: &FolderChild) -> &str {
+        match child {
+            FolderChild::Folder(f) => &f.ipns_name,
+            FolderChild::File(f) => &f.file_meta_ipns_name,
+        }
+    }
+
+    fn child_name(child: &FolderChild) -> &str {
+        match child {
+            FolderChild::Folder(f) => &f.name,
+            FolderChild::File(f) => &f.name,
+        }
+    }
+
+    // ── merge_folder_children tests ──────────────────────────────────────
+
+    #[test]
+    fn merge_both_empty() {
+        let local = metadata(vec![]);
+        let remote = metadata(vec![]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.version, "v2");
+        assert!(merged.children.is_empty());
+    }
+
+    #[test]
+    fn merge_local_empty_preserves_remote() {
+        let local = metadata(vec![]);
+        let remote = metadata(vec![
+            make_file("ipns-a", "photo.jpg"),
+            make_folder("ipns-b", "docs"),
+        ]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 2);
+        assert_eq!(child_ipns(&merged.children[0]), "ipns-a");
+        assert_eq!(child_ipns(&merged.children[1]), "ipns-b");
+    }
+
+    #[test]
+    fn merge_remote_empty_preserves_local() {
+        let local = metadata(vec![
+            make_file("ipns-a", "photo.jpg"),
+            make_folder("ipns-b", "docs"),
+        ]);
+        let remote = metadata(vec![]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 2);
+        assert_eq!(child_ipns(&merged.children[0]), "ipns-a");
+        assert_eq!(child_ipns(&merged.children[1]), "ipns-b");
+    }
+
+    #[test]
+    fn merge_identical_children_uses_local_version() {
+        let local = metadata(vec![make_file("ipns-a", "local-name.jpg")]);
+        let remote = metadata(vec![make_file("ipns-a", "remote-name.jpg")]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 1);
+        // Local version wins (handles rename)
+        assert_eq!(child_name(&merged.children[0]), "local-name.jpg");
+    }
+
+    #[test]
+    fn merge_local_rename_overwrites_remote() {
+        // Same IPNS name, different display name = rename on local device
+        let local = metadata(vec![make_folder("ipns-x", "renamed-folder")]);
+        let remote = metadata(vec![make_folder("ipns-x", "original-folder")]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 1);
+        assert_eq!(child_name(&merged.children[0]), "renamed-folder");
+    }
+
+    #[test]
+    fn merge_disjoint_children_union() {
+        // Local added file-a, remote added file-b => merged has both
+        let local = metadata(vec![make_file("ipns-a", "file-a.txt")]);
+        let remote = metadata(vec![make_file("ipns-b", "file-b.txt")]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 2);
+        let ipns_set: Vec<&str> = merged.children.iter().map(child_ipns).collect();
+        assert!(ipns_set.contains(&"ipns-a"));
+        assert!(ipns_set.contains(&"ipns-b"));
+    }
+
+    #[test]
+    fn merge_preserves_remote_only_children_no_deletion() {
+        // Local has [A, B], remote has [A, B, C].
+        // C is absent from local but MUST be preserved (additive merge).
+        let local = metadata(vec![
+            make_file("ipns-a", "a.txt"),
+            make_file("ipns-b", "b.txt"),
+        ]);
+        let remote = metadata(vec![
+            make_file("ipns-a", "a.txt"),
+            make_file("ipns-b", "b.txt"),
+            make_file("ipns-c", "c.txt"),
+        ]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 3);
+        let ipns_set: Vec<&str> = merged.children.iter().map(child_ipns).collect();
+        assert!(ipns_set.contains(&"ipns-c"), "remote-only child must be preserved");
+    }
+
+    #[test]
+    fn merge_concurrent_additions_from_both_devices() {
+        // Both devices started from [A], local added B, remote added C.
+        let local = metadata(vec![
+            make_file("ipns-a", "a.txt"),
+            make_file("ipns-b", "b-from-local.txt"),
+        ]);
+        let remote = metadata(vec![
+            make_file("ipns-a", "a.txt"),
+            make_file("ipns-c", "c-from-remote.txt"),
+        ]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 3);
+        let ipns_set: Vec<&str> = merged.children.iter().map(child_ipns).collect();
+        assert!(ipns_set.contains(&"ipns-a"));
+        assert!(ipns_set.contains(&"ipns-b"));
+        assert!(ipns_set.contains(&"ipns-c"));
+    }
+
+    #[test]
+    fn merge_mixed_folders_and_files() {
+        let local = metadata(vec![
+            make_folder("ipns-dir", "my-folder"),
+            make_file("ipns-file-1", "readme.md"),
+        ]);
+        let remote = metadata(vec![
+            make_folder("ipns-dir", "my-folder"),
+            make_file("ipns-file-2", "notes.txt"),
+        ]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 3);
+        let ipns_set: Vec<&str> = merged.children.iter().map(child_ipns).collect();
+        assert!(ipns_set.contains(&"ipns-dir"));
+        assert!(ipns_set.contains(&"ipns-file-1"));
+        assert!(ipns_set.contains(&"ipns-file-2"));
+    }
+
+    #[test]
+    fn merge_preserves_remote_order_then_appends_local() {
+        // Merged output should list remote children first (in remote order),
+        // then local-only additions at the end.
+        let local = metadata(vec![
+            make_file("ipns-c", "c.txt"),
+            make_file("ipns-a", "a.txt"),
+        ]);
+        let remote = metadata(vec![
+            make_file("ipns-b", "b.txt"),
+            make_file("ipns-a", "a.txt"),
+        ]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 3);
+        // Remote order: B, A; then local-only: C
+        assert_eq!(child_ipns(&merged.children[0]), "ipns-b");
+        assert_eq!(child_ipns(&merged.children[1]), "ipns-a");
+        assert_eq!(child_ipns(&merged.children[2]), "ipns-c");
+    }
+
+    #[test]
+    fn merge_no_duplicates_when_same_child_in_both() {
+        let local = metadata(vec![
+            make_file("ipns-a", "a.txt"),
+            make_file("ipns-b", "b.txt"),
+        ]);
+        let remote = metadata(vec![
+            make_file("ipns-a", "a.txt"),
+            make_file("ipns-b", "b.txt"),
+        ]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 2, "should not produce duplicates");
+    }
+
+    #[test]
+    fn merge_large_scenario() {
+        // Simulate a folder with many children from different devices.
+        let mut local_children = Vec::new();
+        let mut remote_children = Vec::new();
+
+        // Shared children (0..10)
+        for i in 0..10 {
+            local_children.push(make_file(&format!("ipns-shared-{}", i), &format!("shared-{}.txt", i)));
+            remote_children.push(make_file(&format!("ipns-shared-{}", i), &format!("shared-{}.txt", i)));
+        }
+        // Local-only children (10..15)
+        for i in 10..15 {
+            local_children.push(make_file(&format!("ipns-local-{}", i), &format!("local-{}.txt", i)));
+        }
+        // Remote-only children (15..20)
+        for i in 15..20 {
+            remote_children.push(make_file(&format!("ipns-remote-{}", i), &format!("remote-{}.txt", i)));
+        }
+
+        let local = metadata(local_children);
+        let remote = metadata(remote_children);
+        let merged = merge_folder_children(&local, remote);
+
+        // 10 shared + 5 local-only + 5 remote-only = 20
+        assert_eq!(merged.children.len(), 20);
+    }
+}
