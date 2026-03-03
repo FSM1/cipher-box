@@ -127,7 +127,7 @@ jobs:
 
           # First check if there's a desktop E2E run for HEAD (may still be running)
           HEAD_STATUS=$(gh run list --repo ${{ github.repository }} \
-            --workflow=e2e-desktop.yml --branch=main --limit=5 \
+            --workflow=e2e-desktop.yml --branch=main --limit=50 \
             --json headSha,conclusion,status \
             --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].status // empty")
 
@@ -138,7 +138,7 @@ jobs:
 
             for attempt in $(seq 1 $MAX_ATTEMPTS); do
               CONCLUSION=$(gh run list --repo ${{ github.repository }} \
-                --workflow=e2e-desktop.yml --branch=main --limit=5 \
+                --workflow=e2e-desktop.yml --branch=main --limit=50 \
                 --json headSha,conclusion,status \
                 --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].conclusion // empty")
 
@@ -182,7 +182,7 @@ jobs:
           # Get recent completed desktop E2E runs (newest first) and find the
           # most recent one whose commit is within the release range
           RUNS=$(gh run list --repo ${{ github.repository }} \
-            --workflow=e2e-desktop.yml --branch=main --limit=20 \
+            --workflow=e2e-desktop.yml --branch=main --limit=50 \
             --json headSha,conclusion,status \
             --jq '.[] | select(.status == "completed") | "\(.headSha) \(.conclusion)"')
 
