@@ -132,7 +132,7 @@ Requirements for production release. Each maps to roadmap phases 12+.
 
 ### Advanced Sync
 
-- [ ] **SYNC-04**: Client detects conflicts via IPNS sequence number mismatch before publishing
+- [x] **SYNC-04**: Client detects conflicts via IPNS sequence number mismatch before publishing
 - [ ] **SYNC-05**: Offline write operations are queued locally and replayed on reconnect
 - [ ] **SYNC-06**: Queued operations use idempotency keys to prevent duplicate application
 
@@ -359,7 +359,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SRCH-01     | Phase 15.1 | Complete |
 | SRCH-02     | Phase 15.1 | Complete |
 | SRCH-03     | Phase 15.1 | Complete |
-| SYNC-04     | Phase 16   | Pending  |
+| SYNC-04     | Phase 16   | Complete |
 | SYNC-05     | Phase 16   | Pending  |
 | SYNC-06     | Phase 16   | Pending  |
 | TEE-06      | Phase 17   | Pending  |
