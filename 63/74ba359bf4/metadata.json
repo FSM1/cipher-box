@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "6374ba359bf4",
+  "strategy": "manual-commit",
+  "branch": "fix/e2e-conflict-persist",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/ipns/ipns.service.spec.ts",
+    "apps/api/src/ipns/ipns.service.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/63/74ba359bf4/0/metadata.json",
+      "transcript": "/63/74ba359bf4/0/full.jsonl",
+      "context": "/63/74ba359bf4/0/context.md",
+      "content_hash": "/63/74ba359bf4/0/content_hash.txt",
+      "prompt": "/63/74ba359bf4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 600,
+    "cache_creation_tokens": 208798,
+    "cache_read_tokens": 5588917,
+    "output_tokens": 57479,
+    "api_call_count": 61
+  }
+}

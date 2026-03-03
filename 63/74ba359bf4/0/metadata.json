@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "6374ba359bf4",
+  "session_id": "d2887769-6c79-4828-b3f3-c2532462dd55",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-03T17:30:39.610876Z",
+  "branch": "fix/e2e-conflict-persist",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/ipns/ipns.service.spec.ts",
+    "apps/api/src/ipns/ipns.service.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "cd7489173550",
+  "token_usage": {
+    "input_tokens": 600,
+    "cache_creation_tokens": 208798,
+    "cache_read_tokens": 5588917,
+    "output_tokens": 57479,
+    "api_call_count": 61
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-03T17:30:38.53813Z",
+    "agent_lines": 0,
+    "human_added": 18,
+    "human_modified": 12,
+    "human_removed": 0,
+    "total_committed": 18,
+    "agent_percentage": 0
+  }
+}
