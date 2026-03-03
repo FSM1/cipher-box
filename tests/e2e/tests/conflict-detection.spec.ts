@@ -106,9 +106,22 @@ test.describe.serial('Conflict Detection', () => {
       });
     }
 
-    // Verify we're on the files page and the vault is accessible
+    // Verify we're on the files page and the vault is accessible.
+    // Wait for either the file list grid (non-empty folder) or empty state (fresh vault).
     await page.waitForURL('**/files', { timeout: 60000 });
-    await fileList.fileListContainer().waitFor({ state: 'visible', timeout: 30000 });
+    await Promise.race([
+      fileList.fileListContainer().waitFor({ state: 'visible', timeout: 30000 }),
+      page.locator('[data-testid="empty-state"]').waitFor({ state: 'visible', timeout: 30000 }),
+    ]);
+
+    // Seed: upload a file to ensure the root folder IPNS record exists.
+    // For a fresh vault, no IPNS record is published until the first mutation.
+    // bumpServerSequence needs an existing record to resolve, so we bootstrap here.
+    const seedFileName = `seed-${runId}.txt`;
+    const seedFile = createTestTextFile(seedFileName, 'seed file for conflict tests');
+    await uploadZone.uploadFile(seedFile.path);
+    await fileList.waitForItemToAppear(seedFileName, { timeout: 60000 });
+    createdItems.push({ name: seedFileName, type: 'file' });
   });
 
   test.afterAll(async () => {
