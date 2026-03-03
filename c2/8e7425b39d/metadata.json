@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "c28e7425b39d",
+  "strategy": "manual-commit",
+  "branch": "docs/add-phase-18-recycle-bin",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md",
+    ".planning/milestones/m3/ROADMAP.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c2/8e7425b39d/0/metadata.json",
+      "transcript": "/c2/8e7425b39d/0/full.jsonl",
+      "context": "/c2/8e7425b39d/0/context.md",
+      "content_hash": "/c2/8e7425b39d/0/content_hash.txt",
+      "prompt": "/c2/8e7425b39d/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 17,
+    "cache_creation_tokens": 55776,
+    "cache_read_tokens": 955081,
+    "output_tokens": 6054,
+    "api_call_count": 13
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "c28e7425b39d",
+  "session_id": "86ef3d81-0d40-4d39-b561-2a3c04ae81f7",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-03T19:32:26.301102Z",
+  "branch": "docs/add-phase-18-recycle-bin",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/STATE.md",
+    ".planning/milestones/m3/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "138d9732840a",
+  "token_usage": {
+    "input_tokens": 17,
+    "cache_creation_tokens": 55776,
+    "cache_read_tokens": 955081,
+    "output_tokens": 6054,
+    "api_call_count": 13
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-03T19:32:25.263509Z",
+    "agent_lines": 55,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 55,
+    "agent_percentage": 100
+  }
+}
