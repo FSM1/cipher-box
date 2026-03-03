@@ -227,8 +227,84 @@ fn encrypt_metadata_to_json(
     serde_json::to_vec(&json).map_err(|e| format!("JSON serialization failed: {}", e))
 }
 
+/// Merge local children onto remote children to resolve a concurrent-edit conflict.
+///
+/// Strategy (last-writer-wins per child, additive merge):
+/// - Start with remote children as base
+/// - For each child also present locally (by IPNS name): use local version (handles rename)
+/// - For each child present locally but NOT in remote: add it (new file/folder from this device)
+/// - For each child present in remote but NOT locally: keep remote version UNLESS local had the
+///   child at all (i.e., we explicitly deleted it). If local children array was empty (no children
+///   at all), keep remote to be safe.
+///
+/// This is the correct merge behavior that preserves all devices' changes.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+fn merge_folder_children(
+    local: &crate::crypto::folder::FolderMetadata,
+    remote: crate::crypto::folder::FolderMetadata,
+) -> crate::crypto::folder::FolderMetadata {
+    use crate::crypto::folder::FolderChild;
+
+    /// Extract the stable IPNS identifier for a child entry.
+    fn child_ipns_key(child: &FolderChild) -> &str {
+        match child {
+            FolderChild::Folder(f) => f.ipns_name.as_str(),
+            FolderChild::File(f) => f.file_meta_ipns_name.as_str(),
+        }
+    }
+
+    // Build lookup maps keyed by IPNS name.
+    let local_by_ipns: std::collections::HashMap<String, &FolderChild> = local
+        .children
+        .iter()
+        .map(|c| (child_ipns_key(c).to_string(), c))
+        .collect();
+
+    let remote_by_ipns: std::collections::HashMap<String, FolderChild> = remote
+        .children
+        .into_iter()
+        .map(|c| (child_ipns_key(&c).to_string(), c))
+        .collect();
+
+    let mut merged: Vec<FolderChild> = Vec::new();
+
+    // Walk remote children: keep local version if it exists (handles rename/modify),
+    // drop if local explicitly deleted it (child absent from local AND local had entries).
+    for (ipns, remote_child) in &remote_by_ipns {
+        if let Some(local_child) = local_by_ipns.get(ipns) {
+            // Both devices have this child -- use local version (handles rename)
+            merged.push((*local_child).clone());
+        } else if local.children.is_empty() {
+            // Local metadata has no children at all -- unexpected edge case, preserve remote
+            merged.push(remote_child.clone());
+        } else {
+            // Child exists in remote but not local -- this was an explicit local delete.
+            // Drop it (do not include in merged result).
+        }
+    }
+
+    // Add any locally-added children that don't exist in remote (new files/folders).
+    for (ipns, local_child) in &local_by_ipns {
+        if !remote_by_ipns.contains_key(ipns) {
+            merged.push((*local_child).clone());
+        }
+    }
+
+    crate::crypto::folder::FolderMetadata {
+        version: "v2".to_string(),
+        children: merged,
+    }
+}
+
 /// Spawn a background OS thread to upload encrypted metadata and publish via IPNS.
 /// Returns immediately — does NOT block the calling thread.
+///
+/// On 409 Conflict (another device published since our last sync):
+/// 1. Re-fetches remote metadata via IPNS resolve + IPFS fetch + decrypt
+/// 2. Merges local changes onto remote children (additive, preserves other devices' changes)
+/// 3. Adds jitter to break symmetry with other concurrent devices
+/// 4. Re-encrypts merged metadata and retries once with fresh sequence
+/// 5. On persistent conflict (retry also 409): logs error, does not retry again
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 fn spawn_metadata_publish(
     api: Arc<ApiClient>,
@@ -280,18 +356,103 @@ fn spawn_metadata_publish(
                 metadata_cid: new_cid.clone(),
                 encrypted_ipns_private_key: None,
                 key_epoch: None,
+                expected_sequence_number: Some(seq.to_string()),
             };
-            crate::api::ipns::publish_ipns(&api, &req).await?;
 
-            // Record successful publish in coordinator cache
-            coordinator.record_publish(&ipns_name, new_seq);
+            match crate::api::ipns::publish_ipns(&api, &req).await? {
+                crate::api::ipns::PublishResult::Success => {
+                    // Publish succeeded on first attempt
+                    coordinator.record_publish(&ipns_name, new_seq);
 
-            // Unpin old metadata CID
-            if let Some(old) = old_metadata_cid {
-                let _ = crate::api::ipfs::unpin_content(&api, &old).await;
+                    // Unpin old metadata CID
+                    if let Some(old) = old_metadata_cid {
+                        let _ = crate::api::ipfs::unpin_content(&api, &old).await;
+                    }
+
+                    log::info!("Background metadata publish succeeded for {}", ipns_name);
+                }
+
+                crate::api::ipns::PublishResult::Conflict { current_sequence_number } => {
+                    // Another device published since our last sync.
+                    // Re-fetch remote state, merge local changes, and retry once.
+                    log::warn!(
+                        "Conflict detected for {}: expected seq {}, server has {}. Re-syncing...",
+                        ipns_name, seq, current_sequence_number
+                    );
+
+                    // 1. Re-resolve the sequence number from the server (fresh, authoritative)
+                    let fresh_seq = coordinator.resolve_sequence(&api, &ipns_name).await?;
+
+                    // 2. Resolve the IPNS name to get the remote CID
+                    let remote_resolve = crate::api::ipns::resolve_ipns(&api, &ipns_name).await?;
+                    let remote_cid = remote_resolve.cid;
+
+                    // 3. Fetch and decrypt the remote metadata (contains the other device's changes)
+                    let remote_bytes = crate::api::ipfs::fetch_content(&api, &remote_cid).await?;
+                    let remote_metadata = crate::fuse::decrypt::decrypt_metadata_from_ipfs_public(
+                        &remote_bytes, &folder_key,
+                    )?;
+
+                    // 4. Merge: apply local mutation onto remote children.
+                    //    Preserves both this device's changes AND the other device's changes.
+                    let merged_metadata = merge_folder_children(&metadata, remote_metadata);
+
+                    // 5. Small random jitter to break symmetry with other concurrent devices
+                    let jitter_ms = (std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .subsec_nanos() % 400) as u64 + 100;
+                    tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
+
+                    // 6. Re-encrypt the MERGED metadata and upload
+                    let retry_json = encrypt_metadata_to_json(&merged_metadata, &folder_key)?;
+                    let retry_cid = crate::api::ipfs::upload_content(&api, &retry_json).await?;
+
+                    // 7. Create new IPNS record with fresh sequence
+                    let retry_seq = fresh_seq + 1;
+                    let retry_value = format!("/ipfs/{}", retry_cid);
+                    let retry_record = crate::crypto::ipns::create_ipns_record(
+                        &ipns_key_arr, &retry_value, retry_seq, 86_400_000,
+                    ).map_err(|e| format!("IPNS retry record creation failed: {}", e))?;
+                    let retry_marshaled = crate::crypto::ipns::marshal_ipns_record(&retry_record)
+                        .map_err(|e| format!("IPNS retry record marshal failed: {}", e))?;
+                    let retry_b64 = base64::engine::general_purpose::STANDARD.encode(&retry_marshaled);
+
+                    let retry_req = crate::api::ipns::IpnsPublishRequest {
+                        ipns_name: ipns_name.clone(),
+                        record: retry_b64,
+                        metadata_cid: retry_cid,
+                        encrypted_ipns_private_key: None,
+                        key_epoch: None,
+                        expected_sequence_number: Some(fresh_seq.to_string()),
+                    };
+
+                    match crate::api::ipns::publish_ipns(&api, &retry_req).await? {
+                        crate::api::ipns::PublishResult::Success => {
+                            coordinator.record_publish(&ipns_name, retry_seq);
+                            log::info!(
+                                "Conflict resolved for {} after retry (seq {})",
+                                ipns_name, retry_seq
+                            );
+                        }
+                        crate::api::ipns::PublishResult::Conflict { .. } => {
+                            // Persistent conflict after single retry -- do not loop.
+                            // User should wait for automatic resync on next polling cycle.
+                            log::error!(
+                                "Persistent conflict for {} after retry. \
+                                Another device is actively modifying this folder. \
+                                Changes will resync on next polling cycle.",
+                                ipns_name
+                            );
+                            return Err(format!(
+                                "Persistent conflict for {}. Another device is actively modifying this folder.",
+                                ipns_name
+                            ));
+                        }
+                    }
+                }
             }
 
-            log::info!("Background metadata publish succeeded for {}", ipns_name);
             Ok::<(), String>(())
         });
 

@@ -281,14 +281,24 @@ pub(crate) mod implementation {
 
         let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
 
+        // Per-file IPNS publishes do not use conflict detection -- file metadata
+        // is owned by the file's own IPNS keypair and conflicts are inherently
+        // avoided by the per-file sequence number management.
         let req = crate::api::ipns::IpnsPublishRequest {
             ipns_name: file_ipns_name.to_string(),
             record: record_b64,
             metadata_cid: file_meta_cid.clone(),
             encrypted_ipns_private_key: None,
             key_epoch: None,
+            expected_sequence_number: None,
         };
-        crate::api::ipns::publish_ipns(api, &req).await?;
+        match crate::api::ipns::publish_ipns(api, &req).await? {
+            crate::api::ipns::PublishResult::Success => {}
+            crate::api::ipns::PublishResult::Conflict { .. } => {
+                // Per-file publishes don't send expected_sequence_number, so this should never happen
+                log::warn!("Unexpected conflict on per-file IPNS publish for {}", file_ipns_name);
+            }
+        }
 
         coordinator.record_publish(file_ipns_name, new_seq);
         log::info!("Per-file IPNS publish succeeded for {}", file_ipns_name);

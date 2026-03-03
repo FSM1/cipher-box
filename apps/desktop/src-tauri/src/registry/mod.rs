@@ -110,14 +110,23 @@ pub async fn register_device(
         .map_err(|e| format!("IPNS record marshaling failed: {}", e))?;
     let record_base64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
 
+    // Device registry publishes do not use conflict detection -- the registry
+    // IPNS namespace is separate from folder metadata, and the registry write
+    // is already serialized by the caller.
     let publish_req = IpnsPublishRequest {
         ipns_name: reg_ipns_name,
         record: record_base64,
         metadata_cid: cid,
         encrypted_ipns_private_key: None,
         key_epoch: None,
+        expected_sequence_number: None,
     };
-    crate::api::ipns::publish_ipns(api, &publish_req).await?;
+    match crate::api::ipns::publish_ipns(api, &publish_req).await? {
+        crate::api::ipns::PublishResult::Success => {}
+        crate::api::ipns::PublishResult::Conflict { .. } => {
+            log::warn!("Unexpected conflict on device registry publish");
+        }
+    }
 
     log::info!(
         "Device registered in encrypted registry (device_id: {})",
