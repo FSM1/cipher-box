@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "94157609492b",
+  "session_id": "4df4fe75-007e-479d-98ea-2206ff4e433f",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-03T11:57:28.242469Z",
+  "branch": "feat/phase-16-advanced-sync",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/api/src/ipns/dto/publish.dto.ts",
+    "apps/api/src/ipns/ipns.controller.ts",
+    "apps/api/src/ipns/ipns.service.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "08cbc8c64119",
+  "token_usage": {
+    "input_tokens": 75,
+    "cache_creation_tokens": 256408,
+    "cache_read_tokens": 2765965,
+    "output_tokens": 11097,
+    "api_call_count": 27
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-03T11:57:26.470992Z",
+    "agent_lines": 60,
+    "human_added": 20,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 80,
+    "agent_percentage": 75
+  }
+}
