@@ -9,8 +9,40 @@ on:
         type: string
 
 jobs:
+  resolve-sha:
+    name: Resolve Tag to SHA
+    runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.resolve.outputs.commit_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate release tag and resolve SHA
+        id: resolve
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if ! git rev-parse "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag '${RELEASE_TAG}' does not exist"
+            exit 1
+          fi
+          SHA=$(git rev-parse "refs/tags/${RELEASE_TAG}")
+          echo "commit_sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "Resolved ${RELEASE_TAG} to ${SHA}"
+
+  verify-e2e:
+    name: Verify E2E
+    needs: resolve-sha
+    uses: ./.github/workflows/verify-e2e.yml
+    with:
+      commit_sha: ${{ needs.resolve-sha.outputs.commit_sha }}
+    secrets: inherit
+
   tag-staging:
     name: Create Staging Tag
+    needs: [resolve-sha, verify-e2e]
     runs-on: ubuntu-latest
     environment: staging-approval
     permissions:
@@ -21,49 +53,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Validate release tag exists
-        env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
-        run: |
-          if ! git rev-parse "refs/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
-            echo "::error::Tag '${RELEASE_TAG}' does not exist"
-            exit 1
-          fi
-
-      - name: Verify E2E tests passed
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-        run: |
-          COMMIT_SHA=$(git rev-parse "refs/tags/${RELEASE_TAG}")
-          echo "Checking test status for commit ${COMMIT_SHA}"
-
-          # Web E2E runs on every push to main — must exist and pass
-          E2E_CONCLUSION=$(gh run list --workflow=e2e.yml --branch=main --limit=10 \
-            --json headSha,conclusion --jq "[.[] | select(.headSha == \"${COMMIT_SHA}\")][0].conclusion")
-          if [ -z "$E2E_CONCLUSION" ]; then
-            echo "::error::No E2E test run found for ${RELEASE_TAG} (${COMMIT_SHA})"
-            exit 1
-          fi
-          if [ "$E2E_CONCLUSION" != "success" ]; then
-            echo "::error::E2E Tests did not pass for ${RELEASE_TAG} (conclusion: ${E2E_CONCLUSION})"
-            exit 1
-          fi
-          echo "Web E2E: passed"
-
-          # Desktop E2E may be skipped if no desktop files changed — only block if it ran and failed
-          DESKTOP_CONCLUSION=$(gh run list --workflow=e2e-desktop.yml --branch=main --limit=10 \
-            --json headSha,conclusion --jq "[.[] | select(.headSha == \"${COMMIT_SHA}\")][0].conclusion")
-          if [ -n "$DESKTOP_CONCLUSION" ] && [ "$DESKTOP_CONCLUSION" != "success" ]; then
-            echo "::error::Desktop E2E Tests did not pass for ${RELEASE_TAG} (conclusion: ${DESKTOP_CONCLUSION})"
-            exit 1
-          fi
-          if [ -z "$DESKTOP_CONCLUSION" ]; then
-            echo "Desktop E2E: no run for this commit (skipped — no desktop changes)"
-          else
-            echo "Desktop E2E: passed"
-          fi
 
       - name: Calculate next RC number
         id: rc
