@@ -6,8 +6,6 @@ import { useQuotaStore } from '../stores/quota.store';
 import { unpinFromIpfs } from '../lib/api/ipfs';
 import * as folderService from '../services/folder.service';
 import { reWrapForRecipients } from '../services/share.service';
-import { useSyncStore } from '../stores/sync.store';
-import { isConflictError } from '../lib/errors';
 import {
   createFileMetadata,
   resolveFileMetadata,
@@ -18,7 +16,7 @@ import {
 import type { FileIpnsRecordPayload } from '../services/file-metadata.service';
 import type { FolderChild, FilePointer } from '@cipherbox/crypto';
 import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
-import { getRootFolderState, resyncFolder } from './folder-helpers';
+import { getRootFolderState, resyncFolder, withConflictRetry } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
 
 /**
@@ -109,27 +107,9 @@ export function useFileOperations() {
           });
         };
 
-        let addResult: Awaited<ReturnType<typeof performAddFile>>;
-        try {
-          addResult = await performAddFile();
-        } catch (err) {
-          if (!isConflictError(err)) throw err;
-          useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
-          try {
-            await resyncFolder(parentFolder.ipnsName, parentFolder.id);
-            await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
-            addResult = await performAddFile();
-          } catch (retryErr) {
-            if (isConflictError(retryErr)) {
-              throw new Error('Conflict persists after re-sync. Please try again.');
-            }
-            throw retryErr;
-          } finally {
-            useSyncStore.getState().clearConflict();
-          }
-        }
-
-        const { filePointer, newSequenceNumber } = addResult;
+        const { filePointer, newSequenceNumber } = await withConflictRetry(performAddFile, () =>
+          resyncFolder(parentFolder.ipnsName, parentFolder.id)
+        );
 
         // 3. Update local state with new child and sequence number
         const freshFolders2 = useFolderStore.getState().folders;
@@ -265,27 +245,9 @@ export function useFileOperations() {
           });
         };
 
-        let addResult: Awaited<ReturnType<typeof performAddFiles>>;
-        try {
-          addResult = await performAddFiles();
-        } catch (err) {
-          if (!isConflictError(err)) throw err;
-          useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
-          try {
-            await resyncFolder(parentFolder.ipnsName, parentFolder.id);
-            await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
-            addResult = await performAddFiles();
-          } catch (retryErr) {
-            if (isConflictError(retryErr)) {
-              throw new Error('Conflict persists after re-sync. Please try again.');
-            }
-            throw retryErr;
-          } finally {
-            useSyncStore.getState().clearConflict();
-          }
-        }
-
-        const { filePointers, newSequenceNumber } = addResult;
+        const { filePointers, newSequenceNumber } = await withConflictRetry(performAddFiles, () =>
+          resyncFolder(parentFolder.ipnsName, parentFolder.id)
+        );
 
         // 3. Update local state with new children and sequence number
         const store = useFolderStore.getState();

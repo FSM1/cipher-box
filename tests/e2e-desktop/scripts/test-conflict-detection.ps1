@@ -225,10 +225,13 @@ if ($DirExists -and $Nested -eq "nested-conflict-file") {
 }
 
 # ---- Cleanup ----
+# Wrap in try/catch: on WinFSP mounts, Remove-Item can throw terminating
+# .NET exceptions ("The system cannot find the file specified") that
+# -ErrorAction SilentlyContinue does not suppress.
 Write-Host "--- Cleanup ---"
-Remove-Item -Path "$MountPoint\conflict-test-1.txt" -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$MountPoint\conflict-test-2.txt" -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "$MountPoint\conflict-dir" -Recurse -Force -ErrorAction SilentlyContinue
+try { Remove-Item -Path "$MountPoint\conflict-test-1.txt" -Force -ErrorAction SilentlyContinue } catch {}
+try { Remove-Item -Path "$MountPoint\conflict-test-2.txt" -Force -ErrorAction SilentlyContinue } catch {}
+try { Remove-Item -Path "$MountPoint\conflict-dir" -Recurse -Force -ErrorAction SilentlyContinue } catch {}
 Start-Sleep -Seconds 3
 
 # ---- Summary ----
