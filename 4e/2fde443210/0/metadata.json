@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "4e2fde443210",
+  "session_id": "4df4fe75-007e-479d-98ea-2206ff4e433f",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-03T02:41:09.491371Z",
+  "branch": "feat/phase-16-advanced-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/phases/16-advanced-sync/16-02-PLAN.md",
+    ".planning/phases/16-advanced-sync/16-03-PLAN.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "58a8d3203048",
+  "token_usage": {
+    "input_tokens": 53,
+    "cache_creation_tokens": 78907,
+    "cache_read_tokens": 1324891,
+    "output_tokens": 8063,
+    "api_call_count": 15
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-03T02:41:07.82844Z",
+    "agent_lines": 0,
+    "human_added": 217,
+    "human_modified": 43,
+    "human_removed": 0,
+    "total_committed": 217,
+    "agent_percentage": 0
+  }
+}
