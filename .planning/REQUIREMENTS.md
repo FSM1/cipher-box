@@ -362,7 +362,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SYNC-04     | Phase 16   | Complete |
 | SYNC-05     | Phase 16   | Pending  |
 | SYNC-06     | Phase 16   | Pending  |
-| TEE-06      | Phase 17   | Pending  |
+| TEE-06      | Phase 22   | Pending  |
 | PLAT-01     | Phase 11.3 | Complete |
 | PLAT-02     | Phase 11   | Complete |
 | E2E-01      | Phase 11.4 | Complete |

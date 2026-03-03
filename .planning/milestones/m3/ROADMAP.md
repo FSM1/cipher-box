@@ -2,14 +2,14 @@
 
 ## Overview
 
-Milestone 3 transforms CipherBox from an encrypted file locker into an encrypted productivity platform. Four phases follow the natural dependency chain: billing infrastructure (gates tier-based access), team accounts (enables shared vaults with ECIES-wrapped Per-Team Keys), document editors (TipTap rich text + Univer spreadsheets with decrypt-edit-encrypt pipeline), and document signing (ECDSA attestation using existing Web3Auth keys). Real-time collaboration is explicitly deferred to M4; M3 delivers single-user editing with advisory locking for team documents.
+Milestone 3 transforms CipherBox from an encrypted file locker into an encrypted productivity platform. Five phases follow the natural dependency chain: billing infrastructure (gates tier-based access), team accounts (enables shared vaults with ECIES-wrapped Per-Team Keys), document editors (TipTap rich text + Univer spreadsheets with decrypt-edit-encrypt pipeline), document signing (ECDSA attestation using existing Web3Auth keys), and AWS Nitro TEE (fallback republisher moved from M2). Real-time collaboration is explicitly deferred to M4; M3 delivers single-user editing with advisory locking for team documents.
 
 ## Phases
 
 **Phase Numbering:**
 
 - Continues from M2 (Phases 12-17). M3 starts at Phase 18.
-- Integer phases (18, 19, 20, 21): Planned milestone work
+- Integer phases (18, 19, 20, 21, 22): Planned milestone work
 - Decimal phases (e.g., 19.1): Urgent insertions (marked with INSERTED)
 
 Decimal phases appear between their surrounding integers in numeric order.
@@ -18,6 +18,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 19: Team Accounts** - Team CRUD, ECIES-wrapped Per-Team Key hierarchy, CASL role-based permissions, team vault initialization
 - [ ] **Phase 20: Document Editors** - TipTap rich text and Univer spreadsheet editors with decrypt-edit-encrypt pipeline, autosave queue, advisory locking
 - [ ] **Phase 21: Document Signing** - ECDSA signing/verification with Web3Auth keys, visual signature capture, multi-party workflows, signed PDF export
+- [ ] **Phase 22: AWS Nitro TEE** - Nitro enclave as fallback TEE provider for IPNS republishing (moved from M2)
 
 ## Phase Details
 
@@ -85,11 +86,24 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Plans**: TBD
 
+### Phase 22: AWS Nitro TEE
+
+**Goal**: IPNS republishing has a fallback TEE provider for high availability (moved from M2 — Phala Cloud mock still in use on staging)
+**Depends on**: Phase 12 (can run in parallel with Phases 18-21)
+**Requirements**: TEE-06
+**Research flag**: NEEDS `/gsd:research-phase` -- Rust enclave binary, vsock communication, KMS attestation are entirely new technology for this project.
+**Success Criteria** (what must be TRUE):
+
+1. AWS Nitro enclave can receive ECIES-encrypted IPNS keys, decrypt in hardware, sign IPNS records, and zero memory
+2. Backend routes republish jobs to Nitro when Phala Cloud is unavailable, with automatic failover and failback
+
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
 
-Phases execute in numeric order: 18 -> 19 -> 20 -> 21
+Phases execute in numeric order: 18 -> 19 -> 20 -> 21 -> 22
 
 | Phase                      | Milestone | Plans Complete | Status      | Completed |
 | -------------------------- | --------- | -------------- | ----------- | --------- |
@@ -97,10 +111,11 @@ Phases execute in numeric order: 18 -> 19 -> 20 -> 21
 | 19. Team Accounts          | M3        | 0/TBD          | Not started | -         |
 | 20. Document Editors       | M3        | 0/TBD          | Not started | -         |
 | 21. Document Signing       | M3        | 0/TBD          | Not started | -         |
+| 22. AWS Nitro TEE          | M3        | 0/TBD          | Not started | -         |
 
 ---
 
 Roadmap created: 2026-02-11
-Depth: Comprehensive (4 phases -- research recommends exactly 4; requirements cluster into 4 natural delivery boundaries)
-Total M3 phases: 4 | Total M3 plans: TBD
-Coverage: 32/32 requirements mapped
+Depth: Comprehensive (5 phases -- 4 original + Nitro TEE moved from M2)
+Total M3 phases: 5 (18-22) | Total M3 plans: TBD
+Coverage: 32/32 requirements mapped + TEE-06
