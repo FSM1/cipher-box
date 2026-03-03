@@ -16,6 +16,7 @@ files:
 Currently CipherBox supports two IPFS providers: Pinata (production default) and a local Kubo node (dev/testing). Both are configured server-side via environment variables (`IPFS_PROVIDER`, `IPFS_LOCAL_API_URL`). There is no way for end users to bring their own IPFS node — the choice is made by the server operator, not the individual user.
 
 For a zero-knowledge privacy tool, users may want to:
+
 - Pin their encrypted data to their own IPFS node (self-sovereignty)
 - Use a preferred pinning service other than Pinata (e.g., web3.storage, Filebase, nft.storage)
 - Run a personal Kubo/IPFS node at home and have CipherBox pin directly to it
@@ -40,3 +41,5 @@ TBD — key design questions to resolve:
 5. **Quota tracking:** If uploads go directly to user's node, server-side quota tracking becomes optional or advisory.
 
 6. **Fallback/reliability:** What happens if user's node is unreachable? Fallback to default provider, or fail?
+
+7. **Conflict detection:** Phase 16 (M2) adds API-level optimistic concurrency for conflict detection — the API checks IPNS sequence numbers on publish. BYO-IPFS bypasses the API for publishes, so this conflict detection mechanism will stop working. This feature will need a client-side conflict detection strategy (e.g., IPNS resolution before publish, or CRDT-based metadata) when BYO-IPFS is implemented.
