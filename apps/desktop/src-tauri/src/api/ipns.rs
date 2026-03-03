@@ -6,6 +6,18 @@ use serde::Deserialize;
 
 use super::client::ApiClient;
 
+/// Result of an IPNS publish attempt.
+#[derive(Debug)]
+pub enum PublishResult {
+    /// Publish succeeded.
+    Success,
+    /// Server returned 409 Conflict -- another device published since our last sync.
+    Conflict {
+        /// The server's current sequence number (string, bigint).
+        current_sequence_number: String,
+    },
+}
+
 /// Response from GET /ipns/resolve.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,20 +79,41 @@ pub struct IpnsPublishRequest {
     /// TEE key epoch (required with encrypted_ipns_private_key).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_epoch: Option<u32>,
+    /// Expected sequence number for optimistic concurrency control.
+    /// If set, the server returns 409 Conflict if the current sequence
+    /// does not match. Omit to perform an unconditional publish.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_sequence_number: Option<String>,
 }
 
 /// Publish a signed IPNS record via the backend.
 ///
 /// POST /ipns/publish with the signed record. The backend relays
 /// to delegated-ipfs.dev and tracks the folder for TEE republishing.
+///
+/// Returns `PublishResult::Success` on 2xx, `PublishResult::Conflict`
+/// on 409 (another device published a higher sequence), or `Err` on
+/// other errors.
 pub async fn publish_ipns(
     client: &ApiClient,
     request: &IpnsPublishRequest,
-) -> Result<(), String> {
+) -> Result<PublishResult, String> {
     let resp = client
         .authenticated_post("/ipns/publish", request)
         .await
         .map_err(|e| format!("IPNS publish failed: {}", e))?;
+
+    if resp.status().as_u16() == 409 {
+        // Parse conflict response body: { currentSequenceNumber: "..." }
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        let current_seq = body["currentSequenceNumber"]
+            .as_str()
+            .unwrap_or("0")
+            .to_string();
+        return Ok(PublishResult::Conflict {
+            current_sequence_number: current_seq,
+        });
+    }
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -88,5 +121,5 @@ pub async fn publish_ipns(
         return Err(format!("IPNS publish failed ({}): {}", status, body));
     }
 
-    Ok(())
+    Ok(PublishResult::Success)
 }
