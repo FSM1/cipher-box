@@ -346,8 +346,8 @@ jobs:
       - name: Build packages (excluding desktop)
         run: pnpm --filter @cipherbox/crypto --filter @cipherbox/api --filter @cipherbox/web build
 
-  cargo-check-windows:
-    name: Cargo Check (Windows)
+  cargo-windows:
+    name: Cargo Check & Test (Windows)
     needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
@@ -383,11 +383,14 @@ jobs:
           key: windows-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: windows-cargo-
 
-      - name: Cargo check with winfsp feature
+      - name: Cargo check
         run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features winfsp
 
-  cargo-check-macos:
-    name: Cargo Check (macOS)
+      - name: Cargo test
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features winfsp
+
+  cargo-macos:
+    name: Cargo Check & Test (macOS)
     needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
@@ -423,144 +426,23 @@ jobs:
           key: macos-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: macos-cargo-
 
-      - name: Cargo check with fuse feature
+      - name: Cargo check
         working-directory: apps/desktop/src-tauri
         run: cargo check --no-default-features --features fuse
         env:
           PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
 
-  cargo-check-linux:
-    name: Cargo Check (Linux)
-    needs: [changes, lint]
-    if: |
-      !failure() && !cancelled() &&
-      needs.changes.outputs.desktop == 'true'
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libssl-dev \
-            libxdo-dev \
-            libfuse3-dev \
-            pkg-config \
-            build-essential
-
-      - name: Install Rust toolchain
-        run: rustup default stable
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            apps/desktop/src-tauri/target
-          key: linux-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
-          restore-keys: linux-cargo-
-
-      - name: Cargo check with fuse feature
-        working-directory: apps/desktop/src-tauri
-        run: cargo check --no-default-features --features fuse
-
-  cargo-test-windows:
-    name: Cargo Test (Windows)
-    needs: [changes, cargo-check-windows]
-    if: |
-      !failure() && !cancelled() &&
-      needs.cargo-check-windows.result == 'success'
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install WinFsp
-        shell: powershell
-        run: |
-          $url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
-          $out = "winfsp.msi"
-          $expectedHash = "073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A"
-          Invoke-WebRequest -Uri $url -OutFile $out
-          $actualHash = (Get-FileHash $out -Algorithm SHA256).Hash
-          if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
-          Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
-
-      - name: Create WinFsp MSI placeholder for resource glob
-        shell: powershell
-        run: New-Item -ItemType File -Force -Path "apps/desktop/src-tauri/resources/winfsp-placeholder.msi"
-
-      - name: Install Rust toolchain
-        run: rustup default stable
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            apps/desktop/src-tauri/target
-          key: windows-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
-          restore-keys: windows-cargo-
-
-      - name: Run Rust tests
-        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features winfsp
-
-  cargo-test-macos:
-    name: Cargo Test (macOS)
-    needs: [changes, cargo-check-macos]
-    if: |
-      !failure() && !cancelled() &&
-      needs.cargo-check-macos.result == 'success'
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install FUSE-T
-        run: |
-          brew install --cask fuse-t
-          sudo mkdir -p /usr/local/lib/pkgconfig
-          # fuser's build.rs looks for fuse.pc; FUSE-T ships fuse-t.pc
-          # Copy instead of symlink to avoid dangling link if path varies
-          FUSE_T_PC="/Library/Application Support/fuse-t/pkgconfig/fuse-t.pc"
-          if [ ! -f "$FUSE_T_PC" ]; then
-            FUSE_T_PC=$(find /Library /usr/local /opt/homebrew -name "fuse-t.pc" 2>/dev/null | head -1)
-          fi
-          if [ -z "$FUSE_T_PC" ] || [ ! -f "$FUSE_T_PC" ]; then
-            echo "::error::fuse-t.pc not found after FUSE-T installation"
-            exit 1
-          fi
-          echo "Found fuse-t.pc at: $FUSE_T_PC"
-          sudo cp "$FUSE_T_PC" /usr/local/lib/pkgconfig/fuse.pc
-          # FUSE-T reports its product version (1.x) but implements the FUSE 2.9 API.
-          # fuser's build.rs requires fuse >= 2.6.0, so fix the version to match.
-          sudo sed -i '' 's/^Version:.*/Version: 2.9.9/' /usr/local/lib/pkgconfig/fuse.pc
-
-      - name: Install Rust toolchain
-        run: rustup default stable
-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            apps/desktop/src-tauri/target
-          key: macos-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
-          restore-keys: macos-cargo-
-
-      - name: Run Rust tests
+      - name: Cargo test
         run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --no-default-features --features fuse
         env:
           PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
 
-  cargo-test-linux:
-    name: Cargo Test + Coverage (Linux)
-    needs: [changes, cargo-check-linux]
+  cargo-linux:
+    name: Cargo Check, Test & Coverage (Linux)
+    needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
-      needs.cargo-check-linux.result == 'success'
+      needs.changes.outputs.desktop == 'true'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -589,13 +471,17 @@ jobs:
             apps/desktop/src-tauri/target
           key: linux-cargo-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
           restore-keys: linux-cargo-
+
+      - name: Cargo check
+        working-directory: apps/desktop/src-tauri
+        run: cargo check --no-default-features --features fuse
 
       - name: Install cargo-llvm-cov
         run: |
           rustup component add llvm-tools-preview
           cargo install cargo-llvm-cov --locked
 
-      - name: Run Rust tests with coverage
+      - name: Cargo test with coverage
         run: >-
           cargo llvm-cov
           --manifest-path apps/desktop/src-tauri/Cargo.toml
