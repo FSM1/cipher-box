@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "62a37c394b40",
+  "session_id": "d2887769-6c79-4828-b3f3-c2532462dd55",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-03T19:01:39.231631Z",
+  "branch": "fix/folder-mutation-seq-tracking",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/services/folder.service.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "44a0bec930dc",
+  "token_usage": {
+    "input_tokens": 773,
+    "cache_creation_tokens": 420978,
+    "cache_read_tokens": 18532690,
+    "output_tokens": 108023,
+    "api_call_count": 188
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-03T19:01:37.242324Z",
+    "agent_lines": 0,
+    "human_added": 6,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 6,
+    "agent_percentage": 0
+  }
+}
