@@ -68,6 +68,21 @@ else
 fi
 echo ""
 
+# ---- Step 4: Conflict detection ----
+echo "--- Step 4: Conflict detection ---"
+set +e
+TEST_SECRET="$TEST_SECRET" bash "$SCRIPT_DIR/test-conflict-detection.sh" "$MOUNT_POINT" "$API_URL"
+CONFLICT_FAILURES=$?
+set -e
+
+if [ "$CONFLICT_FAILURES" -eq 0 ]; then
+  echo "Conflict detection: ALL PASSED"
+else
+  echo "Conflict detection: $CONFLICT_FAILURES FAILURE(S)"
+  TOTAL_FAIL=$((TOTAL_FAIL + CONFLICT_FAILURES))
+fi
+echo ""
+
 # ---- Summary ----
 echo "============================================"
 echo "  Summary"
