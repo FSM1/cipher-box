@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "18b82a4a029c",
+  "strategy": "manual-commit",
+  "branch": "fix/folder-mutation-seq-tracking",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useFolderMutations.ts",
+    "apps/web/src/services/folder.service.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/18/b82a4a029c/0/metadata.json",
+      "transcript": "/18/b82a4a029c/0/full.jsonl",
+      "context": "/18/b82a4a029c/0/context.md",
+      "content_hash": "/18/b82a4a029c/0/content_hash.txt",
+      "prompt": "/18/b82a4a029c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 714,
+    "cache_creation_tokens": 344691,
+    "cache_read_tokens": 13763593,
+    "output_tokens": 91939,
+    "api_call_count": 135
+  }
+}
