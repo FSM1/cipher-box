@@ -9,14 +9,9 @@ on:
         type: string
 
 jobs:
-  tag-staging:
-    name: Create Staging Tag
+  validate-tag:
+    name: Validate Release Tag
     runs-on: ubuntu-latest
-    environment: staging-approval
-    permissions:
-      contents: write
-    outputs:
-      staging_tag: ${{ steps.rc.outputs.staging_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,40 +25,37 @@ jobs:
             echo "::error::Tag '${RELEASE_TAG}' does not exist"
             exit 1
           fi
+          echo "Tag ${RELEASE_TAG} validated"
 
-      - name: Verify E2E tests passed
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-        run: |
-          COMMIT_SHA=$(git rev-parse "refs/tags/${RELEASE_TAG}")
-          echo "Checking test status for commit ${COMMIT_SHA}"
+  web-e2e:
+    name: Web E2E
+    needs: validate-tag
+    uses: ./.github/workflows/e2e.yml
+    with:
+      ref: ${{ inputs.release_tag }}
+    secrets: inherit
 
-          # Web E2E runs on every push to main — must exist and pass
-          E2E_CONCLUSION=$(gh run list --workflow=e2e.yml --branch=main --limit=10 \
-            --json headSha,conclusion --jq "[.[] | select(.headSha == \"${COMMIT_SHA}\")][0].conclusion")
-          if [ -z "$E2E_CONCLUSION" ]; then
-            echo "::error::No E2E test run found for ${RELEASE_TAG} (${COMMIT_SHA})"
-            exit 1
-          fi
-          if [ "$E2E_CONCLUSION" != "success" ]; then
-            echo "::error::E2E Tests did not pass for ${RELEASE_TAG} (conclusion: ${E2E_CONCLUSION})"
-            exit 1
-          fi
-          echo "Web E2E: passed"
+  desktop-e2e:
+    name: Desktop E2E
+    needs: validate-tag
+    uses: ./.github/workflows/e2e-desktop.yml
+    with:
+      ref: ${{ inputs.release_tag }}
+    secrets: inherit
 
-          # Desktop E2E may be skipped if no desktop files changed — only block if it ran and failed
-          DESKTOP_CONCLUSION=$(gh run list --workflow=e2e-desktop.yml --branch=main --limit=10 \
-            --json headSha,conclusion --jq "[.[] | select(.headSha == \"${COMMIT_SHA}\")][0].conclusion")
-          if [ -n "$DESKTOP_CONCLUSION" ] && [ "$DESKTOP_CONCLUSION" != "success" ]; then
-            echo "::error::Desktop E2E Tests did not pass for ${RELEASE_TAG} (conclusion: ${DESKTOP_CONCLUSION})"
-            exit 1
-          fi
-          if [ -z "$DESKTOP_CONCLUSION" ]; then
-            echo "Desktop E2E: no run for this commit (skipped — no desktop changes)"
-          else
-            echo "Desktop E2E: passed"
-          fi
+  tag-staging:
+    name: Create Staging Tag
+    needs: [web-e2e, desktop-e2e]
+    runs-on: ubuntu-latest
+    environment: staging-approval
+    permissions:
+      contents: write
+    outputs:
+      staging_tag: ${{ steps.rc.outputs.staging_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Calculate next RC number
         id: rc

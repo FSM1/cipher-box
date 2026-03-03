@@ -4,12 +4,18 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: 'Git ref to checkout (tag, branch, or SHA)'
+        required: false
+        type: string
 
 jobs:
   changes:
     name: Detect Changes
-    # Skip change detection for workflow_dispatch (always run)
-    if: github.event_name != 'workflow_dispatch'
+    # Only run change detection for push events (skip for workflow_dispatch and workflow_call)
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
       desktop: ${{ steps.filter.outputs.desktop }}
@@ -43,7 +49,7 @@ jobs:
     if: >-
       always() && !cancelled() &&
       (
-        github.event_name == 'workflow_dispatch' ||
+        github.event_name != 'push' ||
         needs.changes.outputs.desktop == 'true'
       )
     runs-on: ${{ matrix.os }}
@@ -68,6 +74,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       # --- Install FUSE driver (needed for both build and test) ---
 
