@@ -27,6 +27,7 @@ import {
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from './ipns.service';
 import { batchPublishIpnsRecords } from './ipns.service';
+import { isConflictError } from '../lib/errors';
 import { useAuthStore } from '../stores/auth.store';
 import type { FolderNode } from '../stores/folder.store';
 import type { FileIpnsRecordPayload } from './file-metadata.service';
@@ -256,7 +257,9 @@ export async function updateFolderMetadata(params: {
   });
   const { cid } = await addToIpfs(blob);
 
-  // 4. Publish IPNS record pointing to new CID
+  // 4. Publish IPNS record pointing to new CID.
+  //    Send the pre-increment sequence as expectedSequenceNumber so the API can
+  //    detect concurrent modifications from other devices (conflict detection).
   const newSeq = params.sequenceNumber + 1n;
   await createAndPublishIpnsRecord({
     ipnsPrivateKey: params.ipnsPrivateKey,
@@ -265,6 +268,7 @@ export async function updateFolderMetadata(params: {
     sequenceNumber: newSeq,
     encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
     keyEpoch: params.keyEpoch,
+    expectedSequenceNumber: params.sequenceNumber.toString(),
   });
 
   return { cid, newSequenceNumber: newSeq };
@@ -288,7 +292,7 @@ async function buildFolderIpnsRecord(params: {
   keyEpoch?: number;
 }): Promise<{
   cid: string;
-  record: FileIpnsRecordPayload & { recordType: 'folder' };
+  record: FileIpnsRecordPayload & { recordType: 'folder'; expectedSequenceNumber: string };
   newSequenceNumber: bigint;
 }> {
   // 1. Create v2 folder metadata
@@ -324,6 +328,9 @@ async function buildFolderIpnsRecord(params: {
       encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
       keyEpoch: params.keyEpoch,
       recordType: 'folder',
+      // Send pre-increment sequence as expectedSequenceNumber for conflict detection.
+      // File records (recordType: 'file') do not set this -- they use last-write-wins.
+      expectedSequenceNumber: params.sequenceNumber.toString(),
     },
     newSequenceNumber: newSeq,
   };
@@ -1011,15 +1018,35 @@ export async function checkAndRotateIfNeeded(params: {
 
   const currentMetadata = await fetchAndDecryptMetadata(resolved.cid, folderNode.folderKey);
 
-  // Re-encrypt and publish with new key
-  await updateFolderMetadata({
-    folderId: folderNode.id,
-    children: currentMetadata.children ?? [],
-    folderKey: newFolderKey,
-    ipnsPrivateKey: folderNode.ipnsPrivateKey,
-    ipnsName: folderNode.ipnsName,
-    sequenceNumber: resolved.sequenceNumber,
-  });
+  // Re-encrypt and publish with new key.
+  // If another device published concurrently we get a 409 conflict.
+  // The share key rotation (re-wrap + delete) was already committed, so
+  // we return the new key and defer the metadata re-encryption to the next
+  // sync cycle, when the caller will re-read fresh state and retry.
+  try {
+    await updateFolderMetadata({
+      folderId: folderNode.id,
+      children: currentMetadata.children ?? [],
+      folderKey: newFolderKey,
+      ipnsPrivateKey: folderNode.ipnsPrivateKey,
+      ipnsName: folderNode.ipnsName,
+      sequenceNumber: resolved.sequenceNumber,
+    });
+  } catch (err) {
+    if (isConflictError(err)) {
+      // Key rotation committed (shares re-wrapped, revoked shares deleted).
+      // Metadata publish failed due to concurrent modification. On next sync
+      // the folder will be re-read with fresh state; checkAndRotateIfNeeded
+      // will detect the still-pending rotation and retry re-encryption then.
+      console.warn(
+        `[share] Conflict during lazy rotation metadata publish for ${folderNode.ipnsName}. ` +
+          'Will retry on next sync cycle.'
+      );
+      // Return the new key so the caller can use it for the file being uploaded.
+      return { folderKey: newFolderKey, rotated: true };
+    }
+    throw err; // Re-throw non-conflict errors
+  }
 
   // 4. Re-wrap new folderKey in parent metadata
   //    The parent needs its child's folderKeyEncrypted updated.
