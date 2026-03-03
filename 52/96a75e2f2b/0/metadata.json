@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "5296a75e2f2b",
+  "session_id": "551aeac6-264c-435e-960f-ceb28d0e88aa",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-03T23:41:06.019353Z",
+  "branch": "feat/unify-e2e-verification",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/e2e.yml",
+    ".github/workflows/e2e-desktop.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "26384ad08d4d",
+  "checkpoint_transcript_start": 269,
+  "transcript_lines_at_start": 269,
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 19989,
+    "cache_read_tokens": 1598017,
+    "output_tokens": 6485,
+    "api_call_count": 16
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-03T23:41:05.115248Z",
+    "agent_lines": 5,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 5,
+    "agent_percentage": 100
+  }
+}
