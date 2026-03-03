@@ -264,6 +264,7 @@ Recent decisions affecting current work:
 - Phase 12.6 inserted after Phase 12.5: Per-File IPNS Metadata Split — split file metadata into per-file IPNS records before vault wipe (clean break, no dual-schema). Phase 12.1 (AES-CTR) moved to after 12.6.
 - Phase 11.2 inserted after Phase 11.1: Remove v1 Folder Metadata — eliminate v1/v2 dual-schema code, make v2 FilePointer canonical everywhere, add per-file IPNS publishing to desktop FUSE. Triggered by cross-device format oscillation bug (desktop writes v1, web re-saves as v2 hybrid, desktop rejects).
 - Phase 15 split: "Link Sharing and Search" split into Phase 15 (Link Sharing) and Phase 15.1 (Client-Side Search). Independent features with different security surfaces.
+- Phase 18 added to M2: Recycle Bin -- soft-delete with time-limited retention, file/folder recovery, manual bin emptying. M3 phases renumbered 19-22.
 
 ### Blockers/Concerns
 
@@ -316,6 +317,7 @@ Last session: 2026-03-03
 Stopped at: Phase 16 verified complete
 Resume file: None
 Next: Phase 17 (AWS Nitro TEE) -- needs research phase first
+Then: Phase 18 (Recycle Bin) -- needs planning
 
 ---
 

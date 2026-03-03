@@ -3,8 +3,8 @@
 ## Milestones
 
 - Milestone 1: Staging MVP (Phases 1-10) -- shipped 2026-02-11
-- Milestone 2: Production v1.0 (Phases 11-17) -- in progress
-- Milestone 3: Encrypted Productivity Suite (Phases 18-21) -- planned
+- Milestone 2: Production v1.0 (Phases 11-18) -- in progress
+- Milestone 3: Encrypted Productivity Suite (Phases 19-22) -- planned
 
 ## Phases
 
@@ -65,17 +65,18 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 15.1: Client-Side Search** - Encrypted search index in IndexedDB with incremental updates (INSERTED) -- COMPLETE 2026-02-24
 - [x] **Phase 16: Advanced Sync** - Conflict detection via optimistic concurrency on IPNS folder publishes -- COMPLETE 2026-03-03
 - [ ] **Phase 17: AWS Nitro TEE** - Nitro enclave as fallback TEE provider for IPNS republishing
+- [ ] **Phase 18: Recycle Bin** - Soft-delete with time-limited retention, file/folder recovery, and manual bin emptying
 
 ### Milestone 3: Encrypted Productivity Suite (Planned)
 
 **Milestone Goal:** Transform CipherBox into an encrypted productivity platform with billing, team accounts, document editors, and document signing.
 
-- [ ] **Phase 18: Billing Infrastructure** - Stripe subscriptions, NOWPayments crypto billing, tier enforcement
-- [ ] **Phase 19: Team Accounts** - Team CRUD, ECIES-wrapped Per-Team Key hierarchy, CASL permissions
-- [ ] **Phase 20: Document Editors** - TipTap rich text and Univer spreadsheet editors with decrypt-edit-encrypt pipeline
-- [ ] **Phase 21: Document Signing** - ECDSA signing/verification, visual signature capture, multi-party workflows
+- [ ] **Phase 19: Billing Infrastructure** - Stripe subscriptions, NOWPayments crypto billing, tier enforcement
+- [ ] **Phase 20: Team Accounts** - Team CRUD, ECIES-wrapped Per-Team Key hierarchy, CASL permissions
+- [ ] **Phase 21: Document Editors** - TipTap rich text and Univer spreadsheet editors with decrypt-edit-encrypt pipeline
+- [ ] **Phase 22: Document Signing** - ECDSA signing/verification, visual signature capture, multi-party workflows
 
-See `.planning/milestones/m3/ROADMAP.md` for full M3 phase details.
+See `.planning/milestones/m3/ROADMAP.md` for full M3 phase details (phases renumbered 19-22).
 
 ## Phase Details
 
@@ -477,11 +478,27 @@ Plans:
 2. Backend routes republish jobs to Nitro when Phala Cloud is unavailable, with automatic failover and failback
    **Plans**: TBD
 
+### Phase 18: Recycle Bin
+
+**Goal**: Deleted files and folders are moved to a recycle bin with time-limited retention instead of being permanently destroyed. Users can recover items to their original vault location and manually empty the bin to free storage space.
+**Depends on**: Phase 16 (Advanced Sync complete, conflict detection ensures safe delete/restore operations)
+**Requirements**: TBD
+**Research flag**: NEEDS assessment -- client-side bin metadata design (encrypted bin index on IPFS/IPNS), retention policy enforcement, restore-to-original-path resolution, quota accounting for bin contents
+**Success Criteria** (what must be TRUE):
+
+1. Deleting a file or folder moves it to a recycle bin instead of permanently removing it; the item remains recoverable
+2. User can browse bin contents and restore any item to its original folder location (or root if original folder was also deleted)
+3. User can manually empty the entire bin or permanently delete individual items to free storage quota
+4. Bin items are automatically purged after the retention period expires (e.g., 30 days)
+5. Storage consumed by bin items counts against the user's quota; emptying the bin reclaims space immediately
+
+**Plans**: TBD
+
 ## Progress
 
 **Execution Order:**
 
-Sequential order: 12 -> 12.5 -> 12.6 -> 12.1 -> 11.2 -> 13 -> 14 -> 15 -> 15.1 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21
+Sequential order: 12 -> 12.5 -> 12.6 -> 12.1 -> 11.2 -> 13 -> 14 -> 15 -> 15.1 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21 -> 22
 
 Parallel phases:
 
@@ -528,10 +545,11 @@ Parallel phases:
 | 11.3 Linux Desktop          | M2        | 3/3            | Complete    | 2026-02-28 |
 | 11.4 Cross-Platform E2E     | M2        | 3/3            | Complete    | 2026-02-28 |
 | 17. AWS Nitro TEE           | M2        | 0/TBD          | Not started | -          |
-| 18. Billing Infrastructure  | M3        | 0/TBD          | Not started | -          |
-| 19. Team Accounts           | M3        | 0/TBD          | Not started | -          |
-| 20. Document Editors        | M3        | 0/TBD          | Not started | -          |
-| 21. Document Signing        | M3        | 0/TBD          | Not started | -          |
+| 18. Recycle Bin             | M2        | 0/TBD          | Not started | -          |
+| 19. Billing Infrastructure  | M3        | 0/TBD          | Not started | -          |
+| 20. Team Accounts           | M3        | 0/TBD          | Not started | -          |
+| 21. Document Editors        | M3        | 0/TBD          | Not started | -          |
+| 22. Document Signing        | M3        | 0/TBD          | Not started | -          |
 
 ---
 
@@ -540,5 +558,5 @@ Milestone 1 shipped: 2026-02-11
 Milestone 2 roadmap created: 2026-02-11
 Milestone 3 roadmap created: 2026-02-11
 Total M1 phases: 17 | Total M1 plans: 72 | Depth: Comprehensive
-Total M2 phases: 10 | Total M2 plans: TBD | Depth: Comprehensive
-Total M3 phases: 4 | Total M3 plans: TBD | Depth: Comprehensive
+Total M2 phases: 11 | Total M2 plans: TBD | Depth: Comprehensive
+Total M3 phases: 4 (19-22) | Total M3 plans: TBD | Depth: Comprehensive

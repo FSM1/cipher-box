@@ -8,23 +8,23 @@ Milestone 3 transforms CipherBox from an encrypted file locker into an encrypted
 
 **Phase Numbering:**
 
-- Continues from M2 (Phases 12-17). M3 starts at Phase 18.
-- Integer phases (18, 19, 20, 21): Planned milestone work
-- Decimal phases (e.g., 19.1): Urgent insertions (marked with INSERTED)
+- Continues from M2 (Phases 12-18). M3 starts at Phase 19.
+- Integer phases (19, 20, 21, 22): Planned milestone work
+- Decimal phases (e.g., 20.1): Urgent insertions (marked with INSERTED)
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 18: Billing Infrastructure** - Stripe subscriptions, NOWPayments crypto billing, tier enforcement, and webhook-driven provisioning
-- [ ] **Phase 19: Team Accounts** - Team CRUD, ECIES-wrapped Per-Team Key hierarchy, CASL role-based permissions, team vault initialization
-- [ ] **Phase 20: Document Editors** - TipTap rich text and Univer spreadsheet editors with decrypt-edit-encrypt pipeline, autosave queue, advisory locking
-- [ ] **Phase 21: Document Signing** - ECDSA signing/verification with Web3Auth keys, visual signature capture, multi-party workflows, signed PDF export
+- [ ] **Phase 19: Billing Infrastructure** - Stripe subscriptions, NOWPayments crypto billing, tier enforcement, and webhook-driven provisioning
+- [ ] **Phase 20: Team Accounts** - Team CRUD, ECIES-wrapped Per-Team Key hierarchy, CASL role-based permissions, team vault initialization
+- [ ] **Phase 21: Document Editors** - TipTap rich text and Univer spreadsheet editors with decrypt-edit-encrypt pipeline, autosave queue, advisory locking
+- [ ] **Phase 22: Document Signing** - ECDSA signing/verification with Web3Auth keys, visual signature capture, multi-party workflows, signed PDF export
 
 ## Phase Details
 
-### Phase 18: Billing Infrastructure
+### Phase 19: Billing Infrastructure
 
 **Goal**: Users can subscribe to paid plans and the system enforces storage and feature limits by tier
-**Depends on**: Phase 17 (Milestone 2 complete)
+**Depends on**: Phase 18 (Milestone 2 complete)
 **Requirements**: BILL-01, BILL-02, BILL-03, BILL-04, BILL-05, BILL-06, BILL-07, BILL-08
 **Research flag**: Standard patterns -- Stripe integration is well-documented with mature NestJS modules. NOWPayments REST API is straightforward. Skip `/gsd:research-phase`.
 **Success Criteria** (what must be TRUE):
@@ -37,10 +37,10 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Plans**: TBD
 
-### Phase 19: Team Accounts
+### Phase 20: Team Accounts
 
 **Goal**: Users can create teams with shared encrypted vaults where team members access shared content through a zero-knowledge key hierarchy
-**Depends on**: Phase 18 (billing tier enforcement for team member limits)
+**Depends on**: Phase 19 (billing tier enforcement for team member limits)
 **Requirements**: TEAM-01, TEAM-02, TEAM-03, TEAM-04, TEAM-05, TEAM-06, TEAM-07, TEAM-08, TEAM-09
 **Research flag**: NEEDS `/gsd:research-phase` -- PTK rotation on member removal is the most complex protocol in M3. ECIES re-wrapping correctness with key epochs must be validated. IPNS record size under team metadata growth (N members x M wrapped keys) needs measurement.
 **Success Criteria** (what must be TRUE):
@@ -53,10 +53,10 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Plans**: TBD
 
-### Phase 20: Document Editors
+### Phase 21: Document Editors
 
 **Goal**: Users can create and edit rich text documents and spreadsheets directly in the browser with all content encrypted at rest on IPFS
-**Depends on**: Phase 19 (team vaults for shared document editing context and advisory locking)
+**Depends on**: Phase 20 (team vaults for shared document editing context and advisory locking)
 **Requirements**: EDIT-01, EDIT-02, EDIT-03, EDIT-04, EDIT-05, EDIT-06, EDIT-07, EDIT-08, EDIT-09
 **Research flag**: NEEDS `/gsd:research-phase` -- TipTap 3.x + Univer integration specifics, bundle size impact, autosave pipeline performance with IPFS/IPNS latency. A proof-of-concept of the decrypt-edit-encrypt pipeline should be built early in planning.
 **Success Criteria** (what must be TRUE):
@@ -69,10 +69,10 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Plans**: TBD
 
-### Phase 21: Document Signing
+### Phase 22: Document Signing
 
 **Goal**: Users can cryptographically sign documents with their Web3Auth keys and any authorized party can verify the signature
-**Depends on**: Phase 20 (documents exist to be signed; editor infrastructure provides the document viewing context)
+**Depends on**: Phase 21 (documents exist to be signed; editor infrastructure provides the document viewing context)
 **Requirements**: SIGN-01, SIGN-02, SIGN-03, SIGN-04, SIGN-05, SIGN-06
 **Research flag**: Standard patterns -- uses existing ECDSA primitives (secp256k1 via Web3Auth + Web Crypto API). Straightforward implementation. Skip `/gsd:research-phase`.
 **Success Criteria** (what must be TRUE):
@@ -89,18 +89,18 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 **Execution Order:**
 
-Phases execute in numeric order: 18 -> 19 -> 20 -> 21
+Phases execute in numeric order: 19 -> 20 -> 21 -> 22
 
 | Phase                      | Milestone | Plans Complete | Status      | Completed |
 | -------------------------- | --------- | -------------- | ----------- | --------- |
-| 18. Billing Infrastructure | M3        | 0/TBD          | Not started | -         |
-| 19. Team Accounts          | M3        | 0/TBD          | Not started | -         |
-| 20. Document Editors       | M3        | 0/TBD          | Not started | -         |
-| 21. Document Signing       | M3        | 0/TBD          | Not started | -         |
+| 19. Billing Infrastructure | M3        | 0/TBD          | Not started | -         |
+| 20. Team Accounts          | M3        | 0/TBD          | Not started | -         |
+| 21. Document Editors       | M3        | 0/TBD          | Not started | -         |
+| 22. Document Signing       | M3        | 0/TBD          | Not started | -         |
 
 ---
 
 Roadmap created: 2026-02-11
 Depth: Comprehensive (4 phases -- research recommends exactly 4; requirements cluster into 4 natural delivery boundaries)
-Total M3 phases: 4 | Total M3 plans: TBD
+Total M3 phases: 4 (19-22) | Total M3 plans: TBD
 Coverage: 32/32 requirements mapped
