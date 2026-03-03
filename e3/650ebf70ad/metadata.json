@@ -3,7 +3,7 @@
   "checkpoint_id": "e3650ebf70ad",
   "strategy": "manual-commit",
   "branch": "feat/phase-16-advanced-sync",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     "apps/web/src/hooks/useFolderMutations.ts"
   ],
@@ -14,13 +14,20 @@
       "context": "/e3/650ebf70ad/0/context.md",
       "content_hash": "/e3/650ebf70ad/0/content_hash.txt",
       "prompt": "/e3/650ebf70ad/0/prompt.txt"
+    },
+    {
+      "metadata": "/e3/650ebf70ad/1/metadata.json",
+      "transcript": "/e3/650ebf70ad/1/full.jsonl",
+      "context": "/e3/650ebf70ad/1/context.md",
+      "content_hash": "/e3/650ebf70ad/1/content_hash.txt",
+      "prompt": "/e3/650ebf70ad/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 30,
-    "cache_creation_tokens": 29840,
-    "cache_read_tokens": 3369711,
-    "output_tokens": 10980,
-    "api_call_count": 29
+    "input_tokens": 7217,
+    "cache_creation_tokens": 166423,
+    "cache_read_tokens": 9883428,
+    "output_tokens": 42900,
+    "api_call_count": 91
   }
 }
