@@ -99,14 +99,14 @@ describe('IpnsService', () => {
 
     it('should publish record for new folder successfully', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
-      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '0' });
-      mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '0' });
+      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '1' });
 
       const result = await service.publishRecord(testUserId, createDto());
 
       expect(result.success).toBe(true);
       expect(result.ipnsName).toBe(testIpnsName);
-      expect(result.sequenceNumber).toBe('0');
+      expect(result.sequenceNumber).toBe('1');
       expect(mockDelegatedRoutingClient.publish).toHaveBeenCalledWith(
         testIpnsName,
         expect.any(Uint8Array)
@@ -141,13 +141,13 @@ describe('IpnsService', () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
       mockFolderIpnsRepo.create.mockReturnValue({
         ...mockFolderEntity,
-        sequenceNumber: '0',
+        sequenceNumber: '1',
         encryptedIpnsPrivateKey: null,
         keyEpoch: null,
       });
       mockFolderIpnsRepo.save.mockResolvedValue({
         ...mockFolderEntity,
-        sequenceNumber: '0',
+        sequenceNumber: '1',
         encryptedIpnsPrivateKey: null,
         keyEpoch: null,
       });
@@ -169,13 +169,13 @@ describe('IpnsService', () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
       mockFolderIpnsRepo.create.mockReturnValue({
         ...mockFolderEntity,
-        sequenceNumber: '0',
+        sequenceNumber: '1',
         encryptedIpnsPrivateKey: Buffer.from(testEncryptedIpnsPrivateKey, 'hex'),
         keyEpoch: null,
       });
       mockFolderIpnsRepo.save.mockResolvedValue({
         ...mockFolderEntity,
-        sequenceNumber: '0',
+        sequenceNumber: '1',
         encryptedIpnsPrivateKey: Buffer.from(testEncryptedIpnsPrivateKey, 'hex'),
         keyEpoch: null,
       });
@@ -314,7 +314,7 @@ describe('IpnsService', () => {
         userId: testUserId,
         ipnsName: testIpnsName,
         latestCid: testMetadataCid,
-        sequenceNumber: '0',
+        sequenceNumber: '1',
         encryptedIpnsPrivateKey: Buffer.from(testEncryptedIpnsPrivateKey, 'hex'),
         keyEpoch: testKeyEpoch,
         isRoot: false,
@@ -335,7 +335,7 @@ describe('IpnsService', () => {
         userId: testUserId,
         ipnsName: testIpnsName,
         latestCid: testMetadataCid,
-        sequenceNumber: '0',
+        sequenceNumber: '1',
         encryptedIpnsPrivateKey: Buffer.from(testEncryptedIpnsPrivateKey, 'hex'),
         keyEpoch: testKeyEpoch,
         isRoot: false,
@@ -852,7 +852,7 @@ describe('IpnsService', () => {
       mockFolderIpnsRepo.create.mockImplementation((data) => ({
         ...data,
         id: 'new-id',
-        sequenceNumber: '0',
+        sequenceNumber: '1',
       }));
       mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve({ ...entity }));
 
