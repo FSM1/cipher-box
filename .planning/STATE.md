@@ -264,7 +264,7 @@ Recent decisions affecting current work:
 - Phase 12.6 inserted after Phase 12.5: Per-File IPNS Metadata Split — split file metadata into per-file IPNS records before vault wipe (clean break, no dual-schema). Phase 12.1 (AES-CTR) moved to after 12.6.
 - Phase 11.2 inserted after Phase 11.1: Remove v1 Folder Metadata — eliminate v1/v2 dual-schema code, make v2 FilePointer canonical everywhere, add per-file IPNS publishing to desktop FUSE. Triggered by cross-device format oscillation bug (desktop writes v1, web re-saves as v2 hybrid, desktop rejects).
 - Phase 15 split: "Link Sharing and Search" split into Phase 15 (Link Sharing) and Phase 15.1 (Client-Side Search). Independent features with different security surfaces.
-- Phase 18 added to M2: Recycle Bin -- soft-delete with time-limited retention, file/folder recovery, manual bin emptying. M3 phases renumbered 19-22.
+- Phase 17 added to M2: Recycle Bin -- soft-delete with time-limited retention, file/folder recovery, manual bin emptying. AWS Nitro TEE moved from M2 Phase 17 to M3 Phase 22 (Phala mock still in use on staging). M3 phases: 18-22.
 
 ### Blockers/Concerns
 
@@ -309,15 +309,15 @@ Recent decisions affecting current work:
 - Phase 11.3 (Linux Desktop): COMPLETE -- 3/3 plans done (Rust platform support, packaging & CI, local UAT 18/18 pass)
 - Phase 11.4 (Cross-Platform E2E Testing): COMPLETE -- 3/3 plans done (CI debug artifacts + crypto vectors, FUSE/API test scripts, e2e-desktop.yml workflow)
 - Phase 16 (Advanced Sync): COMPLETE -- 5/5 plans done (API concurrency control, web sync service, desktop conflict handling, web E2E tests, desktop E2E tests)
-- Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
+- Phase 17 (Recycle Bin): Not started -- needs planning
+- Phase 22 (Nitro TEE): Moved to M3. NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
 Last session: 2026-03-03
 Stopped at: Phase 16 verified complete
 Resume file: None
-Next: Phase 17 (AWS Nitro TEE) -- needs research phase first
-Then: Phase 18 (Recycle Bin) -- needs planning
+Next: Phase 17 (Recycle Bin) -- needs planning
 
 ---
 
