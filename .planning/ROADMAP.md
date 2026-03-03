@@ -455,13 +455,15 @@ Plans:
 2. On conflict, both web and desktop clients automatically re-sync the folder and retry the operation once
 3. Persistent conflicts (retry also fails) surface an error to the user without infinite loops
 
-**Plans:** 3 plans
+**Plans:** 5 plans
 
 Plans:
 
 - [ ] 16-01-PLAN.md — API: expectedSequenceNumber on publish DTOs, conflict check in upsertFolderIpns, batch folder-first validation, 409 response, unit tests
 - [ ] 16-02-PLAN.md — Web client: API client regen, expectedSequenceNumber in folder publish paths, 409 handling with re-sync + retry in mutation hooks, sync store conflict status, SyncIndicator conflict state
 - [ ] 16-03-PLAN.md — Desktop client: expected_sequence_number in IpnsPublishRequest, PublishResult enum, conflict handling in spawn_metadata_publish with re-sync + retry
+- [ ] 16-04-PLAN.md — Web E2E tests: Playwright conflict detection tests (upload with stale seq, create folder with stale seq, per-file publish negative test)
+- [ ] 16-05-PLAN.md — Desktop E2E tests: bash/PowerShell conflict detection scripts (FUSE write + seq bump, mkdir + seq bump), run-all integration
 
 ### Phase 17: AWS Nitro TEE
 
@@ -521,7 +523,7 @@ Parallel phases:
 | 14. User-to-User Sharing    | M2        | 6/6            | Complete    | 2026-02-21 |
 | 15. Link Sharing            | M2        | 4/4            | Complete    | 2026-02-23 |
 | 15.1 Client-Side Search     | M2        | 3/3            | Complete    | 2026-02-24 |
-| 16. Advanced Sync           | M2        | 0/3            | Not started | -          |
+| 16. Advanced Sync           | M2        | 0/5            | Not started | -          |
 | 11. Windows Desktop         | M2        | 3/3            | Complete    | 2026-02-22 |
 | 11.3 Linux Desktop          | M2        | 3/3            | Complete    | 2026-02-28 |
 | 11.4 Cross-Platform E2E     | M2        | 3/3            | Complete    | 2026-02-28 |
