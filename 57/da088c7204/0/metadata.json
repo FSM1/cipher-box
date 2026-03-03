@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "57da088c7204",
+  "session_id": "86ef3d81-0d40-4d39-b561-2a3c04ae81f7",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-03T19:54:25.14882Z",
+  "branch": "docs/add-phase-18-recycle-bin",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/milestones/m3/ROADMAP.md",
+    ".planning/REQUIREMENTS.md",
+    ".planning/milestones/m3/REQUIREMENTS.md",
+    ".planning/phases/12.4-mfa-cross-device/12.4-CONTEXT.md",
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "cc2c3007851e",
+  "checkpoint_transcript_start": 274,
+  "transcript_lines_at_start": 274,
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 32920,
+    "cache_read_tokens": 3848928,
+    "output_tokens": 15923,
+    "api_call_count": 32
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-03T19:54:23.906816Z",
+    "agent_lines": 129,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 129,
+    "agent_percentage": 100
+  }
+}
