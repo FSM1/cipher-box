@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "71abf58abc0a",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-16-advanced-sync",
+  "checkpoints_count": 9,
+  "files_touched": [
+    ".planning/debug/desktop-e2e-ci-all-platforms-resolved.md",
+    ".planning/todos/pending/2026-02-14-bring-your-own-ipfs-node.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/71/abf58abc0a/0/metadata.json",
+      "transcript": "/71/abf58abc0a/0/full.jsonl",
+      "context": "/71/abf58abc0a/0/context.md",
+      "content_hash": "/71/abf58abc0a/0/content_hash.txt",
+      "prompt": "/71/abf58abc0a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1996,
+    "cache_creation_tokens": 95964,
+    "cache_read_tokens": 7998778,
+    "output_tokens": 18490,
+    "api_call_count": 75
+  }
+}

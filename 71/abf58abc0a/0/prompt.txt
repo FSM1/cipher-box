@@ -1,0 +1,616 @@
+<objective>
+Check project progress, summarize recent work and what's ahead, then intelligently route to the next action - either executing an existing plan or creating the next one.
+
+Provides situational awareness before continuing work.
+</objective>
+
+
+<process>
+
+<step name="verify">
+**Verify planning structure exists:**
+
+If no `.planning/` directory:
+
+```
+No planning structure found.
+
+Run /gsd:new-project to start a new project.
+```
+
+Exit.
+
+If missing STATE.md: suggest `/gsd:new-project`.
+
+**If ROADMAP.md missing but PROJECT.md exists:**
+
+This means a milestone was completed and archived. Go to **Route F** (between milestones).
+
+If missing both ROADMAP.md and PROJECT.md: suggest `/gsd:new-project`.
+</step>
+
+<step name="load">
+**Load full project context:**
+
+- Read `.planning/STATE.md` for living memory (position, decisions, issues)
+- Read `.planning/ROADMAP.md` for phase structure and objectives
+- Read `.planning/PROJECT.md` for current state (What This Is, Core Value, Requirements)
+  </step>
+
+<step name="recent">
+**Gather recent work context:**
+
+- Find the 2-3 most recent SUMMARY.md files
+- Extract from each: what was accomplished, key decisions, any issues logged
+- This shows "what we've been working on"
+  </step>
+
+<step name="position">
+**Parse current position:**
+
+- From STATE.md: current phase, plan number, status
+- Calculate: total plans, completed plans, remaining plans
+- Note any blockers or concerns
+- Check for CONTEXT.md: For phases without PLAN.md files, check if `{phase}-CONTEXT.md` exists in phase directory
+- Count pending todos: `ls .planning/todos/pending/*.md 2>/dev/null | wc -l`
+- Check for active debug sessions: `ls .planning/debug/*.md 2>/dev/null | grep -v resolved | wc -l`
+  </step>
+
+<step name="report">
+**Present rich status report:**
+
+```
+# [Project Name]
+
+**Progress:** [████████░░] 8/10 plans complete
+
+## Recent Work
+- [Phase X, Plan Y]: [what was accomplished - 1 line]
+- [Phase X, Plan Z]: [what was accomplished - 1 line]
+
+## Current Position
+Phase [N] of [total]: [phase-name]
+Plan [M] of [phase-total]: [status]
+CONTEXT: [✓ if CONTEXT.md exists | - if not]
+
+## Key Decisions Made
+- [decision 1 from STATE.md]
+- [decision 2]
+
+## Blockers/Concerns
+- [any blockers or concerns from STATE.md]
+
+## Pending Todos
+- [count] pending — /gsd:check-todos to review
+
+## Active Debug Sessions
+- [count] active — /gsd:debug to continue
+(Only show this section if count > 0)
+
+## What's Next
+[Next phase/plan objective from ROADMAP]
+```
+
+</step>
+
+<step name="route">
+**Determine next action based on verified counts.**
+
+**Step 1: Count plans, summaries, and issues in current phase**
+
+List files in the current phase directory:
+
+```bash
+ls -1 .planning/phases/[current-phase-dir]/*-PLAN.md 2>/dev/null | wc -l
+ls -1 .planning/phases/[current-phase-dir]/*-SUMMARY.md 2>/dev/null | wc -l
+ls -1 .planning/phases/[current-phase-dir]/*-UAT.md 2>/dev/null | wc -l
+```
+
+State: "This phase has {X} plans, {Y} summaries."
+
+**Step 1.5: Check for unaddressed UAT gaps**
+
+Check for UAT.md files with status "diagnosed" (has gaps needing fixes).
+
+```bash
+# Check for diagnosed UAT with gaps
+grep -l "status: diagnosed" .planning/phases/[current-phase-dir]/*-UAT.md 2>/dev/null
+```
+
+Track:
+- `uat_with_gaps`: UAT.md files with status "diagnosed" (gaps need fixing)
+
+**Step 2: Route based on counts**
+
+| Condition | Meaning | Action |
+|-----------|---------|--------|
+| uat_with_gaps > 0 | UAT gaps need fix plans | Go to **Route E** |
+| summaries < plans | Unexecuted plans exist | Go to **Route A** |
+| summaries = plans AND plans > 0 | Phase complete | Go to Step 3 |
+| plans = 0 | Phase not yet planned | Go to **Route B** |
+
+---
+
+**Route A: Unexecuted plan exists**
+
+Find the first PLAN.md without matching SUMMARY.md.
+Read its `<objective>` section.
+
+```
+---
+
+## ▶ Next Up
+
+**{phase}-{plan}: [Plan Name]** — [objective summary from PLAN.md]
+
+`/gsd:execute-phase {phase}`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+```
+
+---
+
+**Route B: Phase needs planning**
+
+Check if `{phase}-CONTEXT.md` exists in phase directory.
+
+**If CONTEXT.md exists:**
+
+```
+---
+
+## ▶ Next Up
+
+**Phase {N}: {Name}** — {Goal from ROADMAP.md}
+<sub>✓ Context gathered, ready to plan</sub>
+
+`/gsd:plan-phase {phase-number}`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+```
+
+**If CONTEXT.md does NOT exist:**
+
+```
+---
+
+## ▶ Next Up
+
+**Phase {N}: {Name}** — {Goal from ROADMAP.md}
+
+`/gsd:discuss-phase {phase}` — gather context and clarify approach
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:plan-phase {phase}` — skip discussion, plan directly
+- `/gsd:list-phase-assumptions {phase}` — see Claude's assumptions
+
+---
+```
+
+---
+
+**Route E: UAT gaps need fix plans**
+
+UAT.md exists with gaps (diagnosed issues). User needs to plan fixes.
+
+```
+---
+
+## ⚠ UAT Gaps Found
+
+**{phase}-UAT.md** has {N} gaps requiring fixes.
+
+`/gsd:plan-phase {phase} --gaps`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:execute-phase {phase}` — execute phase plans
+- `/gsd:verify-work {phase}` — run more UAT testing
+
+---
+```
+
+---
+
+**Step 3: Check milestone status (only when phase complete)**
+
+Read ROADMAP.md and identify:
+1. Current phase number
+2. All phase numbers in the current milestone section
+
+Count total phases and identify the highest phase number.
+
+State: "Current phase is {X}. Milestone has {N} phases (highest: {Y})."
+
+**Route based on milestone status:**
+
+| Condition | Meaning | Action |
+|-----------|---------|--------|
+| current phase < highest phase | More phases remain | Go to **Route C** |
+| current phase = highest phase | Milestone complete | Go to **Route D** |
+
+---
+
+**Route C: Phase complete, more phases remain**
+
+Read ROADMAP.md to get the next phase's name and goal.
+
+```
+---
+
+## ✓ Phase {Z} Complete
+
+## ▶ Next Up
+
+**Phase {Z+1}: {Name}** — {Goal from ROADMAP.md}
+
+`/gsd:discuss-phase {Z+1}` — gather context and clarify approach
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:plan-phase {Z+1}` — skip discussion, plan directly
+- `/gsd:verify-work {Z}` — user acceptance test before continuing
+
+---
+```
+
+---
+
+**Route D: Milestone complete**
+
+```
+---
+
+## 🎉 Milestone Complete
+
+All {N} phases finished!
+
+## ▶ Next Up
+
+**Complete Milestone** — archive and prepare for next
+
+`/gsd:complete-milestone`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+
+**Also available:**
+- `/gsd:verify-work` — user acceptance test before completing milestone
+
+---
+```
+
+---
+
+**Route F: Between milestones (ROADMAP.md missing, PROJECT.md exists)**
+
+A milestone was completed and archived. Ready to start the next milestone cycle.
+
+Read MILESTONES.md to find the last completed milestone version.
+
+```
+---
+
+## ✓ Milestone v{X.Y} Complete
+
+Ready to plan the next milestone.
+
+## ▶ Next Up
+
+**Start Next Milestone** — questioning → research → requirements → roadmap
+
+`/gsd:new-milestone`
+
+<sub>`/clear` first → fresh context window</sub>
+
+---
+```
+
+</step>
+
+<step name="edge_cases">
+**Handle edge cases:**
+
+- Phase complete but next phase not planned → offer `/gsd:plan-phase [next]`
+- All work complete → offer milestone completion
+- Blockers present → highlight before offering to continue
+- Handoff file exists → mention it, offer `/gsd:resume-work`
+  </step>
+
+</process>
+
+<success_criteria>
+
+- [ ] Rich context provided (recent work, decisions, issues)
+- [ ] Current position clear with visual progress
+- [ ] What's next clearly explained
+- [ ] Smart routing: /gsd:execute-phase if plans exist, /gsd:plan-phase if not
+- [ ] User confirms before any action
+- [ ] Seamless handoff to appropriate gsd command
+      </success_criteria>
+
+---
+
+<objective>
+Debug issues using scientific method with subagent isolation.
+
+**Orchestrator role:** Gather symptoms, spawn gsd-debugger agent, handle checkpoints, spawn continuations.
+
+**Why subagent:** Investigation burns context fast (reading files, forming hypotheses, testing). Fresh 200k context per investigation. Main context stays lean for user interaction.
+</objective>
+
+<context>
+User's issue: 
+
+Check for active sessions:
+```bash
+ls .planning/debug/*.md 2>/dev/null | grep -v resolved | head -5
+```
+</context>
+
+<process>
+
+## 1. Check Active Sessions
+
+If active sessions exist AND no :
+- List sessions with status, hypothesis, next action
+- User picks number to resume OR describes new issue
+
+If  provided OR user describes new issue:
+- Continue to symptom gathering
+
+## 2. Gather Symptoms (if new issue)
+
+Use AskUserQuestion for each:
+
+1. **Expected behavior** - What should happen?
+2. **Actual behavior** - What happens instead?
+3. **Error messages** - Any errors? (paste or describe)
+4. **Timeline** - When did this start? Ever worked?
+5. **Reproduction** - How do you trigger it?
+
+After all gathered, confirm ready to investigate.
+
+## 3. Spawn gsd-debugger Agent
+
+Fill prompt and spawn:
+
+```markdown
+<objective>
+Investigate issue: {slug}
+
+**Summary:** {trigger}
+</objective>
+
+<symptoms>
+expected: {expected}
+actual: {actual}
+errors: {errors}
+reproduction: {reproduction}
+timeline: {timeline}
+</symptoms>
+
+<mode>
+symptoms_prefilled: true
+goal: find_and_fix
+</mode>
+
+<debug_file>
+Create: .planning/debug/{slug}.md
+</debug_file>
+```
+
+```
+Task(
+  prompt=filled_prompt,
+  subagent_type="gsd-debugger",
+  description="Debug {slug}"
+)
+```
+
+## 4. Handle Agent Return
+
+**If `## ROOT CAUSE FOUND`:**
+- Display root cause and evidence summary
+- Offer options:
+  - "Fix now" - spawn fix subagent
+  - "Plan fix" - suggest /gsd:plan-phase --gaps
+  - "Manual fix" - done
+
+**If `## CHECKPOINT REACHED`:**
+- Present checkpoint details to user
+- Get user response
+- Spawn continuation agent (see step 5)
+
+**If `## INVESTIGATION INCONCLUSIVE`:**
+- Show what was checked and eliminated
+- Offer options:
+  - "Continue investigating" - spawn new agent with additional context
+  - "Manual investigation" - done
+  - "Add more context" - gather more symptoms, spawn again
+
+## 5. Spawn Continuation Agent (After Checkpoint)
+
+When user responds to checkpoint, spawn fresh agent:
+
+```markdown
+<objective>
+Continue debugging {slug}. Evidence is in the debug file.
+</objective>
+
+<prior_state>
+Debug file: @.planning/debug/{slug}.md
+</prior_state>
+
+<checkpoint_response>
+**Type:** {checkpoint_type}
+**Response:** {user_response}
+</checkpoint_response>
+
+<mode>
+goal: find_and_fix
+</mode>
+```
+
+```
+Task(
+  prompt=continuation_prompt,
+  subagent_type="gsd-debugger",
+  description="Continue debug {slug}"
+)
+```
+
+</process>
+
+<success_criteria>
+- [ ] Active sessions checked
+- [ ] Symptoms gathered (if new)
+- [ ] gsd-debugger spawned with context
+- [ ] Checkpoints handled correctly
+- [ ] Root cause confirmed before fixing
+</success_criteria>
+
+---
+
+<objective>
+Extract implementation decisions that downstream agents need — researcher and planner will use CONTEXT.md to know what to investigate and what choices are locked.
+
+**How it works:**
+
+1. Analyze the phase to identify gray areas (UI, UX, behavior, etc.)
+2. **For UI phases:** Generate design mockups via Pencil MCP to visualize options
+3. Present gray areas — user selects which to discuss
+4. Deep-dive each selected area until satisfied
+5. Create CONTEXT.md with decisions that guide research and planning
+
+**Output:** `{phase}-CONTEXT.md` — decisions clear enough that downstream agents can act without asking the user again
+
+**For UI phases, also outputs:** Design mockups in Pencil file (in "Draft: Phase X" frame)
+</objective>
+
+<execution_context>
+@./.claude/get-shit-done/workflows/discuss-phase.md
+@./.claude/get-shit-done/templates/context.md
+</execution_context>
+
+<context>
+Phase number: 16 (required)
+
+**Load project state:**
+@.planning/STATE.md
+
+**Load roadmap:**
+@.planning/ROADMAP.md
+</context>
+
+<process>
+1. Validate phase number (error if missing or not in roadmap)
+2. **Create phase branch** — Create `feat/phase-{number}-{slug}` branch for all phase work
+3. Check if CONTEXT.md exists (offer update/view/skip if yes)
+4. **Analyze phase** — Identify domain and generate phase-specific gray areas
+5. **Detect UI phase** — If phase involves UI, prepare for design mockup generation
+6. **Present gray areas** — Multi-select: which to discuss? (NO skip option)
+7. **Deep-dive each area** — 4 questions per area, then offer more/next
+8. **For UI phases: Generate design mockups** — Create visual options in Pencil for user to choose
+9. **Write CONTEXT.md** — Sections match areas discussed, include approved designs
+10. Offer next steps (research or plan)
+
+**CRITICAL: Scope guardrail**
+
+- Phase boundary from ROADMAP.md is FIXED
+- Discussion clarifies HOW to implement, not WHETHER to add more
+- If user suggests new capabilities: "That's its own phase. I'll note it for later."
+- Capture deferred ideas — don't lose them, don't act on them
+
+**Domain-aware gray areas:**
+Gray areas depend on what's being built. Analyze the phase goal:
+
+- Something users SEE → layout, density, interactions, states
+- Something users CALL → responses, errors, auth, versioning
+- Something users RUN → output format, flags, modes, error handling
+- Something users READ → structure, tone, depth, flow
+- Something being ORGANIZED → criteria, grouping, naming, exceptions
+
+Generate 3-4 **phase-specific** gray areas, not generic categories.
+
+**UI Phase Detection:**
+Check if phase involves UI work:
+
+- Phase name contains: "UI", "restyle", "design", "layout", "component", "page", "view"
+- Phase goal mentions: visual, styling, interface, appearance, frontend, display
+- Phase involves: user-facing changes, screens, forms, dialogs
+
+If UI phase detected, enable Pencil MCP design ideation workflow.
+
+**Probing depth:**
+
+- Ask 4 questions per area before checking
+- "More questions about [area], or move to next?"
+- If more → ask 4 more, check again
+- After all areas → "Ready to create context?"
+- **For UI phases:** "Would you like me to generate design mockups based on our discussion?"
+
+**Do NOT ask about (Claude handles these):**
+
+- Technical implementation
+- Architecture choices
+- Performance concerns
+- Scope expansion
+  </process>
+
+<success_criteria>
+
+- Gray areas identified through intelligent analysis
+- User chose which areas to discuss
+- Each selected area explored until satisfied
+- Scope creep redirected to deferred ideas
+- CONTEXT.md captures decisions, not vague vision
+- User knows next steps
+  </success_criteria>
+
+---
+
+sorry i am really confused why i was not asked any questions in that discuss session and where the answers actually came from
+
+---
+
+auto merge seems really nice from a ux perspective, but this would involve some really tricky operations on the folder metadata ipns entry which I am worried will be really complex to implement, and even more complex to test reliably.
+
+---
+
+if I understand it correctly, the check would most likely end up hitting the db cached version when resolving, especially if this is a really fresh ipns record.
+
+---
+
+the more i think about it, the greater my feeling becomes that this whole feature will require more engineering and testing than I am willing to invest in it right now. Lets just keep this on the backlog for milestone 3
+
+---
+
+I am still struggling to see what exact user flows would be necessary here to produce outcomes that are not desired by the user.
+
+---
+
+one thing I wanted to discuss is that this api level conflict detection will only work while we are still depending on the api for ipns publishing and ipfs operations. once the move to byo-ipfs is made this will all need to be rethought, right?
+
+---
+
+yeah, maybe just note this in the byo-ipfs todo for future reference.
+
+---
+
+ok great lets commit all this to the branch
