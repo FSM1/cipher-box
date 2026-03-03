@@ -159,31 +159,31 @@ test.describe.serial('Conflict Detection', () => {
    * The token may be refreshed between tests.
    */
   async function getAccessToken(): Promise<string> {
-    if (authState?.accessToken) {
-      return authState.accessToken;
-    }
-    // Fallback: read from store if authState not available
-    return await page.evaluate(() => {
+    // Always read from the live Zustand store to get the freshest token
+    // (tokens may be refreshed between tests)
+    const liveToken = await page.evaluate(() => {
       const stores = (window as unknown as Record<string, unknown>).__ZUSTAND_STORES as {
         auth: { getState: () => { accessToken: string } };
       };
       return stores?.auth?.getState()?.accessToken ?? '';
     });
+    if (liveToken) return liveToken;
+    // Fallback: use authState captured during beforeAll
+    return authState?.accessToken ?? '';
   }
 
   /**
    * Get the root IPNS name from the browser's Zustand vault store.
    */
   async function getRootIpnsName(): Promise<string> {
-    if (authState?.rootIpnsName) {
-      return authState.rootIpnsName;
-    }
-    return await page.evaluate(() => {
+    const liveName = await page.evaluate(() => {
       const stores = (window as unknown as Record<string, unknown>).__ZUSTAND_STORES as {
         vault: { getState: () => { rootIpnsName: string } };
       };
       return stores?.vault?.getState()?.rootIpnsName ?? '';
     });
+    if (liveName) return liveName;
+    return authState?.rootIpnsName ?? '';
   }
 
   // ============================================================
