@@ -126,12 +126,15 @@ jobs:
           echo "Desktop changes detected since ${PREV_TAG} — verifying Desktop E2E"
 
           # Helper: check if a workflow run actually executed e2e-desktop jobs
-          # (not skipped due to change detection). Returns 0 if tests ran, 1 if skipped.
+          # (not skipped due to change detection). Returns 0 if tests ran, 1 if skipped, 2 on API error.
           run_executed_tests() {
             local run_id=$1
             local executed
-            executed=$(gh api "repos/${{ github.repository }}/actions/runs/${run_id}/jobs" \
-              --jq '[.jobs[] | select(.name | startswith("Desktop E2E")) | select(.conclusion == "success")] | length')
+            if ! executed=$(gh api "repos/${{ github.repository }}/actions/runs/${run_id}/jobs" \
+              --jq '[.jobs[] | select(.name | startswith("Desktop E2E")) | select(.conclusion == "success")] | length'); then
+              echo "::error::Failed to query jobs for run ${run_id} (API error or rate limit)"
+              return 2
+            fi
             [ "${executed:-0}" -gt 0 ]
           }
 
@@ -150,10 +153,9 @@ jobs:
             POLL_INTERVAL=30
 
             for attempt in $(seq 1 $MAX_ATTEMPTS); do
-              CONCLUSION=$(gh run list --repo ${{ github.repository }} \
-                --workflow=e2e-desktop.yml --branch=main --limit=50 \
-                --json headSha,conclusion,status \
-                --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].conclusion // empty")
+              CONCLUSION=$(gh run view "$HEAD_RUN_ID" --repo ${{ github.repository }} \
+                --json conclusion \
+                --jq '.conclusion // empty')
 
               if [ -n "$CONCLUSION" ]; then
                 if [ "$CONCLUSION" != "success" ]; then
@@ -161,7 +163,11 @@ jobs:
                   exit 1
                 fi
                 # Verify the e2e-desktop jobs actually ran (not skipped)
-                if run_executed_tests "$HEAD_RUN_ID"; then
+                run_executed_tests "$HEAD_RUN_ID"
+                rc=$?
+                if [ "$rc" -eq 2 ]; then
+                  exit 1
+                elif [ "$rc" -eq 0 ]; then
                   echo "Desktop E2E: passed (at HEAD, tests executed)"
                   exit 0
                 else
@@ -222,7 +228,11 @@ jobs:
                 break
               fi
               # Success run — verify tests actually executed
-              if run_executed_tests "$run_id"; then
+              run_executed_tests "$run_id"
+              rc=$?
+              if [ "$rc" -eq 2 ]; then
+                exit 1
+              elif [ "$rc" -eq 0 ]; then
                 LATEST_IN_RANGE_SHA="$sha"
                 LATEST_IN_RANGE_CONCLUSION="$conclusion"
                 break
