@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 16 (Advanced Sync)
-Plan: 1 of 5
+Plan: 4 of 5
 Status: In progress
-Last activity: 2026-03-03 -- Completed 16-01-PLAN.md (Optimistic Concurrency Control)
+Last activity: 2026-03-03 -- Completed 16-04-PLAN.md (E2E Conflict Detection Tests)
 
 Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE, Phase 16: 1/5)
 
@@ -46,11 +46,11 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 15.1   | 3/3   | 17 min  | 5.7 min  |
 | M2 Phase 11.3   | 3/3   | 104 min | 34.7 min |
 | M2 Phase 11.4   | 3/3   | 20 min  | 6.7 min  |
-| M2 Phase 16     | 1/5   | 2 min   | 2.0 min  |
+| M2 Phase 16     | 4/5   | 14 min  | 3.5 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 90m, 5m, 10m, 5m, 2m
+- Last 5 plans: 5m, 10m, 5m, 2m, 10m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -224,6 +224,8 @@ Recent decisions affecting current work:
 | Application-level read-compare-write for optimistic concurrency        | 16-01     | Sufficient for v1; TOCTOU mitigated by per-folder publish lock + sequential single-user API requests                 |
 | Backward compat: omitting expectedSequenceNumber = unconditional       | 16-01     | Existing clients and TEE republishes unaffected by new conflict detection                                            |
 | Batch publish aborts entirely on folder conflict                       | 16-01     | Clear signal for client to re-sync; no partial success ambiguity                                                     |
+| bumpServerSequence uses unconditional publish (omit expectedSeq)       | 16-04     | Simpler than matching exact sequence for bump; no IPNS key material needed in tests                                  |
+| Dummy base64 record for test sequence bumps (delegated routing warn)   | 16-04     | Only DB sequence bump needed; delegated routing warning expected and documented                                      |
 
 ### Pending Todos
 
@@ -287,7 +289,7 @@ Recent decisions affecting current work:
 - Phase 14 (Sharing): COMPLETE -- research done, 6 plans created, all 6 executed
 - Phase 15 (Link Sharing): COMPLETE -- ephemeral key bridge pattern, HashRouter fragment handling, unauthenticated endpoint design researched; 4 plans created
 - Phase 15.1 (Client-Side Search): COMPLETE -- 3 plans done (search index service, search UI & integration, E2E search tests)
-- Phase 16 (Advanced Sync): IN PROGRESS -- 1/5 plans complete (optimistic concurrency control)
+- Phase 16 (Advanced Sync): IN PROGRESS -- 4/5 plans complete (optimistic concurrency, web client conflict handling, desktop FUSE, E2E tests)
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
 - Phase 12.1 (AES-CTR Streaming): COMPLETE -- all 4 plans done (CTR crypto primitives, streaming upload pipeline, service worker decrypt proxy, media playback integration)
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
@@ -303,11 +305,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-03
-Stopped at: Completed 16-01-PLAN.md (Optimistic Concurrency Control)
+Stopped at: Completed 16-04-PLAN.md (E2E Conflict Detection Tests)
 Resume file: None
-Next: 16-02-PLAN.md (Web client sync service with conflict handling)
+Next: 16-05-PLAN.md (Desktop FUSE conflict detection) -- already committed on this branch
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-28 after Phase 11.4 Plan 03 complete (Desktop E2E CI Workflow)_
+_Last updated: 2026-03-03 after Phase 16 Plan 04 complete (E2E Conflict Detection Tests)_
