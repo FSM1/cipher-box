@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.22.0](https://github.com/FSM1/cipher-box/compare/v0.21.9...v0.22.0) (2026-03-03)
+
+
+### Features
+
+* Phase 16 — conflict detection via optimistic concurrency ([#253](https://github.com/FSM1/cipher-box/issues/253)) ([f864e50](https://github.com/FSM1/cipher-box/commit/f864e500aab39aaeea88f6a68f449a0c057005ea))
+
+
+### Bug Fixes
+
+* **api:** start new IPNS entries at seq 1 to match client expectation ([#255](https://github.com/FSM1/cipher-box/issues/255)) ([493111d](https://github.com/FSM1/cipher-box/commit/493111d64aedcc15e2039e80937da3d9910f7961))
+* **ci:** include run ID in release gate success message ([#260](https://github.com/FSM1/cipher-box/issues/260)) ([f929643](https://github.com/FSM1/cipher-box/commit/f9296435f4c0f1964c53ec4d8159cf4c0214394b))
+* **ci:** prevent bash -e from killing release gate on skipped desktop tests ([#259](https://github.com/FSM1/cipher-box/issues/259)) ([13d805f](https://github.com/FSM1/cipher-box/commit/13d805fb5187663523d82f4412b45ca62272de49))
+* **ci:** prevent bash -e from killing script on run_executed_tests ([13d805f](https://github.com/FSM1/cipher-box/commit/13d805fb5187663523d82f4412b45ca62272de49))
+* **ci:** verify desktop E2E jobs actually ran in release gate ([#258](https://github.com/FSM1/cipher-box/issues/258)) ([5b641ca](https://github.com/FSM1/cipher-box/commit/5b641caa5746b41ceabf8e358a1a216626796cad))
+* **web:** update sequence numbers after single-item folder mutations ([#256](https://github.com/FSM1/cipher-box/issues/256)) ([e7e8f5f](https://github.com/FSM1/cipher-box/commit/e7e8f5fb7b1612db6892c9e046fdece89ad011bb))
+
 ## [0.21.9](https://github.com/FSM1/cipher-box/compare/v0.21.8...v0.21.9) (2026-03-03)
 
 
