@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "f375f3de4cbe",
+  "strategy": "manual-commit",
+  "branch": "docs/add-phase-18-recycle-bin",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/REQUIREMENTS.md",
+    ".planning/milestones/m3/REQUIREMENTS.md",
+    ".planning/phases/12.4-mfa-cross-device/12.4-CONTEXT.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f3/75f3de4cbe/0/metadata.json",
+      "transcript": "/f3/75f3de4cbe/0/full.jsonl",
+      "context": "/f3/75f3de4cbe/0/context.md",
+      "content_hash": "/f3/75f3de4cbe/0/content_hash.txt",
+      "prompt": "/f3/75f3de4cbe/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 16900,
+    "cache_read_tokens": 1188175,
+    "output_tokens": 4225,
+    "api_call_count": 13
+  }
+}
