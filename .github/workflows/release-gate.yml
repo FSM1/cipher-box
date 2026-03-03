@@ -233,6 +233,7 @@ jobs:
               elif [ "$rc" -eq 0 ]; then
                 LATEST_IN_RANGE_SHA="$sha"
                 LATEST_IN_RANGE_CONCLUSION="$conclusion"
+                LATEST_IN_RANGE_RUN_ID="$run_id"
                 break
               else
                 echo "Skipping run ${run_id} at ${sha} — tests were skipped (no desktop changes detected by workflow)"
@@ -252,7 +253,7 @@ jobs:
             exit 1
           fi
 
-          echo "Desktop E2E: passed (most recent in-range run at ${LATEST_IN_RANGE_SHA} with tests executed)"
+          echo "Desktop E2E: passed (run ${LATEST_IN_RANGE_RUN_ID} at ${LATEST_IN_RANGE_SHA} with tests executed)"
 
       - name: Skip Desktop E2E (no desktop changes)
         if: needs.detect-changes.outputs.desktop != 'true'
