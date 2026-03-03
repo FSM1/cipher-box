@@ -5,11 +5,15 @@ import { useAuthStore } from '../stores/auth.store';
 import { unpinFromIpfs } from '../lib/api/ipfs';
 import * as folderService from '../services/folder.service';
 import { reWrapForRecipients } from '../services/share.service';
-import { useSyncStore } from '../stores/sync.store';
-import { isConflictError } from '../lib/errors';
+import { resolveIpnsRecord } from '../services/ipns.service';
 import type { FolderNode } from '../stores/folder.store';
 import type { FolderEntry } from '@cipherbox/crypto';
-import { MAX_FOLDER_DEPTH, getRootFolderState, resyncFolder } from './folder-helpers';
+import {
+  MAX_FOLDER_DEPTH,
+  getRootFolderState,
+  resyncFolder,
+  withConflictRetry,
+} from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
 
 /**
@@ -69,9 +73,6 @@ export function useFolderMutations() {
           throw new Error('Parent folder not found or vault not initialized');
         }
 
-        // Add to parent's children
-        const newChildren = [...parentFolder.children, folder];
-
         // Update parent folder metadata and publish IPNS (with conflict retry)
         const performParentUpdate = async () => {
           const freshState = useFolderStore.getState();
@@ -92,36 +93,9 @@ export function useFolderMutations() {
           return { children: freshChildren, newSequenceNumber };
         };
 
-        let finalChildren = newChildren;
-        let parentSequence = parentFolder.sequenceNumber;
-        try {
-          const { newSequenceNumber } = await folderService.updateFolderMetadata({
-            folderId: parentFolder.id,
-            children: newChildren,
-            folderKey: parentFolder.folderKey,
-            ipnsPrivateKey: parentFolder.ipnsPrivateKey,
-            ipnsName: parentFolder.ipnsName,
-            sequenceNumber: parentFolder.sequenceNumber,
-          });
-          parentSequence = newSequenceNumber;
-        } catch (err) {
-          if (!isConflictError(err)) throw err;
-          useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
-          try {
-            await resyncFolder(parentFolder.ipnsName, parentFolder.id);
-            await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
-            const result = await performParentUpdate();
-            finalChildren = result.children;
-            parentSequence = result.newSequenceNumber;
-          } catch (retryErr) {
-            if (isConflictError(retryErr)) {
-              throw new Error('Conflict persists after re-sync. Please try again.');
-            }
-            throw retryErr;
-          } finally {
-            useSyncStore.getState().clearConflict();
-          }
-        }
+        const parentResult = await withConflictRetry(performParentUpdate, () =>
+          resyncFolder(parentFolder.ipnsName, parentFolder.id)
+        );
 
         // First publish for the new folder's own IPNS record with TEE-encrypted key
         // This sends encryptedIpnsPrivateKey to backend for TEE republish enrollment
@@ -137,8 +111,10 @@ export function useFolderMutations() {
         });
 
         // Update local state - add new folder to tree and persist sequence
-        useFolderStore.getState().updateFolderChildren(parentFolder.id, finalChildren);
-        useFolderStore.getState().updateFolderSequence(parentFolder.id, parentSequence);
+        useFolderStore.getState().updateFolderChildren(parentFolder.id, parentResult.children);
+        useFolderStore
+          .getState()
+          .updateFolderSequence(parentFolder.id, parentResult.newSequenceNumber);
 
         // Also add the new folder node to the store (with its decrypted keys)
         const newFolderNode: FolderNode = {
@@ -221,25 +197,9 @@ export function useFolderMutations() {
           }
         };
 
-        let renameResult: { newSequenceNumber: bigint };
-        try {
-          renameResult = await performRename();
-        } catch (err) {
-          if (!isConflictError(err)) throw err;
-          useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
-          try {
-            await resyncFolder(parentFolder.ipnsName, parentFolder.id);
-            await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
-            renameResult = await performRename();
-          } catch (retryErr) {
-            if (isConflictError(retryErr)) {
-              throw new Error('Conflict persists after re-sync. Please try again.');
-            }
-            throw retryErr;
-          } finally {
-            useSyncStore.getState().clearConflict();
-          }
-        }
+        const renameResult = await withConflictRetry(performRename, () =>
+          resyncFolder(parentFolder.ipnsName, parentFolder.id)
+        );
 
         if (itemType === 'folder') {
           // Update local folder state name
@@ -332,31 +292,14 @@ export function useFolderMutations() {
           }
         };
 
-        let moveResult: { destSequenceNumber: bigint; sourceSequenceNumber: bigint };
-        try {
-          moveResult = await performMove();
-        } catch (err) {
-          if (!isConflictError(err)) throw err;
-          useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
-          try {
-            // Re-sync both source and destination folders
-            await Promise.all([
-              resyncFolder(sourceFolder.ipnsName, sourceFolder.id),
-              sourceFolder.id !== destFolder.id
-                ? resyncFolder(destFolder.ipnsName, destFolder.id)
-                : Promise.resolve(),
-            ]);
-            await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
-            moveResult = await performMove();
-          } catch (retryErr) {
-            if (isConflictError(retryErr)) {
-              throw new Error('Conflict persists after re-sync. Please try again.');
-            }
-            throw retryErr;
-          } finally {
-            useSyncStore.getState().clearConflict();
-          }
-        }
+        const moveResult = await withConflictRetry(performMove, async () => {
+          await Promise.all([
+            resyncFolder(sourceFolder.ipnsName, sourceFolder.id),
+            sourceFolder.id !== destFolder.id
+              ? resyncFolder(destFolder.ipnsName, destFolder.id)
+              : Promise.resolve(),
+          ]);
+        });
 
         // Save the moved item BEFORE updating source children (otherwise it's already gone)
         const freshSourceBeforeUpdate = getSourceFolder();
@@ -549,32 +492,18 @@ export function useFolderMutations() {
           return { destSeq, sourceSeq, destChildren, sourceChildren };
         };
 
-        let result: Awaited<ReturnType<typeof performBatchMove>>;
-        try {
-          result = await performBatchMove();
-        } catch (err) {
-          if (!isConflictError(err)) throw err;
-          useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
-          try {
+        const result = await withConflictRetry(
+          performBatchMove,
+          async () => {
             await Promise.all([
               resyncFolder(sourceFolder.ipnsName, sourceFolder.id),
               sourceFolder.id !== destFolder.id
                 ? resyncFolder(destFolder.ipnsName, destFolder.id)
                 : Promise.resolve(),
             ]);
-            await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
-            // Re-validate after resync — destination may have new children or depth changes
-            validateBatchMove();
-            result = await performBatchMove();
-          } catch (retryErr) {
-            if (isConflictError(retryErr)) {
-              throw new Error('Conflict persists after re-sync. Please try again.');
-            }
-            throw retryErr;
-          } finally {
-            useSyncStore.getState().clearConflict();
-          }
-        }
+          },
+          validateBatchMove
+        );
 
         // Update local state
         const store = useFolderStore.getState();
@@ -623,46 +552,36 @@ export function useFolderMutations() {
         const parentFolder = getParentFolder();
         if (!parentFolder) throw new Error('Parent folder not found');
 
-        const performDelete = async (): Promise<{ newSequenceNumber: bigint }> => {
+        const performDelete = async (): Promise<{
+          newSequenceNumber: bigint;
+          orphanedIpnsNames: string[];
+        }> => {
           const freshParent = getParentFolder();
           if (!freshParent) throw new Error('Parent folder not found');
           if (itemType === 'folder') {
             const folders = useFolderStore.getState().folders;
-            const { newSequenceNumber } = await folderService.deleteFolder({
+            const { fileIpnsNames, newSequenceNumber } = await folderService.deleteFolder({
               folderId: itemId,
               parentFolderState: freshParent,
               getFolderState: (id) => folders[id],
-              unpinCid: unpinFromIpfs,
             });
-            return { newSequenceNumber };
+            return { newSequenceNumber, orphanedIpnsNames: fileIpnsNames };
           } else {
-            const { newSequenceNumber } = await folderService.deleteFileFromFolder({
-              fileId: itemId,
-              parentFolderState: freshParent,
-            });
-            return { newSequenceNumber };
+            const { fileMetaIpnsName, newSequenceNumber } =
+              await folderService.deleteFileFromFolder({
+                fileId: itemId,
+                parentFolderState: freshParent,
+              });
+            return {
+              newSequenceNumber,
+              orphanedIpnsNames: fileMetaIpnsName ? [fileMetaIpnsName] : [],
+            };
           }
         };
 
-        let deleteResult: { newSequenceNumber: bigint };
-        try {
-          deleteResult = await performDelete();
-        } catch (err) {
-          if (!isConflictError(err)) throw err;
-          useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
-          try {
-            await resyncFolder(parentFolder.ipnsName, parentFolder.id);
-            await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
-            deleteResult = await performDelete();
-          } catch (retryErr) {
-            if (isConflictError(retryErr)) {
-              throw new Error('Conflict persists after re-sync. Please try again.');
-            }
-            throw retryErr;
-          } finally {
-            useSyncStore.getState().clearConflict();
-          }
-        }
+        const deleteResult = await withConflictRetry(performDelete, () =>
+          resyncFolder(parentFolder.ipnsName, parentFolder.id)
+        );
 
         if (itemType === 'folder') {
           // Remove folder and all loaded descendants from local state
@@ -688,6 +607,15 @@ export function useFolderMutations() {
 
         // Persist the new sequence number so subsequent operations use the correct value
         useFolderStore.getState().updateFolderSequence(parentId, deleteResult.newSequenceNumber);
+
+        // Fire-and-forget: resolve orphaned file metadata IPNS names and unpin their CIDs
+        for (const ipnsName of deleteResult.orphanedIpnsNames) {
+          resolveIpnsRecord(ipnsName)
+            .then((resolved) => {
+              if (resolved?.cid) unpinFromIpfs(resolved.cid);
+            })
+            .catch(() => {});
+        }
 
         setState({ isLoading: false, error: null });
       } catch (err) {
@@ -773,30 +701,10 @@ export function useFolderMutations() {
           return { updatedChildren, newSequenceNumber };
         };
 
-        let updatedChildren: typeof parentFolder.children;
-        let newSequenceNumber = parentFolder.sequenceNumber;
-        try {
-          const result = await performBatchDelete();
-          updatedChildren = result.updatedChildren;
-          newSequenceNumber = result.newSequenceNumber;
-        } catch (err) {
-          if (!isConflictError(err)) throw err;
-          useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
-          try {
-            await resyncFolder(parentFolder.ipnsName, parentFolder.id);
-            await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
-            const result = await performBatchDelete();
-            updatedChildren = result.updatedChildren;
-            newSequenceNumber = result.newSequenceNumber;
-          } catch (retryErr) {
-            if (isConflictError(retryErr)) {
-              throw new Error('Conflict persists after re-sync. Please try again.');
-            }
-            throw retryErr;
-          } finally {
-            useSyncStore.getState().clearConflict();
-          }
-        }
+        const { updatedChildren, newSequenceNumber } = await withConflictRetry(
+          performBatchDelete,
+          () => resyncFolder(parentFolder.ipnsName, parentFolder.id)
+        );
 
         // Update local state -- remove all nested folders from store
         const store = useFolderStore.getState();

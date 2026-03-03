@@ -395,14 +395,12 @@ export async function renameFolder(params: {
  * @param params.folderId - ID of folder to delete
  * @param params.parentFolderState - Parent folder containing this folder
  * @param params.getFolderState - Function to get folder state by ID (for recursion)
- * @param params.unpinCid - Function to unpin a CID from IPFS
  * @throws Error if folder not found
  */
 export async function deleteFolder(params: {
   folderId: string;
   parentFolderState: FolderNode;
   getFolderState: (id: string) => FolderNode | undefined;
-  unpinCid: (cid: string) => Promise<void>;
 }): Promise<{ fileIpnsNames: string[]; newSequenceNumber: bigint }> {
   // 1. Find folder in parent's children
   const children = [...params.parentFolderState.children];
