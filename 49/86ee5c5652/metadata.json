@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "4986ee5c5652",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-16-advanced-sync",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/16-advanced-sync/16-VERIFICATION.md",
+    "apps/web/src/hooks/useFolderMutations.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/49/86ee5c5652/0/metadata.json",
+      "transcript": "/49/86ee5c5652/0/full.jsonl",
+      "context": "/49/86ee5c5652/0/context.md",
+      "content_hash": "/49/86ee5c5652/0/content_hash.txt",
+      "prompt": "/49/86ee5c5652/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 67,
+    "cache_creation_tokens": 70159,
+    "cache_read_tokens": 2081744,
+    "output_tokens": 12250,
+    "api_call_count": 28
+  }
+}

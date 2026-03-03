@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "4986ee5c5652",
+  "session_id": "6eb42dda-e22d-4dd9-a22e-ff648317a2b3",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-03T16:02:52.673576Z",
+  "branch": "feat/phase-16-advanced-sync",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/hooks/useFolderMutations.ts",
+    ".planning/phases/16-advanced-sync/16-VERIFICATION.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "58a16de582d5",
+  "token_usage": {
+    "input_tokens": 67,
+    "cache_creation_tokens": 70159,
+    "cache_read_tokens": 2081744,
+    "output_tokens": 12250,
+    "api_call_count": 28
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-03T16:02:51.815479Z",
+    "agent_lines": 75,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 75,
+    "agent_percentage": 100
+  }
+}
