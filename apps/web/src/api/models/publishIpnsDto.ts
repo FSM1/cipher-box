@@ -17,4 +17,6 @@ export interface PublishIpnsDto {
   encryptedIpnsPrivateKey?: string;
   /** TEE key epoch (required with encryptedIpnsPrivateKey) */
   keyEpoch?: number;
+  /** Expected sequence number for conflict detection. When present, the API validates against the stored value and rejects with 409 if mismatched. Omit for backward-compatible unconditional publish. */
+  expectedSequenceNumber?: string;
 }

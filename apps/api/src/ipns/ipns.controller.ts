@@ -58,6 +58,12 @@ export class IpnsController {
     description: 'Unauthorized - JWT token required',
   })
   @ApiResponse({
+    status: 409,
+    description:
+      'Conflict - expectedSequenceNumber does not match current server sequence number. ' +
+      'Response body includes currentSequenceNumber for client re-sync.',
+  })
+  @ApiResponse({
     status: 502,
     description: 'Bad Gateway - Failed to publish to delegated routing',
   })
@@ -92,6 +98,12 @@ export class IpnsController {
   @ApiResponse({
     status: 401,
     description: 'Unauthorized - JWT token required',
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      'Conflict - a folder record in the batch has an expectedSequenceNumber that does not match ' +
+      'the current server sequence number. The entire batch is rejected.',
   })
   @ApiResponse({
     status: 502,

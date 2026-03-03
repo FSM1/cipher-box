@@ -3,6 +3,7 @@ import {
   HttpException,
   HttpStatus,
   BadRequestException,
+  ConflictException,
   Logger,
   Inject,
   forwardRef,
@@ -52,7 +53,9 @@ export class IpnsService {
       dto.ipnsName,
       dto.metadataCid,
       dto.encryptedIpnsPrivateKey,
-      dto.keyEpoch
+      dto.keyEpoch,
+      'folder',
+      dto.expectedSequenceNumber
     );
 
     // Publish to delegated routing API (best-effort — DB is the reliable source)
@@ -107,7 +110,8 @@ export class IpnsService {
             entry.metadataCid,
             entry.encryptedIpnsPrivateKey,
             entry.keyEpoch,
-            entry.recordType ?? 'folder'
+            entry.recordType ?? 'folder',
+            entry.expectedSequenceNumber
           );
 
           // Publish to delegated routing (best-effort)
@@ -134,6 +138,10 @@ export class IpnsService {
           totalSucceeded++;
         } else {
           const reason = result.reason;
+          // If any record (especially a folder record) has a conflict, fail the entire batch
+          if (reason instanceof ConflictException) {
+            throw reason;
+          }
           const ipnsName = batch[j]?.ipnsName ?? 'unknown';
           this.logger.warn(
             `Batch publish failed for ${ipnsName}: ${reason instanceof Error ? reason.message : String(reason)}`
@@ -161,9 +169,24 @@ export class IpnsService {
     metadataCid: string,
     encryptedIpnsPrivateKey?: string,
     keyEpoch?: number,
-    recordType: 'folder' | 'file' = 'folder'
+    recordType: 'folder' | 'file' = 'folder',
+    expectedSequenceNumber?: string
   ): Promise<FolderIpns> {
     const existing = await this.getFolderIpns(userId, ipnsName);
+
+    // Conflict detection: when expectedSequenceNumber is provided, verify it matches
+    if (existing && expectedSequenceNumber !== undefined) {
+      const expected = BigInt(expectedSequenceNumber);
+      const current = BigInt(existing.sequenceNumber);
+      if (expected !== current) {
+        throw new ConflictException({
+          statusCode: 409,
+          message: 'Sequence number mismatch: folder was modified by another device',
+          currentSequenceNumber: existing.sequenceNumber,
+          expectedSequenceNumber,
+        });
+      }
+    }
 
     if (existing) {
       // Update existing entry
