@@ -42,9 +42,10 @@ echo ""
 
 # ---- Setup: Authenticate via test-login ----
 echo "--- Setup: Authenticate via test-login ---"
-AUTH_RESPONSE=$(curl -fsS --connect-timeout 5 --max-time 30 -X POST "$API_URL/auth/test-login" \
+AUTH_RESPONSE=$(printf '{"email":"%s","secret":"%s"}' "$TEST_EMAIL" "$SECRET" | \
+  curl -fsS --connect-timeout 5 --max-time 30 -X POST "$API_URL/auth/test-login" \
   -H "Content-Type: application/json" \
-  -d "{\"email\":\"$TEST_EMAIL\",\"secret\":\"$SECRET\"}" 2>&1) || true
+  --data-binary @- 2>&1) || true
 
 ACCESS_TOKEN=$(echo "$AUTH_RESPONSE" | jq -r '.accessToken // empty')
 if [ -z "$ACCESS_TOKEN" ]; then

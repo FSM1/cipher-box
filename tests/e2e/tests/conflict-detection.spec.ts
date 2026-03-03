@@ -125,6 +125,25 @@ test.describe.serial('Conflict Detection', () => {
   });
 
   test.afterAll(async () => {
+    // Clean up remote items created during tests (runs even if earlier serial tests fail)
+    try {
+      const itemsToDelete = [...createdItems].reverse();
+      for (const item of itemsToDelete) {
+        const isVisible = await fileList.isItemVisible(item.name).catch(() => false);
+        if (!isVisible) continue;
+
+        await fileList.rightClickItem(item.name);
+        await contextMenu.waitForOpen();
+        await contextMenu.clickDelete();
+        await confirmDialog.waitForOpen();
+        await confirmDialog.clickConfirm();
+        await fileList.waitForItemToDisappear(item.name, { timeout: 30000 });
+      }
+    } catch (err) {
+      // Best-effort cleanup -- don't fail the suite if cleanup itself fails
+      console.warn('Cleanup of conflict test items failed:', err);
+    }
+
     cleanupTestFiles();
     if (context) {
       await context.close();
@@ -296,26 +315,5 @@ test.describe.serial('Conflict Detection', () => {
 
     // Track for cleanup
     createdItems.push({ name: editFileName, type: 'file' });
-  });
-
-  // ============================================================
-  // Cleanup: Remove all items created during conflict tests
-  // ============================================================
-
-  test('cleanup: delete conflict test items', async () => {
-    // Delete items in reverse creation order (files first, then folders)
-    const itemsToDelete = [...createdItems].reverse();
-
-    for (const item of itemsToDelete) {
-      const isVisible = await fileList.isItemVisible(item.name).catch(() => false);
-      if (!isVisible) continue;
-
-      await fileList.rightClickItem(item.name);
-      await contextMenu.waitForOpen();
-      await contextMenu.clickDelete();
-      await confirmDialog.waitForOpen();
-      await confirmDialog.clickConfirm();
-      await fileList.waitForItemToDisappear(item.name, { timeout: 30000 });
-    }
   });
 });

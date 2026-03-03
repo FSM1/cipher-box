@@ -6,7 +6,6 @@ import { useQuotaStore } from '../stores/quota.store';
 import { unpinFromIpfs } from '../lib/api/ipfs';
 import * as folderService from '../services/folder.service';
 import { reWrapForRecipients } from '../services/share.service';
-import { resolveIpnsRecord } from '../services/ipns.service';
 import { useSyncStore } from '../stores/sync.store';
 import { isConflictError } from '../lib/errors';
 import {
@@ -19,31 +18,8 @@ import {
 import type { FileIpnsRecordPayload } from '../services/file-metadata.service';
 import type { FolderChild, FilePointer } from '@cipherbox/crypto';
 import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
-import { getRootFolderState } from './folder-helpers';
+import { getRootFolderState, resyncFolder } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
-
-/**
- * Re-sync a specific folder after a 409 conflict.
- *
- * Resolves the folder's IPNS name to get fresh CID + sequenceNumber,
- * fetches and decrypts the metadata, and updates the folder store.
- */
-async function resyncFolder(folderIpnsName: string, folderId: string): Promise<void> {
-  const store = useFolderStore.getState();
-  const folderNode = store.folders[folderId];
-  if (!folderNode) return;
-
-  const resolved = await resolveIpnsRecord(folderIpnsName);
-  if (!resolved) return;
-
-  const remoteMetadata = await folderService.fetchAndDecryptMetadata(
-    resolved.cid,
-    folderNode.folderKey
-  );
-
-  store.updateFolderChildren(folderId, remoteMetadata.children ?? []);
-  store.updateFolderSequence(folderId, resolved.sequenceNumber);
-}
 
 /**
  * React hook for file add/update operations.
@@ -139,17 +115,17 @@ export function useFileOperations() {
         } catch (err) {
           if (!isConflictError(err)) throw err;
           useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
-          await resyncFolder(parentFolder.ipnsName, parentFolder.id);
-          await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
           try {
+            await resyncFolder(parentFolder.ipnsName, parentFolder.id);
+            await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
             addResult = await performAddFile();
-            useSyncStore.getState().clearConflict();
           } catch (retryErr) {
-            useSyncStore.getState().clearConflict();
             if (isConflictError(retryErr)) {
               throw new Error('Conflict persists after re-sync. Please try again.');
             }
             throw retryErr;
+          } finally {
+            useSyncStore.getState().clearConflict();
           }
         }
 
@@ -295,17 +271,17 @@ export function useFileOperations() {
         } catch (err) {
           if (!isConflictError(err)) throw err;
           useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
-          await resyncFolder(parentFolder.ipnsName, parentFolder.id);
-          await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
           try {
+            await resyncFolder(parentFolder.ipnsName, parentFolder.id);
+            await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
             addResult = await performAddFiles();
-            useSyncStore.getState().clearConflict();
           } catch (retryErr) {
-            useSyncStore.getState().clearConflict();
             if (isConflictError(retryErr)) {
               throw new Error('Conflict persists after re-sync. Please try again.');
             }
             throw retryErr;
+          } finally {
+            useSyncStore.getState().clearConflict();
           }
         }
 

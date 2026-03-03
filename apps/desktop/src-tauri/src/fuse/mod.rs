@@ -253,40 +253,37 @@ fn merge_folder_children(
         }
     }
 
-    // Build lookup maps keyed by IPNS name.
+    // Build lookup map keyed by IPNS name for local children.
     let local_by_ipns: std::collections::HashMap<String, &FolderChild> = local
         .children
         .iter()
         .map(|c| (child_ipns_key(c).to_string(), c))
         .collect();
 
-    let remote_by_ipns: std::collections::HashMap<String, FolderChild> = remote
-        .children
-        .into_iter()
-        .map(|c| (child_ipns_key(&c).to_string(), c))
-        .collect();
-
     let mut merged: Vec<FolderChild> = Vec::new();
+    let mut seen_ipns: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    // Walk remote children: keep local version if it exists (handles rename/modify),
-    // drop if local explicitly deleted it (child absent from local AND local had entries).
-    for (ipns, remote_child) in &remote_by_ipns {
-        if let Some(local_child) = local_by_ipns.get(ipns) {
-            // Both devices have this child -- use local version (handles rename)
+    // Walk remote children in original order (deterministic iteration).
+    // If local has a version of this child, use local (handles rename/modify).
+    // Otherwise, preserve the remote child -- without tombstones we cannot
+    // distinguish "local deleted it" from "local never saw it", so we err on
+    // the side of preserving data to avoid dropping concurrent additions.
+    for remote_child in &remote.children {
+        let ipns = child_ipns_key(remote_child).to_string();
+        if let Some(local_child) = local_by_ipns.get(&ipns) {
             merged.push((*local_child).clone());
-        } else if local.children.is_empty() {
-            // Local metadata has no children at all -- unexpected edge case, preserve remote
-            merged.push(remote_child.clone());
         } else {
-            // Child exists in remote but not local -- this was an explicit local delete.
-            // Drop it (do not include in merged result).
+            // Preserve remote child to avoid dropping concurrent additions.
+            merged.push(remote_child.clone());
         }
+        seen_ipns.insert(ipns);
     }
 
     // Add any locally-added children that don't exist in remote (new files/folders).
-    for (ipns, local_child) in &local_by_ipns {
-        if !remote_by_ipns.contains_key(ipns) {
-            merged.push((*local_child).clone());
+    for local_child in &local.children {
+        let ipns = child_ipns_key(local_child).to_string();
+        if !seen_ipns.contains(&ipns) {
+            merged.push(local_child.clone());
         }
     }
 
@@ -418,6 +415,7 @@ fn spawn_metadata_publish(
                         .map_err(|e| format!("IPNS retry record marshal failed: {}", e))?;
                     let retry_b64 = base64::engine::general_purpose::STANDARD.encode(&retry_marshaled);
 
+                    let retry_cid_for_cleanup = retry_cid.clone();
                     let retry_req = crate::api::ipns::IpnsPublishRequest {
                         ipns_name: ipns_name.clone(),
                         record: retry_b64,
@@ -430,6 +428,14 @@ fn spawn_metadata_publish(
                     match crate::api::ipns::publish_ipns(&api, &retry_req).await? {
                         crate::api::ipns::PublishResult::Success => {
                             coordinator.record_publish(&ipns_name, retry_seq);
+
+                            // Unpin orphaned CID from first failed attempt
+                            let _ = crate::api::ipfs::unpin_content(&api, &new_cid).await;
+                            // Unpin old metadata CID (same as success path)
+                            if let Some(old) = old_metadata_cid {
+                                let _ = crate::api::ipfs::unpin_content(&api, &old).await;
+                            }
+
                             log::info!(
                                 "Conflict resolved for {} after retry (seq {})",
                                 ipns_name, retry_seq
@@ -438,6 +444,10 @@ fn spawn_metadata_publish(
                         crate::api::ipns::PublishResult::Conflict { .. } => {
                             // Persistent conflict after single retry -- do not loop.
                             // User should wait for automatic resync on next polling cycle.
+                            // Best-effort cleanup of orphaned CIDs from both attempts.
+                            let _ = crate::api::ipfs::unpin_content(&api, &new_cid).await;
+                            let _ = crate::api::ipfs::unpin_content(&api, &retry_cid_for_cleanup).await;
+
                             log::error!(
                                 "Persistent conflict for {} after retry. \
                                 Another device is actively modifying this folder. \

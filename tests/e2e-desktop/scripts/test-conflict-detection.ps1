@@ -140,10 +140,10 @@ function Invoke-BumpServerSequence {
         if ($PublishResp.success) {
             Write-Host "  Server sequence bumped to $($PublishResp.sequenceNumber) for $IpnsName"
         } else {
-            Write-Host "  WARNING: Publish response did not indicate success"
+            throw "Publish response did not indicate success for $IpnsName"
         }
     } catch {
-        Write-Host "  WARNING: Failed to bump server sequence ($_)"
+        throw "Failed to bump server sequence for ${IpnsName}: $_"
     }
 }
 

@@ -164,12 +164,13 @@ pub(crate) mod implementation {
                             expected_sequence_number: None,
                         };
                         match crate::api::ipns::publish_ipns(&api, &req).await? {
-                            crate::api::ipns::PublishResult::Success => {}
+                            crate::api::ipns::PublishResult::Success => {
+                                coordinator.record_publish(&ipns_name_clone, 0);
+                            }
                             crate::api::ipns::PublishResult::Conflict { .. } => {
                                 log::warn!("Unexpected conflict on new folder IPNS publish for {}", ipns_name_clone);
                             }
                         }
-                        coordinator.record_publish(&ipns_name_clone, 0);
 
                         let lock = coordinator.get_lock(&parent_ipns_name);
                         let _guard = lock.lock().await;
@@ -202,6 +203,10 @@ pub(crate) mod implementation {
                         match crate::api::ipns::publish_ipns(&api, &parent_req).await? {
                             crate::api::ipns::PublishResult::Success => {
                                 coordinator.record_publish(&parent_ipns_name, new_seq);
+                                // Only unpin old CID on successful publish
+                                if let Some(old) = parent_old_cid {
+                                    let _ = crate::api::ipfs::unpin_content(&api, &old).await;
+                                }
                             }
                             crate::api::ipns::PublishResult::Conflict { current_sequence_number } => {
                                 log::warn!(
@@ -209,10 +214,8 @@ pub(crate) mod implementation {
                                     Debounced publish will retry.",
                                     seq, current_sequence_number
                                 );
+                                // Do not unpin -- let the next debounced publish pick up fresh seq
                             }
-                        }
-                        if let Some(old) = parent_old_cid {
-                            let _ = crate::api::ipfs::unpin_content(&api, &old).await;
                         }
                         Ok::<(), String>(())
                     });
