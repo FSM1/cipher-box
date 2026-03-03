@@ -1,15 +1,9 @@
 name: Desktop E2E Tests
 
 on:
-  workflow_run:
-    workflows: ['CI']
-    types: [completed]
+  push:
     branches: [main]
   workflow_dispatch:
-
-permissions:
-  actions: read
-  pull-requests: read
 
 jobs:
   changes:
@@ -21,17 +15,10 @@ jobs:
       desktop: ${{ steps.filter.outputs.desktop }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 2
-      - name: Resolve parent commit SHA
-        id: parent
-        run: echo "sha=$(git rev-parse HEAD~1)" >> "$GITHUB_OUTPUT"
       - uses: dorny/paths-filter@v3
         id: filter
         with:
-          base: ${{ steps.parent.outputs.sha }}
-          ref: ${{ github.event.workflow_run.head_sha }}
+          base: ${{ github.event.before }}
           filters: |
             desktop:
               - 'apps/desktop/src/**'
@@ -57,12 +44,7 @@ jobs:
       always() && !cancelled() &&
       (
         github.event_name == 'workflow_dispatch' ||
-        (
-          github.event_name == 'workflow_run' &&
-          github.event.workflow_run.event == 'push' &&
-          github.event.workflow_run.conclusion == 'success' &&
-          needs.changes.outputs.desktop == 'true'
-        )
+        needs.changes.outputs.desktop == 'true'
       )
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -86,8 +68,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || '' }}
 
       # --- Install FUSE driver (needed for both build and test) ---
 
