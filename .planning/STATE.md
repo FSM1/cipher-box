@@ -226,6 +226,9 @@ Recent decisions affecting current work:
 | Batch publish aborts entirely on folder conflict                       | 16-01     | Clear signal for client to re-sync; no partial success ambiguity                                                     |
 | bumpServerSequence uses unconditional publish (omit expectedSeq)       | 16-04     | Simpler than matching exact sequence for bump; no IPNS key material needed in tests                                  |
 | Dummy base64 record for test sequence bumps (delegated routing warn)   | 16-04     | Only DB sequence bump needed; delegated routing warning expected and documented                                      |
+| PublishResult enum (Success/Conflict) returned by Rust publish_ipns    | 16-03     | Compiler enforces exhaustive match; no silent failure possible on conflict detection                                 |
+| merge_folder_children uses IPNS name as stable child key               | 16-03     | ipns_name for FolderEntry, file_meta_ipns_name for FilePointer; survives rename (same IPNS key, new name field)      |
+| OS notification for desktop conflict detection deferred                | 16-03     | AppHandle not easily accessible from background thread; tray status change visible to user; TODO for v2              |
 
 ### Pending Todos
 
