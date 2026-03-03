@@ -105,10 +105,18 @@ pub async fn publish_ipns(
 
     if resp.status().as_u16() == 409 {
         // Parse conflict response body: { currentSequenceNumber: "..." }
-        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| format!("409 Conflict but failed to parse body: {}", e))?;
         let current_seq = body["currentSequenceNumber"]
             .as_str()
-            .unwrap_or("0")
+            .ok_or_else(|| {
+                format!(
+                    "409 Conflict but missing currentSequenceNumber in response: {}",
+                    body
+                )
+            })?
             .to_string();
         return Ok(PublishResult::Conflict {
             current_sequence_number: current_seq,
