@@ -612,7 +612,8 @@ export function useFolderMutations() {
         for (const ipnsName of deleteResult.orphanedIpnsNames) {
           resolveIpnsRecord(ipnsName)
             .then((resolved) => {
-              if (resolved?.cid) unpinFromIpfs(resolved.cid);
+              if (!resolved?.cid) return;
+              return unpinFromIpfs(resolved.cid).catch(() => {});
             })
             .catch(() => {});
         }
