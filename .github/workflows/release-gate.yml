@@ -165,6 +165,11 @@ jobs:
           # release range and verify it succeeded (covers desktop state at HEAD)
           echo "No Desktop E2E run for HEAD — checking for recent run since ${PREV_TAG}..."
 
+          if [ -z "$PREV_TAG" ]; then
+            echo "::error::No previous release tag and no Desktop E2E run for HEAD. Cannot verify desktop changes."
+            exit 1
+          fi
+
           # Get commit SHAs in the release range
           RANGE_COMMITS=$(gh api "repos/${{ github.repository }}/compare/${PREV_TAG}...${MAIN_SHA}" \
             --jq '[.commits[].sha] | join("\n")' 2>/dev/null || echo "")
@@ -174,12 +179,12 @@ jobs:
             exit 1
           fi
 
-          # Get recent desktop E2E runs (newest first) and find the most recent
-          # one whose commit is within the release range
+          # Get recent completed desktop E2E runs (newest first) and find the
+          # most recent one whose commit is within the release range
           RUNS=$(gh run list --repo ${{ github.repository }} \
             --workflow=e2e-desktop.yml --branch=main --limit=20 \
-            --json headSha,conclusion \
-            --jq '.[] | "\(.headSha) \(.conclusion)"')
+            --json headSha,conclusion,status \
+            --jq '.[] | select(.status == "completed") | "\(.headSha) \(.conclusion)"')
 
           LATEST_IN_RANGE_SHA=""
           LATEST_IN_RANGE_CONCLUSION=""
