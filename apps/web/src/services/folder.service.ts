@@ -809,7 +809,10 @@ export async function moveFolder(params: {
     folderKey: params.sourceFolderState.folderKey,
     ipnsPrivateKey: params.sourceFolderState.ipnsPrivateKey,
     ipnsName: params.sourceFolderState.ipnsName,
-    sequenceNumber: params.sourceFolderState.sequenceNumber,
+    sequenceNumber:
+      params.sourceFolderState.id === params.destFolderState.id
+        ? destSequenceNumber
+        : params.sourceFolderState.sequenceNumber,
   });
 
   return { destSequenceNumber, sourceSequenceNumber };
@@ -872,7 +875,10 @@ export async function moveFile(params: {
     folderKey: params.sourceFolderState.folderKey,
     ipnsPrivateKey: params.sourceFolderState.ipnsPrivateKey,
     ipnsName: params.sourceFolderState.ipnsName,
-    sequenceNumber: params.sourceFolderState.sequenceNumber,
+    sequenceNumber:
+      params.sourceFolderState.id === params.destFolderState.id
+        ? destSequenceNumber
+        : params.sourceFolderState.sequenceNumber,
   });
 
   return { destSequenceNumber, sourceSequenceNumber };
