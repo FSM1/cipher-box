@@ -2358,6 +2358,10 @@
   color: var(--color-warning, #f59e0b);
 }
 
+.sync-indicator-icon--conflict {
+  color: var(--color-warning, #f59e0b);
+}
+
 @keyframes spin {
   from {
     transform: rotate(0deg);

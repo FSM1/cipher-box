@@ -5,10 +5,42 @@ import { useAuthStore } from '../stores/auth.store';
 import { unpinFromIpfs } from '../lib/api/ipfs';
 import * as folderService from '../services/folder.service';
 import { reWrapForRecipients } from '../services/share.service';
+import { resolveIpnsRecord } from '../services/ipns.service';
+import { useSyncStore } from '../stores/sync.store';
+import { isConflictError } from '../lib/errors';
 import type { FolderNode } from '../stores/folder.store';
 import type { FolderEntry } from '@cipherbox/crypto';
 import { MAX_FOLDER_DEPTH, getRootFolderState } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
+
+/**
+ * Re-sync a specific folder after a 409 conflict.
+ *
+ * Resolves the folder's IPNS name to get fresh CID + sequenceNumber,
+ * fetches and decrypts the metadata, and updates the folder store.
+ *
+ * Works for both root and subfolder IPNS names identically.
+ *
+ * @param folderIpnsName - IPNS name of the folder to re-sync
+ * @param folderId - Folder ID for store lookup
+ */
+async function resyncFolder(folderIpnsName: string, folderId: string): Promise<void> {
+  const store = useFolderStore.getState();
+  const folderNode = store.folders[folderId];
+  if (!folderNode) return;
+
+  const resolved = await resolveIpnsRecord(folderIpnsName);
+  if (!resolved) return;
+
+  const remoteMetadata = await folderService.fetchAndDecryptMetadata(
+    resolved.cid,
+    folderNode.folderKey
+  );
+
+  // Update store with fresh remote children and sequence number
+  store.updateFolderChildren(folderId, remoteMetadata.children ?? []);
+  store.updateFolderSequence(folderId, resolved.sequenceNumber);
+}
 
 /**
  * React hook for folder CRUD operations (create, rename, move, delete).
@@ -70,15 +102,52 @@ export function useFolderMutations() {
         // Add to parent's children
         const newChildren = [...parentFolder.children, folder];
 
-        // Update parent folder metadata and publish IPNS
-        await folderService.updateFolderMetadata({
-          folderId: parentFolder.id,
-          children: newChildren,
-          folderKey: parentFolder.folderKey,
-          ipnsPrivateKey: parentFolder.ipnsPrivateKey,
-          ipnsName: parentFolder.ipnsName,
-          sequenceNumber: parentFolder.sequenceNumber,
-        });
+        // Update parent folder metadata and publish IPNS (with conflict retry)
+        const performParentUpdate = async () => {
+          const freshState = useFolderStore.getState();
+          const freshParent =
+            parentId && freshState.folders[parentId]
+              ? freshState.folders[parentId]
+              : getRootFolderState(useVaultStore.getState(), freshState.folders);
+          if (!freshParent) throw new Error('Parent folder not found');
+          const freshChildren = [...freshParent.children, folder];
+          await folderService.updateFolderMetadata({
+            folderId: freshParent.id,
+            children: freshChildren,
+            folderKey: freshParent.folderKey,
+            ipnsPrivateKey: freshParent.ipnsPrivateKey,
+            ipnsName: freshParent.ipnsName,
+            sequenceNumber: freshParent.sequenceNumber,
+          });
+          return freshChildren;
+        };
+
+        let finalChildren = newChildren;
+        try {
+          await folderService.updateFolderMetadata({
+            folderId: parentFolder.id,
+            children: newChildren,
+            folderKey: parentFolder.folderKey,
+            ipnsPrivateKey: parentFolder.ipnsPrivateKey,
+            ipnsName: parentFolder.ipnsName,
+            sequenceNumber: parentFolder.sequenceNumber,
+          });
+        } catch (err) {
+          if (!isConflictError(err)) throw err;
+          useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
+          await resyncFolder(parentFolder.ipnsName, parentFolder.id);
+          await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
+          try {
+            finalChildren = await performParentUpdate();
+            useSyncStore.getState().clearConflict();
+          } catch (retryErr) {
+            useSyncStore.getState().clearConflict();
+            if (isConflictError(retryErr)) {
+              throw new Error('Conflict persists after re-sync. Please try again.');
+            }
+            throw retryErr;
+          }
+        }
 
         // First publish for the new folder's own IPNS record with TEE-encrypted key
         // This sends encryptedIpnsPrivateKey to backend for TEE republish enrollment
@@ -94,7 +163,7 @@ export function useFolderMutations() {
         });
 
         // Update local state - add new folder to tree
-        useFolderStore.getState().updateFolderChildren(parentFolder.id, newChildren);
+        useFolderStore.getState().updateFolderChildren(parentFolder.id, finalChildren);
 
         // Also add the new folder node to the store (with its decrypted keys)
         const newFolderNode: FolderNode = {
@@ -149,40 +218,69 @@ export function useFolderMutations() {
     ): Promise<void> => {
       setState({ isLoading: true, error: null });
       try {
-        const folders = useFolderStore.getState().folders;
-        const vault = useVaultStore.getState();
+        const getParentFolder = () => {
+          const freshState = useFolderStore.getState();
+          return parentId === 'root'
+            ? getRootFolderState(useVaultStore.getState(), freshState.folders)
+            : freshState.folders[parentId];
+        };
 
-        // Get parent folder state
-        const parentFolder =
-          parentId === 'root' ? getRootFolderState(vault, folders) : folders[parentId];
-
+        const parentFolder = getParentFolder();
         if (!parentFolder) throw new Error('Parent folder not found');
 
-        if (itemType === 'folder') {
-          await folderService.renameFolder({
-            folderId: itemId,
-            newName,
-            parentFolderState: parentFolder,
-          });
+        const performRename = async () => {
+          const freshParent = getParentFolder();
+          if (!freshParent) throw new Error('Parent folder not found');
+          if (itemType === 'folder') {
+            await folderService.renameFolder({
+              folderId: itemId,
+              newName,
+              parentFolderState: freshParent,
+            });
+          } else {
+            await folderService.renameFile({
+              fileId: itemId,
+              newName,
+              parentFolderState: freshParent,
+            });
+          }
+        };
 
-          // Update local folder state name
-          useFolderStore.getState().updateFolderName(itemId, newName);
-        } else {
-          await folderService.renameFile({
-            fileId: itemId,
-            newName,
-            parentFolderState: parentFolder,
-          });
+        try {
+          await performRename();
+        } catch (err) {
+          if (!isConflictError(err)) throw err;
+          useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
+          await resyncFolder(parentFolder.ipnsName, parentFolder.id);
+          await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
+          try {
+            await performRename();
+            useSyncStore.getState().clearConflict();
+          } catch (retryErr) {
+            useSyncStore.getState().clearConflict();
+            if (isConflictError(retryErr)) {
+              throw new Error('Conflict persists after re-sync. Please try again.');
+            }
+            throw retryErr;
+          }
         }
 
-        // Update parent's children with new name
-        const updatedChildren = parentFolder.children.map((child) => {
-          if (child.id === itemId) {
-            return { ...child, name: newName, modifiedAt: Date.now() };
-          }
-          return child;
-        });
-        useFolderStore.getState().updateFolderChildren(parentId, updatedChildren);
+        if (itemType === 'folder') {
+          // Update local folder state name
+          useFolderStore.getState().updateFolderName(itemId, newName);
+        }
+
+        // Update parent's children with new name using fresh state
+        const freshParent = getParentFolder();
+        if (freshParent) {
+          const updatedChildren = freshParent.children.map((child) => {
+            if (child.id === itemId) {
+              return { ...child, name: newName, modifiedAt: Date.now() };
+            }
+            return child;
+          });
+          useFolderStore.getState().updateFolderChildren(parentId, updatedChildren);
+        }
 
         setState({ isLoading: false, error: null });
       } catch (err) {
@@ -211,53 +309,98 @@ export function useFolderMutations() {
     ): Promise<void> => {
       setState({ isLoading: true, error: null });
       try {
-        const folders = useFolderStore.getState().folders;
-        const vault = useVaultStore.getState();
+        const getSourceFolder = () => {
+          const freshState = useFolderStore.getState();
+          return sourceParentId === 'root'
+            ? getRootFolderState(useVaultStore.getState(), freshState.folders)
+            : freshState.folders[sourceParentId];
+        };
 
-        // Get source and destination folder states
-        const sourceFolder =
-          sourceParentId === 'root' ? getRootFolderState(vault, folders) : folders[sourceParentId];
+        const getDestFolder = () => {
+          const freshState = useFolderStore.getState();
+          return destParentId === 'root'
+            ? getRootFolderState(useVaultStore.getState(), freshState.folders)
+            : freshState.folders[destParentId];
+        };
 
-        const destFolder =
-          destParentId === 'root' ? getRootFolderState(vault, folders) : folders[destParentId];
-
+        const sourceFolder = getSourceFolder();
+        const destFolder = getDestFolder();
         if (!sourceFolder || !destFolder) {
           throw new Error('Source or destination folder not found');
         }
 
-        if (itemType === 'folder') {
-          await folderService.moveFolder({
-            folderId: itemId,
-            sourceFolderState: sourceFolder,
-            destFolderState: destFolder,
-            folders,
-          });
+        const performMove = async () => {
+          const freshSource = getSourceFolder();
+          const freshDest = getDestFolder();
+          if (!freshSource || !freshDest) throw new Error('Source or destination folder not found');
+          const folders = useFolderStore.getState().folders;
+          if (itemType === 'folder') {
+            await folderService.moveFolder({
+              folderId: itemId,
+              sourceFolderState: freshSource,
+              destFolderState: freshDest,
+              folders,
+            });
+          } else {
+            await folderService.moveFile({
+              fileId: itemId,
+              sourceFolderState: freshSource,
+              destFolderState: freshDest,
+            });
+          }
+        };
 
+        try {
+          await performMove();
+        } catch (err) {
+          if (!isConflictError(err)) throw err;
+          useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
+          // Re-sync both source and destination folders
+          await Promise.all([
+            resyncFolder(sourceFolder.ipnsName, sourceFolder.id),
+            sourceFolder.id !== destFolder.id
+              ? resyncFolder(destFolder.ipnsName, destFolder.id)
+              : Promise.resolve(),
+          ]);
+          await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
+          try {
+            await performMove();
+            useSyncStore.getState().clearConflict();
+          } catch (retryErr) {
+            useSyncStore.getState().clearConflict();
+            if (isConflictError(retryErr)) {
+              throw new Error('Conflict persists after re-sync. Please try again.');
+            }
+            throw retryErr;
+          }
+        }
+
+        if (itemType === 'folder') {
           // Update the moved folder's parentId in local state
-          const movedFolder = folders[itemId];
+          const freshFolders = useFolderStore.getState().folders;
+          const movedFolder = freshFolders[itemId];
           if (movedFolder) {
             useFolderStore.getState().setFolder({
               ...movedFolder,
               parentId: destParentId,
             });
           }
-        } else {
-          await folderService.moveFile({
-            fileId: itemId,
-            sourceFolderState: sourceFolder,
-            destFolderState: destFolder,
-          });
         }
 
         // Update source folder's children (remove item)
-        const updatedSourceChildren = sourceFolder.children.filter((c) => c.id !== itemId);
-        useFolderStore.getState().updateFolderChildren(sourceParentId, updatedSourceChildren);
+        const freshSource = getSourceFolder();
+        if (freshSource) {
+          const updatedSourceChildren = freshSource.children.filter((c) => c.id !== itemId);
+          useFolderStore.getState().updateFolderChildren(sourceParentId, updatedSourceChildren);
+        }
 
         // Update dest folder's children (add item)
-        const movedItem = sourceFolder.children.find((c) => c.id === itemId);
-        if (movedItem) {
+        const freshDest = getDestFolder();
+        const originalSource = getSourceFolder();
+        const movedItem = originalSource?.children.find((c) => c.id === itemId);
+        if (movedItem && freshDest) {
           const updatedDestChildren = [
-            ...destFolder.children,
+            ...freshDest.children,
             { ...movedItem, modifiedAt: Date.now() },
           ];
           useFolderStore.getState().updateFolderChildren(destParentId, updatedDestChildren);
@@ -291,13 +434,21 @@ export function useFolderMutations() {
     ): Promise<void> => {
       setState({ isLoading: true, error: null });
       try {
-        const folders = useFolderStore.getState().folders;
-        const vault = useVaultStore.getState();
+        const getSourceFolder = () => {
+          const freshState = useFolderStore.getState();
+          return sourceParentId === 'root'
+            ? getRootFolderState(useVaultStore.getState(), freshState.folders)
+            : freshState.folders[sourceParentId];
+        };
+        const getDestFolder = () => {
+          const freshState = useFolderStore.getState();
+          return destParentId === 'root'
+            ? getRootFolderState(useVaultStore.getState(), freshState.folders)
+            : freshState.folders[destParentId];
+        };
 
-        const sourceFolder =
-          sourceParentId === 'root' ? getRootFolderState(vault, folders) : folders[sourceParentId];
-        const destFolder =
-          destParentId === 'root' ? getRootFolderState(vault, folders) : folders[destParentId];
+        const sourceFolder = getSourceFolder();
+        const destFolder = getDestFolder();
 
         if (!sourceFolder || !destFolder) {
           throw new Error('Source or destination folder not found');
@@ -307,7 +458,7 @@ export function useFolderMutations() {
         const movedChildren = sourceFolder.children.filter((c) => itemIds.has(c.id));
         const now = Date.now();
 
-        // Validate all items
+        // Validate all items (do this once before the retry loop)
         const batchNames = new Set<string>();
         for (const child of movedChildren) {
           // Intra-batch duplicate name check
@@ -324,6 +475,7 @@ export function useFolderMutations() {
 
           if (child.type === 'folder') {
             // Prevent moving folder into itself or descendant
+            const folders = useFolderStore.getState().folders;
             if (folderService.isDescendantOf(destFolder.id, child.id, folders)) {
               throw new Error(`Cannot move "${child.name}" into itself or its subfolder`);
             }
@@ -339,44 +491,85 @@ export function useFolderMutations() {
           }
         }
 
-        // ADD all to destination FIRST (add-before-remove pattern)
-        const destChildren = [
-          ...destFolder.children,
-          ...movedChildren.map((c) => ({ ...c, modifiedAt: now })),
-        ];
+        const performBatchMove = async (): Promise<{
+          destSeq: bigint;
+          sourceSeq: bigint;
+          destChildren: FolderNode['children'];
+          sourceChildren: FolderNode['children'];
+        }> => {
+          const freshSource = getSourceFolder();
+          const freshDest = getDestFolder();
+          if (!freshSource || !freshDest) throw new Error('Source or destination folder not found');
 
-        const { newSequenceNumber: destSeq } = await folderService.updateFolderMetadata({
-          folderId: destFolder.id,
-          children: destChildren,
-          folderKey: destFolder.folderKey,
-          ipnsPrivateKey: destFolder.ipnsPrivateKey,
-          ipnsName: destFolder.ipnsName,
-          sequenceNumber: destFolder.sequenceNumber,
-        });
+          // Rebuild moved children from fresh source state
+          const freshMoved = freshSource.children.filter((c) => itemIds.has(c.id));
 
-        // REMOVE all from source AFTER destination confirmed
-        const sourceChildren = sourceFolder.children.filter((c) => !itemIds.has(c.id));
+          // ADD all to destination FIRST (add-before-remove pattern)
+          const destChildren = [
+            ...freshDest.children,
+            ...freshMoved.map((c) => ({ ...c, modifiedAt: now })),
+          ];
 
-        const { newSequenceNumber: sourceSeq } = await folderService.updateFolderMetadata({
-          folderId: sourceFolder.id,
-          children: sourceChildren,
-          folderKey: sourceFolder.folderKey,
-          ipnsPrivateKey: sourceFolder.ipnsPrivateKey,
-          ipnsName: sourceFolder.ipnsName,
-          // Re-read sequence in case source === dest parent was updated above
-          sequenceNumber: sourceFolder.id === destFolder.id ? destSeq : sourceFolder.sequenceNumber,
-        });
+          const { newSequenceNumber: destSeq } = await folderService.updateFolderMetadata({
+            folderId: freshDest.id,
+            children: destChildren,
+            folderKey: freshDest.folderKey,
+            ipnsPrivateKey: freshDest.ipnsPrivateKey,
+            ipnsName: freshDest.ipnsName,
+            sequenceNumber: freshDest.sequenceNumber,
+          });
+
+          // REMOVE all from source AFTER destination confirmed
+          const sourceChildren = freshSource.children.filter((c) => !itemIds.has(c.id));
+
+          const { newSequenceNumber: sourceSeq } = await folderService.updateFolderMetadata({
+            folderId: freshSource.id,
+            children: sourceChildren,
+            folderKey: freshSource.folderKey,
+            ipnsPrivateKey: freshSource.ipnsPrivateKey,
+            ipnsName: freshSource.ipnsName,
+            // Re-read sequence in case source === dest parent was updated above
+            sequenceNumber: freshSource.id === freshDest.id ? destSeq : freshSource.sequenceNumber,
+          });
+
+          return { destSeq, sourceSeq, destChildren, sourceChildren };
+        };
+
+        let result: Awaited<ReturnType<typeof performBatchMove>>;
+        try {
+          result = await performBatchMove();
+        } catch (err) {
+          if (!isConflictError(err)) throw err;
+          useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
+          await Promise.all([
+            resyncFolder(sourceFolder.ipnsName, sourceFolder.id),
+            sourceFolder.id !== destFolder.id
+              ? resyncFolder(destFolder.ipnsName, destFolder.id)
+              : Promise.resolve(),
+          ]);
+          await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
+          try {
+            result = await performBatchMove();
+            useSyncStore.getState().clearConflict();
+          } catch (retryErr) {
+            useSyncStore.getState().clearConflict();
+            if (isConflictError(retryErr)) {
+              throw new Error('Conflict persists after re-sync. Please try again.');
+            }
+            throw retryErr;
+          }
+        }
 
         // Update local state
         const store = useFolderStore.getState();
-        store.updateFolderChildren(sourceParentId, sourceChildren);
-        store.updateFolderChildren(destParentId, destChildren);
-        store.updateFolderSequence(destParentId, destSeq);
-        store.updateFolderSequence(sourceParentId, sourceSeq);
+        store.updateFolderChildren(sourceParentId, result.sourceChildren);
+        store.updateFolderChildren(destParentId, result.destChildren);
+        store.updateFolderSequence(destParentId, result.destSeq);
+        store.updateFolderSequence(sourceParentId, result.sourceSeq);
 
         for (const item of items) {
           if (item.type === 'folder') {
-            const movedFolder = folders[item.id];
+            const movedFolder = useFolderStore.getState().folders[item.id];
             if (movedFolder) {
               store.setFolder({ ...movedFolder, parentId: destParentId });
             }
@@ -404,35 +597,65 @@ export function useFolderMutations() {
     async (itemId: string, itemType: 'file' | 'folder', parentId: string): Promise<void> => {
       setState({ isLoading: true, error: null });
       try {
-        const folders = useFolderStore.getState().folders;
-        const vault = useVaultStore.getState();
+        const getParentFolder = () => {
+          const freshState = useFolderStore.getState();
+          return parentId === 'root'
+            ? getRootFolderState(useVaultStore.getState(), freshState.folders)
+            : freshState.folders[parentId];
+        };
 
-        // Get parent folder state
-        const parentFolder =
-          parentId === 'root' ? getRootFolderState(vault, folders) : folders[parentId];
-
+        const parentFolder = getParentFolder();
         if (!parentFolder) throw new Error('Parent folder not found');
 
-        if (itemType === 'folder') {
-          await folderService.deleteFolder({
-            folderId: itemId,
-            parentFolderState: parentFolder,
-            getFolderState: (id) => folders[id],
-            unpinCid: unpinFromIpfs,
-          });
+        const performDelete = async () => {
+          const freshParent = getParentFolder();
+          if (!freshParent) throw new Error('Parent folder not found');
+          if (itemType === 'folder') {
+            const folders = useFolderStore.getState().folders;
+            await folderService.deleteFolder({
+              folderId: itemId,
+              parentFolderState: freshParent,
+              getFolderState: (id) => folders[id],
+              unpinCid: unpinFromIpfs,
+            });
+          } else {
+            await folderService.deleteFileFromFolder({
+              fileId: itemId,
+              parentFolderState: freshParent,
+            });
+          }
+        };
 
-          // Remove folder from local state
-          useFolderStore.getState().removeFolder(itemId);
-        } else {
-          await folderService.deleteFileFromFolder({
-            fileId: itemId,
-            parentFolderState: parentFolder,
-          });
+        try {
+          await performDelete();
+        } catch (err) {
+          if (!isConflictError(err)) throw err;
+          useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
+          await resyncFolder(parentFolder.ipnsName, parentFolder.id);
+          await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
+          try {
+            await performDelete();
+            useSyncStore.getState().clearConflict();
+          } catch (retryErr) {
+            useSyncStore.getState().clearConflict();
+            if (isConflictError(retryErr)) {
+              throw new Error('Conflict persists after re-sync. Please try again.');
+            }
+            throw retryErr;
+          }
         }
 
-        // Update parent's children (remove item)
-        const updatedChildren = parentFolder.children.filter((c) => c.id !== itemId);
-        useFolderStore.getState().updateFolderChildren(parentId, updatedChildren);
+        if (itemType === 'folder') {
+          // Remove folder from local state
+          useFolderStore.getState().removeFolder(itemId);
+        }
+
+        // Update parent's children (remove item) using fresh state
+        const freshParent = getParentFolder();
+        if (freshParent) {
+          const updatedChildren = freshParent.children.filter((c) => c.id !== itemId);
+          useFolderStore.getState().updateFolderChildren(parentId, updatedChildren);
+        }
 
         setState({ isLoading: false, error: null });
       } catch (err) {
@@ -460,12 +683,14 @@ export function useFolderMutations() {
     ): Promise<void> => {
       setState({ isLoading: true, error: null });
       try {
-        const folders = useFolderStore.getState().folders;
-        const vault = useVaultStore.getState();
+        const getParentFolder = () => {
+          const freshState = useFolderStore.getState();
+          return parentId === 'root'
+            ? getRootFolderState(useVaultStore.getState(), freshState.folders)
+            : freshState.folders[parentId];
+        };
 
-        const parentFolder =
-          parentId === 'root' ? getRootFolderState(vault, folders) : folders[parentId];
-
+        const parentFolder = getParentFolder();
         if (!parentFolder) throw new Error('Parent folder not found');
 
         const itemIds = new Set(items.map((i) => i.id));
@@ -477,6 +702,7 @@ export function useFolderMutations() {
 
         const collectFolderIds = (folderId: string) => {
           folderIdsToRemove.push(folderId);
+          const folders = useFolderStore.getState().folders;
           const folder = folders[folderId];
           if (!folder) return;
           for (const child of folder.children) {
@@ -492,18 +718,45 @@ export function useFolderMutations() {
           }
         }
 
-        // Remove all items from parent's children in one pass
-        const updatedChildren = parentFolder.children.filter((c) => !itemIds.has(c.id));
+        const performBatchDelete = async (): Promise<typeof parentFolder.children> => {
+          const freshParent = getParentFolder();
+          if (!freshParent) throw new Error('Parent folder not found');
 
-        // Single IPNS publish for the entire batch
-        await folderService.updateFolderMetadata({
-          folderId: parentFolder.id,
-          children: updatedChildren,
-          folderKey: parentFolder.folderKey,
-          ipnsPrivateKey: parentFolder.ipnsPrivateKey,
-          ipnsName: parentFolder.ipnsName,
-          sequenceNumber: parentFolder.sequenceNumber,
-        });
+          // Remove all items from parent's children in one pass
+          const updatedChildren = freshParent.children.filter((c) => !itemIds.has(c.id));
+
+          // Single IPNS publish for the entire batch
+          await folderService.updateFolderMetadata({
+            folderId: freshParent.id,
+            children: updatedChildren,
+            folderKey: freshParent.folderKey,
+            ipnsPrivateKey: freshParent.ipnsPrivateKey,
+            ipnsName: freshParent.ipnsName,
+            sequenceNumber: freshParent.sequenceNumber,
+          });
+
+          return updatedChildren;
+        };
+
+        let updatedChildren: typeof parentFolder.children;
+        try {
+          updatedChildren = await performBatchDelete();
+        } catch (err) {
+          if (!isConflictError(err)) throw err;
+          useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
+          await resyncFolder(parentFolder.ipnsName, parentFolder.id);
+          await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
+          try {
+            updatedChildren = await performBatchDelete();
+            useSyncStore.getState().clearConflict();
+          } catch (retryErr) {
+            useSyncStore.getState().clearConflict();
+            if (isConflictError(retryErr)) {
+              throw new Error('Conflict persists after re-sync. Please try again.');
+            }
+            throw retryErr;
+          }
+        }
 
         // Update local state -- remove all nested folders from store
         const store = useFolderStore.getState();

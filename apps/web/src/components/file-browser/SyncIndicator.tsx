@@ -7,10 +7,11 @@ import { useSyncStore } from '../../stores/sync.store';
  * - Spinning icon during sync
  * - Checkmark when done
  * - Warning icon on sync failure (subtle, cached data remains visible)
+ * - Amber spinning icon during conflict re-sync (transient state)
  * - No timestamp display
  */
 export function SyncIndicator() {
-  const { status } = useSyncStore();
+  const { status, conflictMessage } = useSyncStore();
 
   // Icon and title based on status
   const getIcon = () => {
@@ -19,6 +20,19 @@ export function SyncIndicator() {
         return (
           <svg
             className="sync-indicator-icon sync-indicator-icon--spinning"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            aria-hidden="true"
+          >
+            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+          </svg>
+        );
+      case 'conflict':
+        return (
+          <svg
+            className="sync-indicator-icon sync-indicator-icon--conflict sync-indicator-icon--spinning"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -76,6 +90,8 @@ export function SyncIndicator() {
     switch (status) {
       case 'syncing':
         return 'Syncing...';
+      case 'conflict':
+        return conflictMessage ?? 'Resolving conflict...';
       case 'success':
         return 'Synced';
       case 'error':
