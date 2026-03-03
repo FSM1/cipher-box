@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "66a8665bf9ae",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-16-advanced-sync",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/fuse/mod.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/66/a8665bf9ae/0/metadata.json",
+      "transcript": "/66/a8665bf9ae/0/full.jsonl",
+      "context": "/66/a8665bf9ae/0/context.md",
+      "content_hash": "/66/a8665bf9ae/0/content_hash.txt",
+      "prompt": "/66/a8665bf9ae/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 7187,
+    "cache_creation_tokens": 136583,
+    "cache_read_tokens": 6513717,
+    "output_tokens": 31920,
+    "api_call_count": 62
+  }
+}
