@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "ee51045241e7",
+  "strategy": "manual-commit",
+  "branch": "feat/unify-e2e-verification",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/release-gate.yml",
+    ".github/workflows/tag-staging.yml",
+    ".github/workflows/verify-e2e.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ee/51045241e7/0/metadata.json",
+      "transcript": "/ee/51045241e7/0/full.jsonl",
+      "context": "/ee/51045241e7/0/context.md",
+      "content_hash": "/ee/51045241e7/0/content_hash.txt",
+      "prompt": "/ee/51045241e7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 25,
+    "cache_creation_tokens": 69442,
+    "cache_read_tokens": 1066048,
+    "output_tokens": 8314,
+    "api_call_count": 21
+  }
+}
