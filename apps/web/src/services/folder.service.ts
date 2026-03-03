@@ -351,7 +351,7 @@ export async function renameFolder(params: {
   folderId: string;
   newName: string;
   parentFolderState: FolderNode;
-}): Promise<void> {
+}): Promise<{ newSequenceNumber: bigint }> {
   // 1. Find folder entry in parent's children
   const children = [...params.parentFolderState.children];
   const folderIndex = children.findIndex((c) => c.type === 'folder' && c.id === params.folderId);
@@ -371,7 +371,7 @@ export async function renameFolder(params: {
   };
 
   // 4. Update parent folder metadata and publish
-  await updateFolderMetadata({
+  const { newSequenceNumber } = await updateFolderMetadata({
     folderId: params.parentFolderState.id,
     children,
     folderKey: params.parentFolderState.folderKey,
@@ -379,6 +379,8 @@ export async function renameFolder(params: {
     ipnsName: params.parentFolderState.ipnsName,
     sequenceNumber: params.parentFolderState.sequenceNumber,
   });
+
+  return { newSequenceNumber };
 }
 
 /**
@@ -401,7 +403,7 @@ export async function deleteFolder(params: {
   parentFolderState: FolderNode;
   getFolderState: (id: string) => FolderNode | undefined;
   unpinCid: (cid: string) => Promise<void>;
-}): Promise<string[]> {
+}): Promise<{ fileIpnsNames: string[]; newSequenceNumber: bigint }> {
   // 1. Find folder in parent's children
   const children = [...params.parentFolderState.children];
   const folderIndex = children.findIndex((c) => c.type === 'folder' && c.id === params.folderId);
@@ -434,7 +436,7 @@ export async function deleteFolder(params: {
   children.splice(folderIndex, 1);
 
   // 4. Update parent folder metadata and publish
-  await updateFolderMetadata({
+  const { newSequenceNumber } = await updateFolderMetadata({
     folderId: params.parentFolderState.id,
     children,
     folderKey: params.parentFolderState.folderKey,
@@ -447,7 +449,7 @@ export async function deleteFolder(params: {
   // The caller (useFolder hook) resolves fileMetaIpnsName -> CID for unpinning.
   // TODO: Phase 14 should add batch unenrollment for orphaned file IPNS records.
 
-  return fileIpnsNames;
+  return { fileIpnsNames, newSequenceNumber };
 }
 
 /**
@@ -468,7 +470,7 @@ export async function deleteFolder(params: {
 export async function deleteFileFromFolder(params: {
   fileId: string;
   parentFolderState: FolderNode;
-}): Promise<{ fileMetaIpnsName: string | undefined }> {
+}): Promise<{ fileMetaIpnsName: string | undefined; newSequenceNumber: bigint }> {
   // 1. Find file in parent's children
   const children = [...params.parentFolderState.children];
   const fileIndex = children.findIndex((c) => c.type === 'file' && c.id === params.fileId);
@@ -483,7 +485,7 @@ export async function deleteFileFromFolder(params: {
   children.splice(fileIndex, 1);
 
   // 4. Update parent folder metadata and publish
-  await updateFolderMetadata({
+  const { newSequenceNumber } = await updateFolderMetadata({
     folderId: params.parentFolderState.id,
     children,
     folderKey: params.parentFolderState.folderKey,
@@ -500,7 +502,7 @@ export async function deleteFileFromFolder(params: {
     );
   }
 
-  return { fileMetaIpnsName };
+  return { fileMetaIpnsName, newSequenceNumber };
 }
 
 /**
@@ -754,7 +756,7 @@ export async function moveFolder(params: {
   sourceFolderState: FolderNode;
   destFolderState: FolderNode;
   folders: Record<string, FolderNode>;
-}): Promise<void> {
+}): Promise<{ destSequenceNumber: bigint; sourceSequenceNumber: bigint }> {
   // 1. Find folder in source
   const folder = params.sourceFolderState.children.find(
     (c) => c.type === 'folder' && c.id === params.folderId
@@ -787,7 +789,7 @@ export async function moveFolder(params: {
     },
   ];
 
-  await updateFolderMetadata({
+  const { newSequenceNumber: destSequenceNumber } = await updateFolderMetadata({
     folderId: params.destFolderState.id,
     children: destChildren,
     folderKey: params.destFolderState.folderKey,
@@ -801,7 +803,7 @@ export async function moveFolder(params: {
     (c) => !(c.type === 'folder' && c.id === params.folderId)
   );
 
-  await updateFolderMetadata({
+  const { newSequenceNumber: sourceSequenceNumber } = await updateFolderMetadata({
     folderId: params.sourceFolderState.id,
     children: sourceChildren,
     folderKey: params.sourceFolderState.folderKey,
@@ -809,6 +811,8 @@ export async function moveFolder(params: {
     ipnsName: params.sourceFolderState.ipnsName,
     sequenceNumber: params.sourceFolderState.sequenceNumber,
   });
+
+  return { destSequenceNumber, sourceSequenceNumber };
 }
 
 /**
@@ -827,7 +831,7 @@ export async function moveFile(params: {
   fileId: string;
   sourceFolderState: FolderNode;
   destFolderState: FolderNode;
-}): Promise<void> {
+}): Promise<{ destSequenceNumber: bigint; sourceSequenceNumber: bigint }> {
   // 1. Find file in source (v2: FilePointer)
   const file = params.sourceFolderState.children.find(
     (c) => c.type === 'file' && c.id === params.fileId
@@ -848,7 +852,7 @@ export async function moveFile(params: {
     },
   ];
 
-  await updateFolderMetadata({
+  const { newSequenceNumber: destSequenceNumber } = await updateFolderMetadata({
     folderId: params.destFolderState.id,
     children: destChildren,
     folderKey: params.destFolderState.folderKey,
@@ -862,7 +866,7 @@ export async function moveFile(params: {
     (c) => !(c.type === 'file' && c.id === params.fileId)
   );
 
-  await updateFolderMetadata({
+  const { newSequenceNumber: sourceSequenceNumber } = await updateFolderMetadata({
     folderId: params.sourceFolderState.id,
     children: sourceChildren,
     folderKey: params.sourceFolderState.folderKey,
@@ -870,6 +874,8 @@ export async function moveFile(params: {
     ipnsName: params.sourceFolderState.ipnsName,
     sequenceNumber: params.sourceFolderState.sequenceNumber,
   });
+
+  return { destSequenceNumber, sourceSequenceNumber };
 }
 
 /**
@@ -888,7 +894,7 @@ export async function renameFile(params: {
   fileId: string;
   newName: string;
   parentFolderState: FolderNode;
-}): Promise<void> {
+}): Promise<{ newSequenceNumber: bigint }> {
   const children = [...params.parentFolderState.children];
   const fileIndex = children.findIndex((c) => c.type === 'file' && c.id === params.fileId);
 
@@ -905,7 +911,7 @@ export async function renameFile(params: {
     modifiedAt: Date.now(),
   };
 
-  await updateFolderMetadata({
+  const { newSequenceNumber } = await updateFolderMetadata({
     folderId: params.parentFolderState.id,
     children,
     folderKey: params.parentFolderState.folderKey,
@@ -913,6 +919,8 @@ export async function renameFile(params: {
     ipnsName: params.parentFolderState.ipnsName,
     sequenceNumber: params.parentFolderState.sequenceNumber,
   });
+
+  return { newSequenceNumber };
 }
 
 /**

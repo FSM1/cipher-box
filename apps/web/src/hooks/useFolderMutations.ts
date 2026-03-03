@@ -203,17 +203,17 @@ export function useFolderMutations() {
         const parentFolder = getParentFolder();
         if (!parentFolder) throw new Error('Parent folder not found');
 
-        const performRename = async () => {
+        const performRename = async (): Promise<{ newSequenceNumber: bigint }> => {
           const freshParent = getParentFolder();
           if (!freshParent) throw new Error('Parent folder not found');
           if (itemType === 'folder') {
-            await folderService.renameFolder({
+            return await folderService.renameFolder({
               folderId: itemId,
               newName,
               parentFolderState: freshParent,
             });
           } else {
-            await folderService.renameFile({
+            return await folderService.renameFile({
               fileId: itemId,
               newName,
               parentFolderState: freshParent,
@@ -221,15 +221,16 @@ export function useFolderMutations() {
           }
         };
 
+        let renameResult: { newSequenceNumber: bigint };
         try {
-          await performRename();
+          renameResult = await performRename();
         } catch (err) {
           if (!isConflictError(err)) throw err;
           useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
           try {
             await resyncFolder(parentFolder.ipnsName, parentFolder.id);
             await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
-            await performRename();
+            renameResult = await performRename();
           } catch (retryErr) {
             if (isConflictError(retryErr)) {
               throw new Error('Conflict persists after re-sync. Please try again.');
@@ -256,6 +257,9 @@ export function useFolderMutations() {
           });
           useFolderStore.getState().updateFolderChildren(parentId, updatedChildren);
         }
+
+        // Persist the new sequence number so subsequent operations use the correct value
+        useFolderStore.getState().updateFolderSequence(parentId, renameResult.newSequenceNumber);
 
         setState({ isLoading: false, error: null });
       } catch (err) {
@@ -304,20 +308,23 @@ export function useFolderMutations() {
           throw new Error('Source or destination folder not found');
         }
 
-        const performMove = async () => {
+        const performMove = async (): Promise<{
+          destSequenceNumber: bigint;
+          sourceSequenceNumber: bigint;
+        }> => {
           const freshSource = getSourceFolder();
           const freshDest = getDestFolder();
           if (!freshSource || !freshDest) throw new Error('Source or destination folder not found');
           const folders = useFolderStore.getState().folders;
           if (itemType === 'folder') {
-            await folderService.moveFolder({
+            return await folderService.moveFolder({
               folderId: itemId,
               sourceFolderState: freshSource,
               destFolderState: freshDest,
               folders,
             });
           } else {
-            await folderService.moveFile({
+            return await folderService.moveFile({
               fileId: itemId,
               sourceFolderState: freshSource,
               destFolderState: freshDest,
@@ -325,8 +332,9 @@ export function useFolderMutations() {
           }
         };
 
+        let moveResult: { destSequenceNumber: bigint; sourceSequenceNumber: bigint };
         try {
-          await performMove();
+          moveResult = await performMove();
         } catch (err) {
           if (!isConflictError(err)) throw err;
           useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
@@ -339,7 +347,7 @@ export function useFolderMutations() {
                 : Promise.resolve(),
             ]);
             await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
-            await performMove();
+            moveResult = await performMove();
           } catch (retryErr) {
             if (isConflictError(retryErr)) {
               throw new Error('Conflict persists after re-sync. Please try again.');
@@ -383,6 +391,12 @@ export function useFolderMutations() {
           ];
           useFolderStore.getState().updateFolderChildren(destParentId, updatedDestChildren);
         }
+
+        // Persist the new sequence numbers so subsequent operations use the correct values
+        useFolderStore.getState().updateFolderSequence(destParentId, moveResult.destSequenceNumber);
+        useFolderStore
+          .getState()
+          .updateFolderSequence(sourceParentId, moveResult.sourceSequenceNumber);
 
         setState({ isLoading: false, error: null });
       } catch (err) {
@@ -609,34 +623,37 @@ export function useFolderMutations() {
         const parentFolder = getParentFolder();
         if (!parentFolder) throw new Error('Parent folder not found');
 
-        const performDelete = async () => {
+        const performDelete = async (): Promise<{ newSequenceNumber: bigint }> => {
           const freshParent = getParentFolder();
           if (!freshParent) throw new Error('Parent folder not found');
           if (itemType === 'folder') {
             const folders = useFolderStore.getState().folders;
-            await folderService.deleteFolder({
+            const { newSequenceNumber } = await folderService.deleteFolder({
               folderId: itemId,
               parentFolderState: freshParent,
               getFolderState: (id) => folders[id],
               unpinCid: unpinFromIpfs,
             });
+            return { newSequenceNumber };
           } else {
-            await folderService.deleteFileFromFolder({
+            const { newSequenceNumber } = await folderService.deleteFileFromFolder({
               fileId: itemId,
               parentFolderState: freshParent,
             });
+            return { newSequenceNumber };
           }
         };
 
+        let deleteResult: { newSequenceNumber: bigint };
         try {
-          await performDelete();
+          deleteResult = await performDelete();
         } catch (err) {
           if (!isConflictError(err)) throw err;
           useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
           try {
             await resyncFolder(parentFolder.ipnsName, parentFolder.id);
             await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
-            await performDelete();
+            deleteResult = await performDelete();
           } catch (retryErr) {
             if (isConflictError(retryErr)) {
               throw new Error('Conflict persists after re-sync. Please try again.');
@@ -668,6 +685,9 @@ export function useFolderMutations() {
           const updatedChildren = freshParent.children.filter((c) => c.id !== itemId);
           useFolderStore.getState().updateFolderChildren(parentId, updatedChildren);
         }
+
+        // Persist the new sequence number so subsequent operations use the correct value
+        useFolderStore.getState().updateFolderSequence(parentId, deleteResult.newSequenceNumber);
 
         setState({ isLoading: false, error: null });
       } catch (err) {
