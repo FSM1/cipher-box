@@ -6,27 +6,258 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
-  get-main-sha:
-    name: Get Main SHA
+  detect-changes:
+    name: Detect Changes Since Last Release
     if: startsWith(github.head_ref, 'release-please--')
     runs-on: ubuntu-latest
     outputs:
-      sha: ${{ steps.sha.outputs.sha }}
+      desktop: ${{ steps.check.outputs.desktop }}
+      prev_tag: ${{ steps.check.outputs.prev_tag }}
     steps:
-      - name: Get latest main commit
-        id: sha
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for desktop-related changes since last release
+        id: check
+        run: |
+          # Find the latest non-staging release tag
+          PREV_TAG=$(git tag --list 'v*' --sort=-v:refname \
+            | grep -v 'staging' \
+            | head -1)
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "No previous release tag found — assuming desktop changed"
+            echo "desktop=true" >> "$GITHUB_OUTPUT"
+            echo "prev_tag=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Previous release tag: ${PREV_TAG}"
+          echo "prev_tag=${PREV_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Diffing ${PREV_TAG}..HEAD"
+
+          # Desktop-related path patterns (mirrored from e2e-desktop.yml)
+          DESKTOP_PATTERNS=(
+            'apps/desktop/src/'
+            'apps/desktop/src-tauri/src/'
+            'apps/desktop/src-tauri/vendor/'
+            'apps/desktop/src-tauri/capabilities/'
+            'apps/desktop/src-tauri/resources/'
+            'apps/desktop/src-tauri/Cargo.toml'
+            'apps/desktop/src-tauri/Cargo.lock'
+            'apps/desktop/src-tauri/build.rs'
+            'apps/desktop/src-tauri/rust-toolchain.toml'
+            'apps/desktop/index.html'
+            'apps/desktop/vite.config.'
+            'apps/desktop/tsconfig'
+            'packages/crypto/src/'
+            'packages/crypto/tsconfig'
+            '.github/workflows/e2e-desktop.yml'
+          )
+
+          CHANGED_FILES=$(git diff --name-only "${PREV_TAG}..HEAD")
+          DESKTOP_CHANGED=false
+
+          for pattern in "${DESKTOP_PATTERNS[@]}"; do
+            if echo "$CHANGED_FILES" | grep -Fq "$pattern"; then
+              echo "Desktop change detected matching pattern: ${pattern}"
+              DESKTOP_CHANGED=true
+              break
+            fi
+          done
+
+          echo "desktop=${DESKTOP_CHANGED}" >> "$GITHUB_OUTPUT"
+          echo "Desktop changes detected: ${DESKTOP_CHANGED}"
+
+  verify-e2e:
+    name: Verify E2E Passed
+    needs: detect-changes
+    if: startsWith(github.head_ref, 'release-please--')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Wait for Web E2E and verify it passed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          SHA=$(gh api repos/${{ github.repository }}/git/ref/heads/main --jq '.object.sha')
-          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
-          echo "Latest main commit: ${SHA}"
+          # Get the latest commit on main (the base the release PR targets)
+          MAIN_SHA=$(gh api repos/${{ github.repository }}/git/ref/heads/main --jq '.object.sha')
+          echo "Latest main commit: ${MAIN_SHA}"
 
-  verify:
-    name: Verify E2E
-    needs: get-main-sha
-    if: startsWith(github.head_ref, 'release-please--')
-    uses: ./.github/workflows/verify-e2e.yml
-    with:
-      commit_sha: ${{ needs.get-main-sha.outputs.sha }}
-    secrets: inherit
+          # Poll for the Web E2E run to complete (it triggers on the same push)
+          MAX_ATTEMPTS=30
+          POLL_INTERVAL=30
+          echo "Waiting for Web E2E run to complete (polling every ${POLL_INTERVAL}s, max ${MAX_ATTEMPTS} attempts)..."
+
+          for attempt in $(seq 1 $MAX_ATTEMPTS); do
+            E2E_CONCLUSION=$(gh run list --repo ${{ github.repository }} \
+              --workflow=e2e.yml --branch=main --limit=10 \
+              --json headSha,conclusion,status \
+              --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0].conclusion // empty")
+
+            if [ -n "$E2E_CONCLUSION" ]; then
+              echo "Web E2E completed with conclusion: ${E2E_CONCLUSION}"
+              break
+            fi
+
+            if [ "$attempt" -eq "$MAX_ATTEMPTS" ]; then
+              echo "::error::Web E2E run did not complete within $(( MAX_ATTEMPTS * POLL_INTERVAL / 60 )) minutes for main (${MAIN_SHA})."
+              exit 1
+            fi
+
+            echo "Attempt ${attempt}/${MAX_ATTEMPTS}: E2E still running, waiting ${POLL_INTERVAL}s..."
+            sleep $POLL_INTERVAL
+          done
+
+          if [ "$E2E_CONCLUSION" != "success" ]; then
+            echo "::error::E2E Tests did not pass on main (conclusion: ${E2E_CONCLUSION})"
+            exit 1
+          fi
+          echo "Web E2E: passed"
+
+      - name: Verify Desktop E2E (if desktop changed)
+        if: needs.detect-changes.outputs.desktop == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREV_TAG: ${{ needs.detect-changes.outputs.prev_tag }}
+        run: |
+          MAIN_SHA=$(gh api repos/${{ github.repository }}/git/ref/heads/main --jq '.object.sha')
+          echo "Desktop changes detected since ${PREV_TAG} — verifying Desktop E2E"
+
+          # Helper: check if a workflow run actually executed e2e-desktop jobs
+          # (not skipped due to change detection). Returns 0 if tests ran, 1 if skipped, 2 on API error.
+          run_executed_tests() {
+            local run_id=$1
+            local executed
+            if ! executed=$(gh api "repos/${{ github.repository }}/actions/runs/${run_id}/jobs" \
+              --jq '[.jobs[] | select(.name | startswith("Desktop E2E")) | select(.conclusion == "success")] | length'); then
+              echo "::error::Failed to query jobs for run ${run_id} (API error or rate limit)"
+              return 2
+            fi
+            [ "${executed:-0}" -gt 0 ]
+          }
+
+          # First check if there's a desktop E2E run for HEAD (may still be running)
+          HEAD_RUN=$(gh run list --repo ${{ github.repository }} \
+            --workflow=e2e-desktop.yml --branch=main --limit=50 \
+            --json headSha,conclusion,status,databaseId \
+            --jq "[.[] | select(.headSha == \"${MAIN_SHA}\")][0]")
+
+          HEAD_STATUS=$(echo "$HEAD_RUN" | jq -r '.status // empty')
+
+          if [ -n "$HEAD_STATUS" ]; then
+            HEAD_RUN_ID=$(echo "$HEAD_RUN" | jq -r '.databaseId')
+            echo "Desktop E2E run exists for HEAD (run ${HEAD_RUN_ID}) — polling until complete..."
+            MAX_ATTEMPTS=40
+            POLL_INTERVAL=30
+
+            for attempt in $(seq 1 $MAX_ATTEMPTS); do
+              CONCLUSION=$(gh run view "$HEAD_RUN_ID" --repo ${{ github.repository }} \
+                --json conclusion \
+                --jq '.conclusion // empty')
+
+              if [ -n "$CONCLUSION" ]; then
+                if [ "$CONCLUSION" != "success" ]; then
+                  echo "::error::Desktop E2E Tests did not pass on main (conclusion: ${CONCLUSION})"
+                  exit 1
+                fi
+                # Verify the e2e-desktop jobs actually ran (not skipped)
+                run_executed_tests "$HEAD_RUN_ID" && rc=0 || rc=$?
+                if [ "$rc" -eq 2 ]; then
+                  exit 1
+                elif [ "$rc" -eq 0 ]; then
+                  echo "Desktop E2E: passed (at HEAD, tests executed)"
+                  exit 0
+                else
+                  echo "Desktop E2E run at HEAD succeeded but tests were skipped (no desktop changes detected by workflow)."
+                  echo "Falling through to search for a run that actually executed tests..."
+                  break
+                fi
+              fi
+
+              if [ "$attempt" -eq "$MAX_ATTEMPTS" ]; then
+                echo "::error::Desktop E2E run did not complete within $(( MAX_ATTEMPTS * POLL_INTERVAL / 60 )) minutes."
+                exit 1
+              fi
+
+              echo "Attempt ${attempt}/${MAX_ATTEMPTS}: Desktop E2E still running, waiting ${POLL_INTERVAL}s..."
+              sleep $POLL_INTERVAL
+            done
+          fi
+
+          # No desktop E2E run for HEAD (or HEAD run skipped tests) — find the
+          # most recent run in the release range that actually executed tests
+          echo "Searching for a Desktop E2E run that executed tests since ${PREV_TAG}..."
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "::error::No previous release tag and no Desktop E2E run for HEAD. Cannot verify desktop changes."
+            exit 1
+          fi
+
+          # Get commit SHAs in the release range
+          RANGE_COMMITS=$(gh api "repos/${{ github.repository }}/compare/${PREV_TAG}...${MAIN_SHA}" \
+            --jq '[.commits[].sha] | join("\n")' 2>/dev/null || echo "")
+
+          if [ -z "$RANGE_COMMITS" ]; then
+            echo "::error::Could not determine commits in range ${PREV_TAG}..${MAIN_SHA}"
+            exit 1
+          fi
+
+          # Get recent completed desktop E2E runs (newest first) and find the
+          # most recent one whose commit is within the release range AND whose
+          # e2e-desktop jobs actually ran (not skipped)
+          RUNS=$(gh run list --repo ${{ github.repository }} \
+            --workflow=e2e-desktop.yml --branch=main --limit=50 \
+            --json headSha,conclusion,status,databaseId \
+            --jq '.[] | select(.status == "completed") | "\(.headSha) \(.conclusion) \(.databaseId)"')
+
+          LATEST_IN_RANGE_SHA=""
+          LATEST_IN_RANGE_CONCLUSION=""
+
+          while IFS=" " read -r sha conclusion run_id; do
+            if [ -z "$sha" ]; then
+              continue
+            fi
+            if echo "$RANGE_COMMITS" | grep -Fq "$sha"; then
+              if [ "$conclusion" != "success" ]; then
+                # Found a failed run in range — report it immediately
+                LATEST_IN_RANGE_SHA="$sha"
+                LATEST_IN_RANGE_CONCLUSION="$conclusion"
+                break
+              fi
+              # Success run — verify tests actually executed
+              run_executed_tests "$run_id" && rc=0 || rc=$?
+              if [ "$rc" -eq 2 ]; then
+                exit 1
+              elif [ "$rc" -eq 0 ]; then
+                LATEST_IN_RANGE_SHA="$sha"
+                LATEST_IN_RANGE_CONCLUSION="$conclusion"
+                LATEST_IN_RANGE_RUN_ID="$run_id"
+                break
+              else
+                echo "Skipping run ${run_id} at ${sha} — tests were skipped (no desktop changes detected by workflow)"
+              fi
+            fi
+          done <<EOF
+          $RUNS
+          EOF
+
+          if [ -z "$LATEST_IN_RANGE_SHA" ]; then
+            echo "::error::No Desktop E2E run found (with tests actually executed) for any commit in ${PREV_TAG}..HEAD. Desktop code changed but was never verified."
+            exit 1
+          fi
+
+          if [ "$LATEST_IN_RANGE_CONCLUSION" != "success" ]; then
+            echo "::error::Most recent Desktop E2E run in range (at ${LATEST_IN_RANGE_SHA}) did not succeed (conclusion: ${LATEST_IN_RANGE_CONCLUSION})."
+            exit 1
+          fi
+
+          echo "Desktop E2E: passed (run ${LATEST_IN_RANGE_RUN_ID} at ${LATEST_IN_RANGE_SHA} with tests executed)"
+
+      - name: Skip Desktop E2E (no desktop changes)
+        if: needs.detect-changes.outputs.desktop != 'true'
+        run: echo "No desktop-related changes since last release — skipping Desktop E2E gate"
+
+      - name: Summary
+        run: echo "All E2E gates passed — release is safe to merge."

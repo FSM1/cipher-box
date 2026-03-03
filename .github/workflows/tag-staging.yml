@@ -9,18 +9,15 @@ on:
         type: string
 
 jobs:
-  resolve-sha:
-    name: Resolve Tag to SHA
+  validate-tag:
+    name: Validate Release Tag
     runs-on: ubuntu-latest
-    outputs:
-      commit_sha: ${{ steps.resolve.outputs.commit_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Validate release tag and resolve SHA
-        id: resolve
+      - name: Validate release tag exists
         env:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
@@ -28,21 +25,27 @@ jobs:
             echo "::error::Tag '${RELEASE_TAG}' does not exist"
             exit 1
           fi
-          SHA=$(git rev-parse "refs/tags/${RELEASE_TAG}")
-          echo "commit_sha=${SHA}" >> "$GITHUB_OUTPUT"
-          echo "Resolved ${RELEASE_TAG} to ${SHA}"
+          echo "Tag ${RELEASE_TAG} validated"
 
-  verify-e2e:
-    name: Verify E2E
-    needs: resolve-sha
-    uses: ./.github/workflows/verify-e2e.yml
+  web-e2e:
+    name: Web E2E
+    needs: validate-tag
+    uses: ./.github/workflows/e2e.yml
     with:
-      commit_sha: ${{ needs.resolve-sha.outputs.commit_sha }}
+      ref: ${{ inputs.release_tag }}
+    secrets: inherit
+
+  desktop-e2e:
+    name: Desktop E2E
+    needs: validate-tag
+    uses: ./.github/workflows/e2e-desktop.yml
+    with:
+      ref: ${{ inputs.release_tag }}
     secrets: inherit
 
   tag-staging:
     name: Create Staging Tag
-    needs: [resolve-sha, verify-e2e]
+    needs: [web-e2e, desktop-e2e]
     runs-on: ubuntu-latest
     environment: staging-approval
     permissions:
