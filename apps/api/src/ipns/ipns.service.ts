@@ -224,12 +224,13 @@ export class IpnsService {
       return saved;
     }
 
-    // Create new entry
+    // Create new entry — sequence starts at '1' to match the IPNS record
+    // the client signed (clients compute newSeq = 0n + 1n = 1n for first publish).
     const folder = this.folderIpnsRepository.create({
       userId,
       ipnsName,
       latestCid: metadataCid,
-      sequenceNumber: '0',
+      sequenceNumber: '1',
       encryptedIpnsPrivateKey: encryptedIpnsPrivateKey
         ? Buffer.from(encryptedIpnsPrivateKey, 'hex')
         : null,
