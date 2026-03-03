@@ -5,7 +5,9 @@
   "branch": "feat/phase-16-advanced-sync",
   "checkpoints_count": 1,
   "files_touched": [
-    "apps/desktop/src-tauri/src/fuse/mod.rs"
+    "apps/desktop/src-tauri/src/fuse/mod.rs",
+    "apps/web/src/stores/sync.store.ts",
+    "tests/e2e/utils/conflict-helpers.ts"
   ],
   "sessions": [
     {
@@ -14,13 +16,20 @@
       "context": "/66/a8665bf9ae/0/context.md",
       "content_hash": "/66/a8665bf9ae/0/content_hash.txt",
       "prompt": "/66/a8665bf9ae/0/prompt.txt"
+    },
+    {
+      "metadata": "/66/a8665bf9ae/1/metadata.json",
+      "transcript": "/66/a8665bf9ae/1/full.jsonl",
+      "context": "/66/a8665bf9ae/1/context.md",
+      "content_hash": "/66/a8665bf9ae/1/content_hash.txt",
+      "prompt": "/66/a8665bf9ae/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 7187,
-    "cache_creation_tokens": 136583,
-    "cache_read_tokens": 6513717,
-    "output_tokens": 31920,
-    "api_call_count": 62
+    "input_tokens": 7202,
+    "cache_creation_tokens": 168035,
+    "cache_read_tokens": 7232101,
+    "output_tokens": 37211,
+    "api_call_count": 76
   }
 }
