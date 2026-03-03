@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 11.4 COMPLETE (Cross-Platform E2E Testing)
+**Current focus:** Milestone 2 -- Phase 16 COMPLETE (Advanced Sync)
 
 ## Current Position
 
-Phase: 11.4 (Cross-Platform E2E Testing) -- VERIFIED COMPLETE
-Plan: 3 of 3
-Status: Phase verified (13/13 must-haves)
-Last activity: 2026-02-28 -- Phase 11.4 verified and complete
+Phase: 16 (Advanced Sync) -- VERIFIED COMPLETE
+Plan: 5 of 5
+Status: Phase verified (3/3 must-haves)
+Last activity: 2026-03-03 -- Phase 16 verified and complete
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE, Phase 16: 5/5 COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 141
-- Average duration: 5.6 min
-- Total execution time: 15.4 hours
+- Total plans completed: 146
+- Average duration: 5.5 min
+- Total execution time: 15.5 hours
 
 **By Phase (M1 summary):**
 
@@ -46,10 +46,11 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 15.1   | 3/3   | 17 min  | 5.7 min  |
 | M2 Phase 11.3   | 3/3   | 104 min | 34.7 min |
 | M2 Phase 11.4   | 3/3   | 20 min  | 6.7 min  |
+| M2 Phase 16     | 5/5   | 18 min  | 3.6 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 2m, 90m, 5m, 10m, 5m
+- Last 5 plans: 10m, 5m, 2m, 10m, 4m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -220,6 +221,18 @@ Recent decisions affecting current work:
 | Green tray icon for Linux, icon_as_template macOS-only                 | 11.3-03   | Black template icons invisible on dark panels; macOS tinting does not work on Linux                                  |
 | ikalnytskyi/action-setup-postgres for cross-platform Postgres          | 11.4-03   | Only action that works on Linux/macOS/Windows without Docker service containers                                      |
 | Separate platform-conditional steps for CI clarity                     | 11.4-03   | Each platform gets own steps for Kubo, Redis, FUSE, API, tests instead of complex conditionals                       |
+| Application-level read-compare-write for optimistic concurrency        | 16-01     | Sufficient for v1; TOCTOU mitigated by per-folder publish lock + sequential single-user API requests                 |
+| Backward compat: omitting expectedSequenceNumber = unconditional       | 16-01     | Existing clients and TEE republishes unaffected by new conflict detection                                            |
+| Batch publish aborts entirely on folder conflict                       | 16-01     | Clear signal for client to re-sync; no partial success ambiguity                                                     |
+| isConflictError checks .status === 409 on Error object (not wrapper)   | 16-02     | Orval custom-instance attaches status as property on thrown Error; no response wrapper needed                        |
+| handleUpdateFile no conflict detection (file-only publish)             | 16-02     | File content update publishes only per-file IPNS; no folder metadata touched, no 409 possible from that path         |
+| resyncFolder helper: resolveIpnsRecord + fetchAndDecryptMetadata       | 16-02     | Re-sync works for root and subfolders identically; called with specific folder's ipnsName (not hardcoded root)       |
+| Single retry with 100-500ms jitter on 409 conflict                     | 16-02     | Breaks symmetry between concurrent clients; persistent conflict after retry surfaces error to user                   |
+| bumpServerSequence uses unconditional publish (omit expectedSeq)       | 16-04     | Simpler than matching exact sequence for bump; no IPNS key material needed in tests                                  |
+| Dummy base64 record for test sequence bumps (delegated routing warn)   | 16-04     | Only DB sequence bump needed; delegated routing warning expected and documented                                      |
+| PublishResult enum (Success/Conflict) returned by Rust publish_ipns    | 16-03     | Compiler enforces exhaustive match; no silent failure possible on conflict detection                                 |
+| merge_folder_children uses IPNS name as stable child key               | 16-03     | ipns_name for FolderEntry, file_meta_ipns_name for FilePointer; survives rename (same IPNS key, new name field)      |
+| OS notification for desktop conflict detection deferred                | 16-03     | AppHandle not easily accessible from background thread; tray status change visible to user; TODO for v2              |
 
 ### Pending Todos
 
@@ -283,7 +296,7 @@ Recent decisions affecting current work:
 - Phase 14 (Sharing): COMPLETE -- research done, 6 plans created, all 6 executed
 - Phase 15 (Link Sharing): COMPLETE -- ephemeral key bridge pattern, HashRouter fragment handling, unauthenticated endpoint design researched; 4 plans created
 - Phase 15.1 (Client-Side Search): COMPLETE -- 3 plans done (search index service, search UI & integration, E2E search tests)
-- Phase 16 (Advanced Sync): NEEDS `/gsd:research-phase` -- three-way merge edge cases
+- Phase 16 (Advanced Sync): COMPLETE -- 5/5 plans done (API optimistic concurrency, web client conflict handling, desktop FUSE conflict, E2E web tests, E2E desktop tests)
 - Phase 12 (Core Kit Foundation): NEEDS `/gsd:research-phase` -- Core Kit initialization, custom JWT verifier, PnP->Core Kit key migration, email passwordless
 - Phase 12.1 (AES-CTR Streaming): COMPLETE -- all 4 plans done (CTR crypto primitives, streaming upload pipeline, service worker decrypt proxy, media playback integration)
 - Phase 12.2 (Device Registry): COMPLETE -- research and execution done
@@ -294,16 +307,17 @@ Recent decisions affecting current work:
 - Phase 13 (File Versioning): COMPLETE -- all 5 plans done (version entry types, creation service, desktop FUSE, version history UI, recovery tool + build verification)
 - Phase 11.3 (Linux Desktop): COMPLETE -- 3/3 plans done (Rust platform support, packaging & CI, local UAT 18/18 pass)
 - Phase 11.4 (Cross-Platform E2E Testing): COMPLETE -- 3/3 plans done (CI debug artifacts + crypto vectors, FUSE/API test scripts, e2e-desktop.yml workflow)
+- Phase 16 (Advanced Sync): COMPLETE -- 5/5 plans done (API concurrency control, web sync service, desktop conflict handling, web E2E tests, desktop E2E tests)
 - Phase 17 (Nitro TEE): NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
-Last session: 2026-02-28
-Stopped at: Phase 11.4 verified complete
+Last session: 2026-03-03
+Stopped at: Phase 16 verified complete
 Resume file: None
-Next: Phase 16 (Advanced Sync) or Phase 17 (AWS Nitro TEE)
+Next: Phase 17 (AWS Nitro TEE) -- needs research phase first
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-02-28 after Phase 11.4 Plan 03 complete (Desktop E2E CI Workflow)_
+_Last updated: 2026-03-03 after Phase 16 verified complete (Advanced Sync)_

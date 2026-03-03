@@ -1,9 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
+import { BadRequestException, ConflictException, HttpException, HttpStatus } from '@nestjs/common';
 import { IpnsService } from './ipns.service';
 import { FolderIpns } from './entities/folder-ipns.entity';
-import { PublishIpnsDto } from './dto';
+import { PublishIpnsDto, BatchPublishIpnsDto } from './dto';
 import { User } from '../auth/entities/user.entity';
 import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
@@ -746,6 +746,140 @@ describe('IpnsService', () => {
       });
       expect(result.success).toBe(true);
       expect(mockFolderIpnsRepo.save).toHaveBeenCalled();
+    });
+  });
+
+  describe('conflict detection', () => {
+    const createDto = (overrides?: Partial<PublishIpnsDto>): PublishIpnsDto => ({
+      ipnsName: testIpnsName,
+      record: testRecord,
+      metadataCid: testMetadataCid,
+      encryptedIpnsPrivateKey: testEncryptedIpnsPrivateKey,
+      keyEpoch: testKeyEpoch,
+      ...overrides,
+    });
+
+    it('rejects publish with stale expectedSequenceNumber (409)', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '5' });
+
+      const dto = createDto({ expectedSequenceNumber: '3' });
+
+      await expect(service.publishRecord(testUserId, dto)).rejects.toThrow(ConflictException);
+
+      try {
+        await service.publishRecord(testUserId, dto);
+      } catch (err) {
+        expect(err).toBeInstanceOf(ConflictException);
+        const response = (err as ConflictException).getResponse() as Record<string, unknown>;
+        expect(response.currentSequenceNumber).toBe('5');
+        expect(response.expectedSequenceNumber).toBe('3');
+        expect(response.statusCode).toBe(409);
+      }
+    });
+
+    it('accepts publish with matching expectedSequenceNumber', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '5' });
+      mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve({ ...entity }));
+
+      const dto = createDto({ expectedSequenceNumber: '5' });
+      const result = await service.publishRecord(testUserId, dto);
+
+      expect(result.success).toBe(true);
+      expect(result.sequenceNumber).toBe('6');
+    });
+
+    it('accepts publish without expectedSequenceNumber (backward compat)', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '5' });
+      mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve({ ...entity }));
+
+      const dto = createDto(); // No expectedSequenceNumber
+      const result = await service.publishRecord(testUserId, dto);
+
+      expect(result.success).toBe(true);
+      expect(result.sequenceNumber).toBe('6');
+    });
+
+    it('rejects entire batch when folder record has stale sequence', async () => {
+      // DB has sequenceNumber '5' for the folder
+      mockFolderIpnsRepo.findOne.mockImplementation(
+        async ({ where }: { where: { ipnsName: string } }) => {
+          if (where.ipnsName === testIpnsName) {
+            return { ...mockFolderEntity, sequenceNumber: '5' };
+          }
+          // File records: no existing entry
+          return null;
+        }
+      );
+      mockFolderIpnsRepo.create.mockImplementation((data) => ({ ...data, id: 'new-id' }));
+      mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve({ ...entity }));
+
+      const batchDto: BatchPublishIpnsDto = {
+        records: [
+          {
+            ipnsName: 'k51qzi5uqu5dg12345abcdef00001',
+            record: testRecord,
+            metadataCid: 'bafkreifile1',
+            recordType: 'file',
+          },
+          {
+            ipnsName: 'k51qzi5uqu5dg12345abcdef00002',
+            record: testRecord,
+            metadataCid: 'bafkreifile2',
+            recordType: 'file',
+          },
+          {
+            ipnsName: testIpnsName,
+            record: testRecord,
+            metadataCid: testMetadataCid,
+            recordType: 'folder',
+            expectedSequenceNumber: '3', // Stale: DB has '5'
+          },
+        ],
+      };
+
+      await expect(service.publishBatch(testUserId, batchDto)).rejects.toThrow(ConflictException);
+    });
+
+    it('batch succeeds when folder record has matching sequence', async () => {
+      mockFolderIpnsRepo.findOne.mockImplementation(
+        async ({ where }: { where: { ipnsName: string } }) => {
+          if (where.ipnsName === testIpnsName) {
+            return { ...mockFolderEntity, sequenceNumber: '5' };
+          }
+          return null;
+        }
+      );
+      mockFolderIpnsRepo.create.mockImplementation((data) => ({
+        ...data,
+        id: 'new-id',
+        sequenceNumber: '0',
+      }));
+      mockFolderIpnsRepo.save.mockImplementation((entity) => Promise.resolve({ ...entity }));
+
+      const batchDto: BatchPublishIpnsDto = {
+        records: [
+          {
+            ipnsName: 'k51qzi5uqu5dg12345abcdef00001',
+            record: testRecord,
+            metadataCid: 'bafkreifile1',
+            recordType: 'file',
+          },
+          {
+            ipnsName: testIpnsName,
+            record: testRecord,
+            metadataCid: testMetadataCid,
+            recordType: 'folder',
+            expectedSequenceNumber: '5', // Matches DB
+          },
+        ],
+      };
+
+      const result = await service.publishBatch(testUserId, batchDto);
+
+      expect(result.totalSucceeded).toBe(2);
+      expect(result.totalFailed).toBe(0);
+      expect(result.results).toHaveLength(2);
+      expect(result.results.every((r) => r.success)).toBe(true);
     });
   });
 });

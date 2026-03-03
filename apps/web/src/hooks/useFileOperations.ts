@@ -6,6 +6,8 @@ import { useQuotaStore } from '../stores/quota.store';
 import { unpinFromIpfs } from '../lib/api/ipfs';
 import * as folderService from '../services/folder.service';
 import { reWrapForRecipients } from '../services/share.service';
+import { useSyncStore } from '../stores/sync.store';
+import { isConflictError } from '../lib/errors';
 import {
   createFileMetadata,
   resolveFileMetadata,
@@ -16,7 +18,7 @@ import {
 import type { FileIpnsRecordPayload } from '../services/file-metadata.service';
 import type { FolderChild, FilePointer } from '@cipherbox/crypto';
 import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
-import { getRootFolderState } from './folder-helpers';
+import { getRootFolderState, resyncFolder } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
 
 /**
@@ -85,16 +87,58 @@ export function useFileOperations() {
         });
 
         // 2. Register FilePointer in folder (batch publishes file + folder IPNS)
-        const { filePointer, newSequenceNumber } = await folderService.addFileToFolder({
-          parentFolderState: parentFolder,
-          fileId,
-          name: fileData.originalName,
-          fileIpnsRecord: ipnsRecord,
-          ipnsPrivateKeyEncrypted,
-        });
+        //    On 409 conflict, re-sync the parent folder and retry once.
+        const performAddFile = async (): Promise<{
+          filePointer: FilePointer;
+          newSequenceNumber: bigint;
+        }> => {
+          const freshFolders = useFolderStore.getState().folders;
+          const freshVault = useVaultStore.getState();
+          const freshParent =
+            parentId === 'root'
+              ? getRootFolderState(freshVault, freshFolders)
+              : freshFolders[parentId];
+          if (!freshParent) throw new Error('Parent folder not found');
+
+          return folderService.addFileToFolder({
+            parentFolderState: freshParent,
+            fileId,
+            name: fileData.originalName,
+            fileIpnsRecord: ipnsRecord,
+            ipnsPrivateKeyEncrypted,
+          });
+        };
+
+        let addResult: Awaited<ReturnType<typeof performAddFile>>;
+        try {
+          addResult = await performAddFile();
+        } catch (err) {
+          if (!isConflictError(err)) throw err;
+          useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
+          try {
+            await resyncFolder(parentFolder.ipnsName, parentFolder.id);
+            await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
+            addResult = await performAddFile();
+          } catch (retryErr) {
+            if (isConflictError(retryErr)) {
+              throw new Error('Conflict persists after re-sync. Please try again.');
+            }
+            throw retryErr;
+          } finally {
+            useSyncStore.getState().clearConflict();
+          }
+        }
+
+        const { filePointer, newSequenceNumber } = addResult;
 
         // 3. Update local state with new child and sequence number
-        const updatedChildren: FolderChild[] = [...parentFolder.children, filePointer];
+        const freshFolders2 = useFolderStore.getState().folders;
+        const freshVault2 = useVaultStore.getState();
+        const freshParent2 =
+          parentId === 'root'
+            ? getRootFolderState(freshVault2, freshFolders2)
+            : freshFolders2[parentId];
+        const updatedChildren: FolderChild[] = [...(freshParent2?.children ?? []), filePointer];
         const store = useFolderStore.getState();
         store.updateFolderChildren(parentId, updatedChildren);
         store.updateFolderSequence(parentId, newSequenceNumber);
@@ -202,14 +246,56 @@ export function useFileOperations() {
         );
 
         // 2. Register FilePointers in folder (batch publishes all IPNS records)
-        const { filePointers, newSequenceNumber } = await folderService.addFilesToFolder({
-          parentFolderState: parentFolder,
-          files: filesWithRecords,
-        });
+        //    On 409 conflict, re-sync the parent folder and retry once.
+        const performAddFiles = async (): Promise<{
+          filePointers: FilePointer[];
+          newSequenceNumber: bigint;
+        }> => {
+          const freshFolders = useFolderStore.getState().folders;
+          const freshVault = useVaultStore.getState();
+          const freshParent =
+            parentId === 'root'
+              ? getRootFolderState(freshVault, freshFolders)
+              : freshFolders[parentId];
+          if (!freshParent) throw new Error('Parent folder not found');
+
+          return folderService.addFilesToFolder({
+            parentFolderState: freshParent,
+            files: filesWithRecords,
+          });
+        };
+
+        let addResult: Awaited<ReturnType<typeof performAddFiles>>;
+        try {
+          addResult = await performAddFiles();
+        } catch (err) {
+          if (!isConflictError(err)) throw err;
+          useSyncStore.getState().setConflict('Folder updated by another device, re-syncing...');
+          try {
+            await resyncFolder(parentFolder.ipnsName, parentFolder.id);
+            await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
+            addResult = await performAddFiles();
+          } catch (retryErr) {
+            if (isConflictError(retryErr)) {
+              throw new Error('Conflict persists after re-sync. Please try again.');
+            }
+            throw retryErr;
+          } finally {
+            useSyncStore.getState().clearConflict();
+          }
+        }
+
+        const { filePointers, newSequenceNumber } = addResult;
 
         // 3. Update local state with new children and sequence number
         const store = useFolderStore.getState();
-        store.updateFolderChildren(parentId, [...parentFolder.children, ...filePointers]);
+        const freshFolders2 = store.folders;
+        const freshVault2 = useVaultStore.getState();
+        const freshParent2 =
+          parentId === 'root'
+            ? getRootFolderState(freshVault2, freshFolders2)
+            : freshFolders2[parentId];
+        store.updateFolderChildren(parentId, [...(freshParent2?.children ?? []), ...filePointers]);
         store.updateFolderSequence(parentId, newSequenceNumber);
 
         // 4. Post-upload: re-wrap file keys for share recipients (fire-and-forget)
@@ -262,6 +348,9 @@ export function useFileOperations() {
    *
    * Old CIDs are preserved as version history (VER-01). Only pruned versions
    * (excess beyond max 10) have their CIDs unpinned.
+   *
+   * NOTE: No conflict detection here -- handleUpdateFile publishes only the
+   * per-file IPNS record. Folder metadata is NOT touched, so no 409 is possible.
    *
    * @param parentId - Parent folder ID ('root' or folder UUID)
    * @param fileData - New file data after re-encryption

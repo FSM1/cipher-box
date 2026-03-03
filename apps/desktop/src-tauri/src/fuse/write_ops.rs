@@ -445,17 +445,25 @@ pub(crate) mod implementation {
                     let record_b64 = base64::engine::general_purpose::STANDARD
                         .encode(&marshaled);
 
+                    // New folder initial publish: sequence 0, no conflict check needed
                     let req = crate::api::ipns::IpnsPublishRequest {
                         ipns_name: ipns_name_clone.clone(),
                         record: record_b64,
                         metadata_cid: initial_cid,
                         encrypted_ipns_private_key: encrypted_ipns_for_tee,
                         key_epoch: tee_key_epoch,
+                        expected_sequence_number: None,
                     };
-                    crate::api::ipns::publish_ipns(&api, &req).await?;
-
-                    coordinator.record_publish(&ipns_name_clone, 0);
-                    log::info!("New folder IPNS published: {}", ipns_name_clone);
+                    match crate::api::ipns::publish_ipns(&api, &req).await? {
+                        crate::api::ipns::PublishResult::Success => {
+                            coordinator.record_publish(&ipns_name_clone, 0);
+                            log::info!("New folder IPNS published: {}", ipns_name_clone);
+                        }
+                        crate::api::ipns::PublishResult::Conflict { .. } => {
+                            // Sequence 0 should never conflict -- log and continue
+                            log::warn!("Unexpected conflict on new folder IPNS publish for {}", ipns_name_clone);
+                        }
+                    }
 
                     let lock = coordinator.get_lock(&parent_ipns_name);
                     let _guard = lock.lock().await;
@@ -483,22 +491,36 @@ pub(crate) mod implementation {
                     let parent_record_b64 = base64::engine::general_purpose::STANDARD
                         .encode(&parent_marshaled);
 
+                    // Parent folder publish after mkdir includes conflict detection.
+                    // On conflict, log a warning -- the debounced publish queue will
+                    // retry the parent metadata on the next cycle.
+                    // TODO: Add full re-fetch+merge+retry for parent mkdir publish (v2).
                     let parent_req = crate::api::ipns::IpnsPublishRequest {
                         ipns_name: parent_ipns_name.clone(),
                         record: parent_record_b64,
                         metadata_cid: parent_meta_cid,
                         encrypted_ipns_private_key: None,
                         key_epoch: None,
+                        expected_sequence_number: Some(seq.to_string()),
                     };
-                    crate::api::ipns::publish_ipns(&api, &parent_req).await?;
-
-                    coordinator.record_publish(&parent_ipns_name, new_seq);
-
-                    if let Some(old) = parent_old_cid {
-                        let _ = crate::api::ipfs::unpin_content(&api, &old).await;
+                    match crate::api::ipns::publish_ipns(&api, &parent_req).await? {
+                        crate::api::ipns::PublishResult::Success => {
+                            coordinator.record_publish(&parent_ipns_name, new_seq);
+                            // Only unpin old CID on successful publish
+                            if let Some(old) = parent_old_cid {
+                                let _ = crate::api::ipfs::unpin_content(&api, &old).await;
+                            }
+                            log::info!("Parent metadata published after mkdir");
+                        }
+                        crate::api::ipns::PublishResult::Conflict { current_sequence_number } => {
+                            log::warn!(
+                                "Conflict on parent publish after mkdir (expected seq {}, server has {}). \
+                                Debounced publish will retry.",
+                                seq, current_sequence_number
+                            );
+                            // Do not record_publish or unpin -- let the next debounced publish pick up fresh seq
+                        }
                     }
-
-                    log::info!("Parent metadata published after mkdir");
                     Ok::<(), String>(())
                 });
 

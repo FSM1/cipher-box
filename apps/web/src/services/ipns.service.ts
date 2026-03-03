@@ -31,6 +31,7 @@ import type { PublishIpnsEntryDtoRecordType } from '../api/models/publishIpnsEnt
  * @param params.sequenceNumber - Current sequence number (will be incremented before publish)
  * @param params.encryptedIpnsPrivateKey - Hex ECIES-wrapped key for TEE (first publish only)
  * @param params.keyEpoch - TEE key epoch (required with encryptedIpnsPrivateKey)
+ * @param params.expectedSequenceNumber - Pre-increment sequence number for conflict detection (folder records only)
  */
 export async function createAndPublishIpnsRecord(params: {
   ipnsPrivateKey: Uint8Array;
@@ -39,6 +40,7 @@ export async function createAndPublishIpnsRecord(params: {
   sequenceNumber: bigint;
   encryptedIpnsPrivateKey?: string;
   keyEpoch?: number;
+  expectedSequenceNumber?: string;
 }): Promise<{ success: boolean; sequenceNumber: bigint }> {
   // 1. Create IPNS record pointing to /ipfs/{metadataCid}
   // 24 hour lifetime (will be republished by TEE every 3 hours)
@@ -62,6 +64,7 @@ export async function createAndPublishIpnsRecord(params: {
     metadataCid: params.metadataCid,
     encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
     keyEpoch: params.keyEpoch,
+    expectedSequenceNumber: params.expectedSequenceNumber,
   });
 
   return {
@@ -88,6 +91,8 @@ export async function batchPublishIpnsRecords(
     encryptedIpnsPrivateKey?: string;
     keyEpoch?: number;
     recordType?: 'folder' | 'file';
+    /** Pre-increment sequence number for conflict detection (folder records only) */
+    expectedSequenceNumber?: string;
   }>
 ): Promise<{ totalSucceeded: number; totalFailed: number }> {
   const response = await ipnsControllerPublishBatch({
@@ -98,6 +103,7 @@ export async function batchPublishIpnsRecords(
       encryptedIpnsPrivateKey: r.encryptedIpnsPrivateKey,
       keyEpoch: r.keyEpoch,
       recordType: r.recordType as PublishIpnsEntryDtoRecordType | undefined,
+      expectedSequenceNumber: r.expectedSequenceNumber,
     })),
   });
 

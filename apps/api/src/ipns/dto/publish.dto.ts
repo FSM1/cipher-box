@@ -83,6 +83,17 @@ export class PublishIpnsDto {
   @IsNumber()
   @IsOptional()
   keyEpoch?: number;
+
+  @ApiProperty({
+    description:
+      'Expected sequence number for conflict detection. When present, the API validates against the stored value and rejects with 409 if mismatched. Omit for backward-compatible unconditional publish.',
+    required: false,
+    example: '5',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/, { message: 'expectedSequenceNumber must be a numeric string' })
+  expectedSequenceNumber?: string;
 }
 
 export class PublishIpnsResponseDto {
@@ -182,6 +193,17 @@ export class PublishIpnsEntryDto {
   @IsOptional()
   @IsIn(['folder', 'file'])
   recordType?: 'folder' | 'file';
+
+  @ApiProperty({
+    description:
+      'Expected sequence number for conflict detection. When present, the API validates against the stored value and rejects with 409 if mismatched. Omit for backward-compatible unconditional publish.',
+    required: false,
+    example: '5',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/, { message: 'expectedSequenceNumber must be a numeric string' })
+  expectedSequenceNumber?: string;
 }
 
 /**

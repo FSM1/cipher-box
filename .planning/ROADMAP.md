@@ -63,7 +63,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 14: User-to-User Sharing** - Read-only folder and file sharing with ECIES key re-wrapping
 - [x] **Phase 15: Link Sharing** - Shareable file links for non-users with URL-fragment decryption keys -- COMPLETE 2026-02-23
 - [x] **Phase 15.1: Client-Side Search** - Encrypted search index in IndexedDB with incremental updates (INSERTED) -- COMPLETE 2026-02-24
-- [ ] **Phase 16: Advanced Sync** - Conflict detection, offline queue, and idempotent replay
+- [x] **Phase 16: Advanced Sync** - Conflict detection via optimistic concurrency on IPNS folder publishes -- COMPLETE 2026-03-03
 - [ ] **Phase 17: AWS Nitro TEE** - Nitro enclave as fallback TEE provider for IPNS republishing
 
 ### Milestone 3: Encrypted Productivity Suite (Planned)
@@ -445,16 +445,25 @@ Plans:
 
 ### Phase 16: Advanced Sync
 
-**Goal**: Users experience reliable sync with conflict awareness and offline resilience
+**Goal**: Conflict detection via API-level optimistic concurrency on IPNS folder publishes. When two devices modify the same folder concurrently, the second publish is rejected and the client re-syncs before retrying. Offline queue and idempotent replay deferred to Milestone 3.
 **Depends on**: Phase 15
-**Requirements**: SYNC-04, SYNC-05, SYNC-06
-**Research flag**: NEEDS `/gsd:research-phase` -- three-way merge edge cases with encrypted metadata need exhaustive test matrix. Offline replay with idempotency keys is uncharted territory for this codebase.
+**Requirements**: SYNC-04 (conflict detection). SYNC-05 and SYNC-06 deferred to M3.
+**Research flag**: COMPLETE -- folder_ipns table analysis, publish flow audit (all callers), batch conflict strategy, client retry patterns, TEE interaction, DB-level atomicity options researched
 **Success Criteria** (what must be TRUE):
 
 1. Client detects when another device has published a newer IPNS sequence number and alerts the user before overwriting
-2. When the user goes offline and makes changes, operations are queued locally and automatically replayed on reconnect
-3. Queued operations use idempotency keys so replaying them after reconnect never produces duplicate files or folders
-   **Plans**: TBD
+2. On conflict, both web and desktop clients automatically re-sync the folder and retry the operation once
+3. Persistent conflicts (retry also fails) surface an error to the user without infinite loops
+
+**Plans:** 5 plans
+
+Plans:
+
+- [x] 16-01-PLAN.md — API: expectedSequenceNumber on publish DTOs, conflict check in upsertFolderIpns, batch folder-first validation, 409 response, unit tests
+- [x] 16-02-PLAN.md — Web client: API client regen, expectedSequenceNumber in folder publish paths, 409 handling with re-sync + retry in mutation hooks, sync store conflict status, SyncIndicator conflict state
+- [x] 16-03-PLAN.md — Desktop client: expected_sequence_number in IpnsPublishRequest, PublishResult enum, conflict handling in spawn_metadata_publish with re-sync + retry
+- [x] 16-04-PLAN.md — Web E2E tests: Playwright conflict detection tests (upload with stale seq, create folder with stale seq, per-file publish negative test)
+- [x] 16-05-PLAN.md — Desktop E2E tests: bash/PowerShell conflict detection scripts (FUSE write + seq bump, mkdir + seq bump), run-all integration
 
 ### Phase 17: AWS Nitro TEE
 
@@ -514,7 +523,7 @@ Parallel phases:
 | 14. User-to-User Sharing    | M2        | 6/6            | Complete    | 2026-02-21 |
 | 15. Link Sharing            | M2        | 4/4            | Complete    | 2026-02-23 |
 | 15.1 Client-Side Search     | M2        | 3/3            | Complete    | 2026-02-24 |
-| 16. Advanced Sync           | M2        | 0/TBD          | Not started | -          |
+| 16. Advanced Sync           | M2        | 5/5            | Complete    | 2026-03-03 |
 | 11. Windows Desktop         | M2        | 3/3            | Complete    | 2026-02-22 |
 | 11.3 Linux Desktop          | M2        | 3/3            | Complete    | 2026-02-28 |
 | 11.4 Cross-Platform E2E     | M2        | 3/3            | Complete    | 2026-02-28 |

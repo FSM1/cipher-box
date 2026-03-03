@@ -96,15 +96,22 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
         .map_err(|e| format!("IPNS record marshaling failed: {}", e))?;
     let record_base64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
 
-    // Publish IPNS record via backend
+    // Publish IPNS record via backend (sequence 0 - first ever publish, no conflict check needed)
     let publish_req = crate::api::ipns::IpnsPublishRequest {
         ipns_name: root_ipns_name.clone(),
         record: record_base64,
         metadata_cid: initial_cid,
         encrypted_ipns_private_key: None,
         key_epoch: None,
+        expected_sequence_number: None,
     };
-    crate::api::ipns::publish_ipns(&state.api, &publish_req).await?;
+    match crate::api::ipns::publish_ipns(&state.api, &publish_req).await? {
+        crate::api::ipns::PublishResult::Success => {}
+        crate::api::ipns::PublishResult::Conflict { .. } => {
+            // Sequence 0 should never conflict on vault init -- log and continue
+            log::warn!("Unexpected conflict on vault init publish (sequence 0)");
+        }
+    }
 
     log::info!("Vault initialized and root metadata published for new user");
     Ok(())

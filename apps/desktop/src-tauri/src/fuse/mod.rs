@@ -227,8 +227,81 @@ fn encrypt_metadata_to_json(
     serde_json::to_vec(&json).map_err(|e| format!("JSON serialization failed: {}", e))
 }
 
+/// Merge local children onto remote children to resolve a concurrent-edit conflict.
+///
+/// Strategy (last-writer-wins per child, additive merge):
+/// - Start with remote children as base
+/// - For each child also present locally (by IPNS name): use local version (handles rename)
+/// - For each child present locally but NOT in remote: add it (new file/folder from this device)
+/// - For each child present in remote but NOT locally: preserve remote (without tombstones we
+///   cannot distinguish "local deleted it" from "local never saw it", so we err on the side of
+///   preserving data to avoid dropping concurrent additions)
+///
+/// This is a purely additive merge -- no deletions are performed.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+fn merge_folder_children(
+    local: &crate::crypto::folder::FolderMetadata,
+    remote: crate::crypto::folder::FolderMetadata,
+) -> crate::crypto::folder::FolderMetadata {
+    use crate::crypto::folder::FolderChild;
+
+    /// Extract the stable IPNS identifier for a child entry.
+    fn child_ipns_key(child: &FolderChild) -> &str {
+        match child {
+            FolderChild::Folder(f) => f.ipns_name.as_str(),
+            FolderChild::File(f) => f.file_meta_ipns_name.as_str(),
+        }
+    }
+
+    // Build lookup map keyed by IPNS name for local children.
+    let local_by_ipns: std::collections::HashMap<String, &FolderChild> = local
+        .children
+        .iter()
+        .map(|c| (child_ipns_key(c).to_string(), c))
+        .collect();
+
+    let mut merged: Vec<FolderChild> = Vec::new();
+    let mut seen_ipns: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // Walk remote children in original order (deterministic iteration).
+    // If local has a version of this child, use local (handles rename/modify).
+    // Otherwise, preserve the remote child -- without tombstones we cannot
+    // distinguish "local deleted it" from "local never saw it", so we err on
+    // the side of preserving data to avoid dropping concurrent additions.
+    for remote_child in &remote.children {
+        let ipns = child_ipns_key(remote_child).to_string();
+        if let Some(local_child) = local_by_ipns.get(&ipns) {
+            merged.push((*local_child).clone());
+        } else {
+            // Preserve remote child to avoid dropping concurrent additions.
+            merged.push(remote_child.clone());
+        }
+        seen_ipns.insert(ipns);
+    }
+
+    // Add any locally-added children that don't exist in remote (new files/folders).
+    for local_child in &local.children {
+        let ipns = child_ipns_key(local_child).to_string();
+        if !seen_ipns.contains(&ipns) {
+            merged.push(local_child.clone());
+        }
+    }
+
+    crate::crypto::folder::FolderMetadata {
+        version: "v2".to_string(),
+        children: merged,
+    }
+}
+
 /// Spawn a background OS thread to upload encrypted metadata and publish via IPNS.
 /// Returns immediately — does NOT block the calling thread.
+///
+/// On 409 Conflict (another device published since our last sync):
+/// 1. Re-fetches remote metadata via IPNS resolve + IPFS fetch + decrypt
+/// 2. Merges local changes onto remote children (additive, preserves other devices' changes)
+/// 3. Adds jitter to break symmetry with other concurrent devices
+/// 4. Re-encrypts merged metadata and retries once with fresh sequence
+/// 5. On persistent conflict (retry also 409): logs error, does not retry again
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 fn spawn_metadata_publish(
     api: Arc<ApiClient>,
@@ -280,18 +353,116 @@ fn spawn_metadata_publish(
                 metadata_cid: new_cid.clone(),
                 encrypted_ipns_private_key: None,
                 key_epoch: None,
+                expected_sequence_number: Some(seq.to_string()),
             };
-            crate::api::ipns::publish_ipns(&api, &req).await?;
 
-            // Record successful publish in coordinator cache
-            coordinator.record_publish(&ipns_name, new_seq);
+            match crate::api::ipns::publish_ipns(&api, &req).await? {
+                crate::api::ipns::PublishResult::Success => {
+                    // Publish succeeded on first attempt
+                    coordinator.record_publish(&ipns_name, new_seq);
 
-            // Unpin old metadata CID
-            if let Some(old) = old_metadata_cid {
-                let _ = crate::api::ipfs::unpin_content(&api, &old).await;
+                    // Unpin old metadata CID
+                    if let Some(old) = old_metadata_cid {
+                        let _ = crate::api::ipfs::unpin_content(&api, &old).await;
+                    }
+
+                    log::info!("Background metadata publish succeeded for {}", ipns_name);
+                }
+
+                crate::api::ipns::PublishResult::Conflict { current_sequence_number } => {
+                    // Another device published since our last sync.
+                    // Re-fetch remote state, merge local changes, and retry once.
+                    log::warn!(
+                        "Conflict detected for {}: expected seq {}, server has {}. Re-syncing...",
+                        ipns_name, seq, current_sequence_number
+                    );
+
+                    // 1. Re-resolve the sequence number from the server (fresh, authoritative)
+                    let fresh_seq = coordinator.resolve_sequence(&api, &ipns_name).await?;
+
+                    // 2. Resolve the IPNS name to get the remote CID
+                    let remote_resolve = crate::api::ipns::resolve_ipns(&api, &ipns_name).await?;
+                    let remote_cid = remote_resolve.cid;
+
+                    // 3. Fetch and decrypt the remote metadata (contains the other device's changes)
+                    let remote_bytes = crate::api::ipfs::fetch_content(&api, &remote_cid).await?;
+                    let remote_metadata = crate::fuse::decrypt::decrypt_metadata_from_ipfs_public(
+                        &remote_bytes, &folder_key,
+                    )?;
+
+                    // 4. Merge: apply local mutation onto remote children.
+                    //    Preserves both this device's changes AND the other device's changes.
+                    let merged_metadata = merge_folder_children(&metadata, remote_metadata);
+
+                    // 5. Small random jitter to break symmetry with other concurrent devices
+                    let jitter_ms = (std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .subsec_nanos() % 400) as u64 + 100;
+                    tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
+
+                    // 6. Re-encrypt the MERGED metadata and upload
+                    let retry_json = encrypt_metadata_to_json(&merged_metadata, &folder_key)?;
+                    let retry_cid = crate::api::ipfs::upload_content(&api, &retry_json).await?;
+
+                    // 7. Create new IPNS record with fresh sequence
+                    let retry_seq = fresh_seq + 1;
+                    let retry_value = format!("/ipfs/{}", retry_cid);
+                    let retry_record = crate::crypto::ipns::create_ipns_record(
+                        &ipns_key_arr, &retry_value, retry_seq, 86_400_000,
+                    ).map_err(|e| format!("IPNS retry record creation failed: {}", e))?;
+                    let retry_marshaled = crate::crypto::ipns::marshal_ipns_record(&retry_record)
+                        .map_err(|e| format!("IPNS retry record marshal failed: {}", e))?;
+                    let retry_b64 = base64::engine::general_purpose::STANDARD.encode(&retry_marshaled);
+
+                    let retry_cid_for_cleanup = retry_cid.clone();
+                    let retry_req = crate::api::ipns::IpnsPublishRequest {
+                        ipns_name: ipns_name.clone(),
+                        record: retry_b64,
+                        metadata_cid: retry_cid,
+                        encrypted_ipns_private_key: None,
+                        key_epoch: None,
+                        expected_sequence_number: Some(fresh_seq.to_string()),
+                    };
+
+                    match crate::api::ipns::publish_ipns(&api, &retry_req).await? {
+                        crate::api::ipns::PublishResult::Success => {
+                            coordinator.record_publish(&ipns_name, retry_seq);
+
+                            // Unpin orphaned CID from first failed attempt
+                            let _ = crate::api::ipfs::unpin_content(&api, &new_cid).await;
+                            // Unpin old metadata CID (same as success path)
+                            if let Some(old) = old_metadata_cid {
+                                let _ = crate::api::ipfs::unpin_content(&api, &old).await;
+                            }
+
+                            log::info!(
+                                "Conflict resolved for {} after retry (seq {})",
+                                ipns_name, retry_seq
+                            );
+                        }
+                        crate::api::ipns::PublishResult::Conflict { .. } => {
+                            // Persistent conflict after single retry -- do not loop.
+                            // User should wait for automatic resync on next polling cycle.
+                            // Best-effort cleanup of orphaned CIDs from both attempts.
+                            let _ = crate::api::ipfs::unpin_content(&api, &new_cid).await;
+                            let _ = crate::api::ipfs::unpin_content(&api, &retry_cid_for_cleanup).await;
+
+                            log::error!(
+                                "Persistent conflict for {} after retry. \
+                                Another device is actively modifying this folder. \
+                                Changes will resync on next polling cycle.",
+                                ipns_name
+                            );
+                            return Err(format!(
+                                "Persistent conflict for {}. Another device is actively modifying this folder.",
+                                ipns_name
+                            ));
+                        }
+                    }
+                }
             }
 
-            log::info!("Background metadata publish succeeded for {}", ipns_name);
             Ok::<(), String>(())
         });
 
@@ -1252,5 +1423,245 @@ pub fn unmount_filesystem() -> Result<(), String> {
             "Failed to unmount {} — close file managers and retry",
             mount_path.display()
         ))
+    }
+}
+
+#[cfg(test)]
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+mod tests {
+    use super::merge_folder_children;
+    use crate::crypto::folder::{FilePointer, FolderChild, FolderEntry, FolderMetadata};
+
+    // ── Helpers ───────────────────────────────────────────────────────────
+
+    fn make_folder(ipns: &str, name: &str) -> FolderChild {
+        FolderChild::Folder(FolderEntry {
+            id: format!("id-{}", name),
+            name: name.to_string(),
+            ipns_name: ipns.to_string(),
+            folder_key_encrypted: "encrypted-key".to_string(),
+            ipns_private_key_encrypted: "encrypted-ipns-key".to_string(),
+            created_at: 1000,
+            modified_at: 2000,
+        })
+    }
+
+    fn make_file(ipns: &str, name: &str) -> FolderChild {
+        FolderChild::File(FilePointer {
+            id: format!("id-{}", name),
+            name: name.to_string(),
+            file_meta_ipns_name: ipns.to_string(),
+            ipns_private_key_encrypted: None,
+            created_at: 1000,
+            modified_at: 2000,
+        })
+    }
+
+    fn metadata(children: Vec<FolderChild>) -> FolderMetadata {
+        FolderMetadata {
+            version: "v2".to_string(),
+            children,
+        }
+    }
+
+    fn child_ipns(child: &FolderChild) -> &str {
+        match child {
+            FolderChild::Folder(f) => &f.ipns_name,
+            FolderChild::File(f) => &f.file_meta_ipns_name,
+        }
+    }
+
+    fn child_name(child: &FolderChild) -> &str {
+        match child {
+            FolderChild::Folder(f) => &f.name,
+            FolderChild::File(f) => &f.name,
+        }
+    }
+
+    // ── merge_folder_children tests ──────────────────────────────────────
+
+    #[test]
+    fn merge_both_empty() {
+        let local = metadata(vec![]);
+        let remote = metadata(vec![]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.version, "v2");
+        assert!(merged.children.is_empty());
+    }
+
+    #[test]
+    fn merge_local_empty_preserves_remote() {
+        let local = metadata(vec![]);
+        let remote = metadata(vec![
+            make_file("ipns-a", "photo.jpg"),
+            make_folder("ipns-b", "docs"),
+        ]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 2);
+        assert_eq!(child_ipns(&merged.children[0]), "ipns-a");
+        assert_eq!(child_ipns(&merged.children[1]), "ipns-b");
+    }
+
+    #[test]
+    fn merge_remote_empty_preserves_local() {
+        let local = metadata(vec![
+            make_file("ipns-a", "photo.jpg"),
+            make_folder("ipns-b", "docs"),
+        ]);
+        let remote = metadata(vec![]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 2);
+        assert_eq!(child_ipns(&merged.children[0]), "ipns-a");
+        assert_eq!(child_ipns(&merged.children[1]), "ipns-b");
+    }
+
+    #[test]
+    fn merge_identical_children_uses_local_version() {
+        let local = metadata(vec![make_file("ipns-a", "local-name.jpg")]);
+        let remote = metadata(vec![make_file("ipns-a", "remote-name.jpg")]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 1);
+        // Local version wins (handles rename)
+        assert_eq!(child_name(&merged.children[0]), "local-name.jpg");
+    }
+
+    #[test]
+    fn merge_local_rename_overwrites_remote() {
+        // Same IPNS name, different display name = rename on local device
+        let local = metadata(vec![make_folder("ipns-x", "renamed-folder")]);
+        let remote = metadata(vec![make_folder("ipns-x", "original-folder")]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 1);
+        assert_eq!(child_name(&merged.children[0]), "renamed-folder");
+    }
+
+    #[test]
+    fn merge_disjoint_children_union() {
+        // Local added file-a, remote added file-b => merged has both
+        let local = metadata(vec![make_file("ipns-a", "file-a.txt")]);
+        let remote = metadata(vec![make_file("ipns-b", "file-b.txt")]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 2);
+        let ipns_set: Vec<&str> = merged.children.iter().map(child_ipns).collect();
+        assert!(ipns_set.contains(&"ipns-a"));
+        assert!(ipns_set.contains(&"ipns-b"));
+    }
+
+    #[test]
+    fn merge_preserves_remote_only_children_no_deletion() {
+        // Local has [A, B], remote has [A, B, C].
+        // C is absent from local but MUST be preserved (additive merge).
+        let local = metadata(vec![
+            make_file("ipns-a", "a.txt"),
+            make_file("ipns-b", "b.txt"),
+        ]);
+        let remote = metadata(vec![
+            make_file("ipns-a", "a.txt"),
+            make_file("ipns-b", "b.txt"),
+            make_file("ipns-c", "c.txt"),
+        ]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 3);
+        let ipns_set: Vec<&str> = merged.children.iter().map(child_ipns).collect();
+        assert!(ipns_set.contains(&"ipns-c"), "remote-only child must be preserved");
+    }
+
+    #[test]
+    fn merge_concurrent_additions_from_both_devices() {
+        // Both devices started from [A], local added B, remote added C.
+        let local = metadata(vec![
+            make_file("ipns-a", "a.txt"),
+            make_file("ipns-b", "b-from-local.txt"),
+        ]);
+        let remote = metadata(vec![
+            make_file("ipns-a", "a.txt"),
+            make_file("ipns-c", "c-from-remote.txt"),
+        ]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 3);
+        let ipns_set: Vec<&str> = merged.children.iter().map(child_ipns).collect();
+        assert!(ipns_set.contains(&"ipns-a"));
+        assert!(ipns_set.contains(&"ipns-b"));
+        assert!(ipns_set.contains(&"ipns-c"));
+    }
+
+    #[test]
+    fn merge_mixed_folders_and_files() {
+        let local = metadata(vec![
+            make_folder("ipns-dir", "my-folder"),
+            make_file("ipns-file-1", "readme.md"),
+        ]);
+        let remote = metadata(vec![
+            make_folder("ipns-dir", "my-folder"),
+            make_file("ipns-file-2", "notes.txt"),
+        ]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 3);
+        let ipns_set: Vec<&str> = merged.children.iter().map(child_ipns).collect();
+        assert!(ipns_set.contains(&"ipns-dir"));
+        assert!(ipns_set.contains(&"ipns-file-1"));
+        assert!(ipns_set.contains(&"ipns-file-2"));
+    }
+
+    #[test]
+    fn merge_preserves_remote_order_then_appends_local() {
+        // Merged output should list remote children first (in remote order),
+        // then local-only additions at the end.
+        let local = metadata(vec![
+            make_file("ipns-c", "c.txt"),
+            make_file("ipns-a", "a.txt"),
+        ]);
+        let remote = metadata(vec![
+            make_file("ipns-b", "b.txt"),
+            make_file("ipns-a", "a.txt"),
+        ]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 3);
+        // Remote order: B, A; then local-only: C
+        assert_eq!(child_ipns(&merged.children[0]), "ipns-b");
+        assert_eq!(child_ipns(&merged.children[1]), "ipns-a");
+        assert_eq!(child_ipns(&merged.children[2]), "ipns-c");
+    }
+
+    #[test]
+    fn merge_no_duplicates_when_same_child_in_both() {
+        let local = metadata(vec![
+            make_file("ipns-a", "a.txt"),
+            make_file("ipns-b", "b.txt"),
+        ]);
+        let remote = metadata(vec![
+            make_file("ipns-a", "a.txt"),
+            make_file("ipns-b", "b.txt"),
+        ]);
+        let merged = merge_folder_children(&local, remote);
+        assert_eq!(merged.children.len(), 2, "should not produce duplicates");
+    }
+
+    #[test]
+    fn merge_large_scenario() {
+        // Simulate a folder with many children from different devices.
+        let mut local_children = Vec::new();
+        let mut remote_children = Vec::new();
+
+        // Shared children (0..10)
+        for i in 0..10 {
+            local_children.push(make_file(&format!("ipns-shared-{}", i), &format!("shared-{}.txt", i)));
+            remote_children.push(make_file(&format!("ipns-shared-{}", i), &format!("shared-{}.txt", i)));
+        }
+        // Local-only children (10..15)
+        for i in 10..15 {
+            local_children.push(make_file(&format!("ipns-local-{}", i), &format!("local-{}.txt", i)));
+        }
+        // Remote-only children (15..20)
+        for i in 15..20 {
+            remote_children.push(make_file(&format!("ipns-remote-{}", i), &format!("remote-{}.txt", i)));
+        }
+
+        let local = metadata(local_children);
+        let remote = metadata(remote_children);
+        let merged = merge_folder_children(&local, remote);
+
+        // 10 shared + 5 local-only + 5 remote-only = 20
+        assert_eq!(merged.children.len(), 20);
     }
 }

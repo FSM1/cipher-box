@@ -72,6 +72,26 @@ if ($RtExitCode -eq 0) {
 }
 Write-Host ""
 
+# ---- Step 4: Conflict detection ----
+Write-Host "--- Step 4: Conflict detection ---"
+$ConflictExitCode = 0
+try {
+    $env:TEST_SECRET = $TestSecret
+    & "$PSScriptRoot\test-conflict-detection.ps1" -MountPoint $MountPoint -ApiUrl $ApiUrl
+    $ConflictExitCode = $LASTEXITCODE
+} catch {
+    Write-Host "Conflict detection script error: $($_.Exception.Message)"
+    $ConflictExitCode = 1
+}
+
+if ($ConflictExitCode -eq 0) {
+    Write-Host "Conflict detection: ALL PASSED"
+} else {
+    Write-Host "Conflict detection: $ConflictExitCode FAILURE(S)"
+    $TotalFail += $ConflictExitCode
+}
+Write-Host ""
+
 # ---- Summary ----
 Write-Host "============================================"
 Write-Host "  Summary"
