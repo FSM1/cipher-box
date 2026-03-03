@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.21.9](https://github.com/FSM1/cipher-box/compare/v0.21.8...v0.21.9) (2026-03-03)
+
+
+### Bug Fixes
+
+* **ci:** poll for E2E completion in release gate ([#252](https://github.com/FSM1/cipher-box/issues/252)) ([308619f](https://github.com/FSM1/cipher-box/commit/308619fbda788603fa47bf7052728cb1fa40d7c5))
+* **e2e:** use Edit instead of Preview for text files in sharing tests ([#250](https://github.com/FSM1/cipher-box/issues/250)) ([ef90514](https://github.com/FSM1/cipher-box/commit/ef9051473d2dc816988148fe389d15ba7f87bc74))
+
 ## [0.21.8](https://github.com/FSM1/cipher-box/compare/v0.21.7...v0.21.8) (2026-03-02)
 
 
