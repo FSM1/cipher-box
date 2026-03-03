@@ -77,7 +77,6 @@ export const useSyncStore = create<SyncState>((set) => ({
 
   clearConflict: () =>
     set({
-      status: 'success',
       conflictMessage: null,
     }),
 

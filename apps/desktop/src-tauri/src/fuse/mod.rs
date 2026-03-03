@@ -233,11 +233,11 @@ fn encrypt_metadata_to_json(
 /// - Start with remote children as base
 /// - For each child also present locally (by IPNS name): use local version (handles rename)
 /// - For each child present locally but NOT in remote: add it (new file/folder from this device)
-/// - For each child present in remote but NOT locally: keep remote version UNLESS local had the
-///   child at all (i.e., we explicitly deleted it). If local children array was empty (no children
-///   at all), keep remote to be safe.
+/// - For each child present in remote but NOT locally: preserve remote (without tombstones we
+///   cannot distinguish "local deleted it" from "local never saw it", so we err on the side of
+///   preserving data to avoid dropping concurrent additions)
 ///
-/// This is the correct merge behavior that preserves all devices' changes.
+/// This is a purely additive merge -- no deletions are performed.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 fn merge_folder_children(
     local: &crate::crypto::folder::FolderMetadata,

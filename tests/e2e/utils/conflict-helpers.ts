@@ -21,7 +21,7 @@ import { Page } from '@playwright/test';
  * warning in API logs because the IPNS record is not cryptographically valid.
  * This is expected -- we only need the DB sequence bump, not a valid IPNS
  * record for DHT propagation. The API still increments the sequence number
- * and returns 201.
+ * and returns 200.
  *
  * @param params.page - Playwright page instance (for page.request API calls)
  * @param params.apiBaseUrl - API base URL (e.g., "http://localhost:3000")
