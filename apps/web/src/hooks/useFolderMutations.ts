@@ -428,41 +428,53 @@ export function useFolderMutations() {
         }
 
         const itemIds = new Set(items.map((i) => i.id));
-        const movedChildren = sourceFolder.children.filter((c) => itemIds.has(c.id));
         const now = Date.now();
 
-        // Validate all items (do this once before the retry loop)
-        const batchNames = new Set<string>();
-        for (const child of movedChildren) {
-          // Intra-batch duplicate name check
-          if (batchNames.has(child.name)) {
-            throw new Error(`Multiple selected items share the name "${child.name}"`);
-          }
-          batchNames.add(child.name);
-
-          // Name collision check against destination
-          const nameExists = destFolder.children.some((c) => c.name === child.name);
-          if (nameExists) {
-            throw new Error(`An item named "${child.name}" already exists in the destination`);
+        // Validate batch move preconditions against current folder state.
+        // Must be called before each attempt (initial + retry after resync)
+        // because concurrent changes may introduce name collisions or depth violations.
+        const validateBatchMove = () => {
+          const currentSource = getSourceFolder();
+          const currentDest = getDestFolder();
+          if (!currentSource || !currentDest) {
+            throw new Error('Source or destination folder not found');
           }
 
-          if (child.type === 'folder') {
-            // Prevent moving folder into itself or descendant
-            const folders = useFolderStore.getState().folders;
-            if (folderService.isDescendantOf(destFolder.id, child.id, folders)) {
-              throw new Error(`Cannot move "${child.name}" into itself or its subfolder`);
+          const currentMovedChildren = currentSource.children.filter((c) => itemIds.has(c.id));
+          const batchNames = new Set<string>();
+          for (const child of currentMovedChildren) {
+            // Intra-batch duplicate name check
+            if (batchNames.has(child.name)) {
+              throw new Error(`Multiple selected items share the name "${child.name}"`);
+            }
+            batchNames.add(child.name);
+
+            // Name collision check against destination
+            const nameExists = currentDest.children.some((c) => c.name === child.name);
+            if (nameExists) {
+              throw new Error(`An item named "${child.name}" already exists in the destination`);
             }
 
-            // Depth limit check
-            const destDepth = folderService.getDepth(destFolder.id, folders);
-            const subtreeDepth = folderService.calculateSubtreeDepth(child.id, folders);
-            if (destDepth + 1 + subtreeDepth > MAX_FOLDER_DEPTH) {
-              throw new Error(
-                `Cannot move "${child.name}": would exceed maximum folder depth of ${MAX_FOLDER_DEPTH}`
-              );
+            if (child.type === 'folder') {
+              // Prevent moving folder into itself or descendant
+              const folders = useFolderStore.getState().folders;
+              if (folderService.isDescendantOf(currentDest.id, child.id, folders)) {
+                throw new Error(`Cannot move "${child.name}" into itself or its subfolder`);
+              }
+
+              // Depth limit check
+              const destDepth = folderService.getDepth(currentDest.id, folders);
+              const subtreeDepth = folderService.calculateSubtreeDepth(child.id, folders);
+              if (destDepth + 1 + subtreeDepth > MAX_FOLDER_DEPTH) {
+                throw new Error(
+                  `Cannot move "${child.name}": would exceed maximum folder depth of ${MAX_FOLDER_DEPTH}`
+                );
+              }
             }
           }
-        }
+        };
+
+        validateBatchMove();
 
         const performBatchMove = async (): Promise<{
           destSeq: bigint;
@@ -522,6 +534,8 @@ export function useFolderMutations() {
                 : Promise.resolve(),
             ]);
             await new Promise((r) => setTimeout(r, 100 + Math.random() * 400));
+            // Re-validate after resync — destination may have new children or depth changes
+            validateBatchMove();
             result = await performBatchMove();
           } catch (retryErr) {
             if (isConflictError(retryErr)) {
