@@ -4,7 +4,14 @@ import { Type } from 'class-transformer';
 import { ReceivedShareResponseDto, SentShareResponseDto } from './share-response.dto';
 
 export class PaginationQueryDto {
-  @ApiProperty({ description: 'Maximum number of items to return', default: 50, required: false })
+  @ApiProperty({
+    description: 'Maximum number of items to return',
+    default: 50,
+    required: false,
+    type: 'integer',
+    minimum: 1,
+    maximum: 100,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -12,7 +19,13 @@ export class PaginationQueryDto {
   @Max(100)
   limit: number = 50;
 
-  @ApiProperty({ description: 'Number of items to skip', default: 0, required: false })
+  @ApiProperty({
+    description: 'Number of items to skip',
+    default: 0,
+    required: false,
+    type: 'integer',
+    minimum: 0,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -24,7 +37,7 @@ export class PaginatedReceivedSharesDto {
   @ApiProperty({ type: [ReceivedShareResponseDto] })
   shares!: ReceivedShareResponseDto[];
 
-  @ApiProperty({ description: 'Total number of matching shares' })
+  @ApiProperty({ description: 'Total number of matching shares', type: 'integer', minimum: 0 })
   total!: number;
 }
 
@@ -32,6 +45,6 @@ export class PaginatedSentSharesDto {
   @ApiProperty({ type: [SentShareResponseDto] })
   shares!: SentShareResponseDto[];
 
-  @ApiProperty({ description: 'Total number of matching shares' })
+  @ApiProperty({ description: 'Total number of matching shares', type: 'integer', minimum: 0 })
   total!: number;
 }

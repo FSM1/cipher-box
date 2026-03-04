@@ -121,11 +121,17 @@ export function ShareDialog({
     let cancelled = false;
     setRecipientsLoading(true);
 
-    sharesControllerGetSentShares({ limit: 100 })
-      .then((response) => {
+    (async () => {
+      const pageSize = 100;
+      let offset = 0;
+      const allShares: SentShare[] = [];
+
+      // Paginate through all sent shares (API max 100 per page)
+
+      while (true) {
+        const response = await sharesControllerGetSentShares({ limit: pageSize, offset });
         if (cancelled) return;
-        // Filter to shares for this specific item (by ipnsName)
-        const itemShares: SentShare[] = response.shares
+        const pageShares = response.shares
           .filter((s) => s.ipnsName === ipnsName)
           .map((s) => ({
             shareId: s.shareId,
@@ -135,8 +141,13 @@ export function ShareDialog({
             itemName: s.itemName,
             createdAt: String(s.createdAt),
           }));
-        setRecipients(itemShares);
-      })
+        allShares.push(...pageShares);
+        offset += response.shares.length;
+        if (offset >= response.total || response.shares.length === 0) break;
+      }
+
+      setRecipients(allShares);
+    })()
       .catch((err) => {
         if (cancelled) return;
         console.error('Failed to fetch sent shares:', err);

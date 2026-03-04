@@ -186,10 +186,29 @@ async function ensureFreshSentShares(): Promise<SentShare[]> {
   if (store.lastSentFetchedAt && Date.now() - store.lastSentFetchedAt < 30_000) {
     return store.sentShares;
   }
-  // Use high limit to fetch all shares — re-wrapping needs the full set
-  const { shares } = await fetchSentShares(1000);
-  useShareStore.getState().setSentShares(shares);
-  return shares;
+  // Re-wrapping needs the full set — paginate through all pages
+  const allShares = await fetchAllSentShares();
+  useShareStore.getState().setSentShares(allShares);
+  return allShares;
+}
+
+/**
+ * Fetch ALL sent shares by paginating through the API.
+ * The API enforces a max limit of 100 per page.
+ */
+async function fetchAllSentShares(): Promise<SentShare[]> {
+  const pageSize = 100;
+  let offset = 0;
+  const allShares: SentShare[] = [];
+
+  while (true) {
+    const { shares, total } = await fetchSentShares(pageSize, offset);
+    allShares.push(...shares);
+    offset += shares.length;
+    if (offset >= total || shares.length === 0) break;
+  }
+
+  return allShares;
 }
 
 /**

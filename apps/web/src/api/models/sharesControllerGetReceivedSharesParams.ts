@@ -9,10 +9,13 @@
 export type SharesControllerGetReceivedSharesParams = {
   /**
    * Maximum number of items to return
+   * @minimum 1
+   * @maximum 100
    */
   limit?: number;
   /**
    * Number of items to skip
+   * @minimum 0
    */
   offset?: number;
 };

@@ -1214,8 +1214,10 @@
             "in": "query",
             "description": "Maximum number of items to return",
             "schema": {
+              "minimum": 1,
+              "maximum": 100,
               "default": 50,
-              "type": "number"
+              "type": "integer"
             }
           },
           {
@@ -1224,8 +1226,9 @@
             "in": "query",
             "description": "Number of items to skip",
             "schema": {
+              "minimum": 0,
               "default": 0,
-              "type": "number"
+              "type": "integer"
             }
           }
         ],
@@ -1264,8 +1267,10 @@
             "in": "query",
             "description": "Maximum number of items to return",
             "schema": {
+              "minimum": 1,
+              "maximum": 100,
               "default": 50,
-              "type": "number"
+              "type": "integer"
             }
           },
           {
@@ -1274,8 +1279,9 @@
             "in": "query",
             "description": "Number of items to skip",
             "schema": {
+              "minimum": 0,
               "default": 0,
-              "type": "number"
+              "type": "integer"
             }
           }
         ],
@@ -1328,6 +1334,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Invalid public key format"
           },
           "401": {
             "description": "Unauthorized"
@@ -2895,8 +2904,9 @@
             }
           },
           "total": {
-            "type": "number",
-            "description": "Total number of matching shares"
+            "type": "integer",
+            "description": "Total number of matching shares",
+            "minimum": 0
           }
         },
         "required": ["shares", "total"]
@@ -2945,8 +2955,9 @@
             }
           },
           "total": {
-            "type": "number",
-            "description": "Total number of matching shares"
+            "type": "integer",
+            "description": "Total number of matching shares",
+            "minimum": 0
           }
         },
         "required": ["shares", "total"]

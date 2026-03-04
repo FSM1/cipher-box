@@ -152,6 +152,7 @@ export class SharesController {
     required: true,
   })
   @ApiResponse({ status: 200, description: 'Lookup result', type: LookupUserResponseDto })
+  @ApiResponse({ status: 400, description: 'Invalid public key format' })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
   async lookupUser(@Query('publicKey') publicKey: string): Promise<LookupUserResponseDto> {
     if (!publicKey || !/^0x04[0-9a-fA-F]{128}$/.test(publicKey)) {

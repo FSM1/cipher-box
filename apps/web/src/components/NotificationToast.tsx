@@ -3,13 +3,7 @@ import { useNotificationStore, type Notification } from '../stores/notification.
 
 const AUTO_DISMISS_MS = 8000;
 
-const borderColors: Record<Notification['type'], string> = {
-  info: 'var(--color-green-primary)',
-  warning: 'var(--color-warning)',
-  error: 'var(--color-error)',
-};
-
-const labelColors: Record<Notification['type'], string> = {
+const typeColors: Record<Notification['type'], string> = {
   info: 'var(--color-green-primary)',
   warning: 'var(--color-warning)',
   error: 'var(--color-error)',
@@ -77,10 +71,11 @@ export function NotificationToast() {
       {notifications.map((n) => (
         <div
           key={n.id}
-          role="status"
+          role={n.type === 'warning' || n.type === 'error' ? 'alert' : 'status'}
+          aria-live={n.type === 'warning' || n.type === 'error' ? 'assertive' : 'polite'}
           style={{
             background: 'rgb(0 0 0 / 92%)',
-            border: `1px solid ${borderColors[n.type]}`,
+            border: `1px solid ${typeColors[n.type]}`,
             borderRadius: 2,
             padding: '8px 12px',
             fontFamily: 'var(--font-family-mono)',
@@ -91,7 +86,7 @@ export function NotificationToast() {
             gap: 8,
           }}
         >
-          <span style={{ color: labelColors[n.type], flexShrink: 0 }}>{labels[n.type]}</span>
+          <span style={{ color: typeColors[n.type], flexShrink: 0 }}>{labels[n.type]}</span>
           <span style={{ flex: 1 }}>{n.message}</span>
           <button
             onClick={() => dismissNotification(n.id)}

@@ -9,6 +9,9 @@ import type { SentShareResponseDto } from './sentShareResponseDto';
 
 export interface PaginatedSentSharesDto {
   shares: SentShareResponseDto[];
-  /** Total number of matching shares */
+  /**
+   * Total number of matching shares
+   * @minimum 0
+   */
   total: number;
 }

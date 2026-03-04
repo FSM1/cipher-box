@@ -92,15 +92,25 @@ async function loadDeviceKeypair(
       request.onerror = () => reject(request.error);
     });
 
-    if (!val || !val.publicKey) return null;
+    // Validate payload shape before touching crypto
+    const publicKeyArr = Array.isArray(val?.publicKey) ? (val.publicKey as number[]) : null;
+    const ivArr = Array.isArray(val?.iv) ? (val.iv as number[]) : null;
+    const encryptedArr = Array.isArray(val?.encryptedPrivateKey)
+      ? (val.encryptedPrivateKey as number[])
+      : null;
+    if (!publicKeyArr || publicKeyArr.length !== 32) return null;
 
     // v1 (plaintext legacy) — discard and regenerate
-    if (val.version !== STORAGE_VERSION) return null;
+    if (val?.version !== STORAGE_VERSION) return null;
 
-    // v2 (encrypted) — decrypt the private key
+    // v2 (encrypted) — validate remaining fields
+    if (!ivArr || ivArr.length !== 12) return null;
+    if (!encryptedArr || encryptedArr.length === 0) return null;
+
+    // Decrypt the private key
     const wrappingKey = await deriveDeviceWrappingKey(vaultPrivateKey);
-    const iv = new Uint8Array(val.iv as number[]);
-    const encryptedPrivateKey = new Uint8Array(val.encryptedPrivateKey as number[]);
+    const iv = new Uint8Array(ivArr);
+    const encryptedPrivateKey = new Uint8Array(encryptedArr);
 
     const decrypted = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv },
@@ -108,9 +118,12 @@ async function loadDeviceKeypair(
       encryptedPrivateKey
     );
 
+    const privateKey = new Uint8Array(decrypted);
+    if (privateKey.length !== 32) return null;
+
     return {
-      publicKey: new Uint8Array(val.publicKey as number[]),
-      privateKey: new Uint8Array(decrypted),
+      publicKey: new Uint8Array(publicKeyArr),
+      privateKey,
     };
   } catch {
     // IndexedDB unavailable, decryption failed, or corrupt data

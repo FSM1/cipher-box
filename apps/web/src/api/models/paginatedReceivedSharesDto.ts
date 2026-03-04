@@ -9,6 +9,9 @@ import type { ReceivedShareResponseDto } from './receivedShareResponseDto';
 
 export interface PaginatedReceivedSharesDto {
   shares: ReceivedShareResponseDto[];
-  /** Total number of matching shares */
+  /**
+   * Total number of matching shares
+   * @minimum 0
+   */
   total: number;
 }

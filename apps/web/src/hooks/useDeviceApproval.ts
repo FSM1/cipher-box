@@ -363,8 +363,11 @@ export function useDeviceApproval() {
       factorKeyBytes.fill(0); // Zero-fill factor key bytes after wrapping
 
       // 3. Get current device ID for tracking
-      const vaultKeypair = useAuthStore.getState().vaultKeypair;
-      const deviceIdentity = await getOrCreateDeviceIdentity(vaultKeypair?.privateKey);
+      const vaultPrivateKey = useAuthStore.getState().vaultKeypair?.privateKey;
+      if (!vaultPrivateKey) {
+        throw new Error('Vault keypair unavailable; cannot approve device request');
+      }
+      const deviceIdentity = await getOrCreateDeviceIdentity(vaultPrivateKey);
 
       // 4. Send response
       await deviceApprovalApi.respond(requestId, {
@@ -386,8 +389,11 @@ export function useDeviceApproval() {
    */
   const denyRequest = useCallback(async (requestId: string) => {
     // Get current device ID for tracking
-    const vaultKeypair = useAuthStore.getState().vaultKeypair;
-    const deviceIdentity = await getOrCreateDeviceIdentity(vaultKeypair?.privateKey);
+    const vaultPrivateKey = useAuthStore.getState().vaultKeypair?.privateKey;
+    if (!vaultPrivateKey) {
+      throw new Error('Vault keypair unavailable; cannot deny device request');
+    }
+    const deviceIdentity = await getOrCreateDeviceIdentity(vaultPrivateKey);
 
     await deviceApprovalApi.respond(requestId, {
       action: 'deny',
