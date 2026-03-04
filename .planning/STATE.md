@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 17 (Recycle Bin) -- In progress
-Plan: 2 of 5
-Status: Plan 02 complete (bin store, service, delete flow rewiring)
-Last activity: 2026-03-04 -- Completed 17-02-PLAN.md
+Plan: 4 of 5
+Status: Plan 04 complete (desktop FUSE bin entry creation)
+Last activity: 2026-03-04 -- Completed 17-04-PLAN.md
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE, Phase 16: 5/5 COMPLETE, Phase 17: 2/5)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE, Phase 16: 5/5 COMPLETE, Phase 17: 4/5)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 148
+- Total plans completed: 150
 - Average duration: 5.5 min
-- Total execution time: 15.7 hours
+- Total execution time: 15.9 hours
 
 **By Phase (M1 summary):**
 
@@ -47,11 +47,11 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 11.3   | 3/3   | 104 min | 34.7 min |
 | M2 Phase 11.4   | 3/3   | 20 min  | 6.7 min  |
 | M2 Phase 16     | 5/5   | 18 min  | 3.6 min  |
-| M2 Phase 17     | 2/5   | 16 min  | 8.0 min  |
+| M2 Phase 17     | 4/5   | 30 min  | 7.5 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 2m, 10m, 4m, 7m, 9m
+- Last 5 plans: 10m, 4m, 7m, 9m, 7m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -240,6 +240,9 @@ Recent decisions affecting current work:
 | addToBin fire-and-forget from delete flow                              | 17-02     | Folder metadata already updated; bin write is best-effort, non-blocking                                              |
 | Folder size 0 in bin entries (resolved on permanent delete)            | 17-02     | Avoids expensive IPNS resolution at delete time; CID cleanup resolves size lazily                                    |
 | Recursive parent restore max depth 5                                   | 17-02     | Prevents infinite loops when parent chain is deep; falls back to root                                                |
+| Inline generate_uuid_v4 in bin.rs (no uuid crate)                      | 17-04     | Same pattern as registry/mod.rs; avoid new dependency for simple function                                            |
+| Inline guess_mime_type mapping (no mime_guess crate)                   | 17-04     | Best-effort MIME for bin display; application/octet-stream fallback acceptable for unknown extensions                |
+| Bin IPNS conflict = log + preserve CID (no retry)                      | 17-04     | Fire-and-forget publish; data preserved via pinned CID; next delete or web session creates fresh bin state           |
 
 ### Pending Todos
 
@@ -316,17 +319,17 @@ Recent decisions affecting current work:
 - Phase 11.3 (Linux Desktop): COMPLETE -- 3/3 plans done (Rust platform support, packaging & CI, local UAT 18/18 pass)
 - Phase 11.4 (Cross-Platform E2E Testing): COMPLETE -- 3/3 plans done (CI debug artifacts + crypto vectors, FUSE/API test scripts, e2e-desktop.yml workflow)
 - Phase 16 (Advanced Sync): COMPLETE -- 5/5 plans done (API concurrency control, web sync service, desktop conflict handling, web E2E tests, desktop E2E tests)
-- Phase 17 (Recycle Bin): IN PROGRESS -- 1/5 plans complete (crypto primitives + config API)
+- Phase 17 (Recycle Bin): IN PROGRESS -- 4/5 plans complete (crypto, store/service, web UI, desktop FUSE)
 - Phase 22 (Nitro TEE): Moved to M3. NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
 Last session: 2026-03-04
-Stopped at: Completed 17-02-PLAN.md
+Stopped at: Completed 17-04-PLAN.md
 Resume file: None
-Next: 17-02-PLAN.md (bin store, service, and delete flow modifications)
+Next: 17-05-PLAN.md (E2E testing)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-03-04 after Plan 17-01 complete (Recycle Bin crypto primitives + config API)_
+_Last updated: 2026-03-04 after Plan 17-04 complete (Desktop FUSE bin entry creation)_
