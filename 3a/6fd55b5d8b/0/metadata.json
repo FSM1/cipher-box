@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "3a6fd55b5d8b",
+  "session_id": "c74a9cf1-c08c-4c49-814d-8ecdaa490970",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-04T01:17:05.255767Z",
+  "branch": "feat/phase-17-recycle-bin",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "packages/crypto/src/bin/derive-ipns.ts",
+    "packages/crypto/src/bin/encrypt.ts",
+    "packages/crypto/src/bin/index.ts",
+    "packages/crypto/src/bin/schema.ts",
+    "packages/crypto/src/bin/types.ts",
+    "packages/crypto/src/index.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f13de6ae0cb8",
+  "token_usage": {
+    "input_tokens": 5,
+    "cache_creation_tokens": 56346,
+    "cache_read_tokens": 281350,
+    "output_tokens": 1144,
+    "api_call_count": 4
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-04T01:16:59.865716Z",
+    "agent_lines": 0,
+    "human_added": 341,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 341,
+    "agent_percentage": 0
+  }
+}
