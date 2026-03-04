@@ -287,10 +287,19 @@ pub(crate) mod implementation {
                         .unwrap_or_default()
                         .as_millis() as u64;
 
+                    let meta_ipns = match file_meta_ipns_name {
+                        Some(name) if !name.is_empty() => name.clone(),
+                        _ => {
+                            log::error!("unlink: missing file_meta_ipns_name for ino {}", child_ino);
+                            reply.error(libc::EIO);
+                            return;
+                        }
+                    };
+
                     let file_pointer = crate::crypto::folder::FilePointer {
                         id: crate::crypto::utils::generate_uuid_v4(),
                         name: inode.name.clone(),
-                        file_meta_ipns_name: file_meta_ipns_name.clone().unwrap_or_default(),
+                        file_meta_ipns_name: meta_ipns,
                         ipns_private_key_encrypted: file_ipns_key_encrypted_hex.clone(),
                         created_at: if created_ms > 0 { created_ms } else { now_ms },
                         modified_at: now_ms,
@@ -649,16 +658,20 @@ pub(crate) mod implementation {
                             .as_millis() as u64;
 
                         // Build the ECIES-wrapped IPNS private key for the FolderEntry
-                        let ipns_key_encrypted = if let Some(key) = ipns_private_key {
-                            match crate::crypto::ecies::wrap_key(key, &fs.public_key) {
+                        let ipns_key_encrypted = match ipns_private_key {
+                            Some(key) => match crate::crypto::ecies::wrap_key(key, &fs.public_key) {
                                 Ok(wrapped) => hex::encode(&wrapped),
                                 Err(e) => {
-                                    log::warn!("rmdir: failed to wrap IPNS key for bin entry: {}", e);
-                                    String::new()
+                                    log::error!("rmdir: failed to wrap IPNS key for bin entry: {}", e);
+                                    reply.error(libc::EIO);
+                                    return;
                                 }
+                            },
+                            None => {
+                                log::error!("rmdir: missing folder IPNS private key for ino {}", child_ino);
+                                reply.error(libc::EIO);
+                                return;
                             }
-                        } else {
-                            String::new()
                         };
 
                         let folder_entry = crate::crypto::folder::FolderEntry {

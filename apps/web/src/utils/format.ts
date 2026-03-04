@@ -63,11 +63,11 @@ export function formatRelativeTime(timestampMs: number): string {
     return days === 1 ? '1 day ago' : `${days} days ago`;
   }
 
-  return new Date(timestampMs).toLocaleDateString('en-US', {
+  return new Intl.DateTimeFormat(undefined, {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
-  });
+  }).format(new Date(timestampMs));
 }
 
 /**

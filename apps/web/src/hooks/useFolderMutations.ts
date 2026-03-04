@@ -31,7 +31,7 @@ function buildFolderPath(folderId: string): string {
     currentId = folder.parentId;
   }
 
-  return parts.length > 0 ? parts.join(' / ') : 'My Vault';
+  return parts.length > 0 ? `My Vault / ${parts.join(' / ')}` : 'My Vault';
 }
 
 /**

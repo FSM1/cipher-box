@@ -216,11 +216,13 @@ export async function addToBin(params: {
     entries: currentEntries,
   };
 
-  // Encrypt and publish
-  await saveBinMetadata({ metadata, userPublicKey, userPrivateKey });
-
-  // Update local store (use setEntries with explicit seq to avoid double-increment)
-  store.setEntries(currentEntries, newSeq);
+  // Encrypt and publish (non-blocking: folder delete already committed, bin is best-effort)
+  try {
+    await saveBinMetadata({ metadata, userPublicKey, userPrivateKey });
+    store.setEntries(currentEntries, newSeq);
+  } catch {
+    console.error('[Bin] addToBin publish failed (non-blocking)');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -270,8 +272,13 @@ export async function addManyToBin(params: {
     entries: currentEntries,
   };
 
-  await saveBinMetadata({ metadata, userPublicKey, userPrivateKey });
-  store.setEntries(currentEntries, newSeq);
+  // Non-blocking: folder delete already committed, bin is best-effort
+  try {
+    await saveBinMetadata({ metadata, userPublicKey, userPrivateKey });
+    store.setEntries(currentEntries, newSeq);
+  } catch {
+    console.error('[Bin] addManyToBin publish failed (non-blocking)');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -291,6 +298,13 @@ export async function restoreFromBin(params: {
   userPublicKey: Uint8Array;
   userPrivateKey: Uint8Array;
 }): Promise<void> {
+  return restoreFromBinInternal(params, 0);
+}
+
+async function restoreFromBinInternal(
+  params: { entryId: string; userPublicKey: Uint8Array; userPrivateKey: Uint8Array },
+  depth: number
+): Promise<void> {
   const { entryId, userPublicKey, userPrivateKey } = params;
 
   const binStore = useBinStore.getState();
@@ -298,7 +312,7 @@ export async function restoreFromBin(params: {
   if (!entry) throw new Error('Bin entry not found');
 
   // Resolve original parent folder
-  const targetFolder = await resolveTargetFolder(entry.originalParentIpnsName, 0, {
+  const targetFolder = await resolveTargetFolder(entry.originalParentIpnsName, depth, {
     userPublicKey,
     userPrivateKey,
   });
@@ -421,7 +435,7 @@ export async function restoreFromBinBatch(params: {
 
       restoredIds.push(entryId);
     } catch (err) {
-      console.error(`[Bin] Failed to restore ${entry.name}:`, err);
+      console.error(`[Bin] Failed to restore entry ${entry.id}:`, err);
     }
   }
 
@@ -485,7 +499,7 @@ export async function permanentlyDeleteBatch(params: {
     try {
       await cleanupEntryCids(entry);
     } catch (err) {
-      console.error(`[Bin] CID cleanup failed for ${entry.name}:`, err);
+      console.error(`[Bin] CID cleanup failed for entry ${entry.id}:`, err);
     }
   }
 
@@ -516,7 +530,7 @@ export async function emptyBin(params: {
     try {
       await cleanupEntryCids(entry);
     } catch (err) {
-      console.error(`[Bin] Failed to cleanup CIDs for ${entry.name}:`, err);
+      console.error(`[Bin] Failed to cleanup CIDs for entry ${entry.id}:`, err);
     }
   }
 
@@ -565,7 +579,7 @@ export async function purgeExpired(params: {
     try {
       await cleanupEntryCids(entry);
     } catch (err) {
-      console.error(`[Bin] Failed to cleanup CIDs for expired ${entry.name}:`, err);
+      console.error(`[Bin] Failed to cleanup CIDs for expired entry ${entry.id}:`, err);
     }
   }
 
@@ -616,7 +630,7 @@ async function cleanupEntryCids(entry: BinEntry): Promise<void> {
   if (entry.itemType === 'file' && entry.filePointer) {
     const fileIpnsName = entry.filePointer.fileMetaIpnsName;
     if (fileIpnsName) {
-      await unpinFileCids(fileIpnsName, `file ${entry.name}`);
+      await unpinFileCids(fileIpnsName, `file ${entry.id}`);
     }
   } else if (entry.itemType === 'folder' && entry.folderEntry) {
     await cleanupFolderCids(entry.folderEntry.ipnsName);
@@ -714,13 +728,16 @@ async function resolveTargetFolder(
   );
 
   if (parentBinEntry) {
-    // Restore parent first (recursive)
-    console.log(`[Bin] Restoring parent folder "${parentBinEntry.name}" first`);
-    await restoreFromBin({
-      entryId: parentBinEntry.id,
-      userPublicKey: params.userPublicKey,
-      userPrivateKey: params.userPrivateKey,
-    });
+    // Restore parent first (recursive, depth incremented)
+    console.log(`[Bin] Restoring parent folder (id: ${parentBinEntry.id}) first`);
+    await restoreFromBinInternal(
+      {
+        entryId: parentBinEntry.id,
+        userPublicKey: params.userPublicKey,
+        userPrivateKey: params.userPrivateKey,
+      },
+      depth + 1
+    );
 
     // After restoring parent, try to find it again
     const updatedFolders = useFolderStore.getState().folders;
