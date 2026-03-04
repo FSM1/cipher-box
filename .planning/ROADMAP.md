@@ -480,14 +480,15 @@ Plans:
 4. Bin items are automatically purged after the retention period expires (e.g., 30 days)
 5. Storage consumed by bin items counts against the user's quota; emptying the bin reclaims space immediately
 
-**Plans:** 4 plans
+**Plans:** 5 plans
 
 Plans:
 
 - [ ] 17-01-PLAN.md — Crypto bin module (types, HKDF IPNS derivation, ECIES encrypt/decrypt, schema validation) + API retention config endpoint
-- [ ] 17-02-PLAN.md — Bin store + bin service + useBin hook + delete flow rewired to soft-delete
+- [ ] 17-02-PLAN.md — Bin store + bin service (initialize, add, restore, permanent delete, empty, purge) + delete flow rewired to soft-delete + useAuth bin init
 - [ ] 17-03-PLAN.md — Bin UI (BinPage, BinBrowser, sidebar nav, context menu, multi-select, restore, permanent delete, empty bin)
-- [ ] 17-04-PLAN.md — Desktop FUSE soft-delete via IPC + E2E Playwright test suite
+- [ ] 17-04-PLAN.md — Desktop FUSE soft-delete (remove CID unpin from unlink/rmdir)
+- [ ] 17-05-PLAN.md — E2E Playwright test suite for recycle bin workflow
 
 ## Progress
 
