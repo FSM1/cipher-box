@@ -150,7 +150,10 @@ export function useAuth() {
     // Placed after vault load so registry failures never block login
     void (async () => {
       try {
-        const deviceKeypair = await getOrCreateDeviceIdentity(userKeypair.privateKey);
+        const deviceKeypair = await getOrCreateDeviceIdentity({
+          mode: 'persisted',
+          vaultPrivateKey: userKeypair.privateKey,
+        });
         const deviceInfo = detectDeviceInfo();
         const result = await initializeOrSyncRegistry({
           userPrivateKey: userKeypair.privateKey,

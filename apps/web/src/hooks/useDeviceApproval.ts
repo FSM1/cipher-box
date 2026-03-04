@@ -231,7 +231,7 @@ export function useDeviceApproval() {
       const ephemeralPubKeyHex = bytesToHex(uncompressedPubKey);
 
       // 2. Get device identity
-      const deviceIdentity = await getOrCreateDeviceIdentity();
+      const deviceIdentity = await getOrCreateDeviceIdentity({ mode: 'ephemeral' });
 
       // 3. Get device name
       const deviceInfo = detectDeviceInfo();
@@ -367,7 +367,10 @@ export function useDeviceApproval() {
       if (!vaultPrivateKey) {
         throw new Error('Vault keypair unavailable; cannot approve device request');
       }
-      const deviceIdentity = await getOrCreateDeviceIdentity(vaultPrivateKey);
+      const deviceIdentity = await getOrCreateDeviceIdentity({
+        mode: 'persisted',
+        vaultPrivateKey,
+      });
 
       // 4. Send response
       await deviceApprovalApi.respond(requestId, {
@@ -393,7 +396,7 @@ export function useDeviceApproval() {
     if (!vaultPrivateKey) {
       throw new Error('Vault keypair unavailable; cannot deny device request');
     }
-    const deviceIdentity = await getOrCreateDeviceIdentity(vaultPrivateKey);
+    const deviceIdentity = await getOrCreateDeviceIdentity({ mode: 'persisted', vaultPrivateKey });
 
     await deviceApprovalApi.respond(requestId, {
       action: 'deny',

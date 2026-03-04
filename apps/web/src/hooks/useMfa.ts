@@ -155,7 +155,7 @@ export function useMfa() {
 
       // Create a device factor for this new device with metadata
       const newDeviceFactor = generateFactorKey();
-      const deviceKeypair = await getOrCreateDeviceIdentity();
+      const deviceKeypair = await getOrCreateDeviceIdentity({ mode: 'ephemeral' });
       const deviceInfo = detectDeviceInfo();
       await coreKit.createFactor({
         shareType: TssShareType.DEVICE,

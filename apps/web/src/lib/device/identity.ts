@@ -173,6 +173,17 @@ async function saveDeviceKeypair(
 }
 
 /**
+ * Request type for getOrCreateDeviceIdentity.
+ *
+ * - `persisted`: Load or create a device keypair encrypted in IndexedDB.
+ * - `ephemeral`: Generate a temporary in-memory keypair (not persisted).
+ *   Use only during REQUIRED_SHARE state before the vault key is available.
+ */
+export type DeviceIdentityRequest =
+  | { mode: 'persisted'; vaultPrivateKey: Uint8Array }
+  | { mode: 'ephemeral' };
+
+/**
  * Get or create the device's Ed25519 identity.
  *
  * Tries to load an existing keypair from IndexedDB first.
@@ -184,20 +195,23 @@ async function saveDeviceKeypair(
  * - privateKey: 32-byte Ed25519 private key (seed)
  * - deviceId: SHA-256 hex of the public key
  *
- * @param vaultPrivateKey - User's vault private key for encrypting at rest.
- *   When undefined (e.g., during REQUIRED_SHARE state before vault is available),
- *   generates a temporary keypair without persisting. The real identity is
- *   created/loaded when useAuth calls this again after login with the vault key.
+ * @param request - Discriminated union specifying whether to persist or use ephemeral identity.
+ *   `{ mode: 'persisted', vaultPrivateKey }` encrypts the keypair at rest in IndexedDB.
+ *   `{ mode: 'ephemeral' }` generates a temporary keypair (e.g., during REQUIRED_SHARE
+ *   state before vault is available). The real identity is created/loaded when useAuth
+ *   calls this again after login with the vault key.
  * @returns Device keypair with derived device ID
  */
 export async function getOrCreateDeviceIdentity(
-  vaultPrivateKey?: Uint8Array
+  request: DeviceIdentityRequest
 ): Promise<DeviceKeypair> {
-  // Without vault key, return ephemeral identity (not persisted)
-  if (!vaultPrivateKey) {
+  // Ephemeral mode: return in-memory identity (not persisted)
+  if (request.mode === 'ephemeral') {
     const keypair = generateDeviceKeypair();
     return keypair;
   }
+
+  const { vaultPrivateKey } = request;
 
   // Try loading existing keypair from IndexedDB
   const stored = await loadDeviceKeypair(vaultPrivateKey);
