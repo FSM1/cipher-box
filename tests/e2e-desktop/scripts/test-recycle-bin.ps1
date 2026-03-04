@@ -99,8 +99,10 @@ try {
 # Capture pre-deletion content
 $PreDeleteContent = ""
 try {
-    $PreDeleteContent = Get-Content -Path "$MountPoint\$TestFile" -Raw -ErrorAction SilentlyContinue
-} catch { }
+    $PreDeleteContent = Get-Content -Path "$MountPoint\$TestFile" -Raw -ErrorAction Stop
+} catch {
+    Test-Fail "Pre-delete content read failed ($_)"
+}
 
 # ---- Test 2: Delete file from mount ----
 Write-Host "--- Test 2: Delete file from mount ---"
@@ -145,8 +147,16 @@ if ($FileGone -and $HadContent) {
 
 # ---- Cleanup ----
 Write-Host "--- Cleanup ---"
-Remove-Item -Path "$MountPoint\$TestFile" -Force -ErrorAction SilentlyContinue
-Test-Pass "Cleanup"
+try {
+    Remove-Item -Path "$MountPoint\$TestFile" -Force -ErrorAction Stop
+    if (-not (Test-Path "$MountPoint\$TestFile")) {
+        Test-Pass "Cleanup"
+    } else {
+        Test-Fail "Cleanup (file still exists)"
+    }
+} catch {
+    Test-Fail "Cleanup ($_)"
+}
 
 # ---- Summary ----
 Write-Host ""

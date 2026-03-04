@@ -103,6 +103,14 @@ describe('deriveBinIpnsKeypair', () => {
 // ─── Encrypt / Decrypt Round-Trip ────────────────────────────────────────
 
 describe('encryptBinMetadata / decryptBinMetadata', () => {
+  it('rejects Ed25519 IPNS public keys for ECIES encryption', async () => {
+    const rootKeypair = generateTestKeypair();
+    const ipnsKeypair = await deriveBinIpnsKeypair(rootKeypair.privateKey);
+    const metadata = createTestBinMetadata(1);
+
+    await expect(encryptBinMetadata(metadata, ipnsKeypair.publicKey)).rejects.toThrow();
+  });
+
   it('round-trips empty bin metadata', async () => {
     const keypair = generateTestKeypair();
     const metadata: RecycleBinMetadata = {
@@ -462,7 +470,7 @@ describe('validateBinMetadata', () => {
     ).toThrow('Invalid bin metadata format');
   });
 
-  it('accepts entry with null filePointer (treated as undefined)', () => {
+  it('rejects entry with null filePointer', () => {
     // null filePointer should fail since it's not undefined and not a non-null object
     expect(() =>
       validateBinMetadata({
