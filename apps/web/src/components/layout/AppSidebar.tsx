@@ -24,6 +24,7 @@ export function AppSidebar() {
           label="Shared"
           active={location.pathname.startsWith('/shared')}
         />
+        <NavItem to="/bin" icon="bin" label="Bin" active={location.pathname.startsWith('/bin')} />
         <NavItem
           to="/settings"
           icon="settings"

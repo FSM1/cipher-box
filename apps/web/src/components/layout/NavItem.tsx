@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 
 interface NavItemProps {
   to: string;
-  icon: 'folder' | 'shared' | 'settings';
+  icon: 'folder' | 'shared' | 'bin' | 'settings';
   label: string;
   active: boolean;
 }
@@ -10,6 +10,7 @@ interface NavItemProps {
 const ICON_MAP: Record<NavItemProps['icon'], string> = {
   folder: '\uD83D\uDCC1',
   shared: '\uD83D\uDD17',
+  bin: '\uD83D\uDDD1',
   settings: '\u2699',
 };
 
