@@ -19,11 +19,7 @@ type BinState = {
 
   // Actions
   setEntries: (entries: BinEntry[], seq: number) => void;
-  addEntry: (entry: BinEntry) => void;
-  removeEntry: (entryId: string) => void;
-  removeEntries: (entryIds: string[]) => void;
   setLoading: (loading: boolean) => void;
-  setLoaded: (loaded: boolean) => void;
   setError: (error: string | null) => void;
   setBinIpnsName: (name: string) => void;
   setRetentionDays: (days: number) => void;
@@ -61,30 +57,7 @@ export const useBinStore = create<BinState>((set) => ({
       error: null,
     }),
 
-  addEntry: (entry) =>
-    set((state) => ({
-      entries: [...state.entries, entry],
-      sequenceNumber: state.sequenceNumber + 1,
-    })),
-
-  removeEntry: (entryId) =>
-    set((state) => ({
-      entries: state.entries.filter((e) => e.id !== entryId),
-      sequenceNumber: state.sequenceNumber + 1,
-    })),
-
-  removeEntries: (entryIds) =>
-    set((state) => {
-      const ids = new Set(entryIds);
-      return {
-        entries: state.entries.filter((e) => !ids.has(e.id)),
-        sequenceNumber: state.sequenceNumber + 1,
-      };
-    }),
-
   setLoading: (loading) => set({ isLoading: loading }),
-
-  setLoaded: (loaded) => set({ isLoaded: loaded }),
 
   setError: (error) => set({ error }),
 

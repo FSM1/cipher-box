@@ -523,9 +523,15 @@ pub(crate) fn spawn_bin_entry_publish(
                         }
                     }
                 }
-                Err(_) => {
-                    // No existing bin IPNS record -- first time using bin
-                    (crate::crypto::bin::empty_bin_metadata(), None)
+                Err(e) => {
+                    // Only treat explicit "not found" as first-time bin initialization.
+                    // Transient errors (network, 500, etc.) must NOT overwrite existing data.
+                    if e.to_lowercase().contains("not found") {
+                        (crate::crypto::bin::empty_bin_metadata(), None)
+                    } else {
+                        log::warn!("Failed to resolve bin IPNS, skipping publish to preserve existing data: {}", e);
+                        return Err(format!("Bin resolve failed, entry not published: {}", e));
+                    }
                 }
             };
 

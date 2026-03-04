@@ -1441,7 +1441,7 @@ fn bin_metadata_deserialization_from_json() {
 
 #[test]
 fn bin_generate_uuid_v4_format() {
-    let uuid = bin::generate_uuid_v4();
+    let uuid = utils::generate_uuid_v4();
     // UUID v4 format: 8-4-4-4-12 hex chars
     assert_eq!(uuid.len(), 36, "UUID should be 36 chars");
     assert_eq!(&uuid[8..9], "-");
@@ -1461,34 +1461,34 @@ fn bin_generate_uuid_v4_format() {
 
 #[test]
 fn bin_generate_uuid_v4_uniqueness() {
-    let uuid1 = bin::generate_uuid_v4();
-    let uuid2 = bin::generate_uuid_v4();
+    let uuid1 = utils::generate_uuid_v4();
+    let uuid2 = utils::generate_uuid_v4();
     assert_ne!(uuid1, uuid2, "Two UUIDs should be unique");
 }
 
 #[test]
 fn bin_guess_mime_type_common_extensions() {
-    assert_eq!(bin::guess_mime_type("photo.png"), "image/png");
-    assert_eq!(bin::guess_mime_type("photo.jpg"), "image/jpeg");
-    assert_eq!(bin::guess_mime_type("photo.jpeg"), "image/jpeg");
-    assert_eq!(bin::guess_mime_type("doc.pdf"), "application/pdf");
-    assert_eq!(bin::guess_mime_type("video.mp4"), "video/mp4");
-    assert_eq!(bin::guess_mime_type("song.mp3"), "audio/mpeg");
-    assert_eq!(bin::guess_mime_type("page.html"), "text/html");
-    assert_eq!(bin::guess_mime_type("data.json"), "application/json");
-    assert_eq!(bin::guess_mime_type("readme.md"), "text/markdown");
-    assert_eq!(bin::guess_mime_type("archive.zip"), "application/zip");
-    assert_eq!(bin::guess_mime_type("sheet.xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    assert_eq!(utils::mime_from_extension("photo.png"), "image/png");
+    assert_eq!(utils::mime_from_extension("photo.jpg"), "image/jpeg");
+    assert_eq!(utils::mime_from_extension("photo.jpeg"), "image/jpeg");
+    assert_eq!(utils::mime_from_extension("doc.pdf"), "application/pdf");
+    assert_eq!(utils::mime_from_extension("video.mp4"), "video/mp4");
+    assert_eq!(utils::mime_from_extension("song.mp3"), "audio/mpeg");
+    assert_eq!(utils::mime_from_extension("page.html"), "text/html");
+    assert_eq!(utils::mime_from_extension("data.json"), "application/json");
+    assert_eq!(utils::mime_from_extension("readme.md"), "text/markdown");
+    assert_eq!(utils::mime_from_extension("archive.zip"), "application/zip");
+    assert_eq!(utils::mime_from_extension("sheet.xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
 }
 
 #[test]
 fn bin_guess_mime_type_unknown_extension() {
-    assert_eq!(bin::guess_mime_type("file.xyz"), "application/octet-stream");
-    assert_eq!(bin::guess_mime_type("noext"), "application/octet-stream");
+    assert_eq!(utils::mime_from_extension("file.xyz"), "application/octet-stream");
+    assert_eq!(utils::mime_from_extension("noext"), "application/octet-stream");
 }
 
 #[test]
 fn bin_guess_mime_type_case_insensitive() {
-    assert_eq!(bin::guess_mime_type("PHOTO.PNG"), "image/png");
-    assert_eq!(bin::guess_mime_type("Doc.PDF"), "application/pdf");
+    assert_eq!(utils::mime_from_extension("PHOTO.PNG"), "image/png");
+    assert_eq!(utils::mime_from_extension("Doc.PDF"), "application/pdf");
 }

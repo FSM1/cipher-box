@@ -288,7 +288,7 @@ pub(crate) mod implementation {
                         .as_millis() as u64;
 
                     let file_pointer = crate::crypto::folder::FilePointer {
-                        id: crate::crypto::bin::generate_uuid_v4(),
+                        id: crate::crypto::utils::generate_uuid_v4(),
                         name: inode.name.clone(),
                         file_meta_ipns_name: file_meta_ipns_name.clone().unwrap_or_default(),
                         ipns_private_key_encrypted: file_ipns_key_encrypted_hex.clone(),
@@ -311,11 +311,13 @@ pub(crate) mod implementation {
 
         log::debug!("unlink: {} from parent {}", name_str, parent);
 
+        let now = SystemTime::now();
+
         fs.inodes.remove(child_ino);
 
         if let Some(parent_inode) = fs.inodes.get_mut(parent) {
-            parent_inode.attr.mtime = SystemTime::now();
-            parent_inode.attr.ctime = SystemTime::now();
+            parent_inode.attr.mtime = now;
+            parent_inode.attr.ctime = now;
         }
 
         if let Err(e) = fs.update_folder_metadata(parent) {
@@ -335,17 +337,17 @@ pub(crate) mod implementation {
             let parent_path = build_folder_path(fs, parent);
 
             let bin_entry = crate::crypto::bin::BinEntry {
-                id: crate::crypto::bin::generate_uuid_v4(),
+                id: crate::crypto::utils::generate_uuid_v4(),
                 item_type: crate::crypto::bin::BinItemType::File,
                 name: item_name.clone(),
                 original_parent_ipns_name: parent_ipns_name,
                 original_path: parent_path,
-                deleted_at: SystemTime::now()
+                deleted_at: now
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64,
                 size: file_size,
-                mime_type: crate::crypto::bin::guess_mime_type(&item_name).to_string(),
+                mime_type: crate::crypto::utils::mime_from_extension(&item_name).to_string(),
                 file_pointer: Some(file_pointer),
                 folder_entry: None,
             };
@@ -660,7 +662,7 @@ pub(crate) mod implementation {
                         };
 
                         let folder_entry = crate::crypto::folder::FolderEntry {
-                            id: crate::crypto::bin::generate_uuid_v4(),
+                            id: crate::crypto::utils::generate_uuid_v4(),
                             name: inode.name.clone(),
                             ipns_name: ipns_name.clone(),
                             folder_key_encrypted: encrypted_folder_key.clone(),
@@ -685,11 +687,13 @@ pub(crate) mod implementation {
 
         log::debug!("rmdir: {} from parent {}", name_str, parent);
 
+        let now = SystemTime::now();
+
         fs.inodes.remove(child_ino);
 
         if let Some(parent_inode) = fs.inodes.get_mut(parent) {
-            parent_inode.attr.mtime = SystemTime::now();
-            parent_inode.attr.ctime = SystemTime::now();
+            parent_inode.attr.mtime = now;
+            parent_inode.attr.ctime = now;
         }
 
         if let Err(e) = fs.update_folder_metadata(parent) {
@@ -709,12 +713,12 @@ pub(crate) mod implementation {
             let parent_path = build_folder_path(fs, parent);
 
             let bin_entry = crate::crypto::bin::BinEntry {
-                id: crate::crypto::bin::generate_uuid_v4(),
+                id: crate::crypto::utils::generate_uuid_v4(),
                 item_type: crate::crypto::bin::BinItemType::Folder,
                 name: item_name,
                 original_parent_ipns_name: parent_ipns_name,
                 original_path: parent_path,
-                deleted_at: SystemTime::now()
+                deleted_at: now
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64,

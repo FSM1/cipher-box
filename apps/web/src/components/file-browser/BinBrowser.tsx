@@ -209,8 +209,8 @@ export function BinBrowser() {
       try {
         await restore(entryId);
         clearSelection();
-      } catch (err) {
-        console.error('Restore failed:', err);
+      } catch {
+        console.error('[Bin] Restore failed');
       }
     },
     [restore, clearSelection]
@@ -230,8 +230,8 @@ export function BinBrowser() {
             await permanentDelete(entryId);
             clearSelection();
             setConfirmDialog((prev) => ({ ...prev, open: false }));
-          } catch (err) {
-            console.error('Permanent delete failed:', err);
+          } catch {
+            console.error('[Bin] Permanent delete failed');
           }
         },
       });
@@ -258,8 +258,8 @@ export function BinBrowser() {
     try {
       await restoreMultiple([...selectedIds]);
       clearSelection();
-    } catch (err) {
-      console.error('Batch restore failed:', err);
+    } catch {
+      console.error('[Bin] Batch restore failed');
     }
   }, [selectedIds, restoreMultiple, clearSelection]);
 
@@ -276,8 +276,8 @@ export function BinBrowser() {
           await permanentDeleteMultiple([...selectedIds]);
           clearSelection();
           setConfirmDialog((prev) => ({ ...prev, open: false }));
-        } catch (err) {
-          console.error('Batch permanent delete failed:', err);
+        } catch {
+          console.error('[Bin] Batch permanent delete failed');
         }
       },
     });
@@ -296,8 +296,8 @@ export function BinBrowser() {
           await emptyAll();
           clearSelection();
           setConfirmDialog((prev) => ({ ...prev, open: false }));
-        } catch (err) {
-          console.error('Empty bin failed:', err);
+        } catch {
+          console.error('[Bin] Empty bin failed');
         }
       },
     });

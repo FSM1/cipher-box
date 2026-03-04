@@ -1,6 +1,6 @@
 import { useCallback, type MouseEvent } from 'react';
 import type { BinEntry } from '@cipherbox/crypto';
-import { formatBytes } from '../../utils/format';
+import { formatBytes, formatRelativeTime, getItemIcon } from '../../utils/format';
 
 type BinListItemProps = {
   /** The bin entry to display */
@@ -17,37 +17,6 @@ type BinListItemProps = {
   /** Callback when right-click context menu is requested */
   onContextMenu: (event: MouseEvent, entry: BinEntry) => void;
 };
-
-/**
- * Format a deletion timestamp as a relative time string.
- */
-function formatRelativeTime(timestamp: number): string {
-  const diff = Date.now() - timestamp;
-  const seconds = Math.floor(diff / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-
-  if (seconds < 60) return 'just now';
-  if (minutes < 60) return `${minutes}m ago`;
-  if (hours < 24) return `${hours}h ago`;
-  if (days === 1) return '1 day ago';
-  return `${days} days ago`;
-}
-
-/**
- * Get a terminal-style type indicator based on item type and MIME.
- */
-function getItemIcon(entry: BinEntry): string {
-  if (entry.itemType === 'folder') return '[DIR]';
-  if (!entry.mimeType) return '[FILE]';
-  if (entry.mimeType.startsWith('image/')) return '[IMG]';
-  if (entry.mimeType.startsWith('video/')) return '[VID]';
-  if (entry.mimeType.startsWith('audio/')) return '[AUD]';
-  if (entry.mimeType.startsWith('text/')) return '[TXT]';
-  if (entry.mimeType === 'application/pdf') return '[PDF]';
-  return '[FILE]';
-}
 
 /**
  * Single row in the bin list.
@@ -135,7 +104,7 @@ export function BinListItem({
           {isSelected ? '[x]' : '[ ]'}
         </span>
         <span className="bin-list-item-icon" aria-hidden="true">
-          {getItemIcon(entry)}
+          {getItemIcon(entry.itemType, entry.mimeType)}
         </span>
         <span className="bin-list-item-label">{entry.name}</span>
       </div>

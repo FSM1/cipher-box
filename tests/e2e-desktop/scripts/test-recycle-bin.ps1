@@ -123,10 +123,11 @@ try {
 Write-Host "--- Test 3: Verify vault config reachable ---"
 try {
     $VaultResponse = Invoke-RestMethod -Uri "$ApiUrl/vault/config" -Headers $Headers
-    if ($VaultResponse) {
-        Test-Pass "Vault API reachable (bin entries stored server-side)"
+    $hasRetention = $VaultResponse.PSObject.Properties.Name -contains 'recycleBinRetentionDays'
+    if ($VaultResponse -and $hasRetention -and $VaultResponse.recycleBinRetentionDays -ge 1) {
+        Test-Pass "Vault config reachable (recycleBinRetentionDays=$($VaultResponse.recycleBinRetentionDays))"
     } else {
-        Test-Fail "Vault API returned empty response"
+        Test-Fail "Vault config missing/invalid recycleBinRetentionDays"
     }
 } catch {
     Test-Fail "Vault API unreachable ($_)"
@@ -148,7 +149,9 @@ if ($FileGone -and $HadContent) {
 # ---- Cleanup ----
 Write-Host "--- Cleanup ---"
 try {
-    Remove-Item -Path "$MountPoint\$TestFile" -Force -ErrorAction Stop
+    if (Test-Path "$MountPoint\$TestFile") {
+        Remove-Item -Path "$MountPoint\$TestFile" -Force -ErrorAction Stop
+    }
     if (-not (Test-Path "$MountPoint\$TestFile")) {
         Test-Pass "Cleanup"
     } else {

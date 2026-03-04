@@ -4,7 +4,7 @@ import { useVaultStore } from '../stores/vault.store';
 import { useAuthStore } from '../stores/auth.store';
 import * as folderService from '../services/folder.service';
 import { reWrapForRecipients } from '../services/share.service';
-import { addToBin } from '../services/bin.service';
+import { addManyToBin } from '../services/bin.service';
 import type { FolderNode } from '../stores/folder.store';
 import type { FolderEntry, FolderChild } from '@cipherbox/crypto';
 import {
@@ -625,8 +625,8 @@ export function useFolderMutations() {
         // Fire-and-forget: add deleted item to recycle bin (CIDs stay pinned for recovery)
         const auth = useAuthStore.getState();
         if (auth.vaultKeypair) {
-          void addToBin({
-            item: deleteResult.removedChild,
+          void addManyToBin({
+            items: [deleteResult.removedChild],
             parentIpnsName: parentFolder.ipnsName,
             parentPath: buildFolderPath(parentId),
             userPublicKey: auth.vaultKeypair.publicKey,
@@ -740,21 +740,19 @@ export function useFolderMutations() {
           store.removeFolder(folderId);
         }
 
-        // Fire-and-forget: add each deleted item to recycle bin
+        // Fire-and-forget: add all deleted items to recycle bin (single IPNS publish)
         const auth = useAuthStore.getState();
         if (auth.vaultKeypair && removedChildren.length > 0) {
           const parentPath = buildFolderPath(parentId);
-          for (const child of removedChildren) {
-            void addToBin({
-              item: child,
-              parentIpnsName: parentFolder.ipnsName,
-              parentPath,
-              userPublicKey: auth.vaultKeypair.publicKey,
-              userPrivateKey: auth.vaultKeypair.privateKey,
-            }).catch(() => {
-              console.error(`[Delete] Failed to add ${child.name} to bin (non-blocking)`);
-            });
-          }
+          void addManyToBin({
+            items: removedChildren,
+            parentIpnsName: parentFolder.ipnsName,
+            parentPath,
+            userPublicKey: auth.vaultKeypair.publicKey,
+            userPrivateKey: auth.vaultKeypair.privateKey,
+          }).catch(() => {
+            console.error('[Delete] Failed to add batch to bin (non-blocking)');
+          });
         }
 
         setState({ isLoading: false, error: null });

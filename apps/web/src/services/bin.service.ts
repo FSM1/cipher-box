@@ -37,6 +37,9 @@ import type { FolderNode } from '../stores/folder.store';
 // Track whether TEE enrollment has been done for this session
 let binTeeEnrolled = false;
 
+/** Current bin metadata version. */
+const BIN_METADATA_VERSION = 'v1' as const;
+
 // ---------------------------------------------------------------------------
 // Internal helpers: load / save bin metadata
 // ---------------------------------------------------------------------------
@@ -138,11 +141,16 @@ export async function initializeBin(params: {
     // Reset TEE enrollment tracking for new session
     binTeeEnrolled = false;
 
-    const binIpns = await deriveBinIpnsKeypair(params.userPrivateKey);
-    store.setBinIpnsName(binIpns.ipnsName);
-
-    // Try to load existing bin metadata
+    // Try to load existing bin metadata (derives IPNS keypair internally)
     const loaded = await loadBinMetadata({ userPrivateKey: params.userPrivateKey });
+
+    // Set IPNS name from loaded result, or derive if no bin exists yet
+    if (loaded) {
+      store.setBinIpnsName(loaded.ipnsName);
+    } else {
+      const binIpns = await deriveBinIpnsKeypair(params.userPrivateKey);
+      store.setBinIpnsName(binIpns.ipnsName);
+    }
 
     if (loaded) {
       store.setEntries(loaded.metadata.entries, loaded.metadata.sequenceNumber);
@@ -203,7 +211,7 @@ export async function addToBin(params: {
   const newSeq = store.sequenceNumber + 1;
 
   const metadata: RecycleBinMetadata = {
-    version: 'v1',
+    version: BIN_METADATA_VERSION,
     sequenceNumber: newSeq,
     entries: currentEntries,
   };
@@ -211,8 +219,59 @@ export async function addToBin(params: {
   // Encrypt and publish
   await saveBinMetadata({ metadata, userPublicKey, userPrivateKey });
 
-  // Update local store
-  store.addEntry(entry);
+  // Update local store (use setEntries with explicit seq to avoid double-increment)
+  store.setEntries(currentEntries, newSeq);
+}
+
+// ---------------------------------------------------------------------------
+// Public API: addManyToBin
+// ---------------------------------------------------------------------------
+
+/**
+ * Add multiple deleted items to the recycle bin in a single IPNS publish.
+ *
+ * Unlike calling addToBin in a loop (which publishes per-item), this batches
+ * all entries into one metadata update.
+ */
+export async function addManyToBin(params: {
+  items: FolderChild[];
+  parentIpnsName: string;
+  parentPath: string;
+  userPublicKey: Uint8Array;
+  userPrivateKey: Uint8Array;
+}): Promise<void> {
+  const { items, parentIpnsName, parentPath, userPublicKey, userPrivateKey } = params;
+  if (items.length === 0) return;
+
+  const now = Date.now();
+  const newEntries: BinEntry[] = items.map((item) => {
+    const isFile = item.type === 'file';
+    return {
+      id: crypto.randomUUID(),
+      itemType: isFile ? 'file' : 'folder',
+      name: item.name,
+      originalParentIpnsName: parentIpnsName,
+      originalPath: parentPath,
+      deletedAt: now,
+      size: 0,
+      mimeType: '',
+      filePointer: isFile ? (item as FilePointer) : undefined,
+      folderEntry: !isFile ? (item as FolderEntry) : undefined,
+    };
+  });
+
+  const store = useBinStore.getState();
+  const currentEntries = [...store.entries, ...newEntries];
+  const newSeq = store.sequenceNumber + 1;
+
+  const metadata: RecycleBinMetadata = {
+    version: BIN_METADATA_VERSION,
+    sequenceNumber: newSeq,
+    entries: currentEntries,
+  };
+
+  await saveBinMetadata({ metadata, userPublicKey, userPrivateKey });
+  store.setEntries(currentEntries, newSeq);
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +352,86 @@ export async function restoreFromBin(params: {
 }
 
 // ---------------------------------------------------------------------------
+// Public API: restoreFromBinBatch
+// ---------------------------------------------------------------------------
+
+/**
+ * Restore multiple bin entries, publishing to the bin IPNS only once at the end.
+ *
+ * Each item is restored to its target folder (which may each require a folder
+ * publish), but the bin metadata is updated in a single publish.
+ */
+export async function restoreFromBinBatch(params: {
+  entryIds: string[];
+  userPublicKey: Uint8Array;
+  userPrivateKey: Uint8Array;
+}): Promise<void> {
+  const { entryIds, userPublicKey, userPrivateKey } = params;
+  if (entryIds.length === 0) return;
+
+  const binStore = useBinStore.getState();
+  const { updateFolderMetadata } = await import('./folder.service');
+
+  const restoredIds: string[] = [];
+
+  for (const entryId of entryIds) {
+    const entry = binStore.entries.find((e) => e.id === entryId);
+    if (!entry) continue;
+
+    try {
+      const targetFolder = await resolveTargetFolder(entry.originalParentIpnsName, 0, {
+        userPublicKey,
+        userPrivateKey,
+      });
+
+      const child = getRestoredChild(entry);
+      const finalChild = resolveNameCollision(child, targetFolder.children);
+
+      const updatedChildren = [...targetFolder.children, finalChild];
+      const { newSequenceNumber } = await updateFolderMetadata({
+        folderId: targetFolder.id,
+        children: updatedChildren,
+        folderKey: targetFolder.folderKey,
+        ipnsPrivateKey: targetFolder.ipnsPrivateKey,
+        ipnsName: targetFolder.ipnsName,
+        sequenceNumber: targetFolder.sequenceNumber,
+      });
+
+      const folderStore = useFolderStore.getState();
+      folderStore.updateFolderChildren(targetFolder.id, updatedChildren);
+      folderStore.updateFolderSequence(targetFolder.id, newSequenceNumber);
+
+      if (entry.itemType === 'folder' && entry.folderEntry) {
+        const existingNode = folderStore.folders[entry.folderEntry.id];
+        if (!existingNode) {
+          folderStore.setFolder({
+            id: entry.folderEntry.id,
+            name: finalChild.name,
+            ipnsName: entry.folderEntry.ipnsName,
+            parentId: targetFolder.id,
+            children: [],
+            isLoaded: false,
+            isLoading: false,
+            sequenceNumber: 0n,
+            folderKey: new Uint8Array(32),
+            ipnsPrivateKey: new Uint8Array(64),
+          });
+        }
+      }
+
+      restoredIds.push(entryId);
+    } catch (err) {
+      console.error(`[Bin] Failed to restore ${entry.name}:`, err);
+    }
+  }
+
+  // Single bin IPNS publish for all restored entries
+  if (restoredIds.length > 0) {
+    await removeEntriesFromBin(restoredIds, { userPublicKey, userPrivateKey });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Public API: permanentlyDelete
 // ---------------------------------------------------------------------------
 
@@ -318,6 +457,40 @@ export async function permanentlyDelete(params: {
 
   // Remove from bin metadata and publish
   await removeEntriesFromBin([entryId], { userPublicKey, userPrivateKey });
+}
+
+// ---------------------------------------------------------------------------
+// Public API: permanentlyDeleteBatch
+// ---------------------------------------------------------------------------
+
+/**
+ * Permanently delete multiple bin entries in a single IPNS publish.
+ *
+ * Cleans up CIDs for all entries (best-effort), then publishes once.
+ */
+export async function permanentlyDeleteBatch(params: {
+  entryIds: string[];
+  userPublicKey: Uint8Array;
+  userPrivateKey: Uint8Array;
+}): Promise<void> {
+  const { entryIds, userPublicKey, userPrivateKey } = params;
+  if (entryIds.length === 0) return;
+
+  const binStore = useBinStore.getState();
+  const idsSet = new Set(entryIds);
+  const entriesToDelete = binStore.entries.filter((e) => idsSet.has(e.id));
+
+  // Cleanup CIDs for all entries (best-effort, continue on individual failures)
+  for (const entry of entriesToDelete) {
+    try {
+      await cleanupEntryCids(entry);
+    } catch (err) {
+      console.error(`[Bin] CID cleanup failed for ${entry.name}:`, err);
+    }
+  }
+
+  // Remove all from bin metadata in a single publish
+  await removeEntriesFromBin(entryIds, { userPublicKey, userPrivateKey });
 }
 
 // ---------------------------------------------------------------------------
@@ -350,7 +523,7 @@ export async function emptyBin(params: {
   // Publish empty bin metadata
   const newSeq = binStore.sequenceNumber + 1;
   const metadata: RecycleBinMetadata = {
-    version: 'v1',
+    version: BIN_METADATA_VERSION,
     sequenceNumber: newSeq,
     entries: [],
   };
@@ -418,7 +591,7 @@ async function removeEntriesFromBin(
   const newSeq = binStore.sequenceNumber + 1;
 
   const metadata: RecycleBinMetadata = {
-    version: 'v1',
+    version: BIN_METADATA_VERSION,
     sequenceNumber: newSeq,
     entries: remainingEntries,
   };
@@ -429,8 +602,8 @@ async function removeEntriesFromBin(
     userPrivateKey: params.userPrivateKey,
   });
 
-  // Update local store
-  binStore.removeEntries(entryIds);
+  // Update local store (use setEntries with explicit seq to avoid double-increment)
+  binStore.setEntries(remainingEntries, newSeq);
 }
 
 /**
@@ -443,33 +616,35 @@ async function cleanupEntryCids(entry: BinEntry): Promise<void> {
   if (entry.itemType === 'file' && entry.filePointer) {
     const fileIpnsName = entry.filePointer.fileMetaIpnsName;
     if (fileIpnsName) {
-      try {
-        const resolved = await resolveIpnsRecord(fileIpnsName);
-        if (resolved?.cid) {
-          // Fetch file metadata to get the actual content CID and size
-          const metaBytes = await fetchFromIpfs(resolved.cid);
-          const metaJson = new TextDecoder().decode(metaBytes);
-          const fileMeta = JSON.parse(metaJson);
-
-          // Unpin the content CID (encrypted file data)
-          if (fileMeta.cid) {
-            await unpinFromIpfs(fileMeta.cid);
-            // Update quota
-            if (fileMeta.size && typeof fileMeta.size === 'number') {
-              useQuotaStore.getState().removeUsage(fileMeta.size);
-            }
-          }
-
-          // Also unpin the metadata CID
-          await unpinFromIpfs(resolved.cid).catch(() => {});
-        }
-      } catch (err) {
-        console.error(`[Bin] CID cleanup failed for file ${entry.name}:`, err);
-      }
+      await unpinFileCids(fileIpnsName, `file ${entry.name}`);
     }
   } else if (entry.itemType === 'folder' && entry.folderEntry) {
-    // Recursively resolve folder to find all descendant file CIDs
     await cleanupFolderCids(entry.folderEntry.ipnsName);
+  }
+}
+
+/**
+ * Unpin a single file's content and metadata CIDs, and update quota.
+ */
+async function unpinFileCids(fileMetaIpnsName: string, label: string): Promise<void> {
+  try {
+    const resolved = await resolveIpnsRecord(fileMetaIpnsName);
+    if (!resolved?.cid) return;
+
+    const metaBytes = await fetchFromIpfs(resolved.cid);
+    const metaJson = new TextDecoder().decode(metaBytes);
+    const fileMeta = JSON.parse(metaJson);
+
+    if (fileMeta.cid) {
+      await unpinFromIpfs(fileMeta.cid);
+      if (fileMeta.size && typeof fileMeta.size === 'number') {
+        useQuotaStore.getState().removeUsage(fileMeta.size);
+      }
+    }
+
+    await unpinFromIpfs(resolved.cid).catch(() => {});
+  } catch (err) {
+    console.error(`[Bin] CID cleanup failed for ${label}:`, err);
   }
 }
 
@@ -481,35 +656,17 @@ async function cleanupFolderCids(folderIpnsName: string): Promise<void> {
     const resolved = await resolveIpnsRecord(folderIpnsName);
     if (!resolved?.cid) return;
 
-    // Try to load folder metadata -- it may be AES-GCM encrypted
     // We don't have the folder key here, so we check if the folder is
     // loaded in the store first
     const folders = useFolderStore.getState().folders;
     const folderNode = Object.values(folders).find((f) => f.ipnsName === folderIpnsName);
 
     if (folderNode) {
-      // Folder is loaded -- iterate children
       for (const child of folderNode.children) {
         if (child.type === 'file') {
           const fp = child as FilePointer;
           if (fp.fileMetaIpnsName) {
-            try {
-              const fileResolved = await resolveIpnsRecord(fp.fileMetaIpnsName);
-              if (fileResolved?.cid) {
-                const metaBytes = await fetchFromIpfs(fileResolved.cid);
-                const metaJson = new TextDecoder().decode(metaBytes);
-                const fileMeta = JSON.parse(metaJson);
-                if (fileMeta.cid) {
-                  await unpinFromIpfs(fileMeta.cid);
-                  if (fileMeta.size && typeof fileMeta.size === 'number') {
-                    useQuotaStore.getState().removeUsage(fileMeta.size);
-                  }
-                }
-                await unpinFromIpfs(fileResolved.cid).catch(() => {});
-              }
-            } catch (err) {
-              console.error(`[Bin] CID cleanup failed for nested file:`, err);
-            }
+            await unpinFileCids(fp.fileMetaIpnsName, 'nested file');
           }
         } else if (child.type === 'folder') {
           const fe = child as FolderEntry;
@@ -518,7 +675,6 @@ async function cleanupFolderCids(folderIpnsName: string): Promise<void> {
       }
     }
 
-    // Unpin the folder metadata CID itself
     await unpinFromIpfs(resolved.cid).catch(() => {});
   } catch (err) {
     console.error(`[Bin] Folder CID cleanup failed for ${folderIpnsName}:`, err);

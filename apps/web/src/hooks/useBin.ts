@@ -4,7 +4,9 @@ import { useAuthStore } from '../stores/auth.store';
 import {
   initializeBin,
   restoreFromBin,
+  restoreFromBinBatch,
   permanentlyDelete,
+  permanentlyDeleteBatch,
   emptyBin,
   purgeExpired,
 } from '../services/bin.service';
@@ -131,13 +133,11 @@ export function useBin() {
 
     setState({ isLoading: true, error: null });
     try {
-      for (const entryId of entryIds) {
-        await restoreFromBin({
-          entryId,
-          userPublicKey: auth.vaultKeypair.publicKey,
-          userPrivateKey: auth.vaultKeypair.privateKey,
-        });
-      }
+      await restoreFromBinBatch({
+        entryIds,
+        userPublicKey: auth.vaultKeypair.publicKey,
+        userPrivateKey: auth.vaultKeypair.privateKey,
+      });
       setState({ isLoading: false, error: null });
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Failed to restore items';
@@ -147,7 +147,7 @@ export function useBin() {
   }, []);
 
   /**
-   * Permanently delete multiple bin entries.
+   * Permanently delete multiple bin entries (single IPNS publish).
    */
   const permanentDeleteMultiple = useCallback(async (entryIds: string[]) => {
     const auth = useAuthStore.getState();
@@ -155,13 +155,11 @@ export function useBin() {
 
     setState({ isLoading: true, error: null });
     try {
-      for (const entryId of entryIds) {
-        await permanentlyDelete({
-          entryId,
-          userPublicKey: auth.vaultKeypair.publicKey,
-          userPrivateKey: auth.vaultKeypair.privateKey,
-        });
-      }
+      await permanentlyDeleteBatch({
+        entryIds,
+        userPublicKey: auth.vaultKeypair.publicKey,
+        userPrivateKey: auth.vaultKeypair.privateKey,
+      });
       setState({ isLoading: false, error: null });
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Failed to permanently delete items';

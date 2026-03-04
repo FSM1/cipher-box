@@ -7,7 +7,7 @@ import {
   type TouchEvent,
 } from 'react';
 import type { FolderChild, FilePointer, FolderEntry } from '@cipherbox/crypto';
-import { formatBytes, formatDate } from '../../utils/format';
+import { formatBytes, formatDate, getItemIcon } from '../../utils/format';
 import { useFileSize } from '../../hooks/useFileSize';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
 
@@ -61,16 +61,6 @@ function isFolder(item: FolderChild): item is FolderEntry {
  */
 function isFile(item: FolderChild): item is FilePointer {
   return item.type === 'file';
-}
-
-/**
- * Get text prefix for item type (terminal-style).
- */
-function getItemIcon(item: FolderChild): string {
-  if (isFolder(item)) {
-    return '[DIR]';
-  }
-  return '[FILE]';
 }
 
 /* File extension helper removed - TYPE column no longer used */
@@ -390,7 +380,7 @@ export function FileListItem({
           {isSelected ? '[x]' : '[ ]'}
         </span>
         <span className="file-list-item-icon" aria-hidden="true">
-          {getItemIcon(item)}
+          {getItemIcon(item.type)}
         </span>
         <span className="file-list-item-name">{item.name}</span>
       </div>
