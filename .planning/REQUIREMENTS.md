@@ -130,6 +130,14 @@ Requirements for production release. Each maps to roadmap phases 12+.
 - [x] **VER-04**: Version retention policy enforced (max versions per file, configurable)
 - [x] **VER-05**: Version storage counted against user quota
 
+### Recycle Bin
+
+- [x] **BIN-01**: Deleting a file or folder moves it to a recycle bin instead of permanently removing it; the item remains recoverable
+- [x] **BIN-02**: User can browse bin contents and restore any item to its original folder location (or root if parent was deleted)
+- [x] **BIN-03**: User can manually empty the entire bin or permanently delete individual items to free storage quota
+- [x] **BIN-04**: Bin items are automatically purged after the retention period expires (default 30 days)
+- [x] **BIN-05**: Storage consumed by bin items counts against the user's quota; emptying the bin reclaims space immediately
+
 ### Advanced Sync
 
 - [x] **SYNC-04**: Client detects conflicts via IPNS sequence number mismatch before publishing
