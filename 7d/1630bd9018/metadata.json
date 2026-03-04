@@ -5,6 +5,7 @@
   "branch": "feat/phase-17-recycle-bin",
   "checkpoints_count": 1,
   "files_touched": [
+    "apps/web/src/hooks/useFolderMutations.ts",
     "apps/web/src/services/bin.service.ts"
   ],
   "sessions": [
@@ -14,13 +15,20 @@
       "context": "/7d/1630bd9018/0/context.md",
       "content_hash": "/7d/1630bd9018/0/content_hash.txt",
       "prompt": "/7d/1630bd9018/0/prompt.txt"
+    },
+    {
+      "metadata": "/7d/1630bd9018/1/metadata.json",
+      "transcript": "/7d/1630bd9018/1/full.jsonl",
+      "context": "/7d/1630bd9018/1/context.md",
+      "content_hash": "/7d/1630bd9018/1/content_hash.txt",
+      "prompt": "/7d/1630bd9018/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 140,
-    "cache_creation_tokens": 246574,
-    "cache_read_tokens": 14230267,
-    "output_tokens": 50541,
-    "api_call_count": 132
+    "input_tokens": 180,
+    "cache_creation_tokens": 369082,
+    "cache_read_tokens": 17596426,
+    "output_tokens": 68188,
+    "api_call_count": 170
   }
 }
