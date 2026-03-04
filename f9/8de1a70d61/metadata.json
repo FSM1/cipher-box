@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "f98de1a70d61",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-17-recycle-bin",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/vault/dto/index.ts",
+    "apps/api/src/vault/dto/vault-config.dto.ts",
+    "apps/api/src/vault/vault.controller.spec.ts",
+    "apps/api/src/vault/vault.controller.ts",
+    "apps/api/src/vault/vault.service.spec.ts",
+    "apps/api/src/vault/vault.service.ts",
+    "apps/web/src/api/models/index.ts",
+    "apps/web/src/api/models/vaultConfigResponseDto.ts",
+    "apps/web/src/api/vault/vault.ts",
+    "packages/api-client/openapi.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f9/8de1a70d61/0/metadata.json",
+      "transcript": "/f9/8de1a70d61/0/full.jsonl",
+      "context": "/f9/8de1a70d61/0/context.md",
+      "content_hash": "/f9/8de1a70d61/0/content_hash.txt",
+      "prompt": "/f9/8de1a70d61/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
