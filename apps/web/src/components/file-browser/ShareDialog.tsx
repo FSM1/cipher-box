@@ -203,14 +203,14 @@ export function ShareDialog({
 
     try {
       // Verify recipient is a registered user
-      await sharesControllerLookupUser({ publicKey: key });
-    } catch (err: unknown) {
-      const status = (err as { status?: number }).status;
-      if (status === 404) {
+      const lookup = await sharesControllerLookupUser({ publicKey: key });
+      if (!lookup.exists) {
         setError('user not found');
-      } else {
-        setError('lookup failed, please try again');
+        setIsSharing(false);
+        return;
       }
+    } catch {
+      setError('lookup failed, please try again');
       setIsSharing(false);
       return;
     }

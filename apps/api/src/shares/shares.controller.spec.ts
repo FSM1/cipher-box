@@ -155,6 +155,12 @@ describe('SharesController', () => {
       expect(result.shares[0].itemType).toBe('folder');
       expect(result.shares[0].itemName).toBe('My Folder');
     });
+
+    it('should pass pagination params to service', async () => {
+      mockSharesService.getSentShares.mockResolvedValue({ shares: [], total: 0 });
+      await controller.getSentShares(mockReq, { limit: 10, offset: 20 });
+      expect(mockSharesService.getSentShares).toHaveBeenCalledWith(userId, 10, 20);
+    });
   });
 
   describe('lookupUser', () => {
