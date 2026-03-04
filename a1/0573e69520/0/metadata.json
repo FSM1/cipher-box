@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "a10573e69520",
+  "session_id": "c74a9cf1-c08c-4c49-814d-8ecdaa490970",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-04T01:37:13.941242Z",
+  "branch": "feat/phase-17-recycle-bin",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/phases/17-recycle-bin/17-02-SUMMARY.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f13de6ae0cb8",
+  "checkpoint_transcript_start": 406,
+  "transcript_lines_at_start": 406,
+  "token_usage": {
+    "input_tokens": 1,
+    "cache_creation_tokens": 1022,
+    "cache_read_tokens": 85542,
+    "output_tokens": 467,
+    "api_call_count": 1
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-04T01:37:12.691877Z",
+    "agent_lines": 0,
+    "human_added": 1203,
+    "human_modified": 9,
+    "human_removed": 0,
+    "total_committed": 1203,
+    "agent_percentage": 0
+  }
+}
