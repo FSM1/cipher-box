@@ -1,0 +1,36 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "cf0bcda48f2d",
+  "session_id": "a1cee255-71a5-4ab3-9e4f-f15071ce0260",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-04T03:07:40.872875Z",
+  "branch": "feat/phase-17-recycle-bin",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/components/file-browser/BinListItem.tsx",
+    "apps/web/src/hooks/useBin.ts",
+    "apps/web/src/hooks/useFolderMutations.ts",
+    "apps/web/src/stores/bin.store.ts",
+    "packages/crypto/src/bin/schema.ts",
+    "apps/desktop/src-tauri/src/fuse/mod.rs",
+    "apps/web/src/components/file-browser/BinBrowser.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b8dbb25edd59",
+  "token_usage": {
+    "input_tokens": 21,
+    "cache_creation_tokens": 53215,
+    "cache_read_tokens": 1289745,
+    "output_tokens": 10199,
+    "api_call_count": 20
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-04T03:07:39.804559Z",
+    "agent_lines": 0,
+    "human_added": 9,
+    "human_modified": 24,
+    "human_removed": 0,
+    "total_committed": 9,
+    "agent_percentage": 0
+  }
+}
