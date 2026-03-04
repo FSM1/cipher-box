@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 17 (Recycle Bin) -- In progress
-Plan: 1 of 5
-Status: Plan 01 complete (crypto primitives + config API)
-Last activity: 2026-03-04 -- Completed 17-01-PLAN.md
+Plan: 2 of 5
+Status: Plan 02 complete (bin store, service, delete flow rewiring)
+Last activity: 2026-03-04 -- Completed 17-02-PLAN.md
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE, Phase 16: 5/5 COMPLETE, Phase 17: 1/5)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE, Phase 16: 5/5 COMPLETE, Phase 17: 2/5)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 147
+- Total plans completed: 148
 - Average duration: 5.5 min
-- Total execution time: 15.6 hours
+- Total execution time: 15.7 hours
 
 **By Phase (M1 summary):**
 
@@ -47,11 +47,11 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 11.3   | 3/3   | 104 min | 34.7 min |
 | M2 Phase 11.4   | 3/3   | 20 min  | 6.7 min  |
 | M2 Phase 16     | 5/5   | 18 min  | 3.6 min  |
-| M2 Phase 17     | 1/5   | 7 min   | 7.0 min  |
+| M2 Phase 17     | 2/5   | 16 min  | 8.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 5m, 2m, 10m, 4m, 7m
+- Last 5 plans: 2m, 10m, 4m, 7m, 9m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -237,6 +237,9 @@ Recent decisions affecting current work:
 | Bin metadata uses ECIES (same as DeviceRegistry, not AES-GCM)          | 17-01     | Single user-scoped record, no per-record symmetric key to manage                                                     |
 | HKDF info cipherbox-recycle-bin-ipns-v1 for bin IPNS derivation        | 17-01     | Domain separation from vault and registry IPNS keys; same salt CipherBox-v1                                          |
 | GET /vault/config synchronous (no DB query)                            | 17-01     | Reads RECYCLE_BIN_RETENTION_DAYS from ConfigService with default 30                                                  |
+| addToBin fire-and-forget from delete flow                              | 17-02     | Folder metadata already updated; bin write is best-effort, non-blocking                                              |
+| Folder size 0 in bin entries (resolved on permanent delete)            | 17-02     | Avoids expensive IPNS resolution at delete time; CID cleanup resolves size lazily                                    |
+| Recursive parent restore max depth 5                                   | 17-02     | Prevents infinite loops when parent chain is deep; falls back to root                                                |
 
 ### Pending Todos
 
@@ -319,7 +322,7 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-04
-Stopped at: Completed 17-01-PLAN.md
+Stopped at: Completed 17-02-PLAN.md
 Resume file: None
 Next: 17-02-PLAN.md (bin store, service, and delete flow modifications)
 
