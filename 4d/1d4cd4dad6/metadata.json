@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "4d1d4cd4dad6",
+  "strategy": "manual-commit",
+  "branch": "fix/m2-tech-debt-store-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/stores/quota.store.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4d/1d4cd4dad6/0/metadata.json",
+      "transcript": "/4d/1d4cd4dad6/0/full.jsonl",
+      "context": "/4d/1d4cd4dad6/0/context.md",
+      "content_hash": "/4d/1d4cd4dad6/0/content_hash.txt",
+      "prompt": "/4d/1d4cd4dad6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 74,
+    "cache_creation_tokens": 106109,
+    "cache_read_tokens": 7262173,
+    "output_tokens": 15702,
+    "api_call_count": 66
+  }
+}
