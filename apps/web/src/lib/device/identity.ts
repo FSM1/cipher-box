@@ -174,10 +174,27 @@ async function saveDeviceKeypair(
 
 /**
  * Module-scoped fallback identity for when IndexedDB persistence fails.
- * Ensures the same deviceId is returned for the duration of a browser session,
- * preventing identity churn if IndexedDB is permanently unavailable.
+ * Scoped to the vault key hash to prevent cross-account reuse if a different
+ * user logs in within the same browser session (tab reuse without reload).
  */
-let sessionFallback: DeviceKeypair | null = null;
+let sessionFallback: { keypair: DeviceKeypair; vaultKeyHash: string } | null = null;
+
+/**
+ * In-flight promise for persisted identity creation. Deduplicates concurrent
+ * calls so only one keypair is generated and saved to IndexedDB.
+ */
+let persistedInFlight: Promise<DeviceKeypair> | null = null;
+
+/**
+ * Hash the first 32 bytes of the vault key for scoping the session fallback.
+ * Uses SHA-256 to avoid storing raw key material in module scope.
+ */
+async function hashVaultKey(vaultPrivateKey: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', vaultPrivateKey as BufferSource);
+  return Array.from(new Uint8Array(digest.slice(0, 8)))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
 
 /**
  * Request type for getOrCreateDeviceIdentity.
@@ -218,7 +235,25 @@ export async function getOrCreateDeviceIdentity(
     return keypair;
   }
 
-  const { vaultPrivateKey } = request;
+  // Deduplicate concurrent persisted-mode calls
+  if (persistedInFlight) {
+    return persistedInFlight;
+  }
+
+  persistedInFlight = resolvePersistedIdentity(request.vaultPrivateKey);
+  try {
+    return await persistedInFlight;
+  } finally {
+    persistedInFlight = null;
+  }
+}
+
+/**
+ * Internal: resolve the persisted device identity.
+ * Separated from the public API so the deduplication wrapper stays clean.
+ */
+async function resolvePersistedIdentity(vaultPrivateKey: Uint8Array): Promise<DeviceKeypair> {
+  const vaultKeyHash = await hashVaultKey(vaultPrivateKey);
 
   // Try loading existing keypair from IndexedDB
   const stored = await loadDeviceKeypair(vaultPrivateKey);
@@ -233,10 +268,13 @@ export async function getOrCreateDeviceIdentity(
     };
   }
 
-  // Return session fallback if IDB previously failed in this session
-  if (sessionFallback) {
-    return sessionFallback;
+  // Return session fallback if IDB previously failed for this vault
+  if (sessionFallback && sessionFallback.vaultKeyHash === vaultKeyHash) {
+    return sessionFallback.keypair;
   }
+
+  // Different vault or no fallback — clear stale entry
+  sessionFallback = null;
 
   // Generate new keypair and persist (encrypted)
   const keypair = generateDeviceKeypair();
@@ -247,7 +285,7 @@ export async function getOrCreateDeviceIdentity(
     );
   } catch {
     // IndexedDB unavailable or write failed; keep identity stable for this session.
-    sessionFallback = keypair;
+    sessionFallback = { keypair, vaultKeyHash };
   }
 
   return keypair;
