@@ -105,7 +105,7 @@ async function loadDeviceKeypair(
 
     // v2 (encrypted) — validate remaining fields
     if (!ivArr || ivArr.length !== 12) return null;
-    if (!encryptedArr || encryptedArr.length === 0) return null;
+    if (!encryptedArr || encryptedArr.length < 48) return null; // 32-byte plaintext + 16-byte GCM tag
 
     // Decrypt the private key
     const wrappingKey = await deriveDeviceWrappingKey(vaultPrivateKey);
@@ -182,8 +182,9 @@ let sessionFallback: { keypair: DeviceKeypair; vaultKeyHash: string } | null = n
 /**
  * In-flight promise for persisted identity creation. Deduplicates concurrent
  * calls so only one keypair is generated and saved to IndexedDB.
+ * Scoped to vault key hash to prevent cross-account deduplication.
  */
-let persistedInFlight: Promise<DeviceKeypair> | null = null;
+let persistedInFlight: { promise: Promise<DeviceKeypair>; vaultKeyHash: string } | null = null;
 
 /**
  * Hash the first 32 bytes of the vault key for scoping the session fallback.
@@ -235,14 +236,16 @@ export async function getOrCreateDeviceIdentity(
     return keypair;
   }
 
-  // Deduplicate concurrent persisted-mode calls
-  if (persistedInFlight) {
-    return persistedInFlight;
+  // Deduplicate concurrent persisted-mode calls for the same vault key
+  const vaultKeyHash = await hashVaultKey(request.vaultPrivateKey);
+  if (persistedInFlight && persistedInFlight.vaultKeyHash === vaultKeyHash) {
+    return persistedInFlight.promise;
   }
 
-  persistedInFlight = resolvePersistedIdentity(request.vaultPrivateKey);
+  const promise = resolvePersistedIdentity(request.vaultPrivateKey, vaultKeyHash);
+  persistedInFlight = { promise, vaultKeyHash };
   try {
-    return await persistedInFlight;
+    return await promise;
   } finally {
     persistedInFlight = null;
   }
@@ -252,9 +255,10 @@ export async function getOrCreateDeviceIdentity(
  * Internal: resolve the persisted device identity.
  * Separated from the public API so the deduplication wrapper stays clean.
  */
-async function resolvePersistedIdentity(vaultPrivateKey: Uint8Array): Promise<DeviceKeypair> {
-  const vaultKeyHash = await hashVaultKey(vaultPrivateKey);
-
+async function resolvePersistedIdentity(
+  vaultPrivateKey: Uint8Array,
+  vaultKeyHash: string
+): Promise<DeviceKeypair> {
   // Try loading existing keypair from IndexedDB
   const stored = await loadDeviceKeypair(vaultPrivateKey);
   if (stored) {
