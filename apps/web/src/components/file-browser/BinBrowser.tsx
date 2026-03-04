@@ -41,6 +41,7 @@ export function BinBrowser() {
   // Selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const lastSelectedIdRef = useRef<string | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
 
   // Confirmation dialog state
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -180,7 +181,11 @@ export function BinBrowser() {
   useEffect(() => {
     if (!contextMenu.visible) return;
 
-    const handleClickOutside = () => hideContextMenu();
+    const handleClickOutside = (event: globalThis.MouseEvent) => {
+      if (contextMenuRef.current && !contextMenuRef.current.contains(event.target as Node)) {
+        hideContextMenu();
+      }
+    };
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') hideContextMenu();
     };
@@ -483,6 +488,7 @@ export function BinBrowser() {
       {/* Context menu */}
       {contextMenu.visible && contextMenu.entry && (
         <div
+          ref={contextMenuRef}
           className="context-menu bin-context-menu"
           style={{ position: 'fixed', left: contextMenu.x, top: contextMenu.y }}
           role="menu"
