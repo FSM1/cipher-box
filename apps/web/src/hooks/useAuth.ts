@@ -21,6 +21,9 @@ import {
 import { getOrCreateDeviceIdentity } from '../lib/device/identity';
 import { detectDeviceInfo } from '../lib/device/info';
 import { initializeOrSyncRegistry } from '../services/device-registry.service';
+import { initializeBin } from '../services/bin.service';
+import { useBinStore } from '../stores/bin.store';
+import { vaultControllerGetConfig } from '../api/vault/vault';
 import { clearFileSizeCache } from './useFileSize';
 
 export function useAuth() {
@@ -166,6 +169,30 @@ export function useAuth() {
         }
       } catch (error) {
         console.error('[Auth] Device registry init failed (non-blocking):', error);
+      }
+    })();
+
+    // Non-blocking bin initialization (fire-and-forget)
+    void (async () => {
+      try {
+        await initializeBin({
+          userPrivateKey: userKeypair.privateKey,
+          userPublicKey: userKeypair.publicKey,
+        });
+      } catch (error) {
+        console.error('[Auth] Bin initialization failed (non-blocking):', error);
+      }
+    })();
+
+    // Non-blocking: fetch retention config from API
+    void (async () => {
+      try {
+        const config = await vaultControllerGetConfig();
+        if (config.recycleBinRetentionDays) {
+          useBinStore.getState().setRetentionDays(config.recycleBinRetentionDays);
+        }
+      } catch (error) {
+        console.error('[Auth] Failed to fetch vault config (non-blocking):', error);
       }
     })();
   }, [getVaultKeypair, setVaultKeypair, setVaultKeys]);
@@ -426,6 +453,7 @@ export function useAuth() {
       useVaultStore.getState().clearVaultKeys();
       useSyncStore.getState().reset();
       useDeviceRegistryStore.getState().clearRegistry();
+      useBinStore.getState().clearBin();
       useMfaStore.getState().reset();
       clearFileSizeCache();
       clearAuthState();
@@ -439,6 +467,7 @@ export function useAuth() {
       useVaultStore.getState().clearVaultKeys();
       useSyncStore.getState().reset();
       useDeviceRegistryStore.getState().clearRegistry();
+      useBinStore.getState().clearBin();
       useMfaStore.getState().reset();
       clearFileSizeCache();
       clearAuthState();
