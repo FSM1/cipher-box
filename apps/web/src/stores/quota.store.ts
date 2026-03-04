@@ -11,6 +11,10 @@ const initialState = {
   error: null as string | null,
 };
 
+// Session version guard: incremented on reset() so in-flight fetchQuota()
+// responses are discarded if they resolve after logout/reset.
+let quotaSessionVersion = 0;
+
 type QuotaState = typeof initialState & {
   fetchQuota: () => Promise<void>;
   removeUsage: (bytes: number) => void;
@@ -22,9 +26,11 @@ export const useQuotaStore = create<QuotaState>((set, get) => ({
   ...initialState,
 
   fetchQuota: async () => {
+    const requestVersion = quotaSessionVersion;
     set({ loading: true, error: null });
     try {
       const quota: QuotaResponse = await vaultApi.getQuota();
+      if (requestVersion !== quotaSessionVersion) return;
       set({
         usedBytes: quota.usedBytes,
         limitBytes: quota.limitBytes,
@@ -32,6 +38,7 @@ export const useQuotaStore = create<QuotaState>((set, get) => ({
         loading: false,
       });
     } catch {
+      if (requestVersion !== quotaSessionVersion) return;
       set({ error: 'Failed to fetch quota', loading: false });
     }
   },
@@ -47,5 +54,8 @@ export const useQuotaStore = create<QuotaState>((set, get) => ({
     return bytes <= remainingBytes;
   },
 
-  reset: () => set(initialState),
+  reset: () => {
+    quotaSessionVersion += 1;
+    set(initialState);
+  },
 }));
