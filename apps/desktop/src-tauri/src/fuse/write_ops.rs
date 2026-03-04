@@ -353,32 +353,39 @@ pub(crate) mod implementation {
                 })
                 .unwrap_or_default();
 
-            let parent_path = build_folder_path(fs, parent);
+            if parent_ipns_name.is_empty() {
+                log::warn!(
+                    "unlink: missing parent IPNS name for parent ino {}, skipping bin publish",
+                    parent
+                );
+            } else {
+                let parent_path = build_folder_path(fs, parent);
 
-            let bin_entry = crate::crypto::bin::BinEntry {
-                id: crate::crypto::utils::generate_uuid_v4(),
-                item_type: crate::crypto::bin::BinItemType::File,
-                name: item_name.clone(),
-                original_parent_ipns_name: parent_ipns_name,
-                original_path: parent_path,
-                deleted_at: now
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
-                size: file_size,
-                mime_type: crate::crypto::utils::mime_from_extension(&item_name).to_string(),
-                file_pointer: Some(file_pointer),
-                folder_entry: None,
-            };
+                let bin_entry = crate::crypto::bin::BinEntry {
+                    id: crate::crypto::utils::generate_uuid_v4(),
+                    item_type: crate::crypto::bin::BinItemType::File,
+                    name: item_name.clone(),
+                    original_parent_ipns_name: parent_ipns_name,
+                    original_path: parent_path,
+                    deleted_at: now
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                    size: file_size,
+                    mime_type: crate::crypto::utils::mime_from_extension(&item_name).to_string(),
+                    file_pointer: Some(file_pointer),
+                    folder_entry: None,
+                };
 
-            crate::fuse::spawn_bin_entry_publish(
-                fs.api.clone(),
-                fs.rt.clone(),
-                bin_entry,
-                fs.private_key.clone(),
-                fs.public_key.to_vec(),
-                fs.publish_coordinator.clone(),
-            );
+                crate::fuse::spawn_bin_entry_publish(
+                    fs.api.clone(),
+                    fs.rt.clone(),
+                    bin_entry,
+                    fs.private_key.clone(),
+                    fs.public_key.to_vec(),
+                    fs.publish_coordinator.clone(),
+                );
+            }
         }
 
         reply.ok();
@@ -733,32 +740,39 @@ pub(crate) mod implementation {
                 })
                 .unwrap_or_default();
 
-            let parent_path = build_folder_path(fs, parent);
+            if parent_ipns_name.is_empty() {
+                log::warn!(
+                    "rmdir: missing parent IPNS name for parent ino {}, skipping bin publish",
+                    parent
+                );
+            } else {
+                let parent_path = build_folder_path(fs, parent);
 
-            let bin_entry = crate::crypto::bin::BinEntry {
-                id: crate::crypto::utils::generate_uuid_v4(),
-                item_type: crate::crypto::bin::BinItemType::Folder,
-                name: item_name,
-                original_parent_ipns_name: parent_ipns_name,
-                original_path: parent_path,
-                deleted_at: now
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
-                size: 0,
-                mime_type: String::new(),
-                file_pointer: None,
-                folder_entry: Some(folder_entry),
-            };
+                let bin_entry = crate::crypto::bin::BinEntry {
+                    id: crate::crypto::utils::generate_uuid_v4(),
+                    item_type: crate::crypto::bin::BinItemType::Folder,
+                    name: item_name,
+                    original_parent_ipns_name: parent_ipns_name,
+                    original_path: parent_path,
+                    deleted_at: now
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                    size: 0,
+                    mime_type: String::new(),
+                    file_pointer: None,
+                    folder_entry: Some(folder_entry),
+                };
 
-            crate::fuse::spawn_bin_entry_publish(
-                fs.api.clone(),
-                fs.rt.clone(),
-                bin_entry,
-                fs.private_key.clone(),
-                fs.public_key.to_vec(),
-                fs.publish_coordinator.clone(),
-            );
+                crate::fuse::spawn_bin_entry_publish(
+                    fs.api.clone(),
+                    fs.rt.clone(),
+                    bin_entry,
+                    fs.private_key.clone(),
+                    fs.public_key.to_vec(),
+                    fs.publish_coordinator.clone(),
+                );
+            }
         }
 
         reply.ok();
