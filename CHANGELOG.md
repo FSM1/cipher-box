@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.0](https://github.com/FSM1/cipher-box/compare/v0.22.0...v0.23.0) (2026-03-04)
+
+
+### Features
+
+* Phase 17 — Recycle Bin ([#262](https://github.com/FSM1/cipher-box/issues/262)) ([c0af622](https://github.com/FSM1/cipher-box/commit/c0af6225a7bf8b49ae4ab04804eed6b6484fd3bf))
+
 ## [0.22.0](https://github.com/FSM1/cipher-box/compare/v0.21.9...v0.22.0) (2026-03-03)
 
 
