@@ -121,11 +121,11 @@ export function ShareDialog({
     let cancelled = false;
     setRecipientsLoading(true);
 
-    sharesControllerGetSentShares()
-      .then((shares) => {
+    sharesControllerGetSentShares({ limit: 100 })
+      .then((response) => {
         if (cancelled) return;
         // Filter to shares for this specific item (by ipnsName)
-        const itemShares: SentShare[] = shares
+        const itemShares: SentShare[] = response.shares
           .filter((s) => s.ipnsName === ipnsName)
           .map((s) => ({
             shareId: s.shareId,

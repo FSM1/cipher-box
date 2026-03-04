@@ -28,62 +28,58 @@ import { useShareStore } from '../stores/share.store';
 import type { FolderNode } from '../stores/folder.store';
 
 /**
- * Fetch all active, non-hidden shares received by the current user.
- * Updates the share store with the results.
+ * Fetch active, non-hidden shares received by the current user (paginated).
  */
-export async function fetchReceivedShares(): Promise<ReceivedShare[]> {
-  const response = await sharesControllerGetReceivedShares();
+export async function fetchReceivedShares(
+  limit = 50,
+  offset = 0
+): Promise<{ shares: ReceivedShare[]; total: number }> {
+  const response = await sharesControllerGetReceivedShares({ limit, offset });
 
-  return response.map((s) => ({
-    shareId: s.shareId,
-    sharerPublicKey: s.sharerPublicKey,
-    itemType: s.itemType as 'folder' | 'file',
-    ipnsName: s.ipnsName,
-    itemName: s.itemName,
-    encryptedKey: s.encryptedKey,
-    createdAt: String(s.createdAt),
-  }));
+  return {
+    shares: response.shares.map((s) => ({
+      shareId: s.shareId,
+      sharerPublicKey: s.sharerPublicKey,
+      itemType: s.itemType as 'folder' | 'file',
+      ipnsName: s.ipnsName,
+      itemName: s.itemName,
+      encryptedKey: s.encryptedKey,
+      createdAt: String(s.createdAt),
+    })),
+    total: response.total,
+  };
 }
 
 /**
- * Fetch all active shares sent by the current user.
- * Updates the share store with the results.
+ * Fetch active shares sent by the current user (paginated).
  */
-export async function fetchSentShares(): Promise<SentShare[]> {
-  const response = await sharesControllerGetSentShares();
+export async function fetchSentShares(
+  limit = 50,
+  offset = 0
+): Promise<{ shares: SentShare[]; total: number }> {
+  const response = await sharesControllerGetSentShares({ limit, offset });
 
-  return response.map((s) => ({
-    shareId: s.shareId,
-    recipientPublicKey: s.recipientPublicKey,
-    itemType: s.itemType as 'folder' | 'file',
-    ipnsName: s.ipnsName,
-    itemName: s.itemName,
-    createdAt: String(s.createdAt),
-  }));
+  return {
+    shares: response.shares.map((s) => ({
+      shareId: s.shareId,
+      recipientPublicKey: s.recipientPublicKey,
+      itemType: s.itemType as 'folder' | 'file',
+      ipnsName: s.ipnsName,
+      itemName: s.itemName,
+      createdAt: String(s.createdAt),
+    })),
+    total: response.total,
+  };
 }
 
 /**
  * Check if a CipherBox user exists with the given secp256k1 public key.
- * Returns false if no user is found (404).
  *
  * @param publicKeyHex - Uncompressed secp256k1 public key (0x04... format)
  */
 export async function lookupUser(publicKeyHex: string): Promise<boolean> {
-  try {
-    await sharesControllerLookupUser({ publicKey: publicKeyHex });
-    return true;
-  } catch (err: unknown) {
-    // Only treat 404 as "user not found"; re-throw network/server errors
-    if (
-      err &&
-      typeof err === 'object' &&
-      'status' in err &&
-      (err as { status: number }).status === 404
-    ) {
-      return false;
-    }
-    throw err;
-  }
+  const result = await sharesControllerLookupUser({ publicKey: publicKeyHex });
+  return result.exists;
 }
 
 /**
@@ -190,7 +186,8 @@ async function ensureFreshSentShares(): Promise<SentShare[]> {
   if (store.lastSentFetchedAt && Date.now() - store.lastSentFetchedAt < 30_000) {
     return store.sentShares;
   }
-  const shares = await fetchSentShares();
+  // Use high limit to fetch all shares — re-wrapping needs the full set
+  const { shares } = await fetchSentShares(1000);
   useShareStore.getState().setSentShares(shares);
   return shares;
 }
@@ -264,14 +261,16 @@ export async function reWrapForRecipients(params: {
     itemId: string;
     plaintextKey: Uint8Array;
   }>;
-}): Promise<void> {
+}): Promise<{ failedRecipients: string[] }> {
   const coveringShares = await findCoveringShares(
     params.folderIpnsName,
     params.folders,
     params.currentFolderId
   );
 
-  if (coveringShares.length === 0) return;
+  if (coveringShares.length === 0) return { failedRecipients: [] };
+
+  const failedRecipients: string[] = [];
 
   // For each share recipient, re-wrap all new item keys
   for (const share of coveringShares) {
@@ -304,8 +303,11 @@ export async function reWrapForRecipients(params: {
         `[share] Failed to re-wrap keys for recipient ${share.recipientPublicKey.slice(0, 10)}...:`,
         err
       );
+      failedRecipients.push(share.recipientPublicKey);
     }
   }
+
+  return { failedRecipients };
 }
 
 // ---------------------------------------------------------------------------

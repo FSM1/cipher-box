@@ -113,11 +113,15 @@ export class SharesService {
   }
 
   /**
-   * Get all active, non-hidden shares received by the user.
+   * Get active, non-hidden shares received by the user (paginated).
    * Includes sharer relation for publicKey display.
    */
-  async getReceivedShares(recipientId: string): Promise<Share[]> {
-    return this.shareRepo.find({
+  async getReceivedShares(
+    recipientId: string,
+    limit: number,
+    offset: number
+  ): Promise<{ shares: Share[]; total: number }> {
+    const [shares, total] = await this.shareRepo.findAndCount({
       where: {
         recipientId,
         revokedAt: IsNull(),
@@ -125,22 +129,32 @@ export class SharesService {
       },
       relations: ['sharer'],
       order: { createdAt: 'DESC' },
+      take: limit,
+      skip: offset,
     });
+    return { shares, total };
   }
 
   /**
-   * Get all active shares sent by the user.
+   * Get active shares sent by the user (paginated).
    * Includes recipient relation for publicKey display.
    */
-  async getSentShares(sharerId: string): Promise<Share[]> {
-    return this.shareRepo.find({
+  async getSentShares(
+    sharerId: string,
+    limit: number,
+    offset: number
+  ): Promise<{ shares: Share[]; total: number }> {
+    const [shares, total] = await this.shareRepo.findAndCount({
       where: {
         sharerId,
         revokedAt: IsNull(),
       },
       relations: ['recipient'],
       order: { createdAt: 'DESC' },
+      take: limit,
+      skip: offset,
     });
+    return { shares, total };
   }
 
   /**

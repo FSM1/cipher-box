@@ -119,7 +119,7 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       setError(null);
 
       try {
-        const shares = await fetchReceivedShares();
+        const { shares } = await fetchReceivedShares();
         if (cancelled) return;
 
         useShareStore.getState().setReceivedShares(shares);

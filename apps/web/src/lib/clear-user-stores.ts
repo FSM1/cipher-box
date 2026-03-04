@@ -16,6 +16,7 @@ import { useBinStore } from '../stores/bin.store';
 import { useShareStore } from '../stores/share.store';
 import { useQuotaStore } from '../stores/quota.store';
 import { useMfaStore } from '../stores/mfa.store';
+import { useNotificationStore } from '../stores/notification.store';
 import { useAuthStore } from '../stores/auth.store';
 import { clearFileSizeCache } from '../hooks/useFileSize';
 
@@ -31,6 +32,7 @@ export function clearAllUserStores(): void {
   useShareStore.getState().clearShares();
   useQuotaStore.getState().reset();
   useMfaStore.getState().reset();
+  useNotificationStore.getState().clearNotifications();
   clearFileSizeCache();
 
   // 3. Clear auth state last (zeros keypair memory, sets isAuthenticated=false)

@@ -12,7 +12,6 @@ import {
   ParseUUIDPipe,
   HttpCode,
   HttpStatus,
-  NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
@@ -23,12 +22,16 @@ import { CreateShareDto } from './dto/create-share.dto';
 import { AddShareKeysDto } from './dto/share-key.dto';
 import { UpdateEncryptedKeyDto } from './dto/update-encrypted-key.dto';
 import {
+  PaginationQueryDto,
+  PaginatedReceivedSharesDto,
+  PaginatedSentSharesDto,
+} from './dto/pagination.dto';
+import {
   CreateShareResponseDto,
-  ReceivedShareResponseDto,
-  SentShareResponseDto,
   PendingRotationResponseDto,
   ShareKeyResponseDto,
 } from './dto/share-response.dto';
+import { LookupUserResponseDto } from './dto/lookup-user-response.dto';
 import { RequestWithUser } from '../common/types';
 
 @ApiTags('shares')
@@ -74,63 +77,68 @@ export class SharesController {
   @Get('received')
   @ApiOperation({
     summary: 'List received shares',
-    description: 'Get all active, non-hidden shares received by the authenticated user.',
+    description: 'Get active, non-hidden shares received by the authenticated user (paginated).',
   })
   @ApiResponse({
     status: 200,
-    description: 'List of received shares',
-    type: [ReceivedShareResponseDto],
+    description: 'Paginated list of received shares',
+    type: PaginatedReceivedSharesDto,
   })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async getReceivedShares(@Request() req: RequestWithUser): Promise<
-    Array<{
-      shareId: string;
-      sharerPublicKey: string;
-      itemType: string;
-      ipnsName: string;
-      itemName: string;
-      encryptedKey: string;
-      createdAt: Date;
-    }>
-  > {
-    const shares = await this.sharesService.getReceivedShares(req.user.id);
-    return shares.map((s) => ({
-      shareId: s.id,
-      sharerPublicKey: s.sharer.publicKey,
-      itemType: s.itemType,
-      ipnsName: s.ipnsName,
-      itemName: s.itemName,
-      encryptedKey: s.encryptedKey.toString('hex'),
-      createdAt: s.createdAt,
-    }));
+  async getReceivedShares(
+    @Request() req: RequestWithUser,
+    @Query() pagination: PaginationQueryDto
+  ): Promise<PaginatedReceivedSharesDto> {
+    const { shares, total } = await this.sharesService.getReceivedShares(
+      req.user.id,
+      pagination.limit,
+      pagination.offset
+    );
+    return {
+      shares: shares.map((s) => ({
+        shareId: s.id,
+        sharerPublicKey: s.sharer.publicKey,
+        itemType: s.itemType,
+        ipnsName: s.ipnsName,
+        itemName: s.itemName,
+        encryptedKey: s.encryptedKey.toString('hex'),
+        createdAt: s.createdAt,
+      })),
+      total,
+    };
   }
 
   @Get('sent')
   @ApiOperation({
     summary: 'List sent shares',
-    description: 'Get all active shares created by the authenticated user.',
+    description: 'Get active shares created by the authenticated user (paginated).',
   })
-  @ApiResponse({ status: 200, description: 'List of sent shares', type: [SentShareResponseDto] })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated list of sent shares',
+    type: PaginatedSentSharesDto,
+  })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  async getSentShares(@Request() req: RequestWithUser): Promise<
-    Array<{
-      shareId: string;
-      recipientPublicKey: string;
-      itemType: string;
-      ipnsName: string;
-      itemName: string;
-      createdAt: Date;
-    }>
-  > {
-    const shares = await this.sharesService.getSentShares(req.user.id);
-    return shares.map((s) => ({
-      shareId: s.id,
-      recipientPublicKey: s.recipient.publicKey,
-      itemType: s.itemType,
-      ipnsName: s.ipnsName,
-      itemName: s.itemName,
-      createdAt: s.createdAt,
-    }));
+  async getSentShares(
+    @Request() req: RequestWithUser,
+    @Query() pagination: PaginationQueryDto
+  ): Promise<PaginatedSentSharesDto> {
+    const { shares, total } = await this.sharesService.getSentShares(
+      req.user.id,
+      pagination.limit,
+      pagination.offset
+    );
+    return {
+      shares: shares.map((s) => ({
+        shareId: s.id,
+        recipientPublicKey: s.recipient.publicKey,
+        itemType: s.itemType,
+        ipnsName: s.ipnsName,
+        itemName: s.itemName,
+        createdAt: s.createdAt,
+      })),
+      total,
+    };
   }
 
   @Get('lookup')
@@ -143,10 +151,9 @@ export class SharesController {
     description: 'Uncompressed secp256k1 public key (0x04...)',
     required: true,
   })
-  @ApiResponse({ status: 200, description: 'User found' })
+  @ApiResponse({ status: 200, description: 'Lookup result', type: LookupUserResponseDto })
   @ApiResponse({ status: 401, description: 'Unauthorized' })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  async lookupUser(@Query('publicKey') publicKey: string): Promise<{ exists: boolean }> {
+  async lookupUser(@Query('publicKey') publicKey: string): Promise<LookupUserResponseDto> {
     if (!publicKey || !/^0x04[0-9a-fA-F]{128}$/.test(publicKey)) {
       throw new BadRequestException(
         'Invalid public key format. Expected uncompressed secp256k1 key: 0x04 + 128 hex chars'
@@ -154,10 +161,7 @@ export class SharesController {
     }
 
     const exists = await this.sharesService.lookupUserByPublicKey(publicKey);
-    if (!exists) {
-      throw new NotFoundException('User not found');
-    }
-    return { exists: true };
+    return { exists };
   }
 
   @Get('pending-rotations')

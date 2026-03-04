@@ -25,10 +25,13 @@ import type {
   AddShareKeysDto,
   CreateShareDto,
   CreateShareResponseDto,
+  LookupUserResponseDto,
+  PaginatedReceivedSharesDto,
+  PaginatedSentSharesDto,
   PendingRotationResponseDto,
-  ReceivedShareResponseDto,
-  SentShareResponseDto,
   ShareKeyResponseDto,
+  SharesControllerGetReceivedSharesParams,
+  SharesControllerGetSentSharesParams,
   SharesControllerLookupUserParams,
   UpdateEncryptedKeyDto,
 } from '../models';
@@ -117,36 +120,45 @@ export const useSharesControllerCreateShare = <TError = void, TContext = unknown
   return useMutation(mutationOptions, queryClient);
 };
 /**
- * Get all active, non-hidden shares received by the authenticated user.
+ * Get active, non-hidden shares received by the authenticated user (paginated).
  * @summary List received shares
  */
-export const sharesControllerGetReceivedShares = (signal?: AbortSignal) => {
-  return customInstance<ReceivedShareResponseDto[]>({
+export const sharesControllerGetReceivedShares = (
+  params?: SharesControllerGetReceivedSharesParams,
+  signal?: AbortSignal
+) => {
+  return customInstance<PaginatedReceivedSharesDto>({
     url: `/shares/received`,
     method: 'GET',
+    params,
     signal,
   });
 };
 
-export const getSharesControllerGetReceivedSharesQueryKey = () => {
-  return [`/shares/received`] as const;
+export const getSharesControllerGetReceivedSharesQueryKey = (
+  params?: SharesControllerGetReceivedSharesParams
+) => {
+  return [`/shares/received`, ...(params ? [params] : [])] as const;
 };
 
 export const getSharesControllerGetReceivedSharesQueryOptions = <
   TData = Awaited<ReturnType<typeof sharesControllerGetReceivedShares>>,
   TError = void,
->(options?: {
-  query?: Partial<
-    UseQueryOptions<Awaited<ReturnType<typeof sharesControllerGetReceivedShares>>, TError, TData>
-  >;
-}) => {
+>(
+  params?: SharesControllerGetReceivedSharesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof sharesControllerGetReceivedShares>>, TError, TData>
+    >;
+  }
+) => {
   const { query: queryOptions } = options ?? {};
 
-  const queryKey = queryOptions?.queryKey ?? getSharesControllerGetReceivedSharesQueryKey();
+  const queryKey = queryOptions?.queryKey ?? getSharesControllerGetReceivedSharesQueryKey(params);
 
   const queryFn: QueryFunction<Awaited<ReturnType<typeof sharesControllerGetReceivedShares>>> = ({
     signal,
-  }) => sharesControllerGetReceivedShares(signal);
+  }) => sharesControllerGetReceivedShares(params, signal);
 
   return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
     Awaited<ReturnType<typeof sharesControllerGetReceivedShares>>,
@@ -164,6 +176,7 @@ export function useSharesControllerGetReceivedShares<
   TData = Awaited<ReturnType<typeof sharesControllerGetReceivedShares>>,
   TError = void,
 >(
+  params: undefined | SharesControllerGetReceivedSharesParams,
   options: {
     query: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof sharesControllerGetReceivedShares>>, TError, TData>
@@ -183,6 +196,7 @@ export function useSharesControllerGetReceivedShares<
   TData = Awaited<ReturnType<typeof sharesControllerGetReceivedShares>>,
   TError = void,
 >(
+  params?: SharesControllerGetReceivedSharesParams,
   options?: {
     query?: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof sharesControllerGetReceivedShares>>, TError, TData>
@@ -202,6 +216,7 @@ export function useSharesControllerGetReceivedShares<
   TData = Awaited<ReturnType<typeof sharesControllerGetReceivedShares>>,
   TError = void,
 >(
+  params?: SharesControllerGetReceivedSharesParams,
   options?: {
     query?: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof sharesControllerGetReceivedShares>>, TError, TData>
@@ -217,6 +232,7 @@ export function useSharesControllerGetReceivedShares<
   TData = Awaited<ReturnType<typeof sharesControllerGetReceivedShares>>,
   TError = void,
 >(
+  params?: SharesControllerGetReceivedSharesParams,
   options?: {
     query?: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof sharesControllerGetReceivedShares>>, TError, TData>
@@ -224,7 +240,7 @@ export function useSharesControllerGetReceivedShares<
   },
   queryClient?: QueryClient
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
-  const queryOptions = getSharesControllerGetReceivedSharesQueryOptions(options);
+  const queryOptions = getSharesControllerGetReceivedSharesQueryOptions(params, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
     queryKey: DataTag<QueryKey, TData, TError>;
@@ -236,32 +252,45 @@ export function useSharesControllerGetReceivedShares<
 }
 
 /**
- * Get all active shares created by the authenticated user.
+ * Get active shares created by the authenticated user (paginated).
  * @summary List sent shares
  */
-export const sharesControllerGetSentShares = (signal?: AbortSignal) => {
-  return customInstance<SentShareResponseDto[]>({ url: `/shares/sent`, method: 'GET', signal });
+export const sharesControllerGetSentShares = (
+  params?: SharesControllerGetSentSharesParams,
+  signal?: AbortSignal
+) => {
+  return customInstance<PaginatedSentSharesDto>({
+    url: `/shares/sent`,
+    method: 'GET',
+    params,
+    signal,
+  });
 };
 
-export const getSharesControllerGetSentSharesQueryKey = () => {
-  return [`/shares/sent`] as const;
+export const getSharesControllerGetSentSharesQueryKey = (
+  params?: SharesControllerGetSentSharesParams
+) => {
+  return [`/shares/sent`, ...(params ? [params] : [])] as const;
 };
 
 export const getSharesControllerGetSentSharesQueryOptions = <
   TData = Awaited<ReturnType<typeof sharesControllerGetSentShares>>,
   TError = void,
->(options?: {
-  query?: Partial<
-    UseQueryOptions<Awaited<ReturnType<typeof sharesControllerGetSentShares>>, TError, TData>
-  >;
-}) => {
+>(
+  params?: SharesControllerGetSentSharesParams,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof sharesControllerGetSentShares>>, TError, TData>
+    >;
+  }
+) => {
   const { query: queryOptions } = options ?? {};
 
-  const queryKey = queryOptions?.queryKey ?? getSharesControllerGetSentSharesQueryKey();
+  const queryKey = queryOptions?.queryKey ?? getSharesControllerGetSentSharesQueryKey(params);
 
   const queryFn: QueryFunction<Awaited<ReturnType<typeof sharesControllerGetSentShares>>> = ({
     signal,
-  }) => sharesControllerGetSentShares(signal);
+  }) => sharesControllerGetSentShares(params, signal);
 
   return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
     Awaited<ReturnType<typeof sharesControllerGetSentShares>>,
@@ -279,6 +308,7 @@ export function useSharesControllerGetSentShares<
   TData = Awaited<ReturnType<typeof sharesControllerGetSentShares>>,
   TError = void,
 >(
+  params: undefined | SharesControllerGetSentSharesParams,
   options: {
     query: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof sharesControllerGetSentShares>>, TError, TData>
@@ -298,6 +328,7 @@ export function useSharesControllerGetSentShares<
   TData = Awaited<ReturnType<typeof sharesControllerGetSentShares>>,
   TError = void,
 >(
+  params?: SharesControllerGetSentSharesParams,
   options?: {
     query?: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof sharesControllerGetSentShares>>, TError, TData>
@@ -317,6 +348,7 @@ export function useSharesControllerGetSentShares<
   TData = Awaited<ReturnType<typeof sharesControllerGetSentShares>>,
   TError = void,
 >(
+  params?: SharesControllerGetSentSharesParams,
   options?: {
     query?: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof sharesControllerGetSentShares>>, TError, TData>
@@ -332,6 +364,7 @@ export function useSharesControllerGetSentShares<
   TData = Awaited<ReturnType<typeof sharesControllerGetSentShares>>,
   TError = void,
 >(
+  params?: SharesControllerGetSentSharesParams,
   options?: {
     query?: Partial<
       UseQueryOptions<Awaited<ReturnType<typeof sharesControllerGetSentShares>>, TError, TData>
@@ -339,7 +372,7 @@ export function useSharesControllerGetSentShares<
   },
   queryClient?: QueryClient
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
-  const queryOptions = getSharesControllerGetSentSharesQueryOptions(options);
+  const queryOptions = getSharesControllerGetSentSharesQueryOptions(params, options);
 
   const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
     queryKey: DataTag<QueryKey, TData, TError>;
@@ -358,7 +391,12 @@ export const sharesControllerLookupUser = (
   params: SharesControllerLookupUserParams,
   signal?: AbortSignal
 ) => {
-  return customInstance<void>({ url: `/shares/lookup`, method: 'GET', params, signal });
+  return customInstance<LookupUserResponseDto>({
+    url: `/shares/lookup`,
+    method: 'GET',
+    params,
+    signal,
+  });
 };
 
 export const getSharesControllerLookupUserQueryKey = (

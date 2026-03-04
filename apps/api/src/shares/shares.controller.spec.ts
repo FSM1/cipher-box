@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { SharesController } from './shares.controller';
 import { SharesService } from './shares.service';
@@ -107,38 +107,53 @@ describe('SharesController', () => {
   });
 
   describe('getReceivedShares', () => {
-    it('should return shares with sharerPublicKey', async () => {
-      mockSharesService.getReceivedShares.mockResolvedValue([mockShare]);
+    const pagination = { limit: 50, offset: 0 };
 
-      const result = await controller.getReceivedShares(mockReq);
+    it('should return paginated shares with sharerPublicKey', async () => {
+      mockSharesService.getReceivedShares.mockResolvedValue({ shares: [mockShare], total: 1 });
 
-      expect(result).toHaveLength(1);
-      expect(result[0].shareId).toBe(shareId);
-      expect(result[0].sharerPublicKey).toBe(mockShare.sharer.publicKey);
-      expect(result[0].encryptedKey).toBe(testEncryptedKey);
-      expect(result[0].itemType).toBe('folder');
+      const result = await controller.getReceivedShares(mockReq, pagination);
+
+      expect(result.shares).toHaveLength(1);
+      expect(result.total).toBe(1);
+      expect(result.shares[0].shareId).toBe(shareId);
+      expect(result.shares[0].sharerPublicKey).toBe(mockShare.sharer.publicKey);
+      expect(result.shares[0].encryptedKey).toBe(testEncryptedKey);
+      expect(result.shares[0].itemType).toBe('folder');
     });
 
     it('should return empty array when no shares', async () => {
-      mockSharesService.getReceivedShares.mockResolvedValue([]);
+      mockSharesService.getReceivedShares.mockResolvedValue({ shares: [], total: 0 });
 
-      const result = await controller.getReceivedShares(mockReq);
+      const result = await controller.getReceivedShares(mockReq, pagination);
 
-      expect(result).toEqual([]);
+      expect(result.shares).toEqual([]);
+      expect(result.total).toBe(0);
+    });
+
+    it('should pass pagination params to service', async () => {
+      mockSharesService.getReceivedShares.mockResolvedValue({ shares: [], total: 0 });
+
+      await controller.getReceivedShares(mockReq, { limit: 10, offset: 20 });
+
+      expect(mockSharesService.getReceivedShares).toHaveBeenCalledWith(userId, 10, 20);
     });
   });
 
   describe('getSentShares', () => {
-    it('should return shares with recipientPublicKey', async () => {
-      mockSharesService.getSentShares.mockResolvedValue([mockShare]);
+    const pagination = { limit: 50, offset: 0 };
 
-      const result = await controller.getSentShares(mockReq);
+    it('should return paginated shares with recipientPublicKey', async () => {
+      mockSharesService.getSentShares.mockResolvedValue({ shares: [mockShare], total: 1 });
 
-      expect(result).toHaveLength(1);
-      expect(result[0].shareId).toBe(shareId);
-      expect(result[0].recipientPublicKey).toBe(recipientPublicKey);
-      expect(result[0].itemType).toBe('folder');
-      expect(result[0].itemName).toBe('My Folder');
+      const result = await controller.getSentShares(mockReq, pagination);
+
+      expect(result.shares).toHaveLength(1);
+      expect(result.total).toBe(1);
+      expect(result.shares[0].shareId).toBe(shareId);
+      expect(result.shares[0].recipientPublicKey).toBe(recipientPublicKey);
+      expect(result.shares[0].itemType).toBe('folder');
+      expect(result.shares[0].itemName).toBe('My Folder');
     });
   });
 
@@ -152,12 +167,13 @@ describe('SharesController', () => {
       expect(result).toEqual({ exists: true });
     });
 
-    it('should throw NotFoundException when user not found', async () => {
+    it('should return exists false when user not found', async () => {
       mockSharesService.lookupUserByPublicKey.mockResolvedValue(false);
 
       const validKey = '0x04' + 'ab'.repeat(64);
-      await expect(controller.lookupUser(validKey)).rejects.toThrow(NotFoundException);
-      await expect(controller.lookupUser(validKey)).rejects.toThrow('User not found');
+      const result = await controller.lookupUser(validKey);
+
+      expect(result).toEqual({ exists: false });
     });
 
     it('should throw BadRequestException for invalid public key format', async () => {

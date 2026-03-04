@@ -13,6 +13,7 @@ describe('SharesService', () => {
   let mockShareRepo: {
     findOne: jest.Mock;
     find: jest.Mock;
+    findAndCount: jest.Mock;
     create: jest.Mock;
     save: jest.Mock;
     remove: jest.Mock;
@@ -66,6 +67,7 @@ describe('SharesService', () => {
     mockShareRepo = {
       findOne: jest.fn(),
       find: jest.fn(),
+      findAndCount: jest.fn(),
       create: jest.fn(),
       save: jest.fn(),
       remove: jest.fn(),
@@ -300,14 +302,14 @@ describe('SharesService', () => {
   });
 
   describe('getReceivedShares', () => {
-    it('should return active non-hidden shares with sharer relation', async () => {
+    it('should return paginated active non-hidden shares with sharer relation', async () => {
       const shares = [mockShare];
-      mockShareRepo.find.mockResolvedValue(shares);
+      mockShareRepo.findAndCount.mockResolvedValue([shares, 1]);
 
-      const result = await service.getReceivedShares(recipientId);
+      const result = await service.getReceivedShares(recipientId, 50, 0);
 
-      expect(result).toEqual(shares);
-      expect(mockShareRepo.find).toHaveBeenCalledWith(
+      expect(result).toEqual({ shares, total: 1 });
+      expect(mockShareRepo.findAndCount).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
             recipientId,
@@ -315,32 +317,36 @@ describe('SharesService', () => {
           }),
           relations: ['sharer'],
           order: { createdAt: 'DESC' },
+          take: 50,
+          skip: 0,
         })
       );
     });
 
     it('should return empty array when no shares exist', async () => {
-      mockShareRepo.find.mockResolvedValue([]);
+      mockShareRepo.findAndCount.mockResolvedValue([[], 0]);
 
-      const result = await service.getReceivedShares(recipientId);
+      const result = await service.getReceivedShares(recipientId, 50, 0);
 
-      expect(result).toEqual([]);
+      expect(result).toEqual({ shares: [], total: 0 });
     });
   });
 
   describe('getSentShares', () => {
-    it('should return active shares with recipient relation', async () => {
+    it('should return paginated active shares with recipient relation', async () => {
       const shares = [mockShare];
-      mockShareRepo.find.mockResolvedValue(shares);
+      mockShareRepo.findAndCount.mockResolvedValue([shares, 1]);
 
-      const result = await service.getSentShares(sharerId);
+      const result = await service.getSentShares(sharerId, 50, 0);
 
-      expect(result).toEqual(shares);
-      expect(mockShareRepo.find).toHaveBeenCalledWith(
+      expect(result).toEqual({ shares, total: 1 });
+      expect(mockShareRepo.findAndCount).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({ sharerId }),
           relations: ['recipient'],
           order: { createdAt: 'DESC' },
+          take: 50,
+          skip: 0,
         })
       );
     });

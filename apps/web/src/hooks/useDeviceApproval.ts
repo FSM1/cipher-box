@@ -27,6 +27,7 @@ import { useCoreKit } from '../lib/web3auth/core-kit-provider';
 import { useMfa } from './useMfa';
 import { useVisibility } from './useVisibility';
 import { useAuth } from './useAuth';
+import { useAuthStore } from '../stores/auth.store';
 import { getOrCreateDeviceIdentity } from '../lib/device/identity';
 import { detectDeviceInfo } from '../lib/device/info';
 import {
@@ -362,7 +363,8 @@ export function useDeviceApproval() {
       factorKeyBytes.fill(0); // Zero-fill factor key bytes after wrapping
 
       // 3. Get current device ID for tracking
-      const deviceIdentity = await getOrCreateDeviceIdentity();
+      const vaultKeypair = useAuthStore.getState().vaultKeypair;
+      const deviceIdentity = await getOrCreateDeviceIdentity(vaultKeypair?.privateKey);
 
       // 4. Send response
       await deviceApprovalApi.respond(requestId, {
@@ -384,7 +386,8 @@ export function useDeviceApproval() {
    */
   const denyRequest = useCallback(async (requestId: string) => {
     // Get current device ID for tracking
-    const deviceIdentity = await getOrCreateDeviceIdentity();
+    const vaultKeypair = useAuthStore.getState().vaultKeypair;
+    const deviceIdentity = await getOrCreateDeviceIdentity(vaultKeypair?.privateKey);
 
     await deviceApprovalApi.respond(requestId, {
       action: 'deny',

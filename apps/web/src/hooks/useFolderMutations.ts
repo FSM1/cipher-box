@@ -14,6 +14,7 @@ import {
   withConflictRetry,
 } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
+import { useNotificationStore } from '../stores/notification.store';
 
 /**
  * Build a breadcrumb-style path string for a folder by walking up the tree.
@@ -157,9 +158,20 @@ export function useFolderMutations() {
           folders: useFolderStore.getState().folders,
           currentFolderId: parentFolder.id,
           newItems: [{ keyType: 'folder', itemId: folder.id, plaintextKey: folderKey }],
-        }).catch((err) => {
-          console.warn('[share] Post-create subfolder re-wrapping failed:', err);
-        });
+        })
+          .then(({ failedRecipients }) => {
+            if (failedRecipients.length > 0) {
+              useNotificationStore
+                .getState()
+                .addNotification(
+                  'warning',
+                  `Failed to update share keys for ${failedRecipients.length} recipient(s). They may not be able to access the new folder until you re-share.`
+                );
+            }
+          })
+          .catch((err) => {
+            console.warn('[share] Post-create subfolder re-wrapping failed:', err);
+          });
 
         setState({ isLoading: false, error: null });
         return folder;
