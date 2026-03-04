@@ -3,7 +3,7 @@
   "checkpoint_id": "b6b084016bf3",
   "strategy": "manual-commit",
   "branch": "feat/phase-17-recycle-bin",
-  "checkpoints_count": 2,
+  "checkpoints_count": 3,
   "files_touched": [
     "apps/desktop/src-tauri/src/crypto/bin.rs",
     "apps/desktop/src-tauri/src/crypto/tests.rs",
@@ -20,7 +20,8 @@
     "apps/web/src/hooks/useFolderMutations.ts",
     "apps/web/src/services/bin.service.ts",
     "apps/web/src/stores/bin.store.ts",
-    "apps/web/src/utils/format.ts"
+    "apps/web/src/utils/format.ts",
+    "tests/e2e-desktop/scripts/test-recycle-bin.ps1"
   ],
   "sessions": [
     {
@@ -36,13 +37,20 @@
       "context": "/b6/b084016bf3/1/context.md",
       "content_hash": "/b6/b084016bf3/1/content_hash.txt",
       "prompt": "/b6/b084016bf3/1/prompt.txt"
+    },
+    {
+      "metadata": "/b6/b084016bf3/2/metadata.json",
+      "transcript": "/b6/b084016bf3/2/full.jsonl",
+      "context": "/b6/b084016bf3/2/context.md",
+      "content_hash": "/b6/b084016bf3/2/content_hash.txt",
+      "prompt": "/b6/b084016bf3/2/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 140,
-    "cache_creation_tokens": 252024,
-    "cache_read_tokens": 14545451,
-    "output_tokens": 55885,
-    "api_call_count": 133
+    "input_tokens": 2724,
+    "cache_creation_tokens": 600473,
+    "cache_read_tokens": 42208113,
+    "output_tokens": 115214,
+    "api_call_count": 393
   }
 }
