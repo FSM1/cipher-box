@@ -87,7 +87,7 @@ jobs:
   verify-e2e:
     name: Verify E2E Passed
     needs: detect-changes
-    if: '!cancelled()'
+    if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
