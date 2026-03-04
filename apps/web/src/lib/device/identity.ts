@@ -173,6 +173,13 @@ async function saveDeviceKeypair(
 }
 
 /**
+ * Module-scoped fallback identity for when IndexedDB persistence fails.
+ * Ensures the same deviceId is returned for the duration of a browser session,
+ * preventing identity churn if IndexedDB is permanently unavailable.
+ */
+let sessionFallback: DeviceKeypair | null = null;
+
+/**
  * Request type for getOrCreateDeviceIdentity.
  *
  * - `persisted`: Load or create a device keypair encrypted in IndexedDB.
@@ -217,11 +224,18 @@ export async function getOrCreateDeviceIdentity(
   const stored = await loadDeviceKeypair(vaultPrivateKey);
   if (stored) {
     const deviceId = deriveDeviceId(stored.publicKey);
+    // IDB is working — clear any session fallback
+    sessionFallback = null;
     return {
       publicKey: stored.publicKey,
       privateKey: stored.privateKey,
       deviceId,
     };
+  }
+
+  // Return session fallback if IDB previously failed in this session
+  if (sessionFallback) {
+    return sessionFallback;
   }
 
   // Generate new keypair and persist (encrypted)
@@ -232,7 +246,8 @@ export async function getOrCreateDeviceIdentity(
       vaultPrivateKey
     );
   } catch {
-    // IndexedDB unavailable or write failed; keep in-memory identity for this session.
+    // IndexedDB unavailable or write failed; keep identity stable for this session.
+    sessionFallback = keypair;
   }
 
   return keypair;
