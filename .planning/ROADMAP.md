@@ -503,7 +503,13 @@ Plans:
 2. Windows desktop file/folder deletion creates bin entries (parity with macOS/Linux)
 3. E2E tests verify CID unpinning on permanent delete and Windows bin entry creation
 
-**Plans:** TBD
+**Plans:** 3 plans
+
+Plans:
+
+- [ ] 17.1-01-PLAN.md — GAP-1 fix: BinEntry schema + contentCid/contentSize capture at soft-delete + unpinFileCids rewrite
+- [ ] 17.1-02-PLAN.md — GAP-2 fix: Windows handle_cleanup bin entry creation (file + folder parity with macOS/Linux)
+- [ ] 17.1-03-PLAN.md — E2E tests: quota reclaim verification + Windows PowerShell bin test script + build verification
 
 ## Progress
 
@@ -556,7 +562,7 @@ Parallel phases:
 | 11.3 Linux Desktop          | M2        | 3/3            | Complete    | 2026-02-28 |
 | 11.4 Cross-Platform E2E     | M2        | 3/3            | Complete    | 2026-02-28 |
 | 17. Recycle Bin             | M2        | 5/5            | Complete    | 2026-03-04 |
-| 17.1 Bin Integration Fixes  | M2        | 0/TBD          | Not started | -          |
+| 17.1 Bin Integration Fixes  | M2        | 0/3            | Not started | -          |
 | 18. Billing Infrastructure  | M3        | 0/TBD          | Not started | -          |
 | 19. Team Accounts           | M3        | 0/TBD          | Not started | -          |
 | 20. Document Editors        | M3        | 0/TBD          | Not started | -          |
