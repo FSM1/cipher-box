@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "532650d842eb",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-17-recycle-bin",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/vault/vault.service.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/53/2650d842eb/0/metadata.json",
+      "transcript": "/53/2650d842eb/0/full.jsonl",
+      "context": "/53/2650d842eb/0/context.md",
+      "content_hash": "/53/2650d842eb/0/content_hash.txt",
+      "prompt": "/53/2650d842eb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2582,
+    "cache_creation_tokens": 347666,
+    "cache_read_tokens": 27355635,
+    "output_tokens": 58884,
+    "api_call_count": 258
+  }
+}
