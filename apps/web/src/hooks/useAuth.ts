@@ -188,7 +188,7 @@ export function useAuth() {
     void (async () => {
       try {
         const config = await vaultControllerGetConfig();
-        if (config.recycleBinRetentionDays) {
+        if (config.recycleBinRetentionDays != null) {
           useBinStore.getState().setRetentionDays(config.recycleBinRetentionDays);
         }
       } catch (error) {

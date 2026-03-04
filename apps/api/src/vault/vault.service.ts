@@ -37,7 +37,11 @@ export class VaultService {
    * Get application configuration including recycle bin retention period.
    */
   getConfig(): VaultConfigResponseDto {
-    const retentionDays = this.configService.get<number>('RECYCLE_BIN_RETENTION_DAYS', 30);
+    const raw = this.configService.get<string>('RECYCLE_BIN_RETENTION_DAYS');
+    let retentionDays = Number(raw);
+    if (!Number.isFinite(retentionDays) || retentionDays < 0) {
+      retentionDays = 30;
+    }
     return {
       recycleBinRetentionDays: retentionDays,
     };

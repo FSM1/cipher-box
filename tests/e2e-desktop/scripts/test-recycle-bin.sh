@@ -96,7 +96,7 @@ fi
 # ---- Test 3: Verify vault config reachable (API health for bin) ----
 echo "--- Test 3: Verify vault config reachable ---"
 CONFIG_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-  "$API_URL/vault" \
+  "$API_URL/vault/config" \
   -H "Authorization: Bearer $ACCESS_TOKEN")
 
 if [ "$CONFIG_STATUS" = "200" ]; then

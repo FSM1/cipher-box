@@ -112,7 +112,13 @@ export function BinListItem({
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
-          onContextMenu(e as unknown as MouseEvent, entry);
+          const rect = e.currentTarget.getBoundingClientRect();
+          const syntheticEvent = {
+            preventDefault: () => {},
+            clientX: rect.left + rect.width / 2,
+            clientY: rect.top + rect.height / 2,
+          } as MouseEvent;
+          onContextMenu(syntheticEvent, entry);
         }
       }}
     >

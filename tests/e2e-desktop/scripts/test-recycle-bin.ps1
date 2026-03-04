@@ -120,7 +120,7 @@ try {
 # ---- Test 3: Verify vault config reachable (API health for bin) ----
 Write-Host "--- Test 3: Verify vault config reachable ---"
 try {
-    $VaultResponse = Invoke-RestMethod -Uri "$ApiUrl/vault" -Headers $Headers
+    $VaultResponse = Invoke-RestMethod -Uri "$ApiUrl/vault/config" -Headers $Headers
     if ($VaultResponse) {
         Test-Pass "Vault API reachable (bin entries stored server-side)"
     } else {
