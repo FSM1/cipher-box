@@ -1,13 +1,17 @@
 import { create } from 'zustand';
 import { vaultApi, QuotaResponse } from '../lib/api/vault';
 
-type QuotaState = {
-  usedBytes: number;
-  limitBytes: number;
-  remainingBytes: number;
-  loading: boolean;
-  error: string | null;
+const DEFAULT_LIMIT_BYTES = 500 * 1024 * 1024; // 500 MiB
 
+const initialState = {
+  usedBytes: 0,
+  limitBytes: DEFAULT_LIMIT_BYTES,
+  remainingBytes: DEFAULT_LIMIT_BYTES,
+  loading: false,
+  error: null as string | null,
+};
+
+type QuotaState = typeof initialState & {
   fetchQuota: () => Promise<void>;
   removeUsage: (bytes: number) => void;
   canUpload: (bytes: number) => boolean;
@@ -15,11 +19,7 @@ type QuotaState = {
 };
 
 export const useQuotaStore = create<QuotaState>((set, get) => ({
-  usedBytes: 0,
-  limitBytes: 500 * 1024 * 1024, // 500 MiB
-  remainingBytes: 500 * 1024 * 1024,
-  loading: false,
-  error: null,
+  ...initialState,
 
   fetchQuota: async () => {
     set({ loading: true, error: null });
@@ -47,12 +47,5 @@ export const useQuotaStore = create<QuotaState>((set, get) => ({
     return bytes <= remainingBytes;
   },
 
-  reset: () =>
-    set({
-      usedBytes: 0,
-      limitBytes: 500 * 1024 * 1024,
-      remainingBytes: 500 * 1024 * 1024,
-      loading: false,
-      error: null,
-    }),
+  reset: () => set(initialState),
 }));
