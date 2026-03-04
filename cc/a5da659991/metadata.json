@@ -5,6 +5,7 @@
   "branch": "fix/m2-gap-closure-phase-17.1",
   "checkpoints_count": 1,
   "files_touched": [
+    "apps/web/src/hooks/useFolderMutations.ts",
     "apps/web/src/services/bin.service.ts"
   ],
   "sessions": [
@@ -14,6 +15,13 @@
       "context": "/cc/a5da659991/0/context.md",
       "content_hash": "/cc/a5da659991/0/content_hash.txt",
       "prompt": "/cc/a5da659991/0/prompt.txt"
+    },
+    {
+      "metadata": "/cc/a5da659991/1/metadata.json",
+      "transcript": "/cc/a5da659991/1/full.jsonl",
+      "context": "/cc/a5da659991/1/context.md",
+      "content_hash": "/cc/a5da659991/1/content_hash.txt",
+      "prompt": "/cc/a5da659991/1/prompt.txt"
     }
   ],
   "token_usage": {

@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "cca5da659991",
+  "session_id": "d6d5a01e-bb30-4864-8755-81d3f9496abf",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-04T23:55:43.149066Z",
+  "branch": "fix/m2-gap-closure-phase-17.1",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/hooks/useFolderMutations.ts",
+    "apps/web/src/services/bin.service.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "db553f9935e2",
+  "checkpoint_transcript_start": 446,
+  "transcript_lines_at_start": 446,
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-04T23:55:42.726941Z",
+    "agent_lines": 141,
+    "human_added": 131,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 272,
+    "agent_percentage": 51.83823529411765
+  }
+}
