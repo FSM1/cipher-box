@@ -288,24 +288,34 @@ pub(crate) mod implementation {
                         .as_millis() as u64;
 
                     let meta_ipns = match file_meta_ipns_name {
-                        Some(name) if !name.is_empty() => name.clone(),
+                        Some(name) if !name.is_empty() => Some(name.clone()),
                         _ => {
-                            log::error!("unlink: missing file_meta_ipns_name for ino {}", child_ino);
-                            reply.error(libc::EIO);
-                            return;
+                            // file_meta_ipns_name is optional for files loaded from
+                            // remote metadata before IPNS resolve. Since bin publishing
+                            // is best-effort, skip creating a bin entry when it's missing
+                            // instead of failing the unlink.
+                            log::warn!(
+                                "unlink: missing file_meta_ipns_name for ino {}, skipping bin entry",
+                                child_ino
+                            );
+                            None
                         }
                     };
 
-                    let file_pointer = crate::crypto::folder::FilePointer {
-                        id: crate::crypto::utils::generate_uuid_v4(),
-                        name: inode.name.clone(),
-                        file_meta_ipns_name: meta_ipns,
-                        ipns_private_key_encrypted: file_ipns_key_encrypted_hex.clone(),
-                        created_at: if created_ms > 0 { created_ms } else { now_ms },
-                        modified_at: now_ms,
-                    };
+                    if let Some(meta_ipns) = meta_ipns {
+                        let file_pointer = crate::crypto::folder::FilePointer {
+                            id: crate::crypto::utils::generate_uuid_v4(),
+                            name: inode.name.clone(),
+                            file_meta_ipns_name: meta_ipns,
+                            ipns_private_key_encrypted: file_ipns_key_encrypted_hex.clone(),
+                            created_at: if created_ms > 0 { created_ms } else { now_ms },
+                            modified_at: now_ms,
+                        };
 
-                    Some((inode.name.clone(), *size, file_pointer))
+                        Some((inode.name.clone(), *size, file_pointer))
+                    } else {
+                        None
+                    }
                 }
                 _ => {
                     reply.error(libc::EISDIR);
