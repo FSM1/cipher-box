@@ -126,11 +126,11 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
 
         while (true) {
           const page = await fetchReceivedShares(pageSize, offset);
+          if (cancelled) return;
           shares.push(...page.shares);
           offset += page.shares.length;
           if (offset >= page.total || page.shares.length === 0) break;
         }
-        if (cancelled) return;
 
         useShareStore.getState().setReceivedShares(shares);
 
