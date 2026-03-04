@@ -146,6 +146,7 @@ export function ShareDialog({
         if (offset >= response.total || response.shares.length === 0) break;
       }
 
+      if (cancelled) return;
       setRecipients(allShares);
     })()
       .catch((err) => {
