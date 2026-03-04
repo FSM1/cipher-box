@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "89f45663f542",
+  "session_id": "c74a9cf1-c08c-4c49-814d-8ecdaa490970",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-04T16:10:20.969301Z",
+  "branch": "fix/m2-tech-debt-store-cleanup",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "454dda7c8c4b",
+  "checkpoint_transcript_start": 3358,
+  "transcript_lines_at_start": 3358,
+  "token_usage": {
+    "input_tokens": 2584,
+    "cache_creation_tokens": 348449,
+    "cache_read_tokens": 27662662,
+    "output_tokens": 59329,
+    "api_call_count": 260
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-04T16:10:18.690504Z",
+    "agent_lines": 0,
+    "human_added": 41,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 41,
+    "agent_percentage": 0
+  }
+}

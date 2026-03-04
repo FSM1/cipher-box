@@ -5,6 +5,7 @@
   "branch": "fix/m2-tech-debt-store-cleanup",
   "checkpoints_count": 1,
   "files_touched": [
+    ".planning/STATE.md",
     ".planning/quick/023-m2-tech-debt-store-logout-cleanup/023-PLAN.md",
     ".planning/quick/023-m2-tech-debt-store-logout-cleanup/023-SUMMARY.md"
   ],
@@ -15,13 +16,20 @@
       "context": "/89/f45663f542/0/context.md",
       "content_hash": "/89/f45663f542/0/content_hash.txt",
       "prompt": "/89/f45663f542/0/prompt.txt"
+    },
+    {
+      "metadata": "/89/f45663f542/1/metadata.json",
+      "transcript": "/89/f45663f542/1/full.jsonl",
+      "context": "/89/f45663f542/1/context.md",
+      "content_hash": "/89/f45663f542/1/content_hash.txt",
+      "prompt": "/89/f45663f542/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 25,
-    "cache_creation_tokens": 74240,
-    "cache_read_tokens": 2071877,
-    "output_tokens": 4955,
-    "api_call_count": 22
+    "input_tokens": 2609,
+    "cache_creation_tokens": 422689,
+    "cache_read_tokens": 29734539,
+    "output_tokens": 64284,
+    "api_call_count": 282
   }
 }
