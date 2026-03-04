@@ -373,6 +373,8 @@ pub(crate) mod implementation {
                         .as_millis() as u64,
                     size: file_size,
                     mime_type: crate::crypto::utils::mime_from_extension(&item_name).to_string(),
+                    content_cid: None,
+                    content_size: Some(file_size),
                     file_pointer: Some(file_pointer),
                     folder_entry: None,
                 };
@@ -760,6 +762,8 @@ pub(crate) mod implementation {
                         .as_millis() as u64,
                     size: 0,
                     mime_type: String::new(),
+                    content_cid: None,
+                    content_size: None,
                     file_pointer: None,
                     folder_entry: Some(folder_entry),
                 };
