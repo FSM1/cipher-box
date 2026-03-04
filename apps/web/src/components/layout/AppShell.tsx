@@ -10,6 +10,7 @@ import { AppFooter } from './AppFooter';
 import { SearchPalette } from '../file-browser/SearchPalette';
 import { DeviceApprovalModal } from '../mfa/DeviceApprovalModal';
 import { MfaEnrollmentPrompt } from '../mfa/MfaEnrollmentPrompt';
+import { NotificationToast } from '../NotificationToast';
 import type { SearchResult } from '../../services/search-index.service';
 import '../../styles/layout.css';
 
@@ -58,6 +59,7 @@ export function AppShell({ children }: AppShellProps) {
           <main className="app-main">{children}</main>
           <AppFooter />
           <DeviceApprovalModal />
+          <NotificationToast />
           <SearchPalette
             isOpen={search.isOpen}
             query={search.query}
@@ -83,6 +85,7 @@ export function AppShell({ children }: AppShellProps) {
       <main className="app-main">{children}</main>
       <AppFooter />
       <DeviceApprovalModal />
+      <NotificationToast />
       <SearchPalette
         isOpen={search.isOpen}
         query={search.query}

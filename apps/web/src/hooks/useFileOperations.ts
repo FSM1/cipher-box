@@ -18,6 +18,7 @@ import type { FolderChild, FilePointer } from '@cipherbox/crypto';
 import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import { getRootFolderState, resyncFolder, withConflictRetry } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
+import { useNotificationStore } from '../stores/notification.store';
 
 /**
  * React hook for file add/update operations.
@@ -134,12 +135,20 @@ export function useFileOperations() {
               authState.vaultKeypair.privateKey
             );
             try {
-              await reWrapForRecipients({
+              const { failedRecipients } = await reWrapForRecipients({
                 folderIpnsName: parentFolder.ipnsName,
                 folders: useFolderStore.getState().folders,
                 currentFolderId: parentFolder.id,
                 newItems: [{ keyType: 'file', itemId: fileId, plaintextKey: fileKey }],
               });
+              if (failedRecipients.length > 0) {
+                useNotificationStore
+                  .getState()
+                  .addNotification(
+                    'warning',
+                    `Failed to update share keys for ${failedRecipients.length} recipient(s). They may not be able to access the new file until you re-share.`
+                  );
+              }
             } finally {
               fileKey.fill(0);
             }
@@ -279,12 +288,20 @@ export function useFileOperations() {
                 plaintextKey: fileKey,
               });
             }
-            await reWrapForRecipients({
+            const { failedRecipients } = await reWrapForRecipients({
               folderIpnsName: parentFolder.ipnsName,
               folders: useFolderStore.getState().folders,
               currentFolderId: parentFolder.id,
               newItems,
             });
+            if (failedRecipients.length > 0) {
+              useNotificationStore
+                .getState()
+                .addNotification(
+                  'warning',
+                  `Failed to update share keys for ${failedRecipients.length} recipient(s). They may not be able to access the new files until you re-share.`
+                );
+            }
           } catch (err) {
             console.warn('[share] Post-upload batch file re-wrapping failed:', err);
           } finally {

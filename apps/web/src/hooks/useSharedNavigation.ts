@@ -119,8 +119,18 @@ export function useSharedNavigation(): UseSharedNavigationReturn {
       setError(null);
 
       try {
-        const shares = await fetchReceivedShares();
-        if (cancelled) return;
+        // Paginate through all received shares (API max 100 per page)
+        const pageSize = 100;
+        let offset = 0;
+        const shares: ReceivedShare[] = [];
+
+        while (true) {
+          const page = await fetchReceivedShares(pageSize, offset);
+          if (cancelled) return;
+          shares.push(...page.shares);
+          offset += page.shares.length;
+          if (offset >= page.total || page.shares.length === 0) break;
+        }
 
         useShareStore.getState().setReceivedShares(shares);
 

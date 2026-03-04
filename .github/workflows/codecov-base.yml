@@ -1,0 +1,58 @@
+name: Codecov Base Upload
+
+# Upload coverage to Codecov for the main branch so PR diffs work.
+# The full CI only runs on pull_request — this lightweight job
+# downloads the cached coverage artifact and re-uploads it tagged
+# to the main branch commit.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  actions: read
+
+jobs:
+  upload-coverage:
+    name: Upload base coverage to Codecov
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download coverage from latest CI run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Find the most recent successful CI workflow run
+          RUN_ID=$(gh api repos/${{ github.repository }}/actions/workflows/ci.yml/runs \
+            --jq '[.workflow_runs[] | select(.conclusion == "success")][0].id' \
+            -f per_page=5)
+
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "No successful CI run found, skipping"
+            exit 0
+          fi
+          echo "Using CI run: $RUN_ID"
+
+          # Find the coverage artifact
+          ARTIFACT_ID=$(gh api repos/${{ github.repository }}/actions/runs/$RUN_ID/artifacts \
+            --jq '.artifacts[] | select(.name == "coverage-lcov") | .id')
+
+          if [ -z "$ARTIFACT_ID" ] || [ "$ARTIFACT_ID" = "null" ]; then
+            echo "No coverage artifact found, skipping"
+            exit 0
+          fi
+          echo "Downloading artifact: $ARTIFACT_ID"
+
+          # Download and extract
+          gh api repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip > coverage.zip
+          unzip -o coverage.zip
+
+      - name: Upload coverage to Codecov
+        if: hashFiles('**/lcov.info') != ''
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: apps/api/coverage/lcov.info,packages/crypto/coverage/lcov.info
+          flags: api,crypto
+          fail_ci_if_error: false

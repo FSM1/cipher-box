@@ -27,6 +27,7 @@ import { useCoreKit } from '../lib/web3auth/core-kit-provider';
 import { useMfa } from './useMfa';
 import { useVisibility } from './useVisibility';
 import { useAuth } from './useAuth';
+import { useAuthStore } from '../stores/auth.store';
 import { getOrCreateDeviceIdentity } from '../lib/device/identity';
 import { detectDeviceInfo } from '../lib/device/info';
 import {
@@ -230,7 +231,7 @@ export function useDeviceApproval() {
       const ephemeralPubKeyHex = bytesToHex(uncompressedPubKey);
 
       // 2. Get device identity
-      const deviceIdentity = await getOrCreateDeviceIdentity();
+      const deviceIdentity = await getOrCreateDeviceIdentity({ mode: 'ephemeral' });
 
       // 3. Get device name
       const deviceInfo = detectDeviceInfo();
@@ -362,7 +363,14 @@ export function useDeviceApproval() {
       factorKeyBytes.fill(0); // Zero-fill factor key bytes after wrapping
 
       // 3. Get current device ID for tracking
-      const deviceIdentity = await getOrCreateDeviceIdentity();
+      const vaultPrivateKey = useAuthStore.getState().vaultKeypair?.privateKey;
+      if (!vaultPrivateKey) {
+        throw new Error('Vault keypair unavailable; cannot approve device request');
+      }
+      const deviceIdentity = await getOrCreateDeviceIdentity({
+        mode: 'persisted',
+        vaultPrivateKey,
+      });
 
       // 4. Send response
       await deviceApprovalApi.respond(requestId, {
@@ -384,7 +392,11 @@ export function useDeviceApproval() {
    */
   const denyRequest = useCallback(async (requestId: string) => {
     // Get current device ID for tracking
-    const deviceIdentity = await getOrCreateDeviceIdentity();
+    const vaultPrivateKey = useAuthStore.getState().vaultKeypair?.privateKey;
+    if (!vaultPrivateKey) {
+      throw new Error('Vault keypair unavailable; cannot deny device request');
+    }
+    const deviceIdentity = await getOrCreateDeviceIdentity({ mode: 'persisted', vaultPrivateKey });
 
     await deviceApprovalApi.respond(requestId, {
       action: 'deny',

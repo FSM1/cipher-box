@@ -121,11 +121,17 @@ export function ShareDialog({
     let cancelled = false;
     setRecipientsLoading(true);
 
-    sharesControllerGetSentShares()
-      .then((shares) => {
+    (async () => {
+      const pageSize = 100;
+      let offset = 0;
+      const allShares: SentShare[] = [];
+
+      // Paginate through all sent shares (API max 100 per page)
+
+      while (true) {
+        const response = await sharesControllerGetSentShares({ limit: pageSize, offset });
         if (cancelled) return;
-        // Filter to shares for this specific item (by ipnsName)
-        const itemShares: SentShare[] = shares
+        const pageShares = response.shares
           .filter((s) => s.ipnsName === ipnsName)
           .map((s) => ({
             shareId: s.shareId,
@@ -135,8 +141,14 @@ export function ShareDialog({
             itemName: s.itemName,
             createdAt: String(s.createdAt),
           }));
-        setRecipients(itemShares);
-      })
+        allShares.push(...pageShares);
+        offset += response.shares.length;
+        if (offset >= response.total || response.shares.length === 0) break;
+      }
+
+      if (cancelled) return;
+      setRecipients(allShares);
+    })()
       .catch((err) => {
         if (cancelled) return;
         console.error('Failed to fetch sent shares:', err);
@@ -192,14 +204,14 @@ export function ShareDialog({
 
     try {
       // Verify recipient is a registered user
-      await sharesControllerLookupUser({ publicKey: key });
-    } catch (err: unknown) {
-      const status = (err as { status?: number }).status;
-      if (status === 404) {
+      const lookup = await sharesControllerLookupUser({ publicKey: key });
+      if (!lookup.exists) {
         setError('user not found');
-      } else {
-        setError('lookup failed, please try again');
+        setIsSharing(false);
+        return;
       }
+    } catch {
+      setError('lookup failed, please try again');
       setIsSharing(false);
       return;
     }

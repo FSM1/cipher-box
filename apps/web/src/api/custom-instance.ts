@@ -8,7 +8,7 @@ const BASE_URL =
 export const customInstance = async <T>(config: {
   url: string;
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
-  params?: Record<string, string>;
+  params?: Record<string, string | number | boolean | undefined>;
   data?: unknown;
   headers?: Record<string, string>;
   signal?: AbortSignal;
@@ -19,7 +19,14 @@ export const customInstance = async <T>(config: {
   // Get auth token from store
   const accessToken = useAuthStore.getState().accessToken;
 
-  const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
+  const queryString = params
+    ? '?' +
+      new URLSearchParams(
+        Object.entries(params)
+          .filter(([, v]) => v !== undefined)
+          .map(([k, v]) => [k, String(v)])
+      ).toString()
+    : '';
 
   const response = await fetch(`${BASE_URL}${url}${queryString}`, {
     method,
