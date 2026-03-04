@@ -2,12 +2,11 @@ import { useState, useCallback } from 'react';
 import { useFolderStore } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import { useAuthStore } from '../stores/auth.store';
-import { unpinFromIpfs } from '../lib/api/ipfs';
 import * as folderService from '../services/folder.service';
 import { reWrapForRecipients } from '../services/share.service';
-import { resolveIpnsRecord } from '../services/ipns.service';
+import { addManyToBin } from '../services/bin.service';
 import type { FolderNode } from '../stores/folder.store';
-import type { FolderEntry } from '@cipherbox/crypto';
+import type { FolderEntry, FolderChild } from '@cipherbox/crypto';
 import {
   MAX_FOLDER_DEPTH,
   getRootFolderState,
@@ -15,6 +14,27 @@ import {
   withConflictRetry,
 } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
+
+/**
+ * Build a breadcrumb-style path string for a folder by walking up the tree.
+ * e.g., "My Vault / Documents / Reports"
+ */
+function buildFolderPath(folderId: string): string {
+  const folders = useFolderStore.getState().folders;
+  const parts: string[] = [];
+  let currentId: string | null = folderId;
+
+  while (currentId !== null) {
+    const folder: FolderNode | undefined = folders[currentId];
+    if (!folder) break;
+    // Stop before including the root node (its name is already the "My Vault" prefix)
+    if (folder.parentId === null) break;
+    parts.unshift(folder.name);
+    currentId = folder.parentId;
+  }
+
+  return parts.length > 0 ? `My Vault / ${parts.join(' / ')}` : 'My Vault';
+}
 
 /**
  * React hook for folder CRUD operations (create, rename, move, delete).
@@ -554,28 +574,24 @@ export function useFolderMutations() {
 
         const performDelete = async (): Promise<{
           newSequenceNumber: bigint;
-          orphanedIpnsNames: string[];
+          removedChild: FolderChild;
         }> => {
           const freshParent = getParentFolder();
           if (!freshParent) throw new Error('Parent folder not found');
           if (itemType === 'folder') {
             const folders = useFolderStore.getState().folders;
-            const { fileIpnsNames, newSequenceNumber } = await folderService.deleteFolder({
+            const { newSequenceNumber, removedChild } = await folderService.deleteFolder({
               folderId: itemId,
               parentFolderState: freshParent,
               getFolderState: (id) => folders[id],
             });
-            return { newSequenceNumber, orphanedIpnsNames: fileIpnsNames };
+            return { newSequenceNumber, removedChild };
           } else {
-            const { fileMetaIpnsName, newSequenceNumber } =
-              await folderService.deleteFileFromFolder({
-                fileId: itemId,
-                parentFolderState: freshParent,
-              });
-            return {
-              newSequenceNumber,
-              orphanedIpnsNames: fileMetaIpnsName ? [fileMetaIpnsName] : [],
-            };
+            const { newSequenceNumber, removedChild } = await folderService.deleteFileFromFolder({
+              fileId: itemId,
+              parentFolderState: freshParent,
+            });
+            return { newSequenceNumber, removedChild };
           }
         };
 
@@ -608,14 +624,18 @@ export function useFolderMutations() {
         // Persist the new sequence number so subsequent operations use the correct value
         useFolderStore.getState().updateFolderSequence(parentId, deleteResult.newSequenceNumber);
 
-        // Fire-and-forget: resolve orphaned file metadata IPNS names and unpin their CIDs
-        for (const ipnsName of deleteResult.orphanedIpnsNames) {
-          resolveIpnsRecord(ipnsName)
-            .then((resolved) => {
-              if (!resolved?.cid) return;
-              return unpinFromIpfs(resolved.cid).catch(() => {});
-            })
-            .catch(() => {});
+        // Fire-and-forget: add deleted item to recycle bin (CIDs stay pinned for recovery)
+        const auth = useAuthStore.getState();
+        if (auth.vaultKeypair) {
+          void addManyToBin({
+            items: [deleteResult.removedChild],
+            parentIpnsName: parentFolder.ipnsName,
+            parentPath: buildFolderPath(parentId),
+            userPublicKey: auth.vaultKeypair.publicKey,
+            userPrivateKey: auth.vaultKeypair.privateKey,
+          }).catch(() => {
+            console.error('[Delete] Failed to add to bin (non-blocking)');
+          });
         }
 
         setState({ isLoading: false, error: null });
@@ -679,12 +699,19 @@ export function useFolderMutations() {
           }
         }
 
+        // Snapshot the items to be removed before batch delete
+        // (needed for addToBin after successful deletion)
+        let removedChildren: FolderChild[] = [];
+
         const performBatchDelete = async (): Promise<{
           updatedChildren: typeof parentFolder.children;
           newSequenceNumber: bigint;
         }> => {
           const freshParent = getParentFolder();
           if (!freshParent) throw new Error('Parent folder not found');
+
+          // Capture removed children before filtering
+          removedChildren = freshParent.children.filter((c) => itemIds.has(c.id));
 
           // Remove all items from parent's children in one pass
           const updatedChildren = freshParent.children.filter((c) => !itemIds.has(c.id));
@@ -713,6 +740,21 @@ export function useFolderMutations() {
         store.updateFolderSequence(parentId, newSequenceNumber);
         for (const folderId of folderIdsToRemove) {
           store.removeFolder(folderId);
+        }
+
+        // Fire-and-forget: add all deleted items to recycle bin (single IPNS publish)
+        const auth = useAuthStore.getState();
+        if (auth.vaultKeypair && removedChildren.length > 0) {
+          const parentPath = buildFolderPath(parentId);
+          void addManyToBin({
+            items: removedChildren,
+            parentIpnsName: parentFolder.ipnsName,
+            parentPath,
+            userPublicKey: auth.vaultKeypair.publicKey,
+            userPrivateKey: auth.vaultKeypair.privateKey,
+          }).catch(() => {
+            console.error('[Delete] Failed to add batch to bin (non-blocking)');
+          });
         }
 
         setState({ isLoading: false, error: null });

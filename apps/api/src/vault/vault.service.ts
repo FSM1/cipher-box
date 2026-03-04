@@ -1,5 +1,6 @@
 import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { Repository } from 'typeorm';
 import { Vault } from './entities/vault.entity';
 import { PinnedCid } from './entities/pinned-cid.entity';
@@ -8,6 +9,7 @@ import { User } from '../auth/entities/user.entity';
 import { InitVaultDto, VaultResponseDto } from './dto/init-vault.dto';
 import { VaultExportDto } from './dto/vault-export.dto';
 import { QuotaResponseDto } from './dto/quota.dto';
+import { VaultConfigResponseDto } from './dto/vault-config.dto';
 import { TeeKeyStateService } from '../tee/tee-key-state.service';
 import { TeeKeysDto } from '../tee/dto/tee-keys.dto';
 
@@ -27,8 +29,23 @@ export class VaultService {
     private readonly folderIpnsRepository: Repository<FolderIpns>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    private readonly teeKeyStateService: TeeKeyStateService
+    private readonly teeKeyStateService: TeeKeyStateService,
+    private readonly configService: ConfigService
   ) {}
+
+  /**
+   * Get application configuration including recycle bin retention period.
+   */
+  getConfig(): VaultConfigResponseDto {
+    const raw = this.configService.get<string>('RECYCLE_BIN_RETENTION_DAYS');
+    let retentionDays = Number(raw);
+    if (!Number.isFinite(retentionDays) || retentionDays < 0) {
+      retentionDays = 30;
+    }
+    return {
+      recycleBinRetentionDays: retentionDays,
+    };
+  }
 
   /**
    * Initialize a new vault for a user

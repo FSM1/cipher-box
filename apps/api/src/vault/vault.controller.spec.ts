@@ -30,6 +30,7 @@ describe('VaultController', () => {
       findVault: jest.fn(),
       getVault: jest.fn(),
       getQuota: jest.fn(),
+      getConfig: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -152,6 +153,28 @@ describe('VaultController', () => {
       const result = await controller.getQuota(mockRequest);
 
       expect(result).toEqual(mockQuotaResponse);
+    });
+  });
+
+  describe('getConfig', () => {
+    const mockConfigResponse = {
+      recycleBinRetentionDays: 30,
+    };
+
+    it('should call vaultService.getConfig', () => {
+      vaultService.getConfig.mockReturnValue(mockConfigResponse);
+
+      controller.getConfig();
+
+      expect(vaultService.getConfig).toHaveBeenCalled();
+    });
+
+    it('should return config response', () => {
+      vaultService.getConfig.mockReturnValue(mockConfigResponse);
+
+      const result = controller.getConfig();
+
+      expect(result).toEqual(mockConfigResponse);
     });
   });
 });

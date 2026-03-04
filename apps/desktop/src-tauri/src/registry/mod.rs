@@ -148,18 +148,7 @@ async fn fetch_and_decrypt_registry(
     serde_json::from_slice(&decrypted).map_err(|e| format!("Registry parse failed: {}", e))
 }
 
-/// Generate a random UUID v4 string.
-fn generate_uuid_v4() -> String {
-    let bytes = crypto::utils::generate_random_bytes(16);
-    format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-4{:01x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3],
-        bytes[4], bytes[5],
-        bytes[6] & 0x0f, bytes[7],
-        (bytes[8] & 0x3f) | 0x80, bytes[9],
-        bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-    )
-}
+// generate_uuid_v4 is in crypto::utils
 
 /// Get or create a persistent device ID stored in macOS Keychain.
 ///
@@ -173,7 +162,7 @@ fn get_or_create_device_id() -> String {
     #[cfg(debug_assertions)]
     {
         log::info!("Debug mode: using ephemeral device ID (no Keychain access)");
-        return generate_uuid_v4();
+        return crypto::utils::generate_uuid_v4();
     }
 
     #[cfg(not(debug_assertions))]
@@ -182,14 +171,14 @@ fn get_or_create_device_id() -> String {
             Ok(e) => e,
             Err(e) => {
                 log::warn!("Keychain entry creation failed: {}. Using ephemeral ID.", e);
-                return generate_uuid_v4();
+                return crypto::utils::generate_uuid_v4();
             }
         };
 
         match entry.get_password() {
             Ok(id) if !id.is_empty() => id,
             _ => {
-                let uuid = generate_uuid_v4();
+                let uuid = crypto::utils::generate_uuid_v4();
 
                 let _ = entry.delete_credential();
                 if let Err(e) = entry.set_password(&uuid) {

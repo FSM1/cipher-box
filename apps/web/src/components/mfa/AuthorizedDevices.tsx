@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useMfa } from '../../hooks/useMfa';
 import { useDeviceRegistryStore } from '../../stores/device-registry.store';
+import { formatRelativeTime } from '../../utils/format';
 import { FactorKeyTypeShareDescription } from '@web3auth/mpc-core-kit';
 
 type DeviceFactorDisplay = {
@@ -178,23 +179,4 @@ export function AuthorizedDevices() {
       )}
     </div>
   );
-}
-
-/**
- * Format a Unix ms timestamp as a relative time string.
- */
-function formatRelativeTime(timestampMs: number): string {
-  const now = Date.now();
-  const diff = now - timestampMs;
-
-  if (diff < 60_000) return 'just now';
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  if (diff < 604_800_000) return `${Math.floor(diff / 86_400_000)}d ago`;
-
-  return new Date(timestampMs).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
 }

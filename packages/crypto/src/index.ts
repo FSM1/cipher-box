@@ -118,6 +118,16 @@ export {
   type DevicePlatform,
 } from './registry';
 
+// Recycle bin metadata types and encryption
+export {
+  encryptBinMetadata,
+  decryptBinMetadata,
+  deriveBinIpnsKeypair,
+  validateBinMetadata,
+  type BinEntry,
+  type RecycleBinMetadata,
+} from './bin';
+
 // Device identity (per-device Ed25519 keypair)
 export { generateDeviceKeypair, deriveDeviceId, type DeviceKeypair } from './device';
 

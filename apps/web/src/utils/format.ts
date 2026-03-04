@@ -45,3 +45,49 @@ export function formatDate(timestamp: number): string {
     day: 'numeric',
   }).format(date);
 }
+
+/**
+ * Format a Unix ms timestamp as a relative time string.
+ *
+ * Returns "just now", "Xm ago", "Xh ago", "Xd ago" for recent timestamps.
+ * Falls back to a locale-formatted date for timestamps older than 7 days.
+ */
+export function formatRelativeTime(timestampMs: number): string {
+  const diff = Date.now() - timestampMs;
+
+  if (diff < 0) {
+    return new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    }).format(new Date(timestampMs));
+  }
+
+  if (diff < 60_000) return 'just now';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  if (diff < 604_800_000) {
+    const days = Math.floor(diff / 86_400_000);
+    return days === 1 ? '1 day ago' : `${days} days ago`;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  }).format(new Date(timestampMs));
+}
+
+/**
+ * Get a terminal-style type indicator based on item type and optional MIME type.
+ */
+export function getItemIcon(itemType: 'file' | 'folder', mimeType?: string): string {
+  if (itemType === 'folder') return '[DIR]';
+  if (!mimeType) return '[FILE]';
+  if (mimeType.startsWith('image/')) return '[IMG]';
+  if (mimeType.startsWith('video/')) return '[VID]';
+  if (mimeType.startsWith('audio/')) return '[AUD]';
+  if (mimeType.startsWith('text/')) return '[TXT]';
+  if (mimeType === 'application/pdf') return '[PDF]';
+  return '[FILE]';
+}

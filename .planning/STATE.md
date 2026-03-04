@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 16 COMPLETE (Advanced Sync)
+**Current focus:** Milestone 2 -- COMPLETE (all phases shipped)
 
 ## Current Position
 
-Phase: 16 (Advanced Sync) -- VERIFIED COMPLETE
+Phase: 17 (Recycle Bin) -- Complete
 Plan: 5 of 5
-Status: Phase verified (3/3 must-haves)
-Last activity: 2026-03-03 -- Phase 16 verified and complete
+Status: Phase complete (all plans executed)
+Last activity: 2026-03-04 -- Completed 17-05-PLAN.md
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE, Phase 16: 5/5 COMPLETE)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE, Phase 16: 5/5 COMPLETE, Phase 17: 5/5 COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 146
+- Total plans completed: 151
 - Average duration: 5.5 min
-- Total execution time: 15.5 hours
+- Total execution time: 16.0 hours
 
 **By Phase (M1 summary):**
 
@@ -47,10 +47,11 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 11.3   | 3/3   | 104 min | 34.7 min |
 | M2 Phase 11.4   | 3/3   | 20 min  | 6.7 min  |
 | M2 Phase 16     | 5/5   | 18 min  | 3.6 min  |
+| M2 Phase 17     | 5/5   | 35 min  | 7.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 10m, 5m, 2m, 10m, 4m
+- Last 5 plans: 4m, 7m, 9m, 7m, 5m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -233,6 +234,15 @@ Recent decisions affecting current work:
 | PublishResult enum (Success/Conflict) returned by Rust publish_ipns    | 16-03     | Compiler enforces exhaustive match; no silent failure possible on conflict detection                                 |
 | merge_folder_children uses IPNS name as stable child key               | 16-03     | ipns_name for FolderEntry, file_meta_ipns_name for FilePointer; survives rename (same IPNS key, new name field)      |
 | OS notification for desktop conflict detection deferred                | 16-03     | AppHandle not easily accessible from background thread; tray status change visible to user; TODO for v2              |
+| Bin metadata uses ECIES (same as DeviceRegistry, not AES-GCM)          | 17-01     | Single user-scoped record, no per-record symmetric key to manage                                                     |
+| HKDF info cipherbox-recycle-bin-ipns-v1 for bin IPNS derivation        | 17-01     | Domain separation from vault and registry IPNS keys; same salt CipherBox-v1                                          |
+| GET /vault/config synchronous (no DB query)                            | 17-01     | Reads RECYCLE_BIN_RETENTION_DAYS from ConfigService with default 30                                                  |
+| addToBin fire-and-forget from delete flow                              | 17-02     | Folder metadata already updated; bin write is best-effort, non-blocking                                              |
+| Folder size 0 in bin entries (resolved on permanent delete)            | 17-02     | Avoids expensive IPNS resolution at delete time; CID cleanup resolves size lazily                                    |
+| Recursive parent restore max depth 5                                   | 17-02     | Prevents infinite loops when parent chain is deep; falls back to root                                                |
+| Inline generate_uuid_v4 in bin.rs (no uuid crate)                      | 17-04     | Same pattern as registry/mod.rs; avoid new dependency for simple function                                            |
+| Inline guess_mime_type mapping (no mime_guess crate)                   | 17-04     | Best-effort MIME for bin display; application/octet-stream fallback acceptable for unknown extensions                |
+| Bin IPNS conflict = log + preserve CID (no retry)                      | 17-04     | Fire-and-forget publish; data preserved via pinned CID; next delete or web session creates fresh bin state           |
 
 ### Pending Todos
 
@@ -309,17 +319,17 @@ Recent decisions affecting current work:
 - Phase 11.3 (Linux Desktop): COMPLETE -- 3/3 plans done (Rust platform support, packaging & CI, local UAT 18/18 pass)
 - Phase 11.4 (Cross-Platform E2E Testing): COMPLETE -- 3/3 plans done (CI debug artifacts + crypto vectors, FUSE/API test scripts, e2e-desktop.yml workflow)
 - Phase 16 (Advanced Sync): COMPLETE -- 5/5 plans done (API concurrency control, web sync service, desktop conflict handling, web E2E tests, desktop E2E tests)
-- Phase 17 (Recycle Bin): Not started -- needs planning
+- Phase 17 (Recycle Bin): COMPLETE -- 5/5 plans done (crypto, store/service, web UI, desktop FUSE, E2E testing)
 - Phase 22 (Nitro TEE): Moved to M3. NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
-Last session: 2026-03-03
-Stopped at: Phase 16 verified complete
+Last session: 2026-03-04
+Stopped at: Completed 17-05-PLAN.md (Phase 17 complete)
 Resume file: None
-Next: Phase 17 (Recycle Bin) -- needs planning
+Next: Phase 17 PR to main
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-03-03 after Phase 16 verified complete (Advanced Sync)_
+_Last updated: 2026-03-04 after Plan 17-05 complete (E2E recycle bin tests)_

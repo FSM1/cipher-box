@@ -7,6 +7,7 @@
 
 use super::aes;
 use super::aes_ctr;
+use super::bin;
 use super::ecies;
 use super::ed25519;
 use super::folder::{
@@ -961,15 +962,34 @@ fn hkdf_registry_derivation_differs_from_vault() {
 }
 
 #[test]
-fn hkdf_all_three_domains_produce_different_names() {
+fn hkdf_all_four_domains_produce_different_names() {
     let (_, _, vault_name) = hkdf::derive_vault_ipns_keypair(&HKDF_TEST_KEY).unwrap();
     let (_, _, file_name) =
         hkdf::derive_file_ipns_keypair(&HKDF_TEST_KEY, "file-id-001-abcdef").unwrap();
     let (_, _, registry_name) = hkdf::derive_registry_ipns_keypair(&HKDF_TEST_KEY).unwrap();
+    let (_, _, bin_name) = hkdf::derive_bin_ipns_keypair(&HKDF_TEST_KEY).unwrap();
 
     assert_ne!(vault_name, file_name);
     assert_ne!(vault_name, registry_name);
+    assert_ne!(vault_name, bin_name);
     assert_ne!(file_name, registry_name);
+    assert_ne!(file_name, bin_name);
+    assert_ne!(registry_name, bin_name);
+}
+
+#[test]
+fn hkdf_bin_derivation_produces_k51_name() {
+    let (priv_key, pub_key, ipns_name) = hkdf::derive_bin_ipns_keypair(&HKDF_TEST_KEY).unwrap();
+    assert_eq!(priv_key.len(), 32, "Ed25519 private key should be 32 bytes");
+    assert_eq!(pub_key.len(), 32, "Ed25519 public key should be 32 bytes");
+    assert!(ipns_name.starts_with("k51"), "IPNS name should start with k51");
+}
+
+#[test]
+fn hkdf_bin_derivation_is_deterministic() {
+    let (_, _, name1) = hkdf::derive_bin_ipns_keypair(&HKDF_TEST_KEY).unwrap();
+    let (_, _, name2) = hkdf::derive_bin_ipns_keypair(&HKDF_TEST_KEY).unwrap();
+    assert_eq!(name1, name2, "Same key should produce same bin IPNS name");
 }
 
 // ============================================================
@@ -1198,4 +1218,277 @@ fn file_metadata_camel_case_serialization() {
     assert!(json.contains("encryptionMode"), "Must use camelCase: encryptionMode");
     assert!(!json.contains("file_key_encrypted"), "Should NOT contain snake_case");
     assert!(!json.contains("mime_type"), "Should NOT contain snake_case");
+}
+
+// ============================================================
+// Recycle Bin Metadata Tests
+// ============================================================
+
+fn make_test_bin_entry(id: &str, item_type: bin::BinItemType) -> bin::BinEntry {
+    bin::BinEntry {
+        id: id.to_string(),
+        item_type,
+        name: format!("test-{}", id),
+        original_parent_ipns_name: "k51qzi5uqu5dlvj2bv6qmx8snx6m8xq7nprfqqopzz6p0".to_string(),
+        original_path: "My Vault / Documents".to_string(),
+        deleted_at: 1700000000000,
+        size: 1024,
+        mime_type: "text/plain".to_string(),
+        file_pointer: match id {
+            _ if id.starts_with("file") => Some(FilePointer {
+                id: "fp-001".to_string(),
+                name: format!("test-{}", id),
+                file_meta_ipns_name: "k51file".to_string(),
+                ipns_private_key_encrypted: Some("deadbeef".to_string()),
+                created_at: 1700000000000,
+                modified_at: 1700000000000,
+            }),
+            _ => None,
+        },
+        folder_entry: match id {
+            _ if id.starts_with("folder") => Some(FolderEntry {
+                id: "fe-001".to_string(),
+                name: format!("test-{}", id),
+                ipns_name: "k51folder".to_string(),
+                folder_key_encrypted: "aabbccdd".to_string(),
+                ipns_private_key_encrypted: "eeff0011".to_string(),
+                created_at: 1700000000000,
+                modified_at: 1700000000000,
+            }),
+            _ => None,
+        },
+    }
+}
+
+#[test]
+fn bin_empty_metadata_has_correct_defaults() {
+    let metadata = bin::empty_bin_metadata();
+    assert_eq!(metadata.version, "v1");
+    assert_eq!(metadata.sequence_number, 0);
+    assert!(metadata.entries.is_empty());
+}
+
+#[test]
+fn bin_metadata_ecies_roundtrip_empty() {
+    let private_key = hex::decode(ECIES_TEST_PRIVATE_KEY).unwrap();
+    let public_key = hex::decode(ECIES_TEST_PUBLIC_KEY).unwrap();
+    let metadata = bin::empty_bin_metadata();
+
+    let encrypted = bin::encrypt_bin_metadata(&metadata, &public_key).unwrap();
+    assert!(!encrypted.is_empty());
+
+    let decrypted = bin::decrypt_bin_metadata(&encrypted, &private_key).unwrap();
+    assert_eq!(decrypted.version, "v1");
+    assert_eq!(decrypted.sequence_number, 0);
+    assert!(decrypted.entries.is_empty());
+}
+
+#[test]
+fn bin_metadata_ecies_roundtrip_with_entries() {
+    let private_key = hex::decode(ECIES_TEST_PRIVATE_KEY).unwrap();
+    let public_key = hex::decode(ECIES_TEST_PUBLIC_KEY).unwrap();
+
+    let metadata = bin::RecycleBinMetadata {
+        version: "v1".to_string(),
+        sequence_number: 5,
+        entries: vec![
+            make_test_bin_entry("file-001", bin::BinItemType::File),
+            make_test_bin_entry("folder-002", bin::BinItemType::Folder),
+        ],
+    };
+
+    let encrypted = bin::encrypt_bin_metadata(&metadata, &public_key).unwrap();
+    let decrypted = bin::decrypt_bin_metadata(&encrypted, &private_key).unwrap();
+
+    assert_eq!(decrypted.version, "v1");
+    assert_eq!(decrypted.sequence_number, 5);
+    assert_eq!(decrypted.entries.len(), 2);
+    assert_eq!(decrypted.entries[0].name, "test-file-001");
+    assert!(decrypted.entries[0].file_pointer.is_some());
+    assert!(decrypted.entries[0].folder_entry.is_none());
+    assert_eq!(decrypted.entries[1].name, "test-folder-002");
+    assert!(decrypted.entries[1].folder_entry.is_some());
+    assert!(decrypted.entries[1].file_pointer.is_none());
+}
+
+#[test]
+fn bin_metadata_wrong_key_fails() {
+    let public_key = hex::decode(ECIES_TEST_PUBLIC_KEY).unwrap();
+    let wrong_key = vec![0xffu8; 32];
+    let metadata = bin::empty_bin_metadata();
+
+    let encrypted = bin::encrypt_bin_metadata(&metadata, &public_key).unwrap();
+    let result = bin::decrypt_bin_metadata(&encrypted, &wrong_key);
+    assert!(result.is_err(), "Wrong private key should fail decryption");
+}
+
+#[test]
+fn bin_metadata_corrupted_ciphertext_fails() {
+    let private_key = hex::decode(ECIES_TEST_PRIVATE_KEY).unwrap();
+    let public_key = hex::decode(ECIES_TEST_PUBLIC_KEY).unwrap();
+    let metadata = bin::empty_bin_metadata();
+
+    let mut encrypted = bin::encrypt_bin_metadata(&metadata, &public_key).unwrap();
+    let mid = encrypted.len() / 2;
+    encrypted[mid] ^= 0xff;
+
+    let result = bin::decrypt_bin_metadata(&encrypted, &private_key);
+    assert!(result.is_err(), "Corrupted ciphertext should fail");
+}
+
+#[test]
+fn bin_metadata_rejects_wrong_version() {
+    let private_key = hex::decode(ECIES_TEST_PRIVATE_KEY).unwrap();
+    let public_key = hex::decode(ECIES_TEST_PUBLIC_KEY).unwrap();
+
+    let mut metadata = bin::empty_bin_metadata();
+    metadata.version = "v2".to_string();
+
+    let encrypted = bin::encrypt_bin_metadata(&metadata, &public_key).unwrap();
+    let result = bin::decrypt_bin_metadata(&encrypted, &private_key);
+    assert!(result.is_err(), "Version v2 should fail validation");
+}
+
+#[test]
+fn bin_metadata_camel_case_serialization() {
+    let metadata = bin::RecycleBinMetadata {
+        version: "v1".to_string(),
+        sequence_number: 3,
+        entries: vec![make_test_bin_entry("file-001", bin::BinItemType::File)],
+    };
+
+    let json = serde_json::to_string(&metadata).unwrap();
+    assert!(json.contains("sequenceNumber"), "Must use camelCase: sequenceNumber");
+    assert!(json.contains("itemType"), "Must use camelCase: itemType");
+    assert!(json.contains("originalParentIpnsName"), "Must use camelCase: originalParentIpnsName");
+    assert!(json.contains("originalPath"), "Must use camelCase: originalPath");
+    assert!(json.contains("deletedAt"), "Must use camelCase: deletedAt");
+    assert!(json.contains("mimeType"), "Must use camelCase: mimeType");
+    assert!(json.contains("filePointer"), "Must use camelCase: filePointer");
+    assert!(!json.contains("sequence_number"), "Should NOT contain snake_case");
+    assert!(!json.contains("item_type"), "Should NOT contain snake_case");
+    assert!(!json.contains("deleted_at"), "Should NOT contain snake_case");
+}
+
+#[test]
+fn bin_metadata_optional_fields_omitted_when_none() {
+    let metadata = bin::RecycleBinMetadata {
+        version: "v1".to_string(),
+        sequence_number: 1,
+        entries: vec![bin::BinEntry {
+            id: "test-1".to_string(),
+            item_type: bin::BinItemType::File,
+            name: "test.txt".to_string(),
+            original_parent_ipns_name: "k51test".to_string(),
+            original_path: "/test.txt".to_string(),
+            deleted_at: 1700000000000,
+            size: 100,
+            mime_type: "text/plain".to_string(),
+            file_pointer: None,
+            folder_entry: None,
+        }],
+    };
+
+    let json = serde_json::to_string(&metadata).unwrap();
+    assert!(!json.contains("filePointer"), "None filePointer should be omitted");
+    assert!(!json.contains("folderEntry"), "None folderEntry should be omitted");
+}
+
+#[test]
+fn bin_metadata_deserialization_from_json() {
+    let json = r#"{
+        "version": "v1",
+        "sequenceNumber": 2,
+        "entries": [
+            {
+                "id": "entry-1",
+                "itemType": "file",
+                "name": "report.pdf",
+                "originalParentIpnsName": "k51parent",
+                "originalPath": "My Vault / Documents",
+                "deletedAt": 1700000000000,
+                "size": 2048,
+                "mimeType": "application/pdf",
+                "filePointer": {
+                    "id": "fp-1",
+                    "name": "report.pdf",
+                    "fileMetaIpnsName": "k51file",
+                    "createdAt": 1700000000000,
+                    "modifiedAt": 1700000000000
+                }
+            },
+            {
+                "id": "entry-2",
+                "itemType": "folder",
+                "name": "old-docs",
+                "originalParentIpnsName": "k51parent",
+                "originalPath": "My Vault",
+                "deletedAt": 1700000000000,
+                "size": 0,
+                "mimeType": ""
+            }
+        ]
+    }"#;
+
+    let metadata: bin::RecycleBinMetadata = serde_json::from_str(json).unwrap();
+    assert_eq!(metadata.version, "v1");
+    assert_eq!(metadata.sequence_number, 2);
+    assert_eq!(metadata.entries.len(), 2);
+    assert_eq!(metadata.entries[0].name, "report.pdf");
+    assert!(metadata.entries[0].file_pointer.is_some());
+    assert!(metadata.entries[1].folder_entry.is_none());
+}
+
+#[test]
+fn bin_generate_uuid_v4_format() {
+    let uuid = utils::generate_uuid_v4();
+    // UUID v4 format: 8-4-4-4-12 hex chars
+    assert_eq!(uuid.len(), 36, "UUID should be 36 chars");
+    assert_eq!(&uuid[8..9], "-");
+    assert_eq!(&uuid[13..14], "-");
+    assert_eq!(&uuid[14..15], "4", "Version nibble should be 4");
+    assert_eq!(&uuid[18..19], "-");
+    assert_eq!(&uuid[23..24], "-");
+
+    // Variant bits (position 19) should be 8, 9, a, or b
+    let variant_char = uuid.chars().nth(19).unwrap();
+    assert!(
+        "89ab".contains(variant_char),
+        "Variant char should be 8/9/a/b, got {}",
+        variant_char
+    );
+}
+
+#[test]
+fn bin_generate_uuid_v4_uniqueness() {
+    let uuid1 = utils::generate_uuid_v4();
+    let uuid2 = utils::generate_uuid_v4();
+    assert_ne!(uuid1, uuid2, "Two UUIDs should be unique");
+}
+
+#[test]
+fn bin_guess_mime_type_common_extensions() {
+    assert_eq!(utils::mime_from_extension("photo.png"), "image/png");
+    assert_eq!(utils::mime_from_extension("photo.jpg"), "image/jpeg");
+    assert_eq!(utils::mime_from_extension("photo.jpeg"), "image/jpeg");
+    assert_eq!(utils::mime_from_extension("doc.pdf"), "application/pdf");
+    assert_eq!(utils::mime_from_extension("video.mp4"), "video/mp4");
+    assert_eq!(utils::mime_from_extension("song.mp3"), "audio/mpeg");
+    assert_eq!(utils::mime_from_extension("page.html"), "text/html");
+    assert_eq!(utils::mime_from_extension("data.json"), "application/json");
+    assert_eq!(utils::mime_from_extension("readme.md"), "text/markdown");
+    assert_eq!(utils::mime_from_extension("archive.zip"), "application/zip");
+    assert_eq!(utils::mime_from_extension("sheet.xlsx"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+}
+
+#[test]
+fn bin_guess_mime_type_unknown_extension() {
+    assert_eq!(utils::mime_from_extension("file.xyz"), "application/octet-stream");
+    assert_eq!(utils::mime_from_extension("noext"), "application/octet-stream");
+}
+
+#[test]
+fn bin_guess_mime_type_case_insensitive() {
+    assert_eq!(utils::mime_from_extension("PHOTO.PNG"), "image/png");
+    assert_eq!(utils::mime_from_extension("Doc.PDF"), "application/pdf");
 }

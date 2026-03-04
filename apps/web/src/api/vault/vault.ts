@@ -21,7 +21,13 @@ import type {
   UseQueryResult,
 } from '@tanstack/react-query';
 
-import type { InitVaultDto, QuotaResponseDto, VaultExportDto, VaultResponseDto } from '../models';
+import type {
+  InitVaultDto,
+  QuotaResponseDto,
+  VaultConfigResponseDto,
+  VaultExportDto,
+  VaultResponseDto,
+} from '../models';
 
 import { customInstance } from '../custom-instance';
 
@@ -106,6 +112,121 @@ export const useVaultControllerInitializeVault = <TError = void, TContext = unkn
 
   return useMutation(mutationOptions, queryClient);
 };
+/**
+ * Returns application configuration including recycle bin retention period. The retention period is configurable via the RECYCLE_BIN_RETENTION_DAYS environment variable (default: 30).
+ * @summary Get vault configuration
+ */
+export const vaultControllerGetConfig = (signal?: AbortSignal) => {
+  return customInstance<VaultConfigResponseDto>({ url: `/vault/config`, method: 'GET', signal });
+};
+
+export const getVaultControllerGetConfigQueryKey = () => {
+  return [`/vault/config`] as const;
+};
+
+export const getVaultControllerGetConfigQueryOptions = <
+  TData = Awaited<ReturnType<typeof vaultControllerGetConfig>>,
+  TError = void,
+>(options?: {
+  query?: Partial<
+    UseQueryOptions<Awaited<ReturnType<typeof vaultControllerGetConfig>>, TError, TData>
+  >;
+}) => {
+  const { query: queryOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getVaultControllerGetConfigQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof vaultControllerGetConfig>>> = ({
+    signal,
+  }) => vaultControllerGetConfig(signal);
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof vaultControllerGetConfig>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type VaultControllerGetConfigQueryResult = NonNullable<
+  Awaited<ReturnType<typeof vaultControllerGetConfig>>
+>;
+export type VaultControllerGetConfigQueryError = void;
+
+export function useVaultControllerGetConfig<
+  TData = Awaited<ReturnType<typeof vaultControllerGetConfig>>,
+  TError = void,
+>(
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof vaultControllerGetConfig>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof vaultControllerGetConfig>>,
+          TError,
+          Awaited<ReturnType<typeof vaultControllerGetConfig>>
+        >,
+        'initialData'
+      >;
+  },
+  queryClient?: QueryClient
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useVaultControllerGetConfig<
+  TData = Awaited<ReturnType<typeof vaultControllerGetConfig>>,
+  TError = void,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof vaultControllerGetConfig>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof vaultControllerGetConfig>>,
+          TError,
+          Awaited<ReturnType<typeof vaultControllerGetConfig>>
+        >,
+        'initialData'
+      >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+export function useVaultControllerGetConfig<
+  TData = Awaited<ReturnType<typeof vaultControllerGetConfig>>,
+  TError = void,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof vaultControllerGetConfig>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+/**
+ * @summary Get vault configuration
+ */
+
+export function useVaultControllerGetConfig<
+  TData = Awaited<ReturnType<typeof vaultControllerGetConfig>>,
+  TError = void,
+>(
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof vaultControllerGetConfig>>, TError, TData>
+    >;
+  },
+  queryClient?: QueryClient
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getVaultControllerGetConfigQueryOptions(options);
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<TData, TError> & {
+    queryKey: DataTag<QueryKey, TData, TError>;
+  };
+
+  query.queryKey = queryOptions.queryKey;
+
+  return query;
+}
+
 /**
  * Returns the minimal vault data needed for independent recovery: root IPNS name, encrypted root keys, and derivation hints.
  * @summary Export vault for independent recovery

@@ -92,6 +92,26 @@ if ($ConflictExitCode -eq 0) {
 }
 Write-Host ""
 
+# ---- Step 5: Recycle bin ----
+Write-Host "--- Step 5: Recycle bin ---"
+$BinExitCode = 0
+try {
+    $env:TEST_SECRET = $TestSecret
+    & "$PSScriptRoot\test-recycle-bin.ps1" -MountPoint $MountPoint -ApiUrl $ApiUrl
+    $BinExitCode = $LASTEXITCODE
+} catch {
+    Write-Host "Recycle bin script error: $($_.Exception.Message)"
+    $BinExitCode = 1
+}
+
+if ($BinExitCode -eq 0) {
+    Write-Host "Recycle bin: ALL PASSED"
+} else {
+    Write-Host "Recycle bin: $BinExitCode FAILURE(S)"
+    $TotalFail += $BinExitCode
+}
+Write-Host ""
+
 # ---- Summary ----
 Write-Host "============================================"
 Write-Host "  Summary"

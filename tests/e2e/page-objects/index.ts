@@ -30,4 +30,5 @@ export {
 } from './dialogs';
 
 // Pages
+export { BinPage } from './pages/bin.page';
 export { InvitePageObject } from './pages/invite.page';

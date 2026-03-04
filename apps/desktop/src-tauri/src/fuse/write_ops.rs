@@ -269,10 +269,53 @@ pub(crate) mod implementation {
             }
         };
 
-        let cid_to_unpin = match fs.inodes.get(child_ino) {
+        // Capture data for bin entry before inode removal
+        let bin_entry_data = match fs.inodes.get(child_ino) {
             Some(inode) => match &inode.kind {
-                InodeKind::File { cid, .. } => {
-                    if cid.is_empty() { None } else { Some(cid.clone()) }
+                InodeKind::File {
+                    file_meta_ipns_name,
+                    file_ipns_key_encrypted_hex,
+                    size,
+                    ..
+                } => {
+                    let now_ms = SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let created_ms = inode.attr.crtime
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+
+                    let meta_ipns = match file_meta_ipns_name {
+                        Some(name) if !name.is_empty() => Some(name.clone()),
+                        _ => {
+                            // file_meta_ipns_name is optional for files loaded from
+                            // remote metadata before IPNS resolve. Since bin publishing
+                            // is best-effort, skip creating a bin entry when it's missing
+                            // instead of failing the unlink.
+                            log::warn!(
+                                "unlink: missing file_meta_ipns_name for ino {}, skipping bin entry",
+                                child_ino
+                            );
+                            None
+                        }
+                    };
+
+                    if let Some(meta_ipns) = meta_ipns {
+                        let file_pointer = crate::crypto::folder::FilePointer {
+                            id: crate::crypto::utils::generate_uuid_v4(),
+                            name: inode.name.clone(),
+                            file_meta_ipns_name: meta_ipns,
+                            ipns_private_key_encrypted: file_ipns_key_encrypted_hex.clone(),
+                            created_at: if created_ms > 0 { created_ms } else { now_ms },
+                            modified_at: now_ms,
+                        };
+
+                        Some((inode.name.clone(), *size, file_pointer))
+                    } else {
+                        None
+                    }
                 }
                 _ => {
                     reply.error(libc::EISDIR);
@@ -287,24 +330,62 @@ pub(crate) mod implementation {
 
         log::debug!("unlink: {} from parent {}", name_str, parent);
 
+        let now = SystemTime::now();
+
         fs.inodes.remove(child_ino);
 
         if let Some(parent_inode) = fs.inodes.get_mut(parent) {
-            parent_inode.attr.mtime = SystemTime::now();
-            parent_inode.attr.ctime = SystemTime::now();
+            parent_inode.attr.mtime = now;
+            parent_inode.attr.ctime = now;
         }
 
         if let Err(e) = fs.update_folder_metadata(parent) {
             log::error!("Failed to update folder metadata after unlink: {}", e);
         }
 
-        if let Some(cid) = cid_to_unpin {
-            let api = fs.api.clone();
-            fs.rt.spawn(async move {
-                if let Err(e) = crate::api::ipfs::unpin_content(&api, &cid).await {
-                    log::debug!("Background unpin failed for {}: {}", cid, e);
-                }
-            });
+        // Create bin entry and publish to bin IPNS (fire-and-forget)
+        if let Some((item_name, file_size, file_pointer)) = bin_entry_data {
+            let parent_ipns_name = fs.inodes.get(parent)
+                .map(|p| match &p.kind {
+                    InodeKind::Root { ipns_name, .. } => ipns_name.clone().unwrap_or_default(),
+                    InodeKind::Folder { ipns_name, .. } => ipns_name.clone(),
+                    _ => String::new(),
+                })
+                .unwrap_or_default();
+
+            if parent_ipns_name.is_empty() {
+                log::warn!(
+                    "unlink: missing parent IPNS name for parent ino {}, skipping bin publish",
+                    parent
+                );
+            } else {
+                let parent_path = build_folder_path(fs, parent);
+
+                let bin_entry = crate::crypto::bin::BinEntry {
+                    id: crate::crypto::utils::generate_uuid_v4(),
+                    item_type: crate::crypto::bin::BinItemType::File,
+                    name: item_name.clone(),
+                    original_parent_ipns_name: parent_ipns_name,
+                    original_path: parent_path,
+                    deleted_at: now
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                    size: file_size,
+                    mime_type: crate::crypto::utils::mime_from_extension(&item_name).to_string(),
+                    file_pointer: Some(file_pointer),
+                    folder_entry: None,
+                };
+
+                crate::fuse::spawn_bin_entry_publish(
+                    fs.api.clone(),
+                    fs.rt.clone(),
+                    bin_entry,
+                    fs.private_key.clone(),
+                    fs.public_key.to_vec(),
+                    fs.publish_coordinator.clone(),
+                );
+            }
         }
 
         reply.ok();
@@ -566,18 +647,61 @@ pub(crate) mod implementation {
             }
         };
 
-        let cid_to_unpin = match fs.inodes.get(child_ino) {
+        // Capture folder data for bin entry before inode removal
+        let bin_entry_data = match fs.inodes.get(child_ino) {
             Some(inode) => {
                 match &inode.kind {
-                    InodeKind::Folder { ipns_name, .. } => {
+                    InodeKind::Folder {
+                        ipns_name,
+                        encrypted_folder_key,
+                        ipns_private_key,
+                        ..
+                    } => {
+                        // Check for non-empty folder (POSIX requirement)
                         if let Some(ref children) = inode.children {
                             if !children.is_empty() {
                                 reply.error(libc::ENOTEMPTY);
                                 return;
                             }
                         }
-                        fs.metadata_cache.get(ipns_name)
-                            .map(|cached| cached.cid.clone())
+
+                        let now_ms = SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+                        let created_ms = inode.attr.crtime
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64;
+
+                        // Build the ECIES-wrapped IPNS private key for the FolderEntry
+                        let ipns_key_encrypted = match ipns_private_key {
+                            Some(key) => match crate::crypto::ecies::wrap_key(key, &fs.public_key) {
+                                Ok(wrapped) => hex::encode(&wrapped),
+                                Err(e) => {
+                                    log::error!("rmdir: failed to wrap IPNS key for bin entry: {}", e);
+                                    reply.error(libc::EIO);
+                                    return;
+                                }
+                            },
+                            None => {
+                                log::error!("rmdir: missing folder IPNS private key for ino {}", child_ino);
+                                reply.error(libc::EIO);
+                                return;
+                            }
+                        };
+
+                        let folder_entry = crate::crypto::folder::FolderEntry {
+                            id: crate::crypto::utils::generate_uuid_v4(),
+                            name: inode.name.clone(),
+                            ipns_name: ipns_name.clone(),
+                            folder_key_encrypted: encrypted_folder_key.clone(),
+                            ipns_private_key_encrypted: ipns_key_encrypted,
+                            created_at: if created_ms > 0 { created_ms } else { now_ms },
+                            modified_at: now_ms,
+                        };
+
+                        Some((inode.name.clone(), folder_entry))
                     }
                     _ => {
                         reply.error(libc::ENOTDIR);
@@ -593,24 +717,62 @@ pub(crate) mod implementation {
 
         log::debug!("rmdir: {} from parent {}", name_str, parent);
 
+        let now = SystemTime::now();
+
         fs.inodes.remove(child_ino);
 
         if let Some(parent_inode) = fs.inodes.get_mut(parent) {
-            parent_inode.attr.mtime = SystemTime::now();
-            parent_inode.attr.ctime = SystemTime::now();
+            parent_inode.attr.mtime = now;
+            parent_inode.attr.ctime = now;
         }
 
         if let Err(e) = fs.update_folder_metadata(parent) {
             log::error!("Failed to update folder metadata after rmdir: {}", e);
         }
 
-        if let Some(cid) = cid_to_unpin {
-            let api = fs.api.clone();
-            fs.rt.spawn(async move {
-                if let Err(e) = crate::api::ipfs::unpin_content(&api, &cid).await {
-                    log::debug!("Background unpin failed for {}: {}", cid, e);
-                }
-            });
+        // Create bin entry and publish to bin IPNS (fire-and-forget)
+        if let Some((item_name, folder_entry)) = bin_entry_data {
+            let parent_ipns_name = fs.inodes.get(parent)
+                .map(|p| match &p.kind {
+                    InodeKind::Root { ipns_name, .. } => ipns_name.clone().unwrap_or_default(),
+                    InodeKind::Folder { ipns_name, .. } => ipns_name.clone(),
+                    _ => String::new(),
+                })
+                .unwrap_or_default();
+
+            if parent_ipns_name.is_empty() {
+                log::warn!(
+                    "rmdir: missing parent IPNS name for parent ino {}, skipping bin publish",
+                    parent
+                );
+            } else {
+                let parent_path = build_folder_path(fs, parent);
+
+                let bin_entry = crate::crypto::bin::BinEntry {
+                    id: crate::crypto::utils::generate_uuid_v4(),
+                    item_type: crate::crypto::bin::BinItemType::Folder,
+                    name: item_name,
+                    original_parent_ipns_name: parent_ipns_name,
+                    original_path: parent_path,
+                    deleted_at: now
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                    size: 0,
+                    mime_type: String::new(),
+                    file_pointer: None,
+                    folder_entry: Some(folder_entry),
+                };
+
+                crate::fuse::spawn_bin_entry_publish(
+                    fs.api.clone(),
+                    fs.rt.clone(),
+                    bin_entry,
+                    fs.private_key.clone(),
+                    fs.public_key.to_vec(),
+                    fs.publish_coordinator.clone(),
+                );
+            }
         }
 
         reply.ok();
@@ -800,5 +962,32 @@ pub(crate) mod implementation {
         }
 
         reply.ok();
+    }
+
+    /// Build a human-readable breadcrumb path for a folder inode.
+    /// Walks parent_ino upward to root, concatenating names with " / ".
+    /// Example: "My Vault / Documents / Reports"
+    fn build_folder_path(fs: &CipherBoxFS, folder_ino: u64) -> String {
+        let mut parts = Vec::new();
+        let mut current = folder_ino;
+        for _ in 0..20 { // Safety limit to prevent infinite loops
+            match fs.inodes.get(current) {
+                Some(inode) => {
+                    match &inode.kind {
+                        InodeKind::Root { .. } => {
+                            parts.push("My Vault".to_string());
+                            break;
+                        }
+                        _ => {
+                            parts.push(inode.name.clone());
+                            current = inode.parent_ino;
+                        }
+                    }
+                }
+                None => break,
+            }
+        }
+        parts.reverse();
+        parts.join(" / ")
     }
 }

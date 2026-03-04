@@ -401,12 +401,19 @@ export async function deleteFolder(params: {
   folderId: string;
   parentFolderState: FolderNode;
   getFolderState: (id: string) => FolderNode | undefined;
-}): Promise<{ fileIpnsNames: string[]; newSequenceNumber: bigint }> {
+}): Promise<{
+  fileIpnsNames: string[];
+  newSequenceNumber: bigint;
+  removedChild: FolderEntry;
+}> {
   // 1. Find folder in parent's children
   const children = [...params.parentFolderState.children];
   const folderIndex = children.findIndex((c) => c.type === 'folder' && c.id === params.folderId);
 
   if (folderIndex === -1) throw new Error('Folder not found');
+
+  // Capture the removed FolderEntry before splicing (needed for bin service)
+  const removedChild = children[folderIndex] as FolderEntry;
 
   // 2. Recursively collect file IPNS names for cleanup
   // In v2, file children are FilePointers with fileMetaIpnsName (no inline CID).
@@ -447,7 +454,7 @@ export async function deleteFolder(params: {
   // The caller (useFolder hook) resolves fileMetaIpnsName -> CID for unpinning.
   // TODO: Phase 14 should add batch unenrollment for orphaned file IPNS records.
 
-  return { fileIpnsNames, newSequenceNumber };
+  return { fileIpnsNames, newSequenceNumber, removedChild };
 }
 
 /**
@@ -468,16 +475,20 @@ export async function deleteFolder(params: {
 export async function deleteFileFromFolder(params: {
   fileId: string;
   parentFolderState: FolderNode;
-}): Promise<{ fileMetaIpnsName: string | undefined; newSequenceNumber: bigint }> {
+}): Promise<{
+  fileMetaIpnsName: string | undefined;
+  newSequenceNumber: bigint;
+  removedChild: FilePointer;
+}> {
   // 1. Find file in parent's children
   const children = [...params.parentFolderState.children];
   const fileIndex = children.findIndex((c) => c.type === 'file' && c.id === params.fileId);
 
   if (fileIndex === -1) throw new Error('File not found');
 
-  // 2. Get fileMetaIpnsName for cleanup
-  const filePointer = children[fileIndex] as FilePointer;
-  const fileMetaIpnsName = filePointer.fileMetaIpnsName;
+  // 2. Capture the removed FilePointer before splicing (needed for bin service)
+  const removedChild = children[fileIndex] as FilePointer;
+  const fileMetaIpnsName = removedChild.fileMetaIpnsName;
 
   // 3. Remove file from parent's children
   children.splice(fileIndex, 1);
@@ -500,7 +511,7 @@ export async function deleteFileFromFolder(params: {
     );
   }
 
-  return { fileMetaIpnsName, newSequenceNumber };
+  return { fileMetaIpnsName, newSequenceNumber, removedChild };
 }
 
 /**

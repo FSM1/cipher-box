@@ -472,6 +472,134 @@ fn spawn_metadata_publish(
     });
 }
 
+/// Add a BinEntry to the user's encrypted recycle bin IPNS record.
+///
+/// Background operation: reads existing bin metadata from IPNS (or creates empty),
+/// appends the new entry, encrypts with ECIES, uploads to IPFS, publishes IPNS.
+/// Fire-and-forget -- errors are logged but don't propagate.
+/// CIDs remain pinned on delete for recovery via the web app bin UI.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub(crate) fn spawn_bin_entry_publish(
+    api: Arc<ApiClient>,
+    rt: tokio::runtime::Handle,
+    entry: crate::crypto::bin::BinEntry,
+    user_private_key: Zeroizing<Vec<u8>>,
+    user_public_key: Vec<u8>,
+    coordinator: Arc<PublishCoordinator>,
+) {
+    std::thread::spawn(move || {
+        let result = rt.block_on(async {
+            // 1. Derive the bin IPNS keypair from user's private key
+            let pk_arr: [u8; 32] = user_private_key.as_slice().try_into()
+                .map_err(|_| "Invalid private key length for bin derivation".to_string())?;
+            let (bin_ipns_private_key, _bin_ipns_public_key, bin_ipns_name) =
+                crate::crypto::hkdf::derive_bin_ipns_keypair(&pk_arr)
+                    .map_err(|e| format!("Bin IPNS derivation failed: {}", e))?;
+
+            // 2. Acquire per-IPNS publish lock
+            let lock = coordinator.get_lock(&bin_ipns_name);
+            let _guard = lock.lock().await;
+
+            // 3. Try to resolve existing bin metadata from IPNS
+            let (mut bin_metadata, existing_cid) = match crate::api::ipns::resolve_ipns(&api, &bin_ipns_name).await {
+                Ok(resp) => {
+                    // Fetch and decrypt existing bin metadata
+                    match crate::api::ipfs::fetch_content(&api, &resp.cid).await {
+                        Ok(bytes) => {
+                            match crate::crypto::bin::decrypt_bin_metadata(&bytes, &user_private_key) {
+                                Ok(meta) => (meta, Some(resp.cid)),
+                                Err(e) => {
+                                    // Cannot decrypt existing bin — do NOT overwrite with empty.
+                                    // The CID stays pinned so no data is lost.
+                                    log::warn!("Failed to decrypt existing bin metadata, skipping publish to preserve existing data: {}", e);
+                                    return Err(format!("Bin decrypt failed, entry not published: {}", e));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            // Cannot fetch existing blob — do NOT overwrite with empty.
+                            log::warn!("Failed to fetch bin metadata blob, skipping publish to preserve existing data: {}", e);
+                            return Err(format!("Bin fetch failed, entry not published: {}", e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Only treat explicit "not found" as first-time bin initialization.
+                    // Transient errors (network, 500, etc.) must NOT overwrite existing data.
+                    if e.to_lowercase().contains("not found") {
+                        (crate::crypto::bin::empty_bin_metadata(), None)
+                    } else {
+                        log::warn!("Failed to resolve bin IPNS, skipping publish to preserve existing data: {}", e);
+                        return Err(format!("Bin resolve failed, entry not published: {}", e));
+                    }
+                }
+            };
+
+            // 4. Add the new entry and increment sequence number
+            bin_metadata.sequence_number += 1;
+            bin_metadata.entries.push(entry);
+
+            // 5. Encrypt with ECIES using user's public key
+            let encrypted = crate::crypto::bin::encrypt_bin_metadata(&bin_metadata, &user_public_key)
+                .map_err(|e| format!("Bin metadata encryption failed: {}", e))?;
+
+            // 6. Upload to IPFS
+            let new_cid = crate::api::ipfs::upload_content(&api, &encrypted).await?;
+
+            // 7. Resolve current IPNS sequence and publish
+            let seq = coordinator.resolve_sequence(&api, &bin_ipns_name).await.unwrap_or(0);
+            let new_seq = seq + 1;
+
+            let bin_ipns_key_arr: [u8; 32] = bin_ipns_private_key.as_slice().try_into()
+                .map_err(|_| "Invalid bin IPNS key length".to_string())?;
+            let value = format!("/ipfs/{}", new_cid);
+            let record = crate::crypto::ipns::create_ipns_record(
+                &bin_ipns_key_arr, &value, new_seq, 86_400_000,
+            ).map_err(|e| format!("Bin IPNS record creation failed: {}", e))?;
+            let marshaled = crate::crypto::ipns::marshal_ipns_record(&record)
+                .map_err(|e| format!("Bin IPNS marshal failed: {}", e))?;
+
+            use base64::Engine;
+            let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
+
+            let req = crate::api::ipns::IpnsPublishRequest {
+                ipns_name: bin_ipns_name.clone(),
+                record: record_b64,
+                metadata_cid: new_cid,
+                encrypted_ipns_private_key: None,
+                key_epoch: None,
+                expected_sequence_number: Some(seq.to_string()),
+            };
+
+            match crate::api::ipns::publish_ipns(&api, &req).await? {
+                crate::api::ipns::PublishResult::Success => {
+                    coordinator.record_publish(&bin_ipns_name, new_seq);
+                    // Unpin old bin metadata CID
+                    if let Some(old) = existing_cid {
+                        let _ = crate::api::ipfs::unpin_content(&api, &old).await;
+                    }
+                    log::info!("Bin entry published for '{}'", bin_metadata.entries.last().map(|e| e.name.as_str()).unwrap_or("?"));
+                }
+                crate::api::ipns::PublishResult::Conflict { current_sequence_number } => {
+                    // On conflict, log warning. The entry will be lost for this delete,
+                    // but the CID stays pinned (no data loss). Next delete or web app
+                    // session will create a fresh bin state.
+                    log::warn!(
+                        "Bin IPNS publish conflict (expected {}, server {}). Bin entry not saved, but CID preserved.",
+                        seq, current_sequence_number
+                    );
+                }
+            }
+
+            Ok::<(), String>(())
+        });
+
+        if let Err(e) = result {
+            log::error!("Background bin entry publish failed: {}", e);
+        }
+    });
+}
+
 /// The main filesystem struct.
 ///
 /// Shared between macOS FUSE and Windows WinFsp implementations.

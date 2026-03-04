@@ -83,6 +83,21 @@ else
 fi
 echo ""
 
+# ---- Step 5: Recycle bin ----
+echo "--- Step 5: Recycle bin ---"
+set +e
+TEST_SECRET="$TEST_SECRET" bash "$SCRIPT_DIR/test-recycle-bin.sh" "$MOUNT_POINT" "$API_URL"
+BIN_FAILURES=$?
+set -e
+
+if [ "$BIN_FAILURES" -eq 0 ]; then
+  echo "Recycle bin: ALL PASSED"
+else
+  echo "Recycle bin: $BIN_FAILURES FAILURE(S)"
+  TOTAL_FAIL=$((TOTAL_FAIL + BIN_FAILURES))
+fi
+echo ""
+
 # ---- Summary ----
 echo "============================================"
 echo "  Summary"
