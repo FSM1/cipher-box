@@ -631,8 +631,8 @@ export function useFolderMutations() {
             parentPath: buildFolderPath(parentId),
             userPublicKey: auth.vaultKeypair.publicKey,
             userPrivateKey: auth.vaultKeypair.privateKey,
-          }).catch((err) => {
-            console.error('[Delete] Failed to add to bin (non-blocking):', err);
+          }).catch(() => {
+            console.error('[Delete] Failed to add to bin (non-blocking)');
           });
         }
 
@@ -751,8 +751,8 @@ export function useFolderMutations() {
               parentPath,
               userPublicKey: auth.vaultKeypair.publicKey,
               userPrivateKey: auth.vaultKeypair.privateKey,
-            }).catch((err) => {
-              console.error(`[Delete] Failed to add ${child.name} to bin (non-blocking):`, err);
+            }).catch(() => {
+              console.error(`[Delete] Failed to add ${child.name} to bin (non-blocking)`);
             });
           }
         }

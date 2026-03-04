@@ -90,7 +90,10 @@ export const useBinStore = create<BinState>((set) => ({
 
   setBinIpnsName: (name) => set({ binIpnsName: name }),
 
-  setRetentionDays: (days) => set({ retentionDays: days }),
+  setRetentionDays: (days) =>
+    set({
+      retentionDays: Number.isFinite(days) ? Math.max(1, Math.floor(days)) : 30,
+    }),
 
   clearBin: () =>
     set({

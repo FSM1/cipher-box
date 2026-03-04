@@ -490,7 +490,7 @@ pub(crate) fn spawn_bin_entry_publish(
     std::thread::spawn(move || {
         let result = rt.block_on(async {
             // 1. Derive the bin IPNS keypair from user's private key
-            let pk_arr: [u8; 32] = user_private_key.clone().try_into()
+            let pk_arr: [u8; 32] = user_private_key.as_slice().try_into()
                 .map_err(|_| "Invalid private key length for bin derivation".to_string())?;
             let (bin_ipns_private_key, _bin_ipns_public_key, bin_ipns_name) =
                 crate::crypto::hkdf::derive_bin_ipns_keypair(&pk_arr)
@@ -509,14 +509,17 @@ pub(crate) fn spawn_bin_entry_publish(
                             match crate::crypto::bin::decrypt_bin_metadata(&bytes, &user_private_key) {
                                 Ok(meta) => (meta, Some(resp.cid)),
                                 Err(e) => {
-                                    log::warn!("Failed to decrypt existing bin metadata, starting fresh: {}", e);
-                                    (crate::crypto::bin::empty_bin_metadata(), None)
+                                    // Cannot decrypt existing bin — do NOT overwrite with empty.
+                                    // The CID stays pinned so no data is lost.
+                                    log::warn!("Failed to decrypt existing bin metadata, skipping publish to preserve existing data: {}", e);
+                                    return Err(format!("Bin decrypt failed, entry not published: {}", e));
                                 }
                             }
                         }
                         Err(e) => {
-                            log::warn!("Failed to fetch bin metadata blob, starting fresh: {}", e);
-                            (crate::crypto::bin::empty_bin_metadata(), None)
+                            // Cannot fetch existing blob — do NOT overwrite with empty.
+                            log::warn!("Failed to fetch bin metadata blob, skipping publish to preserve existing data: {}", e);
+                            return Err(format!("Bin fetch failed, entry not published: {}", e));
                         }
                     }
                 }

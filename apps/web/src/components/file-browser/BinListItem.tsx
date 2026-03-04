@@ -110,15 +110,9 @@ export function BinListItem({
       aria-selected={isSelected}
       tabIndex={0}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') {
+        if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          const rect = e.currentTarget.getBoundingClientRect();
-          const syntheticEvent = {
-            preventDefault: () => {},
-            clientX: rect.left + rect.width / 2,
-            clientY: rect.top + rect.height / 2,
-          } as MouseEvent;
-          onContextMenu(syntheticEvent, entry);
+          onSelect(entry.id, { ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, metaKey: e.metaKey });
         }
       }}
     >
@@ -129,7 +123,7 @@ export function BinListItem({
           role="checkbox"
           aria-checked={isSelected}
           aria-label={`Select ${entry.name}`}
-          tabIndex={-1}
+          tabIndex={0}
           onKeyDown={(e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();

@@ -91,12 +91,16 @@ function validateBinEntry(data: unknown): void {
   }
 
   // Validate deletedAt (number)
-  if (typeof entry.deletedAt !== 'number') {
+  if (
+    typeof entry.deletedAt !== 'number' ||
+    !Number.isFinite(entry.deletedAt) ||
+    entry.deletedAt < 0
+  ) {
     throw new CryptoError('Invalid bin metadata format', 'DECRYPTION_FAILED');
   }
 
-  // Validate size (non-negative number)
-  if (typeof entry.size !== 'number' || entry.size < 0) {
+  // Validate size (non-negative finite number)
+  if (typeof entry.size !== 'number' || !Number.isFinite(entry.size) || entry.size < 0) {
     throw new CryptoError('Invalid bin metadata format', 'DECRYPTION_FAILED');
   }
 

@@ -137,6 +137,11 @@ export function BinBrowser() {
             for (const id of rangeIds) next.add(id);
             return next;
           });
+          lastSelectedIdRef.current = entryId;
+        } else {
+          // Stale anchor — fall back to selecting the clicked row
+          setSelectedIds(new Set([entryId]));
+          lastSelectedIdRef.current = entryId;
         }
       } else if (isCtrl) {
         setSelectedIds((prev) => {

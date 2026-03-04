@@ -46,8 +46,8 @@ export function useBin() {
         retentionDays: currentRetention,
         userPublicKey: auth.vaultKeypair.publicKey,
         userPrivateKey: auth.vaultKeypair.privateKey,
-      }).catch((err) => {
-        console.error('[useBin] Auto-purge failed (non-blocking):', err);
+      }).catch(() => {
+        console.error('[useBin] Auto-purge failed (non-blocking)');
       });
 
       setState({ isLoading: false, error: null });
