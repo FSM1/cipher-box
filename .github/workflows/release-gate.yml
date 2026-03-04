@@ -73,11 +73,16 @@ jobs:
   verify-e2e:
     name: Verify E2E Passed
     needs: detect-changes
-    if: startsWith(github.head_ref, 'release-please--')
+    if: '!cancelled()'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
+      - name: Skip (not a release PR)
+        if: "!startsWith(github.head_ref, 'release-please--')"
+        run: echo "Not a release PR — E2E gate not applicable"
+
       - name: Wait for Web E2E and verify it passed
+        if: startsWith(github.head_ref, 'release-please--')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -117,7 +122,7 @@ jobs:
           echo "Web E2E: passed"
 
       - name: Verify Desktop E2E (if desktop changed)
-        if: needs.detect-changes.outputs.desktop == 'true'
+        if: startsWith(github.head_ref, 'release-please--') && needs.detect-changes.outputs.desktop == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PREV_TAG: ${{ needs.detect-changes.outputs.prev_tag }}
@@ -256,8 +261,9 @@ jobs:
           echo "Desktop E2E: passed (run ${LATEST_IN_RANGE_RUN_ID} at ${LATEST_IN_RANGE_SHA} with tests executed)"
 
       - name: Skip Desktop E2E (no desktop changes)
-        if: needs.detect-changes.outputs.desktop != 'true'
+        if: startsWith(github.head_ref, 'release-please--') && needs.detect-changes.outputs.desktop != 'true'
         run: echo "No desktop-related changes since last release — skipping Desktop E2E gate"
 
       - name: Summary
+        if: startsWith(github.head_ref, 'release-please--')
         run: echo "All E2E gates passed — release is safe to merge."
