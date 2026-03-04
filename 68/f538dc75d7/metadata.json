@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "68f538dc75d7",
+  "strategy": "manual-commit",
+  "branch": "fix/security-review-hardening",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/todos/done/2026-02-15-security-review-medium-term-fixes.md",
+    ".planning/todos/done/2026-02-21-phase14-security-review-deferred.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/68/f538dc75d7/0/metadata.json",
+      "transcript": "/68/f538dc75d7/0/full.jsonl",
+      "context": "/68/f538dc75d7/0/context.md",
+      "content_hash": "/68/f538dc75d7/0/content_hash.txt",
+      "prompt": "/68/f538dc75d7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 132,
+    "cache_creation_tokens": 172805,
+    "cache_read_tokens": 14333792,
+    "output_tokens": 35002,
+    "api_call_count": 126
+  }
+}

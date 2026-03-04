@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "68f538dc75d7",
+  "session_id": "6d960bbf-6a84-4e21-848c-a2a890fa4224",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-04T18:32:13.706025Z",
+  "branch": "fix/security-review-hardening",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/todos/done/2026-02-15-security-review-medium-term-fixes.md",
+    ".planning/todos/done/2026-02-21-phase14-security-review-deferred.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "dcc0e1285436",
+  "token_usage": {
+    "input_tokens": 132,
+    "cache_creation_tokens": 172805,
+    "cache_read_tokens": 14333792,
+    "output_tokens": 35002,
+    "api_call_count": 126
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-04T18:32:12.25857Z",
+    "agent_lines": 48,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 48,
+    "agent_percentage": 100
+  }
+}
