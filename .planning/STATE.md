@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- COMPLETE (all phases shipped)
+**Current focus:** Milestone 2 -- gap closure in progress (Phase 17.1 from audit)
 
 ## Current Position
 
-Phase: 17 (Recycle Bin) -- Complete
-Plan: 5 of 5
-Status: Phase complete (all plans executed)
-Last activity: 2026-03-04 -- Completed 17-05-PLAN.md
+Phase: 17.1 (Recycle Bin Integration Fixes) -- Not started
+Plan: 0 of TBD
+Status: Phase added, needs planning
+Last activity: 2026-03-05 -- Gap closure phase created from milestone audit
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE, Phase 16: 5/5 COMPLETE, Phase 17: 5/5 COMPLETE)
+Progress: [########################-] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE, Phase 16: 5/5 COMPLETE, Phase 17: 5/5 COMPLETE, Phase 17.1: 0/TBD NOT STARTED)
 
 ## Performance Metrics
 
@@ -275,6 +275,7 @@ Recent decisions affecting current work:
 - Phase 11.2 inserted after Phase 11.1: Remove v1 Folder Metadata — eliminate v1/v2 dual-schema code, make v2 FilePointer canonical everywhere, add per-file IPNS publishing to desktop FUSE. Triggered by cross-device format oscillation bug (desktop writes v1, web re-saves as v2 hybrid, desktop rejects).
 - Phase 15 split: "Link Sharing and Search" split into Phase 15 (Link Sharing) and Phase 15.1 (Client-Side Search). Independent features with different security surfaces.
 - Phase 17 added to M2: Recycle Bin -- soft-delete with time-limited retention, file/folder recovery, manual bin emptying. AWS Nitro TEE moved from M2 Phase 17 to M3 Phase 22 (Phala mock still in use on staging). M3 phases: 18-22.
+- Phase 17.1 inserted after Phase 17: Recycle Bin Integration Fixes -- milestone audit found bin permanent delete can't unpin CIDs (encrypted metadata parsed as plain JSON) and Windows desktop deletes bypass bin. Closes GAP-1 (CRITICAL) and GAP-2 (MODERATE).
 
 ### Blockers/Concerns
 
@@ -321,14 +322,15 @@ Recent decisions affecting current work:
 - Phase 11.4 (Cross-Platform E2E Testing): COMPLETE -- 3/3 plans done (CI debug artifacts + crypto vectors, FUSE/API test scripts, e2e-desktop.yml workflow)
 - Phase 16 (Advanced Sync): COMPLETE -- 5/5 plans done (API concurrency control, web sync service, desktop conflict handling, web E2E tests, desktop E2E tests)
 - Phase 17 (Recycle Bin): COMPLETE -- 5/5 plans done (crypto, store/service, web UI, desktop FUSE, E2E testing)
+- Phase 17.1 (Bin Integration Fixes): Skip research -- root causes identified in audit, fix approaches defined
 - Phase 22 (Nitro TEE): Moved to M3. NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
-Last session: 2026-03-04
-Stopped at: Completed 17-05-PLAN.md (Phase 17 complete)
+Last session: 2026-03-05
+Stopped at: Created Phase 17.1 gap closure phase from milestone audit
 Resume file: None
-Next: Phase 17 PR to main
+Next: Plan Phase 17.1 via /gsd:plan-phase
 
 ---
 
