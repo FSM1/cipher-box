@@ -6,10 +6,8 @@ import { authApi } from '../lib/api/auth';
 import { vaultApi } from '../lib/api/vault';
 import { useAuthStore } from '../stores/auth.store';
 import { useVaultStore } from '../stores/vault.store';
-import { useFolderStore } from '../stores/folder.store';
-import { useSyncStore } from '../stores/sync.store';
 import { useDeviceRegistryStore } from '../stores/device-registry.store';
-import { useMfaStore } from '../stores/mfa.store';
+import { clearAllUserStores } from '../lib/clear-user-stores';
 import {
   initializeVault,
   encryptVaultKeys,
@@ -24,7 +22,6 @@ import { initializeOrSyncRegistry } from '../services/device-registry.service';
 import { initializeBin } from '../services/bin.service';
 import { useBinStore } from '../stores/bin.store';
 import { vaultControllerGetConfig } from '../api/vault/vault';
-import { clearFileSizeCache } from './useFileSize';
 
 export function useAuth() {
   const navigate = useNavigate();
@@ -49,7 +46,6 @@ export function useAuth() {
     setLastAuthMethod,
     setUserEmail,
     setVaultKeypair,
-    logout: clearAuthState,
   } = useAuthStore();
 
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -446,36 +442,20 @@ export function useAuth() {
       // 2. Logout Core Kit (clears session from localStorage)
       await coreKitLogout();
 
-      // 3. Clear local state
-      // [SECURITY: HIGH-02] Clear vault and folder stores
-      // BEFORE auth state to zero crypto keys from memory
-      useFolderStore.getState().clearFolders();
-      useVaultStore.getState().clearVaultKeys();
-      useSyncStore.getState().reset();
-      useDeviceRegistryStore.getState().clearRegistry();
-      useBinStore.getState().clearBin();
-      useMfaStore.getState().reset();
-      clearFileSizeCache();
-      clearAuthState();
+      // 3. Clear all user-scoped stores (centralized helper)
+      clearAllUserStores();
 
-      // 4. Navigate to login (pending auth cleared by clearAuthState -> store logout)
+      // 4. Navigate to login
       navigate('/');
     } catch (error) {
       console.error('[useAuth] Logout failed:', error);
       // Still clear state even if backend fails
-      useFolderStore.getState().clearFolders();
-      useVaultStore.getState().clearVaultKeys();
-      useSyncStore.getState().reset();
-      useDeviceRegistryStore.getState().clearRegistry();
-      useBinStore.getState().clearBin();
-      useMfaStore.getState().reset();
-      clearFileSizeCache();
-      clearAuthState();
+      clearAllUserStores();
       navigate('/');
     } finally {
       setIsLoggingOut(false);
     }
-  }, [accessToken, coreKitLogout, clearAuthState, navigate, isLoggingOut]);
+  }, [accessToken, coreKitLogout, navigate, isLoggingOut]);
 
   // Keep function refs up-to-date for use in session restoration effect.
   // Using refs prevents the effect from re-firing when function identities change.

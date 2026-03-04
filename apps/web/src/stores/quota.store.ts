@@ -1,29 +1,36 @@
 import { create } from 'zustand';
 import { vaultApi, QuotaResponse } from '../lib/api/vault';
 
-type QuotaState = {
-  usedBytes: number;
-  limitBytes: number;
-  remainingBytes: number;
-  loading: boolean;
-  error: string | null;
+const DEFAULT_LIMIT_BYTES = 500 * 1024 * 1024; // 500 MiB
 
+const initialState = {
+  usedBytes: 0,
+  limitBytes: DEFAULT_LIMIT_BYTES,
+  remainingBytes: DEFAULT_LIMIT_BYTES,
+  loading: false,
+  error: null as string | null,
+};
+
+// Session version guard: incremented on reset() so in-flight fetchQuota()
+// responses are discarded if they resolve after logout/reset.
+let quotaSessionVersion = 0;
+
+type QuotaState = typeof initialState & {
   fetchQuota: () => Promise<void>;
   removeUsage: (bytes: number) => void;
   canUpload: (bytes: number) => boolean;
+  reset: () => void;
 };
 
 export const useQuotaStore = create<QuotaState>((set, get) => ({
-  usedBytes: 0,
-  limitBytes: 500 * 1024 * 1024, // 500 MiB
-  remainingBytes: 500 * 1024 * 1024,
-  loading: false,
-  error: null,
+  ...initialState,
 
   fetchQuota: async () => {
+    const requestVersion = quotaSessionVersion;
     set({ loading: true, error: null });
     try {
       const quota: QuotaResponse = await vaultApi.getQuota();
+      if (requestVersion !== quotaSessionVersion) return;
       set({
         usedBytes: quota.usedBytes,
         limitBytes: quota.limitBytes,
@@ -31,6 +38,7 @@ export const useQuotaStore = create<QuotaState>((set, get) => ({
         loading: false,
       });
     } catch {
+      if (requestVersion !== quotaSessionVersion) return;
       set({ error: 'Failed to fetch quota', loading: false });
     }
   },
@@ -44,5 +52,10 @@ export const useQuotaStore = create<QuotaState>((set, get) => ({
   canUpload: (bytes) => {
     const { remainingBytes } = get();
     return bytes <= remainingBytes;
+  },
+
+  reset: () => {
+    quotaSessionVersion += 1;
+    set(initialState);
   },
 }));
