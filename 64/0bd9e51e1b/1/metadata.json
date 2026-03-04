@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "640bd9e51e1b",
+  "session_id": "ee11aec4-0c2c-48b4-9e43-d65e681eccfe",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-04T23:22:33.989512Z",
+  "branch": "fix/m2-gap-closure-phase-17.1",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/ROADMAP.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "687d4a1daeaa",
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 63611,
+    "cache_read_tokens": 1879113,
+    "output_tokens": 5818,
+    "api_call_count": 21
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-04T23:22:33.115501Z",
+    "agent_lines": 0,
+    "human_added": 947,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 947,
+    "agent_percentage": 0
+  }
+}
