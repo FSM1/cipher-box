@@ -276,6 +276,7 @@ pub(crate) mod implementation {
                     file_meta_ipns_name,
                     file_ipns_key_encrypted_hex,
                     size,
+                    cid,
                     ..
                 } => {
                     let now_ms = SystemTime::now()
@@ -312,7 +313,7 @@ pub(crate) mod implementation {
                             modified_at: now_ms,
                         };
 
-                        Some((inode.name.clone(), *size, file_pointer))
+                        Some((inode.name.clone(), *size, file_pointer, cid.clone()))
                     } else {
                         None
                     }
@@ -344,7 +345,7 @@ pub(crate) mod implementation {
         }
 
         // Create bin entry and publish to bin IPNS (fire-and-forget)
-        if let Some((item_name, file_size, file_pointer)) = bin_entry_data {
+        if let Some((item_name, file_size, file_pointer, content_cid)) = bin_entry_data {
             let parent_ipns_name = fs.inodes.get(parent)
                 .map(|p| match &p.kind {
                     InodeKind::Root { ipns_name, .. } => ipns_name.clone().unwrap_or_default(),
@@ -373,7 +374,7 @@ pub(crate) mod implementation {
                         .as_millis() as u64,
                     size: file_size,
                     mime_type: crate::crypto::utils::mime_from_extension(&item_name).to_string(),
-                    content_cid: None,
+                    content_cid: if content_cid.is_empty() { None } else { Some(content_cid) },
                     content_size: Some(file_size),
                     file_pointer: Some(file_pointer),
                     folder_entry: None,
