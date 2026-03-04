@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "7d1630bd9018",
+  "session_id": "51b7921c-bb61-4023-87d9-55f68dda1acc",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-04T12:44:25.211759Z",
+  "branch": "feat/phase-17-recycle-bin",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/services/bin.service.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "00a8818c7f11",
+  "token_usage": {
+    "input_tokens": 140,
+    "cache_creation_tokens": 246574,
+    "cache_read_tokens": 14230267,
+    "output_tokens": 50541,
+    "api_call_count": 132
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-04T12:44:17.884495Z",
+    "agent_lines": 0,
+    "human_added": 40,
+    "human_modified": 20,
+    "human_removed": 0,
+    "total_committed": 40,
+    "agent_percentage": 0
+  }
+}

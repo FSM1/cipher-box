@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "7d1630bd9018",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-17-recycle-bin",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/services/bin.service.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7d/1630bd9018/0/metadata.json",
+      "transcript": "/7d/1630bd9018/0/full.jsonl",
+      "context": "/7d/1630bd9018/0/context.md",
+      "content_hash": "/7d/1630bd9018/0/content_hash.txt",
+      "prompt": "/7d/1630bd9018/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 140,
+    "cache_creation_tokens": 246574,
+    "cache_read_tokens": 14230267,
+    "output_tokens": 50541,
+    "api_call_count": 132
+  }
+}
