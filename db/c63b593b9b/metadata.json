@@ -3,8 +3,9 @@
   "checkpoint_id": "dbc63b593b9b",
   "strategy": "manual-commit",
   "branch": "feat/phase-17-recycle-bin",
-  "checkpoints_count": 3,
+  "checkpoints_count": 4,
   "files_touched": [
+    "apps/web/src/hooks/useFolderMutations.ts",
     "apps/web/src/services/bin.service.ts"
   ],
   "sessions": [
@@ -14,13 +15,20 @@
       "context": "/db/c63b593b9b/0/context.md",
       "content_hash": "/db/c63b593b9b/0/content_hash.txt",
       "prompt": "/db/c63b593b9b/0/prompt.txt"
+    },
+    {
+      "metadata": "/db/c63b593b9b/1/metadata.json",
+      "transcript": "/db/c63b593b9b/1/full.jsonl",
+      "context": "/db/c63b593b9b/1/context.md",
+      "content_hash": "/db/c63b593b9b/1/content_hash.txt",
+      "prompt": "/db/c63b593b9b/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 185,
-    "cache_creation_tokens": 315026,
-    "cache_read_tokens": 20024746,
-    "output_tokens": 66070,
-    "api_call_count": 174
+    "input_tokens": 225,
+    "cache_creation_tokens": 437534,
+    "cache_read_tokens": 23390905,
+    "output_tokens": 83717,
+    "api_call_count": 212
   }
 }
