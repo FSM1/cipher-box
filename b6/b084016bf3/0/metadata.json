@@ -1,0 +1,41 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "b6b084016bf3",
+  "session_id": "51b7921c-bb61-4023-87d9-55f68dda1acc",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-04T03:42:28.837632Z",
+  "branch": "feat/phase-17-recycle-bin",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/crypto/bin.rs",
+    "apps/desktop/src-tauri/src/crypto/tests.rs",
+    "apps/desktop/src-tauri/src/crypto/utils.rs",
+    "apps/desktop/src-tauri/src/fuse/helpers.rs",
+    "apps/desktop/src-tauri/src/fuse/write_ops.rs",
+    "apps/desktop/src-tauri/src/registry/mod.rs",
+    "apps/web/src/components/file-browser/BinListItem.tsx",
+    "apps/web/src/components/file-browser/FileListItem.tsx",
+    "apps/web/src/components/mfa/AuthorizedDevices.tsx",
+    "apps/web/src/services/bin.service.ts",
+    "apps/web/src/stores/bin.store.ts",
+    "apps/web/src/utils/format.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "9f875f3dceaf",
+  "token_usage": {
+    "input_tokens": 100,
+    "cache_creation_tokens": 129516,
+    "cache_read_tokens": 11179292,
+    "output_tokens": 38238,
+    "api_call_count": 95
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-04T03:42:26.480838Z",
+    "agent_lines": 204,
+    "human_added": 216,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 421,
+    "agent_percentage": 48.45605700712589
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "b6b084016bf3",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-17-recycle-bin",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/crypto/bin.rs",
+    "apps/desktop/src-tauri/src/crypto/tests.rs",
+    "apps/desktop/src-tauri/src/crypto/utils.rs",
+    "apps/desktop/src-tauri/src/fuse/helpers.rs",
+    "apps/desktop/src-tauri/src/fuse/write_ops.rs",
+    "apps/desktop/src-tauri/src/registry/mod.rs",
+    "apps/web/src/components/file-browser/BinListItem.tsx",
+    "apps/web/src/components/file-browser/FileListItem.tsx",
+    "apps/web/src/components/mfa/AuthorizedDevices.tsx",
+    "apps/web/src/services/bin.service.ts",
+    "apps/web/src/stores/bin.store.ts",
+    "apps/web/src/utils/format.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b6/b084016bf3/0/metadata.json",
+      "transcript": "/b6/b084016bf3/0/full.jsonl",
+      "context": "/b6/b084016bf3/0/context.md",
+      "content_hash": "/b6/b084016bf3/0/content_hash.txt",
+      "prompt": "/b6/b084016bf3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 100,
+    "cache_creation_tokens": 129516,
+    "cache_read_tokens": 11179292,
+    "output_tokens": 38238,
+    "api_call_count": 95
+  }
+}
