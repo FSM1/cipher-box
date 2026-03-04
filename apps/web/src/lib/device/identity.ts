@@ -212,10 +212,14 @@ export async function getOrCreateDeviceIdentity(
 
   // Generate new keypair and persist (encrypted)
   const keypair = generateDeviceKeypair();
-  await saveDeviceKeypair(
-    { publicKey: keypair.publicKey, privateKey: keypair.privateKey },
-    vaultPrivateKey
-  );
+  try {
+    await saveDeviceKeypair(
+      { publicKey: keypair.publicKey, privateKey: keypair.privateKey },
+      vaultPrivateKey
+    );
+  } catch {
+    // IndexedDB unavailable or write failed; keep in-memory identity for this session.
+  }
 
   return keypair;
 }
