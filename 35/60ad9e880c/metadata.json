@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "3560ad9e880c",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-17-recycle-bin",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/fuse/mod.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/35/60ad9e880c/0/metadata.json",
+      "transcript": "/35/60ad9e880c/0/full.jsonl",
+      "context": "/35/60ad9e880c/0/context.md",
+      "content_hash": "/35/60ad9e880c/0/content_hash.txt",
+      "prompt": "/35/60ad9e880c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 40,
+    "cache_creation_tokens": 122508,
+    "cache_read_tokens": 3366159,
+    "output_tokens": 17647,
+    "api_call_count": 38
+  }
+}
