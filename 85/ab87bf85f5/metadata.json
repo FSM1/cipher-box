@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "85ab87bf85f5",
+  "strategy": "manual-commit",
+  "branch": "chore/release-gate-required-check",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/release-gate.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/85/ab87bf85f5/0/metadata.json",
+      "transcript": "/85/ab87bf85f5/0/full.jsonl",
+      "context": "/85/ab87bf85f5/0/context.md",
+      "content_hash": "/85/ab87bf85f5/0/content_hash.txt",
+      "prompt": "/85/ab87bf85f5/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 292,
+    "cache_creation_tokens": 424786,
+    "cache_read_tokens": 28538050,
+    "output_tokens": 98041,
+    "api_call_count": 261
+  }
+}
