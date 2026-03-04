@@ -27,6 +27,8 @@ function buildFolderPath(folderId: string): string {
   while (currentId !== null) {
     const folder: FolderNode | undefined = folders[currentId];
     if (!folder) break;
+    // Stop before including the root node (its name is already the "My Vault" prefix)
+    if (folder.parentId === null) break;
     parts.unshift(folder.name);
     currentId = folder.parentId;
   }

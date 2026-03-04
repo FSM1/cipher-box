@@ -38,16 +38,24 @@ function createTestBinMetadata(entryCount = 1): RecycleBinMetadata {
     ...(i % 2 === 0
       ? {
           filePointer: {
-            cid: `bafybeig${'x'.repeat(52)}`,
-            encryptedKey: `${'dd'.repeat(32)}`,
-            size: i * 1024,
-            mimeType: 'text/plain',
+            type: 'file' as const,
+            id: crypto.randomUUID(),
+            name: `test-item-${i}.txt`,
+            fileMetaIpnsName: `k51${'c'.repeat(59)}`,
+            createdAt: now - i * 120_000,
+            modifiedAt: now - i * 60_000,
           },
         }
       : {
           folderEntry: {
+            type: 'folder' as const,
+            id: crypto.randomUUID(),
+            name: `test-item-${i}.txt`,
             ipnsName: `k51${'b'.repeat(59)}`,
-            encryptedFolderKey: `${'ee'.repeat(48)}`,
+            ipnsPrivateKeyEncrypted: `${'dd'.repeat(48)}`,
+            folderKeyEncrypted: `${'ee'.repeat(48)}`,
+            createdAt: now - i * 120_000,
+            modifiedAt: now - i * 60_000,
           },
         }),
   }));

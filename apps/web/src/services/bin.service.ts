@@ -93,14 +93,14 @@ async function saveBinMetadata(params: {
   let encryptedIpnsKey: string | undefined;
   let keyEpoch: number | undefined;
 
-  if (!binTeeEnrolled) {
+  const enrollingTee = !binTeeEnrolled;
+  if (enrollingTee) {
     const teeKeys = useAuthStore.getState().teeKeys;
     if (teeKeys?.currentPublicKey) {
       try {
         const wrappedKey = await wrapKey(binIpns.privateKey, hexToBytes(teeKeys.currentPublicKey));
         encryptedIpnsKey = bytesToHex(wrappedKey);
         keyEpoch = teeKeys.currentEpoch;
-        binTeeEnrolled = true;
       } catch (err) {
         console.error('[Bin] TEE enrollment failed (non-blocking):', err);
       }
@@ -116,6 +116,11 @@ async function saveBinMetadata(params: {
     encryptedIpnsPrivateKey: encryptedIpnsKey,
     keyEpoch,
   });
+
+  // Mark TEE enrolled only after successful publish
+  if (enrollingTee && encryptedIpnsKey) {
+    binTeeEnrolled = true;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -383,13 +388,13 @@ export async function restoreFromBinBatch(params: {
   const { entryIds, userPublicKey, userPrivateKey } = params;
   if (entryIds.length === 0) return;
 
-  const binStore = useBinStore.getState();
   const { updateFolderMetadata } = await import('./folder.service');
 
   const restoredIds: string[] = [];
 
   for (const entryId of entryIds) {
-    const entry = binStore.entries.find((e) => e.id === entryId);
+    // Read fresh state each iteration — recursive restores may mutate the store
+    const entry = useBinStore.getState().entries.find((e) => e.id === entryId);
     if (!entry) continue;
 
     try {

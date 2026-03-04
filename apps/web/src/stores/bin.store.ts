@@ -65,7 +65,7 @@ export const useBinStore = create<BinState>((set) => ({
 
   setRetentionDays: (days) =>
     set({
-      retentionDays: Number.isFinite(days) ? Math.max(1, Math.floor(days)) : 30,
+      retentionDays: Number.isFinite(days) ? Math.max(0, Math.floor(days)) : 30,
     }),
 
   clearBin: () =>
