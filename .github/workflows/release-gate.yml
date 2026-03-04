@@ -16,8 +16,10 @@ jobs:
     steps:
       - name: Check if release PR
         id: release-check
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
-          if [[ "${{ github.head_ref }}" == release-please--* ]]; then
+          if [[ "$HEAD_REF" == release-please--* ]]; then
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           else
             echo "is_release=false" >> "$GITHUB_OUTPUT"
