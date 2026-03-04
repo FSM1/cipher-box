@@ -300,6 +300,7 @@ Recent decisions affecting current work:
 | 020 | Fix shared items rendering                | 2026-02-25 | 96b7591 | [020-fix-shared-items-rendering](./quick/020-fix-shared-items-rendering/)                                   |
 | 021 | Account deletion (GDPR)                   | 2026-02-25 | 8ae01dd | [021-account-deletion-gdpr](./quick/021-account-deletion-gdpr/)                                             |
 | 022 | Fix MFA status detection false positive   | 2026-02-26 | ff850e0 | [022-fix-mfa-status-detection-false-positive](./quick/022-fix-mfa-status-detection-false-positive/)         |
+| 023 | M2 tech debt: store logout cleanup        | 2026-03-04 | a8febeb | [023-m2-tech-debt-store-logout-cleanup](./quick/023-m2-tech-debt-store-logout-cleanup/)                     |
 
 ### Research Flags
 
