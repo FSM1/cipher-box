@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "94fe8778a376",
+  "strategy": "manual-commit",
+  "branch": "fix/security-review-hardening",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/lib/device/identity.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/94/fe8778a376/0/metadata.json",
+      "transcript": "/94/fe8778a376/0/full.jsonl",
+      "context": "/94/fe8778a376/0/context.md",
+      "content_hash": "/94/fe8778a376/0/content_hash.txt",
+      "prompt": "/94/fe8778a376/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 68702,
+    "cache_read_tokens": 3861899,
+    "output_tokens": 17843,
+    "api_call_count": 41
+  }
+}

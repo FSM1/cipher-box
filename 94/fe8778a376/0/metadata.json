@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "94fe8778a376",
+  "session_id": "cd58a64f-c035-4714-abdd-d1ffcd9be7fd",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-04T20:34:37.708568Z",
+  "branch": "fix/security-review-hardening",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/lib/device/identity.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "a9c72f44df00",
+  "checkpoint_transcript_start": 159,
+  "transcript_lines_at_start": 159,
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 68702,
+    "cache_read_tokens": 3861899,
+    "output_tokens": 17843,
+    "api_call_count": 41
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-04T20:34:36.32725Z",
+    "agent_lines": 16,
+    "human_added": 332,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 348,
+    "agent_percentage": 4.597701149425287
+  }
+}
