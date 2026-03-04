@@ -3,7 +3,7 @@
   "checkpoint_id": "cf0bcda48f2d",
   "strategy": "manual-commit",
   "branch": "feat/phase-17-recycle-bin",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     "apps/desktop/src-tauri/src/fuse/mod.rs",
     "apps/web/src/components/file-browser/BinBrowser.tsx",
@@ -20,13 +20,20 @@
       "context": "/cf/0bcda48f2d/0/context.md",
       "content_hash": "/cf/0bcda48f2d/0/content_hash.txt",
       "prompt": "/cf/0bcda48f2d/0/prompt.txt"
+    },
+    {
+      "metadata": "/cf/0bcda48f2d/1/metadata.json",
+      "transcript": "/cf/0bcda48f2d/1/full.jsonl",
+      "context": "/cf/0bcda48f2d/1/context.md",
+      "content_hash": "/cf/0bcda48f2d/1/content_hash.txt",
+      "prompt": "/cf/0bcda48f2d/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 21,
-    "cache_creation_tokens": 53215,
-    "cache_read_tokens": 1289745,
-    "output_tokens": 10199,
-    "api_call_count": 20
+    "input_tokens": 2605,
+    "cache_creation_tokens": 401664,
+    "cache_read_tokens": 28952407,
+    "output_tokens": 69528,
+    "api_call_count": 280
   }
 }
