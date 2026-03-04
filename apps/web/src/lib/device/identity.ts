@@ -187,8 +187,8 @@ let sessionFallback: { keypair: DeviceKeypair; vaultKeyHash: string } | null = n
 let persistedInFlight: { promise: Promise<DeviceKeypair>; vaultKeyHash: string } | null = null;
 
 /**
- * Hash the first 32 bytes of the vault key for scoping the session fallback.
- * Uses SHA-256 to avoid storing raw key material in module scope.
+ * Hash the entire vault key and use the first 8 bytes of the digest to scope
+ * the session fallback, avoiding storage of raw key material in module scope.
  */
 async function hashVaultKey(vaultPrivateKey: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', vaultPrivateKey as BufferSource);
