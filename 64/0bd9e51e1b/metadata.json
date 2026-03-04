@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "640bd9e51e1b",
+  "strategy": "manual-commit",
+  "branch": "fix/m2-gap-closure-phase-17.1",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/phases/17.1-bin-integration-fixes/17.1-01-PLAN.md",
+    ".planning/phases/17.1-bin-integration-fixes/17.1-02-PLAN.md",
+    ".planning/phases/17.1-bin-integration-fixes/17.1-03-PLAN.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/64/0bd9e51e1b/0/metadata.json",
+      "transcript": "/64/0bd9e51e1b/0/full.jsonl",
+      "context": "/64/0bd9e51e1b/0/context.md",
+      "content_hash": "/64/0bd9e51e1b/0/content_hash.txt",
+      "prompt": "/64/0bd9e51e1b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5,
+    "cache_creation_tokens": 63440,
+    "cache_read_tokens": 289222,
+    "output_tokens": 2533,
+    "api_call_count": 4
+  }
+}
