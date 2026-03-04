@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "f5c9ea7211d0",
+  "session_id": "d2887769-6c79-4828-b3f3-c2532462dd55",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-04T01:33:52.281284Z",
+  "branch": "feat/phase-17-recycle-bin",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useFolderMutations.ts",
+    "apps/web/src/services/folder.service.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "03356fab5825",
+  "token_usage": {
+    "input_tokens": 876,
+    "cache_creation_tokens": 491222,
+    "cache_read_tokens": 26574235,
+    "output_tokens": 131202,
+    "api_call_count": 253
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-04T01:33:49.871983Z",
+    "agent_lines": 0,
+    "human_added": 4706,
+    "human_modified": 30,
+    "human_removed": 0,
+    "total_committed": 4706,
+    "agent_percentage": 0
+  }
+}
