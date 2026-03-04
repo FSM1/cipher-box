@@ -5,7 +5,7 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- Phase 17 COMPLETE (Recycle Bin)
+**Current focus:** Milestone 2 -- COMPLETE (all phases shipped)
 
 ## Current Position
 

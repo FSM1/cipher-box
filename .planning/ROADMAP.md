@@ -64,7 +64,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 15: Link Sharing** - Shareable file links for non-users with URL-fragment decryption keys -- COMPLETE 2026-02-23
 - [x] **Phase 15.1: Client-Side Search** - Encrypted search index in IndexedDB with incremental updates (INSERTED) -- COMPLETE 2026-02-24
 - [x] **Phase 16: Advanced Sync** - Conflict detection via optimistic concurrency on IPNS folder publishes -- COMPLETE 2026-03-03
-- [ ] **Phase 17: Recycle Bin** - Soft-delete with time-limited retention, file/folder recovery, and manual bin emptying
+- [x] **Phase 17: Recycle Bin** - Soft-delete with time-limited retention, file/folder recovery, and manual bin emptying -- COMPLETE 2026-03-04
 
 ### Milestone 3: Encrypted Productivity Suite (Planned)
 
@@ -484,11 +484,11 @@ Plans:
 
 Plans:
 
-- [ ] 17-01-PLAN.md — Crypto bin module (types, HKDF IPNS derivation, ECIES encrypt/decrypt, schema validation) + API retention config endpoint
-- [ ] 17-02-PLAN.md — Bin store + bin service (initialize, add, restore, permanent delete, empty, purge) + delete flow rewired to soft-delete + useAuth bin init
-- [ ] 17-03-PLAN.md — Bin UI (BinPage, BinBrowser, sidebar nav, context menu, multi-select, restore, permanent delete, empty bin)
-- [ ] 17-04-PLAN.md — Desktop FUSE soft-delete (remove CID unpin from unlink/rmdir)
-- [ ] 17-05-PLAN.md — E2E Playwright test suite for recycle bin workflow
+- [x] 17-01-PLAN.md — Crypto bin module (types, HKDF IPNS derivation, ECIES encrypt/decrypt, schema validation) + API retention config endpoint
+- [x] 17-02-PLAN.md — Bin store + bin service (initialize, add, restore, permanent delete, empty, purge) + delete flow rewired to soft-delete + useAuth bin init
+- [x] 17-03-PLAN.md — Bin UI (BinPage, BinBrowser, sidebar nav, context menu, multi-select, restore, permanent delete, empty bin)
+- [x] 17-04-PLAN.md — Desktop FUSE bin integration (Rust bin crypto module, HKDF derivation, ECIES encrypt/decrypt, bin entry creation in handle_unlink/handle_rmdir)
+- [x] 17-05-PLAN.md — E2E test suites: Playwright web recycle bin workflow + desktop-e2e FUSE delete-to-bin recovery scripts
 
 ## Progress
 
@@ -540,7 +540,7 @@ Parallel phases:
 | 11. Windows Desktop         | M2        | 3/3            | Complete    | 2026-02-22 |
 | 11.3 Linux Desktop          | M2        | 3/3            | Complete    | 2026-02-28 |
 | 11.4 Cross-Platform E2E     | M2        | 3/3            | Complete    | 2026-02-28 |
-| 17. Recycle Bin             | M2        | 0/4            | Not started | -          |
+| 17. Recycle Bin             | M2        | 5/5            | Complete    | 2026-03-04 |
 | 18. Billing Infrastructure  | M3        | 0/TBD          | Not started | -          |
 | 19. Team Accounts           | M3        | 0/TBD          | Not started | -          |
 | 20. Document Editors        | M3        | 0/TBD          | Not started | -          |
