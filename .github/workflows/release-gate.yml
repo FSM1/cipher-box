@@ -10,8 +10,8 @@ jobs:
     name: Detect Changes Since Last Release
     runs-on: ubuntu-latest
     outputs:
-      desktop: ${{ steps.check.outputs.desktop }}
-      prev_tag: ${{ steps.check.outputs.prev_tag }}
+      desktop: ${{ steps.check.outputs.desktop || steps.release-check.outputs.desktop }}
+      prev_tag: ${{ steps.check.outputs.prev_tag || steps.release-check.outputs.prev_tag }}
       is_release: ${{ steps.release-check.outputs.is_release }}
     steps:
       - name: Check if release PR
@@ -21,6 +21,8 @@ jobs:
             echo "is_release=true" >> "$GITHUB_OUTPUT"
           else
             echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "desktop=false" >> "$GITHUB_OUTPUT"
+            echo "prev_tag=" >> "$GITHUB_OUTPUT"
             echo "Not a release PR — skipping change detection"
           fi
 
@@ -85,9 +87,16 @@ jobs:
   verify-e2e:
     name: Verify E2E Passed
     needs: detect-changes
+    if: '!cancelled()'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
+      - name: Fail if detect-changes did not complete (release PR)
+        if: needs.detect-changes.outputs.is_release == 'true' && needs.detect-changes.result != 'success'
+        run: |
+          echo "::error::detect-changes must succeed before E2E verification."
+          exit 1
+
       - name: Skip (not a release PR)
         if: needs.detect-changes.outputs.is_release != 'true'
         run: echo "Not a release PR — E2E gate not applicable"
