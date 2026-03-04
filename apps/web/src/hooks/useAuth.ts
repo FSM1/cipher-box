@@ -23,6 +23,8 @@ import { detectDeviceInfo } from '../lib/device/info';
 import { initializeOrSyncRegistry } from '../services/device-registry.service';
 import { initializeBin } from '../services/bin.service';
 import { useBinStore } from '../stores/bin.store';
+import { useShareStore } from '../stores/share.store';
+import { useQuotaStore } from '../stores/quota.store';
 import { vaultControllerGetConfig } from '../api/vault/vault';
 import { clearFileSizeCache } from './useFileSize';
 
@@ -454,6 +456,8 @@ export function useAuth() {
       useSyncStore.getState().reset();
       useDeviceRegistryStore.getState().clearRegistry();
       useBinStore.getState().clearBin();
+      useShareStore.getState().clearShares();
+      useQuotaStore.getState().reset();
       useMfaStore.getState().reset();
       clearFileSizeCache();
       clearAuthState();
@@ -468,6 +472,8 @@ export function useAuth() {
       useSyncStore.getState().reset();
       useDeviceRegistryStore.getState().clearRegistry();
       useBinStore.getState().clearBin();
+      useShareStore.getState().clearShares();
+      useQuotaStore.getState().reset();
       useMfaStore.getState().reset();
       clearFileSizeCache();
       clearAuthState();

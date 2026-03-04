@@ -11,6 +11,7 @@ type QuotaState = {
   fetchQuota: () => Promise<void>;
   removeUsage: (bytes: number) => void;
   canUpload: (bytes: number) => boolean;
+  reset: () => void;
 };
 
 export const useQuotaStore = create<QuotaState>((set, get) => ({
@@ -45,4 +46,13 @@ export const useQuotaStore = create<QuotaState>((set, get) => ({
     const { remainingBytes } = get();
     return bytes <= remainingBytes;
   },
+
+  reset: () =>
+    set({
+      usedBytes: 0,
+      limitBytes: 500 * 1024 * 1024,
+      remainingBytes: 500 * 1024 * 1024,
+      loading: false,
+      error: null,
+    }),
 }));
