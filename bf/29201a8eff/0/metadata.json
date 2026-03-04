@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "bf29201a8eff",
+  "session_id": "51b7921c-bb61-4023-87d9-55f68dda1acc",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-04T15:07:41.328536Z",
+  "branch": "chore/release-gate-required-check",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/release-gate.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "8177a84d4a8d",
+  "token_usage": {
+    "input_tokens": 299,
+    "cache_creation_tokens": 430039,
+    "cache_read_tokens": 29419684,
+    "output_tokens": 99350,
+    "api_call_count": 267
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-04T15:07:37.99258Z",
+    "agent_lines": 0,
+    "human_added": 2,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 0
+  }
+}
