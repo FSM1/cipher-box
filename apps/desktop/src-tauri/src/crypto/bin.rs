@@ -48,6 +48,12 @@ pub struct BinEntry {
     pub mime_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
+    pub content_cid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub content_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub file_pointer: Option<FilePointer>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]

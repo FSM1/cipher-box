@@ -109,6 +109,24 @@ function validateBinEntry(data: unknown): void {
     throw new CryptoError('Invalid bin metadata format', 'DECRYPTION_FAILED');
   }
 
+  // Validate optional contentCid (non-empty string if present)
+  if (entry.contentCid !== undefined) {
+    if (typeof entry.contentCid !== 'string' || entry.contentCid.length === 0) {
+      throw new CryptoError('Invalid bin metadata format', 'DECRYPTION_FAILED');
+    }
+  }
+
+  // Validate optional contentSize (non-negative finite number if present)
+  if (entry.contentSize !== undefined) {
+    if (
+      typeof entry.contentSize !== 'number' ||
+      !Number.isFinite(entry.contentSize) ||
+      entry.contentSize < 0
+    ) {
+      throw new CryptoError('Invalid bin metadata format', 'DECRYPTION_FAILED');
+    }
+  }
+
   // Validate filePointer/folderEntry: optional, but if present must be objects
   // Be lenient -- schema may evolve, so we don't enforce strict presence based on itemType
   if (
