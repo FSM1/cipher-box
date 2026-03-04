@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "2c6a71ea5f74",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-17-recycle-bin",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/17-recycle-bin/17-CONTEXT.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2c/6a71ea5f74/0/metadata.json",
+      "transcript": "/2c/6a71ea5f74/0/full.jsonl",
+      "context": "/2c/6a71ea5f74/0/context.md",
+      "content_hash": "/2c/6a71ea5f74/0/content_hash.txt",
+      "prompt": "/2c/6a71ea5f74/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 48,
+    "cache_creation_tokens": 63293,
+    "cache_read_tokens": 3272419,
+    "output_tokens": 9190,
+    "api_call_count": 37
+  }
+}
