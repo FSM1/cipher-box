@@ -470,8 +470,8 @@ Plans:
 
 **Goal**: Deleted files and folders are moved to a recycle bin with time-limited retention instead of being permanently destroyed. Users can recover items to their original vault location and manually empty the bin to free storage space.
 **Depends on**: Phase 16 (Advanced Sync complete, conflict detection ensures safe delete/restore operations)
-**Requirements**: TBD
-**Research flag**: NEEDS assessment -- client-side bin metadata design (encrypted bin index on IPFS/IPNS), retention policy enforcement, restore-to-original-path resolution, quota accounting for bin contents
+**Requirements**: BIN-01, BIN-02, BIN-03, BIN-04, BIN-05
+**Research flag**: COMPLETE -- encrypted bin IPNS record (ECIES + HKDF), client-side retention enforcement, restore-to-original-path resolution, desktop FUSE soft-delete via IPC researched
 **Success Criteria** (what must be TRUE):
 
 1. Deleting a file or folder moves it to a recycle bin instead of permanently removing it; the item remains recoverable
@@ -480,7 +480,14 @@ Plans:
 4. Bin items are automatically purged after the retention period expires (e.g., 30 days)
 5. Storage consumed by bin items counts against the user's quota; emptying the bin reclaims space immediately
 
-**Plans**: TBD
+**Plans:** 4 plans
+
+Plans:
+
+- [ ] 17-01-PLAN.md — Crypto bin module (types, HKDF IPNS derivation, ECIES encrypt/decrypt, schema validation) + API retention config endpoint
+- [ ] 17-02-PLAN.md — Bin store + bin service + useBin hook + delete flow rewired to soft-delete
+- [ ] 17-03-PLAN.md — Bin UI (BinPage, BinBrowser, sidebar nav, context menu, multi-select, restore, permanent delete, empty bin)
+- [ ] 17-04-PLAN.md — Desktop FUSE soft-delete via IPC + E2E Playwright test suite
 
 ## Progress
 
@@ -532,7 +539,7 @@ Parallel phases:
 | 11. Windows Desktop         | M2        | 3/3            | Complete    | 2026-02-22 |
 | 11.3 Linux Desktop          | M2        | 3/3            | Complete    | 2026-02-28 |
 | 11.4 Cross-Platform E2E     | M2        | 3/3            | Complete    | 2026-02-28 |
-| 17. Recycle Bin             | M2        | 0/TBD          | Not started | -          |
+| 17. Recycle Bin             | M2        | 0/4            | Not started | -          |
 | 18. Billing Infrastructure  | M3        | 0/TBD          | Not started | -          |
 | 19. Team Accounts           | M3        | 0/TBD          | Not started | -          |
 | 20. Document Editors        | M3        | 0/TBD          | Not started | -          |
