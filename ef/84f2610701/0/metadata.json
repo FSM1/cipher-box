@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "ef84f2610701",
+  "session_id": "a87b629c-56ee-40a9-84ea-a29de41bef97",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-04T17:09:58.794918Z",
+  "branch": "fix/m2-tech-debt-store-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/stores/quota.store.ts",
+    "apps/web/src/hooks/useAuth.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f78cd215332b",
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 92595,
+    "cache_read_tokens": 5717707,
+    "output_tokens": 12631,
+    "api_call_count": 54
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-04T17:09:57.856652Z",
+    "agent_lines": 0,
+    "human_added": 7,
+    "human_modified": 51,
+    "human_removed": 0,
+    "total_committed": 7,
+    "agent_percentage": 0
+  }
+}
