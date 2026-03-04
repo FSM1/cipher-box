@@ -97,6 +97,7 @@ export * from './unpinDto';
 export * from './unpinResponseDto';
 export * from './updateEncryptedKeyDto';
 export * from './uploadResponseDto';
+export * from './vaultConfigResponseDto';
 export * from './vaultExportDto';
 export * from './vaultExportDtoDerivationInfo';
 export * from './vaultExportDtoDerivationMethod';

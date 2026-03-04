@@ -5,6 +5,7 @@ import { VaultService } from './vault.service';
 import { InitVaultDto, VaultResponseDto } from './dto/init-vault.dto';
 import { VaultExportDto } from './dto/vault-export.dto';
 import { QuotaResponseDto } from './dto/quota.dto';
+import { VaultConfigResponseDto } from './dto/vault-config.dto';
 import { RequestWithUser } from '../common/types';
 
 @ApiTags('Vault')
@@ -38,6 +39,25 @@ export class VaultController {
     @Body() dto: InitVaultDto
   ): Promise<VaultResponseDto> {
     return this.vaultService.initializeVault(req.user.id, dto);
+  }
+
+  @Get('config')
+  @ApiOperation({
+    summary: 'Get vault configuration',
+    description:
+      'Returns application configuration including recycle bin retention period. The retention period is configurable via the RECYCLE_BIN_RETENTION_DAYS environment variable (default: 30).',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Vault configuration',
+    type: VaultConfigResponseDto,
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized - JWT token required',
+  })
+  getConfig(): VaultConfigResponseDto {
+    return this.vaultService.getConfig();
   }
 
   @Get('export')

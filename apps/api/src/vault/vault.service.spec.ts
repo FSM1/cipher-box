@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { VaultService, QUOTA_LIMIT_BYTES } from './vault.service';
 import { Vault } from './entities/vault.entity';
@@ -40,6 +41,9 @@ describe('VaultService', () => {
   };
   let mockTeeKeyStateService: {
     getTeeKeysDto: jest.Mock;
+  };
+  let mockConfigService: {
+    get: jest.Mock;
   };
 
   // Test data
@@ -107,6 +111,13 @@ describe('VaultService', () => {
       getTeeKeysDto: jest.fn().mockResolvedValue(null),
     };
 
+    mockConfigService = {
+      get: jest.fn().mockImplementation((key: string, defaultValue?: unknown) => {
+        if (key === 'RECYCLE_BIN_RETENTION_DAYS') return defaultValue;
+        return defaultValue;
+      }),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         VaultService,
@@ -129,6 +140,10 @@ describe('VaultService', () => {
         {
           provide: TeeKeyStateService,
           useValue: mockTeeKeyStateService,
+        },
+        {
+          provide: ConfigService,
+          useValue: mockConfigService,
         },
       ],
     }).compile();
@@ -568,6 +583,27 @@ describe('VaultService', () => {
       const result = await service.getVault(testUserId);
 
       expect(result.teeKeys).toBeNull();
+    });
+  });
+
+  describe('getConfig', () => {
+    it('should return recycleBinRetentionDays from ConfigService', () => {
+      mockConfigService.get.mockReturnValue(2);
+
+      const result = service.getConfig();
+
+      expect(mockConfigService.get).toHaveBeenCalledWith('RECYCLE_BIN_RETENTION_DAYS', 30);
+      expect(result).toEqual({ recycleBinRetentionDays: 2 });
+    });
+
+    it('should use default value of 30 when env var is not set', () => {
+      mockConfigService.get.mockImplementation(
+        (_key: string, defaultValue?: unknown) => defaultValue
+      );
+
+      const result = service.getConfig();
+
+      expect(result).toEqual({ recycleBinRetentionDays: 30 });
     });
   });
 

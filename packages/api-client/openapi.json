@@ -661,6 +661,35 @@
         "tags": ["Vault"]
       }
     },
+    "/vault/config": {
+      "get": {
+        "description": "Returns application configuration including recycle bin retention period. The retention period is configurable via the RECYCLE_BIN_RETENTION_DAYS environment variable (default: 30).",
+        "operationId": "VaultController_getConfig",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Vault configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultConfigResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - JWT token required"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get vault configuration",
+        "tags": ["Vault"]
+      }
+    },
     "/vault/export": {
       "get": {
         "description": "Returns the minimal vault data needed for independent recovery: root IPNS name, encrypted root keys, and derivation hints.",
@@ -2398,6 +2427,17 @@
           "createdAt",
           "initializedAt"
         ]
+      },
+      "VaultConfigResponseDto": {
+        "type": "object",
+        "properties": {
+          "recycleBinRetentionDays": {
+            "type": "number",
+            "description": "Number of days items are retained in the recycle bin before auto-purge",
+            "example": 30
+          }
+        },
+        "required": ["recycleBinRetentionDays"]
       },
       "VaultExportDto": {
         "type": "object",
