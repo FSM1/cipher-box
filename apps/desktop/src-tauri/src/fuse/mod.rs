@@ -483,7 +483,7 @@ pub(crate) fn spawn_bin_entry_publish(
     api: Arc<ApiClient>,
     rt: tokio::runtime::Handle,
     entry: crate::crypto::bin::BinEntry,
-    user_private_key: Vec<u8>,
+    user_private_key: Zeroizing<Vec<u8>>,
     user_public_key: Vec<u8>,
     coordinator: Arc<PublishCoordinator>,
 ) {

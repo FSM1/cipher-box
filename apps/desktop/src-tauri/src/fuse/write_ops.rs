@@ -365,7 +365,7 @@ pub(crate) mod implementation {
                 fs.api.clone(),
                 fs.rt.clone(),
                 bin_entry,
-                fs.private_key.to_vec(),
+                fs.private_key.clone(),
                 fs.public_key.to_vec(),
                 fs.publish_coordinator.clone(),
             );
@@ -745,7 +745,7 @@ pub(crate) mod implementation {
                 fs.api.clone(),
                 fs.rt.clone(),
                 bin_entry,
-                fs.private_key.to_vec(),
+                fs.private_key.clone(),
                 fs.public_key.to_vec(),
                 fs.publish_coordinator.clone(),
             );
