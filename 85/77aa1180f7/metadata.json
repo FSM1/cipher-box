@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "8577aa1180f7",
+  "strategy": "manual-commit",
+  "branch": "fix/m2-gap-closure-phase-17.1",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/crypto/tests.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/85/77aa1180f7/0/metadata.json",
+      "transcript": "/85/77aa1180f7/0/full.jsonl",
+      "context": "/85/77aa1180f7/0/context.md",
+      "content_hash": "/85/77aa1180f7/0/content_hash.txt",
+      "prompt": "/85/77aa1180f7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 25139,
+    "cache_read_tokens": 1039692,
+    "output_tokens": 3083,
+    "api_call_count": 22
+  }
+}

@@ -1,0 +1,37 @@
+Implement the following plan:
+
+# Fix: Codecov Base Upload workflow 404
+
+## Context
+The "Codecov Base Upload" workflow (`codecov-base.yml`) fails every time it runs on push to `main`. The step "Download coverage from latest CI run" gets a 404 from the GitHub API. This means Codecov never gets base branch coverage, so PR coverage diffs don't work.
+
+## Root Cause
+In `.github/workflows/codecov-base.yml` line 27-29, the `gh api` call uses `-f per_page=5`. The `-f` flag causes `gh api` to switch from GET to POST. The GitHub API endpoint (`/actions/workflows/{id}/runs`) only accepts GET, returning 404 for POST.
+
+## Fix
+**File:** `.github/workflows/codecov-base.yml`
+
+Change line 27-29 from:
+```bash
+RUN_ID=$(gh api repos/${{ github.repository }}/actions/workflows/ci.yml/runs \
+  --jq '[.workflow_runs[] | select(.conclusion == "success")][0].id' \
+  -f per_page=5)
+```
+To:
+```bash
+RUN_ID=$(gh api "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?per_page=5" \
+  --jq '[.workflow_runs[] | select(.conclusion == "success")][0].id')
+```
+
+No other `gh api` calls in the file use `-f`, so this is the only line that needs changing.
+
+## Verification
+- Push the fix to a branch, merge to `main`, and confirm the Codecov Base Upload workflow passes
+- Or: manually run the corrected `gh api` command to confirm it returns a valid run ID (already verified locally)
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.claude/projects/-Users-michael-Code-cipher-box/b49a3c21-2120-460f-9623-2f335bfeb258.jsonl
+
+---
+
+ok switch back to the pr 268 branch - all 3 rust test jobs are failing
