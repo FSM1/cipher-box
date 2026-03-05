@@ -4,29 +4,30 @@
 
 ## Test Framework
 
-**Runner:**
+**Runners:**
 
-- Not configured - no test framework installed
-
-**Assertion Library:**
-
-- Not configured
+- **Backend (API):** Jest (`apps/api/` — NestJS default)
+- **Frontend (Web):** Vitest (`apps/web/`)
+- **Crypto package:** Vitest (`packages/crypto/`)
+- **E2E:** Playwright (`tests/e2e/`, `tests/e2e-desktop/`)
 
 **Run Commands:**
 
 ```bash
-# No test commands available
-# package.json does not include test scripts
+pnpm test              # Run all unit tests (parallel across workspaces)
+pnpm test:e2e          # Playwright E2E tests (requires API + web running)
+pnpm test:e2e:headed   # E2E with visible browser
+pnpm typecheck         # TypeScript type checking across all workspaces
 ```
 
 ## Current State
 
-**Status:** No automated testing infrastructure exists in this codebase.
+**Status:** Testing infrastructure is implemented across all workspaces.
 
-The project is in preliminary R&D/POC phase. The only "testing" is:
-
-1. Manual execution of the POC harness (`npm start`)
-2. Runtime verification within the POC code itself
+- Unit tests exist for API services, crypto operations, and web components
+- E2E tests cover authentication, file operations, and desktop app flows
+- CI pipeline runs lint, typecheck, unit tests, and E2E tests
+- Coverage is not yet at target thresholds (see recommended targets below)
 
 ## POC Verification Pattern
 
