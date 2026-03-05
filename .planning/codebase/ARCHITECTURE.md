@@ -150,7 +150,7 @@
 - PoC: Throws errors on failures, logs warnings for non-critical issues (e.g., pin removal)
 - Specified Backend: HTTP status codes with structured error responses
 - Specified Client: User-facing error messages, retry logic for transient failures
-- TEE Republish: Exponential backoff (30s -> 60s -> 120s -> 240s -> 300s max)
+- Backend Republish Scheduler: Exponential backoff for failed entries (30s -> 60s -> 120s -> ... -> 3600s max)
 
 ## Cross-Cutting Concerns
 
