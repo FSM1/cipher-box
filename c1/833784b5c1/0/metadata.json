@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "c1833784b5c1",
+  "session_id": "5a07dfc7-5783-464d-80b1-abe95c47a4d7",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-05T13:03:02.028184Z",
+  "branch": "chore/m2-milestone-audit",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/12-multi-factor-authentication/12-VERIFICATION.md",
+    ".planning/v1.0-production-MILESTONE-AUDIT.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b628d3035935",
+  "token_usage": {
+    "input_tokens": 33,
+    "cache_creation_tokens": 191270,
+    "cache_read_tokens": 2284549,
+    "output_tokens": 19850,
+    "api_call_count": 28
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-05T13:02:59.175519Z",
+    "agent_lines": 239,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 239,
+    "agent_percentage": 100
+  }
+}
