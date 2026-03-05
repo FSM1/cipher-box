@@ -352,7 +352,12 @@ test.describe.serial('Recycle Bin', () => {
     // The primary value of this test is proving permanent delete doesn't crash.
     const quotaDecreased = await page.evaluate(() => {
       try {
-        const store = (window as any).__ZUSTAND_STORES__?.quota;
+        const store = (
+          window as unknown as Record<
+            string,
+            Record<string, { getState: () => { usedBytes: number } }>
+          >
+        ).__ZUSTAND_STORES__?.quota;
         if (!store) return null; // Store not accessible, skip
         // Just verify store is functional (not crashed)
         const state = store.getState();
@@ -403,7 +408,12 @@ test.describe.serial('Recycle Bin', () => {
     // 5. Snapshot quota usage (best-effort)
     const quotaBefore = await page.evaluate(() => {
       try {
-        const store = (window as any).__ZUSTAND_STORES__?.quota;
+        const store = (
+          window as unknown as Record<
+            string,
+            Record<string, { getState: () => { usedBytes: number } }>
+          >
+        ).__ZUSTAND_STORES__?.quota;
         if (!store) return null;
         return store.getState().usedBytes as number;
       } catch {
@@ -436,7 +446,12 @@ test.describe.serial('Recycle Bin', () => {
       await page.waitForTimeout(3000);
       const quotaAfter = await page.evaluate(() => {
         try {
-          const store = (window as any).__ZUSTAND_STORES__?.quota;
+          const store = (
+            window as unknown as Record<
+              string,
+              Record<string, { getState: () => { usedBytes: number } }>
+            >
+          ).__ZUSTAND_STORES__?.quota;
           if (!store) return null;
           return store.getState().usedBytes as number;
         } catch {
