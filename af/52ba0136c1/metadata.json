@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "af52ba0136c1",
+  "strategy": "manual-commit",
+  "branch": "fix/desktop-e2e-windows",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/e2e/tests/recycle-bin.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/af/52ba0136c1/0/metadata.json",
+      "transcript": "/af/52ba0136c1/0/full.jsonl",
+      "context": "/af/52ba0136c1/0/context.md",
+      "content_hash": "/af/52ba0136c1/0/content_hash.txt",
+      "prompt": "/af/52ba0136c1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 115,
+    "cache_creation_tokens": 288336,
+    "cache_read_tokens": 13779894,
+    "output_tokens": 47915,
+    "api_call_count": 111
+  }
+}
