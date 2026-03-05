@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "61bc5416fb00",
+  "session_id": "75259638-a7eb-4679-aabd-2306ae730071",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-05T12:11:53.543159Z",
+  "branch": "fix/desktop-e2e-windows",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/e2e/page-objects/file-browser/upload-zone.page.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f54bd3b44608",
+  "token_usage": {
+    "input_tokens": 201,
+    "cache_creation_tokens": 479389,
+    "cache_read_tokens": 22577986,
+    "output_tokens": 89298,
+    "api_call_count": 191
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-05T12:11:51.768419Z",
+    "agent_lines": 0,
+    "human_added": 15,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 15,
+    "agent_percentage": 0
+  }
+}

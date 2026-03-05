@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "61bc5416fb00",
+  "strategy": "manual-commit",
+  "branch": "fix/desktop-e2e-windows",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/e2e/page-objects/file-browser/upload-zone.page.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/61/bc5416fb00/0/metadata.json",
+      "transcript": "/61/bc5416fb00/0/full.jsonl",
+      "context": "/61/bc5416fb00/0/context.md",
+      "content_hash": "/61/bc5416fb00/0/content_hash.txt",
+      "prompt": "/61/bc5416fb00/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 201,
+    "cache_creation_tokens": 479389,
+    "cache_read_tokens": 22577986,
+    "output_tokens": 89298,
+    "api_call_count": 191
+  }
+}
