@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "9158dd39fe5a",
+  "strategy": "manual-commit",
+  "branch": "fix/m2-gap-closure-phase-17.1",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/crypto/bin.rs",
+    "apps/desktop/src-tauri/src/crypto/tests.rs",
+    "apps/desktop/src-tauri/src/fuse/windows/write_ops.rs",
+    "apps/desktop/src-tauri/src/fuse/write_ops.rs",
+    "apps/web/src/services/bin.service.ts",
+    "packages/crypto/src/bin/schema.ts",
+    "packages/crypto/src/bin/types.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/91/58dd39fe5a/0/metadata.json",
+      "transcript": "/91/58dd39fe5a/0/full.jsonl",
+      "context": "/91/58dd39fe5a/0/context.md",
+      "content_hash": "/91/58dd39fe5a/0/content_hash.txt",
+      "prompt": "/91/58dd39fe5a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 47,
+    "cache_creation_tokens": 29852,
+    "cache_read_tokens": 4611697,
+    "output_tokens": 10323,
+    "api_call_count": 43
+  }
+}
