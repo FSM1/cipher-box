@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "bd5084e0c4c4",
+  "strategy": "manual-commit",
+  "branch": "fix/e2e-tc08-reupload-same-file",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/e2e/page-objects/file-browser/upload-zone.page.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bd/5084e0c4c4/0/metadata.json",
+      "transcript": "/bd/5084e0c4c4/0/full.jsonl",
+      "context": "/bd/5084e0c4c4/0/context.md",
+      "content_hash": "/bd/5084e0c4c4/0/content_hash.txt",
+      "prompt": "/bd/5084e0c4c4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 86,
+    "cache_creation_tokens": 191053,
+    "cache_read_tokens": 8798092,
+    "output_tokens": 41383,
+    "api_call_count": 80
+  }
+}
