@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "61bc5416fb00",
+  "session_id": "9b0e9cf8-d146-4a32-9626-bd77684ca0d0",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-05T12:12:11.310017Z",
+  "branch": "fix/desktop-e2e-windows",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/fuse/mod.rs",
+    "tests/e2e/page-objects/file-browser/upload-zone.page.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "edc53d26f5d2",
+  "checkpoint_transcript_start": 97,
+  "transcript_lines_at_start": 97,
+  "token_usage": {
+    "input_tokens": 13,
+    "cache_creation_tokens": 11672,
+    "cache_read_tokens": 626442,
+    "output_tokens": 2639,
+    "api_call_count": 12
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-05T12:12:10.608428Z",
+    "agent_lines": 0,
+    "human_added": 12,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 12,
+    "agent_percentage": 0
+  }
+}
