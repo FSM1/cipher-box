@@ -1,0 +1,89 @@
+# Session Context
+
+## User Prompts
+
+### Prompt 1
+
+# Resolve PR Review Comments
+
+Resolve all open review comments on the current PR from any automated reviewer (CodeRabbit, GitHub Copilot, etc.) or human reviewers.
+
+## Workflow
+
+### 1. Identify the PR
+
+```bash
+PR_NUMBER=$(gh pr view --json number --jq '.number')
+```
+
+If no PR exists for the current branch, stop and inform the user.
+
+### 2. Fetch all unresolved review threads
+
+Use the GraphQL `reviewThreads` query to get threads with `isResolved` status:
+
+```bash
+REPO_OWNER=$(gh repo view --js...
+
+### Prompt 2
+
+# Resolve PR Review Comments
+
+Resolve all open review comments on the current PR from any automated reviewer (CodeRabbit, GitHub Copilot, etc.) or human reviewers.
+
+## Workflow
+
+### 1. Identify the PR
+
+```bash
+PR_NUMBER=$(gh pr view --json number --jq '.number')
+```
+
+If no PR exists for the current branch, stop and inform the user.
+
+### 2. Fetch all unresolved review threads
+
+Use the GraphQL `reviewThreads` query to get threads with `isResolved` status:
+
+```bash
+REPO_OWNER=$(gh repo view --js...
+
+### Prompt 3
+
+https://github.com/FSM1/cipher-box/pull/268#discussion_r2887096556 - what would it take to implement version cleanup right now?
+
+### Prompt 4
+
+yeah please, go ahead
+
+### Prompt 5
+
+is this new code covered by the versioning delete e2e test?
+
+### Prompt 6
+
+would it not be possible to just test that the quota released > size of the V2 Content CID + metadata
+
+### Prompt 7
+
+# Resolve PR Review Comments
+
+Resolve all open review comments on the current PR from any automated reviewer (CodeRabbit, GitHub Copilot, etc.) or human reviewers.
+
+## Workflow
+
+### 1. Identify the PR
+
+```bash
+PR_NUMBER=$(gh pr view --json number --jq '.number')
+```
+
+If no PR exists for the current branch, stop and inform the user.
+
+### 2. Fetch all unresolved review threads
+
+Use the GraphQL `reviewThreads` query to get threads with `isResolved` status:
+
+```bash
+REPO_OWNER=$(gh repo view --js...
+
