@@ -176,7 +176,7 @@
 
 - Problem: Zero test files (no .test.ts or .spec.ts files found)
 - Blocks: Cannot verify correctness; cannot refactor safely; 85% coverage target unreachable
-- Files: No test configuration (no jest.config._, vitest.config._)
+- Files: No test configuration (no `jest.config.*`, `vitest.config.*`)
 
 **No error recovery:**
 

@@ -317,12 +317,12 @@ if (error.response?.status === 401) {
 - [README.md](../README.md) - Project overview, features, tech stack
 - [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) - Encryption hierarchy, key derivation, threat model
 - [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md) - Local setup, running, testing
-- [Preliminary/Documentation/IMPLEMENTATION_ROADMAP.md](../Preliminary/Documentation/IMPLEMENTATION_ROADMAP.md) - 12-week development timeline
-- [Preliminary/Documentation/PRD.md](../Preliminary/Documentation/PRD.md) - Product requirements, user journeys, scope
-- [Preliminary/Documentation/TECHNICAL_ARCHITECTURE.md](../Preliminary/Documentation/TECHNICAL_ARCHITECTURE.md) - Encryption, key hierarchy, system design
-- [Preliminary/Documentation/API_SPECIFICATION.md](../Preliminary/Documentation/API_SPECIFICATION.md) - Backend endpoints, database schema
-- [Preliminary/Documentation/DATA_FLOWS.md](../Preliminary/Documentation/DATA_FLOWS.md) - Sequence diagrams, test vectors
-- [Preliminary/Documentation/CLIENT_SPECIFICATION.md](../Preliminary/Documentation/CLIENT_SPECIFICATION.md) - Web UI, desktop app specs
+- [00-Preliminary-R&D/Documentation/IMPLEMENTATION_ROADMAP.md](../00-Preliminary-R&D/Documentation/IMPLEMENTATION_ROADMAP.md) - 12-week development timeline
+- [00-Preliminary-R&D/Documentation/PRD.md](../00-Preliminary-R&D/Documentation/PRD.md) - Product requirements, user journeys, scope
+- [00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md](../00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md) - Encryption, key hierarchy, system design
+- [00-Preliminary-R&D/Documentation/API_SPECIFICATION.md](../00-Preliminary-R&D/Documentation/API_SPECIFICATION.md) - Backend endpoints, database schema
+- [00-Preliminary-R&D/Documentation/DATA_FLOWS.md](../00-Preliminary-R&D/Documentation/DATA_FLOWS.md) - Sequence diagrams, test vectors
+- [00-Preliminary-R&D/Documentation/CLIENT_SPECIFICATION.md](../00-Preliminary-R&D/Documentation/CLIENT_SPECIFICATION.md) - Web UI, desktop app specs
 
 **For detailed crypto flows:** See TECHNICAL_ARCHITECTURE.md (key hierarchy, encryption primitives) and DATA_FLOWS.md (sequence diagrams, test vectors)
 

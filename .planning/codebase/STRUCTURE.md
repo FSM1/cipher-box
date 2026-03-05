@@ -38,7 +38,7 @@ cipher-box/
 │       ├── package.json        # PoC dependencies
 │       └── tsconfig.json       # TypeScript config
 ├── README.md                   # Project overview, features, getting started
-├── LICENSE                     # Apache 2.0 license
+├── LICENSE                     # MIT license
 ├── .gitignore                  # Git ignore patterns
 └── cipherbox logo.png          # Project logo asset
 ```
