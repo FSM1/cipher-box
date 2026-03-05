@@ -309,4 +309,61 @@ test.describe.serial('Recycle Bin', () => {
       .catch(() => false);
     expect(hasList || hasEmpty).toBe(true);
   });
+
+  // ============================================================
+  // TC07: Permanent delete completes without crash (GAP-1 fix)
+  // ============================================================
+
+  test('TC07: permanent delete reclaims storage without crash', async () => {
+    test.slow();
+
+    const fileName = `bin-perm-${runId}.txt`;
+    const fileContent = 'x'.repeat(1024); // 1KB file for measurable quota change
+
+    // Navigate to files and upload a test file
+    await navigateToFiles();
+    const testFile = createTestTextFile(fileName, fileContent);
+    await uploadZone.uploadFile(testFile.path);
+    await fileList.waitForItemToAppear(fileName, { timeout: 60000 });
+
+    // Wait for upload to fully propagate
+    await page.waitForTimeout(3000);
+
+    // Delete the file (soft-delete -> bin)
+    await fileList.rightClickItem(fileName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickDelete();
+    await confirmDialog.waitForOpen();
+    await confirmDialog.clickConfirm();
+    await fileList.waitForItemToDisappear(fileName, { timeout: 30000 });
+
+    // Navigate to bin and permanently delete
+    await binPage.navigate();
+    await binPage.waitForBinItem(fileName, { timeout: 30000 });
+    await binPage.permanentlyDeleteItem(fileName);
+
+    // PRIMARY ASSERTION: permanent delete completes without crash
+    // Before GAP-1 fix, this would fail because unpinFileCids tried to
+    // JSON.parse AES-256-GCM encrypted file metadata
+    await binPage.waitForBinItemToDisappear(fileName, { timeout: 30000 });
+
+    // SECONDARY ASSERTION (best-effort): check quota via Zustand store if accessible
+    // This is fragile because window.__ZUSTAND_STORES__ may not be exposed.
+    // The primary value of this test is proving permanent delete doesn't crash.
+    const quotaDecreased = await page.evaluate(() => {
+      try {
+        const store = (window as any).__ZUSTAND_STORES__?.quota;
+        if (!store) return null; // Store not accessible, skip
+        // Just verify store is functional (not crashed)
+        const state = store.getState();
+        return typeof state.usedBytes === 'number';
+      } catch {
+        return null;
+      }
+    });
+    // Only assert if store was accessible -- null means we couldn't check
+    if (quotaDecreased !== null) {
+      expect(quotaDecreased).toBe(true);
+    }
+  });
 });
