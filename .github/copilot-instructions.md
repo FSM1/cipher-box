@@ -53,7 +53,7 @@ CipherBox uses a **mandatory two-phase auth flow** that must be understood befor
 
 ### Zero-Knowledge Key Hierarchy
 
-```
+```text
 User Auth → Web3Auth → ECDSA Private Key (client RAM only, never transmitted)
                     ├─ Used for ECIES decryption of all data keys
                     ├─ Used to decrypt IPNS signing keys (Ed25519)
@@ -231,6 +231,7 @@ if (error.response?.status === 401) {
    ```
 
 4. **Using sync crypto in main thread**
+
    ```typescript
    // WRONG (blocks UI for large files)
    const encrypted = aesEncryptSync(largeFile, key);
@@ -261,6 +262,7 @@ if (error.response?.status === 401) {
    ```
 
 3. **Always validate IPNS signatures client-side**
+
    ```typescript
    const messageHash = await sha256(signedEntry.encryptedMetadata);
    const isValid = await ecdsaVerify(messageHash, signedEntry.signature, userPubkey);
@@ -312,8 +314,9 @@ if (error.response?.status === 401) {
 
 ## Key Files & Documentation
 
-- [00_START_HERE.md](../00_START_HERE.md) - Project overview, quick reference
-- [README.md](../README.md) - Architecture summary, tech stack
+- [README.md](../README.md) - Project overview, features, tech stack
+- [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) - Encryption hierarchy, key derivation, threat model
+- [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md) - Local setup, running, testing
 - [Preliminary/Documentation/IMPLEMENTATION_ROADMAP.md](../Preliminary/Documentation/IMPLEMENTATION_ROADMAP.md) - 12-week development timeline
 - [Preliminary/Documentation/PRD.md](../Preliminary/Documentation/PRD.md) - Product requirements, user journeys, scope
 - [Preliminary/Documentation/TECHNICAL_ARCHITECTURE.md](../Preliminary/Documentation/TECHNICAL_ARCHITECTURE.md) - Encryption, key hierarchy, system design
@@ -352,7 +355,7 @@ if (error.response?.status === 401) {
 
 Configure in Web3Auth dashboard to link multiple auth methods:
 
-```
+```text
 cipherbox-aggregate (group ID)
   ├─ google (Google OAuth)
   ├─ email_passwordless (Magic Link)
