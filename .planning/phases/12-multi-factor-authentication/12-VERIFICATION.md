@@ -1,6 +1,7 @@
 ---
 phase: 12-core-kit-identity-provider
 verified: 2026-03-05T03:00:00Z
+retroactive: true
 status: passed
 score: 6/6 must-haves verified
 ---
