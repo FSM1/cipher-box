@@ -1,0 +1,118 @@
+Implement the following plan:
+
+# Plan: Restructure README and Create Product Documentation
+
+## Context
+
+CipherBox v1.0 shipped on 2026-03-05 with a comprehensive feature set (sharing, search, MFA, versioning, desktop cross-platform, etc.), but the README still reads like a pre-implementation technical spec — 50%+ is ASCII crypto diagrams, key derivation flows, and attack surface analysis. It references "MVP scope" with items that already shipped listed as deferred. The `00_START_HERE.md` is similarly outdated. The docs need to reflect that this is a shipped product, not a planning document.
+
+## Changes
+
+### 1. Rewrite `README.md` (~200 lines, down from 400)
+
+Product-focused structure:
+
+1. **Header** — centered logo, title "CipherBox", tagline "Privacy-first encrypted cloud storage with decentralized persistence"
+2. **What is CipherBox** — 5-line paragraph: technology demonstrator, zero-knowledge encryption, plain-language value proposition
+3. **Acknowledgements** — keep the ChainSafe Files attribution verbatim
+4. **Features** — grouped by category, clean bullet list:
+   - Authentication (Web3Auth MPC: email, OAuth, magic link, wallet + MFA)
+   - Encryption (client-side AES-256-GCM, ECIES key wrapping, streaming CTR)
+   - File Management (CRUD, 20-level folders, drag-and-drop)
+   - Sharing (user-to-user ECIES re-wrapping, link sharing)
+   - Search (client-side encrypted index)
+   - Versioning (file history with restore)
+   - Sync (multi-device IPNS polling, conflict detection)
+   - Desktop (macOS/Windows/Linux with virtual filesystem mount)
+   - Recycle Bin (30-day soft-delete)
+   - TEE Republishing (Phala Cloud auto-refresh)
+   - Data Portability (vault export, standalone recovery)
+5. **Architecture Overview** — one simplified ASCII diagram (5 boxes: Client -> API -> IPFS/PostgreSQL/TEE), 3-line explanation of zero-knowledge relay model, link to `docs/ARCHITECTURE.md`
+6. **Tech Stack** — updated table (fix Tauri/Electron -> Tauri v2, add BullMQ/Redis, Web3Auth MPC Core Kit)
+7. **Project Structure** — monorepo tree (apps/api, apps/web, apps/desktop, packages/crypto, packages/api-client, tee-worker, tests/e2e)
+8. **Getting Started** — 4-line quickstart (docker compose, pnpm install, pnpm dev), link to `docs/DEVELOPMENT.md`
+9. **Documentation** — table linking all docs
+10. **License** — one line, MIT
+
+### 2. Create `docs/ARCHITECTURE.md` (~280 lines)
+
+Move all deep technical content from current README verbatim (preserve ASCII diagrams exactly):
+
+1. Overview paragraph
+2. Key Derivation — Web3Auth + external wallet HKDF diagram (current lines 119-143)
+3. Encryption Hierarchy — full key tree (current lines 150-184)
+4. Visibility Model — encrypted vs visible vs RAM-only table (current lines 189-215)
+5. Cryptographic Primitives — algorithm table (current lines 219-225)
+6. Data Flows — file upload flow diagram (current lines 229-267)
+7. Defense in Depth — nested protection chain (current lines 271-281)
+8. Threat Model — attacker view (current lines 285-302)
+9. Key Design Decisions — the 6 decisions with rationale (current lines 308-346)
+10. User Journey example (current lines 352-359)
+11. Cross-references to frozen specs and other docs
+
+### 3. Create `docs/DEVELOPMENT.md` (~150 lines)
+
+Consolidate scattered setup info:
+
+1. **Prerequisites** — Node.js 20+, pnpm 9+, Docker, Rust (desktop only)
+2. **Infrastructure** — `docker compose -f docker/docker-compose.yml up -d`
+3. **Environment** — copy `.env.example` files, key variables
+4. **Running Web App** — `pnpm dev` (API at :3000, web at :5173)
+5. **Running Desktop** — platform FUSE deps, `pnpm --filter desktop dev`
+6. **Testing** — unit tests, E2E (Playwright), desktop E2E
+7. **API Client Generation** — when/how to run `pnpm api:generate`
+8. **Code Quality** — linting, formatting, conventional commits
+
+Source info from:
+- `apps/api/.env.example`
+- `apps/web/.env.example`
+- `apps/desktop/.env.example` (if exists)
+- `docker/docker-compose.yml`
+- `package.json` (scripts)
+- `.claude/CLAUDE.md` (dev env notes)
+
+### 4. Delete `00_START_HERE.md`
+
+Outdated pre-implementation artifact with incorrect information (3-person team, 12-week timeline, shipped features listed as deferred, "IN PROGRESS" status).
+
+### 5. Update references
+
+- `.markdownlintignore` — remove `00_START_HERE.md` line
+- `.github/copilot-instructions.md` — update reference from `00_START_HERE.md` to `README.md`
+- `.planning/codebase/STRUCTURE.md` — update tree to remove `00_START_HERE.md`
+
+## Files Modified
+
+| File | Action |
+|:--|:--|
+| `README.md` | Rewrite (product-focused) |
+| `docs/ARCHITECTURE.md` | Create (moved crypto content) |
+| `docs/DEVELOPMENT.md` | Create (local setup guide) |
+| `00_START_HERE.md` | Delete |
+| `.markdownlintignore` | Remove `00_START_HERE.md` line |
+| `.github/copilot-instructions.md` | Update `00_START_HERE.md` reference |
+| `.planning/codebase/STRUCTURE.md` | Update tree listing |
+
+## Implementation Order
+
+1. Create `docs/ARCHITECTURE.md` (destination for moved content)
+2. Create `docs/DEVELOPMENT.md` (independent)
+3. Rewrite `README.md` (links to new docs)
+4. Delete `00_START_HERE.md`
+5. Update `.markdownlintignore`, `.github/copilot-instructions.md`, `.planning/codebase/STRUCTURE.md`
+6. Run `pnpm lint:md` to verify all new/modified markdown
+
+## Verification
+
+1. `pnpm lint:md` passes on all new/modified files
+2. All internal markdown links resolve (docs/ARCHITECTURE.md, docs/DEVELOPMENT.md, etc.)
+3. README renders correctly on GitHub (centered logo, tables, code blocks)
+4. No orphaned references to `00_START_HERE.md` anywhere in the repo
+5. ASCII diagrams in `docs/ARCHITECTURE.md` preserved exactly from original README
+
+
+If you need specific details from before exiting plan mode (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.claude/projects/-Users-michael-Code-cipher-box/2259b788-4d52-4278-9c4f-cafbc130777d.jsonl
+
+---
+
+ok lets get a PR for this up
