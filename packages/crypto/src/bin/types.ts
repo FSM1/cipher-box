@@ -37,6 +37,8 @@ export type BinEntry = {
   contentCid?: string;
   /** Original file size in bytes (captured at soft-delete time for quota reclaim on permanent delete) */
   contentSize?: number;
+  /** Version CIDs and sizes (captured at soft-delete time for unpin on permanent delete) */
+  versionCids?: Array<{ cid: string; size: number }>;
 
   // --- Item reference data (needed for restore and permanent delete) ---
 

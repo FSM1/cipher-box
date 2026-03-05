@@ -54,10 +54,20 @@ pub struct BinEntry {
     pub content_size: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
+    pub version_cids: Option<Vec<VersionCidEntry>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub file_pointer: Option<FilePointer>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(default)]
     pub folder_entry: Option<FolderEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionCidEntry {
+    pub cid: String,
+    pub size: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

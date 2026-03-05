@@ -376,6 +376,7 @@ pub(crate) mod implementation {
                     mime_type: crate::crypto::utils::mime_from_extension(&item_name).to_string(),
                     content_cid: if content_cid.is_empty() { None } else { Some(content_cid) },
                     content_size: Some(file_size),
+                    version_cids: None,
                     file_pointer: Some(file_pointer),
                     folder_entry: None,
                 };
@@ -765,6 +766,7 @@ pub(crate) mod implementation {
                     mime_type: String::new(),
                     content_cid: None,
                     content_size: None,
+                    version_cids: None,
                     file_pointer: None,
                     folder_entry: Some(folder_entry),
                 };

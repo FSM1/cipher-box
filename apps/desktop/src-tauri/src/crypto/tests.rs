@@ -1236,6 +1236,7 @@ fn make_test_bin_entry(id: &str, item_type: bin::BinItemType) -> bin::BinEntry {
         mime_type: "text/plain".to_string(),
         content_cid: None,
         content_size: None,
+        version_cids: None,
         file_pointer: match id {
             _ if id.starts_with("file") => Some(FilePointer {
                 id: "fp-001".to_string(),
@@ -1388,6 +1389,7 @@ fn bin_metadata_optional_fields_omitted_when_none() {
             mime_type: "text/plain".to_string(),
             content_cid: None,
             content_size: None,
+            version_cids: None,
             file_pointer: None,
             folder_entry: None,
         }],
@@ -1684,6 +1686,7 @@ fn bin_entry_content_cid_roundtrip() {
             mime_type: "image/jpeg".to_string(),
             content_cid: Some("bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4".to_string()),
             content_size: Some(12345),
+            version_cids: None,
             file_pointer: Some(FilePointer {
                 id: "fp-cid-test".to_string(),
                 name: "photo.jpg".to_string(),

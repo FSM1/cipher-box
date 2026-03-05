@@ -304,6 +304,11 @@ export async function addManyToBin(params: {
           const fileMeta = await decryptFileMetadata(encrypted, folderKey);
           entry.contentCid = fileMeta.cid;
           entry.contentSize = fileMeta.size;
+          if (Array.isArray(fileMeta.versions) && fileMeta.versions.length > 0) {
+            entry.versionCids = fileMeta.versions
+              .filter((v) => v.cid)
+              .map((v) => ({ cid: v.cid, size: v.size ?? 0 }));
+          }
         }
       } catch (err) {
         console.warn('[Bin] Failed to resolve file CID for bin entry (non-blocking):', err);
@@ -701,22 +706,19 @@ async function unpinFileCids(entry: BinEntry): Promise<void> {
       if (Number.isFinite(entry.contentSize)) {
         useQuotaStore.getState().removeUsage(entry.contentSize!);
       }
-      // Also unpin the file metadata CID and any version CIDs
+      // Unpin version CIDs captured at soft-delete time
+      if (entry.versionCids?.length) {
+        for (const v of entry.versionCids) {
+          await unpinFromIpfs(v.cid).catch(() => {});
+          if (Number.isFinite(v.size)) {
+            useQuotaStore.getState().removeUsage(v.size);
+          }
+        }
+      }
+      // Also unpin the file metadata IPNS record CID
       if (entry.filePointer) {
         const resolved = await resolveIpnsRecord(entry.filePointer.fileMetaIpnsName);
         if (resolved?.cid) {
-          // Best-effort: try to parse file metadata for version CIDs.
-          // This uses plaintext JSON parsing — if the metadata is encrypted
-          // (which it is for v2 entries), version cleanup is skipped here
-          // but will succeed for folder-nested files in cleanupFolderCids.
-          try {
-            const metaBytes = await fetchFromIpfs(resolved.cid);
-            const metaJson = new TextDecoder().decode(metaBytes);
-            const fileMeta = JSON.parse(metaJson);
-            await unpinVersionCids(fileMeta);
-          } catch {
-            // Expected for encrypted metadata — version cleanup is best-effort
-          }
           await unpinFromIpfs(resolved.cid).catch(() => {});
         }
       }
