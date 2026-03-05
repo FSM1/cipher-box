@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "95bed50a110f",
+  "strategy": "manual-commit",
+  "branch": "fix/m2-gap-closure-phase-17.1",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/services/bin.service.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/95/bed50a110f/0/metadata.json",
+      "transcript": "/95/bed50a110f/0/full.jsonl",
+      "context": "/95/bed50a110f/0/context.md",
+      "content_hash": "/95/bed50a110f/0/content_hash.txt",
+      "prompt": "/95/bed50a110f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 306,
+    "cache_creation_tokens": 432902,
+    "cache_read_tokens": 30175425,
+    "output_tokens": 99986,
+    "api_call_count": 272
+  }
+}
