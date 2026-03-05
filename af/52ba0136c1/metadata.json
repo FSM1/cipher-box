@@ -3,7 +3,7 @@
   "checkpoint_id": "af52ba0136c1",
   "strategy": "manual-commit",
   "branch": "fix/desktop-e2e-windows",
-  "checkpoints_count": 0,
+  "checkpoints_count": 1,
   "files_touched": [
     "tests/e2e/tests/recycle-bin.spec.ts"
   ],
@@ -14,13 +14,20 @@
       "context": "/af/52ba0136c1/0/context.md",
       "content_hash": "/af/52ba0136c1/0/content_hash.txt",
       "prompt": "/af/52ba0136c1/0/prompt.txt"
+    },
+    {
+      "metadata": "/af/52ba0136c1/1/metadata.json",
+      "transcript": "/af/52ba0136c1/1/full.jsonl",
+      "context": "/af/52ba0136c1/1/context.md",
+      "content_hash": "/af/52ba0136c1/1/content_hash.txt",
+      "prompt": "/af/52ba0136c1/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 115,
-    "cache_creation_tokens": 288336,
-    "cache_read_tokens": 13779894,
-    "output_tokens": 47915,
-    "api_call_count": 111
+    "input_tokens": 127,
+    "cache_creation_tokens": 304820,
+    "cache_read_tokens": 14116768,
+    "output_tokens": 49273,
+    "api_call_count": 119
   }
 }

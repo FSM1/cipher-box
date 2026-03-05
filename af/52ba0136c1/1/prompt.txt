@@ -1,0 +1,9 @@
+CI is reporting a few `unexpected any` issues in a freshly added test file
+
+---
+
+[Image: source: /Users/michael/Desktop/Screenshot 2026-03-05 at 13.06.14.png]
+
+---
+
+push it up
