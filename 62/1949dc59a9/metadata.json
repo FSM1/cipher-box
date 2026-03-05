@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "621949dc59a9",
+  "strategy": "manual-commit",
+  "branch": "fix/m2-gap-closure-phase-17.1",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/crypto/tests.rs",
+    "apps/web/src/components/file-browser/ReplaceFileDialog.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/62/1949dc59a9/0/metadata.json",
+      "transcript": "/62/1949dc59a9/0/full.jsonl",
+      "context": "/62/1949dc59a9/0/context.md",
+      "content_hash": "/62/1949dc59a9/0/content_hash.txt",
+      "prompt": "/62/1949dc59a9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 31781,
+    "cache_read_tokens": 664323,
+    "output_tokens": 5109,
+    "api_call_count": 13
+  }
+}

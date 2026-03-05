@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "621949dc59a9",
+  "session_id": "0ff2061b-18ca-40f5-88df-f1326576417b",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-05T01:49:21.799346Z",
+  "branch": "fix/m2-gap-closure-phase-17.1",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/crypto/tests.rs",
+    "apps/web/src/components/file-browser/ReplaceFileDialog.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "1ffe1b40876d",
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 31781,
+    "cache_read_tokens": 664323,
+    "output_tokens": 5109,
+    "api_call_count": 13
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-05T01:49:20.793616Z",
+    "agent_lines": 15,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 15,
+    "agent_percentage": 100
+  }
+}
