@@ -10,9 +10,9 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 ## Current Position
 
 Phase: 17.1 (Recycle Bin Integration Fixes) -- In Progress
-Plan: 2 of 3
+Plan: 2 of 3 (Plans 01 and 02 complete)
 Status: In progress
-Last activity: 2026-03-05 -- Completed 17.1-02-PLAN.md (Windows bin integration)
+Last activity: 2026-03-05 -- Completed 17.1-01-PLAN.md (bin CID capture and unpin fix)
 
 Progress: [########################-] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE, Phase 16: 5/5 COMPLETE, Phase 17: 5/5 COMPLETE, Phase 17.1: 2/3 IN PROGRESS)
 
@@ -20,9 +20,9 @@ Progress: [########################-] (M1 complete, M2 Phase 12 complete, Phase 
 
 **Velocity:**
 
-- Total plans completed: 152
+- Total plans completed: 153
 - Average duration: 5.5 min
-- Total execution time: 16.1 hours
+- Total execution time: 16.3 hours
 
 **By Phase (M1 summary):**
 
@@ -48,10 +48,11 @@ Progress: [########################-] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 11.4   | 3/3   | 20 min  | 6.7 min  |
 | M2 Phase 16     | 5/5   | 18 min  | 3.6 min  |
 | M2 Phase 17     | 5/5   | 35 min  | 7.0 min  |
+| M2 Phase 17.1   | 2/3   | 20 min  | 10.0 min |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 7m, 9m, 7m, 5m
+- Last 5 plans: 7m, 9m, 7m, 5m, 11m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -243,6 +244,8 @@ Recent decisions affecting current work:
 | Inline generate_uuid_v4 in bin.rs (no uuid crate)                      | 17-04     | Same pattern as registry/mod.rs; avoid new dependency for simple function                                            |
 | Inline guess_mime_type mapping (no mime_guess crate)                   | 17-04     | Best-effort MIME for bin display; application/octet-stream fallback acceptable for unknown extensions                |
 | Bin IPNS conflict = log + preserve CID (no retry)                      | 17-04     | Fire-and-forget publish; data preserved via pinned CID; next delete or web session creates fresh bin state           |
+| Store CID+size in BinEntry at soft-delete (not re-decrypt at delete)   | 17.1-01   | Avoids GAP-1 bug: parsing AES-GCM encrypted metadata as plain JSON; capture when data is in memory                   |
+| cleanupFolderCids receives FolderEntry for direct folderKey unwrapping | 17.1-01   | Changed from IPNS name string to full FolderEntry; enables ECIES unwrap + AES-GCM decrypt for nested files           |
 
 ### Pending Todos
 
@@ -328,11 +331,11 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-03-05
-Stopped at: Phase 17.1 planned (3 plans, 2 waves, verified)
+Stopped at: Completed 17.1-01-PLAN.md (bin CID capture and unpin fix)
 Resume file: None
-Next: Execute Phase 17.1 via /gsd:execute-phase 17.1
+Next: Execute 17.1-03-PLAN.md (E2E tests for bin integration)
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-03-04 after Plan 17-05 complete (E2E recycle bin tests)_
+_Last updated: 2026-03-05 after Plan 17.1-01 complete (bin CID capture and unpin fix)_
