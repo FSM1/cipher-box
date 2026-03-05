@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "da48acf7845e",
+  "session_id": "9071bc72-bc8d-4d59-ad23-65b10ec13265",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-05T22:14:53.48814Z",
+  "branch": "docs/restructure-readme-product-docs",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docs/ARCHITECTURE.md",
+    "docs/DEVELOPMENT.md",
+    "README.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e4e2695a7418",
+  "token_usage": {
+    "input_tokens": 47,
+    "cache_creation_tokens": 145704,
+    "cache_read_tokens": 2989148,
+    "output_tokens": 15030,
+    "api_call_count": 42
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-05T22:14:52.333798Z",
+    "agent_lines": 0,
+    "human_added": 9,
+    "human_modified": 16,
+    "human_removed": 0,
+    "total_committed": 9,
+    "agent_percentage": 0
+  }
+}
