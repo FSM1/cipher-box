@@ -43,11 +43,16 @@ export function ReplaceFileDialog({ replacements, onComplete }: ReplaceFileDialo
         newFileKeyEncrypted: current.encryptedData.wrappedKey,
         newFileIv: current.encryptedData.iv,
         newSize: current.encryptedData.size,
+        newEncryptionMode: current.encryptedData.encryptionMode,
         forceVersion: true,
       });
       advance();
     } catch (err) {
       console.error('[replace] Failed to replace file:', err);
+      // Clean up orphaned pin + quota on failure
+      void unpinFromIpfs(current.encryptedData.cid).catch(() => {});
+      useQuotaStore.getState().removeUsage(current.encryptedData.size);
+      advance();
     } finally {
       setIsLoading(false);
     }

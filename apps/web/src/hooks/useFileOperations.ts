@@ -344,6 +344,7 @@ export function useFileOperations() {
         newFileKeyEncrypted: string;
         newFileIv: string;
         newSize: number;
+        newEncryptionMode?: 'GCM' | 'CTR';
         forceVersion?: boolean; // true for web re-upload, false/undefined for text editor
       }
     ): Promise<void> => {
@@ -405,6 +406,7 @@ export function useFileOperations() {
               fileKeyEncrypted: fileData.newFileKeyEncrypted,
               fileIv: fileData.newFileIv,
               size: fileData.newSize,
+              ...(fileData.newEncryptionMode ? { encryptionMode: fileData.newEncryptionMode } : {}),
             },
             createVersion,
           }));

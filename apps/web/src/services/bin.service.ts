@@ -740,7 +740,7 @@ async function unpinFileCids(entry: BinEntry): Promise<void> {
 
     if (fileMeta.cid) {
       await unpinFromIpfs(fileMeta.cid);
-      if (fileMeta.size && typeof fileMeta.size === 'number') {
+      if (Number.isFinite(fileMeta.size)) {
         useQuotaStore.getState().removeUsage(fileMeta.size);
       }
     }
