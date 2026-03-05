@@ -20,7 +20,7 @@ CipherBox is a production-grade, privacy-first encrypted cloud storage platform 
 
 - Web3Auth authentication (email, OAuth, magic link, external wallet) — v0.1
 - Client-side AES-256-GCM encryption + ECIES key wrapping — v0.1
-- IPFS file storage via Pinata with IPNS metadata — v0.1
+- IPFS file storage via Kubo with IPNS metadata — v0.1
 - Full file/folder CRUD with 20-level hierarchy — v0.1
 - File browser web UI with terminal aesthetic — v0.1
 - Multi-device sync via IPNS polling (30s) — v0.1
@@ -95,7 +95,7 @@ See `.planning/milestones/m3/REQUIREMENTS.md` for full requirements.
 
 **Technical Environment:**
 
-- IPFS via Pinata for file storage and pinning
+- IPFS via Kubo for file storage and pinning
 - IPNS for mutable metadata pointers (per-folder + per-file)
 - Web3Auth Core Kit MPC for deterministic ECDSA key derivation
 - Phala Cloud for TEE auto-republishing (3-hour interval)
@@ -112,13 +112,13 @@ See `.planning/milestones/m3/REQUIREMENTS.md` for full requirements.
 ## Constraints
 
 - **File size**: 100 MB max — browser memory limits
-- **Storage quota**: 500 MiB free tier — Pinata cost management
+- **Storage quota**: 500 MiB free tier — IPFS storage management
 - **Files per folder**: 1,000 max — UI performance
 - **Folder depth**: 20 levels max — traversal performance
 - **Sync latency**: ~30 seconds — IPNS polling interval
 - **Tech stack**: NestJS backend, React 18 frontend, Tauri desktop — per specifications
 - **Auth provider**: Web3Auth Core Kit MPC — deterministic key derivation requirement
-- **IPFS provider**: Pinata — managed pinning service
+- **IPFS provider**: Kubo (self-hosted)
 
 ## Key Decisions
 

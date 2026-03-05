@@ -13,7 +13,7 @@ Web3Auth Network (Key Derivation)
         ↓ ECDSA Private Key (RAM only!)
 User Device ← Vault Data ← PostgreSQL
         ↓ Encrypted Keys
-IPFS (Pinata) ← Encrypted Files
+IPFS (Kubo) ← Encrypted Files
         ↑
 TEE (Phala/Nitro) ← IPNS Republish (every 3h)
 ```
@@ -158,7 +158,7 @@ Every key below the VaultKey is **randomly generated** (not derived) and **ECIES
   │  5. Clear plaintext fileKey from memory                      │
   │         │                                                    │
   │         ▼                                                    │
-  │  6. Upload encrypted blob → Pinata → IPFS → returns CID     │
+  │  6. Upload encrypted blob → IPFS (Kubo) → returns CID     │
   │         │                                                    │
   │         ▼                                                    │
   │  7. Add to folder metadata:                                  │

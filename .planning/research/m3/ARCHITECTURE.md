@@ -33,7 +33,7 @@ Before detailing M3 additions, here is the current system as of M1/M2 completion
 | Web App   | React 18 + Zustand + Vite     | File browser, auth, upload/download, IPNS sync |
 | API       | NestJS + TypeORM + PostgreSQL | Auth, vault, IPFS/IPNS relay, TEE coordination |
 | Desktop   | Tauri v2 + Rust FUSE          | Transparent encrypted filesystem mount         |
-| IPFS      | Pinata (managed pinning)      | Encrypted content storage                      |
+| IPFS      | Kubo (self-hosted)            | Encrypted content storage                      |
 | IPNS      | Per-folder Ed25519 keypairs   | Mutable metadata pointers                      |
 | TEE       | Phala Cloud / AWS Nitro       | IPNS auto-republishing                         |
 | Auth      | Web3Auth + SIWE               | Key derivation and identity                    |

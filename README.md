@@ -56,7 +56,7 @@ The client encrypts everything locally. The API is a zero-knowledge relay — it
 | **Database**       | PostgreSQL 16                                 |
 | **Job Queue**      | BullMQ + Redis                                |
 | **Key Derivation** | Web3Auth MPC Core Kit                         |
-| **Storage**        | IPFS via Kubo / Pinata                        |
+| **Storage**        | IPFS via Kubo                                 |
 | **Desktop**        | Tauri v2 + FUSE-T / WinFSP                    |
 | **TEE**            | Phala Cloud (IPNS republishing)               |
 | **Crypto**         | Web Crypto API (AES-256-GCM, ECIES secp256k1) |

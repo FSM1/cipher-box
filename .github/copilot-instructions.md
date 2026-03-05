@@ -112,7 +112,7 @@ interface DecryptedFolderMetadata {
 - **Frontend:** React 18 + TypeScript + Tailwind CSS
 - **Backend:** Node.js + NestJS + TypeScript
 - **Database:** PostgreSQL (users, vaults, audit trail)
-- **Storage:** IPFS via Pinata API
+- **Storage:** IPFS via Kubo
 - **Auth:** Web3Auth Modal SDK (@web3auth/modal)
 - **Desktop:** Tauri/Electron + FUSE (macFUSE/FUSE3/WinFSP)
 
@@ -151,7 +151,7 @@ const encryptedFile = await crypto.subtle.encrypt(
 // 3. Wrap file key with user's public key (ECIES)
 const encryptedFileKey = await eciesEncrypt(fileKey, userPublicKey);
 
-// 4. Upload encrypted file to backend → Pinata → get CID
+// 4. Upload encrypted file to backend → IPFS → get CID
 const { cid } = await api.post('/vault/upload', {
   encryptedFile: new Blob([encryptedFile]),
   fileName: file.name, // plaintext OK for server audit

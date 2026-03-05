@@ -123,7 +123,7 @@ Mistakes that break zero-knowledge guarantees, cause data loss, or require archi
 - Silent data loss: user's uploaded file disappears from folder listing
 - No merge mechanism -- one user's entire metadata update is discarded
 - File content exists on IPFS (CID is valid) but is unreachable because folder metadata doesn't reference it
-- Orphaned Pinata pins consuming storage quota
+- Orphaned IPFS pins consuming storage quota
 - Users lose trust in the system
 
 **Prevention:**
@@ -331,7 +331,7 @@ Mistakes that cause significant bugs, data integrity issues, or expensive rework
 
 ### Pitfall 8: File Versioning Storage Cost Explosion on IPFS
 
-**What goes wrong:** Each version of a file is a separate encrypted blob on IPFS with a unique CID (because CipherBox uses random keys and IVs per encryption -- no deduplication possible). A 10MB file with 50 versions consumes 500MB of Pinata storage, even if changes between versions are tiny.
+**What goes wrong:** Each version of a file is a separate encrypted blob on IPFS with a unique CID (because CipherBox uses random keys and IVs per encryption -- no deduplication possible). A 10MB file with 50 versions consumes 500MB of IPFS storage, even if changes between versions are tiny.
 
 **Why it happens:**
 
@@ -344,7 +344,7 @@ Mistakes that cause significant bugs, data integrity issues, or expensive rework
 **Consequences:**
 
 - 500 MiB free tier quota exhausted rapidly with active files
-- Pinata costs scale linearly with version count x file size
+- IPFS costs scale linearly with version count x file size
 - Users surprised by storage usage
 - No way to deduplicate or compress versions
 
@@ -372,7 +372,7 @@ Version metadata in folder entry should follow this structure:
 
 Additional prevention measures:
 
-- **Unpin old versions promptly.** When a version is pruned, call Pinata unpin. Track pending unpins to avoid orphans.
+- **Unpin old versions promptly.** When a version is pruned, call IPFS unpin. Track pending unpins to avoid orphans.
 - **Show storage impact to users:** "This file has 8 versions using 42MB. Keeping 5 versions would save 17MB."
 - **Explicitly document:** "File versioning does not support delta storage. Each version stores the complete encrypted file."
 
@@ -402,7 +402,7 @@ Additional prevention measures:
 
 - Folder load times degrade as version count grows
 - IPNS publish latency increases (larger payload)
-- Pinata storage for metadata records grows significantly
+- IPFS storage for metadata records grows significantly
 - Every file operation in the folder re-publishes all version metadata
 
 **Prevention:**
@@ -521,7 +521,7 @@ Additional prevention measures:
 
 ### Pitfall 12: Orphaned Versions After Folder Metadata Publish Failure
 
-**What goes wrong:** When creating a new version of a file, the client: (1) encrypts new content, (2) uploads to IPFS (gets new CID), (3) updates folder metadata with new version entry, (4) publishes IPNS. If step 4 fails (network error, IPNS timeout), the new file CID is pinned on Pinata but not referenced in any folder metadata. The old version remains current, and the new version is orphaned.
+**What goes wrong:** When creating a new version of a file, the client: (1) encrypts new content, (2) uploads to IPFS (gets new CID), (3) updates folder metadata with new version entry, (4) publishes IPNS. If step 4 fails (network error, IPNS timeout), the new file CID is pinned on IPFS but not referenced in any folder metadata. The old version remains current, and the new version is orphaned.
 
 **Why it happens:**
 
@@ -532,7 +532,7 @@ Additional prevention measures:
 
 **Consequences:**
 
-- Pinata storage consumed by unreferenced CIDs
+- IPFS storage consumed by unreferenced CIDs
 - User's edit appears to have been lost
 - Multiple retries can create multiple orphaned versions
 - Storage quota leaks over time
@@ -545,14 +545,14 @@ Additional prevention measures:
   3. After metadata publish: mark intent as complete
   4. On next session start: check for incomplete intents. Either retry the metadata publish or unpin the orphaned CID.
 - **Backend reconciliation job:**
-  - Periodically compare Pinata pin list against all CIDs referenced in known folder metadata
+  - Periodically compare IPFS pin list against all CIDs referenced in known folder metadata
   - Flag orphaned CIDs for review/cleanup
   - Auto-unpin CIDs orphaned for >24 hours
 - **Retry with idempotency:** If IPNS publish fails, retry with same sequence number. IPNS accepts re-publishes with same or higher sequence numbers.
 
 **Detection:**
 
-- Monitor: Pinata pin count vs expected pin count (derived from folder metadata)
+- Monitor: IPFS pin count vs expected pin count (derived from folder metadata)
 - Audit: weekly reconciliation of pinned CIDs vs referenced CIDs
 - Alert: pin count growing faster than file count
 

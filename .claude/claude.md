@@ -87,7 +87,7 @@ When generating code for CipherBox:
 ## Architecture Decisions
 
 - **Auth:** Web3Auth for key derivation, CipherBox backend for tokens
-- **Storage:** IPFS via Pinata for files, IPNS for metadata (all relayed via CipherBox API)
+- **Storage:** IPFS via Kubo for files, IPNS for metadata (all relayed via CipherBox API)
 - **Encryption:** Client-side only, server is zero-knowledge
 - **Sync:** IPNS polling (30s interval), no push infrastructure
 - **Desktop:** FUSE mount for transparent file access
