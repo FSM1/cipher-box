@@ -398,6 +398,11 @@ pub(crate) mod implementation {
             inode.attr.size = 0;
             inode.attr.mtime = SystemTime::now();
             inode.attr.ctime = SystemTime::now();
+            inode.write_generation += 1;
+            if let InodeKind::File { size: ref mut s, cid: ref mut c, .. } = inode.kind {
+                *s = 0;
+                c.clear();
+            }
             *file_info = fill_file_info(&inode.attr);
         }
 
@@ -463,6 +468,9 @@ pub(crate) mod implementation {
                 inode.attr.size = new_size;
                 inode.attr.blocks = (new_size + 511) / 512;
                 inode.attr.mtime = SystemTime::now();
+                if new_size == 0 {
+                    inode.write_generation += 1;
+                }
                 if let InodeKind::File { size: ref mut s, cid: ref mut c, .. } = inode.kind {
                     *s = new_size;
                     if new_size == 0 {
@@ -791,6 +799,10 @@ pub(crate) mod implementation {
                             file_ipns_key_encrypted_hex: cached_hex,
                             versions: versions_for_meta.clone(),
                         };
+                        // Bump generation so stale background uploads (from a
+                        // prior truncate-to-zero flush) are rejected by
+                        // drain_upload_completions.
+                        inode.write_generation += 1;
                         inode.attr.size = file_size;
                         inode.attr.blocks = (file_size + 511) / 512;
                         inode.attr.mtime = SystemTime::now();
@@ -798,6 +810,9 @@ pub(crate) mod implementation {
 
                     fs.pending_content.insert(ino, plaintext);
 
+                    let write_gen = fs.inodes.get(ino)
+                        .map(|i| i.write_generation)
+                        .unwrap_or(0);
                     let parent_ino = fs.inodes.get(ino).map(|i| i.parent_ino).unwrap_or(ROOT_INO);
                     let folder_key_for_file_meta = fs.get_folder_key(parent_ino);
                     fs.queue_publish(parent_ino, true);
@@ -831,7 +846,7 @@ pub(crate) mod implementation {
                                 parent_ino,
                                 old_file_cid,
                                 pruned_cids,
-                                write_generation: 0,
+                                write_generation: write_gen,
                             });
 
                             if let (Some(ipns_key), Some(ipns_name), Some(folder_key)) =

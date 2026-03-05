@@ -513,6 +513,7 @@ jobs:
           BINARY="apps/desktop/src-tauri/target/debug/${{ matrix.binary-name }}"
           DEV_KEY=$(openssl rand -hex 32)
           LOGFILE="$RUNNER_TEMP/cipherbox-desktop.log"
+          export DESKTOP_LOG="$LOGFILE"
           "$BINARY" --dev-key "$DEV_KEY" > "$LOGFILE" 2>&1 &
           DESKTOP_PID=$!
           set +e
