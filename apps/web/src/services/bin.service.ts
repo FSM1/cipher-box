@@ -701,10 +701,22 @@ async function unpinFileCids(entry: BinEntry): Promise<void> {
       if (Number.isFinite(entry.contentSize)) {
         useQuotaStore.getState().removeUsage(entry.contentSize!);
       }
-      // Also unpin the file metadata CID
+      // Also unpin the file metadata CID and any version CIDs
       if (entry.filePointer) {
         const resolved = await resolveIpnsRecord(entry.filePointer.fileMetaIpnsName);
         if (resolved?.cid) {
+          // Best-effort: try to parse file metadata for version CIDs.
+          // This uses plaintext JSON parsing — if the metadata is encrypted
+          // (which it is for v2 entries), version cleanup is skipped here
+          // but will succeed for folder-nested files in cleanupFolderCids.
+          try {
+            const metaBytes = await fetchFromIpfs(resolved.cid);
+            const metaJson = new TextDecoder().decode(metaBytes);
+            const fileMeta = JSON.parse(metaJson);
+            await unpinVersionCids(fileMeta);
+          } catch {
+            // Expected for encrypted metadata — version cleanup is best-effort
+          }
           await unpinFromIpfs(resolved.cid).catch(() => {});
         }
       }
@@ -732,10 +744,33 @@ async function unpinFileCids(entry: BinEntry): Promise<void> {
         useQuotaStore.getState().removeUsage(fileMeta.size);
       }
     }
+    await unpinVersionCids(fileMeta);
 
     await unpinFromIpfs(resolved.cid).catch(() => {});
   } catch (err) {
     console.error(`[Bin] CID cleanup failed for file ${entry.id}:`, err);
+  }
+}
+
+/**
+ * Unpin version CIDs from a decrypted/parsed file metadata object and reclaim quota.
+ * Best-effort: errors on individual versions are caught and logged.
+ */
+async function unpinVersionCids(fileMeta: {
+  versions?: Array<{ cid?: string; size?: number }>;
+}): Promise<void> {
+  if (!Array.isArray(fileMeta.versions)) return;
+  for (const version of fileMeta.versions) {
+    try {
+      if (version.cid) {
+        await unpinFromIpfs(version.cid);
+      }
+      if (Number.isFinite(version.size)) {
+        useQuotaStore.getState().removeUsage(version.size!);
+      }
+    } catch {
+      // Best-effort for individual version cleanup
+    }
   }
 }
 
@@ -786,6 +821,8 @@ async function cleanupFolderCids(
                 useQuotaStore.getState().removeUsage(fileMeta.size);
               }
             }
+            // Unpin any historical version CIDs
+            await unpinVersionCids(fileMeta);
             // Also unpin the file metadata CID
             await unpinFromIpfs(fileResolved.cid).catch(() => {});
           }
