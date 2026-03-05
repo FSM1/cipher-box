@@ -1587,13 +1587,14 @@ fn file_metadata_versions_camel_case_serialization() {
         versions: Some(vec![make_test_version_entry(0)]),
     };
 
-    let json = serde_json::to_string(&metadata).unwrap();
-    assert!(json.contains("fileKeyEncrypted"), "Version entry must use camelCase: fileKeyEncrypted");
-    assert!(json.contains("fileIv"), "Version entry must use camelCase: fileIv");
-    assert!(json.contains("encryptionMode"), "Version entry must use camelCase: encryptionMode");
-    assert!(!json.contains("file_key_encrypted"), "Should NOT contain snake_case file_key_encrypted");
-    assert!(!json.contains("file_iv"), "Should NOT contain snake_case file_iv");
-    assert!(!json.contains("encryption_mode"), "Should NOT contain snake_case encryption_mode");
+    let json = serde_json::to_value(&metadata).unwrap();
+    let version0 = &json["versions"][0];
+    assert!(version0.get("fileKeyEncrypted").is_some(), "Version entry must use camelCase: fileKeyEncrypted");
+    assert!(version0.get("fileIv").is_some(), "Version entry must use camelCase: fileIv");
+    assert!(version0.get("encryptionMode").is_some(), "Version entry must use camelCase: encryptionMode");
+    assert!(version0.get("file_key_encrypted").is_none(), "Should NOT contain snake_case file_key_encrypted");
+    assert!(version0.get("file_iv").is_none(), "Should NOT contain snake_case file_iv");
+    assert!(version0.get("encryption_mode").is_none(), "Should NOT contain snake_case encryption_mode");
 }
 
 #[test]

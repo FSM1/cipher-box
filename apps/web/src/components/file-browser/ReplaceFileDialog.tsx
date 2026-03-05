@@ -4,6 +4,7 @@ import { useUploadStore } from '../../stores/upload.store';
 import type { PendingReplacement } from '../../stores/upload.store';
 import { useFileOperations } from '../../hooks/useFileOperations';
 import { unpinFromIpfs } from '../../lib/api/ipfs';
+import { useQuotaStore } from '../../stores/quota.store';
 import '../../styles/dialogs.css';
 
 type ReplaceFileDialogProps = {
@@ -44,25 +45,28 @@ export function ReplaceFileDialog({ replacements, onComplete }: ReplaceFileDialo
         newSize: current.encryptedData.size,
         forceVersion: true,
       });
+      advance();
     } catch (err) {
       console.error('[replace] Failed to replace file:', err);
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
-    advance();
   }, [current, isLoading, updateFile, advance]);
 
   const handleSkip = useCallback(() => {
     if (!current || isLoading) return;
     // Unpin the orphaned upload since user chose to skip
     void unpinFromIpfs(current.encryptedData.cid).catch(() => {});
+    useQuotaStore.getState().removeUsage(current.encryptedData.size);
     advance();
   }, [current, isLoading, advance]);
 
   const handleClose = useCallback(() => {
     if (isLoading) return;
-    // Skip all remaining replacements and clean up orphaned pins
+    // Skip all remaining replacements and clean up orphaned pins + quota
     for (let i = currentIndex; i < replacements.length; i++) {
       void unpinFromIpfs(replacements[i].encryptedData.cid).catch(() => {});
+      useQuotaStore.getState().removeUsage(replacements[i].encryptedData.size);
     }
     useUploadStore.getState().clearPendingReplacements();
     onComplete();
