@@ -499,13 +499,14 @@ pub(crate) mod implementation {
             };
 
             // Capture bin entry data for file or folder before removal
-            let bin_file_data: Option<(String, u64, crate::crypto::folder::FilePointer)> =
+            let bin_file_data: Option<(String, u64, crate::crypto::folder::FilePointer, String)> =
                 match fs.inodes.get(ino) {
                     Some(inode) => match &inode.kind {
                         InodeKind::File {
                             file_meta_ipns_name,
                             file_ipns_key_encrypted_hex,
                             size,
+                            cid,
                             ..
                         } => {
                             let now_ms = SystemTime::now()
@@ -527,7 +528,7 @@ pub(crate) mod implementation {
                                         created_at: if created_ms > 0 { created_ms } else { now_ms },
                                         modified_at: now_ms,
                                     };
-                                    Some((inode.name.clone(), *size, file_pointer))
+                                    Some((inode.name.clone(), *size, file_pointer, cid.clone()))
                                 }
                                 _ => {
                                     log::warn!(
@@ -624,7 +625,7 @@ pub(crate) mod implementation {
                     .unwrap_or_default()
                     .as_millis() as u64;
 
-                let bin_entry = if let Some((name, size, fp)) = bin_file_data {
+                let bin_entry = if let Some((name, size, fp, cid)) = bin_file_data {
                     Some(crate::crypto::bin::BinEntry {
                         id: crate::crypto::utils::generate_uuid_v4(),
                         item_type: crate::crypto::bin::BinItemType::File,
@@ -634,7 +635,7 @@ pub(crate) mod implementation {
                         deleted_at: now_ms,
                         size,
                         mime_type: crate::crypto::utils::mime_from_extension(&name).to_string(),
-                        content_cid: None,
+                        content_cid: if cid.is_empty() { None } else { Some(cid) },
                         content_size: Some(size),
                         file_pointer: Some(fp),
                         folder_entry: None,
