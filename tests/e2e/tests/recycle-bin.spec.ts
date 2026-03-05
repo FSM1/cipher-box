@@ -38,6 +38,20 @@ test.describe.serial('Recycle Bin', () => {
   // Unique suffix per test run to avoid naming collisions
   const runId = Date.now().toString();
 
+  /** Best-effort Zustand quota store accessor (returns null if store not exposed). */
+  type QuotaStore = { getState: () => { usedBytes: number } };
+  const getQuotaUsedBytes = (p: Page) =>
+    p.evaluate(() => {
+      try {
+        const store = (window as unknown as Record<string, Record<string, QuotaStore> | undefined>)
+          .__ZUSTAND_STORES__?.quota;
+        if (!store) return null;
+        return store.getState().usedBytes as number;
+      } catch {
+        return null;
+      }
+    });
+
   test.beforeAll(async ({ browser: testBrowser }) => {
     browser = testBrowser;
     context = await browser.newContext();
@@ -350,25 +364,10 @@ test.describe.serial('Recycle Bin', () => {
     // SECONDARY ASSERTION (best-effort): check quota via Zustand store if accessible
     // This is fragile because window.__ZUSTAND_STORES__ may not be exposed.
     // The primary value of this test is proving permanent delete doesn't crash.
-    const quotaDecreased = await page.evaluate(() => {
-      try {
-        const store = (
-          window as unknown as Record<
-            string,
-            Record<string, { getState: () => { usedBytes: number } }>
-          >
-        ).__ZUSTAND_STORES__?.quota;
-        if (!store) return null; // Store not accessible, skip
-        // Just verify store is functional (not crashed)
-        const state = store.getState();
-        return typeof state.usedBytes === 'number';
-      } catch {
-        return null;
-      }
-    });
+    const quotaUsed = await getQuotaUsedBytes(page);
     // Only assert if store was accessible -- null means we couldn't check
-    if (quotaDecreased !== null) {
-      expect(quotaDecreased).toBe(true);
+    if (quotaUsed !== null) {
+      expect(typeof quotaUsed === 'number').toBe(true);
     }
   });
 
@@ -406,20 +405,7 @@ test.describe.serial('Recycle Bin', () => {
     await page.waitForTimeout(3000); // Wait for IPNS publish
 
     // 5. Snapshot quota usage (best-effort)
-    const quotaBefore = await page.evaluate(() => {
-      try {
-        const store = (
-          window as unknown as Record<
-            string,
-            Record<string, { getState: () => { usedBytes: number } }>
-          >
-        ).__ZUSTAND_STORES__?.quota;
-        if (!store) return null;
-        return store.getState().usedBytes as number;
-      } catch {
-        return null;
-      }
-    });
+    const quotaBefore = await getQuotaUsedBytes(page);
 
     // 6. Soft-delete the file
     await fileList.rightClickItem(fileName);
@@ -444,20 +430,7 @@ test.describe.serial('Recycle Bin', () => {
     if (quotaBefore !== null) {
       // Wait for quota to settle after unpinning
       await page.waitForTimeout(3000);
-      const quotaAfter = await page.evaluate(() => {
-        try {
-          const store = (
-            window as unknown as Record<
-              string,
-              Record<string, { getState: () => { usedBytes: number } }>
-            >
-          ).__ZUSTAND_STORES__?.quota;
-          if (!store) return null;
-          return store.getState().usedBytes as number;
-        } catch {
-          return null;
-        }
-      });
+      const quotaAfter = await getQuotaUsedBytes(page);
       if (quotaAfter !== null) {
         const reclaimed = quotaBefore - quotaAfter;
         // Must reclaim more than just v2 content size — proves version CIDs were also freed

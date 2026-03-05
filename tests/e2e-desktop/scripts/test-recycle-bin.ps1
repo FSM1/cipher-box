@@ -6,6 +6,7 @@
 #
 # Environment:
 #   TEST_SECRET   test-login shared secret (default: e2e-test-secret-ci-only)
+#   DESKTOP_LOG   Path to desktop binary log file (enables log-based bin publish verification)
 #
 # Tests:
 #   1. Create test file on FUSE mount
