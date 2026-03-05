@@ -32,13 +32,13 @@ See PROJECT.md Key Decisions table for full list with outcomes.
 
 ### Open Concerns
 
-- 9 LOW-priority tech debt items from M2 audit (see `.planning/milestones/v1.0-production-MILESTONE-AUDIT.md`)
+- 9 LOW-priority tech debt items from M2 audit (see `.planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md`)
 - SYNC-05/SYNC-06 (offline queue) deferred to M3+
 - TEE-06 (AWS Nitro) deferred to M3 Phase 22
 
 ### Resolved
 
-All M2 blockers resolved. See `.planning/milestones/v1.0-production-MILESTONE-AUDIT.md` resolved_since_previous_audit section.
+All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md` resolved_since_previous_audit section.
 
 ---
 
