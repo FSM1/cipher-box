@@ -539,7 +539,7 @@ pub(crate) mod implementation {
                                             })
                                             .collect();
                                         if mapped.is_empty() { None } else { Some(mapped) }
-                                    }).flatten();
+                                    });
                                     Some((inode.name.clone(), *size, file_pointer, cid.clone(), ver_cids))
                                 }
                                 _ => {
