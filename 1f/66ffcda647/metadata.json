@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "1f66ffcda647",
+  "strategy": "manual-commit",
+  "branch": "docs/restructure-readme-product-docs",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/copilot-instructions.md",
+    "README.md",
+    "docs/ARCHITECTURE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1f/66ffcda647/0/metadata.json",
+      "transcript": "/1f/66ffcda647/0/full.jsonl",
+      "context": "/1f/66ffcda647/0/context.md",
+      "content_hash": "/1f/66ffcda647/0/content_hash.txt",
+      "prompt": "/1f/66ffcda647/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 100,
+    "cache_creation_tokens": 107421,
+    "cache_read_tokens": 9535500,
+    "output_tokens": 32724,
+    "api_call_count": 94
+  }
+}
