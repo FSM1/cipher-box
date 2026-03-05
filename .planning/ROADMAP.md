@@ -65,6 +65,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 15.1: Client-Side Search** - Encrypted search index in IndexedDB with incremental updates (INSERTED) -- COMPLETE 2026-02-24
 - [x] **Phase 16: Advanced Sync** - Conflict detection via optimistic concurrency on IPNS folder publishes -- COMPLETE 2026-03-03
 - [x] **Phase 17: Recycle Bin** - Soft-delete with time-limited retention, file/folder recovery, and manual bin emptying -- COMPLETE 2026-03-04
+- [x] **Phase 17.1: Recycle Bin Integration Fixes** - Fix bin permanent delete CID unpinning and Windows desktop bin bypass -- COMPLETE 2026-03-05
 
 ### Milestone 3: Encrypted Productivity Suite (Planned)
 
@@ -507,9 +508,9 @@ Plans:
 
 Plans:
 
-- [ ] 17.1-01-PLAN.md — GAP-1 fix: BinEntry schema + contentCid/contentSize capture at soft-delete + unpinFileCids rewrite
-- [ ] 17.1-02-PLAN.md — GAP-2 fix: Windows handle_cleanup bin entry creation (file + folder parity with macOS/Linux)
-- [ ] 17.1-03-PLAN.md — E2E tests: quota reclaim verification + Windows PowerShell bin test script + build verification
+- [x] 17.1-01-PLAN.md — GAP-1 fix: BinEntry schema + contentCid/contentSize capture at soft-delete + unpinFileCids rewrite
+- [x] 17.1-02-PLAN.md — GAP-2 fix: Windows handle_cleanup bin entry creation (file + folder parity with macOS/Linux)
+- [x] 17.1-03-PLAN.md — E2E tests: quota reclaim verification + Windows PowerShell bin test script + build verification
 
 ## Progress
 
@@ -562,7 +563,7 @@ Parallel phases:
 | 11.3 Linux Desktop          | M2        | 3/3            | Complete    | 2026-02-28 |
 | 11.4 Cross-Platform E2E     | M2        | 3/3            | Complete    | 2026-02-28 |
 | 17. Recycle Bin             | M2        | 5/5            | Complete    | 2026-03-04 |
-| 17.1 Bin Integration Fixes  | M2        | 0/3            | Not started | -          |
+| 17.1 Bin Integration Fixes  | M2        | 3/3            | Complete    | 2026-03-05 |
 | 18. Billing Infrastructure  | M3        | 0/TBD          | Not started | -          |
 | 19. Team Accounts           | M3        | 0/TBD          | Not started | -          |
 | 20. Document Editors        | M3        | 0/TBD          | Not started | -          |
