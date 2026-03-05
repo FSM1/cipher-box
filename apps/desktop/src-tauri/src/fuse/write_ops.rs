@@ -277,6 +277,7 @@ pub(crate) mod implementation {
                     file_ipns_key_encrypted_hex,
                     size,
                     cid,
+                    versions,
                     ..
                 } => {
                     let now_ms = SystemTime::now()
@@ -313,7 +314,18 @@ pub(crate) mod implementation {
                             modified_at: now_ms,
                         };
 
-                        Some((inode.name.clone(), *size, file_pointer, cid.clone()))
+                        let ver_cids = versions.as_ref().and_then(|items| {
+                            let mapped: Vec<crate::crypto::bin::VersionCidEntry> = items
+                                .iter()
+                                .filter(|v| !v.cid.is_empty())
+                                .map(|v| crate::crypto::bin::VersionCidEntry {
+                                    cid: v.cid.clone(),
+                                    size: v.size,
+                                })
+                                .collect();
+                            if mapped.is_empty() { None } else { Some(mapped) }
+                        });
+                        Some((inode.name.clone(), *size, file_pointer, cid.clone(), ver_cids))
                     } else {
                         None
                     }
@@ -345,7 +357,7 @@ pub(crate) mod implementation {
         }
 
         // Create bin entry and publish to bin IPNS (fire-and-forget)
-        if let Some((item_name, file_size, file_pointer, content_cid)) = bin_entry_data {
+        if let Some((item_name, file_size, file_pointer, content_cid, ver_cids)) = bin_entry_data {
             let parent_ipns_name = fs.inodes.get(parent)
                 .map(|p| match &p.kind {
                     InodeKind::Root { ipns_name, .. } => ipns_name.clone().unwrap_or_default(),
@@ -376,7 +388,7 @@ pub(crate) mod implementation {
                     mime_type: crate::crypto::utils::mime_from_extension(&item_name).to_string(),
                     content_cid: if content_cid.is_empty() { None } else { Some(content_cid) },
                     content_size: Some(file_size),
-                    version_cids: None,
+                    version_cids: ver_cids,
                     file_pointer: Some(file_pointer),
                     folder_entry: None,
                 };

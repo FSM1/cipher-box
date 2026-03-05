@@ -228,6 +228,11 @@ export async function addToBin(params: {
         const fileMeta = await decryptFileMetadata(encrypted, folderKey);
         entry.contentCid = fileMeta.cid;
         entry.contentSize = fileMeta.size;
+        if (Array.isArray(fileMeta.versions) && fileMeta.versions.length > 0) {
+          entry.versionCids = fileMeta.versions
+            .filter((v) => v.cid)
+            .map((v) => ({ cid: v.cid, size: v.size ?? 0 }));
+        }
       }
     } catch (err) {
       console.warn('[Bin] Failed to resolve file CID for bin entry (non-blocking):', err);
