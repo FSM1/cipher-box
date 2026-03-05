@@ -1234,6 +1234,8 @@ fn make_test_bin_entry(id: &str, item_type: bin::BinItemType) -> bin::BinEntry {
         deleted_at: 1700000000000,
         size: 1024,
         mime_type: "text/plain".to_string(),
+        content_cid: None,
+        content_size: None,
         file_pointer: match id {
             _ if id.starts_with("file") => Some(FilePointer {
                 id: "fp-001".to_string(),
@@ -1384,6 +1386,8 @@ fn bin_metadata_optional_fields_omitted_when_none() {
             deleted_at: 1700000000000,
             size: 100,
             mime_type: "text/plain".to_string(),
+            content_cid: None,
+            content_size: None,
             file_pointer: None,
             folder_entry: None,
         }],
