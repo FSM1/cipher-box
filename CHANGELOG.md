@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.23.1](https://github.com/FSM1/cipher-box/compare/v0.23.0...v0.23.1) (2026-03-05)
+
+
+### Bug Fixes
+
+* **17.1:** close bin integration gaps - CID unpinning + Windows bin ([#268](https://github.com/FSM1/cipher-box/issues/268)) ([15a7ece](https://github.com/FSM1/cipher-box/commit/15a7ece0892fad0b9bb7447a8487d548449e4dd4))
+* **ci:** use query param instead of -f flag in codecov-base gh api call ([f1cadfa](https://github.com/FSM1/cipher-box/commit/f1cadfaff4c25ca130d78bb8efc0cb3674711de5))
+* **desktop:** fix Windows FUSE overwrite race and bin E2E test ([#271](https://github.com/FSM1/cipher-box/issues/271)) ([42bbdd7](https://github.com/FSM1/cipher-box/commit/42bbdd74075bd2d8854b4e6af77354f6a9dd2982))
+* **e2e:** clear file input before setInputFiles to fix TC08 ([#270](https://github.com/FSM1/cipher-box/issues/270)) ([ec34d0a](https://github.com/FSM1/cipher-box/commit/ec34d0ad8343174aa95d4be0e355505515fd8419))
+* **e2e:** clear file input before setInputFiles to fix TC08 re-upload ([ec34d0a](https://github.com/FSM1/cipher-box/commit/ec34d0ad8343174aa95d4be0e355505515fd8419))
+* **security:** harden auth and sharing subsystems ([#267](https://github.com/FSM1/cipher-box/issues/267)) ([4f53611](https://github.com/FSM1/cipher-box/commit/4f536118efa67d48c6d59cc9b40e05121e076dd8))
+* **web:** clear share and quota stores on logout ([#265](https://github.com/FSM1/cipher-box/issues/265)) ([11dada9](https://github.com/FSM1/cipher-box/commit/11dada95bef89b7f91ea61a2e6e9b6e74db0d040))
+
 ## [0.23.0](https://github.com/FSM1/cipher-box/compare/v0.22.0...v0.23.0) (2026-03-04)
 
 
