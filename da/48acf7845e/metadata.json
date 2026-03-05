@@ -3,7 +3,7 @@
   "checkpoint_id": "da48acf7845e",
   "strategy": "manual-commit",
   "branch": "docs/restructure-readme-product-docs",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "README.md",
     "docs/ARCHITECTURE.md",
@@ -16,13 +16,20 @@
       "context": "/da/48acf7845e/0/context.md",
       "content_hash": "/da/48acf7845e/0/content_hash.txt",
       "prompt": "/da/48acf7845e/0/prompt.txt"
+    },
+    {
+      "metadata": "/da/48acf7845e/1/metadata.json",
+      "transcript": "/da/48acf7845e/1/full.jsonl",
+      "context": "/da/48acf7845e/1/context.md",
+      "content_hash": "/da/48acf7845e/1/content_hash.txt",
+      "prompt": "/da/48acf7845e/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 47,
-    "cache_creation_tokens": 145704,
-    "cache_read_tokens": 2989148,
-    "output_tokens": 15030,
-    "api_call_count": 42
+    "input_tokens": 149,
+    "cache_creation_tokens": 269798,
+    "cache_read_tokens": 12823227,
+    "output_tokens": 48029,
+    "api_call_count": 138
   }
 }
