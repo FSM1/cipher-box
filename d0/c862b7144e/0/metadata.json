@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "d0c862b7144e",
+  "session_id": "a817a9dc-5328-436a-bfe5-375bb21289e5",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-05T01:33:24.66242Z",
+  "branch": "fix/m2-gap-closure-phase-17.1",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/crypto/tests.rs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "dd8a954eed68",
+  "token_usage": {
+    "input_tokens": 213,
+    "cache_creation_tokens": 205064,
+    "cache_read_tokens": 15079326,
+    "output_tokens": 45189,
+    "api_call_count": 165
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-05T01:33:21.655684Z",
+    "agent_lines": 0,
+    "human_added": 537,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 537,
+    "agent_percentage": 0
+  }
+}
