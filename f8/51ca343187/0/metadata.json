@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "f851ca343187",
+  "session_id": "c0f97371-2fe1-445d-a3f5-0892c67c509c",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-05T02:26:05.970481Z",
+  "branch": "fix/m2-gap-closure-phase-17.1",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/hooks/useDropUpload.ts",
+    "apps/web/src/services/bin.service.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f317f3a2c1c6",
+  "token_usage": {
+    "input_tokens": 11,
+    "cache_creation_tokens": 41688,
+    "cache_read_tokens": 567965,
+    "output_tokens": 4270,
+    "api_call_count": 10
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-05T02:26:04.965476Z",
+    "agent_lines": 32,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 32,
+    "agent_percentage": 100
+  }
+}

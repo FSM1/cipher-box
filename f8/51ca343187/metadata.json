@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "f851ca343187",
+  "strategy": "manual-commit",
+  "branch": "fix/m2-gap-closure-phase-17.1",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/hooks/useDropUpload.ts",
+    "apps/web/src/services/bin.service.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f8/51ca343187/0/metadata.json",
+      "transcript": "/f8/51ca343187/0/full.jsonl",
+      "context": "/f8/51ca343187/0/context.md",
+      "content_hash": "/f8/51ca343187/0/content_hash.txt",
+      "prompt": "/f8/51ca343187/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11,
+    "cache_creation_tokens": 41688,
+    "cache_read_tokens": 567965,
+    "output_tokens": 4270,
+    "api_call_count": 10
+  }
+}
