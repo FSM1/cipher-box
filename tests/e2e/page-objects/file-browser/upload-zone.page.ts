@@ -55,6 +55,10 @@ export class UploadZonePage {
    * @param filePaths - Array of file paths
    */
   async uploadFiles(filePaths: string[]): Promise<void> {
+    // Clear previous selection so re-uploading the same file paths triggers change
+    await this.fileInput().evaluate((el: HTMLInputElement) => {
+      el.value = '';
+    });
     await this.fileInput().setInputFiles(filePaths);
   }
 

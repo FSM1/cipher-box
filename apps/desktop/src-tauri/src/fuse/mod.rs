@@ -909,9 +909,17 @@ impl CipherBoxFS {
                     );
                 }
             }
-            // Move plaintext from pending_content to content_cache
-            if let Some(plaintext) = self.pending_content.remove(&result.ino) {
-                self.content_cache.set(&result.new_cid, plaintext);
+            // Move plaintext from pending_content to content_cache — but only
+            // if the generation matched. For stale uploads, pending_content
+            // already holds the newer cycle's plaintext; consuming it here
+            // would pollute content_cache with a stale CID key and leave
+            // the correct CID with no cache entry.
+            if let Some(inode) = self.inodes.get(result.ino) {
+                if inode.write_generation == result.write_generation {
+                    if let Some(plaintext) = self.pending_content.remove(&result.ino) {
+                        self.content_cache.set(&result.new_cid, plaintext);
+                    }
+                }
             }
             // Old file CID is now preserved as a version entry -- do NOT unpin it.
             // Only unpin CIDs from pruned versions that exceeded MAX_VERSIONS_PER_FILE.
