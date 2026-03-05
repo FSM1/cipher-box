@@ -492,6 +492,12 @@ pub(crate) mod implementation {
 
         // FspCleanupDelete = 0x01
         if flags & 0x01 != 0 {
+            let now = SystemTime::now();
+            let now_ms = now
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+
             // Capture parent inode and bin entry data before inode removal
             let parent_ino = match fs.inodes.get(ino) {
                 Some(inode) => inode.parent_ino,
@@ -510,10 +516,6 @@ pub(crate) mod implementation {
                             versions,
                             ..
                         } => {
-                            let now_ms = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() as u64;
                             let created_ms = inode.attr.crtime
                                 .duration_since(UNIX_EPOCH)
                                 .unwrap_or_default()
@@ -529,17 +531,7 @@ pub(crate) mod implementation {
                                         created_at: if created_ms > 0 { created_ms } else { now_ms },
                                         modified_at: now_ms,
                                     };
-                                    let ver_cids = versions.as_ref().and_then(|items| {
-                                        let mapped: Vec<crate::crypto::bin::VersionCidEntry> = items
-                                            .iter()
-                                            .filter(|v| !v.cid.is_empty())
-                                            .map(|v| crate::crypto::bin::VersionCidEntry {
-                                                cid: v.cid.clone(),
-                                                size: v.size,
-                                            })
-                                            .collect();
-                                        if mapped.is_empty() { None } else { Some(mapped) }
-                                    });
+                                    let ver_cids = crate::fuse::helpers::versions_to_bin_entries(versions);
                                     Some((inode.name.clone(), *size, file_pointer, cid.clone(), ver_cids))
                                 }
                                 _ => {
@@ -566,10 +558,6 @@ pub(crate) mod implementation {
                                 ipns_private_key,
                                 ..
                             } => {
-                                let now_ms = SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis() as u64;
                                 let created_ms = inode.attr.crtime
                                     .duration_since(UNIX_EPOCH)
                                     .unwrap_or_default()
@@ -613,8 +601,8 @@ pub(crate) mod implementation {
             fs.inodes.remove(ino);
 
             if let Some(parent_inode) = fs.inodes.get_mut(parent_ino) {
-                parent_inode.attr.mtime = SystemTime::now();
-                parent_inode.attr.ctime = SystemTime::now();
+                parent_inode.attr.mtime = now;
+                parent_inode.attr.ctime = now;
             }
 
             if let Err(e) = fs.update_folder_metadata(parent_ino) {
@@ -631,11 +619,7 @@ pub(crate) mod implementation {
                 .unwrap_or_default();
 
             if !parent_ipns_name.is_empty() {
-                let parent_path = build_folder_path(&fs, parent_ino);
-                let now_ms = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64;
+                let parent_path = crate::fuse::helpers::build_folder_path(&fs, parent_ino);
 
                 let bin_entry = if let Some((name, size, fp, cid, ver_cids)) = bin_file_data {
                     Some(crate::crypto::bin::BinEntry {
@@ -995,30 +979,4 @@ pub(crate) mod implementation {
         Ok(())
     }
 
-    /// Build a human-readable breadcrumb path for a folder inode.
-    /// Walks parent_ino upward to root, concatenating names with " / ".
-    /// Example: "My Vault / Documents / Reports"
-    fn build_folder_path(fs: &crate::fuse::CipherBoxFS, folder_ino: u64) -> String {
-        let mut parts = Vec::new();
-        let mut current = folder_ino;
-        for _ in 0..20 { // Safety limit to prevent infinite loops
-            match fs.inodes.get(current) {
-                Some(inode) => {
-                    match &inode.kind {
-                        InodeKind::Root { .. } => {
-                            parts.push("My Vault".to_string());
-                            break;
-                        }
-                        _ => {
-                            parts.push(inode.name.clone());
-                            current = inode.parent_ino;
-                        }
-                    }
-                }
-                None => break,
-            }
-        }
-        parts.reverse();
-        parts.join(" / ")
-    }
 }

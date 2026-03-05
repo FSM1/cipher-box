@@ -60,3 +60,49 @@ pub fn is_windows_special(name: &str) -> bool {
 pub fn mime_from_extension(filename: &str) -> String {
     crate::crypto::utils::mime_from_extension(filename).to_string()
 }
+
+/// Build a human-readable breadcrumb path for a folder inode.
+/// Walks parent_ino upward to root, concatenating names with " / ".
+/// Example: "My Vault / Documents / Reports"
+pub fn build_folder_path(fs: &crate::fuse::CipherBoxFS, folder_ino: u64) -> String {
+    use crate::fuse::inode::InodeKind;
+    let mut parts = Vec::new();
+    let mut current = folder_ino;
+    for _ in 0..20 { // Safety limit to prevent infinite loops
+        match fs.inodes.get(current) {
+            Some(inode) => {
+                match &inode.kind {
+                    InodeKind::Root { .. } => {
+                        parts.push("My Vault".to_string());
+                        break;
+                    }
+                    _ => {
+                        parts.push(inode.name.clone());
+                        current = inode.parent_ino;
+                    }
+                }
+            }
+            None => break,
+        }
+    }
+    parts.reverse();
+    parts.join(" / ")
+}
+
+/// Convert VersionEntry list to VersionCidEntry list for bin entries.
+/// Filters out entries with empty CIDs and returns None if the result is empty.
+pub fn versions_to_bin_entries(
+    versions: &Option<Vec<crate::crypto::folder::VersionEntry>>,
+) -> Option<Vec<crate::crypto::bin::VersionCidEntry>> {
+    versions.as_ref().and_then(|items| {
+        let mapped: Vec<crate::crypto::bin::VersionCidEntry> = items
+            .iter()
+            .filter(|v| !v.cid.is_empty())
+            .map(|v| crate::crypto::bin::VersionCidEntry {
+                cid: v.cid.clone(),
+                size: v.size,
+            })
+            .collect();
+        if mapped.is_empty() { None } else { Some(mapped) }
+    })
+}

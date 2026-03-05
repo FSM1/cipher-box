@@ -32,6 +32,7 @@ import {
 } from '@cipherbox/crypto';
 import { addToIpfs, fetchFromIpfs, unpinFromIpfs } from '../lib/api/ipfs';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from './ipns.service';
+import { resolveFileMetadata } from './file-metadata.service';
 import { useAuthStore } from '../stores/auth.store';
 import { useBinStore } from '../stores/bin.store';
 import { useFolderStore } from '../stores/folder.store';
@@ -175,6 +176,36 @@ export async function initializeBin(params: {
   }
 }
 
+/**
+ * Resolve file metadata and enrich a bin entry with content CID, size, and version CIDs.
+ * Best-effort: errors are caught and logged, the entry is left un-enriched.
+ */
+async function enrichBinEntryWithFileMetadata(
+  entry: BinEntry,
+  item: FolderChild,
+  folderKey: Uint8Array
+): Promise<void> {
+  try {
+    const fp = item as FilePointer;
+    const { metadata: fileMeta } = await resolveFileMetadata(fp.fileMetaIpnsName, folderKey);
+    entry.contentCid = fileMeta.cid;
+    entry.contentSize = fileMeta.size;
+    if (Number.isFinite(fileMeta.size)) {
+      entry.size = fileMeta.size;
+    }
+    if (fileMeta.mimeType) {
+      entry.mimeType = fileMeta.mimeType;
+    }
+    if (Array.isArray(fileMeta.versions) && fileMeta.versions.length > 0) {
+      entry.versionCids = fileMeta.versions
+        .filter((v) => v.cid)
+        .map((v) => ({ cid: v.cid, size: v.size ?? 0 }));
+    }
+  } catch (err) {
+    console.warn('[Bin] Failed to resolve file CID for bin entry (non-blocking):', err);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public API: addToBin
 // ---------------------------------------------------------------------------
@@ -218,31 +249,7 @@ export async function addToBin(params: {
 
   // Resolve file CID+size at soft-delete time (when folderKey is available)
   if (isFile && folderKey) {
-    try {
-      const fp = item as FilePointer;
-      const resolved = await resolveIpnsRecord(fp.fileMetaIpnsName);
-      if (resolved?.cid) {
-        const metaBytes = await fetchFromIpfs(resolved.cid);
-        const metaJson = new TextDecoder().decode(metaBytes);
-        const encrypted = JSON.parse(metaJson) as EncryptedFileMetadata;
-        const fileMeta = await decryptFileMetadata(encrypted, folderKey);
-        entry.contentCid = fileMeta.cid;
-        entry.contentSize = fileMeta.size;
-        if (Number.isFinite(fileMeta.size)) {
-          entry.size = fileMeta.size;
-        }
-        if (fileMeta.mimeType) {
-          entry.mimeType = fileMeta.mimeType;
-        }
-        if (Array.isArray(fileMeta.versions) && fileMeta.versions.length > 0) {
-          entry.versionCids = fileMeta.versions
-            .filter((v) => v.cid)
-            .map((v) => ({ cid: v.cid, size: v.size ?? 0 }));
-        }
-      }
-    } catch (err) {
-      console.warn('[Bin] Failed to resolve file CID for bin entry (non-blocking):', err);
-    }
+    await enrichBinEntryWithFileMetadata(entry, item, folderKey);
   }
 
   // Read current bin state and build updated metadata
@@ -305,31 +312,7 @@ export async function addManyToBin(params: {
 
     // Resolve file CID+size at soft-delete time (when folderKey is available)
     if (isFile && folderKey) {
-      try {
-        const fp = item as FilePointer;
-        const resolved = await resolveIpnsRecord(fp.fileMetaIpnsName);
-        if (resolved?.cid) {
-          const metaBytes = await fetchFromIpfs(resolved.cid);
-          const metaJson = new TextDecoder().decode(metaBytes);
-          const encrypted = JSON.parse(metaJson) as EncryptedFileMetadata;
-          const fileMeta = await decryptFileMetadata(encrypted, folderKey);
-          entry.contentCid = fileMeta.cid;
-          entry.contentSize = fileMeta.size;
-          if (Number.isFinite(fileMeta.size)) {
-            entry.size = fileMeta.size;
-          }
-          if (fileMeta.mimeType) {
-            entry.mimeType = fileMeta.mimeType;
-          }
-          if (Array.isArray(fileMeta.versions) && fileMeta.versions.length > 0) {
-            entry.versionCids = fileMeta.versions
-              .filter((v) => v.cid)
-              .map((v) => ({ cid: v.cid, size: v.size ?? 0 }));
-          }
-        }
-      } catch (err) {
-        console.warn('[Bin] Failed to resolve file CID for bin entry (non-blocking):', err);
-      }
+      await enrichBinEntryWithFileMetadata(entry, item, folderKey);
     }
 
     newEntries.push(entry);
@@ -725,12 +708,7 @@ async function unpinFileCids(entry: BinEntry): Promise<void> {
       }
       // Unpin version CIDs captured at soft-delete time
       if (entry.versionCids?.length) {
-        for (const v of entry.versionCids) {
-          await unpinFromIpfs(v.cid).catch(() => {});
-          if (Number.isFinite(v.size)) {
-            useQuotaStore.getState().removeUsage(v.size);
-          }
-        }
+        await unpinVersionCids({ versions: entry.versionCids });
       }
       // Also unpin the file metadata IPNS record CID
       if (entry.filePointer) {
