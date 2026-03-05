@@ -9,20 +9,20 @@ See: .planning/PROJECT.md (updated 2026-02-11)
 
 ## Current Position
 
-Phase: 17.1 (Recycle Bin Integration Fixes) -- In Progress
-Plan: 2 of 3 (Plans 01 and 02 complete)
-Status: In progress
-Last activity: 2026-03-05 -- Completed 17.1-01-PLAN.md (bin CID capture and unpin fix)
+Phase: 17.1 (Recycle Bin Integration Fixes) -- COMPLETE
+Plan: 3 of 3 (all plans complete)
+Status: Phase complete
+Last activity: 2026-03-05 -- Completed 17.1-03-PLAN.md (E2E tests for bin integration)
 
-Progress: [########################-] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE, Phase 16: 5/5 COMPLETE, Phase 17: 5/5 COMPLETE, Phase 17.1: 2/3 IN PROGRESS)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE, Phase 16: 5/5 COMPLETE, Phase 17: 5/5 COMPLETE, Phase 17.1: 3/3 COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 153
+- Total plans completed: 154
 - Average duration: 5.5 min
-- Total execution time: 16.3 hours
+- Total execution time: 16.4 hours
 
 **By Phase (M1 summary):**
 
@@ -48,11 +48,11 @@ Progress: [########################-] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 11.4   | 3/3   | 20 min  | 6.7 min  |
 | M2 Phase 16     | 5/5   | 18 min  | 3.6 min  |
 | M2 Phase 17     | 5/5   | 35 min  | 7.0 min  |
-| M2 Phase 17.1   | 2/3   | 20 min  | 10.0 min |
+| M2 Phase 17.1   | 3/3   | 24 min  | 8.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 7m, 9m, 7m, 5m, 11m
+- Last 5 plans: 9m, 7m, 5m, 11m, 4m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -325,15 +325,15 @@ Recent decisions affecting current work:
 - Phase 11.4 (Cross-Platform E2E Testing): COMPLETE -- 3/3 plans done (CI debug artifacts + crypto vectors, FUSE/API test scripts, e2e-desktop.yml workflow)
 - Phase 16 (Advanced Sync): COMPLETE -- 5/5 plans done (API concurrency control, web sync service, desktop conflict handling, web E2E tests, desktop E2E tests)
 - Phase 17 (Recycle Bin): COMPLETE -- 5/5 plans done (crypto, store/service, web UI, desktop FUSE, E2E testing)
-- Phase 17.1 (Bin Integration Fixes): Skip research -- root causes identified in audit, fix approaches defined
+- Phase 17.1 (Bin Integration Fixes): COMPLETE -- 3/3 plans done (bin CID capture fix, Windows WinFsp bin integration, E2E test coverage)
 - Phase 22 (Nitro TEE): Moved to M3. NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
 Last session: 2026-03-05
-Stopped at: Completed 17.1-01-PLAN.md (bin CID capture and unpin fix)
+Stopped at: Completed 17.1-03-PLAN.md (E2E tests for bin integration) -- Phase 17.1 COMPLETE
 Resume file: None
-Next: Execute 17.1-03-PLAN.md (E2E tests for bin integration)
+Next: M2 gap closure complete. Ready for PR to merge Phase 17.1 fixes.
 
 ---
 
