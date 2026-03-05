@@ -20,7 +20,7 @@ TEE (Phala/Nitro) ← IPNS Republish (every 3h)
 
 **Key Properties:**
 
-- Same user + any auth method → same keypair → same vault
+- Same user identity → same keypair → same vault (auth methods share a vault when they resolve to the same CipherBox `userId`; see [Authentication Architecture](AUTHENTICATION_ARCHITECTURE.md))
 - TEE republishes IPNS records even when all devices are offline
 
 ## Key Derivation
@@ -216,7 +216,7 @@ With full access to IPFS and the CipherBox server but without the user's private
 ### 1. Web3Auth for Key Derivation
 
 ```text
-Email/Password/OAuth/Magic Link/External Wallet → Web3Auth → Same ECDSA keypair
+Any auth method → CipherBox backend resolves userId → Web3Auth → Same ECDSA keypair
 ```
 
 ### 2. Layered Encryption

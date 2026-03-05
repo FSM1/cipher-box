@@ -16,17 +16,21 @@ This project is inspired by discussions and planning while working on [ChainSafe
 
 ## Features
 
-- **Authentication** — Web3Auth MPC Core Kit: email OTP, Google OAuth, magic link, external wallet. MFA via device factor. Same user + any auth method = same vault.
+- **Authentication** — Web3Auth MPC Core Kit: email OTP, Google OAuth, magic link, external wallet. MFA via device factor. Same user identity = same vault.
 - **Encryption** — Client-side AES-256-GCM for files and metadata. ECIES secp256k1 key wrapping (per-file, per-folder random keys). Streaming AES-CTR for large files.
 - **File Management** — Upload, download, rename, move, delete. Nested folders up to 20 levels. Drag-and-drop.
+- **Sync** — Multi-device via IPNS polling (~30s). Conflict detection and resolution.
+- **Desktop** — macOS via Tauri v2 + FUSE-T virtual filesystem mount. Background sync with system tray.
+- **TEE Republishing** — Automatic IPNS record refresh every 3 hours via Phala Cloud. Zero-knowledge: keys decrypted only inside hardware enclaves.
+- **Data Portability** — Full vault export (JSON + encrypted blobs). Standalone recovery with private key — no CipherBox required.
+
+### Planned (v1.1+)
+
 - **Sharing** — User-to-user sharing with ECIES re-wrapping. Link sharing with time-limited access tokens.
 - **Search** — Client-side encrypted search index across file and folder names.
 - **Versioning** — File history with point-in-time restore.
-- **Sync** — Multi-device via IPNS polling (~30s). Conflict detection and resolution.
-- **Desktop** — macOS, Windows, and Linux via Tauri v2. Virtual filesystem mount (FUSE-T / WinFSP / libfuse). Background sync with system tray.
 - **Recycle Bin** — 30-day soft-delete with restore.
-- **TEE Republishing** — Automatic IPNS record refresh every 3 hours via Phala Cloud. Zero-knowledge: keys decrypted only inside hardware enclaves.
-- **Data Portability** — Full vault export (JSON + encrypted blobs). Standalone recovery with private key — no CipherBox required.
+- **Desktop (Windows & Linux)** — WinFSP / libfuse support.
 
 ## Architecture Overview
 
