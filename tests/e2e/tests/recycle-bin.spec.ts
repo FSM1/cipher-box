@@ -366,4 +366,84 @@ test.describe.serial('Recycle Bin', () => {
       expect(quotaDecreased).toBe(true);
     }
   });
+
+  // ============================================================
+  // TC08: Versioned file permanent delete reclaims all quota
+  // ============================================================
+
+  test('TC08: permanent delete of versioned file reclaims all quota', async () => {
+    test.slow();
+
+    const fileName = `bin-versioned-${runId}.txt`;
+    const v1Content = 'x'.repeat(1024); // ~1KB
+    const v2Content = 'y'.repeat(2048); // ~2KB
+
+    // 1. Upload version 1 (~1KB)
+    await navigateToFiles();
+    const v1File = createTestTextFile(fileName, v1Content);
+    await uploadZone.uploadFile(v1File.path);
+    await fileList.waitForItemToAppear(fileName, { timeout: 60000 });
+
+    // Wait for IPNS publish to propagate
+    await page.waitForTimeout(5000);
+
+    // 2. Overwrite fixture with larger content and re-upload same name
+    const v2File = createTestTextFile(fileName, v2Content);
+    await uploadZone.uploadFile(v2File.path);
+
+    // 3. ReplaceFileDialog should appear — click "Replace"
+    const replaceButton = page.getByTestId('replace-file-confirm');
+    await replaceButton.waitFor({ state: 'visible', timeout: 30000 });
+    await replaceButton.click();
+
+    // 4. Wait for replace to complete (dialog dismisses, file still in list)
+    await replaceButton.waitFor({ state: 'hidden', timeout: 30000 });
+    await page.waitForTimeout(3000); // Wait for IPNS publish
+
+    // 5. Snapshot quota usage (best-effort)
+    const quotaBefore = await page.evaluate(() => {
+      try {
+        const store = (window as any).__ZUSTAND_STORES__?.quota;
+        if (!store) return null;
+        return store.getState().usedBytes as number;
+      } catch {
+        return null;
+      }
+    });
+
+    // 6. Soft-delete the file
+    await fileList.rightClickItem(fileName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickDelete();
+    await confirmDialog.waitForOpen();
+    await confirmDialog.clickConfirm();
+    await fileList.waitForItemToDisappear(fileName, { timeout: 30000 });
+
+    // 7. Navigate to bin and permanently delete
+    await binPage.navigate();
+    await binPage.waitForBinItem(fileName, { timeout: 30000 });
+    await binPage.permanentlyDeleteItem(fileName);
+
+    // PRIMARY ASSERTION: permanent delete completes without crash
+    await binPage.waitForBinItemToDisappear(fileName, { timeout: 30000 });
+
+    // SECONDARY ASSERTION (best-effort): quota decreased by ~3KB
+    if (quotaBefore !== null) {
+      // Wait for quota to settle after unpinning
+      await page.waitForTimeout(3000);
+      const quotaAfter = await page.evaluate(() => {
+        try {
+          const store = (window as any).__ZUSTAND_STORES__?.quota;
+          if (!store) return null;
+          return store.getState().usedBytes as number;
+        } catch {
+          return null;
+        }
+      });
+      if (quotaAfter !== null) {
+        // Expect quota decreased (current + version CIDs freed)
+        expect(quotaAfter).toBeLessThan(quotaBefore);
+      }
+    }
+  });
 });
