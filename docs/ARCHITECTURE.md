@@ -1,6 +1,6 @@
 # Architecture
 
-CipherBox implements layered, zero-knowledge encryption where **all user data is encrypted client-side before leaving the device**. The server and storage layer never see plaintext — not file contents, not file names, not folder names, not timestamps, not file sizes.
+CipherBox implements layered, zero-knowledge encryption where **all user data is encrypted client-side before leaving the device**. The server and storage layer never see plaintext — not file contents, not file names, not folder names, not timestamps, not plaintext file sizes (encrypted blob sizes are visible for storage accounting).
 
 ## System Overview
 
@@ -124,13 +124,13 @@ Every key below the VaultKey is **randomly generated** (not derived) and **ECIES
 
 ## Cryptographic Primitives
 
-| Purpose                    | Algorithm                  | Parameters                               |
-| :------------------------- | :------------------------- | :--------------------------------------- |
-| File & metadata encryption | AES-256-GCM                | 256-bit key, 96-bit IV, 128-bit auth tag |
-| Key wrapping               | ECIES (secp256k1)          | Ephemeral keypair + AES-GCM              |
-| Key derivation (wallets)   | HKDF-SHA256                | 32-byte output, static salt              |
-| IPNS record signing        | Ed25519                    | 32-byte seed, 64-byte signatures         |
-| Random generation          | `crypto.getRandomValues()` | CSPRNG (Web Crypto API)                  |
+| Purpose                             | Algorithm                  | Parameters                               |
+| :---------------------------------- | :------------------------- | :--------------------------------------- |
+| File & metadata encryption          | AES-256-GCM                | 256-bit key, 96-bit IV, 128-bit auth tag |
+| Key wrapping                        | ECIES (secp256k1)          | Ephemeral keypair + AES-GCM              |
+| Deterministic key derivation (IPNS) | HKDF-SHA256                | 32-byte output, context-specific salt    |
+| IPNS record signing                 | Ed25519                    | 32-byte seed, 64-byte signatures         |
+| Random generation                   | `crypto.getRandomValues()` | CSPRNG (Web Crypto API)                  |
 
 ## Data Flows
 

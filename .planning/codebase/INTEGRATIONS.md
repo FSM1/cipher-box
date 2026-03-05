@@ -28,7 +28,7 @@ CipherBox is a **technology demonstrator** with integrations split between:
   - Key feature: Group connections for deterministic keypair derivation
   - Spec: `00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md` Section 2
 
-**TEE Providers (Planned - Not Implemented):**
+**TEE Providers (Implemented — `tee-worker/`):**
 
 - Trusted Execution Environment for IPNS republishing
 

@@ -126,21 +126,21 @@ cipher-box/
 
 **New Backend Feature:**
 
-- Primary code: Create `backend/` directory at root
+- Primary code: Add modules under `apps/api/src/`
 - Spec reference: `00-Preliminary-R&D/Documentation/API_SPECIFICATION.md`
 - Pattern: NestJS modules with controllers, services, entities
 
 **New Frontend Feature:**
 
-- Primary code: Create `frontend/` directory at root
+- Primary code: Add components/pages under `apps/web/src/`
 - Spec reference: `00-Preliminary-R&D/Documentation/CLIENT_SPECIFICATION.md`
 - Pattern: React 18 with TypeScript, Web Crypto API
 
 **New Desktop Feature:**
 
-- Primary code: Create `desktop/` directory at root
+- Primary code: Add code under `apps/desktop/` (Tauri frontend) or `apps/desktop/src-tauri/` (Rust backend)
 - Spec reference: `00-Preliminary-R&D/Documentation/CLIENT_SPECIFICATION.md` (Section 2)
-- Pattern: Tauri or Electron with FUSE integration
+- Pattern: Tauri v2 with FUSE-T integration
 
 **Extending PoC:**
 
@@ -149,7 +149,7 @@ cipher-box/
 
 **New Utility/Helper:**
 
-- Shared helpers: Create `shared/` or `common/` at root (when implementing)
+- Shared helpers: Add to `packages/crypto/` or create a new package under `packages/`
 - PoC utilities: Add to `00-Preliminary-R&D/poc/src/` (if extending PoC)
 
 **New Specification:**
@@ -196,14 +196,14 @@ cipher-box/
 
 ## Implementation Status
 
-| Component       | Spec Location               | Implementation     | Status   |
-| --------------- | --------------------------- | ------------------ | -------- |
-| Backend API     | `API_SPECIFICATION.md`      | Not created        | Planned  |
-| Web Frontend    | `CLIENT_SPECIFICATION.md`   | Not created        | Planned  |
-| Desktop App     | `CLIENT_SPECIFICATION.md`   | Not created        | Planned  |
-| TEE Integration | `TECHNICAL_ARCHITECTURE.md` | Not created        | Planned  |
-| Database        | `API_SPECIFICATION.md`      | Not created        | Planned  |
-| PoC Harness     | N/A                         | `poc/src/index.ts` | Complete |
+| Component       | Spec Location               | Implementation             | Status      |
+| --------------- | --------------------------- | -------------------------- | ----------- |
+| Backend API     | `API_SPECIFICATION.md`      | `apps/api/`                | Implemented |
+| Web Frontend    | `CLIENT_SPECIFICATION.md`   | `apps/web/`                | Implemented |
+| Desktop App     | `CLIENT_SPECIFICATION.md`   | `apps/desktop/`            | Implemented |
+| TEE Integration | `TECHNICAL_ARCHITECTURE.md` | `tee-worker/`              | Implemented |
+| Database        | `API_SPECIFICATION.md`      | `apps/api/src/migrations/` | Implemented |
+| PoC Harness     | N/A                         | `00-Preliminary-R&D/poc/`  | Complete    |
 
 ---
 
