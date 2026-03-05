@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "f5d35d1b5d65",
+  "session_id": "0f129355-d7bf-4f5d-bf92-0109454758e6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-05T11:53:58.038201Z",
+  "branch": "fix/desktop-e2e-windows",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/fuse/windows/write_ops.rs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "de37e8ab7057",
+  "checkpoint_transcript_start": 476,
+  "transcript_lines_at_start": 476,
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 8709,
+    "cache_read_tokens": 1232915,
+    "output_tokens": 1163,
+    "api_call_count": 10
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-05T11:53:56.235363Z",
+    "agent_lines": 0,
+    "human_added": 36,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 36,
+    "agent_percentage": 0
+  }
+}
