@@ -83,7 +83,7 @@ pnpm --filter @cipherbox/web dev    # Web only
 
 ```bash
 cp apps/desktop/.env.example apps/desktop/.env
-pnpm --filter desktop dev
+pnpm --filter @cipherbox/desktop dev
 ```
 
 The desktop app defaults to the staging API. For local development, update `apps/desktop/.env`:
@@ -96,7 +96,7 @@ VITE_ENVIRONMENT=local
 The Rust backend also needs the local API URL. Either set it in your shell or prefix the dev command:
 
 ```bash
-CIPHERBOX_API_URL=http://localhost:3000 pnpm --filter desktop dev
+CIPHERBOX_API_URL=http://localhost:3000 pnpm --filter @cipherbox/desktop dev
 ```
 
 See [apps/desktop/CLAUDE.md](../apps/desktop/CLAUDE.md) for FUSE architecture details and dev-key mode.

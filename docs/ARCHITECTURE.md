@@ -15,7 +15,7 @@ User Device ← Vault Data ← PostgreSQL
         ↓ Encrypted Keys
 IPFS (Kubo) ← Encrypted Files
         ↑
-TEE (Phala/Nitro) ← IPNS Republish (every 3h)
+TEE (Phala/Nitro) ← IPNS Republish (every 6h)
 ```
 
 **Key Properties:**
@@ -31,16 +31,16 @@ Two paths produce the same `VaultKey` (a secp256k1 keypair):
 ┌─────────────────────────────────────────────────────────────────────┐
 │                       KEY DERIVATION                                │
 ├─────────────────────────┬───────────────────────────────────────────┤
-│  Web3Auth (Social Login)│  External Wallet (MetaMask, etc.)        │
+│  Web3Auth (Social Login)│  Web3Auth (External Wallet via SIWE)     │
 │                         │                                           │
-│  Google/Email/etc.      │  1. Sign deterministic EIP-712 message   │
-│        ↓                │  2. Normalize signature (low-S, EIP-2)   │
-│  Web3Auth Network       │  3. HKDF-SHA256:                         │
-│        ↓                │     salt  = "CipherBox-ECIES-v1"         │
-│  secp256k1 keypair      │     info  = wallet address (lowercase)   │
-│  (deterministic)        │     input = normalized signature          │
-│                         │        ↓                                  │
-│                         │  secp256k1 keypair (deterministic)       │
+│  Google/Email/etc.      │  1. Wallet signs SIWE (EIP-4361) message │
+│        ↓                │  2. Backend verifies SIWE, issues JWT    │
+│  Web3Auth Network       │  3. Web3Auth Core Kit validates JWT      │
+│        ↓                │  4. Web3Auth Network                     │
+│  secp256k1 keypair      │        ↓                                  │
+│  (deterministic)        │  secp256k1 keypair (deterministic)       │
+│                         │                                           │
+│                         │                                           │
 ├─────────────────────────┴───────────────────────────────────────────┤
 │                              ↓                                      │
 │                   VaultKey (secp256k1)                               │
@@ -247,7 +247,7 @@ Client holds: Private key (RAM only)
 ### 6. TEE-Based IPNS Republishing
 
 ```text
-IPNS records expire after ~24h → TEE republishes every 3h
+IPNS records expire after ~24h → backend scheduler triggers republish every 6h
 Client encrypts ipnsPrivateKey with TEE public key (ECIES)
 TEE decrypts in hardware, signs, zeroes key immediately
 Providers: Phala Cloud (primary) / AWS Nitro (fallback)

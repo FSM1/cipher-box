@@ -17,11 +17,11 @@ This project is inspired by discussions and planning while working on [ChainSafe
 ## Features
 
 - **Authentication** — Web3Auth MPC Core Kit: email OTP, Google OAuth, magic link, external wallet. MFA via device factor. Same user identity = same vault.
-- **Encryption** — Client-side AES-256-GCM for files and metadata. ECIES secp256k1 key wrapping (per-file, per-folder random keys). Streaming AES-CTR for large files.
+- **Encryption** — Client-side AES-256-GCM for files and metadata. ECIES secp256k1 key wrapping (per-file, per-folder random keys). Streaming AES-256-CTR for large media files.
 - **File Management** — Upload, download, rename, move, delete. Nested folders up to 20 levels. Drag-and-drop.
 - **Sync** — Multi-device via IPNS polling (~30s). Conflict detection and resolution.
 - **Desktop** — macOS via Tauri v2 + FUSE-T virtual filesystem mount. Background sync with system tray.
-- **TEE Republishing** — Automatic IPNS record refresh every 3 hours via Phala Cloud. Zero-knowledge: keys decrypted only inside hardware enclaves.
+- **TEE Republishing** — Automatic IPNS record refresh every 6 hours via Phala Cloud. Zero-knowledge: keys decrypted only inside hardware enclaves.
 - **Data Portability** — Full vault export (JSON + encrypted blobs). Standalone recovery with private key — no CipherBox required.
 
 ### Planned (v1.1+)
@@ -55,7 +55,7 @@ The client encrypts everything locally. The API is a zero-knowledge relay — it
 
 | Component          | Technology                                    |
 | :----------------- | :-------------------------------------------- |
-| **Frontend**       | React 19 + TypeScript + Tailwind CSS          |
+| **Frontend**       | React 18 + TypeScript + Tailwind CSS          |
 | **Backend**        | Node.js + NestJS + TypeScript                 |
 | **Database**       | PostgreSQL 16                                 |
 | **Job Queue**      | BullMQ + Redis                                |
