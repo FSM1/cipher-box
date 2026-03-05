@@ -698,8 +698,8 @@ async function unpinFileCids(entry: BinEntry): Promise<void> {
     // Preferred path: use stored contentCid from soft-delete time
     if (entry.contentCid) {
       await unpinFromIpfs(entry.contentCid);
-      if (entry.contentSize && typeof entry.contentSize === 'number') {
-        useQuotaStore.getState().removeUsage(entry.contentSize);
+      if (Number.isFinite(entry.contentSize)) {
+        useQuotaStore.getState().removeUsage(entry.contentSize!);
       }
       // Also unpin the file metadata CID
       if (entry.filePointer) {
@@ -751,6 +751,7 @@ async function cleanupFolderCids(
   folderEntry: FolderEntry,
   userPrivateKey: Uint8Array
 ): Promise<void> {
+  let folderMetadataCid: string | null = null;
   try {
     // Step 1: Unwrap the folder's AES key using user's private key (ECIES)
     const wrappedFolderKey = hexToBytes(folderEntry.folderKeyEncrypted);
@@ -759,6 +760,7 @@ async function cleanupFolderCids(
     // Step 2: Resolve folder's IPNS to get its metadata CID
     const resolved = await resolveIpnsRecord(folderEntry.ipnsName);
     if (!resolved?.cid) return;
+    folderMetadataCid = resolved.cid;
 
     // Step 3: Fetch and decrypt the folder metadata
     const metaBytes = await fetchFromIpfs(resolved.cid);
@@ -780,7 +782,7 @@ async function cleanupFolderCids(
             const fileMeta = await decryptFileMetadata(encryptedFileMeta, folderKey);
             if (fileMeta.cid) {
               await unpinFromIpfs(fileMeta.cid);
-              if (fileMeta.size && typeof fileMeta.size === 'number') {
+              if (Number.isFinite(fileMeta.size)) {
                 useQuotaStore.getState().removeUsage(fileMeta.size);
               }
             }
@@ -796,11 +798,13 @@ async function cleanupFolderCids(
         console.error(`[Bin] Failed to cleanup CIDs for child ${child.name}:`, childErr);
       }
     }
-
-    // Unpin the folder metadata CID itself
-    await unpinFromIpfs(resolved.cid).catch(() => {});
   } catch (err) {
     console.error(`[Bin] Folder CID cleanup failed for ${folderEntry.ipnsName}:`, err);
+  } finally {
+    // Always unpin the folder metadata CID, even if child cleanup threw
+    if (folderMetadataCid) {
+      await unpinFromIpfs(folderMetadataCid).catch(() => {});
+    }
   }
 }
 
