@@ -427,7 +427,10 @@ test.describe.serial('Recycle Bin', () => {
     // PRIMARY ASSERTION: permanent delete completes without crash
     await binPage.waitForBinItemToDisappear(fileName, { timeout: 30000 });
 
-    // SECONDARY ASSERTION (best-effort): quota decreased by ~3KB
+    // SECONDARY ASSERTION (best-effort): quota reclaim covers more than just the
+    // current content CID — proves versionCids cleanup also ran.
+    // v2 content is 2048 bytes; if version CIDs (v1 = 1024 bytes) were also
+    // reclaimed, the delta will exceed v2Content alone.
     if (quotaBefore !== null) {
       // Wait for quota to settle after unpinning
       await page.waitForTimeout(3000);
@@ -441,8 +444,9 @@ test.describe.serial('Recycle Bin', () => {
         }
       });
       if (quotaAfter !== null) {
-        // Expect quota decreased (current + version CIDs freed)
-        expect(quotaAfter).toBeLessThan(quotaBefore);
+        const reclaimed = quotaBefore - quotaAfter;
+        // Must reclaim more than just v2 content size — proves version CIDs were also freed
+        expect(reclaimed).toBeGreaterThan(v2Content.length);
       }
     }
   });
