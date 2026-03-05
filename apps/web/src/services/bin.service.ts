@@ -228,6 +228,12 @@ export async function addToBin(params: {
         const fileMeta = await decryptFileMetadata(encrypted, folderKey);
         entry.contentCid = fileMeta.cid;
         entry.contentSize = fileMeta.size;
+        if (Number.isFinite(fileMeta.size)) {
+          entry.size = fileMeta.size;
+        }
+        if (fileMeta.mimeType) {
+          entry.mimeType = fileMeta.mimeType;
+        }
         if (Array.isArray(fileMeta.versions) && fileMeta.versions.length > 0) {
           entry.versionCids = fileMeta.versions
             .filter((v) => v.cid)
@@ -309,6 +315,12 @@ export async function addManyToBin(params: {
           const fileMeta = await decryptFileMetadata(encrypted, folderKey);
           entry.contentCid = fileMeta.cid;
           entry.contentSize = fileMeta.size;
+          if (Number.isFinite(fileMeta.size)) {
+            entry.size = fileMeta.size;
+          }
+          if (fileMeta.mimeType) {
+            entry.mimeType = fileMeta.mimeType;
+          }
           if (Array.isArray(fileMeta.versions) && fileMeta.versions.length > 0) {
             entry.versionCids = fileMeta.versions
               .filter((v) => v.cid)
@@ -731,9 +743,11 @@ async function unpinFileCids(entry: BinEntry): Promise<void> {
     }
 
     // Fallback for legacy entries without contentCid:
-    // Resolve IPNS and attempt to parse file metadata as plaintext JSON.
-    // NOTE: This will fail for encrypted file metadata (the original GAP-1 bug).
-    // Legacy entries that hit this path will log an error but not crash.
+    // Resolve IPNS and attempt to interpret file metadata as plaintext JSON.
+    // NOTE: For encrypted file metadata ({ iv, data }), JSON.parse will usually
+    // succeed, but the parsed object will not have cid/size, so no content unpin
+    // or quota reclaim happens (the original GAP-1 bug). Entries that hit this
+    // path may log an error but will not crash the delete flow.
     if (!entry.filePointer) return;
     const fileIpnsName = entry.filePointer.fileMetaIpnsName;
     if (!fileIpnsName) return;

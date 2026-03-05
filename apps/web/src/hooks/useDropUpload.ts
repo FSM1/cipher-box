@@ -61,13 +61,28 @@ export function useDropUpload() {
       // Identify which files already exist in the target folder
       const folder = useFolderStore.getState().folders[folderId];
       const existingByName = new Map<string, string>(); // name → fileId
+      const existingFolderNames = new Set<string>();
       if (folder) {
         for (const child of folder.children) {
           if (child.type === 'file') {
             existingByName.set(child.name, child.id);
+          } else if (child.type === 'folder') {
+            existingFolderNames.add(child.name);
           }
         }
       }
+
+      // Fail fast on file–folder name collisions (no Replace/Skip for folders)
+      const folderNameConflicts = files.filter((f) => existingFolderNames.has(f.name));
+      if (folderNameConflicts.length > 0) {
+        useUploadStore
+          .getState()
+          .setError(
+            `Cannot upload file(s) with the same name as an existing folder: ${folderNameConflicts.map((f) => f.name).join(', ')}`
+          );
+        return false;
+      }
+
       const newFiles = files.filter((f) => !existingByName.has(f.name));
       const duplicateFiles = files.filter((f) => existingByName.has(f.name));
 
