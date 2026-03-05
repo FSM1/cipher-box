@@ -9,6 +9,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useUploadStore } from '../upload.store';
+import type { PendingReplacement } from '../upload.store';
 
 /**
  * Simulates the catch-block error recovery logic from UploadZone/EmptyState.
@@ -132,5 +133,83 @@ describe('Upload Error Recovery - Orphan Cleanup Logic', () => {
 
     expect(mockUnpin).toHaveBeenCalledWith('QmFAIL');
     expect(mockFetchQuota).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Upload Store - Pending Replacements', () => {
+  const testReplacement: PendingReplacement = {
+    fileName: 'test.txt',
+    fileId: 'file-123',
+    parentId: 'root',
+    encryptedData: {
+      cid: 'bafytest123',
+      wrappedKey: 'aa'.repeat(48),
+      iv: 'bb'.repeat(12),
+      size: 1024,
+      encryptionMode: 'GCM',
+    },
+  };
+
+  beforeEach(() => {
+    useUploadStore.getState().reset();
+  });
+
+  it('starts with empty pendingReplacements', () => {
+    expect(useUploadStore.getState().pendingReplacements).toEqual([]);
+  });
+
+  it('setPendingReplacements stores replacements', () => {
+    useUploadStore.getState().setPendingReplacements([testReplacement]);
+
+    const state = useUploadStore.getState();
+    expect(state.pendingReplacements).toHaveLength(1);
+    expect(state.pendingReplacements[0].fileName).toBe('test.txt');
+    expect(state.pendingReplacements[0].fileId).toBe('file-123');
+    expect(state.pendingReplacements[0].encryptedData.cid).toBe('bafytest123');
+    expect(state.pendingReplacements[0].encryptedData.encryptionMode).toBe('GCM');
+  });
+
+  it('setPendingReplacements handles multiple items', () => {
+    const second: PendingReplacement = {
+      ...testReplacement,
+      fileName: 'doc.pdf',
+      fileId: 'file-456',
+      encryptedData: { ...testReplacement.encryptedData, cid: 'bafytest456', size: 2048 },
+    };
+    useUploadStore.getState().setPendingReplacements([testReplacement, second]);
+
+    expect(useUploadStore.getState().pendingReplacements).toHaveLength(2);
+    expect(useUploadStore.getState().pendingReplacements[1].fileName).toBe('doc.pdf');
+  });
+
+  it('clearPendingReplacements empties the array', () => {
+    useUploadStore.getState().setPendingReplacements([testReplacement]);
+    expect(useUploadStore.getState().pendingReplacements).toHaveLength(1);
+
+    useUploadStore.getState().clearPendingReplacements();
+    expect(useUploadStore.getState().pendingReplacements).toEqual([]);
+  });
+
+  it('reset clears pendingReplacements', () => {
+    useUploadStore.getState().setPendingReplacements([testReplacement]);
+    expect(useUploadStore.getState().pendingReplacements).toHaveLength(1);
+
+    useUploadStore.getState().reset();
+    expect(useUploadStore.getState().pendingReplacements).toEqual([]);
+  });
+
+  it('setPendingReplacements replaces previous items', () => {
+    useUploadStore.getState().setPendingReplacements([testReplacement]);
+
+    const replacement2: PendingReplacement = {
+      ...testReplacement,
+      fileName: 'other.txt',
+      fileId: 'file-789',
+    };
+    useUploadStore.getState().setPendingReplacements([replacement2]);
+
+    const state = useUploadStore.getState();
+    expect(state.pendingReplacements).toHaveLength(1);
+    expect(state.pendingReplacements[0].fileName).toBe('other.txt');
   });
 });

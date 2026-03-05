@@ -37,6 +37,8 @@ function createTestBinMetadata(entryCount = 1): RecycleBinMetadata {
     mimeType: i % 2 === 0 ? 'text/plain' : '',
     ...(i % 2 === 0
       ? {
+          contentCid: `bafybeicontent${i}${'a'.repeat(40)}`,
+          contentSize: (i + 1) * 512,
           filePointer: {
             type: 'file' as const,
             id: crypto.randomUUID(),
@@ -166,6 +168,8 @@ describe('encryptBinMetadata / decryptBinMetadata', () => {
     expect(restored.size).toBe(original.size);
     expect(restored.mimeType).toBe(original.mimeType);
     expect(restored.filePointer).toEqual(original.filePointer);
+    expect(restored.contentCid).toBe(original.contentCid);
+    expect(restored.contentSize).toBe(original.contentSize);
   });
 
   it('fails to decrypt with wrong key', async () => {
@@ -519,5 +523,227 @@ describe('validateBinMetadata', () => {
         entries: [null],
       })
     ).toThrow('Invalid bin metadata format');
+  });
+
+  // contentCid validation
+  it('accepts entry with valid contentCid', () => {
+    expect(() =>
+      validateBinMetadata({
+        version: 'v1',
+        sequenceNumber: 1,
+        entries: [
+          {
+            id: 'abc',
+            itemType: 'file',
+            name: 'test.txt',
+            originalParentIpnsName: 'k51xxx',
+            originalPath: '/test.txt',
+            deletedAt: Date.now(),
+            size: 100,
+            mimeType: 'text/plain',
+            contentCid: 'bafybeicontent123',
+          },
+        ],
+      })
+    ).not.toThrow();
+  });
+
+  it('accepts entry without contentCid (undefined)', () => {
+    expect(() =>
+      validateBinMetadata({
+        version: 'v1',
+        sequenceNumber: 1,
+        entries: [
+          {
+            id: 'abc',
+            itemType: 'file',
+            name: 'test.txt',
+            originalParentIpnsName: 'k51xxx',
+            originalPath: '/test.txt',
+            deletedAt: Date.now(),
+            size: 100,
+            mimeType: 'text/plain',
+          },
+        ],
+      })
+    ).not.toThrow();
+  });
+
+  it('rejects entry with empty contentCid', () => {
+    expect(() =>
+      validateBinMetadata({
+        version: 'v1',
+        sequenceNumber: 1,
+        entries: [
+          {
+            id: 'abc',
+            itemType: 'file',
+            name: 'test.txt',
+            originalParentIpnsName: 'k51xxx',
+            originalPath: '/test.txt',
+            deletedAt: Date.now(),
+            size: 100,
+            mimeType: 'text/plain',
+            contentCid: '',
+          },
+        ],
+      })
+    ).toThrow('Invalid bin metadata format');
+  });
+
+  it('rejects entry with non-string contentCid', () => {
+    expect(() =>
+      validateBinMetadata({
+        version: 'v1',
+        sequenceNumber: 1,
+        entries: [
+          {
+            id: 'abc',
+            itemType: 'file',
+            name: 'test.txt',
+            originalParentIpnsName: 'k51xxx',
+            originalPath: '/test.txt',
+            deletedAt: Date.now(),
+            size: 100,
+            mimeType: 'text/plain',
+            contentCid: 12345,
+          },
+        ],
+      })
+    ).toThrow('Invalid bin metadata format');
+  });
+
+  // contentSize validation
+  it('accepts entry with valid contentSize', () => {
+    expect(() =>
+      validateBinMetadata({
+        version: 'v1',
+        sequenceNumber: 1,
+        entries: [
+          {
+            id: 'abc',
+            itemType: 'file',
+            name: 'test.txt',
+            originalParentIpnsName: 'k51xxx',
+            originalPath: '/test.txt',
+            deletedAt: Date.now(),
+            size: 100,
+            mimeType: 'text/plain',
+            contentSize: 2048,
+          },
+        ],
+      })
+    ).not.toThrow();
+  });
+
+  it('accepts entry with contentSize of zero', () => {
+    expect(() =>
+      validateBinMetadata({
+        version: 'v1',
+        sequenceNumber: 1,
+        entries: [
+          {
+            id: 'abc',
+            itemType: 'file',
+            name: 'test.txt',
+            originalParentIpnsName: 'k51xxx',
+            originalPath: '/test.txt',
+            deletedAt: Date.now(),
+            size: 100,
+            mimeType: 'text/plain',
+            contentSize: 0,
+          },
+        ],
+      })
+    ).not.toThrow();
+  });
+
+  it('rejects entry with negative contentSize', () => {
+    expect(() =>
+      validateBinMetadata({
+        version: 'v1',
+        sequenceNumber: 1,
+        entries: [
+          {
+            id: 'abc',
+            itemType: 'file',
+            name: 'test.txt',
+            originalParentIpnsName: 'k51xxx',
+            originalPath: '/test.txt',
+            deletedAt: Date.now(),
+            size: 100,
+            mimeType: 'text/plain',
+            contentSize: -1,
+          },
+        ],
+      })
+    ).toThrow('Invalid bin metadata format');
+  });
+
+  it('rejects entry with non-number contentSize', () => {
+    expect(() =>
+      validateBinMetadata({
+        version: 'v1',
+        sequenceNumber: 1,
+        entries: [
+          {
+            id: 'abc',
+            itemType: 'file',
+            name: 'test.txt',
+            originalParentIpnsName: 'k51xxx',
+            originalPath: '/test.txt',
+            deletedAt: Date.now(),
+            size: 100,
+            mimeType: 'text/plain',
+            contentSize: '2048',
+          },
+        ],
+      })
+    ).toThrow('Invalid bin metadata format');
+  });
+
+  it('rejects entry with non-finite contentSize', () => {
+    expect(() =>
+      validateBinMetadata({
+        version: 'v1',
+        sequenceNumber: 1,
+        entries: [
+          {
+            id: 'abc',
+            itemType: 'file',
+            name: 'test.txt',
+            originalParentIpnsName: 'k51xxx',
+            originalPath: '/test.txt',
+            deletedAt: Date.now(),
+            size: 100,
+            mimeType: 'text/plain',
+            contentSize: Infinity,
+          },
+        ],
+      })
+    ).toThrow('Invalid bin metadata format');
+  });
+
+  it('accepts entry with both contentCid and contentSize', () => {
+    expect(() =>
+      validateBinMetadata({
+        version: 'v1',
+        sequenceNumber: 1,
+        entries: [
+          {
+            id: 'abc',
+            itemType: 'file',
+            name: 'test.txt',
+            originalParentIpnsName: 'k51xxx',
+            originalPath: '/test.txt',
+            deletedAt: Date.now(),
+            size: 100,
+            mimeType: 'text/plain',
+            contentCid: 'bafybeicontent123',
+            contentSize: 2048,
+          },
+        ],
+      })
+    ).not.toThrow();
   });
 });
