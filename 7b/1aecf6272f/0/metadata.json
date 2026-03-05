@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "7b1aecf6272f",
+  "session_id": "d6d5a01e-bb30-4864-8755-81d3f9496abf",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-05T00:18:00.83419Z",
+  "branch": "fix/m2-gap-closure-phase-17.1",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/fuse/windows/write_ops.rs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "db553f9935e2",
+  "token_usage": {
+    "input_tokens": 519,
+    "cache_creation_tokens": 72522,
+    "cache_read_tokens": 1621799,
+    "output_tokens": 5723,
+    "api_call_count": 18
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-05T00:17:59.298112Z",
+    "agent_lines": 0,
+    "human_added": 1,
+    "human_modified": 4,
+    "human_removed": 0,
+    "total_committed": 1,
+    "agent_percentage": 0
+  }
+}

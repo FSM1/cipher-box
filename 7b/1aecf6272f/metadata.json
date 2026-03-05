@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "7b1aecf6272f",
+  "strategy": "manual-commit",
+  "branch": "fix/m2-gap-closure-phase-17.1",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/desktop/src-tauri/src/fuse/windows/write_ops.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7b/1aecf6272f/0/metadata.json",
+      "transcript": "/7b/1aecf6272f/0/full.jsonl",
+      "context": "/7b/1aecf6272f/0/context.md",
+      "content_hash": "/7b/1aecf6272f/0/content_hash.txt",
+      "prompt": "/7b/1aecf6272f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 519,
+    "cache_creation_tokens": 72522,
+    "cache_read_tokens": 1621799,
+    "output_tokens": 5723,
+    "api_call_count": 18
+  }
+}
