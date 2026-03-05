@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "4c12c05871d2",
+  "strategy": "manual-commit",
+  "branch": "chore/m2-milestone-audit",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/milestones/m2/m2-v1.0-ROADMAP.md",
+    ".planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/4c/12c05871d2/0/metadata.json",
+      "transcript": "/4c/12c05871d2/0/full.jsonl",
+      "context": "/4c/12c05871d2/0/context.md",
+      "content_hash": "/4c/12c05871d2/0/content_hash.txt",
+      "prompt": "/4c/12c05871d2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16078,
+    "cache_creation_tokens": 109937,
+    "cache_read_tokens": 7241367,
+    "output_tokens": 28469,
+    "api_call_count": 63
+  }
+}
