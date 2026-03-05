@@ -270,7 +270,9 @@ export async function updateFileMetadata(params: {
   fileMetaIpnsName: string;
   folderKey: Uint8Array;
   currentMetadata: FileMetadata;
-  updates: Partial<Pick<FileMetadata, 'cid' | 'fileKeyEncrypted' | 'fileIv' | 'size'>>;
+  updates: Partial<
+    Pick<FileMetadata, 'cid' | 'fileKeyEncrypted' | 'fileIv' | 'size' | 'encryptionMode'>
+  >;
   createVersion: boolean;
 }): Promise<{
   ipnsRecord: FileIpnsRecordPayload;

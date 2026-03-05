@@ -19,14 +19,20 @@ import {
   bytesToHex,
   hexToBytes,
   wrapKey,
+  unwrapKey,
+  decryptFileMetadata,
+  decryptFolderMetadata,
   type RecycleBinMetadata,
   type BinEntry,
   type FolderChild,
   type FilePointer,
   type FolderEntry,
+  type EncryptedFileMetadata,
+  type EncryptedFolderMetadata,
 } from '@cipherbox/crypto';
 import { addToIpfs, fetchFromIpfs, unpinFromIpfs } from '../lib/api/ipfs';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from './ipns.service';
+import { resolveFileMetadata } from './file-metadata.service';
 import { useAuthStore } from '../stores/auth.store';
 import { useBinStore } from '../stores/bin.store';
 import { useFolderStore } from '../stores/folder.store';
@@ -170,6 +176,36 @@ export async function initializeBin(params: {
   }
 }
 
+/**
+ * Resolve file metadata and enrich a bin entry with content CID, size, and version CIDs.
+ * Best-effort: errors are caught and logged, the entry is left un-enriched.
+ */
+async function enrichBinEntryWithFileMetadata(
+  entry: BinEntry,
+  item: FolderChild,
+  folderKey: Uint8Array
+): Promise<void> {
+  try {
+    const fp = item as FilePointer;
+    const { metadata: fileMeta } = await resolveFileMetadata(fp.fileMetaIpnsName, folderKey);
+    entry.contentCid = fileMeta.cid;
+    entry.contentSize = fileMeta.size;
+    if (Number.isFinite(fileMeta.size)) {
+      entry.size = fileMeta.size;
+    }
+    if (fileMeta.mimeType) {
+      entry.mimeType = fileMeta.mimeType;
+    }
+    if (Array.isArray(fileMeta.versions) && fileMeta.versions.length > 0) {
+      entry.versionCids = fileMeta.versions
+        .filter((v) => v.cid)
+        .map((v) => ({ cid: v.cid, size: v.size ?? 0 }));
+    }
+  } catch (err) {
+    console.warn('[Bin] Failed to resolve file CID for bin entry (non-blocking):', err);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public API: addToBin
 // ---------------------------------------------------------------------------
@@ -192,8 +228,9 @@ export async function addToBin(params: {
   parentPath: string;
   userPublicKey: Uint8Array;
   userPrivateKey: Uint8Array;
+  folderKey?: Uint8Array;
 }): Promise<void> {
-  const { item, parentIpnsName, parentPath, userPublicKey, userPrivateKey } = params;
+  const { item, parentIpnsName, parentPath, userPublicKey, userPrivateKey, folderKey } = params;
 
   // Build bin entry
   const isFile = item.type === 'file';
@@ -204,11 +241,16 @@ export async function addToBin(params: {
     originalParentIpnsName: parentIpnsName,
     originalPath: parentPath,
     deletedAt: Date.now(),
-    size: 0, // Files: resolved lazily on permanent delete. Folders: 0.
+    size: 0,
     mimeType: '',
     filePointer: isFile ? (item as FilePointer) : undefined,
     folderEntry: !isFile ? (item as FolderEntry) : undefined,
   };
+
+  // Resolve file CID+size at soft-delete time (when folderKey is available)
+  if (isFile && folderKey) {
+    await enrichBinEntryWithFileMetadata(entry, item, folderKey);
+  }
 
   // Read current bin state and build updated metadata
   const store = useBinStore.getState();
@@ -246,14 +288,16 @@ export async function addManyToBin(params: {
   parentPath: string;
   userPublicKey: Uint8Array;
   userPrivateKey: Uint8Array;
+  folderKey?: Uint8Array;
 }): Promise<void> {
-  const { items, parentIpnsName, parentPath, userPublicKey, userPrivateKey } = params;
+  const { items, parentIpnsName, parentPath, userPublicKey, userPrivateKey, folderKey } = params;
   if (items.length === 0) return;
 
   const now = Date.now();
-  const newEntries: BinEntry[] = items.map((item) => {
+  const newEntries: BinEntry[] = [];
+  for (const item of items) {
     const isFile = item.type === 'file';
-    return {
+    const entry: BinEntry = {
       id: crypto.randomUUID(),
       itemType: isFile ? 'file' : 'folder',
       name: item.name,
@@ -265,7 +309,14 @@ export async function addManyToBin(params: {
       filePointer: isFile ? (item as FilePointer) : undefined,
       folderEntry: !isFile ? (item as FolderEntry) : undefined,
     };
-  });
+
+    // Resolve file CID+size at soft-delete time (when folderKey is available)
+    if (isFile && folderKey) {
+      await enrichBinEntryWithFileMetadata(entry, item, folderKey);
+    }
+
+    newEntries.push(entry);
+  }
 
   const store = useBinStore.getState();
   const currentEntries = [...store.entries, ...newEntries];
@@ -472,7 +523,7 @@ export async function permanentlyDelete(params: {
   if (!entry) throw new Error('Bin entry not found');
 
   // Perform CID cleanup
-  await cleanupEntryCids(entry);
+  await cleanupEntryCids(entry, userPrivateKey);
 
   // Remove from bin metadata and publish
   await removeEntriesFromBin([entryId], { userPublicKey, userPrivateKey });
@@ -502,7 +553,7 @@ export async function permanentlyDeleteBatch(params: {
   // Cleanup CIDs for all entries (best-effort, continue on individual failures)
   for (const entry of entriesToDelete) {
     try {
-      await cleanupEntryCids(entry);
+      await cleanupEntryCids(entry, userPrivateKey);
     } catch (err) {
       console.error(`[Bin] CID cleanup failed for entry ${entry.id}:`, err);
     }
@@ -533,7 +584,7 @@ export async function emptyBin(params: {
   // Cleanup CIDs for all entries (best-effort, continue on individual failures)
   for (const entry of entries) {
     try {
-      await cleanupEntryCids(entry);
+      await cleanupEntryCids(entry, userPrivateKey);
     } catch (err) {
       console.error(`[Bin] Failed to cleanup CIDs for entry ${entry.id}:`, err);
     }
@@ -582,7 +633,7 @@ export async function purgeExpired(params: {
   // Cleanup CIDs for expired entries (best-effort)
   for (const entry of expired) {
     try {
-      await cleanupEntryCids(entry);
+      await cleanupEntryCids(entry, userPrivateKey);
     } catch (err) {
       console.error(`[Bin] Failed to cleanup CIDs for expired entry ${entry.id}:`, err);
     }
@@ -628,26 +679,58 @@ async function removeEntriesFromBin(
 /**
  * Cleanup CIDs for a bin entry (unpin from IPFS + update quota).
  *
- * Files: resolve file IPNS -> get CID -> unpin
- * Folders: recursively resolve descendant file CIDs -> unpin all
+ * Files: use stored contentCid if available, else fall back to IPNS resolution.
+ * Folders: unwrap folderKey, decrypt folder metadata, decrypt each nested file's
+ * metadata to get CID for unpinning. Recurses for subfolders.
  */
-async function cleanupEntryCids(entry: BinEntry): Promise<void> {
-  if (entry.itemType === 'file' && entry.filePointer) {
-    const fileIpnsName = entry.filePointer.fileMetaIpnsName;
-    if (fileIpnsName) {
-      await unpinFileCids(fileIpnsName, `file ${entry.id}`);
-    }
+async function cleanupEntryCids(entry: BinEntry, userPrivateKey: Uint8Array): Promise<void> {
+  if (entry.itemType === 'file') {
+    await unpinFileCids(entry);
   } else if (entry.itemType === 'folder' && entry.folderEntry) {
-    await cleanupFolderCids(entry.folderEntry.ipnsName);
+    await cleanupFolderCids(entry.folderEntry, userPrivateKey);
   }
 }
 
 /**
  * Unpin a single file's content and metadata CIDs, and update quota.
+ *
+ * Prefers stored contentCid (captured at soft-delete time) to avoid
+ * re-decrypting encrypted file metadata (which was the GAP-1 bug).
+ * Falls back to legacy IPNS resolution for old entries without contentCid.
  */
-async function unpinFileCids(fileMetaIpnsName: string, label: string): Promise<void> {
+async function unpinFileCids(entry: BinEntry): Promise<void> {
   try {
-    const resolved = await resolveIpnsRecord(fileMetaIpnsName);
+    // Preferred path: use stored contentCid from soft-delete time
+    if (entry.contentCid) {
+      await unpinFromIpfs(entry.contentCid);
+      if (Number.isFinite(entry.contentSize)) {
+        useQuotaStore.getState().removeUsage(entry.contentSize!);
+      }
+      // Unpin version CIDs captured at soft-delete time
+      if (entry.versionCids?.length) {
+        await unpinVersionCids({ versions: entry.versionCids });
+      }
+      // Also unpin the file metadata IPNS record CID
+      if (entry.filePointer) {
+        const resolved = await resolveIpnsRecord(entry.filePointer.fileMetaIpnsName);
+        if (resolved?.cid) {
+          await unpinFromIpfs(resolved.cid).catch(() => {});
+        }
+      }
+      return;
+    }
+
+    // Fallback for legacy entries without contentCid:
+    // Resolve IPNS and attempt to interpret file metadata as plaintext JSON.
+    // NOTE: For encrypted file metadata ({ iv, data }), JSON.parse will usually
+    // succeed, but the parsed object will not have cid/size, so no content unpin
+    // or quota reclaim happens (the original GAP-1 bug). Entries that hit this
+    // path may log an error but will not crash the delete flow.
+    if (!entry.filePointer) return;
+    const fileIpnsName = entry.filePointer.fileMetaIpnsName;
+    if (!fileIpnsName) return;
+
+    const resolved = await resolveIpnsRecord(fileIpnsName);
     if (!resolved?.cid) return;
 
     const metaBytes = await fetchFromIpfs(resolved.cid);
@@ -656,47 +739,108 @@ async function unpinFileCids(fileMetaIpnsName: string, label: string): Promise<v
 
     if (fileMeta.cid) {
       await unpinFromIpfs(fileMeta.cid);
-      if (fileMeta.size && typeof fileMeta.size === 'number') {
+      if (Number.isFinite(fileMeta.size)) {
         useQuotaStore.getState().removeUsage(fileMeta.size);
       }
     }
+    await unpinVersionCids(fileMeta);
 
     await unpinFromIpfs(resolved.cid).catch(() => {});
   } catch (err) {
-    console.error(`[Bin] CID cleanup failed for ${label}:`, err);
+    console.error(`[Bin] CID cleanup failed for file ${entry.id}:`, err);
+  }
+}
+
+/**
+ * Unpin version CIDs from a decrypted/parsed file metadata object and reclaim quota.
+ * Best-effort: errors on individual versions are caught and logged.
+ */
+async function unpinVersionCids(fileMeta: {
+  versions?: Array<{ cid?: string; size?: number }>;
+}): Promise<void> {
+  if (!Array.isArray(fileMeta.versions)) return;
+  for (const version of fileMeta.versions) {
+    try {
+      if (version.cid) {
+        await unpinFromIpfs(version.cid);
+      }
+      if (Number.isFinite(version.size)) {
+        useQuotaStore.getState().removeUsage(version.size!);
+      }
+    } catch {
+      // Best-effort for individual version cleanup
+    }
   }
 }
 
 /**
  * Recursively unpin all CIDs in a folder tree.
+ *
+ * Unwraps the folder's AES key using the user's private key, then decrypts
+ * the folder metadata to enumerate children. For each file child, decrypts
+ * the file metadata to extract the content CID for unpinning.
+ * For subfolder children, recurses with the user's private key.
  */
-async function cleanupFolderCids(folderIpnsName: string): Promise<void> {
+async function cleanupFolderCids(
+  folderEntry: FolderEntry,
+  userPrivateKey: Uint8Array
+): Promise<void> {
+  let folderMetadataCid: string | null = null;
   try {
-    const resolved = await resolveIpnsRecord(folderIpnsName);
+    // Step 1: Unwrap the folder's AES key using user's private key (ECIES)
+    const wrappedFolderKey = hexToBytes(folderEntry.folderKeyEncrypted);
+    const folderKey = await unwrapKey(wrappedFolderKey, userPrivateKey);
+
+    // Step 2: Resolve folder's IPNS to get its metadata CID
+    const resolved = await resolveIpnsRecord(folderEntry.ipnsName);
     if (!resolved?.cid) return;
+    folderMetadataCid = resolved.cid;
 
-    // We don't have the folder key here, so we check if the folder is
-    // loaded in the store first
-    const folders = useFolderStore.getState().folders;
-    const folderNode = Object.values(folders).find((f) => f.ipnsName === folderIpnsName);
+    // Step 3: Fetch and decrypt the folder metadata
+    const metaBytes = await fetchFromIpfs(resolved.cid);
+    const metaJson = new TextDecoder().decode(metaBytes);
+    const encrypted = JSON.parse(metaJson) as EncryptedFolderMetadata;
+    const folderMeta = await decryptFolderMetadata(encrypted, folderKey);
 
-    if (folderNode) {
-      for (const child of folderNode.children) {
+    // Step 4: For each child, unpin CIDs
+    for (const child of folderMeta.children) {
+      try {
         if (child.type === 'file') {
           const fp = child as FilePointer;
-          if (fp.fileMetaIpnsName) {
-            await unpinFileCids(fp.fileMetaIpnsName, 'nested file');
+          // Decrypt file metadata to get content CID
+          const fileResolved = await resolveIpnsRecord(fp.fileMetaIpnsName);
+          if (fileResolved?.cid) {
+            const fileMetaBytes = await fetchFromIpfs(fileResolved.cid);
+            const fileMetaJson = new TextDecoder().decode(fileMetaBytes);
+            const encryptedFileMeta = JSON.parse(fileMetaJson) as EncryptedFileMetadata;
+            const fileMeta = await decryptFileMetadata(encryptedFileMeta, folderKey);
+            if (fileMeta.cid) {
+              await unpinFromIpfs(fileMeta.cid);
+              if (Number.isFinite(fileMeta.size)) {
+                useQuotaStore.getState().removeUsage(fileMeta.size);
+              }
+            }
+            // Unpin any historical version CIDs
+            await unpinVersionCids(fileMeta);
+            // Also unpin the file metadata CID
+            await unpinFromIpfs(fileResolved.cid).catch(() => {});
           }
         } else if (child.type === 'folder') {
-          const fe = child as FolderEntry;
-          await cleanupFolderCids(fe.ipnsName);
+          // Subfolder: folderKeyEncrypted is ECIES-wrapped with the user's publicKey
+          const subFe = child as FolderEntry;
+          await cleanupFolderCids(subFe, userPrivateKey);
         }
+      } catch (childErr) {
+        console.error(`[Bin] Failed to cleanup CIDs for child ${child.name}:`, childErr);
       }
     }
-
-    await unpinFromIpfs(resolved.cid).catch(() => {});
   } catch (err) {
-    console.error(`[Bin] Folder CID cleanup failed for ${folderIpnsName}:`, err);
+    console.error(`[Bin] Folder CID cleanup failed for ${folderEntry.ipnsName}:`, err);
+  } finally {
+    // Always unpin the folder metadata CID, even if child cleanup threw
+    if (folderMetadataCid) {
+      await unpinFromIpfs(folderMetadataCid).catch(() => {});
+    }
   }
 }
 

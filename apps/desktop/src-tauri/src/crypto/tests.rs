@@ -13,7 +13,7 @@ use super::ed25519;
 use super::folder::{
     decrypt_file_metadata, decrypt_folder_metadata,
     encrypt_file_metadata, encrypt_folder_metadata, FileMetadata,
-    FilePointer, FolderChild, FolderEntry, FolderMetadata,
+    FilePointer, FolderChild, FolderEntry, FolderMetadata, VersionEntry,
 };
 use super::hkdf;
 use super::ipns;
@@ -1234,6 +1234,9 @@ fn make_test_bin_entry(id: &str, item_type: bin::BinItemType) -> bin::BinEntry {
         deleted_at: 1700000000000,
         size: 1024,
         mime_type: "text/plain".to_string(),
+        content_cid: None,
+        content_size: None,
+        version_cids: None,
         file_pointer: match id {
             _ if id.starts_with("file") => Some(FilePointer {
                 id: "fp-001".to_string(),
@@ -1384,6 +1387,9 @@ fn bin_metadata_optional_fields_omitted_when_none() {
             deleted_at: 1700000000000,
             size: 100,
             mime_type: "text/plain".to_string(),
+            content_cid: None,
+            content_size: None,
+            version_cids: None,
             file_pointer: None,
             folder_entry: None,
         }],
@@ -1491,4 +1497,221 @@ fn bin_guess_mime_type_unknown_extension() {
 fn bin_guess_mime_type_case_insensitive() {
     assert_eq!(utils::mime_from_extension("PHOTO.PNG"), "image/png");
     assert_eq!(utils::mime_from_extension("Doc.PDF"), "application/pdf");
+}
+
+// ============================================================
+// FileMetadata + VersionEntry Roundtrip Tests
+// ============================================================
+
+fn make_test_version_entry(index: u32) -> VersionEntry {
+    VersionEntry {
+        cid: format!("bafyversion{}{}", index, "a".repeat(40)),
+        file_key_encrypted: "aa".repeat(48),
+        file_iv: "bb".repeat(12),
+        size: (index as u64 + 1) * 1024,
+        timestamp: 1700000000000 + (index as u64 * 86400000),
+        encryption_mode: if index % 2 == 0 { "GCM".to_string() } else { "CTR".to_string() },
+    }
+}
+
+#[test]
+fn file_metadata_with_versions_roundtrip() {
+    let key = utils::generate_file_key();
+    let metadata = FileMetadata {
+        version: "v1".to_string(),
+        cid: "bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4".to_string(),
+        file_key_encrypted: "deadbeef".to_string(),
+        file_iv: "aabbccdd".to_string(),
+        size: 4096,
+        mime_type: "application/pdf".to_string(),
+        encryption_mode: "GCM".to_string(),
+        created_at: 1700000000000,
+        modified_at: 1700000000000,
+        versions: Some(vec![make_test_version_entry(0), make_test_version_entry(1)]),
+    };
+
+    let sealed = encrypt_file_metadata(&metadata, &key).unwrap();
+    let decrypted = decrypt_file_metadata(&sealed, &key).unwrap();
+
+    let versions = decrypted.versions.expect("versions should be Some after roundtrip");
+    assert_eq!(versions.len(), 2, "Should have 2 version entries");
+
+    // Verify first version (index 0)
+    assert_eq!(versions[0].cid, make_test_version_entry(0).cid);
+    assert_eq!(versions[0].file_key_encrypted, "aa".repeat(48));
+    assert_eq!(versions[0].file_iv, "bb".repeat(12));
+    assert_eq!(versions[0].size, 1024);
+    assert_eq!(versions[0].timestamp, 1700000000000);
+    assert_eq!(versions[0].encryption_mode, "GCM");
+
+    // Verify second version (index 1)
+    assert_eq!(versions[1].cid, make_test_version_entry(1).cid);
+    assert_eq!(versions[1].size, 2048);
+    assert_eq!(versions[1].timestamp, 1700000000000 + 86400000);
+    assert_eq!(versions[1].encryption_mode, "CTR");
+}
+
+#[test]
+fn file_metadata_with_empty_versions_roundtrip() {
+    let key = utils::generate_file_key();
+    let metadata = FileMetadata {
+        version: "v1".to_string(),
+        cid: "bafytest".to_string(),
+        file_key_encrypted: "aa".to_string(),
+        file_iv: "bb".to_string(),
+        size: 100,
+        mime_type: "text/plain".to_string(),
+        encryption_mode: "GCM".to_string(),
+        created_at: 1000,
+        modified_at: 2000,
+        versions: Some(vec![]),
+    };
+
+    let sealed = encrypt_file_metadata(&metadata, &key).unwrap();
+    let decrypted = decrypt_file_metadata(&sealed, &key).unwrap();
+
+    let versions = decrypted.versions.expect("versions should be Some (not collapsed to None)");
+    assert!(versions.is_empty(), "versions should be an empty vec");
+}
+
+#[test]
+fn file_metadata_versions_camel_case_serialization() {
+    let metadata = FileMetadata {
+        version: "v1".to_string(),
+        cid: "bafytest".to_string(),
+        file_key_encrypted: "aa".to_string(),
+        file_iv: "bb".to_string(),
+        size: 100,
+        mime_type: "text/plain".to_string(),
+        encryption_mode: "GCM".to_string(),
+        created_at: 1000,
+        modified_at: 2000,
+        versions: Some(vec![make_test_version_entry(0)]),
+    };
+
+    let json = serde_json::to_value(&metadata).unwrap();
+    let version0 = &json["versions"][0];
+    assert!(version0.get("fileKeyEncrypted").is_some(), "Version entry must use camelCase: fileKeyEncrypted");
+    assert!(version0.get("fileIv").is_some(), "Version entry must use camelCase: fileIv");
+    assert!(version0.get("encryptionMode").is_some(), "Version entry must use camelCase: encryptionMode");
+    assert!(version0.get("file_key_encrypted").is_none(), "Should NOT contain snake_case file_key_encrypted");
+    assert!(version0.get("file_iv").is_none(), "Should NOT contain snake_case file_iv");
+    assert!(version0.get("encryption_mode").is_none(), "Should NOT contain snake_case encryption_mode");
+}
+
+#[test]
+fn file_metadata_versions_none_omitted_in_json() {
+    let metadata = FileMetadata {
+        version: "v1".to_string(),
+        cid: "bafytest".to_string(),
+        file_key_encrypted: "aa".to_string(),
+        file_iv: "bb".to_string(),
+        size: 100,
+        mime_type: "text/plain".to_string(),
+        encryption_mode: "GCM".to_string(),
+        created_at: 1000,
+        modified_at: 2000,
+        versions: None,
+    };
+
+    let json = serde_json::to_string(&metadata).unwrap();
+    assert!(!json.contains("versions"), "None versions should be omitted from JSON");
+}
+
+#[test]
+fn file_metadata_versions_deserialization_from_json() {
+    let json = r#"{
+        "version": "v1",
+        "cid": "bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4",
+        "fileKeyEncrypted": "deadbeef",
+        "fileIv": "aabbccdd",
+        "size": 4096,
+        "mimeType": "application/pdf",
+        "encryptionMode": "GCM",
+        "createdAt": 1700000000000,
+        "modifiedAt": 1700000000000,
+        "versions": [
+            {
+                "cid": "bafyversion0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "fileKeyEncrypted": "aabbccdd",
+                "fileIv": "112233",
+                "size": 1024,
+                "timestamp": 1700000000000,
+                "encryptionMode": "GCM"
+            },
+            {
+                "cid": "bafyversion1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "fileKeyEncrypted": "eeff0011",
+                "fileIv": "445566",
+                "size": 2048,
+                "timestamp": 1700086400000,
+                "encryptionMode": "CTR"
+            }
+        ]
+    }"#;
+
+    let metadata: FileMetadata = serde_json::from_str(json).unwrap();
+    assert_eq!(metadata.version, "v1");
+    assert_eq!(metadata.size, 4096);
+
+    let versions = metadata.versions.expect("versions should be Some after deserialization");
+    assert_eq!(versions.len(), 2);
+    assert_eq!(versions[0].cid, "bafyversion0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(versions[0].file_key_encrypted, "aabbccdd");
+    assert_eq!(versions[0].file_iv, "112233");
+    assert_eq!(versions[0].size, 1024);
+    assert_eq!(versions[0].timestamp, 1700000000000);
+    assert_eq!(versions[0].encryption_mode, "GCM");
+    assert_eq!(versions[1].cid, "bafyversion1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    assert_eq!(versions[1].size, 2048);
+    assert_eq!(versions[1].encryption_mode, "CTR");
+}
+
+#[test]
+fn bin_entry_content_cid_roundtrip() {
+    let private_key = hex::decode(ECIES_TEST_PRIVATE_KEY).unwrap();
+    let public_key = hex::decode(ECIES_TEST_PUBLIC_KEY).unwrap();
+
+    let metadata = bin::RecycleBinMetadata {
+        version: "v1".to_string(),
+        sequence_number: 1,
+        entries: vec![bin::BinEntry {
+            id: "file-cid-test".to_string(),
+            item_type: bin::BinItemType::File,
+            name: "photo.jpg".to_string(),
+            original_parent_ipns_name: "k51qzi5uqu5dlvj2bv6qmx8snx6m8xq7nprfqqopzz6p0".to_string(),
+            original_path: "My Vault / Photos".to_string(),
+            deleted_at: 1700000000000,
+            size: 12345,
+            mime_type: "image/jpeg".to_string(),
+            content_cid: Some("bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4".to_string()),
+            content_size: Some(12345),
+            version_cids: None,
+            file_pointer: Some(FilePointer {
+                id: "fp-cid-test".to_string(),
+                name: "photo.jpg".to_string(),
+                file_meta_ipns_name: "k51filecidtest".to_string(),
+                ipns_private_key_encrypted: Some("deadbeef".to_string()),
+                created_at: 1700000000000,
+                modified_at: 1700000000000,
+            }),
+            folder_entry: None,
+        }],
+    };
+
+    let encrypted = bin::encrypt_bin_metadata(&metadata, &public_key).unwrap();
+    let decrypted = bin::decrypt_bin_metadata(&encrypted, &private_key).unwrap();
+
+    assert_eq!(decrypted.entries.len(), 1);
+    let entry = &decrypted.entries[0];
+    assert_eq!(
+        entry.content_cid.as_deref(),
+        Some("bafybeicklkqcnlvtiscr2hzkubjwnwjinvskffn4xorqeduft3wq7vm5u4"),
+        "content_cid should survive encrypt/decrypt roundtrip"
+    );
+    assert_eq!(
+        entry.content_size,
+        Some(12345),
+        "content_size should survive encrypt/decrypt roundtrip"
+    );
 }

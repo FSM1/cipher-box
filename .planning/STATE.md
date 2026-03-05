@@ -5,24 +5,24 @@
 See: .planning/PROJECT.md (updated 2026-02-11)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Milestone 2 -- COMPLETE (all phases shipped)
+**Current focus:** Milestone 2 -- all phases complete, ready for milestone audit
 
 ## Current Position
 
-Phase: 17 (Recycle Bin) -- Complete
-Plan: 5 of 5
-Status: Phase complete (all plans executed)
-Last activity: 2026-03-04 -- Completed 17-05-PLAN.md
+Phase: 17.1 (Recycle Bin Integration Fixes) -- COMPLETE
+Plan: 3 of 3 (all plans complete)
+Status: Phase complete
+Last activity: 2026-03-05 -- Completed 17.1-03-PLAN.md (E2E tests for bin integration)
 
-Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE, Phase 16: 5/5 COMPLETE, Phase 17: 5/5 COMPLETE)
+Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 12.2 complete, Phase 12.3 complete, Phase 12.3.1 complete, Phase 12.4 complete, Phase 12.5 complete, Phase 12.6 complete, Phase 12.1 complete, Phase 11.1: 7/7 COMPLETE, Phase 11.2: 3/3 COMPLETE, Phase 13: 5/5 COMPLETE, Phase 14: 6/6 COMPLETE, Phase 11: 3/3 COMPLETE, Phase 15: 4/4 COMPLETE, Phase 15.1: 3/3 COMPLETE, Phase 11.3: 3/3 COMPLETE, Phase 11.4: 3/3 COMPLETE, Phase 16: 5/5 COMPLETE, Phase 17: 5/5 COMPLETE, Phase 17.1: 3/3 COMPLETE)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 151
+- Total plans completed: 154
 - Average duration: 5.5 min
-- Total execution time: 16.0 hours
+- Total execution time: 16.4 hours
 
 **By Phase (M1 summary):**
 
@@ -48,10 +48,11 @@ Progress: [#########################] (M1 complete, M2 Phase 12 complete, Phase 
 | M2 Phase 11.4   | 3/3   | 20 min  | 6.7 min  |
 | M2 Phase 16     | 5/5   | 18 min  | 3.6 min  |
 | M2 Phase 17     | 5/5   | 35 min  | 7.0 min  |
+| M2 Phase 17.1   | 3/3   | 24 min  | 8.0 min  |
 
 **Recent Trend:**
 
-- Last 5 plans: 4m, 7m, 9m, 7m, 5m
+- Last 5 plans: 9m, 7m, 5m, 11m, 4m
 - Trend: Stable
 
 Updated after each plan completion.
@@ -243,6 +244,8 @@ Recent decisions affecting current work:
 | Inline generate_uuid_v4 in bin.rs (no uuid crate)                      | 17-04     | Same pattern as registry/mod.rs; avoid new dependency for simple function                                            |
 | Inline guess_mime_type mapping (no mime_guess crate)                   | 17-04     | Best-effort MIME for bin display; application/octet-stream fallback acceptable for unknown extensions                |
 | Bin IPNS conflict = log + preserve CID (no retry)                      | 17-04     | Fire-and-forget publish; data preserved via pinned CID; next delete or web session creates fresh bin state           |
+| Store CID+size in BinEntry at soft-delete (not re-decrypt at delete)   | 17.1-01   | Avoids GAP-1 bug: parsing AES-GCM encrypted metadata as plain JSON; capture when data is in memory                   |
+| cleanupFolderCids receives FolderEntry for direct folderKey unwrapping | 17.1-01   | Changed from IPNS name string to full FolderEntry; enables ECIES unwrap + AES-GCM decrypt for nested files           |
 
 ### Pending Todos
 
@@ -275,6 +278,7 @@ Recent decisions affecting current work:
 - Phase 11.2 inserted after Phase 11.1: Remove v1 Folder Metadata — eliminate v1/v2 dual-schema code, make v2 FilePointer canonical everywhere, add per-file IPNS publishing to desktop FUSE. Triggered by cross-device format oscillation bug (desktop writes v1, web re-saves as v2 hybrid, desktop rejects).
 - Phase 15 split: "Link Sharing and Search" split into Phase 15 (Link Sharing) and Phase 15.1 (Client-Side Search). Independent features with different security surfaces.
 - Phase 17 added to M2: Recycle Bin -- soft-delete with time-limited retention, file/folder recovery, manual bin emptying. AWS Nitro TEE moved from M2 Phase 17 to M3 Phase 22 (Phala mock still in use on staging). M3 phases: 18-22.
+- Phase 17.1 inserted after Phase 17: Recycle Bin Integration Fixes -- milestone audit found bin permanent delete can't unpin CIDs (encrypted metadata parsed as plain JSON) and Windows desktop deletes bypass bin. Closes GAP-1 (CRITICAL) and GAP-2 (MODERATE).
 
 ### Blockers/Concerns
 
@@ -321,16 +325,17 @@ Recent decisions affecting current work:
 - Phase 11.4 (Cross-Platform E2E Testing): COMPLETE -- 3/3 plans done (CI debug artifacts + crypto vectors, FUSE/API test scripts, e2e-desktop.yml workflow)
 - Phase 16 (Advanced Sync): COMPLETE -- 5/5 plans done (API concurrency control, web sync service, desktop conflict handling, web E2E tests, desktop E2E tests)
 - Phase 17 (Recycle Bin): COMPLETE -- 5/5 plans done (crypto, store/service, web UI, desktop FUSE, E2E testing)
+- Phase 17.1 (Bin Integration Fixes): COMPLETE -- 3/3 plans done (bin CID capture fix, Windows WinFsp bin integration, E2E test coverage)
 - Phase 22 (Nitro TEE): Moved to M3. NEEDS `/gsd:research-phase` -- Rust enclave, highest risk item
 
 ## Session Continuity
 
-Last session: 2026-03-04
-Stopped at: Completed 17-05-PLAN.md (Phase 17 complete)
+Last session: 2026-03-05
+Stopped at: Phase 17.1 complete (3/3 plans, verified 7/7 must-haves)
 Resume file: None
-Next: Phase 17 PR to main
+Next: Audit Milestone 2 via /gsd:audit-milestone
 
 ---
 
 _State initialized: 2026-01-20_
-_Last updated: 2026-03-04 after Plan 17-05 complete (E2E recycle bin tests)_
+_Last updated: 2026-03-05 after Phase 17.1 complete (bin integration fixes verified)_

@@ -276,6 +276,8 @@ pub(crate) mod implementation {
                     file_meta_ipns_name,
                     file_ipns_key_encrypted_hex,
                     size,
+                    cid,
+                    versions,
                     ..
                 } => {
                     let now_ms = SystemTime::now()
@@ -312,7 +314,8 @@ pub(crate) mod implementation {
                             modified_at: now_ms,
                         };
 
-                        Some((inode.name.clone(), *size, file_pointer))
+                        let ver_cids = crate::fuse::helpers::versions_to_bin_entries(versions);
+                        Some((inode.name.clone(), *size, file_pointer, cid.clone(), ver_cids))
                     } else {
                         None
                     }
@@ -344,7 +347,7 @@ pub(crate) mod implementation {
         }
 
         // Create bin entry and publish to bin IPNS (fire-and-forget)
-        if let Some((item_name, file_size, file_pointer)) = bin_entry_data {
+        if let Some((item_name, file_size, file_pointer, content_cid, ver_cids)) = bin_entry_data {
             let parent_ipns_name = fs.inodes.get(parent)
                 .map(|p| match &p.kind {
                     InodeKind::Root { ipns_name, .. } => ipns_name.clone().unwrap_or_default(),
@@ -359,7 +362,7 @@ pub(crate) mod implementation {
                     parent
                 );
             } else {
-                let parent_path = build_folder_path(fs, parent);
+                let parent_path = crate::fuse::helpers::build_folder_path(fs, parent);
 
                 let bin_entry = crate::crypto::bin::BinEntry {
                     id: crate::crypto::utils::generate_uuid_v4(),
@@ -373,6 +376,9 @@ pub(crate) mod implementation {
                         .as_millis() as u64,
                     size: file_size,
                     mime_type: crate::crypto::utils::mime_from_extension(&item_name).to_string(),
+                    content_cid: if content_cid.is_empty() { None } else { Some(content_cid) },
+                    content_size: Some(file_size),
+                    version_cids: ver_cids,
                     file_pointer: Some(file_pointer),
                     folder_entry: None,
                 };
@@ -746,7 +752,7 @@ pub(crate) mod implementation {
                     parent
                 );
             } else {
-                let parent_path = build_folder_path(fs, parent);
+                let parent_path = crate::fuse::helpers::build_folder_path(fs, parent);
 
                 let bin_entry = crate::crypto::bin::BinEntry {
                     id: crate::crypto::utils::generate_uuid_v4(),
@@ -760,6 +766,9 @@ pub(crate) mod implementation {
                         .as_millis() as u64,
                     size: 0,
                     mime_type: String::new(),
+                    content_cid: None,
+                    content_size: None,
+                    version_cids: None,
                     file_pointer: None,
                     folder_entry: Some(folder_entry),
                 };
@@ -964,30 +973,4 @@ pub(crate) mod implementation {
         reply.ok();
     }
 
-    /// Build a human-readable breadcrumb path for a folder inode.
-    /// Walks parent_ino upward to root, concatenating names with " / ".
-    /// Example: "My Vault / Documents / Reports"
-    fn build_folder_path(fs: &CipherBoxFS, folder_ino: u64) -> String {
-        let mut parts = Vec::new();
-        let mut current = folder_ino;
-        for _ in 0..20 { // Safety limit to prevent infinite loops
-            match fs.inodes.get(current) {
-                Some(inode) => {
-                    match &inode.kind {
-                        InodeKind::Root { .. } => {
-                            parts.push("My Vault".to_string());
-                            break;
-                        }
-                        _ => {
-                            parts.push(inode.name.clone());
-                            current = inode.parent_ino;
-                        }
-                    }
-                }
-                None => break,
-            }
-        }
-        parts.reverse();
-        parts.join(" / ")
-    }
 }

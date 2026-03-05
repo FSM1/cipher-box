@@ -10,6 +10,19 @@ type UploadStatus =
   | 'error'
   | 'cancelled';
 
+export type PendingReplacement = {
+  fileName: string;
+  fileId: string;
+  parentId: string;
+  encryptedData: {
+    cid: string;
+    wrappedKey: string;
+    iv: string;
+    size: number;
+    encryptionMode: 'GCM' | 'CTR';
+  };
+};
+
 type UploadState = {
   status: UploadStatus;
   progress: number; // 0-100 for current batch
@@ -18,6 +31,7 @@ type UploadState = {
   completedFiles: number;
   error: string | null;
   cancelSource: ReturnType<typeof axios.CancelToken.source> | null;
+  pendingReplacements: PendingReplacement[];
 
   startUpload: (totalFiles: number) => void;
   setEncrypting: (filename: string) => void;
@@ -28,6 +42,8 @@ type UploadState = {
   setError: (error: string) => void;
   cancel: () => void;
   reset: () => void;
+  setPendingReplacements: (replacements: PendingReplacement[]) => void;
+  clearPendingReplacements: () => void;
 };
 
 export const useUploadStore = create<UploadState>((set, get) => ({
@@ -38,6 +54,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   completedFiles: 0,
   error: null,
   cancelSource: null,
+  pendingReplacements: [],
 
   startUpload: (totalFiles) =>
     set({
@@ -89,5 +106,9 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       completedFiles: 0,
       error: null,
       cancelSource: null,
+      pendingReplacements: [],
     }),
+
+  setPendingReplacements: (replacements) => set({ pendingReplacements: replacements }),
+  clearPendingReplacements: () => set({ pendingReplacements: [] }),
 }));

@@ -109,6 +109,43 @@ function validateBinEntry(data: unknown): void {
     throw new CryptoError('Invalid bin metadata format', 'DECRYPTION_FAILED');
   }
 
+  // Validate optional contentCid (non-empty string if present)
+  if (entry.contentCid !== undefined) {
+    if (typeof entry.contentCid !== 'string' || entry.contentCid.length === 0) {
+      throw new CryptoError('Invalid bin metadata format', 'DECRYPTION_FAILED');
+    }
+  }
+
+  // Validate optional contentSize (non-negative finite number if present)
+  if (entry.contentSize !== undefined) {
+    if (
+      typeof entry.contentSize !== 'number' ||
+      !Number.isFinite(entry.contentSize) ||
+      entry.contentSize < 0
+    ) {
+      throw new CryptoError('Invalid bin metadata format', 'DECRYPTION_FAILED');
+    }
+  }
+
+  // Validate optional versionCids (array of {cid: string, size: number} if present)
+  if (entry.versionCids !== undefined) {
+    if (!Array.isArray(entry.versionCids)) {
+      throw new CryptoError('Invalid bin metadata format', 'DECRYPTION_FAILED');
+    }
+    for (const vc of entry.versionCids) {
+      if (typeof vc !== 'object' || vc === null) {
+        throw new CryptoError('Invalid bin metadata format', 'DECRYPTION_FAILED');
+      }
+      const v = vc as Record<string, unknown>;
+      if (typeof v.cid !== 'string' || v.cid.length === 0) {
+        throw new CryptoError('Invalid bin metadata format', 'DECRYPTION_FAILED');
+      }
+      if (typeof v.size !== 'number' || !Number.isFinite(v.size) || v.size < 0) {
+        throw new CryptoError('Invalid bin metadata format', 'DECRYPTION_FAILED');
+      }
+    }
+  }
+
   // Validate filePointer/folderEntry: optional, but if present must be objects
   // Be lenient -- schema may evolve, so we don't enforce strict presence based on itemType
   if (

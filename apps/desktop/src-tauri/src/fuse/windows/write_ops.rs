@@ -492,39 +492,186 @@ pub(crate) mod implementation {
 
         // FspCleanupDelete = 0x01
         if flags & 0x01 != 0 {
-            let (parent_ino, cid_to_unpin) = match fs.inodes.get(ino) {
-                Some(inode) => {
-                    let parent = inode.parent_ino;
-                    let cid = match &inode.kind {
-                        InodeKind::File { cid, .. } => {
-                            if cid.is_empty() { None } else { Some(cid.clone()) }
-                        }
-                        InodeKind::Folder { ipns_name, .. } => {
-                            fs.metadata_cache.get(ipns_name).map(|cached| cached.cid.clone())
-                        }
-                        _ => None,
-                    };
-                    (parent, cid)
-                }
+            let now = SystemTime::now();
+            let now_ms = now
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+
+            // Capture parent inode and bin entry data before inode removal
+            let parent_ino = match fs.inodes.get(ino) {
+                Some(inode) => inode.parent_ino,
                 None => return,
             };
+
+            // Capture bin entry data for file or folder before removal
+            let bin_file_data: Option<(String, u64, crate::crypto::folder::FilePointer, String, Option<Vec<crate::crypto::bin::VersionCidEntry>>)> =
+                match fs.inodes.get(ino) {
+                    Some(inode) => match &inode.kind {
+                        InodeKind::File {
+                            file_meta_ipns_name,
+                            file_ipns_key_encrypted_hex,
+                            size,
+                            cid,
+                            versions,
+                            ..
+                        } => {
+                            let created_ms = inode.attr.crtime
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64;
+
+                            match file_meta_ipns_name {
+                                Some(name) if !name.is_empty() => {
+                                    let file_pointer = crate::crypto::folder::FilePointer {
+                                        id: crate::crypto::utils::generate_uuid_v4(),
+                                        name: inode.name.clone(),
+                                        file_meta_ipns_name: name.clone(),
+                                        ipns_private_key_encrypted: file_ipns_key_encrypted_hex.clone(),
+                                        created_at: if created_ms > 0 { created_ms } else { now_ms },
+                                        modified_at: now_ms,
+                                    };
+                                    let ver_cids = crate::fuse::helpers::versions_to_bin_entries(versions);
+                                    Some((inode.name.clone(), *size, file_pointer, cid.clone(), ver_cids))
+                                }
+                                _ => {
+                                    log::warn!(
+                                        "cleanup delete: missing file_meta_ipns_name for ino {}, skipping bin entry",
+                                        ino
+                                    );
+                                    None
+                                }
+                            }
+                        }
+                        _ => None,
+                    },
+                    None => None,
+                };
+
+            let bin_folder_data: Option<(String, crate::crypto::folder::FolderEntry)> =
+                if bin_file_data.is_none() {
+                    match fs.inodes.get(ino) {
+                        Some(inode) => match &inode.kind {
+                            InodeKind::Folder {
+                                ipns_name,
+                                encrypted_folder_key,
+                                ipns_private_key,
+                                ..
+                            } => {
+                                let created_ms = inode.attr.crtime
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis() as u64;
+
+                                match ipns_private_key {
+                                    Some(key) => {
+                                        match crate::crypto::ecies::wrap_key(key, &fs.public_key) {
+                                            Ok(wrapped) => {
+                                                let folder_entry = crate::crypto::folder::FolderEntry {
+                                                    id: crate::crypto::utils::generate_uuid_v4(),
+                                                    name: inode.name.clone(),
+                                                    ipns_name: ipns_name.clone(),
+                                                    folder_key_encrypted: encrypted_folder_key.clone(),
+                                                    ipns_private_key_encrypted: hex::encode(&wrapped),
+                                                    created_at: if created_ms > 0 { created_ms } else { now_ms },
+                                                    modified_at: now_ms,
+                                                };
+                                                Some((inode.name.clone(), folder_entry))
+                                            }
+                                            Err(e) => {
+                                                log::error!("cleanup delete: failed to wrap IPNS key: {}", e);
+                                                None
+                                            }
+                                        }
+                                    }
+                                    None => {
+                                        log::error!("cleanup delete: missing IPNS private key for ino {}", ino);
+                                        None
+                                    }
+                                }
+                            }
+                            _ => None,
+                        },
+                        None => None,
+                    }
+                } else {
+                    None
+                };
 
             fs.inodes.remove(ino);
 
             if let Some(parent_inode) = fs.inodes.get_mut(parent_ino) {
-                parent_inode.attr.mtime = SystemTime::now();
-                parent_inode.attr.ctime = SystemTime::now();
+                parent_inode.attr.mtime = now;
+                parent_inode.attr.ctime = now;
             }
 
             if let Err(e) = fs.update_folder_metadata(parent_ino) {
                 log::error!("Failed to update folder metadata after delete: {}", e);
             }
 
-            if let Some(cid) = cid_to_unpin {
-                let api = fs.api.clone();
-                fs.rt.spawn(async move {
-                    let _ = crate::api::ipfs::unpin_content(&api, &cid).await;
-                });
+            // Create bin entry and publish (fire-and-forget) -- CIDs stay pinned for recovery
+            let parent_ipns_name = fs.inodes.get(parent_ino)
+                .map(|p| match &p.kind {
+                    InodeKind::Root { ipns_name, .. } => ipns_name.clone().unwrap_or_default(),
+                    InodeKind::Folder { ipns_name, .. } => ipns_name.clone(),
+                    _ => String::new(),
+                })
+                .unwrap_or_default();
+
+            if !parent_ipns_name.is_empty() {
+                let parent_path = crate::fuse::helpers::build_folder_path(&fs, parent_ino);
+
+                let bin_entry = if let Some((name, size, fp, cid, ver_cids)) = bin_file_data {
+                    Some(crate::crypto::bin::BinEntry {
+                        id: crate::crypto::utils::generate_uuid_v4(),
+                        item_type: crate::crypto::bin::BinItemType::File,
+                        name: name.clone(),
+                        original_parent_ipns_name: parent_ipns_name,
+                        original_path: parent_path,
+                        deleted_at: now_ms,
+                        size,
+                        mime_type: crate::crypto::utils::mime_from_extension(&name).to_string(),
+                        content_cid: if cid.is_empty() { None } else { Some(cid) },
+                        content_size: Some(size),
+                        version_cids: ver_cids,
+                        file_pointer: Some(fp),
+                        folder_entry: None,
+                    })
+                } else if let Some((name, fe)) = bin_folder_data {
+                    Some(crate::crypto::bin::BinEntry {
+                        id: crate::crypto::utils::generate_uuid_v4(),
+                        item_type: crate::crypto::bin::BinItemType::Folder,
+                        name,
+                        original_parent_ipns_name: parent_ipns_name,
+                        original_path: parent_path,
+                        deleted_at: now_ms,
+                        size: 0,
+                        mime_type: String::new(),
+                        content_cid: None,
+                        content_size: None,
+                        version_cids: None,
+                        file_pointer: None,
+                        folder_entry: Some(fe),
+                    })
+                } else {
+                    None
+                };
+
+                if let Some(entry) = bin_entry {
+                    crate::fuse::spawn_bin_entry_publish(
+                        fs.api.clone(),
+                        fs.rt.clone(),
+                        entry,
+                        fs.private_key.clone(),
+                        fs.public_key.to_vec(),
+                        fs.publish_coordinator.clone(),
+                    );
+                }
+            } else {
+                log::warn!(
+                    "cleanup delete: missing parent IPNS name for parent ino {}, skipping bin publish",
+                    parent_ino
+                );
             }
         } else {
             // Non-delete cleanup: flush dirty file handles
@@ -831,4 +978,5 @@ pub(crate) mod implementation {
         );
         Ok(())
     }
+
 }

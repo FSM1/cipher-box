@@ -65,6 +65,7 @@ See `.planning/archive/m1-ROADMAP.md` for full M1 phase details and plan lists.
 - [x] **Phase 15.1: Client-Side Search** - Encrypted search index in IndexedDB with incremental updates (INSERTED) -- COMPLETE 2026-02-24
 - [x] **Phase 16: Advanced Sync** - Conflict detection via optimistic concurrency on IPNS folder publishes -- COMPLETE 2026-03-03
 - [x] **Phase 17: Recycle Bin** - Soft-delete with time-limited retention, file/folder recovery, and manual bin emptying -- COMPLETE 2026-03-04
+- [x] **Phase 17.1: Recycle Bin Integration Fixes** - Fix bin permanent delete CID unpinning and Windows desktop bin bypass -- COMPLETE 2026-03-05
 
 ### Milestone 3: Encrypted Productivity Suite (Planned)
 
@@ -490,11 +491,32 @@ Plans:
 - [x] 17-04-PLAN.md — Desktop FUSE bin integration (Rust bin crypto module, HKDF derivation, ECIES encrypt/decrypt, bin entry creation in handle_unlink/handle_rmdir)
 - [x] 17-05-PLAN.md — E2E test suites: Playwright web recycle bin workflow + desktop-e2e FUSE delete-to-bin recovery scripts
 
+### Phase 17.1: Recycle Bin Integration Fixes (INSERTED)
+
+**Goal**: Fix two cross-phase integration gaps found by milestone audit: (1) bin permanent delete cannot unpin file CIDs because encrypted file metadata is parsed as plain JSON, and (2) Windows desktop deletes bypass the recycle bin entirely
+**Depends on**: Phase 17 (Recycle Bin)
+**Requirements**: BIN-03 (full), BIN-05 (full) — completing partial satisfaction from Phase 17
+**Gap Closure**: Closes GAP-1 (CRITICAL) and GAP-2 (MODERATE) from v1.0-production-MILESTONE-AUDIT.md
+**Research flag**: Skip — root causes identified in audit, fix approaches defined
+**Success Criteria** (what must be TRUE):
+
+1. Permanently deleting a bin item unpins the file's IPFS CID and reclaims storage quota
+2. Windows desktop file/folder deletion creates bin entries (parity with macOS/Linux)
+3. E2E tests verify CID unpinning on permanent delete and Windows bin entry creation
+
+**Plans:** 3 plans
+
+Plans:
+
+- [x] 17.1-01-PLAN.md — GAP-1 fix: BinEntry schema + contentCid/contentSize capture at soft-delete + unpinFileCids rewrite
+- [x] 17.1-02-PLAN.md — GAP-2 fix: Windows handle_cleanup bin entry creation (file + folder parity with macOS/Linux)
+- [x] 17.1-03-PLAN.md — E2E tests: quota reclaim verification + Windows PowerShell bin test script + build verification
+
 ## Progress
 
 **Execution Order:**
 
-Sequential order: 12 -> 12.5 -> 12.6 -> 12.1 -> 11.2 -> 13 -> 14 -> 15 -> 15.1 -> 16 -> 17 -> 18 -> 19 -> 20 -> 21 -> 22
+Sequential order: 12 -> 12.5 -> 12.6 -> 12.1 -> 11.2 -> 13 -> 14 -> 15 -> 15.1 -> 16 -> 17 -> 17.1 -> 18 -> 19 -> 20 -> 21 -> 22
 
 Parallel phases:
 
@@ -541,6 +563,7 @@ Parallel phases:
 | 11.3 Linux Desktop          | M2        | 3/3            | Complete    | 2026-02-28 |
 | 11.4 Cross-Platform E2E     | M2        | 3/3            | Complete    | 2026-02-28 |
 | 17. Recycle Bin             | M2        | 5/5            | Complete    | 2026-03-04 |
+| 17.1 Bin Integration Fixes  | M2        | 3/3            | Complete    | 2026-03-05 |
 | 18. Billing Infrastructure  | M3        | 0/TBD          | Not started | -          |
 | 19. Team Accounts           | M3        | 0/TBD          | Not started | -          |
 | 20. Document Editors        | M3        | 0/TBD          | Not started | -          |

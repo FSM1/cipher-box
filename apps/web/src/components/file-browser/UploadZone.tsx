@@ -1,6 +1,8 @@
 import { useCallback, useState } from 'react';
 import { useDropzone, FileRejection } from 'react-dropzone';
 import { useDropUpload, MAX_FILE_SIZE } from '../../hooks/useDropUpload';
+import { useUploadStore } from '../../stores/upload.store';
+import { ReplaceFileDialog } from './ReplaceFileDialog';
 import '../../styles/upload.css';
 
 type UploadZoneProps = {
@@ -29,6 +31,7 @@ type UploadZoneProps = {
 export function UploadZone({ folderId, onUploadComplete }: UploadZoneProps) {
   const { handleFileDrop, isUploading } = useDropUpload();
   const [error, setError] = useState<string | null>(null);
+  const pendingReplacements = useUploadStore((s) => s.pendingReplacements);
 
   const handleDrop = useCallback(
     async (acceptedFiles: File[], rejectedFiles: FileRejection[]) => {
@@ -98,6 +101,12 @@ export function UploadZone({ folderId, onUploadComplete }: UploadZoneProps) {
             &times;
           </button>
         </div>
+      )}
+      {pendingReplacements.length > 0 && (
+        <ReplaceFileDialog
+          replacements={pendingReplacements}
+          onComplete={() => onUploadComplete?.()}
+        />
       )}
     </div>
   );

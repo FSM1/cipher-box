@@ -3,6 +3,7 @@ import { useFileUpload } from './useFileUpload';
 import { useFolder } from './useFolder';
 import { unpinFromIpfs } from '../lib/api/ipfs';
 import { useUploadStore } from '../stores/upload.store';
+import type { PendingReplacement } from '../stores/upload.store';
 import { useQuotaStore } from '../stores/quota.store';
 import { useFolderStore } from '../stores/folder.store';
 import type { UploadedFile } from '../services/upload.service';
@@ -47,21 +48,6 @@ export function useDropUpload() {
         return false;
       }
 
-      // Check for duplicate names in target folder
-      const folder = useFolderStore.getState().folders[folderId];
-      if (folder) {
-        const existingNames = new Set(folder.children.map((c) => c.name));
-        const duplicates = files.filter((f) => existingNames.has(f.name));
-        if (duplicates.length > 0) {
-          useUploadStore
-            .getState()
-            .setError(
-              `File${duplicates.length > 1 ? 's' : ''} already exist${duplicates.length === 1 ? 's' : ''} in this folder: ${duplicates.map((f) => f.name).join(', ')}`
-            );
-          return false;
-        }
-      }
-
       // Check for duplicates within batch (independent of folder cache)
       const batchNames = new Set<string>();
       for (const f of files) {
@@ -72,6 +58,34 @@ export function useDropUpload() {
         batchNames.add(f.name);
       }
 
+      // Identify which files already exist in the target folder
+      const folder = useFolderStore.getState().folders[folderId];
+      const existingByName = new Map<string, string>(); // name → fileId
+      const existingFolderNames = new Set<string>();
+      if (folder) {
+        for (const child of folder.children) {
+          if (child.type === 'file') {
+            existingByName.set(child.name, child.id);
+          } else if (child.type === 'folder') {
+            existingFolderNames.add(child.name);
+          }
+        }
+      }
+
+      // Fail fast on file–folder name collisions (no Replace/Skip for folders)
+      const folderNameConflicts = files.filter((f) => existingFolderNames.has(f.name));
+      if (folderNameConflicts.length > 0) {
+        useUploadStore
+          .getState()
+          .setError(
+            `Cannot upload file(s) with the same name as an existing folder: ${folderNameConflicts.map((f) => f.name).join(', ')}`
+          );
+        return false;
+      }
+
+      const newFiles = files.filter((f) => !existingByName.has(f.name));
+      const duplicateFiles = files.filter((f) => existingByName.has(f.name));
+
       let uploadedFiles: UploadedFile[] | undefined;
       try {
         uploadedFiles = await upload(files);
@@ -81,18 +95,53 @@ export function useDropUpload() {
         // Build file index for mimeType lookup
         const filesByName = new Map(files.map((f) => [f.name, f]));
 
-        await addFiles(
-          folderId,
-          uploadedFiles.map((uploaded) => ({
-            cid: uploaded.cid,
-            wrappedKey: uploaded.wrappedKey,
-            iv: uploaded.iv,
-            originalName: uploaded.originalName,
-            originalSize: uploaded.originalSize,
-            mimeType: filesByName.get(uploaded.originalName)?.type || 'application/octet-stream',
-            encryptionMode: uploaded.encryptionMode,
-          }))
-        );
+        // Build uploaded file index by name for quick lookup
+        const uploadedByName = new Map(uploadedFiles.map((u) => [u.originalName, u]));
+
+        // Register only genuinely new files in the folder
+        if (newFiles.length > 0) {
+          const newUploaded = newFiles
+            .map((f) => uploadedByName.get(f.name))
+            .filter((u): u is UploadedFile => !!u);
+
+          await addFiles(
+            folderId,
+            newUploaded.map((uploaded) => ({
+              cid: uploaded.cid,
+              wrappedKey: uploaded.wrappedKey,
+              iv: uploaded.iv,
+              originalName: uploaded.originalName,
+              originalSize: uploaded.originalSize,
+              mimeType: filesByName.get(uploaded.originalName)?.type || 'application/octet-stream',
+              encryptionMode: uploaded.encryptionMode,
+            }))
+          );
+        }
+
+        // Surface duplicates as pending replacements for the UI to handle
+        if (duplicateFiles.length > 0) {
+          const replacements: PendingReplacement[] = duplicateFiles
+            .map((f) => {
+              const uploaded = uploadedByName.get(f.name);
+              const existingFileId = existingByName.get(f.name);
+              if (!uploaded || !existingFileId) return null;
+              return {
+                fileName: f.name,
+                fileId: existingFileId,
+                parentId: folderId,
+                encryptedData: {
+                  cid: uploaded.cid,
+                  wrappedKey: uploaded.wrappedKey,
+                  iv: uploaded.iv,
+                  size: uploaded.originalSize,
+                  encryptionMode: uploaded.encryptionMode,
+                },
+              };
+            })
+            .filter((r): r is PendingReplacement => r !== null);
+
+          useUploadStore.getState().setPendingReplacements(replacements);
+        }
 
         useUploadStore.getState().setSuccess();
         return true;

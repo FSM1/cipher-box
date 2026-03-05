@@ -645,6 +645,7 @@ export function useFolderMutations() {
             parentPath: buildFolderPath(parentId),
             userPublicKey: auth.vaultKeypair.publicKey,
             userPrivateKey: auth.vaultKeypair.privateKey,
+            folderKey: parentFolder.folderKey,
           }).catch(() => {
             console.error('[Delete] Failed to add to bin (non-blocking)');
           });
@@ -764,6 +765,7 @@ export function useFolderMutations() {
             parentPath,
             userPublicKey: auth.vaultKeypair.publicKey,
             userPrivateKey: auth.vaultKeypair.privateKey,
+            folderKey: parentFolder.folderKey,
           }).catch(() => {
             console.error('[Delete] Failed to add batch to bin (non-blocking)');
           });

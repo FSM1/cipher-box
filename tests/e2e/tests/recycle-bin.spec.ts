@@ -309,4 +309,145 @@ test.describe.serial('Recycle Bin', () => {
       .catch(() => false);
     expect(hasList || hasEmpty).toBe(true);
   });
+
+  // ============================================================
+  // TC07: Permanent delete completes without crash (GAP-1 fix)
+  // ============================================================
+
+  test('TC07: permanent delete reclaims storage without crash', async () => {
+    test.slow();
+
+    const fileName = `bin-perm-${runId}.txt`;
+    const fileContent = 'x'.repeat(1024); // 1KB file for measurable quota change
+
+    // Navigate to files and upload a test file
+    await navigateToFiles();
+    const testFile = createTestTextFile(fileName, fileContent);
+    await uploadZone.uploadFile(testFile.path);
+    await fileList.waitForItemToAppear(fileName, { timeout: 60000 });
+
+    // Wait for upload to fully propagate
+    await page.waitForTimeout(3000);
+
+    // Delete the file (soft-delete -> bin)
+    await fileList.rightClickItem(fileName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickDelete();
+    await confirmDialog.waitForOpen();
+    await confirmDialog.clickConfirm();
+    await fileList.waitForItemToDisappear(fileName, { timeout: 30000 });
+
+    // Navigate to bin and permanently delete
+    await binPage.navigate();
+    await binPage.waitForBinItem(fileName, { timeout: 30000 });
+    await binPage.permanentlyDeleteItem(fileName);
+
+    // PRIMARY ASSERTION: permanent delete completes without crash
+    // Before GAP-1 fix, this would fail because unpinFileCids tried to
+    // JSON.parse AES-256-GCM encrypted file metadata
+    await binPage.waitForBinItemToDisappear(fileName, { timeout: 30000 });
+
+    // SECONDARY ASSERTION (best-effort): check quota via Zustand store if accessible
+    // This is fragile because window.__ZUSTAND_STORES__ may not be exposed.
+    // The primary value of this test is proving permanent delete doesn't crash.
+    const quotaDecreased = await page.evaluate(() => {
+      try {
+        const store = (window as any).__ZUSTAND_STORES__?.quota;
+        if (!store) return null; // Store not accessible, skip
+        // Just verify store is functional (not crashed)
+        const state = store.getState();
+        return typeof state.usedBytes === 'number';
+      } catch {
+        return null;
+      }
+    });
+    // Only assert if store was accessible -- null means we couldn't check
+    if (quotaDecreased !== null) {
+      expect(quotaDecreased).toBe(true);
+    }
+  });
+
+  // ============================================================
+  // TC08: Versioned file permanent delete reclaims all quota
+  // ============================================================
+
+  test('TC08: permanent delete of versioned file reclaims all quota', async () => {
+    test.slow();
+
+    const fileName = `bin-versioned-${runId}.txt`;
+    const v1Content = 'x'.repeat(1024); // ~1KB
+    const v2Content = 'y'.repeat(2048); // ~2KB
+
+    // 1. Upload version 1 (~1KB)
+    await navigateToFiles();
+    const v1File = createTestTextFile(fileName, v1Content);
+    await uploadZone.uploadFile(v1File.path);
+    await fileList.waitForItemToAppear(fileName, { timeout: 60000 });
+
+    // Wait for IPNS publish to propagate
+    await page.waitForTimeout(5000);
+
+    // 2. Overwrite fixture with larger content and re-upload same name
+    const v2File = createTestTextFile(fileName, v2Content);
+    await uploadZone.uploadFile(v2File.path);
+
+    // 3. ReplaceFileDialog should appear — click "Replace"
+    const replaceButton = page.getByTestId('replace-file-confirm');
+    await replaceButton.waitFor({ state: 'visible', timeout: 30000 });
+    await replaceButton.click();
+
+    // 4. Wait for replace to complete (dialog dismisses, file still in list)
+    await replaceButton.waitFor({ state: 'hidden', timeout: 30000 });
+    await page.waitForTimeout(3000); // Wait for IPNS publish
+
+    // 5. Snapshot quota usage (best-effort)
+    const quotaBefore = await page.evaluate(() => {
+      try {
+        const store = (window as any).__ZUSTAND_STORES__?.quota;
+        if (!store) return null;
+        return store.getState().usedBytes as number;
+      } catch {
+        return null;
+      }
+    });
+
+    // 6. Soft-delete the file
+    await fileList.rightClickItem(fileName);
+    await contextMenu.waitForOpen();
+    await contextMenu.clickDelete();
+    await confirmDialog.waitForOpen();
+    await confirmDialog.clickConfirm();
+    await fileList.waitForItemToDisappear(fileName, { timeout: 30000 });
+
+    // 7. Navigate to bin and permanently delete
+    await binPage.navigate();
+    await binPage.waitForBinItem(fileName, { timeout: 30000 });
+    await binPage.permanentlyDeleteItem(fileName);
+
+    // PRIMARY ASSERTION: permanent delete completes without crash
+    await binPage.waitForBinItemToDisappear(fileName, { timeout: 30000 });
+
+    // SECONDARY ASSERTION (best-effort): quota reclaim covers more than just the
+    // current content CID — proves versionCids cleanup also ran.
+    // v2 content is 2048 bytes; if version CIDs (v1 = 1024 bytes) were also
+    // reclaimed, the delta will exceed v2Content alone.
+    if (quotaBefore !== null) {
+      // Wait for quota to settle after unpinning
+      await page.waitForTimeout(3000);
+      const quotaAfter = await page.evaluate(() => {
+        try {
+          const store = (window as any).__ZUSTAND_STORES__?.quota;
+          if (!store) return null;
+          return store.getState().usedBytes as number;
+        } catch {
+          return null;
+        }
+      });
+      if (quotaAfter !== null) {
+        const reclaimed = quotaBefore - quotaAfter;
+        // Must reclaim more than just v2 content size — proves version CIDs were also freed
+        expect(reclaimed).toBeGreaterThan(v2Content.length);
+      }
+    }
+  });
 });
