@@ -381,7 +381,7 @@ export type FileVersionEntry = {
 
 ### Version Retention Strategy
 
-Since file versions are pinned on IPFS (via Pinata), they consume storage quota. Need a configurable retention policy:
+Since file versions are pinned on IPFS, they consume storage quota. Need a configurable retention policy:
 
 | Strategy             | Implementation                                             |
 | -------------------- | ---------------------------------------------------------- |
@@ -411,7 +411,7 @@ Since file versions are pinned on IPFS (via Pinata), they consume storage quota.
 
 ### Confidence: HIGH
 
-Version history is purely a metadata schema extension plus Pinata pin management. The existing stack handles everything needed.
+Version history is purely a metadata schema extension plus IPFS pin management. The existing stack handles everything needed.
 
 ---
 
@@ -678,7 +678,7 @@ totp_secrets (if CipherBox-level TOTP)
 | Job               | Queue           | Purpose                                        |
 | ----------------- | --------------- | ---------------------------------------------- |
 | `share.notify`    | `notifications` | Notify recipient of new share                  |
-| `version.cleanup` | `maintenance`   | Unpin expired version CIDs from Pinata         |
+| `version.cleanup` | `maintenance`   | Unpin expired version CIDs from IPFS           |
 | `search.reindex`  | `client-tasks`  | Trigger client-side reindex after bulk changes |
 | `nitro.republish` | `republish`     | Route to Nitro when Phala is unavailable       |
 

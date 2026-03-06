@@ -6,19 +6,18 @@ files:
   - apps/api/src/ipfs/ipfs.module.ts
   - apps/api/src/ipfs/providers/ipfs-provider.interface.ts
   - apps/api/src/ipfs/providers/local.provider.ts
-  - apps/api/src/ipfs/providers/pinata.provider.ts
   - apps/api/.env.example
   - apps/web/src/lib/api/ipfs.ts
 ---
 
 ## Problem
 
-Currently CipherBox supports two IPFS providers: Pinata (production default) and a local Kubo node (dev/testing). Both are configured server-side via environment variables (`IPFS_PROVIDER`, `IPFS_LOCAL_API_URL`). There is no way for end users to bring their own IPFS node — the choice is made by the server operator, not the individual user.
+Currently CipherBox uses a self-hosted Kubo node for IPFS, configured server-side via environment variables (`IPFS_LOCAL_API_URL`). There is no way for end users to bring their own IPFS node — the choice is made by the server operator, not the individual user.
 
 For a zero-knowledge privacy tool, users may want to:
 
 - Pin their encrypted data to their own IPFS node (self-sovereignty)
-- Use a preferred pinning service other than Pinata (e.g., web3.storage, Filebase, nft.storage)
+- Use a preferred pinning service (e.g., web3.storage, Filebase, nft.storage)
 - Run a personal Kubo/IPFS node at home and have CipherBox pin directly to it
 - Avoid relying on a third-party pinning service entirely
 

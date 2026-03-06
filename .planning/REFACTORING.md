@@ -54,7 +54,7 @@
 
 - [x] **Status:** DONE
 - **Files:** `apps/api/src/auth/auth.service.ts`
-- **Problem:** 6 distinct responsibilities, cross-domain dependencies (IPFS/Pinata in auth)
+- **Problem:** 6 distinct responsibilities, cross-domain dependencies (IPFS in auth)
 - **Fix:** Split into `AuthService` (core), `AuthMethodService`, `AccountService`, `TestAuthService`
 
 ### 2.3 Split `SharesService` (569 lines)

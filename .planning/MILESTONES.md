@@ -52,7 +52,7 @@
 
 - Web3Auth authentication (email, OAuth, magic link, external wallet)
 - Client-side AES-256-GCM encryption + ECIES key wrapping
-- IPFS file storage via Pinata with IPNS metadata
+- IPFS file storage via Kubo with IPNS metadata
 - Full file/folder CRUD with 20-level folder hierarchy
 - File browser web UI with terminal aesthetic
 - Multi-device sync via IPNS polling (30s interval)

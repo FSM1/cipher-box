@@ -1,178 +1,177 @@
 # External Integrations
 
-**Analysis Date:** 2026-01-20
+**Analysis Date:** 2026-03-06
 
 ## Project Status
 
-CipherBox is a **technology demonstrator** with integrations split between:
-- **Implemented (PoC)**: Local IPFS daemon, optional Pinata
-- **Planned (Production)**: Web3Auth, PostgreSQL, Pinata, TEE providers
+CipherBox is a **technology demonstrator** with the following integrations implemented:
+
+- **IPFS (Kubo)**: File storage and IPNS publishing (`apps/api/src/ipfs/`)
+- **Web3Auth MPC Core Kit**: Authentication and key derivation (`apps/web/src/lib/web3auth/`)
+- **PostgreSQL**: User/vault metadata storage (`apps/api/src/`)
+- **Redis/BullMQ**: Job queue for background tasks (`apps/api/src/`)
+- **TEE (Phala Cloud)**: IPNS republishing (`tee-worker/`)
 
 ## APIs & External Services
 
-**IPFS/IPNS (Implemented in PoC):**
+**IPFS/IPNS (Implemented):**
+
 - Local IPFS daemon (Kubo) - File storage and IPNS publishing
-  - SDK/Client: `ipfs-http-client` 60.0.1
-  - Connection: `IPFS_API_URL` env var (default: http://127.0.0.1:5001)
-  - Gateway: `IPFS_GATEWAY_URL` env var (optional)
-  - Usage: `00-Preliminary-R&D/poc/src/index.ts`
+  - Provider: `apps/api/src/ipfs/providers/local.provider.ts`
+  - Connection: `KUBO_API_URL` env var (default: `http://127.0.0.1:5001`)
+  - Upload: `POST /ipfs/upload` (multipart/form-data, field `file`)
+  - Fetch: `GET /ipfs/:cid`
+  - Unpin: `POST /ipfs/unpin`
 
-**Pinata (Implemented in PoC, optional):**
-- Remote IPFS pinning service - Persistent file storage
-  - SDK/Client: Native `fetch` API
-  - Auth: `PINATA_API_KEY`, `PINATA_API_SECRET` env vars
-  - Toggle: `PINATA_ENABLED=true`
-  - Endpoints used:
-    - `POST https://api.pinata.cloud/pinning/pinByHash` - Pin CID
-    - `DELETE https://api.pinata.cloud/pinning/unpin/{cid}` - Unpin CID
-  - Usage: `pinataPin()`, `pinataUnpin()` in `00-Preliminary-R&D/poc/src/index.ts`
+- Delegated routing (delegated-ipfs.dev) - IPNS record publishing and resolution
+  - Client: `apps/api/src/ipns/delegated-routing.client.ts`
+  - Publish: `POST /ipns/publish`, `POST /ipns/publish-batch`
+  - Resolve: `GET /ipns/resolve`
+  - Retry: Exponential backoff (3 retries, 1s base, 30s cap)
 
-**Web3Auth (Planned - Not Implemented):**
+**Web3Auth (Implemented):**
+
 - Authentication and key derivation - User identity
-  - SDK/Client: `@web3auth/modal` (planned)
-  - Auth methods: Google, Apple, GitHub, Email, Magic Link, External Wallet
+  - SDK/Client: `@web3auth/mpc-core-kit` (`apps/web/src/lib/web3auth/`)
+  - Auth methods: Email OTP, Google OAuth, Magic Link, External Wallet
   - JWKS endpoint: `https://api-auth.web3auth.io/jwks`
-  - Key feature: Group connections for deterministic keypair derivation
-  - Spec: `00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md` Section 2
+  - Backend validation: `apps/api/src/auth/strategies/web3auth-jwt.strategy.ts`
+  - Key feature: MPC-based deterministic keypair derivation with device factor MFA
 
-**TEE Providers (Planned - Not Implemented):**
+**TEE Providers (Implemented):**
+
 - Trusted Execution Environment for IPNS republishing
 
-**Phala Cloud (Primary):**
-- TEE-based IPNS key decryption and signing
-  - Cost: ~$0.10/hr
-  - Features: Intel SGX hardware attestation, on-chain verification
-  - Latency: 12-30s per republish
-  - Spec: `00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md` Section 9
+**Phala Cloud (Primary — Implemented):**
 
-**AWS Nitro Enclaves (Fallback):**
-- Backup TEE provider
-  - Cost: ~$0.17-0.50/hr
-  - Features: AWS custom silicon, AWS attestation API
-  - Latency: <100ms per republish
+- TEE-based IPNS key decryption and signing
+  - Worker: `tee-worker/src/`
+  - Features: Intel SGX hardware attestation
+  - Schedule: Every 6 hours via backend cron
+  - Enrollment: `apps/api/src/republish/republish.service.ts`
+
+**AWS Nitro Enclaves (Planned Fallback):**
+
+- Backup TEE provider (not yet implemented)
 
 ## Data Storage
 
-**Databases (Planned):**
-- PostgreSQL - User accounts, vaults, tokens, audit logs
-  - Tables: users, refresh_tokens, auth_nonces, vaults, volume_audit, pinned_cids, ipns_republish_schedule, tee_key_state, tee_key_rotation_log, ipfs_operations_log
-  - Spec: `00-Preliminary-R&D/Documentation/API_SPECIFICATION.md` Section 4
+**PostgreSQL (Implemented):**
 
-**File Storage:**
-- IPFS Network - Encrypted file content (decentralized)
-- Pinata - Managed pinning (ensures availability)
-- Local filesystem (PoC only) - State persistence in `./state/`
+- User accounts, vaults, tokens, audit logs
+  - ORM: TypeORM (`apps/api/src/`)
+  - Migrations: `apps/api/src/migrations/`
+  - Key entities: users, vaults, refresh_tokens, pinned_cids, ipns_republish_schedule, shares, device_approvals
+  - Protocol: `docs/DATABASE_EVOLUTION_PROTOCOL.md`
+
+**Redis (Implemented):**
+
+- BullMQ job queue for background tasks
+  - Connection: `REDIS_URL` env var
+  - Used by: `apps/api/src/` for async job processing
+
+**IPFS (Implemented):**
+
+- Encrypted file content storage (decentralized)
+  - Kubo node for pinning and availability
+  - All content is ciphertext (zero-knowledge)
 
 **Caching:**
-- None implemented in PoC
-- Planned: In-memory metadata cache, disk-based encrypted content cache (desktop)
+
+- API: In-memory IPNS resolution cache with DB-cached CID fallback
+- Desktop: In-memory metadata cache with background refresh (`apps/desktop/src-tauri/src/fuse/`)
 
 ## Authentication & Identity
 
-**Auth Provider (Planned):**
-- Web3Auth - Primary authentication
-  - Implementation: Two-phase auth (Web3Auth + CipherBox backend)
+**Web3Auth (Implemented):**
+
+- Primary authentication and key derivation
+  - Implementation: Two-phase auth (Web3Auth MPC Core Kit + CipherBox backend JWT)
   - Token types:
     - Web3Auth ID Token (1 hour) - For backend authentication
     - CipherBox Access Token (15 min) - API authorization
     - CipherBox Refresh Token (7 days) - Token renewal
-  - Spec: `00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md` Section 2
+  - Details: `docs/AUTHENTICATION_ARCHITECTURE.md`
 
-**PoC Authentication:**
-- Local private key from `.env` - No external auth
-- secp256k1 keypair derived locally using `@noble/secp256k1`
+**Test Authentication (Dev/Staging Only):**
+
+- `POST /auth/test-login` - Bypasses real auth for E2E testing
+  - Guarded by `TEST_LOGIN_SECRET` env var and `NODE_ENV !== 'production'`
 
 ## Monitoring & Observability
 
-**Error Tracking:**
-- None implemented
+**API Metrics (Implemented):**
+
+- Prometheus metrics: `apps/api/src/metrics/`
+- Health check: `GET /health`
+
+**Web App:**
+
+- No error tracking service (see CONCERNS.md)
+- Console logging only
 
 **Logs:**
-- Console logging only (PoC)
-- Planned: `ipfs_operations_log` table for IPFS/IPNS operation tracking
 
-**Monitoring (Planned):**
-- Republish success rate monitoring
-- TEE response latency tracking
-- Epoch rotation lag monitoring
+- API: NestJS structured logger
+- Web: Console.\* calls (tech debt)
+- Desktop: Rust `log` crate
 
 ## CI/CD & Deployment
 
-**Hosting:**
-- Not deployed (PoC runs locally)
-- Planned: Web app hosting TBD, Backend hosting TBD
+**CI Pipeline (Implemented):**
 
-**CI Pipeline:**
-- GitHub Actions (`.github/` directory present, contents not examined)
+- GitHub Actions (`.github/workflows/`)
+  - `ci.yml` - Lint, typecheck, unit tests on PRs
+  - `ci-e2e.yml` - Playwright E2E tests on `main` pushes
+  - `deploy-staging.yml` - Deploy on `v*-staging*` tags
+  - `release-please.yml` - Automated releases on `main`
+
+**Staging (Implemented):**
+
+- VPS: 76.13.151.200 (Hostinger)
+- API: `https://api-staging.cipherbox.cc`
+- Web: `https://app-staging.cipherbox.cc`
+- Deploy: Push tag `v<version>-staging-rc-<N>`
+
+**Production:**
+
+- Not yet deployed
 
 ## Environment Configuration
 
-**Required env vars (PoC):**
-- `ECDSA_PRIVATE_KEY` - 32-byte hex string (no 0x prefix)
+**API (`apps/api/.env.example`):**
 
-**Optional env vars (PoC):**
-- `IPFS_API_URL` - IPFS daemon endpoint
-- `IPFS_GATEWAY_URL` - IPFS gateway URL
-- `PINATA_ENABLED` - Enable Pinata integration
-- `PINATA_API_KEY` - Pinata authentication
-- `PINATA_API_SECRET` - Pinata authentication
-- `POC_STATE_DIR` - State persistence directory
-- `IPNS_POLL_INTERVAL_MS` - Polling interval (default: 1500)
-- `IPNS_POLL_TIMEOUT_MS` - Polling timeout (default: 120000)
-- `STRESS_CHILDREN_COUNT` - Stress testing (default: 0)
-- `STRESS_CHILD_TYPE` - Stress test type (file/folder)
+- `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE` - PostgreSQL connection
+- `REDIS_HOST`, `REDIS_PORT` - Redis connection (for BullMQ)
+- `IPFS_LOCAL_API_URL`, `IPFS_LOCAL_GATEWAY_URL` - IPFS Kubo daemon endpoints
+- `JWT_SECRET` - Access token signing
+- `CORS_ALLOWED_ORIGINS` - Allowed origins (comma-separated, supports wildcards)
+- `DELEGATED_ROUTING_URL` - IPNS delegated routing endpoint
+- `TEE_WORKER_URL`, `TEE_WORKER_SECRET` - TEE worker connection
+- `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL` - Email OTP delivery
+
+**Web (`apps/web/.env.example`):**
+
+- `VITE_API_URL` - Backend API URL
+- `VITE_WEB3AUTH_CLIENT_ID` - Web3Auth project ID
+- `VITE_WEB3AUTH_VERIFIER` - Web3Auth verifier name
 
 **Secrets location:**
-- `.env` file (local development)
-- Environment variables (production, planned)
+
+- `.env` files (local development)
+- GitHub Actions secrets/vars (CI/CD)
+- Docker Compose `.env` (staging)
 
 ## Webhooks & Callbacks
 
 **Incoming:**
+
 - None
 
 **Outgoing:**
+
 - None
-
-## IPFS/IPNS Integration Details
-
-**IPFS Operations (from PoC):**
-```typescript
-// Adding content
-const { cid } = await ctx.ipfs.add(content, { pin: false });
-
-// Fetching content
-const data = await collectChunks(ctx.ipfs.cat(cid));
-
-// Pinning
-await ctx.ipfs.pin.add(cid);
-await ctx.ipfs.pin.rm(cid);
-
-// Key management
-await ctx.ipfs.key.gen(keyName, { type: "ed25519" });
-await ctx.ipfs.key.rm(keyName);
-```
-
-**IPNS Operations (from PoC):**
-```typescript
-// Publishing
-await ctx.ipfs.name.publish(`/ipfs/${cid}`, {
-    key: ipnsKeyName,
-    allowOffline: true,
-});
-
-// Resolving
-for await (const result of ctx.ipfs.name.resolve(ipnsName, { nocache: true })) {
-    // Extract CID from result
-}
-```
-
-**Production Relay Model (Planned):**
-- Client signs IPNS records locally
-- Backend relays signed records to IPFS network
-- Backend never sees plaintext IPNS private keys
-- Spec: `00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md` Section 5
 
 ---
 
-*Integration audit: 2026-01-20*
+Integration audit: 2026-03-06

@@ -22,7 +22,7 @@ CipherBox requires isolated environments to prevent cross-environment interferen
 | **Local Dev**  | Kubo (offline) | Sapphire Devnet  | Mock service           | Local Postgres      | **Disabled**         | Full                       |
 | **CI E2E**     | Kubo (offline) | Sapphire Devnet  | Mock service (per-run) | Ephemeral Postgres  | **Disabled**         | Full per-run               |
 | **Staging**    | Kubo (online)  | Sapphire Devnet  | delegated-ipfs.dev     | Managed Postgres    | **Active** (testnet) | Shared with Local/CI users |
-| **Production** | Pinata         | Sapphire Mainnet | delegated-ipfs.dev     | Production Postgres | **Active** (mainnet) | Full                       |
+| **Production** | Kubo (managed) | Sapphire Mainnet | delegated-ipfs.dev     | Production Postgres | **Active** (mainnet) | Full                       |
 
 ## Solution: Environment-Aware Key Derivation
 
@@ -292,8 +292,7 @@ JWT_SECRET=${{ secrets.JWT_SECRET_STAGING }}
 **Infrastructure:**
 
 - Managed PostgreSQL (AWS RDS / Cloud SQL / etc.)
-- Pinata for IPFS pinning (redundant, managed)
-- Optional: Self-hosted Kubo cluster for reads
+- Kubo for IPFS pinning (self-hosted or managed)
 
 **Configuration:**
 
@@ -305,8 +304,7 @@ VITE_ENVIRONMENT=production  # Network is derived from this (see web3auth/config
 
 CIPHERBOX_ENVIRONMENT=production
 NODE_ENV=production
-IPFS_PROVIDER=pinata
-PINATA_JWT=${{ secrets.PINATA_JWT }}
+IPFS_LOCAL_API_URL=http://ipfs:5001
 DELEGATED_ROUTING_URL=https://delegated-ipfs.dev
 JWT_SECRET=${{ secrets.JWT_SECRET_PRODUCTION }}
 ```
@@ -315,7 +313,7 @@ JWT_SECRET=${{ secrets.JWT_SECRET_PRODUCTION }}
 
 - **Separate Web3Auth Project** (Sapphire Mainnet)
 - Different client ID (complete user isolation from dev/staging)
-- Pinata for production-grade IPFS pinning
+- Kubo for production-grade IPFS pinning
 - Environment context: `production`
 
 ## Web3Auth Project Setup
@@ -412,7 +410,7 @@ export const web3AuthOptions: Web3AuthOptions = {
 | `NODE_ENV`              | development     | test           | production            | production         |
 | `CIPHERBOX_ENVIRONMENT` | local           | ci             | staging               | production         |
 | `DB_DATABASE`           | cipherbox_local | cipherbox_ci   | cipherbox_staging     | cipherbox_prod     |
-| `IPFS_PROVIDER`         | local           | local          | local                 | pinata             |
+| `IPFS_PROVIDER`         | local           | local          | local                 | local              |
 | `DELEGATED_ROUTING_URL` | localhost:3001  | localhost:3001 | delegated-ipfs.dev    | delegated-ipfs.dev |
 | `JWT_SECRET`            | dev-secret      | ci-secret      | secrets.JWT_STAGING   | secrets.JWT_PROD   |
 | `TEE_ENABLED`           | **false**       | **false**      | true                  | true               |
