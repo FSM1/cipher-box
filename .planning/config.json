@@ -1,8 +1,21 @@
 {
   "mode": "interactive",
-  "depth": "comprehensive",
+  "granularity": "fine",
   "parallelization": true,
   "commit_docs": true,
   "created": "2026-01-20",
-  "notes": "Start interactive, can switch to YOLO once confident"
+  "notes": "Start interactive, can switch to YOLO once confident",
+  "model_profile": "quality",
+  "workflow": {
+    "research": true,
+    "plan_check": true,
+    "verifier": true,
+    "auto_advance": false,
+    "nyquist_validation": true
+  },
+  "git": {
+    "branching_strategy": "phase",
+    "phase_branch_template": "phase-{phase}-{slug}",
+    "milestone_branch_template": "{milestone}-{slug}"
+  }
 }
