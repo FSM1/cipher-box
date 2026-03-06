@@ -34,7 +34,6 @@ All files in `00-Preliminary-R&D/Documentation/` are **FINALIZED** specification
 | [API_SPECIFICATION.md](../00-Preliminary-R&D/Documentation/API_SPECIFICATION.md)           | Backend endpoints, database schema         |
 | [DATA_FLOWS.md](../00-Preliminary-R&D/Documentation/DATA_FLOWS.md)                         | Sequence diagrams, test vectors            |
 | [CLIENT_SPECIFICATION.md](../00-Preliminary-R&D/Documentation/CLIENT_SPECIFICATION.md)     | Web UI, desktop app specs                  |
-| [IMPLEMENTATION_ROADMAP.md](../00-Preliminary-R&D/Documentation/IMPLEMENTATION_ROADMAP.md) | Week-by-week development plan              |
 
 ---
 
@@ -152,11 +151,11 @@ const encryptedFile = await crypto.subtle.encrypt(
 const encryptedFileKey = await eciesEncrypt(fileKey, userPublicKey);
 
 // 4. Upload encrypted file to backend → IPFS → get CID
-const { cid } = await api.post('/vault/upload', {
-  encryptedFile: new Blob([encryptedFile]),
-  // NOTE: fileName is NOT sent — the server never sees plaintext file names
-  iv: bytesToHex(fileIV),
-});
+// Endpoint: POST /ipfs/upload (multipart/form-data with 'file' field)
+const formData = new FormData();
+formData.append('file', new Blob([encryptedFile]));
+const { cid } = await api.post('/ipfs/upload', formData);
+// NOTE: No fileName sent — the server never sees plaintext file names
 
 // 5. Add to folder metadata (all encrypted)
 const fileEntry = {
@@ -317,7 +316,6 @@ if (error.response?.status === 401) {
 - [README.md](../README.md) - Project overview, features, tech stack
 - [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) - Encryption hierarchy, key derivation, threat model
 - [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md) - Local setup, running, testing
-- [00-Preliminary-R&D/Documentation/IMPLEMENTATION_ROADMAP.md](../00-Preliminary-R&D/Documentation/IMPLEMENTATION_ROADMAP.md) - 12-week development timeline
 - [00-Preliminary-R&D/Documentation/PRD.md](../00-Preliminary-R&D/Documentation/PRD.md) - Product requirements, user journeys, scope
 - [00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md](../00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md) - Encryption, key hierarchy, system design
 - [00-Preliminary-R&D/Documentation/API_SPECIFICATION.md](../00-Preliminary-R&D/Documentation/API_SPECIFICATION.md) - Backend endpoints, database schema

@@ -165,11 +165,11 @@
 
 ## Missing Critical Features
 
-**No automated tests:**
+**Test coverage below target thresholds:**
 
-- Problem: Zero test files (no .test.ts or .spec.ts files found)
-- Blocks: Cannot verify correctness; cannot refactor safely; 85% coverage target unreachable
-- Files: No test configuration (no `jest.config.*`, `vitest.config.*`)
+- Problem: Tests exist across all workspaces (API: Jest, Web: Vitest, Crypto: Vitest, E2E: Playwright) but coverage has not yet reached the 85% line / 80% branch targets
+- Blocks: Cannot confidently refactor critical paths; coverage gaps in crypto edge cases
+- Files: `apps/api/jest.config.js`, `apps/web/vitest.config.ts`, `packages/crypto/vitest.config.ts`, `tests/e2e/`
 
 **No error recovery:**
 

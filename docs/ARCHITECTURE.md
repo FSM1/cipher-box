@@ -73,7 +73,7 @@ Keys below the VaultKey are either **randomly generated** or **HKDF-derived**, t
     ├── File Pointer Entries ────────────────────────────────────────────┐
     │     name (encrypted)           ◄── only visible after              │
     │     timestamps (encrypted)         decrypting metadata             │
-    │     ipnsName (k51...)  ────────────────────────────────────────────┤
+    │     fileMetaIpnsName (k51...)  ─────────────────────────────────────┤
     │          │                                                        │
     │          ▼                                                        │
     │     File Metadata (per-file IPNS record, encrypted JSON)          │
