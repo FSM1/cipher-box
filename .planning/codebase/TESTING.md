@@ -112,13 +112,13 @@ CipherBox shall employ a **Test Pyramid** approach with comprehensive coverage a
 - Database: Test database, reset between test suites
 - Secrets: Test JWT keys, mock Web3Auth tokens
 
-**Frontend E2E Tests (Cypress/Puppeteer):**
+**Frontend E2E Tests (Playwright):**
 
 - Run on: Developer machines, CI runners, **staging environment**
 - Dependencies: Frontend app + Backend API + Database (full stack)
 - Database: Seeded with test fixtures, reset to snapshot between spec files
 - Browsers: Chrome (primary), Firefox, Edge
-- Parallelization: Parallel specs via Cypress Cloud
+- Parallelization: Parallel workers via Playwright
 
 **TEE Tests:**
 
@@ -127,7 +127,7 @@ CipherBox shall employ a **Test Pyramid** approach with comprehensive coverage a
 
 ### Framework Requirements
 
-_Note: This section specifies framework choices and requirements. Concrete configuration files and implementation examples will be created when the testing infrastructure is implemented._
+_Note: This section describes the framework choices in use. The testing infrastructure is implemented across all workspaces._
 
 **Backend (NestJS):**
 
@@ -138,9 +138,8 @@ _Note: This section specifies framework choices and requirements. Concrete confi
 
 **Frontend (React):**
 
-- E2E Framework: Cypress (recommended) or Puppeteer
-- Component Testing: Cypress Component Testing for complex components (optional)
-- Visual Regression: Percy integration (optional)
+- E2E Framework: Playwright (`tests/e2e/`, `tests/e2e-desktop/`)
+- Visual Regression: Percy integration (optional, works with Playwright)
 
 **TEE (Rust):**
 
@@ -276,7 +275,7 @@ _Note: This section specifies framework choices and requirements. Concrete confi
 - **Stage 1: Lint & Type Check (parallel)** — ESLint (Backend + Frontend), Prettier formatting verification, TypeScript compilation check, Cargo fmt + Clippy (TEE)
 - **Stage 2: Unit Tests (parallel, no services needed)** — Backend unit tests with coverage, TEE unit tests with coverage, coverage threshold enforcement
 - **Stage 3: Integration Tests** — Backend integration tests, requires PostgreSQL service container
-- **Stage 4: E2E Tests (parallel)** — API E2E tests (full backend + database), Frontend Cypress tests (full stack), screenshot/video artifacts on failure
+- **Stage 4: E2E Tests (parallel)** — API E2E tests (full backend + database), Frontend Playwright tests (full stack), screenshot/video artifacts on failure
 - **Stage 5: Build & Deploy** — Production build verification, deploy to staging (main branch only)
 
 ### Test Data Management
@@ -294,7 +293,7 @@ _Note: This section specifies framework choices and requirements. Concrete confi
 
 - Factory functions for test entities (users, vaults, files)
 - Deterministic test keys for reproducible crypto tests
-- JSON fixtures for Cypress mock responses
+- JSON fixtures for Playwright mock responses
 
 ### Priority Test Areas
 
