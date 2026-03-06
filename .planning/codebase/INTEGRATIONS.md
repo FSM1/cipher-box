@@ -4,10 +4,13 @@
 
 ## Project Status
 
-CipherBox is a **technology demonstrator** with integrations split between:
+CipherBox is a **technology demonstrator** with the following integrations implemented:
 
-- **Implemented (PoC)**: Local IPFS daemon
-- **Planned (Production)**: Web3Auth, PostgreSQL, IPFS (Kubo), TEE providers
+- **IPFS (Kubo)**: File storage and IPNS publishing (`apps/api/src/ipfs/`)
+- **Web3Auth MPC Core Kit**: Authentication and key derivation (`apps/web/src/lib/web3auth/`)
+- **PostgreSQL**: User/vault metadata storage (`apps/api/src/`)
+- **Redis/BullMQ**: Job queue for background tasks (`apps/api/src/`)
+- **TEE (Phala Cloud)**: IPNS republishing (`tee-worker/`)
 
 ## APIs & External Services
 
@@ -19,13 +22,13 @@ CipherBox is a **technology demonstrator** with integrations split between:
   - Gateway: `IPFS_GATEWAY_URL` env var (optional)
   - Usage: `00-Preliminary-R&D/poc/src/index.ts`
 
-**Web3Auth (Planned - Not Implemented):**
+**Web3Auth (Implemented):**
 
 - Authentication and key derivation - User identity
-  - SDK/Client: `@web3auth/modal` (planned)
-  - Auth methods: Google, Apple, GitHub, Email, Magic Link, External Wallet
+  - SDK/Client: `@web3auth/mpc-core-kit` (`apps/web/src/lib/web3auth/`)
+  - Auth methods: Email OTP, Google OAuth, Magic Link, External Wallet
   - JWKS endpoint: `https://api-auth.web3auth.io/jwks`
-  - Key feature: Group connections for deterministic keypair derivation
+  - Key feature: MPC-based deterministic keypair derivation with device factor MFA
   - Spec: `00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md` Section 2
 
 **TEE Providers (Implemented — `tee-worker/`):**

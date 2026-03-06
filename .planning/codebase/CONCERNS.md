@@ -11,19 +11,12 @@
 - Impact: Makes testing individual components impossible, increases cognitive load, harder to refactor
 - Fix approach: Extract into modules (crypto.ts, ipfs.ts, folder.ts, types.ts) before building production code
 
-**No production implementation exists:**
+**Legacy POC file still present:**
 
-- Issue: Only a console POC harness exists; no backend, frontend, or desktop app code
-- Files: Only `00-Preliminary-R&D/poc/src/index.ts` contains implementation code
-- Impact: Finalized specs (v1.11.1) have no corresponding implementation; 12-week roadmap has not started
-- Fix approach: Begin Week 1 of IMPLEMENTATION_ROADMAP.md; create backend/frontend/desktop repos
-
-**Spec/Implementation version mismatch:**
-
-- Issue: CLAUDE.md has git merge conflict markers (`<<<<<<< HEAD`)
-- Files: `.claude/CLAUDE.md`
-- Impact: Unclear which version is authoritative; potential confusion for AI assistants
-- Fix approach: Resolve the merge conflict properly; remove conflict markers
+- Issue: The original 702-line monolithic POC (`00-Preliminary-R&D/poc/src/index.ts`) remains in the repo alongside the modular production code in `apps/`, `packages/`, and `tee-worker/`
+- Files: `00-Preliminary-R&D/poc/src/index.ts`, `apps/web/`, `apps/api/`, `apps/desktop/`, `tee-worker/`
+- Impact: New contributors may confuse the PoC with the current implementation. The PoC uses outdated patterns (ipfs-http-client, direct console logging)
+- Fix approach: Treat `00-Preliminary-R&D/poc/` as historical reference only; all new work goes in `apps/*`, `packages/*`, and `tee-worker/`
 
 **Console logging throughout POC:**
 

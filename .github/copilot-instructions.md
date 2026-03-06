@@ -2,12 +2,12 @@
 
 ## Version Management
 
-**Current Documentation Version:** 1.10.0
+**Current Documentation Version:** 1.11.1
 **Status:** Finalized (2026-01-20)
 
 ### ⚠️ IMPORTANT: Do Not Edit Preliminary/Documentation Files
 
-All files in `00-Preliminary-R&D/Documentation/` are **FINALIZED** specifications (version 1.10.0, status: Finalized). These documents represent the agreed-upon design and should **NOT** be modified.
+All files in `00-Preliminary-R&D/Documentation/` are **FINALIZED** specifications (version 1.11.1, status: Finalized). These documents represent the agreed-upon design and should **NOT** be modified.
 
 **If you need to make changes:**
 
@@ -154,7 +154,7 @@ const encryptedFileKey = await eciesEncrypt(fileKey, userPublicKey);
 // 4. Upload encrypted file to backend → IPFS → get CID
 const { cid } = await api.post('/vault/upload', {
   encryptedFile: new Blob([encryptedFile]),
-  fileName: file.name, // plaintext OK for server audit
+  // NOTE: fileName is NOT sent — the server never sees plaintext file names
   iv: bytesToHex(fileIV),
 });
 

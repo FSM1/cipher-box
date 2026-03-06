@@ -6,7 +6,6 @@ files:
   - apps/api/src/ipfs/ipfs.module.ts
   - apps/api/src/ipfs/providers/ipfs-provider.interface.ts
   - apps/api/src/ipfs/providers/local.provider.ts
-  - apps/api/src/ipfs/providers/local.provider.ts
   - apps/api/.env.example
   - apps/web/src/lib/api/ipfs.ts
 ---

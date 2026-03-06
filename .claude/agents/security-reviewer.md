@@ -119,7 +119,7 @@ This project implements zero-knowledge encrypted storage. Key security propertie
 
 ```text
 User Private Key (secp256k1, from Web3Auth)
-    └── Root Folder Key (derived, AES-256)
+    └── Root Folder Key (random, AES-256)
         └── Folder Keys (per-folder, AES-256)
             └── File Keys (per-file, AES-256)
 ```
