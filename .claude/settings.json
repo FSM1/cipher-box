@@ -94,9 +94,5 @@
   },
   "permissions": {
     "deny": ["Read(./.entire/metadata/**)"]
-  },
-  "statusLine": {
-    "type": "command",
-    "command": "node .claude/hooks/gsd-statusline.js"
   }
 }
