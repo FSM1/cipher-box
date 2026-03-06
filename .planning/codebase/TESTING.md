@@ -112,13 +112,13 @@ CipherBox shall employ a **Test Pyramid** approach with comprehensive coverage a
 - Database: Test database, reset between test suites
 - Secrets: Test JWT keys, mock Web3Auth tokens
 
-**Frontend E2E Tests (Cypress/Puppeteer):**
+**Frontend E2E Tests (Playwright):**
 
 - Run on: Developer machines, CI runners, **staging environment**
 - Dependencies: Frontend app + Backend API + Database (full stack)
 - Database: Seeded with test fixtures, reset to snapshot between spec files
-- Browsers: Chrome (primary), Firefox, Edge
-- Parallelization: Parallel specs via Cypress Cloud
+- Browsers: Chromium (primary), Firefox, WebKit
+- Parallelization: Playwright's built-in parallel workers
 
 **TEE Tests:**
 

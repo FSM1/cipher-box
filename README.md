@@ -75,7 +75,7 @@ cipher-box/
 │   └── desktop/          # Tauri v2 desktop app
 ├── packages/
 │   ├── crypto/           # Shared encryption library
-│   └── api-client/       # Generated typed API client
+│   └── api-client/       # OpenAPI spec; generated typed client lives in apps/web/src/api/
 ├── tee-worker/           # Phala Cloud TEE worker
 ├── tests/
 │   ├── e2e/              # Playwright E2E tests

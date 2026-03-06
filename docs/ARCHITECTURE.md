@@ -15,7 +15,7 @@ User Device ← Vault Data ← PostgreSQL
         ↓ Encrypted Keys
 IPFS (Kubo) ← Encrypted Files
         ↑
-TEE (Phala/Nitro) ← IPNS Republish (every 6h)
+TEE (Phala; Nitro fallback planned) ← IPNS Republish (every 6h)
 ```
 
 **Key Properties:**
@@ -53,7 +53,7 @@ Two paths produce the same `VaultKey` (a secp256k1 keypair):
 
 ## Encryption Hierarchy
 
-Every key below the VaultKey is **randomly generated** (not derived) and **ECIES-wrapped** with the user's public key. Compromising one file key reveals nothing about other file keys.
+Keys below the VaultKey are either **randomly generated** or **HKDF-derived**, then **ECIES-wrapped** with the user's public key. IPNS keypairs (vault, device-registry, per-file) are derived deterministically via HKDF-SHA256 from the user's private key (see [Cryptographic Primitives](#cryptographic-primitives)). Content encryption keys (rootFolderKey, per-folder keys, per-file keys) are randomly generated. Compromising one file key reveals nothing about other file keys.
 
 ```text
     VaultKey (secp256k1 keypair)
@@ -62,7 +62,7 @@ Every key below the VaultKey is **randomly generated** (not derived) and **ECIES
     ├──────────────────────────────────────────┐
     │                                          │
     ▼                                          ▼
- rootFolderKey (random 32B)          rootIpnsPrivateKey (Ed25519)
+ rootFolderKey (random 32B)          rootIpnsPrivateKey (Ed25519, HKDF-derived)
     │                                          │
     │  AES-256-GCM decrypt                     │  Signs IPNS records
     ▼                                          ▼
@@ -70,26 +70,29 @@ Every key below the VaultKey is **randomly generated** (not derived) and **ECIES
     │
     │  Contains per-child entries:
     │
-    ├── File Entries ──────────────────────────────────────────┐
-    │     name (encrypted)        ◄── only visible after       │
-    │     size (encrypted)            decrypting metadata       │
-    │     timestamps (encrypted)                                │
-    │     fileKeyEncrypted ──── ECIES-unwrap ──► fileKey (32B) │
-    │     fileIv (12B)                              │           │
-    │     cid (IPFS ref)            AES-256-GCM decrypt        │
-    │                                               ▼          │
-    │                                        File Contents     │
-    │                                                          │
-    ├── Subfolder Entries ─────────────────────────────────────┤
-    │     name (encrypted)        ◄── only visible after       │
-    │     timestamps (encrypted)      decrypting metadata      │
-    │     folderKeyEncrypted ── ECIES-unwrap ──► folderKey     │
-    │     ipnsPrivateKeyEncrypted ─ ECIES-unwrap ► ipnsKey     │
-    │     ipnsName (k51...)                                    │
-    │          │                                               │
-    │          ▼                                               │
-    │     Subfolder Metadata (same structure, recursive)       │
-    └──────────────────────────────────────────────────────────┘
+    ├── File Pointer Entries ────────────────────────────────────────────┐
+    │     name (encrypted)           ◄── only visible after              │
+    │     timestamps (encrypted)         decrypting metadata             │
+    │     ipnsName (k51...)  ────────────────────────────────────────────┤
+    │          │                                                        │
+    │          ▼                                                        │
+    │     File Metadata (per-file IPNS record, encrypted JSON)          │
+    │         fileKeyEncrypted ─ ECIES-unwrap ──► fileKey (32B)         │
+    │         fileIv (12B)                             │                │
+    │         cid (IPFS ref)          AES-256-GCM decrypt               │
+    │                                                    ▼              │
+    │                                             File Contents          │
+    │                                                                   │
+    ├── Subfolder Entries ──────────────────────────────────────────────┤
+    │     name (encrypted)        ◄── only visible after                │
+    │     timestamps (encrypted)      decrypting metadata               │
+    │     folderKeyEncrypted ── ECIES-unwrap ──► folderKey              │
+    │     ipnsPrivateKeyEncrypted ─ ECIES-unwrap ► ipnsKey              │
+    │     ipnsName (k51...)                                             │
+    │          │                                                        │
+    │          ▼                                                        │
+    │     Subfolder Metadata (same structure, recursive)                │
+    └───────────────────────────────────────────────────────────────────┘
 ```
 
 ## Visibility Model
@@ -161,17 +164,22 @@ Every key below the VaultKey is **randomly generated** (not derived) and **ECIES
   │  6. Upload encrypted blob → IPFS (Kubo) → returns CID     │
   │         │                                                    │
   │         ▼                                                    │
-  │  7. Add to folder metadata:                                  │
-  │       { name, cid, fileKeyEncrypted, fileIv, size, ... }     │
+  │  7. Create per-file FileMetadata entry (own IPNS record):    │
+  │       { cid, fileKeyEncrypted, fileIv, size, ... }           │
   │         │                                                    │
   │         ▼                                                    │
-  │  8. Re-encrypt folder metadata with folderKey (AES-256-GCM)  │
+  │  8. Add FilePointer to folder metadata children:             │
+  │       { type: "file", nameEncrypted, nameIv,                 │
+  │         fileMetaIpnsName, ipnsPrivateKeyEncrypted? }         │
   │         │                                                    │
   │         ▼                                                    │
-  │  9. Upload encrypted metadata → IPFS → new CID              │
+  │  9. Re-encrypt folder metadata with folderKey (AES-256-GCM)  │
   │         │                                                    │
   │         ▼                                                    │
-  │ 10. Publish IPNS record: /ipns/k51... → /ipfs/<new CID>     │
+  │ 10. Upload encrypted metadata → IPFS → new CID              │
+  │         │                                                    │
+  │         ▼                                                    │
+  │ 11. Publish IPNS record: /ipns/k51... → /ipfs/<new CID>     │
   │     (signed with folder's Ed25519 private key)               │
   └──────────────────────────────────────────────────────────────┘
 ```
@@ -250,7 +258,7 @@ Client holds: Private key (RAM only)
 IPNS records expire after ~24h → backend scheduler triggers republish every 6h
 Client encrypts ipnsPrivateKey with TEE public key (ECIES)
 TEE decrypts in hardware, signs, zeroes key immediately
-Providers: Phala Cloud (primary) / AWS Nitro (fallback)
+Providers: Phala Cloud (current) / AWS Nitro (planned fallback)
 ```
 
 ## User Journey Example
