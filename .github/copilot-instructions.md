@@ -1,22 +1,5 @@
 # CipherBox AI Agent Instructions
 
-## Version Management
-
-**Current Documentation Version:** 1.11.1
-**Status:** Finalized (2026-01-20)
-
-### ⚠️ IMPORTANT: Do Not Edit Preliminary/Documentation Files
-
-All files in `00-Preliminary-R&D/Documentation/` are **FINALIZED** specifications (version 1.11.1, status: Finalized). These documents represent the agreed-upon design and should **NOT** be modified.
-
-**If you need to make changes:**
-
-- New implementation documentation should be created in a separate location
-- Working notes and updates belong in `.planning/` or project-specific directories
-- Do not modify version numbers or content in `00-Preliminary-R&D/Documentation/`
-
----
-
 ## Project Overview
 
 **CipherBox** is a **technology demonstrator** for privacy-first, zero-knowledge encrypted cloud storage using IPFS/IPNS for decentralized persistence and Web3Auth for deterministic key derivation.
@@ -25,15 +8,17 @@ All files in `00-Preliminary-R&D/Documentation/` are **FINALIZED** specification
 
 **Core Principle:** The server NEVER sees plaintext data or unencrypted keys. All encryption/decryption happens client-side.
 
-## Documentation Structure
+## Documentation
 
-| Document                                                                                   | Purpose                                    |
-| ------------------------------------------------------------------------------------------ | ------------------------------------------ |
-| [PRD.md](../00-Preliminary-R&D/Documentation/PRD.md)                                       | Product requirements, user journeys, scope |
-| [TECHNICAL_ARCHITECTURE.md](../00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md) | Encryption, key hierarchy, system design   |
-| [API_SPECIFICATION.md](../00-Preliminary-R&D/Documentation/API_SPECIFICATION.md)           | Backend endpoints, database schema         |
-| [DATA_FLOWS.md](../00-Preliminary-R&D/Documentation/DATA_FLOWS.md)                         | Sequence diagrams, test vectors            |
-| [CLIENT_SPECIFICATION.md](../00-Preliminary-R&D/Documentation/CLIENT_SPECIFICATION.md)     | Web UI, desktop app specs                  |
+| Document                                                                      | Purpose                                                        |
+| :---------------------------------------------------------------------------- | :------------------------------------------------------------- |
+| [README.md](../README.md)                                                     | Project overview, features, tech stack                         |
+| [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md)                               | Encryption hierarchy, key derivation, data flows, threat model |
+| [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md)                                 | Local setup, running, testing                                  |
+| [docs/AUTHENTICATION_ARCHITECTURE.md](../docs/AUTHENTICATION_ARCHITECTURE.md) | Auth flow details                                              |
+| [docs/METADATA_SCHEMAS.md](../docs/METADATA_SCHEMAS.md)                       | All metadata object schemas with field tables                  |
+| [docs/VAULT_EXPORT_FORMAT.md](../docs/VAULT_EXPORT_FORMAT.md)                 | Export/recovery data format                                    |
+| [docs/DATABASE_EVOLUTION_PROTOCOL.md](../docs/DATABASE_EVOLUTION_PROTOCOL.md) | Migration discipline                                           |
 
 ---
 
@@ -41,79 +26,93 @@ All files in `00-Preliminary-R&D/Documentation/` are **FINALIZED** specification
 
 ### Two-Phase Authentication Model
 
-CipherBox uses a **mandatory two-phase auth flow** that must be understood before implementing any auth-related features:
+CipherBox uses a **mandatory two-phase auth flow**:
 
-1. **Phase 1 (Web3Auth):** User authenticates → Web3Auth derives ECDSA secp256k1 keypair via threshold cryptography
-2. **Phase 2 (CipherBox Backend):** Client authenticates with backend using either:
-   - **Option A:** Web3Auth ID token (JWT) validated via JWKS endpoint
-   - **Option B:** SIWE-like signature flow (nonce-based)
+1. **Phase 1 (Web3Auth MPC Core Kit):** User authenticates via email OTP, Google OAuth, magic link, or external wallet. Web3Auth derives an ECDSA secp256k1 keypair via MPC threshold cryptography. MFA is handled via device factors.
+2. **Phase 2 (CipherBox Backend):** Client authenticates with the backend using a Web3Auth ID token (JWT) validated via JWKS. The backend issues its own access/refresh token pair.
 
-**Key Insight:** The ECDSA keypair from Phase 1 is the user's identity. Web3Auth's "group connections" feature ensures that Google OAuth, email/password, magic links, and external wallet auth all derive the **same keypair** for the same user.
+**Key Insight:** The ECDSA keypair from Phase 1 is the user's identity. Web3Auth ensures the same user always derives the same keypair regardless of auth method (when methods resolve to the same CipherBox `userId`).
+
+See [docs/AUTHENTICATION_ARCHITECTURE.md](../docs/AUTHENTICATION_ARCHITECTURE.md) for full details.
 
 ### Zero-Knowledge Key Hierarchy
 
 ```text
-User Auth → Web3Auth → ECDSA Private Key (client RAM only, never transmitted)
+User Auth → Web3Auth MPC Core Kit → ECDSA Private Key (client RAM only, never transmitted)
                     ├─ Used for ECIES decryption of all data keys
-                    ├─ Used to decrypt IPNS signing keys (Ed25519)
+                    ├─ Used to derive IPNS signing keys (Ed25519, HKDF)
                     └─ Destroyed on logout
 
 ECDSA Public Key (stored on server, identifies user)
     └─ Used to encrypt (ECIES):
-        ├─ Root Folder Key (AES-256, stored encrypted on server)
-        ├─ Subfolder Keys (AES-256, stored encrypted in parent IPNS metadata)
-        └─ File Keys (AES-256, stored encrypted in folder IPNS metadata)
+        ├─ Root Folder Key (random AES-256, stored encrypted on server)
+        ├─ Subfolder Keys (random AES-256, stored encrypted in parent folder metadata)
+        └─ File Keys (random AES-256, stored encrypted in per-file metadata)
+
+IPNS Keypairs (Ed25519, HKDF-derived from private key)
+    ├─ Vault IPNS (root folder metadata pointer)
+    ├─ Device Registry IPNS
+    └─ Per-file IPNS (file metadata pointer)
 ```
 
 **Critical Rule:** Never log, persist to disk, or transmit the ECDSA private key. It exists ONLY in client memory during the session.
 
-### Per-Folder IPNS Architecture
+### v2 Folder Metadata with FilePointers
 
-Each folder has its own IPNS entry containing encrypted metadata. This design enables future per-folder sharing (v2+).
+Each folder has its own IPNS entry. Files use a v2 `FilePointer` schema — the folder stores a slim reference, and per-file crypto material lives in a dedicated IPNS record.
 
-**Folder Metadata Structure:**
+See [docs/METADATA_SCHEMAS.md](../docs/METADATA_SCHEMAS.md) for the full schema reference including `FolderMetadata`, `FilePointer`, `FileMetadata`, and all other metadata objects.
 
-```typescript
-interface DecryptedFolderMetadata {
-  children: Array<{
-    type: 'file' | 'folder';
-    nameEncrypted: string; // AES-256-GCM(name, folderKey)
-    nameIv: string;
-    cid?: string; // For files: IPFS CID
-    ipnsName?: string; // For folders: IPNS name
-    fileKeyEncrypted?: string; // ECIES(fileKey, userPubkey)
-    subfolderKeyEncrypted?: string; // ECIES(folderKey, userPubkey)
-    size?: number;
-    created: number;
-    modified: number;
-  }>;
-}
-```
+## Technology Stack
 
-**When modifying files/folders:** Always re-encrypt and republish the containing folder's IPNS entry.
-
-## Technology Stack & Standards
+| Component          | Technology                                       |
+| :----------------- | :----------------------------------------------- |
+| **Frontend**       | React 18 + TypeScript + Tailwind CSS             |
+| **Backend**        | Node.js + NestJS + TypeScript                    |
+| **Database**       | PostgreSQL 16                                    |
+| **Job Queue**      | BullMQ + Redis                                   |
+| **Key Derivation** | Web3Auth MPC Core Kit (`@web3auth/mpc-core-kit`) |
+| **Storage**        | IPFS via Kubo                                    |
+| **Desktop**        | Tauri v2 + FUSE-T (macOS, SMB backend)           |
+| **TEE**            | Phala Cloud (IPNS republishing)                  |
+| **Crypto**         | Web Crypto API (AES-256-GCM, ECIES secp256k1)    |
 
 ### Encryption Primitives (Non-Negotiable)
 
-| Algorithm           | Use Case                            | Implementation                |
-| ------------------- | ----------------------------------- | ----------------------------- |
-| **AES-256-GCM**     | File content + metadata encryption  | Web Crypto API / libsodium.js |
-| **ECIES secp256k1** | Key wrapping (files, folders)       | ethers.js / libsodium.js      |
-| **ECDSA secp256k1** | IPNS signing, user identity         | Web3Auth / ethers.js          |
-| **HKDF-SHA256**     | Key derivation                      | Web Crypto API                |
-| **Argon2**          | Password hashing (server-side only) | argon2-browser                |
+| Algorithm           | Use Case                            | Implementation |
+| ------------------- | ----------------------------------- | -------------- |
+| **AES-256-GCM**     | File content + metadata encryption  | Web Crypto API |
+| **AES-256-CTR**     | Streaming encryption (large files)  | Web Crypto API |
+| **ECIES secp256k1** | Key wrapping (files, folders, IPNS) | eciesjs        |
+| **HKDF-SHA256**     | IPNS keypair derivation             | Web Crypto API |
+| **Ed25519**         | IPNS record signing                 | @noble/ed25519 |
 
 **Never use:** Custom crypto, CBC mode, ECB mode, MD5, SHA1
 
-### Target Tech Stack (v1.0)
+## API Endpoints (Actual Implementation)
 
-- **Frontend:** React 18 + TypeScript + Tailwind CSS
-- **Backend:** Node.js + NestJS + TypeScript
-- **Database:** PostgreSQL (users, vaults, audit trail)
-- **Storage:** IPFS via Kubo
-- **Auth:** Web3Auth Modal SDK (@web3auth/modal)
-- **Desktop:** Tauri/Electron + FUSE (macFUSE/FUSE3/WinFSP)
+| Endpoint                          | Method | Purpose                                     |
+| :-------------------------------- | :----- | :------------------------------------------ |
+| `/auth/identity/google`           | POST   | Google OAuth authentication                 |
+| `/auth/identity/email/send-otp`   | POST   | Send email OTP                              |
+| `/auth/identity/email/verify-otp` | POST   | Verify email OTP                            |
+| `/auth/identity/wallet/nonce`     | GET    | Get nonce for wallet auth                   |
+| `/auth/identity/wallet`           | POST   | Wallet signature authentication             |
+| `/vault`                          | GET    | Get vault data                              |
+| `/vault/init`                     | POST   | Initialize vault (first-time setup)         |
+| `/vault/config`                   | GET    | Get vault configuration                     |
+| `/vault/export`                   | GET    | Generate vault export                       |
+| `/vault/quota`                    | GET    | Get storage quota                           |
+| `/ipfs/upload`                    | POST   | Upload encrypted file (multipart/form-data) |
+| `/ipfs/unpin`                     | POST   | Unpin CID from IPFS                         |
+| `/ipfs/:cid`                      | GET    | Fetch file by CID                           |
+| `/ipns/publish`                   | POST   | Publish IPNS record                         |
+| `/ipns/publish-batch`             | POST   | Batch publish IPNS records                  |
+| `/ipns/resolve`                   | GET    | Resolve IPNS name to CID                    |
+| `/device-approval/request`        | POST   | Request device approval                     |
+| `/device-approval/pending`        | GET    | Get pending approvals                       |
+| `/shares`                         | POST   | Create a share                              |
+| `/shares/received`                | GET    | Get received shares                         |
 
 ## Development Patterns
 
@@ -121,24 +120,22 @@ interface DecryptedFolderMetadata {
 
 When working on `apps/api` code:
 
-1. **After modifying API endpoints, DTOs, or controllers**, regenerate the API client to keep the web app in sync:
+1. **After modifying API endpoints, DTOs, or controllers**, regenerate the API client:
 
    ```bash
    pnpm api:generate
    ```
 
-   This command generates the OpenAPI spec from the API, creates the typed client for the web app, and runs lint fixes.
-
-2. **Always run `pnpm api:generate` before completing a feature** that touches the API to ensure type safety across the monorepo.
+2. **Always run `pnpm api:generate` before completing a feature** that touches the API.
 
 3. **Commit the regenerated client files** (`apps/web/src/api/`) along with your API changes.
 
-### File Upload Flow (Reference Implementation)
+### File Upload Flow (Reference)
 
 ```typescript
 // 1. Generate random file key
 const fileKey = crypto.getRandomValues(new Uint8Array(32));
-const fileIV = crypto.getRandomValues(new Uint8Array(12)); // GCM uses 96-bit IV
+const fileIV = crypto.getRandomValues(new Uint8Array(12));
 
 // 2. Encrypt file content
 const encryptedFile = await crypto.subtle.encrypt(
@@ -151,26 +148,19 @@ const encryptedFile = await crypto.subtle.encrypt(
 const encryptedFileKey = await eciesEncrypt(fileKey, userPublicKey);
 
 // 4. Upload encrypted file to backend → IPFS → get CID
-// Endpoint: POST /ipfs/upload (multipart/form-data with 'file' field)
+// POST /ipfs/upload (multipart/form-data with 'file' field)
 const formData = new FormData();
 formData.append('file', new Blob([encryptedFile]));
 const { cid } = await api.post('/ipfs/upload', formData);
 // NOTE: No fileName sent — the server never sees plaintext file names
 
-// 5. Add to folder metadata (all encrypted)
-const fileEntry = {
-  type: 'file',
-  nameEncrypted: await aesEncrypt(file.name, folderKey),
-  nameIv: crypto.getRandomValues(new Uint8Array(12)),
-  cid,
-  fileKeyEncrypted: encryptedFileKey,
-  fileIv: bytesToHex(fileIV),
-  size: file.size,
-  created: Date.now(),
-  modified: Date.now(),
-};
+// 5. Create per-file FileMetadata (own IPNS record)
+// Contains: cid, fileKeyEncrypted, fileIv, size, etc.
 
-// 6. Re-encrypt folder metadata and republish IPNS
+// 6. Add FilePointer to folder metadata children
+// Contains: type, nameEncrypted, nameIv, fileMetaIpnsName
+
+// 7. Re-encrypt folder metadata and republish IPNS
 await republishFolderIPNS(folderId, updatedMetadata);
 ```
 
@@ -180,248 +170,81 @@ Every write operation (create/rename/move/delete) must:
 
 1. Update the in-memory folder metadata
 2. Re-encrypt the entire metadata JSON with the folder key
-3. Sign the encrypted metadata with ECDSA private key
-4. Call `POST /vault/publish-ipns` with signed entry
+3. Upload encrypted metadata to IPFS → get new CID
+4. Publish IPNS record: `/ipns/k51...` → `/ipfs/<new CID>`
 
-**Performance Note:** IPNS publishing is the bottleneck (~2s). Batch operations when possible (e.g., multi-file upload should publish once at the end).
-
-### Session Token Management
-
-```typescript
-// Access tokens (15min, memory only)
-const accessToken = response.data.accessToken;
-// Store in: React context / Zustand / Redux (never localStorage)
-
-// Refresh tokens (7 days, secure storage)
-const refreshToken = response.data.refreshToken;
-// Store in: HTTP-only cookie (preferred) OR encrypted localStorage
-
-// Token refresh pattern
-if (error.response?.status === 401) {
-  const newAccessToken = await refreshAccessToken();
-  // Retry original request with new token
-}
-```
+**Performance Note:** IPNS publishing is the bottleneck (~2s). Batch operations when possible.
 
 ## Common Pitfalls & Anti-Patterns
 
-### ❌ Never Do This
+### Never Do This
 
-1. **Storing keys in plaintext localStorage**
+1. **Store keys in plaintext localStorage** — use in-memory state only
+2. **Log sensitive data** — no `console.log` of keys, decrypted content
+3. **Send plaintext to server** — all file content and names must be encrypted client-side
+4. **Send file names to server** — the server is zero-knowledge, it never sees plaintext names
+5. **Use sync crypto in main thread** — use Web Workers for large files
 
-   ```typescript
-   // WRONG
-   localStorage.setItem('privateKey', privateKeyHex);
-   ```
+### Correct Patterns
 
-2. **Logging sensitive data**
-
-   ```typescript
-   // WRONG
-   console.log('User private key:', privateKey);
-   console.log('Decrypted file:', fileContent);
-   ```
-
-3. **Sending plaintext to server**
-
-   ```typescript
-   // WRONG
-   await api.post('/vault/upload', { fileContent: file });
-   ```
-
-4. **Using sync crypto in main thread**
-
-   ```typescript
-   // WRONG (blocks UI for large files)
-   const encrypted = aesEncryptSync(largeFile, key);
-   ```
-
-### ✅ Correct Patterns
-
-1. **Store keys in memory, clear on logout**
-
-   ```typescript
-   // React context for session-scoped state
-   const [ecdsaPrivateKey, setEcdsaPrivateKey] = useState<Uint8Array | null>(null);
-
-   const logout = () => {
-     setEcdsaPrivateKey(null); // Cleared from memory
-     // No disk persistence
-   };
-   ```
-
+1. **Store keys in memory, clear on logout** (React context / Zustand)
 2. **Use Web Workers for large file encryption**
-
-   ```typescript
-   const worker = new Worker('./crypto-worker.js');
-   worker.postMessage({ fileData, key });
-   worker.onmessage = (e) => {
-     const encrypted = e.data;
-   };
-   ```
-
-3. **Always validate IPNS signatures client-side**
-
-   ```typescript
-   const messageHash = await sha256(signedEntry.encryptedMetadata);
-   const isValid = await ecdsaVerify(messageHash, signedEntry.signature, userPubkey);
-   if (!isValid) throw new Error('Metadata tampering detected');
-   ```
+3. **Use `Uint8Array` for all binary data**, not strings
+4. **Use `camelCase` for API fields, `snake_case` for database columns**
 
 ## MVP Scope Boundaries (v1.0)
 
-### ✅ In Scope
+### In Scope
 
-- Multi-method auth (email/pass, OAuth, magic link, external wallet)
+- Multi-method auth (email OTP, Google OAuth, magic link, external wallet)
 - File upload/download (E2E encrypted)
 - Folder operations (create/rename/move/delete)
-- Web UI (React)
-- Desktop mount (macOS FUSE only for v1.0)
+- Web UI (React) + Desktop mount (macOS FUSE via Tauri v2)
 - Multi-device sync (IPNS polling, ~30s latency)
 - Vault export (data portability)
+- TEE-based IPNS republishing (Phala Cloud)
 
-### ❌ Out of Scope (defer to v1.1+)
+### Out of Scope (defer to v1.1+)
 
 - Billing/payments
 - File versioning
-- Folder sharing
 - Search/indexing
 - Mobile apps
-- Linux/Windows desktop (v1.1)
+- Linux/Windows desktop
 
-**When users request out-of-scope features:** Acknowledge the value, but clarify they're post-MVP. Suggest workarounds if applicable.
-
-## Testing Requirements
+## Testing
 
 ### Security Test Checklist
 
 - [ ] Private key never logged (search logs for "privateKey", "ecdsa", "0x04")
 - [ ] Private key never in localStorage/sessionStorage
 - [ ] All file uploads: server receives ciphertext only
-- [ ] All folder names: encrypted in IPNS metadata
+- [ ] All folder/file names: encrypted in metadata, never sent plaintext
 - [ ] IPNS signature verification passes
 - [ ] Wrong private key cannot decrypt vault
 
-### Performance Benchmarks (P95)
+### Running Tests
 
-- Auth flow: <3s
-- File upload (<100MB): <5s
-- File download (<100MB): <5s
-- IPNS publish: <2s
-- Folder create: <1s
-- Multi-device sync latency: <30s
-
-## Key Files & Documentation
-
-- [README.md](../README.md) - Project overview, features, tech stack
-- [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) - Encryption hierarchy, key derivation, threat model
-- [docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md) - Local setup, running, testing
-- [00-Preliminary-R&D/Documentation/PRD.md](../00-Preliminary-R&D/Documentation/PRD.md) - Product requirements, user journeys, scope
-- [00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md](../00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md) - Encryption, key hierarchy, system design
-- [00-Preliminary-R&D/Documentation/API_SPECIFICATION.md](../00-Preliminary-R&D/Documentation/API_SPECIFICATION.md) - Backend endpoints, database schema
-- [00-Preliminary-R&D/Documentation/DATA_FLOWS.md](../00-Preliminary-R&D/Documentation/DATA_FLOWS.md) - Sequence diagrams, test vectors
-- [00-Preliminary-R&D/Documentation/CLIENT_SPECIFICATION.md](../00-Preliminary-R&D/Documentation/CLIENT_SPECIFICATION.md) - Web UI, desktop app specs
-
-**For detailed crypto flows:** See TECHNICAL_ARCHITECTURE.md (key hierarchy, encryption primitives) and DATA_FLOWS.md (sequence diagrams, test vectors)
-
-## API Conventions (When Backend Exists)
-
-### Expected Endpoints
-
-- `POST /auth/login` - Authenticate with Web3Auth ID token or SIWE signature
-- `GET /auth/nonce` - Get nonce for SIWE flow
-- `POST /auth/refresh` - Refresh access token
-- `GET /my-vault` - Get encrypted root key + IPNS name
-- `POST /my-vault/initialize` - Create vault (first-time setup)
-- `POST /vault/upload` - Upload encrypted file → IPFS → return CID
-- `POST /vault/publish-ipns` - Publish signed IPNS entry
-- `POST /vault/export` - Generate vault export JSON
-
-### Response Patterns
-
-```typescript
-// Success
-{ success: true, data: { cid: "QmXxxx..." } }
-
-// Error
-{ success: false, error: { code: "VAULT_NOT_INITIALIZED", message: "..." } }
+```bash
+pnpm test              # Unit tests (all workspaces)
+pnpm test:e2e          # Playwright E2E (Playwright starts API/web automatically)
+pnpm typecheck         # TypeScript type checking
 ```
 
-## Web3Auth Integration Notes
-
-### Group Connections Setup (Dashboard)
-
-Configure in Web3Auth dashboard to link multiple auth methods:
-
-```text
-cipherbox-aggregate (group ID)
-  ├─ google (Google OAuth)
-  ├─ email_passwordless (Magic Link)
-  ├─ auth0 (Email/Password via Auth0)
-  └─ external_wallets (MetaMask, WalletConnect)
-```
-
-### Client Integration
-
-```typescript
-import { Web3Auth } from '@web3auth/modal';
-
-const web3auth = new Web3Auth({
-  clientId: 'YOUR_CLIENT_ID',
-  web3AuthNetwork: 'sapphire_mainnet', // or testnet
-  chainConfig: {
-    chainNamespace: 'eip155',
-    chainId: '0x1', // Ethereum mainnet (or any chain)
-  },
-});
-
-await web3auth.initModal();
-const web3authProvider = await web3auth.connect();
-
-// Get private key (use sparingly, clear from memory ASAP)
-const privateKey = await web3authProvider.request({
-  method: 'eth_private_key',
-});
-
-// Get ID token for CipherBox backend auth
-const { idToken } = await web3auth.authenticateUser();
-```
-
-## Verification Requirements
+## Verification with MCP Tools
 
 ### Playwright MCP for Application Testing
 
-**ALWAYS attempt to verify application changes using Playwright MCP** when it is available. This ensures implemented features work correctly at runtime.
-
-**Verification workflow:**
-
-1. Navigate to the app URL (typically `http://localhost:5173`)
-2. Wait for page elements to load
-3. Capture screenshots for visual verification
-4. Verify element existence and content
-5. Test interactive features (clicks, form submissions)
-6. Verify computed styles match design specifications
+**ALWAYS attempt to verify application changes using Playwright MCP** when available.
 
 **If Playwright MCP is not available:**
 
 - Document what needs manual verification
 - Provide step-by-step test instructions
-- Flag items that require human review
 
-### Pencil Design Verification
+### Pencil MCP for Design Work
 
-For UI work, verify implementations against Pencil design files:
-
-1. **Design files are at:** `designs/*.pen` (JSON format)
-2. **Extract exact values:** Colors (hex), spacing (pixels), typography
-3. **Verify CSS matches:** Check both source CSS and computed styles
-4. **Document discrepancies:** Include file/line references for fixes
-
-**Key design specs:**
-
-- Colors: `#000000` (background), `#00D084` (primary green)
-- Font: JetBrains Mono (400, 600, 700 weights)
-- Spacing: 8px, 12px, 16px, 24px, 32px scale
+For UI work, verify implementations against Pencil design files at `designs/*.pen`.
 
 ## Questions to Ask When Unclear
 
@@ -433,6 +256,6 @@ For UI work, verify implementations against Pencil design files:
 
 ## Final Note
 
-This project prioritizes **cryptographic correctness over convenience**. When in doubt, err on the side of more encryption, more validation, and stricter security. The target user (cypherpunks, crypto enthusiasts) values privacy guarantees more than UX polish.
+This project prioritizes **cryptographic correctness over convenience**. When in doubt, err on the side of more encryption, more validation, and stricter security.
 
-**For detailed guidance:** Refer to [PRD.md](../00-Preliminary-R&D/Documentation/PRD.md) for product scope, [TECHNICAL_ARCHITECTURE.md](../00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md) for crypto and system design, and [DATA_FLOWS.md](../00-Preliminary-R&D/Documentation/DATA_FLOWS.md) for test vectors and sequence diagrams.
+**For detailed guidance:** See [docs/ARCHITECTURE.md](../docs/ARCHITECTURE.md) for crypto design and [docs/METADATA_SCHEMAS.md](../docs/METADATA_SCHEMAS.md) for all metadata object schemas.
