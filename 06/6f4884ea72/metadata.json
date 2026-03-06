@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "066f4884ea72",
+  "strategy": "manual-commit",
+  "branch": "docs/restructure-readme-product-docs",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/copilot-instructions.md",
+    ".planning/codebase/STACK.md",
+    ".planning/codebase/TESTING.md",
+    ".planning/todos/pending/2026-02-14-bring-your-own-ipfs-node.md",
+    "docs/DEVELOPMENT.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/06/6f4884ea72/0/metadata.json",
+      "transcript": "/06/6f4884ea72/0/full.jsonl",
+      "context": "/06/6f4884ea72/0/context.md",
+      "content_hash": "/06/6f4884ea72/0/content_hash.txt",
+      "prompt": "/06/6f4884ea72/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 17,
+    "cache_creation_tokens": 107545,
+    "cache_read_tokens": 979791,
+    "output_tokens": 7872,
+    "api_call_count": 16
+  }
+}
