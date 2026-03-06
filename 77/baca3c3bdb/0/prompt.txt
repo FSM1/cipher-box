@@ -1,0 +1,124 @@
+hmmm that status line is still not the way it was before - let me get you the original statusline.js from another machine
+
+---
+
+ok we are back - replaced the file myself
+
+---
+
+Tool loaded.
+
+---
+
+nah that was not committed, its under claude global settings
+
+---
+
+why was that PR created with a `fix` prefix? its a `chore` at best.
+
+---
+
+its already merged, but you should definitely log a memory regarding PR naming conventions and the implications of such
+
+---
+
+Tool loaded.
+
+---
+
+Tool loaded.
+
+---
+
+yeah get a PR going
+
+---
+
+ok lets get back to main
+
+---
+
+<objective>
+Interactive configuration of GSD workflow agents and model profile via multi-question prompt.
+
+Routes to the settings workflow which handles:
+
+- Config existence ensuring
+- Current settings reading and parsing
+- Interactive 5-question prompt (model, research, plan_check, verifier, branching)
+- Config merging and writing
+- Confirmation display with quick command references
+  </objective>
+
+<execution_context>
+@./.claude/get-shit-done/workflows/settings.md
+</execution_context>
+
+<process>
+**Follow the settings workflow** from `@./.claude/get-shit-done/workflows/settings.md`.
+
+The workflow handles all logic including:
+
+1. Config file creation with defaults if missing
+2. Current config reading
+3. Interactive settings presentation with pre-selection
+4. Answer parsing and config merging
+5. File writing
+6. Confirmation display
+   </process>
+
+---
+
+Tool loaded.
+
+---
+
+<objective>
+Validate `.planning/` directory integrity and report actionable issues. Checks for missing files, invalid configurations, inconsistent state, and orphaned plans.
+</objective>
+
+<execution_context>
+@./.claude/get-shit-done/workflows/health.md
+</execution_context>
+
+<process>
+Execute the health workflow from @./.claude/get-shit-done/workflows/health.md end-to-end.
+Parse --repair flag from arguments and pass to workflow.
+</process>
+
+---
+
+yeah go ahead
+
+---
+
+<objective>
+Archive phase directories from completed milestones into `.planning/milestones/v{X.Y}-phases/`.
+
+Use when `.planning/phases/` has accumulated directories from past milestones.
+</objective>
+
+<execution_context>
+@./.claude/get-shit-done/workflows/cleanup.md
+</execution_context>
+
+<process>
+Follow the cleanup workflow at @./.claude/get-shit-done/workflows/cleanup.md.
+Identify completed milestones, show a dry-run summary, and archive on confirmation.
+</process>
+
+---
+
+yeah go ahead
+
+---
+
+why does the new state.md show that there are 4 uncompleted phases and 4 uncompleted plans? is this due to the missing summary.md issues picked up earlier?
+
+---
+
+I am pretty sure that all these plans have been completed and probably only no summary.md was created. could you dig through github and try and determine what was done for these to post-factum create the missing SUMMARY.md files?
+
+---
+
+Tool loaded.

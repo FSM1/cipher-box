@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "77baca3c3bdb",
+  "strategy": "manual-commit",
+  "branch": "chore/archive-phase-directories",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/config.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/77/baca3c3bdb/0/metadata.json",
+      "transcript": "/77/baca3c3bdb/0/full.jsonl",
+      "context": "/77/baca3c3bdb/0/context.md",
+      "content_hash": "/77/baca3c3bdb/0/content_hash.txt",
+      "prompt": "/77/baca3c3bdb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1920,
+    "cache_creation_tokens": 149529,
+    "cache_read_tokens": 2619680,
+    "output_tokens": 15664,
+    "api_call_count": 67
+  }
+}
