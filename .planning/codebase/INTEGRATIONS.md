@@ -1,6 +1,6 @@
 # External Integrations
 
-**Analysis Date:** 2026-01-20
+**Analysis Date:** 2026-03-06
 
 ## Project Status
 
@@ -14,13 +14,20 @@ CipherBox is a **technology demonstrator** with the following integrations imple
 
 ## APIs & External Services
 
-**IPFS/IPNS (Implemented in PoC):**
+**IPFS/IPNS (Implemented):**
 
 - Local IPFS daemon (Kubo) - File storage and IPNS publishing
-  - SDK/Client: `ipfs-http-client` 60.0.1
-  - Connection: `IPFS_API_URL` env var (default: <http://127.0.0.1:5001>)
-  - Gateway: `IPFS_GATEWAY_URL` env var (optional)
-  - Usage: `00-Preliminary-R&D/poc/src/index.ts`
+  - Provider: `apps/api/src/ipfs/providers/local.provider.ts`
+  - Connection: `KUBO_API_URL` env var (default: `http://127.0.0.1:5001`)
+  - Upload: `POST /ipfs/upload` (multipart/form-data, field `file`)
+  - Fetch: `GET /ipfs/:cid`
+  - Unpin: `POST /ipfs/unpin`
+
+- Delegated routing (delegated-ipfs.dev) - IPNS record publishing and resolution
+  - Client: `apps/api/src/ipns/delegated-routing.client.ts`
+  - Publish: `POST /ipns/publish`, `POST /ipns/publish-batch`
+  - Resolve: `GET /ipns/resolve`
+  - Retry: Exponential backoff (3 retries, 1s base, 30s cap)
 
 **Web3Auth (Implemented):**
 
@@ -28,114 +35,131 @@ CipherBox is a **technology demonstrator** with the following integrations imple
   - SDK/Client: `@web3auth/mpc-core-kit` (`apps/web/src/lib/web3auth/`)
   - Auth methods: Email OTP, Google OAuth, Magic Link, External Wallet
   - JWKS endpoint: `https://api-auth.web3auth.io/jwks`
+  - Backend validation: `apps/api/src/auth/strategies/web3auth-jwt.strategy.ts`
   - Key feature: MPC-based deterministic keypair derivation with device factor MFA
-  - Spec: `00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md` Section 2
 
-**TEE Providers (Implemented — `tee-worker/`):**
+**TEE Providers (Implemented):**
 
 - Trusted Execution Environment for IPNS republishing
 
-**Phala Cloud (Primary):**
+**Phala Cloud (Primary — Implemented):**
 
 - TEE-based IPNS key decryption and signing
-  - Cost: ~$0.10/hr
-  - Features: Intel SGX hardware attestation, on-chain verification
-  - Latency: 12-30s per republish
-  - Spec: `00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md` Section 9
+  - Worker: `tee-worker/src/`
+  - Features: Intel SGX hardware attestation
+  - Schedule: Every 3 hours via backend cron
+  - Enrollment: `apps/api/src/republish/republish.service.ts`
 
-**AWS Nitro Enclaves (Fallback):**
+**AWS Nitro Enclaves (Planned Fallback):**
 
-- Backup TEE provider
-  - Cost: ~$0.17-0.50/hr
-  - Features: AWS custom silicon, AWS attestation API
-  - Latency: <100ms per republish
+- Backup TEE provider (not yet implemented)
 
 ## Data Storage
 
-**Databases (Planned):**
+**PostgreSQL (Implemented):**
 
-- PostgreSQL - User accounts, vaults, tokens, audit logs
-  - Tables: users, refresh_tokens, auth_nonces, vaults, volume_audit, pinned_cids, ipns_republish_schedule, tee_key_state, tee_key_rotation_log, ipfs_operations_log
-  - Spec: `00-Preliminary-R&D/Documentation/API_SPECIFICATION.md` Section 4
+- User accounts, vaults, tokens, audit logs
+  - ORM: TypeORM (`apps/api/src/`)
+  - Migrations: `apps/api/src/migrations/`
+  - Key entities: users, vaults, refresh_tokens, pinned_cids, ipns_republish_schedule, shares, device_approvals
+  - Protocol: `docs/DATABASE_EVOLUTION_PROTOCOL.md`
 
-**File Storage:**
+**Redis (Implemented):**
 
-- IPFS Network - Encrypted file content (decentralized)
-- Kubo - Local IPFS node (pinning and availability)
-- Local filesystem (PoC only) - State persistence in `./state/`
+- BullMQ job queue for background tasks
+  - Connection: `REDIS_URL` env var
+  - Used by: `apps/api/src/` for async job processing
+
+**IPFS (Implemented):**
+
+- Encrypted file content storage (decentralized)
+  - Kubo node for pinning and availability
+  - All content is ciphertext (zero-knowledge)
 
 **Caching:**
 
-- None implemented in PoC
-- Planned: In-memory metadata cache, disk-based encrypted content cache (desktop)
+- API: In-memory IPNS resolution cache with DB-cached CID fallback
+- Desktop: In-memory metadata cache with background refresh (`apps/desktop/src-tauri/src/fuse/`)
 
 ## Authentication & Identity
 
-**Auth Provider (Planned):**
+**Web3Auth (Implemented):**
 
-- Web3Auth - Primary authentication
-  - Implementation: Two-phase auth (Web3Auth + CipherBox backend)
+- Primary authentication and key derivation
+  - Implementation: Two-phase auth (Web3Auth MPC Core Kit + CipherBox backend JWT)
   - Token types:
     - Web3Auth ID Token (1 hour) - For backend authentication
     - CipherBox Access Token (15 min) - API authorization
     - CipherBox Refresh Token (7 days) - Token renewal
-  - Spec: `00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md` Section 2
+  - Details: `docs/AUTHENTICATION_ARCHITECTURE.md`
 
-**PoC Authentication:**
+**Test Authentication (Dev/Staging Only):**
 
-- Local private key from `.env` - No external auth
-- secp256k1 keypair derived locally using `@noble/secp256k1`
+- `POST /auth/test-login` - Bypasses real auth for E2E testing
+  - Guarded by `TEST_LOGIN_SECRET` env var and `NODE_ENV !== 'production'`
 
 ## Monitoring & Observability
 
-**Error Tracking:**
+**API Metrics (Implemented):**
 
-- None implemented
+- Prometheus metrics: `apps/api/src/metrics/`
+- Health check: `GET /health`
+
+**Web App:**
+
+- No error tracking service (see CONCERNS.md)
+- Console logging only
 
 **Logs:**
 
-- Console logging only (PoC)
-- Planned: `ipfs_operations_log` table for IPFS/IPNS operation tracking
-
-**Monitoring (Planned):**
-
-- Republish success rate monitoring
-- TEE response latency tracking
-- Epoch rotation lag monitoring
+- API: NestJS structured logger
+- Web: Console.\* calls (tech debt)
+- Desktop: Rust `log` crate
 
 ## CI/CD & Deployment
 
-**Hosting:**
+**CI Pipeline (Implemented):**
 
-- Not deployed (PoC runs locally)
-- Planned: Web app hosting TBD, Backend hosting TBD
+- GitHub Actions (`.github/workflows/`)
+  - `ci.yml` - Lint, typecheck, unit tests on PRs
+  - `ci-e2e.yml` - Playwright E2E tests on `main` pushes
+  - `deploy-staging.yml` - Deploy on `v*-staging*` tags
+  - `release-please.yml` - Automated releases on `main`
 
-**CI Pipeline:**
+**Staging (Implemented):**
 
-- GitHub Actions (`.github/` directory present, contents not examined)
+- VPS: 76.13.151.200 (Hostinger)
+- API: `https://api-staging.cipherbox.cc`
+- Web: `https://app-staging.cipherbox.cc`
+- Deploy: Push tag `v<version>-staging-rc-<N>`
+
+**Production:**
+
+- Not yet deployed
 
 ## Environment Configuration
 
-**Required env vars (PoC):**
+**API (`apps/api/.env.example`):**
 
-- `ECDSA_PRIVATE_KEY` - 32-byte hex string (no 0x prefix)
+- `DATABASE_URL` - PostgreSQL connection string
+- `REDIS_URL` - Redis connection string
+- `KUBO_API_URL` - IPFS daemon endpoint
+- `JWT_SECRET` - Access token signing
+- `WEB3AUTH_CLIENT_ID` - Web3Auth project ID
+- `TEE_PUBLIC_KEY` - Current TEE epoch public key
+- `CORS_ORIGINS` - Allowed origins
 
-**Optional env vars (PoC):**
+**Web (`apps/web/.env.example`):**
 
-- `IPFS_API_URL` - IPFS daemon endpoint
-- `IPFS_GATEWAY_URL` - IPFS gateway URL
-- `IPFS_LOCAL_API_URL` - Kubo API endpoint
-- `IPFS_LOCAL_GATEWAY_URL` - Kubo gateway endpoint
-- `POC_STATE_DIR` - State persistence directory
-- `IPNS_POLL_INTERVAL_MS` - Polling interval (default: 1500)
-- `IPNS_POLL_TIMEOUT_MS` - Polling timeout (default: 120000)
-- `STRESS_CHILDREN_COUNT` - Stress testing (default: 0)
-- `STRESS_CHILD_TYPE` - Stress test type (file/folder)
+- `VITE_API_URL` - Backend API URL
+- `VITE_WEB3AUTH_CLIENT_ID` - Web3Auth project ID
+- `VITE_WEB3AUTH_VERIFIER` - Web3Auth verifier name
 
 **Secrets location:**
 
-- `.env` file (local development)
-- Environment variables (production, planned)
+- `.env` files (local development)
+- GitHub Actions secrets/vars (CI/CD)
+- Docker Compose `.env` (staging)
 
 ## Webhooks & Callbacks
 
@@ -147,48 +171,6 @@ CipherBox is a **technology demonstrator** with the following integrations imple
 
 - None
 
-## IPFS/IPNS Integration Details
-
-**IPFS Operations (from PoC):**
-
-```typescript
-// Adding content
-const { cid } = await ctx.ipfs.add(content, { pin: false });
-
-// Fetching content
-const data = await collectChunks(ctx.ipfs.cat(cid));
-
-// Pinning
-await ctx.ipfs.pin.add(cid);
-await ctx.ipfs.pin.rm(cid);
-
-// Key management
-await ctx.ipfs.key.gen(keyName, { type: 'ed25519' });
-await ctx.ipfs.key.rm(keyName);
-```
-
-**IPNS Operations (from PoC):**
-
-```typescript
-// Publishing
-await ctx.ipfs.name.publish(`/ipfs/${cid}`, {
-  key: ipnsKeyName,
-  allowOffline: true,
-});
-
-// Resolving
-for await (const result of ctx.ipfs.name.resolve(ipnsName, { nocache: true })) {
-  // Extract CID from result
-}
-```
-
-**Production Relay Model (Planned):**
-
-- Client signs IPNS records locally
-- Backend relays signed records to IPFS network
-- Backend never sees plaintext IPNS private keys
-- Spec: `00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md` Section 5
-
 ---
 
-Integration audit: 2026-01-20
+Integration audit: 2026-03-06
