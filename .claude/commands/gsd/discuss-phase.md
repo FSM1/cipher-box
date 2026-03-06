@@ -1,7 +1,7 @@
 ---
 name: gsd:discuss-phase
-description: Gather phase context through adaptive questioning before planning. For UI phases, generates design mockups via Pencil MCP for ideation.
-argument-hint: '<phase>'
+description: Gather phase context through adaptive questioning before planning
+argument-hint: '<phase> [--auto]'
 allowed-tools:
   - Read
   - Write
@@ -9,7 +9,9 @@ allowed-tools:
   - Glob
   - Grep
   - AskUserQuestion
-  - mcp__pencil__*
+  - Task
+  - mcp__context7__resolve-library-id
+  - mcp__context7__query-docs
 ---
 
 <objective>
@@ -17,15 +19,14 @@ Extract implementation decisions that downstream agents need — researcher and 
 
 **How it works:**
 
-1. Analyze the phase to identify gray areas (UI, UX, behavior, etc.)
-2. **For UI phases:** Generate design mockups via Pencil MCP to visualize options
-3. Present gray areas — user selects which to discuss
-4. Deep-dive each selected area until satisfied
-5. Create CONTEXT.md with decisions that guide research and planning
+1. Load prior context (PROJECT.md, REQUIREMENTS.md, STATE.md, prior CONTEXT.md files)
+2. Scout codebase for reusable assets and patterns
+3. Analyze phase — skip gray areas already decided in prior phases
+4. Present remaining gray areas — user selects which to discuss
+5. Deep-dive each selected area until satisfied
+6. Create CONTEXT.md with decisions that guide research and planning
 
-**Output:** `{phase}-CONTEXT.md` — decisions clear enough that downstream agents can act without asking the user again
-
-**For UI phases, also outputs:** Design mockups in Pencil file (in "Draft: Phase X" frame)
+**Output:** `{phase_num}-CONTEXT.md` — decisions clear enough that downstream agents can act without asking the user again
 </objective>
 
 <execution_context>
@@ -36,24 +37,19 @@ Extract implementation decisions that downstream agents need — researcher and 
 <context>
 Phase number: $ARGUMENTS (required)
 
-**Load project state:**
-@.planning/STATE.md
-
-**Load roadmap:**
-@.planning/ROADMAP.md
+Context files are resolved in-workflow using `init phase-op` and roadmap/state tool calls.
 </context>
 
 <process>
 1. Validate phase number (error if missing or not in roadmap)
-2. **Create phase branch** — Create `feat/phase-{number}-{slug}` branch for all phase work
-3. Check if CONTEXT.md exists (offer update/view/skip if yes)
-4. **Analyze phase** — Identify domain and generate phase-specific gray areas
-5. **Detect UI phase** — If phase involves UI, prepare for design mockup generation
-6. **Present gray areas** — Multi-select: which to discuss? (NO skip option)
-7. **Deep-dive each area** — 4 questions per area, then offer more/next
-8. **For UI phases: Generate design mockups** — Create visual options in Pencil for user to choose
-9. **Write CONTEXT.md** — Sections match areas discussed, include approved designs
-10. Offer next steps (research or plan)
+2. Check if CONTEXT.md exists (offer update/view/skip if yes)
+3. **Load prior context** — Read PROJECT.md, REQUIREMENTS.md, STATE.md, and all prior CONTEXT.md files
+4. **Scout codebase** — Find reusable assets, patterns, and integration points
+5. **Analyze phase** — Check prior decisions, skip already-decided areas, generate remaining gray areas
+6. **Present gray areas** — Multi-select: which to discuss? Annotate with prior decisions + code context
+7. **Deep-dive each area** — 4 questions per area, code-informed options, Context7 for library choices
+8. **Write CONTEXT.md** — Sections match areas discussed + code_context section
+9. Offer next steps (research or plan)
 
 **CRITICAL: Scope guardrail**
 
@@ -73,22 +69,12 @@ Gray areas depend on what's being built. Analyze the phase goal:
 
 Generate 3-4 **phase-specific** gray areas, not generic categories.
 
-**UI Phase Detection:**
-Check if phase involves UI work:
-
-- Phase name contains: "UI", "restyle", "design", "layout", "component", "page", "view"
-- Phase goal mentions: visual, styling, interface, appearance, frontend, display
-- Phase involves: user-facing changes, screens, forms, dialogs
-
-If UI phase detected, enable Pencil MCP design ideation workflow.
-
 **Probing depth:**
 
 - Ask 4 questions per area before checking
 - "More questions about [area], or move to next?"
 - If more → ask 4 more, check again
 - After all areas → "Ready to create context?"
-- **For UI phases:** "Would you like me to generate design mockups based on our discussion?"
 
 **Do NOT ask about (Claude handles these):**
 
@@ -100,6 +86,7 @@ If UI phase detected, enable Pencil MCP design ideation workflow.
 
 <success_criteria>
 
+- Prior context loaded and applied (no re-asking decided questions)
 - Gray areas identified through intelligent analysis
 - User chose which areas to discuss
 - Each selected area explored until satisfied

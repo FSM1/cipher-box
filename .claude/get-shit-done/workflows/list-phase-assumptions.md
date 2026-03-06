@@ -54,39 +54,45 @@ Based on roadmap description and project context, identify assumptions across fi
 
 **1. Technical Approach:**
 What libraries, frameworks, patterns, or tools would Claude use?
+
 - "I'd use X library because..."
 - "I'd follow Y pattern because..."
 - "I'd structure this as Z because..."
 
 **2. Implementation Order:**
 What would Claude build first, second, third?
+
 - "I'd start with X because it's foundational"
 - "Then Y because it depends on X"
 - "Finally Z because..."
 
 **3. Scope Boundaries:**
 What's included vs excluded in Claude's interpretation?
+
 - "This phase includes: A, B, C"
 - "This phase does NOT include: D, E, F"
 - "Boundary ambiguities: G could go either way"
 
 **4. Risk Areas:**
 Where does Claude expect complexity or challenges?
+
 - "The tricky part is X because..."
 - "Potential issues: Y, Z"
 - "I'd watch out for..."
 
 **5. Dependencies:**
 What does Claude assume exists or needs to be in place?
+
 - "This assumes X from previous phases"
 - "External dependencies: Y, Z"
 - "This will be consumed by..."
 
 Be honest about uncertainty. Mark assumptions with confidence levels:
+
 - "Fairly confident: ..." (clear from roadmap)
 - "Assuming: ..." (reasonable inference)
 - "Unclear: ..." (could go multiple ways)
-</step>
+  </step>
 
 <step name="present_assumptions">
 Present assumptions in a clear, scannable format:
@@ -132,7 +138,7 @@ Wait for user response.
 Acknowledge the corrections:
 
 ```
-Got it. Key corrections:
+Key corrections:
 - [correction 1]
 - [correction 2]
 
@@ -142,7 +148,7 @@ This changes my understanding significantly. [Summarize new understanding]
 **If user confirms assumptions:**
 
 ```
-Great, assumptions validated.
+Assumptions validated.
 ```
 
 Continue to offer_next.
@@ -169,10 +175,11 @@ If "Re-examine": Return to analyze_phase with updated understanding
 </process>
 
 <success_criteria>
+
 - Phase number validated against roadmap
 - Assumptions surfaced across five areas: technical approach, implementation order, scope, risks, dependencies
 - Confidence levels marked where appropriate
 - "What do you think?" prompt presented
 - User feedback acknowledged
 - Clear next steps offered
-</success_criteria>
+  </success_criteria>

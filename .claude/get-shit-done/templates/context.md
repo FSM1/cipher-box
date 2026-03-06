@@ -1,12 +1,13 @@
 # Phase Context Template
 
-Template for `.planning/phases/XX-name/{phase}-CONTEXT.md` - captures implementation decisions for a phase.
+Template for `.planning/phases/XX-name/{phase_num}-CONTEXT.md` - captures implementation decisions for a phase.
 
 **Purpose:** Document decisions that downstream agents need. Researcher uses this to know WHAT to investigate. Planner uses this to know WHAT choices are locked vs flexible.
 
 **Key principle:** Categories are NOT predefined. They emerge from what was actually discussed for THIS phase. A CLI phase has CLI-relevant sections, a UI phase has UI-relevant sections.
 
 **Downstream consumers:**
+
 - `gsd-phase-researcher` — Reads decisions to focus research (e.g., "card layout" → research card component patterns)
 - `gsd-planner` — Reads decisions to create specific tasks (e.g., "infinite scroll" → task includes virtualization)
 
@@ -31,16 +32,20 @@ Template for `.planning/phases/XX-name/{phase}-CONTEXT.md` - captures implementa
 ## Implementation Decisions
 
 ### [Area 1 that was discussed]
+
 - [Specific decision made]
 - [Another decision if applicable]
 
 ### [Area 2 that was discussed]
+
 - [Specific decision made]
 
 ### [Area 3 that was discussed]
+
 - [Specific decision made]
 
 ### Claude's Discretion
+
 [Areas where user explicitly said "you decide" — Claude has flexibility here during planning/implementation]
 
 </decisions>
@@ -54,6 +59,24 @@ Template for `.planning/phases/XX-name/{phase}-CONTEXT.md` - captures implementa
 
 </specifics>
 
+<code_context>
+
+## Existing Code Insights
+
+### Reusable Assets
+
+- [Component/hook/utility]: [How it could be used in this phase]
+
+### Established Patterns
+
+- [Pattern]: [How it constrains/enables this phase]
+
+### Integration Points
+
+- [Where new code connects to existing system]
+
+</code_context>
+
 <deferred>
 ## Deferred Ideas
 
@@ -65,8 +88,8 @@ Template for `.planning/phases/XX-name/{phase}-CONTEXT.md` - captures implementa
 
 ---
 
-*Phase: XX-name*
-*Context gathered: [date]*
+_Phase: XX-name_
+_Context gathered: [date]_
 ```
 
 <good_examples>
@@ -90,20 +113,24 @@ Display posts from followed users in a scrollable feed. Users can view posts and
 ## Implementation Decisions
 
 ### Layout style
+
 - Card-based layout, not timeline or list
 - Each card shows: author avatar, name, timestamp, full post content, reaction counts
 - Cards have subtle shadows, rounded corners — modern feel
 
 ### Loading behavior
+
 - Infinite scroll, not pagination
 - Pull-to-refresh on mobile
 - New posts indicator at top ("3 new posts") rather than auto-inserting
 
 ### Empty state
+
 - Friendly illustration + "Follow people to see posts here"
 - Suggest 3-5 accounts to follow based on interests
 
 ### Claude's Discretion
+
 - Loading skeleton design
 - Exact spacing and typography
 - Error state handling
@@ -128,8 +155,8 @@ Display posts from followed users in a scrollable feed. Users can view posts and
 
 ---
 
-*Phase: 03-post-feed*
-*Context gathered: 2025-01-20*
+_Phase: 03-post-feed_
+_Context gathered: 2025-01-20_
 ```
 
 **Example 2: CLI tool (Database backup)**
@@ -151,21 +178,25 @@ CLI command to backup database to local file or S3. Supports full and incrementa
 ## Implementation Decisions
 
 ### Output format
+
 - JSON for programmatic use, table format for humans
 - Default to table, --json flag for JSON
 - Verbose mode (-v) shows progress, silent by default
 
 ### Flag design
+
 - Short flags for common options: -o (output), -v (verbose), -f (force)
 - Long flags for clarity: --incremental, --compress, --encrypt
 - Required: database connection string (positional or --db)
 
 ### Error recovery
+
 - Retry 3 times on network failure, then fail with clear message
 - --no-retry flag to fail fast
 - Partial backups are deleted on failure (no corrupt files)
 
 ### Claude's Discretion
+
 - Exact progress bar implementation
 - Compression algorithm choice
 - Temp file handling
@@ -190,8 +221,8 @@ CLI command to backup database to local file or S3. Supports full and incrementa
 
 ---
 
-*Phase: 02-backup-command*
-*Context gathered: 2025-01-20*
+_Phase: 02-backup-command_
+_Context gathered: 2025-01-20_
 ```
 
 **Example 3: Organization task (Photo library)**
@@ -213,21 +244,25 @@ Organize existing photo library into structured folders. Handle duplicates and a
 ## Implementation Decisions
 
 ### Grouping criteria
+
 - Primary grouping by year, then by month
 - Events detected by time clustering (photos within 2 hours = same event)
 - Event folders named by date + location if available
 
 ### Duplicate handling
+
 - Keep highest resolution version
-- Move duplicates to _duplicates folder (don't delete)
+- Move duplicates to \_duplicates folder (don't delete)
 - Log all duplicate decisions for review
 
 ### Naming convention
+
 - Format: YYYY-MM-DD_HH-MM-SS_originalname.ext
 - Preserve original filename as suffix for searchability
 - Handle name collisions with incrementing suffix
 
 ### Claude's Discretion
+
 - Exact clustering algorithm
 - How to handle photos with no EXIF data
 - Folder emoji usage
@@ -252,8 +287,8 @@ Organize existing photo library into structured folders. Handle duplicates and a
 
 ---
 
-*Phase: 01-photo-organization*
-*Context gathered: 2025-01-20*
+_Phase: 01-photo-organization_
+_Context gathered: 2025-01-20_
 ```
 
 </good_examples>
@@ -264,28 +299,23 @@ Organize existing photo library into structured folders. Handle duplicates and a
 The output should answer: "What does the researcher need to investigate? What choices are locked for the planner?"
 
 **Good content (concrete decisions):**
+
 - "Card-based layout, not timeline"
 - "Retry 3 times on network failure, then fail"
 - "Group by year, then by month"
 - "JSON for programmatic use, table for humans"
 
 **Bad content (too vague):**
+
 - "Should feel modern and clean"
 - "Good user experience"
 - "Fast and responsive"
 - "Easy to use"
 
-**Sections explained:**
-
-- **Domain** — The scope anchor. Copied/derived from ROADMAP.md. Fixed boundary.
-- **Decisions** — Organized by areas discussed (NOT predefined categories). Section headers come from the actual discussion — "Layout style", "Flag design", "Grouping criteria", etc.
-- **Claude's Discretion** — Explicit acknowledgment of what Claude can decide during implementation.
-- **Specifics** — Product references, examples, "like X but..." statements.
-- **Deferred** — Ideas captured but explicitly out of scope. Prevents scope creep while preserving good ideas.
-
 **After creation:**
-- File lives in phase directory: `.planning/phases/XX-name/{phase}-CONTEXT.md`
+
+- File lives in phase directory: `.planning/phases/XX-name/{phase_num}-CONTEXT.md`
 - `gsd-phase-researcher` uses decisions to focus investigation
 - `gsd-planner` uses decisions + research to create executable tasks
 - Downstream agents should NOT need to ask the user again about captured decisions
-</guidelines>
+  </guidelines>

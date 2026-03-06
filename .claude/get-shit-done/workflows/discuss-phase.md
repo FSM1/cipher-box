@@ -61,7 +61,7 @@ The phase boundary comes from ROADMAP.md and is FIXED. Discussion clarifies HOW 
 
 **When user suggests scope creep:**
 
-```text
+```
 "[Feature X] would be a new capability — that's its own phase.
 Want me to note it for the roadmap backlog?
 
@@ -87,7 +87,7 @@ Gray areas are **implementation decisions the user cares about** — things that
 
 **Don't use generic category labels** (UI, UX, Behavior). Generate specific gray areas:
 
-```text
+```
 Phase: "User authentication"
 → Session handling, Error responses, Multi-device policy, Recovery flow
 
@@ -113,18 +113,21 @@ Phase: "API documentation"
 
 <process>
 
-<step name="validate_phase" priority="first">
+**Express path available:** If you already have a PRD or acceptance criteria document, use `/gsd:plan-phase {phase} --prd path/to/prd.md` to skip this discussion and go straight to planning.
+
+<step name="initialize" priority="first">
 Phase number from argument (required).
 
-Load and validate:
+```bash
+INIT=$(node "./.claude/get-shit-done/bin/gsd-tools.cjs" init phase-op "${PHASE}")
+if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
+```
 
-- Read `.planning/ROADMAP.md`
-- Find phase entry
-- Extract: number, name, description, status
+Parse JSON for: `commit_docs`, `phase_found`, `phase_dir`, `phase_number`, `phase_name`, `phase_slug`, `padded_phase`, `has_research`, `has_context`, `has_plans`, `has_verification`, `plan_count`, `roadmap_exists`, `planning_exists`.
 
-**If phase not found:**
+**If `phase_found` is false:**
 
-```text
+```
 Phase [X] not found in roadmap.
 
 Use /gsd:progress to see available phases.
@@ -132,60 +135,20 @@ Use /gsd:progress to see available phases.
 
 Exit workflow.
 
-**If phase found:** Continue to create_phase_branch.
-</step>
-
-<step name="create_phase_branch">
-Create a dedicated branch for all phase work before any changes.
-
-```bash
-# Get current branch
-CURRENT_BRANCH=$(git branch --show-current)
-
-# Extract phase name from roadmap
-PHASE_NAME=$(grep -E "^\*?\*?Phase ${PHASE}:" .planning/ROADMAP.md | sed -E 's/.*Phase [0-9]+: //' | sed 's/\*//g' | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | cut -d'-' -f1-3)
-PADDED_PHASE=$(printf "%02d" ${PHASE})
-BRANCH_NAME="feat/phase-${PADDED_PHASE}-${PHASE_NAME}"
-
-# Check if already on this phase branch (resuming)
-if [ "$CURRENT_BRANCH" = "$BRANCH_NAME" ]; then
-  echo "Already on phase branch: $BRANCH_NAME"
-else
-  # Check if branch already exists
-  if git show-ref --verify --quiet "refs/heads/$BRANCH_NAME"; then
-    echo "Switching to existing phase branch: $BRANCH_NAME"
-    git checkout "$BRANCH_NAME"
-  else
-    echo "Creating phase branch from main: $BRANCH_NAME"
-    git checkout main
-    git pull origin main
-    git checkout -b "$BRANCH_NAME"
-  fi
-fi
-```
-
-**Skip conditions:**
-
-- Already on the correct phase branch (resuming discussion)
-
-Report: "Working on branch: {branch_name}"
-
-Continue to check_existing.
+**If `phase_found` is true:** Continue to check_existing.
 </step>
 
 <step name="check_existing">
-Check if CONTEXT.md already exists:
+Check if CONTEXT.md already exists using `has_context` from init.
 
 ```bash
-# Match both zero-padded (05-*) and unpadded (5-*) folders
-PADDED_PHASE=$(printf "%02d" ${PHASE})
-ls .planning/phases/${PADDED_PHASE}-*/CONTEXT.md .planning/phases/${PADDED_PHASE}-*/${PADDED_PHASE}-CONTEXT.md .planning/phases/${PHASE}-*/CONTEXT.md .planning/phases/${PHASE}-*/${PHASE}-CONTEXT.md 2>/dev/null
+ls ${phase_dir}/*-CONTEXT.md 2>/dev/null
 ```
 
 **If exists:**
 Use AskUserQuestion:
 
-- header: "Existing context"
+- header: "Context"
 - question: "Phase [X] already has context. What do you want to do?"
 - options:
   - "Update it" — Review and revise existing context
@@ -196,73 +159,229 @@ If "Update": Load existing, continue to analyze_phase
 If "View": Display CONTEXT.md, then offer update/skip
 If "Skip": Exit workflow
 
-**If doesn't exist:** Continue to analyze_phase.
+**If doesn't exist:**
+
+Check `has_plans` and `plan_count` from init. **If `has_plans` is true:**
+
+Use AskUserQuestion:
+
+- header: "Plans exist"
+- question: "Phase [X] already has {plan_count} plan(s) created without user context. Your decisions here won't affect existing plans unless you replan."
+- options:
+  - "Continue and replan after" — Capture context, then run /gsd:plan-phase {X} to replan
+  - "View existing plans" — Show plans before deciding
+  - "Cancel" — Skip discuss-phase
+
+If "Continue and replan after": Continue to analyze_phase.
+If "View existing plans": Display plan files, then offer "Continue" / "Cancel".
+If "Cancel": Exit workflow.
+
+**If `has_plans` is false:** Continue to load_prior_context.
+</step>
+
+<step name="load_prior_context">
+Read project-level and prior phase context to avoid re-asking decided questions and maintain consistency.
+
+**Step 1: Read project-level files**
+
+```bash
+# Core project files
+cat .planning/PROJECT.md 2>/dev/null
+cat .planning/REQUIREMENTS.md 2>/dev/null
+cat .planning/STATE.md 2>/dev/null
+```
+
+Extract from these:
+
+- **PROJECT.md** — Vision, principles, non-negotiables, user preferences
+- **REQUIREMENTS.md** — Acceptance criteria, constraints, must-haves vs nice-to-haves
+- **STATE.md** — Current progress, any flags or session notes
+
+**Step 2: Read all prior CONTEXT.md files**
+
+```bash
+# Find all CONTEXT.md files from phases before current
+find .planning/phases -name "*-CONTEXT.md" 2>/dev/null | sort
+```
+
+For each CONTEXT.md where phase number < current phase:
+
+- Read the `<decisions>` section — these are locked preferences
+- Read `<specifics>` — particular references or "I want it like X" moments
+- Note any patterns (e.g., "user consistently prefers minimal UI", "user rejected single-key shortcuts")
+
+**Step 3: Build internal `<prior_decisions>` context**
+
+Structure the extracted information:
+
+```
+<prior_decisions>
+## Project-Level
+- [Key principle or constraint from PROJECT.md]
+- [Requirement that affects this phase from REQUIREMENTS.md]
+
+## From Prior Phases
+### Phase N: [Name]
+- [Decision that may be relevant to current phase]
+- [Preference that establishes a pattern]
+
+### Phase M: [Name]
+- [Another relevant decision]
+</prior_decisions>
+```
+
+**Usage in subsequent steps:**
+
+- `analyze_phase`: Skip gray areas already decided in prior phases
+- `present_gray_areas`: Annotate options with prior decisions ("You chose X in Phase 5")
+- `discuss_areas`: Pre-fill answers or flag conflicts ("This contradicts Phase 3 — same here or different?")
+
+**If no prior context exists:** Continue without — this is expected for early phases.
+</step>
+
+<step name="scout_codebase">
+Lightweight scan of existing code to inform gray area identification and discussion. Uses ~10% context — acceptable for an interactive session.
+
+**Step 1: Check for existing codebase maps**
+
+```bash
+ls .planning/codebase/*.md 2>/dev/null
+```
+
+**If codebase maps exist:** Read the most relevant ones (CONVENTIONS.md, STRUCTURE.md, STACK.md based on phase type). Extract:
+
+- Reusable components/hooks/utilities
+- Established patterns (state management, styling, data fetching)
+- Integration points (where new code would connect)
+
+Skip to Step 3 below.
+
+**Step 2: If no codebase maps, do targeted grep**
+
+Extract key terms from the phase goal (e.g., "feed" → "post", "card", "list"; "auth" → "login", "session", "token").
+
+```bash
+# Find files related to phase goal terms
+grep -rl "{term1}\|{term2}" src/ app/ --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" 2>/dev/null | head -10
+
+# Find existing components/hooks
+ls src/components/ 2>/dev/null
+ls src/hooks/ 2>/dev/null
+ls src/lib/ src/utils/ 2>/dev/null
+```
+
+Read the 3-5 most relevant files to understand existing patterns.
+
+**Step 3: Build internal codebase_context**
+
+From the scan, identify:
+
+- **Reusable assets** — existing components, hooks, utilities that could be used in this phase
+- **Established patterns** — how the codebase does state management, styling, data fetching
+- **Integration points** — where new code would connect (routes, nav, providers)
+- **Creative options** — approaches the existing architecture enables or constrains
+
+Store as internal `<codebase_context>` for use in analyze_phase and present_gray_areas. This is NOT written to a file — it's used within this session only.
 </step>
 
 <step name="analyze_phase">
-Analyze the phase to identify gray areas worth discussing.
+Analyze the phase to identify gray areas worth discussing. **Use both `prior_decisions` and `codebase_context` to ground the analysis.**
 
 **Read the phase description from ROADMAP.md and determine:**
 
 1. **Domain boundary** — What capability is this phase delivering? State it clearly.
 
-2. **Gray areas by category** — For each relevant category (UI, UX, Behavior, Empty States, Content), identify 1-2 specific ambiguities that would change implementation.
+2. **Check prior decisions** — Before generating gray areas, check if any were already decided:
+   - Scan `<prior_decisions>` for relevant choices (e.g., "Ctrl+C only, no single-key shortcuts")
+   - These are **pre-answered** — don't re-ask unless this phase has conflicting needs
+   - Note applicable prior decisions for use in presentation
 
-3. **Skip assessment** — If no meaningful gray areas exist (pure infrastructure, clear-cut implementation), the phase may not need discussion.
+3. **Gray areas by category** — For each relevant category (UI, UX, Behavior, Empty States, Content), identify 1-2 specific ambiguities that would change implementation. **Annotate with code context where relevant** (e.g., "You already have a Card component" or "No existing pattern for this").
+
+4. **Skip assessment** — If no meaningful gray areas exist (pure infrastructure, clear-cut implementation, or all already decided in prior phases), the phase may not need discussion.
 
 **Output your analysis internally, then present to user.**
 
-Example analysis for "Post Feed" phase:
+Example analysis for "Post Feed" phase (with code and prior context):
 
-```text
+```
 Domain: Displaying posts from followed users
+Existing: Card component (src/components/ui/Card.tsx), useInfiniteQuery hook, Tailwind CSS
+Prior decisions: "Minimal UI preferred" (Phase 2), "No pagination — always infinite scroll" (Phase 4)
 Gray areas:
-- UI: Layout style (cards vs timeline vs grid)
-- UI: Information density (full posts vs previews)
-- Behavior: Loading pattern (infinite scroll vs pagination)
-- Empty State: What shows when no posts exist
+- UI: Layout style (cards vs timeline vs grid) — Card component exists with shadow/rounded variants
+- UI: Information density (full posts vs previews) — no existing density patterns
+- Behavior: Loading pattern — ALREADY DECIDED: infinite scroll (Phase 4)
+- Empty State: What shows when no posts exist — EmptyState component exists in ui/
 - Content: What metadata displays (time, author, reactions count)
 ```
 
 </step>
 
 <step name="present_gray_areas">
-Present the domain boundary and gray areas to user.
+Present the domain boundary, prior decisions, and gray areas to user.
 
-**First, state the boundary:**
+**First, state the boundary and any prior decisions that apply:**
 
-```text
+```
 Phase [X]: [Name]
 Domain: [What this phase delivers — from your analysis]
 
 We'll clarify HOW to implement this.
 (New capabilities belong in other phases.)
+
+[If prior decisions apply:]
+**Carrying forward from earlier phases:**
+- [Decision from Phase N that applies here]
+- [Decision from Phase M that applies here]
 ```
 
 **Then use AskUserQuestion (multiSelect: true):**
 
 - header: "Discuss"
 - question: "Which areas do you want to discuss for [phase name]?"
-- options: Generate 3-4 phase-specific gray areas, each formatted as:
+- options: Generate 3-4 phase-specific gray areas, each with:
   - "[Specific area]" (label) — concrete, not generic
-  - [1-2 questions this covers] (description)
+  - [1-2 questions this covers + code context annotation] (description)
+  - **Highlight the recommended choice with brief explanation why**
+
+**Prior decision annotations:** When a gray area was already decided in a prior phase, annotate it:
+
+```
+☐ Exit shortcuts — How should users quit?
+  (You decided "Ctrl+C only, no single-key shortcuts" in Phase 5 — revisit or keep?)
+```
+
+**Code context annotations:** When the scout found relevant existing code, annotate the gray area description:
+
+```
+☐ Layout style — Cards vs list vs timeline?
+  (You already have a Card component with shadow/rounded variants. Reusing it keeps the app consistent.)
+```
+
+**Combining both:** When both prior decisions and code context apply:
+
+```
+☐ Loading behavior — Infinite scroll or pagination?
+  (You chose infinite scroll in Phase 4. useInfiniteQuery hook already set up.)
+```
 
 **Do NOT include a "skip" or "you decide" option.** User ran this command to discuss — give them real choices.
 
-**Examples by domain:**
+**Examples by domain (with code context):**
 
 For "Post Feed" (visual feature):
 
-```text
-☐ Layout style — Cards vs list vs timeline? Information density?
-☐ Loading behavior — Infinite scroll or pagination? Pull to refresh?
+```
+☐ Layout style — Cards vs list vs timeline? (Card component exists with variants)
+☐ Loading behavior — Infinite scroll or pagination? (useInfiniteQuery hook available)
 ☐ Content ordering — Chronological, algorithmic, or user choice?
 ☐ Post metadata — What info per post? Timestamps, reactions, author?
 ```
 
 For "Database backup CLI" (command-line tool):
 
-```text
+```
 ☐ Output format — JSON, table, or plain text? Verbosity levels?
 ☐ Flag design — Short flags, long flags, or both? Required vs optional?
 ☐ Progress reporting — Silent, progress bar, or verbose logging?
@@ -271,7 +390,7 @@ For "Database backup CLI" (command-line tool):
 
 For "Organize photo library" (organization task):
 
-```text
+```
 ☐ Grouping criteria — By date, location, faces, or events?
 ☐ Duplicate handling — Keep best, keep all, or prompt each time?
 ☐ Naming convention — Original names, dates, or descriptive?
@@ -292,39 +411,55 @@ Ask 4 questions per area before offering to continue or move on. Each answer oft
 
 1. **Announce the area:**
 
-   ```text
+   ```
    Let's talk about [Area].
    ```
 
 2. **Ask 4 questions using AskUserQuestion:**
-   - header: "[Area]"
+   - header: "[Area]" (max 12 chars — abbreviate if needed)
    - question: Specific decision for this area
-   - options: 2-3 concrete choices (AskUserQuestion adds "Other" automatically)
+   - options: 2-3 concrete choices (AskUserQuestion adds "Other" automatically), with the recommended choice highlighted and brief explanation why
+   - **Annotate options with code context** when relevant:
+     ```
+     "How should posts be displayed?"
+     - Cards (reuses existing Card component — consistent with Messages)
+     - List (simpler, would be a new pattern)
+     - Timeline (needs new Timeline component — none exists yet)
+     ```
    - Include "You decide" as an option when reasonable — captures Claude discretion
+   - **Context7 for library choices:** When a gray area involves library selection (e.g., "magic links" → query next-auth docs) or API approach decisions, use `mcp__context7__*` tools to fetch current documentation and inform the options. Don't use Context7 for every question — only when library-specific knowledge improves the options.
 
 3. **After 4 questions, check:**
-   - header: "[Area]"
+   - header: "[Area]" (max 12 chars)
    - question: "More questions about [area], or move to next?"
    - options: "More questions" / "Next area"
 
    If "More questions" → ask 4 more, then check again
    If "Next area" → proceed to next selected area
+   If "Other" (free text) → interpret intent: continuation phrases ("chat more", "keep going", "yes", "more") map to "More questions"; advancement phrases ("done", "move on", "next", "skip") map to "Next area". If ambiguous, ask: "Continue with more questions about [area], or move to the next area?"
 
-4. **After all areas complete:**
-   - header: "Done"
-   - question: "That covers [list areas]. Ready to create context?"
-   - options: "Create context" / "Revisit an area"
+4. **After all initially-selected areas complete:**
+   - Summarize what was captured from the discussion so far
+   - AskUserQuestion:
+     - header: "Done"
+     - question: "We've discussed [list areas]. Which gray areas remain unclear?"
+     - options: "Explore more gray areas" / "I'm ready for context"
+   - If "Explore more gray areas":
+     - Identify 2-4 additional gray areas based on what was learned
+     - Return to present_gray_areas logic with these new areas
+     - Loop: discuss new areas, then prompt again
+   - If "I'm ready for context": Proceed to write_context
 
 **Question design:**
 
 - Options should be concrete, not abstract ("Cards" not "Option A")
 - Each answer should inform the next question
-- If user picks "Other", receive their input, reflect it back, confirm
+- If user picks "Other" to provide freeform input (e.g., "let me describe it", "something else", or an open-ended reply), ask your follow-up as plain text — NOT another AskUserQuestion. Wait for them to type at the normal prompt, then reflect their input back and confirm before resuming AskUserQuestion for the next question.
 
 **Scope creep handling:**
 If user mentions something outside the phase domain:
 
-```text
+```
 "[Feature] sounds like a new capability — that belongs in its own phase.
 I'll note it as a deferred idea.
 
@@ -339,19 +474,15 @@ Create CONTEXT.md capturing decisions made.
 
 **Find or create phase directory:**
 
+Use values from init: `phase_dir`, `phase_slug`, `padded_phase`.
+
+If `phase_dir` is null (phase exists in roadmap but no directory):
+
 ```bash
-# Match existing directory (padded or unpadded)
-PADDED_PHASE=$(printf "%02d" ${PHASE})
-PHASE_DIR=$(ls -d .planning/phases/${PADDED_PHASE}-* .planning/phases/${PHASE}-* 2>/dev/null | head -1)
-if [ -z "$PHASE_DIR" ]; then
-  # Create from roadmap name (lowercase, hyphens)
-  PHASE_NAME=$(grep "Phase ${PHASE}:" .planning/ROADMAP.md | sed 's/.*Phase [0-9]*: //' | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
-  mkdir -p ".planning/phases/${PADDED_PHASE}-${PHASE_NAME}"
-  PHASE_DIR=".planning/phases/${PADDED_PHASE}-${PHASE_NAME}"
-fi
+mkdir -p ".planning/phases/${padded_phase}-${phase_slug}"
 ```
 
-**File location:** `${PHASE_DIR}/${PADDED_PHASE}-CONTEXT.md`
+**File location:** `${phase_dir}/${padded_phase}-CONTEXT.md`
 
 **Structure the content by what was discussed:**
 
@@ -386,6 +517,24 @@ fi
 
 </decisions>
 
+<code_context>
+
+## Existing Code Insights
+
+### Reusable Assets
+
+- [Component/hook/utility]: [How it could be used in this phase]
+
+### Established Patterns
+
+- [Pattern]: [How it constrains/enables this phase]
+
+### Integration Points
+
+- [Where new code connects to existing system]
+
+</code_context>
+
 <specifics>
 ## Specific Ideas
 
@@ -413,10 +562,161 @@ _Context gathered: [date]_
 Write file.
 </step>
 
+<step name="ui_phase_detection">
+**Detect if this is a UI phase:**
+
+<!-- SYNC: UI keyword heuristic also in execute-phase.md, design/sync.md -->
+
+```bash
+PHASE_TEXT=$(grep -i "Phase ${PHASE}:" .planning/ROADMAP.md)
+if echo "$PHASE_TEXT" | grep -iqE "ui|ux|style|restyle|design|layout|component|page|view|screen|display|button|form|modal|dialog|popover|tooltip|toast|dropdown|sidebar|header|footer|nav|menu|card|list|table|grid|icon|badge|avatar|breadcrumb|tab|color|font|typography|spacing|padding|margin|responsive|mobile|css|visual|appearance|interface|frontend|dashboard|browser|drag|drop|dnd|hover|focus|animation|transition|overlay|scroll|carousel|interaction|gesture|click|swipe|resize|collapse|expand|accordion|input|checkbox|radio|select|slider|toggle|switch|picker|upload|panel|drawer|toolbar|statusbar|banner|alert|notification|snackbar|thumbnail|preview|placeholder|skeleton|spinner|progress|loading"; then
+  IS_UI_PHASE=true
+else
+  IS_UI_PHASE=false
+fi
+```
+
+**If UI phase:**
+
+1. Check for existing Pencil design file
+2. Load existing design tokens (colors, typography, spacing) if available
+3. Enable design mockup generation during discussion
+4. Note to user: "This is a UI phase — I can generate design mockups to help visualize options."
+   </step>
+
+<step name="generate_design_mockups">
+**Only for UI phases.** After discussing gray areas, offer to generate design mockups.
+
+**Trigger:**
+After all areas discussed, before confirming creation:
+
+```text
+We've discussed the implementation details. Since this is a UI phase,
+I can generate design mockups in Pencil to visualize the options.
+
+Would you like me to create design mockups based on our discussion?
+```
+
+- Options: "Yes, generate mockups" / "Skip mockups"
+
+**If "Skip mockups":** Continue to confirm_creation step.
+
+**If "Yes, generate mockups":**
+
+## Step 1: Validate Design Context
+
+```bash
+if [ ! -f "designs/DESIGN.md" ]; then
+  echo "WARNING: designs/DESIGN.md not found"
+fi
+ls designs/*.pen 2>/dev/null
+```
+
+**If DESIGN.md missing:**
+
+Use AskUserQuestion:
+
+- header: "Design context"
+- question: "Design system file (DESIGN.md) not found. How should we proceed?"
+- options:
+  - "Create DESIGN.md" — Extract tokens from existing .pen file
+  - "Skip mockups" — Continue without visual mockups
+  - "Describe in text" — I'll describe the design options verbally
+
+## Step 2: Prepare Discussion Context Summary
+
+```markdown
+## MOCKUP REQUEST
+
+**Phase:** ${PHASE} - ${PHASE_NAME}
+**Phase Goal:** [From ROADMAP.md]
+
+### Discussion Summary
+
+**Gray areas discussed:**
+
+- [Area 1]: [Decision made]
+
+**User quotes (preserve exact wording):**
+
+- "[Quote 1]"
+
+**Key decisions:**
+
+- Layout: [choice]
+- Density: [choice]
+- Interactions: [choice]
+
+### Mockup Request
+
+Generate 2-3 options that visualize these decisions.
+Show each option within the app layout context.
+```
+
+## Step 3: Spawn ui-design-discusser Agent
+
+```text
+Task(
+  subagent_type: "ui-design-discusser",
+  prompt: [Discussion context summary from Step 2],
+  description: "Generate UI mockups for Phase ${PHASE}"
+)
+```
+
+**Files the agent will access:**
+
+- `designs/DESIGN.md` — Design system tokens (required)
+- `designs/*.pen` — Existing design file
+- `.planning/phases/${PADDED_PHASE}-*/CONTEXT.md` — If exists
+
+## Step 4: Handle Agent Return
+
+**Use AskUserQuestion:**
+
+- header: "Design direction"
+- question: "Which direction resonates with your vision?"
+- options:
+  - "Option A" — [Brief description]
+  - "Option B" — [Brief description]
+  - "Refine" — I want to adjust one of these options
+  - "Neither" — Let me describe what I'm looking for
+
+## Step 5: Handle Iteration (if needed)
+
+**If "Refine":** Ask which option and what changes, re-spawn agent.
+**If "Neither":** Ask user to describe their vision, re-spawn agent.
+**Iteration limit:** Maximum 3 refinement rounds.
+
+## Step 6: Mark Selection and Capture Final Screenshot
+
+The agent will:
+
+1. Add "SELECTED" badge to chosen option frame
+2. Update stroke to 3px primary color (#00D084)
+3. Dim non-selected options (50% opacity)
+4. Capture final screenshot: `${PHASE_DIR}/screenshots/selected-option-[letter].png`
+
+## Step 7: Capture Approved Direction
+
+```markdown
+### Approved Design Direction
+
+**Frame:** [Frame name] (ID: [frame-id])
+**Screenshot:** `.planning/phases/${PADDED_PHASE}-*/screenshots/selected-option-[letter].png`
+**Canvas location:** `Drafts - Phase [X]`
+
+**Key design decisions:**
+
+- [Decision 1]
+- [Decision 2]
+```
+
+</step>
+
 <step name="confirm_creation">
 Present summary and next steps:
 
-```text
+```
 Created: .planning/phases/${PADDED_PHASE}-${SLUG}/${PADDED_PHASE}-CONTEXT.md
 
 ## Decisions Captured
@@ -453,291 +753,129 @@ Created: .planning/phases/${PADDED_PHASE}-${SLUG}/${PADDED_PHASE}-CONTEXT.md
 </step>
 
 <step name="git_commit">
-Commit phase context and any design artifacts:
+Commit phase context (uses `commit_docs` from init internally):
 
 ```bash
-# Always add context file
-git add "${PHASE_DIR}/${PADDED_PHASE}-CONTEXT.md"
-
-# For UI phases: add design file and screenshots if they exist
-if [ "$IS_UI_PHASE" = true ]; then
-  # Add .pen file if modified
-  git diff --quiet designs/*.pen 2>/dev/null || git add designs/*.pen
-
-  # Add screenshots directory if it exists
-  [ -d "${PHASE_DIR}/screenshots" ] && git add "${PHASE_DIR}/screenshots/"
-fi
-
-git commit -m "$(cat <<EOF
-docs(${PADDED_PHASE}): capture phase context
-
-Phase ${PADDED_PHASE}: ${PHASE_NAME}
-- Implementation decisions documented
-- Phase boundary established
-${IS_UI_PHASE:+- Design mockups added to .pen file}
-${IS_UI_PHASE:+- Screenshots saved for reference}
-EOF
-)"
+node "./.claude/get-shit-done/bin/gsd-tools.cjs" commit "docs(${padded_phase}): capture phase context" --files "${phase_dir}/${padded_phase}-CONTEXT.md"
 ```
 
-Confirm: "Committed: docs(${PADDED_PHASE}): capture phase context"
+Confirm: "Committed: docs(${padded_phase}): capture phase context"
+</step>
+
+<step name="update_state">
+Update STATE.md with session info:
+
+```bash
+node "./.claude/get-shit-done/bin/gsd-tools.cjs" state record-session \
+  --stopped-at "Phase ${PHASE} context gathered" \
+  --resume-file "${phase_dir}/${padded_phase}-CONTEXT.md"
+```
+
+Commit STATE.md:
+
+```bash
+node "./.claude/get-shit-done/bin/gsd-tools.cjs" commit "docs(state): record phase ${PHASE} context session" --files .planning/STATE.md
+```
+
+</step>
+
+<step name="auto_advance">
+Check for auto-advance trigger:
+
+1. Parse `--auto` flag from $ARGUMENTS
+2. **Sync chain flag with intent** — if user invoked manually (no `--auto`), clear the ephemeral chain flag from any previous interrupted `--auto` chain. This does NOT touch `workflow.auto_advance` (the user's persistent settings preference):
+   ```bash
+   if [[ ! "$ARGUMENTS" =~ --auto ]]; then
+     node "./.claude/get-shit-done/bin/gsd-tools.cjs" config-set workflow._auto_chain_active false 2>/dev/null
+   fi
+   ```
+3. Read both the chain flag and user preference:
+   ```bash
+   AUTO_CHAIN=$(node "./.claude/get-shit-done/bin/gsd-tools.cjs" config-get workflow._auto_chain_active 2>/dev/null || echo "false")
+   AUTO_CFG=$(node "./.claude/get-shit-done/bin/gsd-tools.cjs" config-get workflow.auto_advance 2>/dev/null || echo "false")
+   ```
+
+**If `--auto` flag present AND `AUTO_CHAIN` is not true:** Persist chain flag to config (handles direct `--auto` usage without new-project):
+
+```bash
+node "./.claude/get-shit-done/bin/gsd-tools.cjs" config-set workflow._auto_chain_active true
+```
+
+**If `--auto` flag present OR `AUTO_CHAIN` is true OR `AUTO_CFG` is true:**
+
+Display banner:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ GSD ► AUTO-ADVANCING TO PLAN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Context captured. Launching plan-phase...
+```
+
+Launch plan-phase using the Skill tool to avoid nested Task sessions (which cause runtime freezes due to deep agent nesting — see #686):
+
+```
+Skill(skill="gsd:plan-phase", args="${PHASE} --auto")
+```
+
+This keeps the auto-advance chain flat — discuss, plan, and execute all run at the same nesting level rather than spawning increasingly deep Task agents.
+
+**Handle plan-phase return:**
+
+- **PHASE COMPLETE** → Full chain succeeded. Display:
+
+  ```
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   GSD ► PHASE ${PHASE} COMPLETE
+  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Auto-advance pipeline finished: discuss → plan → execute
+
+  Next: /gsd:discuss-phase ${NEXT_PHASE} --auto
+  <sub>/clear first → fresh context window</sub>
+  ```
+
+- **PLANNING COMPLETE** → Planning done, execution didn't complete:
+  ```
+  Auto-advance partial: Planning complete, execution did not finish.
+  Continue: /gsd:execute-phase ${PHASE}
+  ```
+- **PLANNING INCONCLUSIVE / CHECKPOINT** → Stop chain:
+  ```
+  Auto-advance stopped: Planning needs input.
+  Continue: /gsd:plan-phase ${PHASE}
+  ```
+- **GAPS FOUND** → Stop chain:
+  ```
+  Auto-advance stopped: Gaps found during execution.
+  Continue: /gsd:plan-phase ${PHASE} --gaps
+  ```
+
+**If neither `--auto` nor config enabled:**
+Route to `confirm_creation` step (existing behavior — show manual next steps).
 </step>
 
 </process>
 
-<step name="detect_ui_phase">
-After analyzing the phase, determine if it involves UI work.
-
-**UI phase indicators:**
-
-- Phase name contains: "UI", "restyle", "design", "layout", "component", "page", "view", "browser", "dashboard"
-- Phase goal mentions: visual, styling, interface, appearance, frontend, display, screen
-- Phase involves: user-facing changes, forms, dialogs, navigation
-
-```bash
-# Check phase name and description for UI keywords
-# Note: This heuristic may produce false positives for phases that mention UI terms
-# but are primarily backend/infrastructure work. The workflow handles this by:
-# 1. Offering design mockup generation as optional (user can decline)
-# 2. Checking for existing design files before assuming UI work is needed
-# 3. Allowing "Skip mockups" option in the design generation step
-PHASE_TEXT=$(grep -i "Phase ${PHASE}:" .planning/ROADMAP.md)
-if echo "$PHASE_TEXT" | grep -iqE "ui|ux|style|restyle|design|layout|component|page|view|screen|display|button|form|modal|dialog|popover|tooltip|toast|dropdown|sidebar|header|footer|nav|menu|card|list|table|grid|icon|badge|avatar|breadcrumb|tab|color|font|typography|spacing|padding|margin|responsive|mobile|css|visual|appearance|interface|frontend|dashboard|browser|drag|drop|dnd|hover|focus|animation|transition|overlay|scroll|carousel|interaction|gesture|click|swipe|resize|collapse|expand|accordion|input|checkbox|radio|select|slider|toggle|switch|picker|upload|panel|drawer|toolbar|statusbar|banner|alert|notification|snackbar|thumbnail|preview|placeholder|skeleton|spinner|progress|loading"; then
-  IS_UI_PHASE=true
-else
-  IS_UI_PHASE=false
-fi
-```
-
-**If UI phase:**
-
-1. Check for existing Pencil design file
-2. Load existing design tokens (colors, typography, spacing) if available
-3. Enable design mockup generation during discussion
-4. Note to user: "This is a UI phase — I can generate design mockups to help visualize options."
-   </step>
-
-<step name="generate_design_mockups">
-**Only for UI phases.** After discussing gray areas, offer to generate design mockups.
-
-**Trigger:**
-After all areas discussed, before writing CONTEXT.md:
-
-```text
-We've discussed the implementation details. Since this is a UI phase,
-I can generate design mockups in Pencil to visualize the options.
-
-Would you like me to create design mockups based on our discussion?
-```
-
-- Options: "Yes, generate mockups" / "Skip mockups"
-
-**If "Skip mockups":** Continue to write_context step.
-
-**If "Yes, generate mockups":**
-
-## Step 1: Validate Design Context
-
-Check that design context exists before spawning the agent:
-
-```bash
-# Check for DESIGN.md (required for consistent mockups)
-if [ ! -f "designs/DESIGN.md" ]; then
-  echo "WARNING: designs/DESIGN.md not found"
-  # Offer to create it or skip mockups
-fi
-
-# Check for existing .pen file
-ls designs/*.pen 2>/dev/null
-```
-
-**If DESIGN.md missing:**
-
-Use AskUserQuestion:
-
-- header: "Design context"
-- question: "Design system file (DESIGN.md) not found. How should we proceed?"
-- options:
-  - "Create DESIGN.md" — Extract tokens from existing .pen file
-  - "Skip mockups" — Continue without visual mockups
-  - "Describe in text" — I'll describe the design options verbally
-
-If "Create DESIGN.md": Run token extraction, then continue.
-If "Skip mockups": Continue to write_context.
-If "Describe in text": Provide text descriptions, then continue to write_context.
-
-## Step 2: Prepare Discussion Context Summary
-
-Compile the discussion context for the sub-agent:
-
-```markdown
-## MOCKUP REQUEST
-
-**Phase:** ${PHASE} - ${PHASE_NAME}
-**Phase Goal:** [From ROADMAP.md]
-
-### Discussion Summary
-
-**Gray areas discussed:**
-
-- [Area 1]: [Decision made]
-- [Area 2]: [Decision made]
-
-**User quotes (preserve exact wording):**
-
-- "[Quote 1]"
-- "[Quote 2]"
-
-**Key decisions:**
-
-- Layout: [choice]
-- Density: [choice]
-- Interactions: [choice]
-
-### Mockup Request
-
-Generate 2-3 options that visualize these decisions.
-Show each option within the app layout context.
-```
-
-## Step 3: Spawn ui-design-discusser Agent
-
-Spawn the agent in its own context window to handle Pencil interactions:
-
-```text
-Task(
-  subagent_type: "ui-design-discusser",
-  prompt: [Discussion context summary from Step 2],
-  description: "Generate UI mockups for Phase ${PHASE}"
-)
-```
-
-**Files the agent will access:**
-
-- `designs/DESIGN.md` — Design system tokens (required)
-- `designs/*.pen` — Existing design file
-- `.planning/phases/${PADDED_PHASE}-*/CONTEXT.md` — If exists, for additional context
-
-## Step 4: Handle Agent Return
-
-The agent returns a structured summary (see ui-design-discusser.md for format).
-
-**Display to user:**
-
-```markdown
-[Agent's structured return - includes:]
-
-- Your preferences incorporated
-- Design consistency notes
-- Options generated with descriptions
-- In-context views available
-- Design decisions made
-```
-
-**Use AskUserQuestion:**
-
-- header: "Design direction"
-- question: "Which direction resonates with your vision?"
-- options:
-  - "Option A" — [Brief description from agent return]
-  - "Option B" — [Brief description from agent return]
-  - "Refine" — I want to adjust one of these options
-  - "Neither" — Let me describe what I'm looking for
-
-## Step 5: Handle Iteration (if needed)
-
-**If "Refine":**
-
-Ask which option and what changes:
-
-```text
-Which option would you like to refine, and what changes?
-```
-
-Capture response and re-spawn agent with refinement context:
-
-```markdown
-## REFINEMENT REQUEST
-
-**Base option:** [Option A/B] (frame-id from previous return)
-**User feedback:** "[User's refinement request]"
-**Specific changes:** [If mentioned]
-```
-
-**If "Neither":**
-
-Ask user to describe their vision:
-
-```text
-What are you looking for? Describe how you imagine it.
-```
-
-Capture response and re-spawn agent with new direction.
-
-**Iteration limit:** Maximum 3 refinement rounds. After 3:
-
-```text
-We've iterated a few times. Let's capture the current direction
-in CONTEXT.md and refine during implementation if needed.
-```
-
-## Step 6: Mark Selection and Capture Final Screenshot
-
-Once user approves a direction, re-spawn agent to mark the selection:
-
-```markdown
-## SELECTION CONFIRMATION
-
-**Selected option:** Option [A/B/C]
-**Frame ID:** [frame-id from previous return]
-**Phase directory:** ${PHASE_DIR}
-```
-
-The agent will:
-
-1. Add "✓ SELECTED" badge to chosen option frame
-2. Update stroke to 3px primary color (#00D084)
-3. Dim non-selected options (50% opacity)
-4. Update drafts container header with selection info
-5. Capture final screenshot: `${PHASE_DIR}/screenshots/selected-option-[letter].png`
-
-## Step 7: Capture Approved Direction
-
-After selection is marked:
-
-- Record the approved frame ID(s) for CONTEXT.md
-- Note any design decisions for DESIGN.md update
-- Include screenshot path for reference
-- Continue to write_context step
-
-```markdown
-### Approved Design Direction
-
-**Frame:** [Frame name] (ID: [frame-id])
-**Screenshot:** `.planning/phases/${PADDED_PHASE}-*/screenshots/selected-option-[letter].png`
-**Canvas location:** `Drafts - Phase [X]` (right side of main design)
-
-**Key design decisions:**
-
-- [Decision 1]
-- [Decision 2]
-```
-
-</step>
-
 <success_criteria>
 
 - Phase validated against roadmap
-- Gray areas identified through intelligent analysis (not generic questions)
+- Prior context loaded (PROJECT.md, REQUIREMENTS.md, STATE.md, prior CONTEXT.md files)
+- Already-decided questions not re-asked (carried forward from prior phases)
+- Codebase scouted for reusable assets, patterns, and integration points
+- Gray areas identified through intelligent analysis with code and prior decision annotations
 - User selected which areas to discuss
-- Each selected area explored until user satisfied
+- Each selected area explored until user satisfied (with code-informed and prior-decision-informed options)
 - Scope creep redirected to deferred ideas
 - **For UI phases:** Design mockups generated and user approved a direction
 - **For UI phases:** Mockups placed in dedicated "Drafts - Phase N" canvas area
 - **For UI phases:** Screenshots saved to `.planning/phases/*/screenshots/`
 - **For UI phases:** Selected option visually marked in .pen file
 - CONTEXT.md captures actual decisions, not vague vision
+- CONTEXT.md includes code_context section with reusable assets and patterns
 - **For UI phases:** CONTEXT.md references approved Pencil design frame and screenshot
 - Deferred ideas preserved for future phases
+- STATE.md updated with session info
 - User knows next steps
   </success_criteria>

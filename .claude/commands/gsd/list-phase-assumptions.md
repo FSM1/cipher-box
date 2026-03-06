@@ -1,7 +1,7 @@
 ---
 name: gsd:list-phase-assumptions
 description: Surface Claude's assumptions about a phase approach before planning
-argument-hint: "[phase]"
+argument-hint: '[phase]'
 allowed-tools:
   - Read
   - Bash
@@ -23,11 +23,7 @@ Output: Conversational output only (no file creation) - ends with "What do you t
 <context>
 Phase number: $ARGUMENTS (required)
 
-**Load project state first:**
-@.planning/STATE.md
-
-**Load roadmap:**
-@.planning/ROADMAP.md
+Project state and roadmap are loaded in-workflow using targeted reads.
 </context>
 
 <process>
