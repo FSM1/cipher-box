@@ -9,6 +9,14 @@
             "command": "entire hooks claude-code session-start"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/gsd-check-update.js"
+          }
+        ]
       }
     ],
     "SessionEnd": [
@@ -73,10 +81,22 @@
             "command": "entire hooks claude-code post-todo"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/gsd-context-monitor.js"
+          }
+        ]
       }
     ]
   },
   "permissions": {
     "deny": ["Read(./.entire/metadata/**)"]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "node .claude/hooks/gsd-statusline.js"
   }
 }

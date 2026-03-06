@@ -1,6 +1,6 @@
 # Research Template
 
-Template for `.planning/phases/XX-name/{phase}-RESEARCH.md` - comprehensive ecosystem research before planning.
+Template for `.planning/phases/XX-name/{phase_num}-RESEARCH.md` - comprehensive ecosystem research before planning.
 
 **Purpose:** Document what Claude needs to know to implement a phase well - not just "which library" but "how do experts build this."
 
@@ -8,17 +8,49 @@ Template for `.planning/phases/XX-name/{phase}-RESEARCH.md` - comprehensive ecos
 
 ## File Template
 
-```markdown
+````markdown
 # Phase [X]: [Name] - Research
 
 **Researched:** [date]
 **Domain:** [primary technology/problem domain]
 **Confidence:** [HIGH/MEDIUM/LOW]
 
+<user_constraints>
+
+## User Constraints (from CONTEXT.md)
+
+**CRITICAL:** If CONTEXT.md exists from /gsd:discuss-phase, copy locked decisions here verbatim. These MUST be honored by the planner.
+
+### Locked Decisions
+
+[Copy from CONTEXT.md `## Decisions` section - these are NON-NEGOTIABLE]
+
+- [Decision 1]
+- [Decision 2]
+
+### Claude's Discretion
+
+[Copy from CONTEXT.md - areas where researcher/planner can choose]
+
+- [Area 1]
+- [Area 2]
+
+### Deferred Ideas (OUT OF SCOPE)
+
+[Copy from CONTEXT.md - do NOT research or plan these]
+
+- [Deferred 1]
+- [Deferred 2]
+
+**If no CONTEXT.md exists:** Write "No user constraints - all decisions at Claude's discretion"
+</user_constraints>
+
 <research_summary>
+
 ## Summary
 
 [2-3 paragraph executive summary]
+
 - What was researched
 - What the standard approach is
 - Key recommendations
@@ -27,39 +59,48 @@ Template for `.planning/phases/XX-name/{phase}-RESEARCH.md` - comprehensive ecos
 </research_summary>
 
 <standard_stack>
+
 ## Standard Stack
 
 The established libraries/tools for this domain:
 
 ### Core
-| Library | Version | Purpose | Why Standard |
-|---------|---------|---------|--------------|
-| [name] | [ver] | [what it does] | [why experts use it] |
-| [name] | [ver] | [what it does] | [why experts use it] |
+
+| Library | Version | Purpose        | Why Standard         |
+| ------- | ------- | -------------- | -------------------- |
+| [name]  | [ver]   | [what it does] | [why experts use it] |
+| [name]  | [ver]   | [what it does] | [why experts use it] |
 
 ### Supporting
-| Library | Version | Purpose | When to Use |
-|---------|---------|---------|-------------|
-| [name] | [ver] | [what it does] | [use case] |
-| [name] | [ver] | [what it does] | [use case] |
+
+| Library | Version | Purpose        | When to Use |
+| ------- | ------- | -------------- | ----------- |
+| [name]  | [ver]   | [what it does] | [use case]  |
+| [name]  | [ver]   | [what it does] | [use case]  |
 
 ### Alternatives Considered
-| Instead of | Could Use | Tradeoff |
-|------------|-----------|----------|
+
+| Instead of | Could Use     | Tradeoff                       |
+| ---------- | ------------- | ------------------------------ |
 | [standard] | [alternative] | [when alternative makes sense] |
 
 **Installation:**
+
 ```bash
 npm install [packages]
 # or
 yarn add [packages]
 ```
+````
+
 </standard_stack>
 
 <architecture_patterns>
+
 ## Architecture Patterns
 
 ### Recommended Project Structure
+
 ```
 src/
 ├── [folder]/        # [purpose]
@@ -68,56 +109,66 @@ src/
 ```
 
 ### Pattern 1: [Pattern Name]
+
 **What:** [description]
 **When to use:** [conditions]
 **Example:**
+
 ```typescript
 // [code example from Context7/official docs]
 ```
 
 ### Pattern 2: [Pattern Name]
+
 **What:** [description]
 **When to use:** [conditions]
 **Example:**
+
 ```typescript
 // [code example]
 ```
 
 ### Anti-Patterns to Avoid
+
 - **[Anti-pattern]:** [why it's bad, what to do instead]
 - **[Anti-pattern]:** [why it's bad, what to do instead]
-</architecture_patterns>
+  </architecture_patterns>
 
 <dont_hand_roll>
+
 ## Don't Hand-Roll
 
 Problems that look simple but have existing solutions:
 
-| Problem | Don't Build | Use Instead | Why |
-|---------|-------------|-------------|-----|
-| [problem] | [what you'd build] | [library] | [edge cases, complexity] |
-| [problem] | [what you'd build] | [library] | [edge cases, complexity] |
-| [problem] | [what you'd build] | [library] | [edge cases, complexity] |
+| Problem   | Don't Build        | Use Instead | Why                      |
+| --------- | ------------------ | ----------- | ------------------------ |
+| [problem] | [what you'd build] | [library]   | [edge cases, complexity] |
+| [problem] | [what you'd build] | [library]   | [edge cases, complexity] |
+| [problem] | [what you'd build] | [library]   | [edge cases, complexity] |
 
 **Key insight:** [why custom solutions are worse in this domain]
 </dont_hand_roll>
 
 <common_pitfalls>
+
 ## Common Pitfalls
 
 ### Pitfall 1: [Name]
+
 **What goes wrong:** [description]
 **Why it happens:** [root cause]
 **How to avoid:** [prevention strategy]
 **Warning signs:** [how to detect early]
 
 ### Pitfall 2: [Name]
+
 **What goes wrong:** [description]
 **Why it happens:** [root cause]
 **How to avoid:** [prevention strategy]
 **Warning signs:** [how to detect early]
 
 ### Pitfall 3: [Name]
+
 **What goes wrong:** [description]
 **Why it happens:** [root cause]
 **How to avoid:** [prevention strategy]
@@ -125,47 +176,56 @@ Problems that look simple but have existing solutions:
 </common_pitfalls>
 
 <code_examples>
+
 ## Code Examples
 
 Verified patterns from official sources:
 
 ### [Common Operation 1]
+
 ```typescript
 // Source: [Context7/official docs URL]
-[code]
+[code];
 ```
 
 ### [Common Operation 2]
+
 ```typescript
 // Source: [Context7/official docs URL]
-[code]
+[code];
 ```
 
 ### [Common Operation 3]
+
 ```typescript
 // Source: [Context7/official docs URL]
-[code]
+[code];
 ```
+
 </code_examples>
 
 <sota_updates>
+
 ## State of the Art (2024-2025)
 
 What's changed recently:
 
-| Old Approach | Current Approach | When Changed | Impact |
-|--------------|------------------|--------------|--------|
-| [old] | [new] | [date/version] | [what it means for implementation] |
+| Old Approach | Current Approach | When Changed   | Impact                             |
+| ------------ | ---------------- | -------------- | ---------------------------------- |
+| [old]        | [new]            | [date/version] | [what it means for implementation] |
 
 **New tools/patterns to consider:**
+
 - [Tool/Pattern]: [what it enables, when to use]
 - [Tool/Pattern]: [what it enables, when to use]
 
 **Deprecated/outdated:**
+
 - [Thing]: [why it's outdated, what replaced it]
-</sota_updates>
+  </sota_updates>
 
 <open_questions>
+
 ## Open Questions
 
 Things that couldn't be fully resolved:
@@ -179,32 +239,37 @@ Things that couldn't be fully resolved:
    - What we know: [partial info]
    - What's unclear: [the gap]
    - Recommendation: [how to handle]
-</open_questions>
+     </open_questions>
 
 <sources>
 ## Sources
 
 ### Primary (HIGH confidence)
+
 - [Context7 library ID] - [topics fetched]
 - [Official docs URL] - [what was checked]
 
 ### Secondary (MEDIUM confidence)
+
 - [WebSearch verified with official source] - [finding + verification]
 
 ### Tertiary (LOW confidence - needs validation)
+
 - [WebSearch only] - [finding, marked for validation during implementation]
-</sources>
+  </sources>
 
 <metadata>
 ## Metadata
 
 **Research scope:**
+
 - Core technology: [what]
 - Ecosystem: [libraries explored]
 - Patterns: [patterns researched]
 - Pitfalls: [areas checked]
 
 **Confidence breakdown:**
+
 - Standard stack: [HIGH/MEDIUM/LOW] - [reason]
 - Architecture: [HIGH/MEDIUM/LOW] - [reason]
 - Pitfalls: [HIGH/MEDIUM/LOW] - [reason]
@@ -216,10 +281,11 @@ Things that couldn't be fully resolved:
 
 ---
 
-*Phase: XX-name*
-*Research completed: [date]*
-*Ready for planning: [yes/no]*
-```
+_Phase: XX-name_
+_Research completed: [date]_
+_Ready for planning: [yes/no]_
+
+````
 
 ---
 
@@ -271,13 +337,16 @@ Key finding: Don't hand-roll physics or collision detection. Rapier (via @react-
 **Installation:**
 ```bash
 npm install three @react-three/fiber @react-three/drei @react-three/rapier zustand
-```
+````
+
 </standard_stack>
 
 <architecture_patterns>
+
 ## Architecture Patterns
 
 ### Recommended Project Structure
+
 ```
 src/
 ├── components/
@@ -295,9 +364,11 @@ src/
 ```
 
 ### Pattern 1: Vehicle with Rapier Physics
+
 **What:** Use RigidBody with vehicle-specific settings, not custom physics
 **When to use:** Any ground vehicle
 **Example:**
+
 ```typescript
 // Source: @react-three/rapier docs
 import { RigidBody, useRapier } from '@react-three/rapier'
@@ -324,9 +395,11 @@ function Vehicle() {
 ```
 
 ### Pattern 2: Instanced Meshes for City
+
 **What:** Use InstancedMesh for repeated objects (buildings, trees, props)
 **When to use:** >100 similar objects
 **Example:**
+
 ```typescript
 // Source: drei docs
 import { Instances, Instance } from '@react-three/drei'
@@ -345,41 +418,47 @@ function Buildings({ positions }) {
 ```
 
 ### Anti-Patterns to Avoid
+
 - **Creating meshes in render loop:** Create once, update transforms only
 - **Not using InstancedMesh:** Individual meshes for buildings kills performance
 - **Custom physics math:** Rapier handles it better, every time
-</architecture_patterns>
+  </architecture_patterns>
 
 <dont_hand_roll>
+
 ## Don't Hand-Roll
 
-| Problem | Don't Build | Use Instead | Why |
-|---------|-------------|-------------|-----|
-| Vehicle physics | Custom velocity/acceleration | Rapier RigidBody | Wheel friction, suspension, collisions are complex |
-| Collision detection | Raycasting everything | Rapier colliders | Performance, edge cases, tunneling |
-| Camera follow | Manual lerp | drei CameraControls or custom with useFrame | Smooth interpolation, bounds |
-| City generation | Pure random placement | Grid-based with noise for variation | Random looks wrong, grid is predictable |
-| LOD | Manual distance checks | drei <Detailed> | Handles transitions, hysteresis |
+| Problem             | Don't Build                  | Use Instead                                 | Why                                                |
+| ------------------- | ---------------------------- | ------------------------------------------- | -------------------------------------------------- |
+| Vehicle physics     | Custom velocity/acceleration | Rapier RigidBody                            | Wheel friction, suspension, collisions are complex |
+| Collision detection | Raycasting everything        | Rapier colliders                            | Performance, edge cases, tunneling                 |
+| Camera follow       | Manual lerp                  | drei CameraControls or custom with useFrame | Smooth interpolation, bounds                       |
+| City generation     | Pure random placement        | Grid-based with noise for variation         | Random looks wrong, grid is predictable            |
+| LOD                 | Manual distance checks       | drei <Detailed>                             | Handles transitions, hysteresis                    |
 
 **Key insight:** 3D game development has 40+ years of solved problems. Rapier implements proper physics simulation. drei implements proper 3D helpers. Fighting these leads to bugs that look like "game feel" issues but are actually physics edge cases.
 </dont_hand_roll>
 
 <common_pitfalls>
+
 ## Common Pitfalls
 
 ### Pitfall 1: Physics Tunneling
+
 **What goes wrong:** Fast objects pass through walls
 **Why it happens:** Default physics step too large for velocity
 **How to avoid:** Use CCD (Continuous Collision Detection) in Rapier
 **Warning signs:** Objects randomly appearing outside buildings
 
 ### Pitfall 2: Performance Death by Draw Calls
+
 **What goes wrong:** Game stutters with many buildings
 **Why it happens:** Each mesh = 1 draw call, hundreds of buildings = hundreds of calls
 **How to avoid:** InstancedMesh for similar objects, merge static geometry
 **Warning signs:** GPU bound, low FPS despite simple scene
 
 ### Pitfall 3: Vehicle "Floaty" Feel
+
 **What goes wrong:** Car doesn't feel grounded
 **Why it happens:** Missing proper wheel/suspension simulation
 **How to avoid:** Use Rapier vehicle controller or tune mass/damping carefully
@@ -387,9 +466,11 @@ function Buildings({ positions }) {
 </common_pitfalls>
 
 <code_examples>
+
 ## Code Examples
 
 ### Basic R3F + Rapier Setup
+
 ```typescript
 // Source: @react-three/rapier getting started
 import { Canvas } from '@react-three/fiber'
@@ -409,76 +490,86 @@ function Game() {
 ```
 
 ### Vehicle Controls Hook
+
 ```typescript
 // Source: Community pattern, verified with drei docs
-import { useFrame } from '@react-three/fiber'
-import { useKeyboardControls } from '@react-three/drei'
+import { useFrame } from '@react-three/fiber';
+import { useKeyboardControls } from '@react-three/drei';
 
 function useVehicleControls(rigidBodyRef) {
-  const [, getKeys] = useKeyboardControls()
+  const [, getKeys] = useKeyboardControls();
 
   useFrame(() => {
-    const { forward, back, left, right } = getKeys()
-    const body = rigidBodyRef.current
-    if (!body) return
+    const { forward, back, left, right } = getKeys();
+    const body = rigidBodyRef.current;
+    if (!body) return;
 
-    const impulse = { x: 0, y: 0, z: 0 }
-    if (forward) impulse.z -= 10
-    if (back) impulse.z += 5
+    const impulse = { x: 0, y: 0, z: 0 };
+    if (forward) impulse.z -= 10;
+    if (back) impulse.z += 5;
 
-    body.applyImpulse(impulse, true)
+    body.applyImpulse(impulse, true);
 
-    if (left) body.applyTorqueImpulse({ x: 0, y: 2, z: 0 }, true)
-    if (right) body.applyTorqueImpulse({ x: 0, y: -2, z: 0 }, true)
-  })
+    if (left) body.applyTorqueImpulse({ x: 0, y: 2, z: 0 }, true);
+    if (right) body.applyTorqueImpulse({ x: 0, y: -2, z: 0 }, true);
+  });
 }
 ```
+
 </code_examples>
 
 <sota_updates>
+
 ## State of the Art (2024-2025)
 
-| Old Approach | Current Approach | When Changed | Impact |
-|--------------|------------------|--------------|--------|
-| cannon-es | Rapier | 2023 | Rapier is faster, better maintained |
-| vanilla Three.js | React Three Fiber | 2020+ | R3F is now standard for React apps |
-| Manual InstancedMesh | drei <Instances> | 2022 | Simpler API, handles updates |
+| Old Approach         | Current Approach  | When Changed | Impact                              |
+| -------------------- | ----------------- | ------------ | ----------------------------------- |
+| cannon-es            | Rapier            | 2023         | Rapier is faster, better maintained |
+| vanilla Three.js     | React Three Fiber | 2020+        | R3F is now standard for React apps  |
+| Manual InstancedMesh | drei <Instances>  | 2022         | Simpler API, handles updates        |
 
 **New tools/patterns to consider:**
+
 - **WebGPU:** Coming but not production-ready for games yet (2025)
 - **drei Gltf helpers:** <useGLTF.preload> for loading screens
 
 **Deprecated/outdated:**
+
 - **cannon.js (original):** Use cannon-es fork or better, Rapier
 - **Manual raycasting for physics:** Just use Rapier colliders
-</sota_updates>
+  </sota_updates>
 
 <sources>
 ## Sources
 
 ### Primary (HIGH confidence)
+
 - /pmndrs/react-three-fiber - getting started, hooks, performance
 - /pmndrs/drei - instances, controls, helpers
 - /dimforge/rapier-js - physics setup, vehicle physics
 
 ### Secondary (MEDIUM confidence)
+
 - Three.js discourse "city driving game" threads - verified patterns against docs
 - R3F examples repository - verified code works
 
 ### Tertiary (LOW confidence - needs validation)
+
 - None - all findings verified
-</sources>
+  </sources>
 
 <metadata>
 ## Metadata
 
 **Research scope:**
+
 - Core technology: Three.js + React Three Fiber
 - Ecosystem: Rapier, drei, zustand
 - Patterns: Vehicle physics, instancing, city generation
 - Pitfalls: Performance, physics, feel
 
 **Confidence breakdown:**
+
 - Standard stack: HIGH - verified with Context7, widely used
 - Architecture: HIGH - from official examples
 - Pitfalls: HIGH - documented in discourse, verified in docs
@@ -490,9 +581,10 @@ function useVehicleControls(rigidBodyRef) {
 
 ---
 
-*Phase: 03-city-driving*
-*Research completed: 2025-01-20*
-*Ready for planning: yes*
+_Phase: 03-city-driving_
+_Research completed: 2025-01-20_
+_Ready for planning: yes_
+
 ```
 
 ---
@@ -524,6 +616,7 @@ function useVehicleControls(rigidBodyRef) {
 - Code examples can be referenced in task actions
 
 **After creation:**
-- File lives in phase directory: `.planning/phases/XX-name/{phase}-RESEARCH.md`
+- File lives in phase directory: `.planning/phases/XX-name/{phase_num}-RESEARCH.md`
 - Referenced during planning workflow
 - plan-phase loads it automatically when present
+```

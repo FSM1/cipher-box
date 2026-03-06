@@ -7,10 +7,7 @@ Use this workflow when:
 </trigger>
 
 <purpose>
-Instantly restore full project context and present clear status.
-Enables seamless session continuity for fully autonomous workflows.
-
-"Where were we?" should have an immediate, complete answer.
+Instantly restore full project context so "Where were we?" has an immediate, complete answer.
 </purpose>
 
 <required_reading>
@@ -19,18 +16,19 @@ Enables seamless session continuity for fully autonomous workflows.
 
 <process>
 
-<step name="detect_existing_project">
-Check if this is an existing project:
+<step name="initialize">
+Load all context in one call:
 
 ```bash
-ls .planning/STATE.md 2>/dev/null && echo "Project exists"
-ls .planning/ROADMAP.md 2>/dev/null && echo "Roadmap exists"
-ls .planning/PROJECT.md 2>/dev/null && echo "Project file exists"
+INIT=$(node "./.claude/get-shit-done/bin/gsd-tools.cjs" init resume)
+if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
-**If STATE.md exists:** Proceed to load_state
-**If only ROADMAP.md/PROJECT.md exist:** Offer to reconstruct STATE.md
-**If .planning/ doesn't exist:** This is a new project - route to /gsd:new-project
+Parse JSON for: `state_exists`, `roadmap_exists`, `project_exists`, `planning_exists`, `has_interrupted_agent`, `interrupted_agent_id`, `commit_docs`.
+
+**If `state_exists` is true:** Proceed to load_state
+**If `state_exists` is false but `roadmap_exists` or `project_exists` is true:** Offer to reconstruct STATE.md
+**If `planning_exists` is false:** This is a new project - route to /gsd:new-project
 </step>
 
 <step name="load_state">
@@ -74,10 +72,9 @@ for plan in .planning/phases/*/*-PLAN.md; do
   [ ! -f "$summary" ] && echo "Incomplete: $plan"
 done 2>/dev/null
 
-# Check for interrupted agents
-if [ -f .planning/current-agent-id.txt ] && [ -s .planning/current-agent-id.txt ]; then
-  AGENT_ID=$(cat .planning/current-agent-id.txt | tr -d '\n')
-  echo "Interrupted agent: $AGENT_ID"
+# Check for interrupted agents (use has_interrupted_agent and interrupted_agent_id from init)
+if [ "$has_interrupted_agent" = "true" ]; then
+  echo "Interrupted agent: $interrupted_agent_id"
 fi
 ```
 
@@ -200,7 +197,7 @@ What would you like to do?
 **Note:** When offering phase planning, check for CONTEXT.md existence first:
 
 ```bash
-ls .planning/phases/XX-name/CONTEXT.md 2>/dev/null
+ls .planning/phases/XX-name/*-CONTEXT.md 2>/dev/null
 ```
 
 If missing, suggest discuss-phase before plan. If exists, offer plan directly.
@@ -212,6 +209,7 @@ Wait for user selection.
 Based on user selection, route to appropriate workflow:
 
 - **Execute plan** → Show command for user to run after clearing:
+
   ```
   ---
 
@@ -225,7 +223,9 @@ Based on user selection, route to appropriate workflow:
 
   ---
   ```
+
 - **Plan phase** → Show command for user to run after clearing:
+
   ```
   ---
 
@@ -245,11 +245,12 @@ Based on user selection, route to appropriate workflow:
 
   ---
   ```
+
 - **Transition** → ./transition.md
 - **Check todos** → Read .planning/todos/pending/, present summary
 - **Review alignment** → Read PROJECT.md, compare to current state
 - **Something else** → Ask what they need
-</step>
+  </step>
 
 <step name="update_session">
 Before proceeding to routed workflow, update session continuity:
@@ -290,17 +291,13 @@ This handles cases where:
   </reconstruction>
 
 <quick_resume>
-For users who want minimal friction:
-
-If user says just "continue" or "go":
+If user says "continue" or "go":
 
 - Load state silently
 - Determine primary action
 - Execute immediately without presenting options
 
 "Continuing from [state]... [action]"
-
-This enables fully autonomous "just keep going" workflow.
 </quick_resume>
 
 <success_criteria>

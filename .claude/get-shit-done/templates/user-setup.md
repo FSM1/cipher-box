@@ -8,7 +8,7 @@ Template for `.planning/phases/XX-name/{phase}-USER-SETUP.md` - human-required c
 
 ## File Template
 
-```markdown
+````markdown
 # Phase {X}: User Setup Required
 
 **Generated:** [YYYY-MM-DD]
@@ -19,10 +19,10 @@ Complete these items for the integration to function. Claude automated everythin
 
 ## Environment Variables
 
-| Status | Variable | Source | Add to |
-|--------|----------|--------|--------|
-| [ ] | `ENV_VAR_NAME` | [Service Dashboard → Path → To → Value] | `.env.local` |
-| [ ] | `ANOTHER_VAR` | [Service Dashboard → Path → To → Value] | `.env.local` |
+| Status | Variable       | Source                                  | Add to       |
+| ------ | -------------- | --------------------------------------- | ------------ |
+| [ ]    | `ENV_VAR_NAME` | [Service Dashboard → Path → To → Value] | `.env.local` |
+| [ ]    | `ANOTHER_VAR`  | [Service Dashboard → Path → To → Value] | `.env.local` |
 
 ## Account Setup
 
@@ -48,14 +48,17 @@ After completing setup, verify with:
 ```bash
 # [Verification commands]
 ```
+````
 
 Expected results:
+
 - [What success looks like]
 
 ---
 
 **Once all items complete:** Mark status as "Complete" at top of file.
-```
+
+````
 
 ---
 
@@ -91,7 +94,7 @@ user_setup:
     local_dev:
       - "Run: stripe listen --forward-to localhost:3000/api/webhooks/stripe"
       - "Use the webhook secret from CLI output for local testing"
-```
+````
 
 ---
 
@@ -99,16 +102,17 @@ user_setup:
 
 **USER-SETUP.md contains ONLY what Claude literally cannot do.**
 
-| Claude CAN Do (not in USER-SETUP) | Claude CANNOT Do (→ USER-SETUP) |
-|-----------------------------------|--------------------------------|
-| `npm install stripe` | Create Stripe account |
-| Write webhook handler code | Get API keys from dashboard |
-| Create `.env.local` file structure | Copy actual secret values |
-| Run `stripe listen` | Authenticate Stripe CLI (browser OAuth) |
-| Configure package.json | Access external service dashboards |
-| Write any code | Retrieve secrets from third-party systems |
+| Claude CAN Do (not in USER-SETUP)  | Claude CANNOT Do (→ USER-SETUP)           |
+| ---------------------------------- | ----------------------------------------- |
+| `npm install stripe`               | Create Stripe account                     |
+| Write webhook handler code         | Get API keys from dashboard               |
+| Create `.env.local` file structure | Copy actual secret values                 |
+| Run `stripe listen`                | Authenticate Stripe CLI (browser OAuth)   |
+| Configure package.json             | Access external service dashboards        |
+| Write any code                     | Retrieve secrets from third-party systems |
 
 **The test:** "Does this require a human in a browser, accessing an account Claude doesn't have credentials for?"
+
 - Yes → USER-SETUP.md
 - No → Claude does it automatically
 
@@ -117,7 +121,8 @@ user_setup:
 ## Service-Specific Examples
 
 <stripe_example>
-```markdown
+
+````markdown
 # Phase 10: User Setup Required
 
 **Generated:** 2025-01-14
@@ -128,11 +133,11 @@ Complete these items for Stripe integration to function.
 
 ## Environment Variables
 
-| Status | Variable | Source | Add to |
-|--------|----------|--------|--------|
-| [ ] | `STRIPE_SECRET_KEY` | Stripe Dashboard → Developers → API keys → Secret key | `.env.local` |
-| [ ] | `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Stripe Dashboard → Developers → API keys → Publishable key | `.env.local` |
-| [ ] | `STRIPE_WEBHOOK_SECRET` | Stripe Dashboard → Developers → Webhooks → [endpoint] → Signing secret | `.env.local` |
+| Status | Variable                             | Source                                                                 | Add to       |
+| ------ | ------------------------------------ | ---------------------------------------------------------------------- | ------------ |
+| [ ]    | `STRIPE_SECRET_KEY`                  | Stripe Dashboard → Developers → API keys → Secret key                  | `.env.local` |
+| [ ]    | `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Stripe Dashboard → Developers → API keys → Publishable key             | `.env.local` |
+| [ ]    | `STRIPE_WEBHOOK_SECRET`              | Stripe Dashboard → Developers → Webhooks → [endpoint] → Signing secret | `.env.local` |
 
 ## Account Setup
 
@@ -161,9 +166,12 @@ Complete these items for Stripe integration to function.
 ## Local Development
 
 For local webhook testing:
+
 ```bash
 stripe listen --forward-to localhost:3000/api/webhooks/stripe
 ```
+````
+
 Use the webhook signing secret from CLI output (starts with `whsec_`).
 
 ## Verification
@@ -188,7 +196,8 @@ Expected: Build passes, webhook returns 400 (signature validation working).
 ---
 
 **Once all items complete:** Mark status as "Complete" at top of file.
-```
+
+````
 </stripe_example>
 
 <supabase_example>
@@ -237,12 +246,13 @@ grep SUPABASE .env.local
 
 # Verify connection (run in project directory)
 npx supabase status
-```
+````
 
 ---
 
 **Once all items complete:** Mark status as "Complete" at top of file.
-```
+
+````
 </supabase_example>
 
 <sendgrid_example>
@@ -292,11 +302,12 @@ grep SENDGRID .env.local
 curl -X POST http://localhost:3000/api/test-email \
   -H "Content-Type: application/json" \
   -d '{"to": "your@email.com"}'
-```
+````
 
 ---
 
 **Once all items complete:** Mark status as "Complete" at top of file.
+
 ```
 </sendgrid_example>
 
@@ -304,20 +315,9 @@ curl -X POST http://localhost:3000/api/test-email \
 
 ## Guidelines
 
-**Include in USER-SETUP.md:**
-- Environment variable names and where to find values
-- Account creation URLs (if new service)
-- Dashboard configuration steps
-- Verification commands to confirm setup works
-- Local development alternatives (e.g., `stripe listen`)
-
-**Do NOT include:**
-- Actual secret values (never)
-- Steps Claude can automate (package installs, code changes, file creation)
-- Generic instructions ("set up your environment")
+**Never include:** Actual secret values. Steps Claude can automate (package installs, code changes).
 
 **Naming:** `{phase}-USER-SETUP.md` matches the phase number pattern.
-
 **Status tracking:** User marks checkboxes and updates status line when complete.
-
 **Searchability:** `grep -r "USER-SETUP" .planning/` finds all phases with user requirements.
+```

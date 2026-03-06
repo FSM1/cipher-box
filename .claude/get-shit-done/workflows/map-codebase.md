@@ -22,11 +22,24 @@ Documents are reference material for Claude when planning/executing. Always incl
 
 <process>
 
-<step name="check_existing" priority="first">
-Check if .planning/codebase/ already exists:
+<step name="init_context" priority="first">
+Load codebase mapping context:
 
 ```bash
-ls -la .planning/codebase/ 2>/dev/null
+INIT=$(node "./.claude/get-shit-done/bin/gsd-tools.cjs" init map-codebase)
+if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
+```
+
+Extract from init JSON: `mapper_model`, `commit_docs`, `codebase_dir`, `existing_maps`, `has_maps`, `codebase_dir_exists`.
+</step>
+
+<step name="check_existing">
+Check if .planning/codebase/ already exists using `has_maps` from init context.
+
+If `codebase_dir_exists` is true:
+
+```bash
+ls -la .planning/codebase/
 ```
 
 **If exists:**
@@ -59,6 +72,7 @@ mkdir -p .planning/codebase
 ```
 
 **Expected output files:**
+
 - STACK.md (from tech mapper)
 - INTEGRATIONS.md (from tech mapper)
 - ARCHITECTURE.md (from arch mapper)
@@ -73,22 +87,19 @@ Continue to spawn_agents.
 <step name="spawn_agents">
 Spawn 4 parallel gsd-codebase-mapper agents.
 
-Use Task tool with `subagent_type="gsd-codebase-mapper"` and `run_in_background=true` for parallel execution.
+Use Task tool with `subagent_type="gsd-codebase-mapper"`, `model="{mapper_model}"`, and `run_in_background=true` for parallel execution.
 
 **CRITICAL:** Use the dedicated `gsd-codebase-mapper` agent, NOT `Explore`. The mapper agent writes documents directly.
 
 **Agent 1: Tech Focus**
 
-Task tool parameters:
 ```
-subagent_type: "gsd-codebase-mapper"
-run_in_background: true
-description: "Map codebase tech stack"
-```
-
-Prompt:
-```
-Focus: tech
+Task(
+  subagent_type="gsd-codebase-mapper",
+  model="{mapper_model}",
+  run_in_background=true,
+  description="Map codebase tech stack",
+  prompt="Focus: tech
 
 Analyze this codebase for technology stack and external integrations.
 
@@ -96,21 +107,19 @@ Write these documents to .planning/codebase/:
 - STACK.md - Languages, runtime, frameworks, dependencies, configuration
 - INTEGRATIONS.md - External APIs, databases, auth providers, webhooks
 
-Explore thoroughly. Write documents directly using templates. Return confirmation only.
+Explore thoroughly. Write documents directly using templates. Return confirmation only."
+)
 ```
 
 **Agent 2: Architecture Focus**
 
-Task tool parameters:
 ```
-subagent_type: "gsd-codebase-mapper"
-run_in_background: true
-description: "Map codebase architecture"
-```
-
-Prompt:
-```
-Focus: arch
+Task(
+  subagent_type="gsd-codebase-mapper",
+  model="{mapper_model}",
+  run_in_background=true,
+  description="Map codebase architecture",
+  prompt="Focus: arch
 
 Analyze this codebase architecture and directory structure.
 
@@ -118,21 +127,19 @@ Write these documents to .planning/codebase/:
 - ARCHITECTURE.md - Pattern, layers, data flow, abstractions, entry points
 - STRUCTURE.md - Directory layout, key locations, naming conventions
 
-Explore thoroughly. Write documents directly using templates. Return confirmation only.
+Explore thoroughly. Write documents directly using templates. Return confirmation only."
+)
 ```
 
 **Agent 3: Quality Focus**
 
-Task tool parameters:
 ```
-subagent_type: "gsd-codebase-mapper"
-run_in_background: true
-description: "Map codebase conventions"
-```
-
-Prompt:
-```
-Focus: quality
+Task(
+  subagent_type="gsd-codebase-mapper",
+  model="{mapper_model}",
+  run_in_background=true,
+  description="Map codebase conventions",
+  prompt="Focus: quality
 
 Analyze this codebase for coding conventions and testing patterns.
 
@@ -140,28 +147,27 @@ Write these documents to .planning/codebase/:
 - CONVENTIONS.md - Code style, naming, patterns, error handling
 - TESTING.md - Framework, structure, mocking, coverage
 
-Explore thoroughly. Write documents directly using templates. Return confirmation only.
+Explore thoroughly. Write documents directly using templates. Return confirmation only."
+)
 ```
 
 **Agent 4: Concerns Focus**
 
-Task tool parameters:
 ```
-subagent_type: "gsd-codebase-mapper"
-run_in_background: true
-description: "Map codebase concerns"
-```
-
-Prompt:
-```
-Focus: concerns
+Task(
+  subagent_type="gsd-codebase-mapper",
+  model="{mapper_model}",
+  run_in_background=true,
+  description="Map codebase concerns",
+  prompt="Focus: concerns
 
 Analyze this codebase for technical debt, known issues, and areas of concern.
 
 Write this document to .planning/codebase/:
 - CONCERNS.md - Tech debt, bugs, security, performance, fragile areas
 
-Explore thoroughly. Write document directly using template. Return confirmation only.
+Explore thoroughly. Write document directly using template. Return confirmation only."
+)
 ```
 
 Continue to collect_confirmations.
@@ -173,6 +179,7 @@ Wait for all 4 agents to complete.
 Read each agent's output file to collect confirmations.
 
 **Expected confirmation format from each agent:**
+
 ```
 ## Mapping Complete
 
@@ -200,10 +207,46 @@ wc -l .planning/codebase/*.md
 ```
 
 **Verification checklist:**
+
 - All 7 documents exist
 - No empty documents (each should have >20 lines)
 
 If any documents missing or empty, note which agents may have failed.
+
+Continue to scan_for_secrets.
+</step>
+
+<step name="scan_for_secrets">
+**CRITICAL SECURITY CHECK:** Scan output files for accidentally leaked secrets before committing.
+
+Run secret pattern detection:
+
+```bash
+# Check for common API key patterns in generated docs
+grep -E '(sk-[a-zA-Z0-9]{20,}|sk_live_[a-zA-Z0-9]+|sk_test_[a-zA-Z0-9]+|ghp_[a-zA-Z0-9]{36}|gho_[a-zA-Z0-9]{36}|glpat-[a-zA-Z0-9_-]+|AKIA[A-Z0-9]{16}|xox[baprs]-[a-zA-Z0-9-]+|-----BEGIN.*PRIVATE KEY|eyJ[a-zA-Z0-9_-]+\.eyJ[a-zA-Z0-9_-]+\.)' .planning/codebase/*.md 2>/dev/null && SECRETS_FOUND=true || SECRETS_FOUND=false
+```
+
+**If SECRETS_FOUND=true:**
+
+```
+⚠️  SECURITY ALERT: Potential secrets detected in codebase documents!
+
+Found patterns that look like API keys or tokens in:
+[show grep output]
+
+This would expose credentials if committed.
+
+**Action required:**
+1. Review the flagged content above
+2. If these are real secrets, they must be removed before committing
+3. Consider adding sensitive files to Claude Code "Deny" permissions
+
+Pausing before commit. Reply "safe to proceed" if the flagged content is not actually sensitive, or edit the files first.
+```
+
+Wait for user confirmation before continuing to commit_codebase_map.
+
+**If SECRETS_FOUND=false:**
 
 Continue to commit_codebase_map.
 </step>
@@ -212,19 +255,7 @@ Continue to commit_codebase_map.
 Commit the codebase map:
 
 ```bash
-git add .planning/codebase/*.md
-git commit -m "$(cat <<'EOF'
-docs: map existing codebase
-
-- STACK.md - Technologies and dependencies
-- ARCHITECTURE.md - System design and patterns
-- STRUCTURE.md - Directory layout
-- CONVENTIONS.md - Code style and patterns
-- TESTING.md - Test structure
-- INTEGRATIONS.md - External services
-- CONCERNS.md - Technical debt and issues
-EOF
-)"
+node "./.claude/get-shit-done/bin/gsd-tools.cjs" commit "docs: map existing codebase" --files .planning/codebase/*.md
 ```
 
 Continue to offer_next.
@@ -234,6 +265,7 @@ Continue to offer_next.
 Present completion summary and next steps.
 
 **Get line counts:**
+
 ```bash
 wc -l .planning/codebase/*.md
 ```
@@ -279,6 +311,7 @@ End workflow.
 </process>
 
 <success_criteria>
+
 - .planning/codebase/ directory created
 - 4 parallel gsd-codebase-mapper agents spawned with run_in_background=true
 - Agents write documents directly (orchestrator doesn't receive document contents)
@@ -286,4 +319,4 @@ End workflow.
 - All 7 codebase documents exist
 - Clear completion summary with line counts
 - User offered clear next steps in GSD style
-</success_criteria>
+  </success_criteria>

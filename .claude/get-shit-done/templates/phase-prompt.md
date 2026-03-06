@@ -16,17 +16,18 @@ Template for `.planning/phases/XX-name/{phase}-{plan}-PLAN.md` - executable phas
 phase: XX-name
 plan: NN
 type: execute
-wave: N                     # Execution wave (1, 2, 3...). Pre-computed at plan time.
-depends_on: []              # Plan IDs this plan requires (e.g., ["01-01"]).
-files_modified: []          # Files this plan modifies.
-autonomous: true            # false if plan has checkpoints requiring user interaction
-user_setup: []              # Human-required setup Claude cannot automate (see below)
+wave: N # Execution wave (1, 2, 3...). Pre-computed at plan time.
+depends_on: [] # Plan IDs this plan requires (e.g., ["01-01"]).
+files_modified: [] # Files this plan modifies.
+autonomous: true # false if plan has checkpoints requiring user interaction
+requirements: [] # REQUIRED — Requirement IDs from ROADMAP this plan addresses. MUST NOT be empty.
+user_setup: [] # Human-required setup Claude cannot automate (see below)
 
 # Goal-backward verification (derived during planning, verified after execution)
 must_haves:
-  truths: []                # Observable behaviors that must be true for goal achievement
-  artifacts: []             # Files that must exist with real implementation
-  key_links: []             # Critical connections between artifacts
+  truths: [] # Observable behaviors that must be true for goal achievement
+  artifacts: [] # Files that must exist with real implementation
+  key_links: [] # Critical connections between artifacts
 ---
 
 <objective>
@@ -49,8 +50,11 @@ Output: [What artifacts will be created]
 @.planning/STATE.md
 
 # Only reference prior plan SUMMARYs if genuinely needed:
+
 # - This plan uses types/exports from prior plan
+
 # - Prior plan made decision that affects this plan
+
 # Do NOT reflexively chain: Plan 02 refs 01, Plan 03 refs 02...
 
 [Relevant source files:]
@@ -75,33 +79,23 @@ Output: [What artifacts will be created]
   <done>[Acceptance criteria]</done>
 </task>
 
+<!-- For checkpoint task examples and patterns, see @./.claude/get-shit-done/references/checkpoints.md -->
+<!-- Key rule: Claude starts dev server BEFORE human-verify checkpoints. User only visits URLs. -->
+
 <task type="checkpoint:decision" gate="blocking">
   <decision>[What needs deciding]</decision>
   <context>[Why this decision matters]</context>
   <options>
-    <option id="option-a">
-      <name>[Option name]</name>
-      <pros>[Benefits and advantages]</pros>
-      <cons>[Tradeoffs and limitations]</cons>
-    </option>
-    <option id="option-b">
-      <name>[Option name]</name>
-      <pros>[Benefits and advantages]</pros>
-      <cons>[Tradeoffs and limitations]</cons>
-    </option>
+    <option id="option-a"><name>[Name]</name><pros>[Benefits]</pros><cons>[Tradeoffs]</cons></option>
+    <option id="option-b"><name>[Name]</name><pros>[Benefits]</pros><cons>[Tradeoffs]</cons></option>
   </options>
-  <resume-signal>[How to indicate choice - "Select: option-a or option-b"]</resume-signal>
+  <resume-signal>Select: option-a or option-b</resume-signal>
 </task>
 
 <task type="checkpoint:human-verify" gate="blocking">
-  <what-built>[What Claude just built that needs verification]</what-built>
-  <how-to-verify>
-    1. Run: [command to start dev server/app]
-    2. Visit: [URL to check]
-    3. Test: [Specific interactions]
-    4. Confirm: [Expected behaviors]
-  </how-to-verify>
-  <resume-signal>Type "approved" to continue, or describe issues to fix</resume-signal>
+  <what-built>[What Claude built] - server running at [URL]</what-built>
+  <how-to-verify>Visit [URL] and verify: [visual checks only, NO CLI commands]</how-to-verify>
+  <resume-signal>Type "approved" or describe issues</resume-signal>
 </task>
 
 </tasks>
@@ -130,17 +124,18 @@ After completion, create `.planning/phases/XX-name/{phase}-{plan}-SUMMARY.md`
 
 ## Frontmatter Fields
 
-| Field | Required | Purpose |
-|-------|----------|---------|
-| `phase` | Yes | Phase identifier (e.g., `01-foundation`) |
-| `plan` | Yes | Plan number within phase (e.g., `01`, `02`) |
-| `type` | Yes | Always `execute` for standard plans, `tdd` for TDD plans |
-| `wave` | Yes | Execution wave number (1, 2, 3...). Pre-computed at plan time. |
-| `depends_on` | Yes | Array of plan IDs this plan requires. |
-| `files_modified` | Yes | Files this plan touches. |
-| `autonomous` | Yes | `true` if no checkpoints, `false` if has checkpoints |
-| `user_setup` | No | Array of human-required setup items (external services) |
-| `must_haves` | Yes | Goal-backward verification criteria (see below) |
+| Field            | Required | Purpose                                                                                                 |
+| ---------------- | -------- | ------------------------------------------------------------------------------------------------------- |
+| `phase`          | Yes      | Phase identifier (e.g., `01-foundation`)                                                                |
+| `plan`           | Yes      | Plan number within phase (e.g., `01`, `02`)                                                             |
+| `type`           | Yes      | Always `execute` for standard plans, `tdd` for TDD plans                                                |
+| `wave`           | Yes      | Execution wave number (1, 2, 3...). Pre-computed at plan time.                                          |
+| `depends_on`     | Yes      | Array of plan IDs this plan requires.                                                                   |
+| `files_modified` | Yes      | Files this plan touches.                                                                                |
+| `autonomous`     | Yes      | `true` if no checkpoints, `false` if has checkpoints                                                    |
+| `requirements`   | Yes      | **MUST** list requirement IDs from ROADMAP. Every roadmap requirement MUST appear in at least one plan. |
+| `user_setup`     | No       | Array of human-required setup items (external services)                                                 |
+| `must_haves`     | Yes      | Goal-backward verification criteria (see below)                                                         |
 
 **Wave is pre-computed:** Wave numbers are assigned during `/gsd:plan-phase`. Execute-phase reads `wave` directly from frontmatter and groups plans by wave number. No runtime dependency analysis needed.
 
@@ -199,9 +194,9 @@ Plan 02 in Wave 2 waits for Plan 01 in Wave 1 - genuine dependency on auth types
 ```yaml
 # Plan 03 - UI with verification
 wave: 3
-depends_on: ["01", "02"]
+depends_on: ['01', '02']
 files_modified: [src/components/Dashboard.tsx]
-autonomous: false  # Has checkpoint:human-verify
+autonomous: false # Has checkpoint:human-verify
 ```
 
 Wave 3 runs after Waves 1 and 2. Pauses at checkpoint, orchestrator presents to user, resumes on approval.
@@ -221,11 +216,17 @@ Wave 3 runs after Waves 1 and 2. Pauses at checkpoint, orchestrator presents to 
 @.planning/STATE.md
 
 # Only include SUMMARY refs if genuinely needed:
+
 # - This plan imports types from prior plan
+
 # - Prior plan made decision affecting this plan
+
 # - Prior plan's output is input to this plan
+
 #
+
 # Independent plans need NO prior SUMMARY references.
+
 # Do NOT reflexively chain: 02 refs 01, 03 refs 02...
 
 @src/relevant/source.ts
@@ -233,6 +234,7 @@ Wave 3 runs after Waves 1 and 2. Pauses at checkpoint, orchestrator presents to 
 ```
 
 **Bad pattern (creates false dependencies):**
+
 ```markdown
 <context>
 @.planning/phases/03-features/03-01-SUMMARY.md  # Just because it's earlier
@@ -253,7 +255,7 @@ Wave 3 runs after Waves 1 and 2. Pauses at checkpoint, orchestrator presents to 
 **When to split:**
 
 - Different subsystems (auth vs API vs UI)
-- >3 tasks
+- > 3 tasks
 - Risk of context overflow
 - TDD candidates - separate plans
 
@@ -284,14 +286,15 @@ See `./.claude/get-shit-done/references/tdd.md` for TDD plan structure.
 
 ## Task Types
 
-| Type | Use For | Autonomy |
-|------|---------|----------|
-| `auto` | Everything Claude can do independently | Fully autonomous |
-| `checkpoint:human-verify` | Visual/functional verification | Pauses, returns to orchestrator |
-| `checkpoint:decision` | Implementation choices | Pauses, returns to orchestrator |
-| `checkpoint:human-action` | Truly unavoidable manual steps (rare) | Pauses, returns to orchestrator |
+| Type                      | Use For                                | Autonomy                        |
+| ------------------------- | -------------------------------------- | ------------------------------- |
+| `auto`                    | Everything Claude can do independently | Fully autonomous                |
+| `checkpoint:human-verify` | Visual/functional verification         | Pauses, returns to orchestrator |
+| `checkpoint:decision`     | Implementation choices                 | Pauses, returns to orchestrator |
+| `checkpoint:human-action` | Truly unavoidable manual steps (rare)  | Pauses, returns to orchestrator |
 
 **Checkpoint behavior in parallel execution:**
+
 - Plan runs until checkpoint
 - Agent returns with checkpoint details + agent_id
 - Orchestrator presents to user
@@ -311,7 +314,8 @@ plan: 01
 type: execute
 wave: 1
 depends_on: []
-files_modified: [src/features/user/model.ts, src/features/user/api.ts, src/features/user/UserList.tsx]
+files_modified:
+  [src/features/user/model.ts, src/features/user/api.ts, src/features/user/UserList.tsx]
 autonomous: true
 ---
 
@@ -352,9 +356,10 @@ Output: User model, API endpoints, and UI components.
 </verification>
 
 <success_criteria>
+
 - All tasks completed
 - User feature works end-to-end
-</success_criteria>
+  </success_criteria>
 
 <output>
 After completion, create `.planning/phases/03-features/03-01-SUMMARY.md`
@@ -369,7 +374,7 @@ phase: 03-features
 plan: 03
 type: execute
 wave: 2
-depends_on: ["03-01", "03-02"]
+depends_on: ['03-01', '03-02']
 files_modified: [src/components/Dashboard.tsx]
 autonomous: false
 ---
@@ -403,15 +408,16 @@ Output: Working dashboard component.
   <done>Dashboard renders without errors</done>
 </task>
 
+<!-- Checkpoint pattern: Claude starts server, user visits URL. See checkpoints.md for full patterns. -->
+<task type="auto">
+  <name>Start dev server</name>
+  <action>Run `npm run dev` in background, wait for ready</action>
+  <verify>curl localhost:3000 returns 200</verify>
+</task>
+
 <task type="checkpoint:human-verify" gate="blocking">
-  <what-built>Responsive dashboard with user and product sections</what-built>
-  <how-to-verify>
-    1. Run: npm run dev
-    2. Visit: http://localhost:3000/dashboard
-    3. Desktop: Verify two-column grid
-    4. Mobile: Verify stacked layout
-    5. Check: No layout shift, no scroll issues
-  </how-to-verify>
+  <what-built>Dashboard - server at http://localhost:3000</what-built>
+  <how-to-verify>Visit localhost:3000/dashboard. Check: desktop grid, mobile stack, no scroll issues.</how-to-verify>
   <resume-signal>Type "approved" or describe issues</resume-signal>
 </task>
 </tasks>
@@ -422,9 +428,10 @@ Output: Working dashboard component.
 </verification>
 
 <success_criteria>
+
 - All tasks completed
 - User approved visual layout
-</success_criteria>
+  </success_criteria>
 
 <output>
 After completion, create `.planning/phases/03-features/03-03-SUMMARY.md`
@@ -436,11 +443,13 @@ After completion, create `.planning/phases/03-features/03-03-SUMMARY.md`
 ## Anti-Patterns
 
 **Bad: Reflexive dependency chaining**
+
 ```yaml
-depends_on: ["03-01"]  # Just because 01 comes before 02
+depends_on: ['03-01'] # Just because 01 comes before 02
 ```
 
 **Bad: Horizontal layer grouping**
+
 ```
 Plan 01: All models
 Plan 02: All APIs (depends on 01)
@@ -448,6 +457,7 @@ Plan 03: All UIs (depends on 02)
 ```
 
 **Bad: Missing autonomy flag**
+
 ```yaml
 # Has checkpoint but no autonomous: false
 depends_on: []
@@ -456,6 +466,7 @@ files_modified: [...]
 ```
 
 **Bad: Vague tasks**
+
 ```xml
 <task type="auto">
   <name>Set up authentication</name>
@@ -483,21 +494,22 @@ When a plan introduces external services requiring human configuration, declare 
 ```yaml
 user_setup:
   - service: stripe
-    why: "Payment processing requires API keys"
+    why: 'Payment processing requires API keys'
     env_vars:
       - name: STRIPE_SECRET_KEY
-        source: "Stripe Dashboard → Developers → API keys → Secret key"
+        source: 'Stripe Dashboard → Developers → API keys → Secret key'
       - name: STRIPE_WEBHOOK_SECRET
-        source: "Stripe Dashboard → Developers → Webhooks → Signing secret"
+        source: 'Stripe Dashboard → Developers → Webhooks → Signing secret'
     dashboard_config:
-      - task: "Create webhook endpoint"
-        location: "Stripe Dashboard → Developers → Webhooks → Add endpoint"
-        details: "URL: https://[your-domain]/api/webhooks/stripe"
+      - task: 'Create webhook endpoint'
+        location: 'Stripe Dashboard → Developers → Webhooks → Add endpoint'
+        details: 'URL: https://[your-domain]/api/webhooks/stripe'
     local_dev:
-      - "stripe listen --forward-to localhost:3000/api/webhooks/stripe"
+      - 'stripe listen --forward-to localhost:3000/api/webhooks/stripe'
 ```
 
 **The automation-first rule:** `user_setup` contains ONLY what Claude literally cannot do:
+
 - Account creation (requires human signup)
 - Secret retrieval (requires dashboard access)
 - Dashboard configuration (requires human in browser)
@@ -519,46 +531,46 @@ The `must_haves` field defines what must be TRUE for the phase goal to be achiev
 ```yaml
 must_haves:
   truths:
-    - "User can see existing messages"
-    - "User can send a message"
-    - "Messages persist across refresh"
+    - 'User can see existing messages'
+    - 'User can send a message'
+    - 'Messages persist across refresh'
   artifacts:
-    - path: "src/components/Chat.tsx"
-      provides: "Message list rendering"
+    - path: 'src/components/Chat.tsx'
+      provides: 'Message list rendering'
       min_lines: 30
-    - path: "src/app/api/chat/route.ts"
-      provides: "Message CRUD operations"
-      exports: ["GET", "POST"]
-    - path: "prisma/schema.prisma"
-      provides: "Message model"
-      contains: "model Message"
+    - path: 'src/app/api/chat/route.ts'
+      provides: 'Message CRUD operations'
+      exports: ['GET', 'POST']
+    - path: 'prisma/schema.prisma'
+      provides: 'Message model'
+      contains: 'model Message'
   key_links:
-    - from: "src/components/Chat.tsx"
-      to: "/api/chat"
-      via: "fetch in useEffect"
-      pattern: "fetch.*api/chat"
-    - from: "src/app/api/chat/route.ts"
-      to: "prisma.message"
-      via: "database query"
+    - from: 'src/components/Chat.tsx'
+      to: '/api/chat'
+      via: 'fetch in useEffect'
+      pattern: 'fetch.*api/chat'
+    - from: 'src/app/api/chat/route.ts'
+      to: 'prisma.message'
+      via: 'database query'
       pattern: "prisma\\.message\\.(find|create)"
 ```
 
 **Field descriptions:**
 
-| Field | Purpose |
-|-------|---------|
-| `truths` | Observable behaviors from user perspective. Each must be testable. |
-| `artifacts` | Files that must exist with real implementation. |
-| `artifacts[].path` | File path relative to project root. |
-| `artifacts[].provides` | What this artifact delivers. |
-| `artifacts[].min_lines` | Optional. Minimum lines to be considered substantive. |
-| `artifacts[].exports` | Optional. Expected exports to verify. |
-| `artifacts[].contains` | Optional. Pattern that must exist in file. |
-| `key_links` | Critical connections between artifacts. |
-| `key_links[].from` | Source artifact. |
-| `key_links[].to` | Target artifact or endpoint. |
-| `key_links[].via` | How they connect (description). |
-| `key_links[].pattern` | Optional. Regex to verify connection exists. |
+| Field                   | Purpose                                                            |
+| ----------------------- | ------------------------------------------------------------------ |
+| `truths`                | Observable behaviors from user perspective. Each must be testable. |
+| `artifacts`             | Files that must exist with real implementation.                    |
+| `artifacts[].path`      | File path relative to project root.                                |
+| `artifacts[].provides`  | What this artifact delivers.                                       |
+| `artifacts[].min_lines` | Optional. Minimum lines to be considered substantive.              |
+| `artifacts[].exports`   | Optional. Expected exports to verify.                              |
+| `artifacts[].contains`  | Optional. Pattern that must exist in file.                         |
+| `key_links`             | Critical connections between artifacts.                            |
+| `key_links[].from`      | Source artifact.                                                   |
+| `key_links[].to`        | Target artifact or endpoint.                                       |
+| `key_links[].via`       | How they connect (description).                                    |
+| `key_links[].pattern`   | Optional. Regex to verify connection exists.                       |
 
 **Why this matters:**
 
