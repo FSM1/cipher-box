@@ -47,7 +47,7 @@ CipherBox is a **technology demonstrator** with the following integrations imple
 - TEE-based IPNS key decryption and signing
   - Worker: `tee-worker/src/`
   - Features: Intel SGX hardware attestation
-  - Schedule: Every 3 hours via backend cron
+  - Schedule: Every 6 hours via backend cron
   - Enrollment: `apps/api/src/republish/republish.service.ts`
 
 **AWS Nitro Enclaves (Planned Fallback):**

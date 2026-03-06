@@ -8,7 +8,7 @@
 
 - Issue: When files or folders are deleted, their IPNS records and TEE republish enrollments are not cleaned up. The code logs warnings and defers to "Phase 14" via TODO comments.
 - Files: `apps/web/src/services/folder.service.ts:455`, `apps/web/src/services/folder.service.ts:507-512`, `apps/web/src/services/delete.service.ts:22-29`
-- Impact: Orphaned IPNS records accumulate in the TEE republish schedule. The republish service has capacity warnings at 1000+ records. Each orphan wastes TEE compute and delegated routing bandwidth every 3 hours until natural expiry.
+- Impact: Orphaned IPNS records accumulate in the TEE republish schedule. The republish service has capacity warnings at 1000+ records. Each orphan wastes TEE compute and delegated routing bandwidth every 6 hours until natural expiry.
 - Fix approach: The API already has `unenrollIpns()` at `apps/api/src/republish/republish.service.ts:255`. Expose it via a REST endpoint and call it from the web client during file/folder deletion. Batch unenrollment needed for folder deletes containing multiple files.
 
 **Desktop device approval polling not implemented:**
@@ -167,7 +167,7 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 
 **IPNS record propagation and TEE republishing:**
 
-- Current capacity: TEE republishes all enrolled IPNS records every 3 hours via batch endpoint.
+- Current capacity: TEE republishes all enrolled IPNS records every 6 hours via batch endpoint.
 - Limit: At 1000+ enrolled records per user, republish cycles may exceed the 3-hour window. The `delete.service.ts:28` documents this threshold.
 - Scaling path: Implement IPNS unenrollment on deletion (see Tech Debt section). Consider per-user republish prioritization.
 

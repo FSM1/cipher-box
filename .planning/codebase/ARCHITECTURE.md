@@ -54,7 +54,7 @@
 - Location: `tee-worker/`
 - Contains: Phala Cloud worker for IPNS key decryption and record signing
 - Depends on: Backend republish schedule, delegated-ipfs.dev
-- Used by: Backend cron jobs (every 3 hours)
+- Used by: Backend cron jobs (every 6 hours)
 
 **Legacy PoC (Historical Reference Only):**
 
