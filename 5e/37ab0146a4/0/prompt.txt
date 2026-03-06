@@ -1,0 +1,29 @@
+hmmm that status line is still not the way it was before - let me get you the original statusline.js from another machine
+
+---
+
+ok we are back - replaced the file myself
+
+---
+
+Tool loaded.
+
+---
+
+nah that was not committed, its under claude global settings
+
+---
+
+why was that PR created with a `fix` prefix? its a `chore` at best.
+
+---
+
+its already merged, but you should definitely log a memory regarding PR naming conventions and the implications of such
+
+---
+
+Tool loaded.
+
+---
+
+Tool loaded.

@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "5e37ab0146a4",
+  "session_id": "a5de7244-6f54-43a5-8bd9-2c8cc1288075",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-06T22:45:45.367898Z",
+  "branch": "docs/conventional-commit-learnings",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".learnings/2026-03-06-conventional-commit-type-accuracy.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "d6b34e5968b0",
+  "token_usage": {
+    "input_tokens": 72,
+    "cache_creation_tokens": 27376,
+    "cache_read_tokens": 389755,
+    "output_tokens": 2210,
+    "api_call_count": 20
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-06T22:45:44.90919Z",
+    "agent_lines": 30,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 30,
+    "agent_percentage": 100
+  }
+}

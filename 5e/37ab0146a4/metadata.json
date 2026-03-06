@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "5e37ab0146a4",
+  "strategy": "manual-commit",
+  "branch": "docs/conventional-commit-learnings",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".learnings/2026-03-06-conventional-commit-type-accuracy.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/5e/37ab0146a4/0/metadata.json",
+      "transcript": "/5e/37ab0146a4/0/full.jsonl",
+      "context": "/5e/37ab0146a4/0/context.md",
+      "content_hash": "/5e/37ab0146a4/0/content_hash.txt",
+      "prompt": "/5e/37ab0146a4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 72,
+    "cache_creation_tokens": 27376,
+    "cache_read_tokens": 389755,
+    "output_tokens": 2210,
+    "api_call_count": 20
+  }
+}
