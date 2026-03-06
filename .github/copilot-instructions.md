@@ -31,7 +31,7 @@ CipherBox uses a **mandatory two-phase auth flow**:
 1. **Phase 1 (Web3Auth MPC Core Kit):** User authenticates via email OTP, Google OAuth, magic link, or external wallet. Web3Auth derives an ECDSA secp256k1 keypair via MPC threshold cryptography. MFA is handled via device factors.
 2. **Phase 2 (CipherBox Backend):** Client authenticates with the backend using a Web3Auth ID token (JWT) validated via JWKS. The backend issues its own access/refresh token pair.
 
-**Key Insight:** The ECDSA keypair from Phase 1 is the user's identity. Web3Auth ensures the same user always derives the same keypair regardless of auth method (when methods resolve to the same CipherBox `userId`).
+**Key Insight:** The ECDSA keypair from Phase 1 is the user's identity. Web3Auth derives the keypair deterministically from the CipherBox `userId`. Multiple auth methods (e.g., Google + email) share the same keypair only when the CipherBox backend resolves them to the same `userId` — identity linking is controlled by the backend, not automatic.
 
 See [docs/AUTHENTICATION_ARCHITECTURE.md](../docs/AUTHENTICATION_ARCHITECTURE.md) for full details.
 
