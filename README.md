@@ -24,12 +24,13 @@ This project is inspired by discussions and planning while working on [ChainSafe
 - **TEE Republishing** — Automatic IPNS record refresh every 6 hours via Phala Cloud. Zero-knowledge: keys decrypted only inside hardware enclaves.
 - **Data Portability** — Full vault export (JSON + encrypted blobs). Standalone recovery with private key — no CipherBox required.
 
+- **Sharing** — User-to-user sharing with ECIES re-wrapping. Invite-link sharing with time-limited access tokens.
+- **Recycle Bin** — 30-day soft-delete with restore.
+
 ### Planned (v1.1+)
 
-- **Sharing** — User-to-user sharing with ECIES re-wrapping. Link sharing with time-limited access tokens.
 - **Search** — Client-side encrypted search index across file and folder names.
 - **Versioning** — File history with point-in-time restore.
-- **Recycle Bin** — 30-day soft-delete with restore.
 - **Desktop (Windows & Linux)** — WinFSP / libfuse support.
 
 ## Architecture Overview

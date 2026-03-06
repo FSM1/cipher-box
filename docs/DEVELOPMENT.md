@@ -106,8 +106,13 @@ See [apps/desktop/CLAUDE.md](../apps/desktop/CLAUDE.md) for FUSE architecture de
 ### Unit tests
 
 ```bash
-pnpm test
+# Run all unit tests (excludes E2E)
+pnpm --filter @cipherbox/api test
+pnpm --filter @cipherbox/web test
+pnpm --filter @cipherbox/crypto test
 ```
+
+> **Note:** `pnpm test` runs tests across all workspaces including E2E — use the filtered commands above for unit tests only.
 
 ### E2E tests (Playwright)
 

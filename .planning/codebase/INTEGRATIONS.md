@@ -141,13 +141,14 @@ CipherBox is a **technology demonstrator** with the following integrations imple
 
 **API (`apps/api/.env.example`):**
 
-- `DATABASE_URL` - PostgreSQL connection string
-- `REDIS_URL` - Redis connection string
-- `KUBO_API_URL` - IPFS daemon endpoint
+- `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_DATABASE` - PostgreSQL connection
+- `REDIS_HOST`, `REDIS_PORT` - Redis connection (for BullMQ)
+- `IPFS_LOCAL_API_URL`, `IPFS_LOCAL_GATEWAY_URL` - IPFS Kubo daemon endpoints
 - `JWT_SECRET` - Access token signing
-- `WEB3AUTH_CLIENT_ID` - Web3Auth project ID
-- `TEE_PUBLIC_KEY` - Current TEE epoch public key
-- `CORS_ORIGINS` - Allowed origins
+- `CORS_ALLOWED_ORIGINS` - Allowed origins (comma-separated, supports wildcards)
+- `DELEGATED_ROUTING_URL` - IPNS delegated routing endpoint
+- `TEE_WORKER_URL`, `TEE_WORKER_SECRET` - TEE worker connection
+- `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL` - Email OTP delivery
 
 **Web (`apps/web/.env.example`):**
 

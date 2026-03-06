@@ -49,10 +49,11 @@ ECDSA Public Key (stored on server, identifies user)
         ├─ Subfolder Keys (random AES-256, stored encrypted in parent folder metadata)
         └─ File Keys (random AES-256, stored encrypted in per-file metadata)
 
-IPNS Keypairs (Ed25519, HKDF-derived from private key)
-    ├─ Vault IPNS (root folder metadata pointer)
-    ├─ Device Registry IPNS
-    └─ Per-file IPNS (file metadata pointer)
+IPNS Keypairs (Ed25519)
+    ├─ Vault IPNS (HKDF-derived from private key)
+    ├─ Device Registry IPNS (HKDF-derived from private key)
+    ├─ Subfolder IPNS (random, ECIES-wrapped in parent metadata)
+    └─ Per-file IPNS (random, ECIES-wrapped in FilePointer; legacy: HKDF-derived)
 ```
 
 **Critical Rule:** Never log, persist to disk, or transmit the ECDSA private key. It exists ONLY in client memory during the session.
