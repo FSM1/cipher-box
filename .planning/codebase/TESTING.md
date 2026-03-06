@@ -15,7 +15,7 @@
 
 ```bash
 pnpm test              # Run all unit tests (parallel across workspaces)
-pnpm test:e2e          # Playwright E2E tests (requires API + web running)
+pnpm test:e2e          # Playwright E2E tests (requires infra: Postgres, IPFS, Redis; API/web started via Playwright webServer)
 pnpm test:e2e:headed   # E2E with visible browser
 pnpm typecheck         # TypeScript type checking across all workspaces
 ```
@@ -26,7 +26,7 @@ pnpm typecheck         # TypeScript type checking across all workspaces
 
 - Unit tests exist for API services, crypto operations, and web components
 - E2E tests cover authentication, file operations, and desktop app flows
-- CI pipeline runs lint, typecheck, unit tests, and E2E tests
+- CI on `main` runs lint, typecheck, unit tests, and E2E tests (E2E is not run on PRs by default)
 - Coverage is not yet at target thresholds (see recommended targets below)
 
 ## POC Verification Pattern
@@ -138,9 +138,9 @@ _Note: This section specifies framework choices and requirements. Concrete confi
 
 **Frontend (React):**
 
-- E2E Framework: Cypress (recommended) or Puppeteer
-- Component Testing: Cypress Component Testing for complex components (optional)
-- Visual Regression: Percy integration (optional)
+- E2E Framework: Playwright (browser and desktop flows)
+- Component Testing: React Testing Library + Vitest for complex components (optional)
+- Visual Regression: Percy (or equivalent) integration via Playwright SDK (optional)
 
 **TEE (Rust):**
 
@@ -276,7 +276,7 @@ _Note: This section specifies framework choices and requirements. Concrete confi
 - **Stage 1: Lint & Type Check (parallel)** — ESLint (Backend + Frontend), Prettier formatting verification, TypeScript compilation check, Cargo fmt + Clippy (TEE)
 - **Stage 2: Unit Tests (parallel, no services needed)** — Backend unit tests with coverage, TEE unit tests with coverage, coverage threshold enforcement
 - **Stage 3: Integration Tests** — Backend integration tests, requires PostgreSQL service container
-- **Stage 4: E2E Tests (parallel)** — API E2E tests (full backend + database), Frontend Cypress tests (full stack), screenshot/video artifacts on failure
+- **Stage 4: E2E Tests (parallel)** — API E2E tests (full backend + database), Frontend Playwright tests (full stack), screenshot/video artifacts on failure
 - **Stage 5: Build & Deploy** — Production build verification, deploy to staging (main branch only)
 
 ### Test Data Management

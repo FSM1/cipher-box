@@ -111,7 +111,7 @@ pnpm test
 
 ### E2E tests (Playwright)
 
-Requires API + web running locally:
+Playwright auto-starts API + web via `webServer` config (requires infra services: Postgres, IPFS, Redis):
 
 ```bash
 pnpm test:e2e

@@ -7,13 +7,13 @@
 
 ### ⚠️ IMPORTANT: Do Not Edit Preliminary/Documentation Files
 
-All files in `Preliminary/Documentation/` are **FINALIZED** specifications (version 1.10.0, status: Finalized). These documents represent the agreed-upon design and should **NOT** be modified.
+All files in `00-Preliminary-R&D/Documentation/` are **FINALIZED** specifications (version 1.10.0, status: Finalized). These documents represent the agreed-upon design and should **NOT** be modified.
 
 **If you need to make changes:**
 
 - New implementation documentation should be created in a separate location
 - Working notes and updates belong in `.planning/` or project-specific directories
-- Do not modify version numbers or content in `Preliminary/Documentation/`
+- Do not modify version numbers or content in `00-Preliminary-R&D/Documentation/`
 
 ---
 
@@ -27,14 +27,14 @@ All files in `Preliminary/Documentation/` are **FINALIZED** specifications (vers
 
 ## Documentation Structure
 
-| Document                                                                            | Purpose                                    |
-| ----------------------------------------------------------------------------------- | ------------------------------------------ |
-| [PRD.md](../Preliminary/Documentation/PRD.md)                                       | Product requirements, user journeys, scope |
-| [TECHNICAL_ARCHITECTURE.md](../Preliminary/Documentation/TECHNICAL_ARCHITECTURE.md) | Encryption, key hierarchy, system design   |
-| [API_SPECIFICATION.md](../Preliminary/Documentation/API_SPECIFICATION.md)           | Backend endpoints, database schema         |
-| [DATA_FLOWS.md](../Preliminary/Documentation/DATA_FLOWS.md)                         | Sequence diagrams, test vectors            |
-| [CLIENT_SPECIFICATION.md](../Preliminary/Documentation/CLIENT_SPECIFICATION.md)     | Web UI, desktop app specs                  |
-| [IMPLEMENTATION_ROADMAP.md](../Preliminary/Documentation/IMPLEMENTATION_ROADMAP.md) | Week-by-week development plan              |
+| Document                                                                                   | Purpose                                    |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------ |
+| [PRD.md](../00-Preliminary-R&D/Documentation/PRD.md)                                       | Product requirements, user journeys, scope |
+| [TECHNICAL_ARCHITECTURE.md](../00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md) | Encryption, key hierarchy, system design   |
+| [API_SPECIFICATION.md](../00-Preliminary-R&D/Documentation/API_SPECIFICATION.md)           | Backend endpoints, database schema         |
+| [DATA_FLOWS.md](../00-Preliminary-R&D/Documentation/DATA_FLOWS.md)                         | Sequence diagrams, test vectors            |
+| [CLIENT_SPECIFICATION.md](../00-Preliminary-R&D/Documentation/CLIENT_SPECIFICATION.md)     | Web UI, desktop app specs                  |
+| [IMPLEMENTATION_ROADMAP.md](../00-Preliminary-R&D/Documentation/IMPLEMENTATION_ROADMAP.md) | Week-by-week development plan              |
 
 ---
 
@@ -437,4 +437,4 @@ For UI work, verify implementations against Pencil design files:
 
 This project prioritizes **cryptographic correctness over convenience**. When in doubt, err on the side of more encryption, more validation, and stricter security. The target user (cypherpunks, crypto enthusiasts) values privacy guarantees more than UX polish.
 
-**For detailed guidance:** Refer to [PRD.md](../Preliminary/Documentation/PRD.md) for product scope, [TECHNICAL_ARCHITECTURE.md](../Preliminary/Documentation/TECHNICAL_ARCHITECTURE.md) for crypto and system design, and [DATA_FLOWS.md](../Preliminary/Documentation/DATA_FLOWS.md) for test vectors and sequence diagrams.
+**For detailed guidance:** Refer to [PRD.md](../00-Preliminary-R&D/Documentation/PRD.md) for product scope, [TECHNICAL_ARCHITECTURE.md](../00-Preliminary-R&D/Documentation/TECHNICAL_ARCHITECTURE.md) for crypto and system design, and [DATA_FLOWS.md](../00-Preliminary-R&D/Documentation/DATA_FLOWS.md) for test vectors and sequence diagrams.

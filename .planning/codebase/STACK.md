@@ -4,61 +4,59 @@
 
 ## Project Status
 
-CipherBox is a **technology demonstrator** in early development. Currently, only a **Proof of Concept (PoC) console harness** exists in `/00-Preliminary-R&D/poc/`. The full production system (web app, desktop app, backend) is specified in documentation but not yet implemented.
+CipherBox is a **technology demonstrator** with a working implementation. The web app (`apps/web/`), backend API (`apps/api/`), desktop app (`apps/desktop/`), shared crypto library (`packages/crypto/`), TEE worker (`tee-worker/`), and E2E test suites (`tests/e2e/`, `tests/e2e-desktop/`) are all implemented. The original PoC console harness remains in `/00-Preliminary-R&D/poc/` for reference.
 
 ## Languages
 
 **Primary:**
 
-- TypeScript 5.4.x - All application code (PoC, planned web/desktop/backend)
+- TypeScript 5.7+ - All application code (web, desktop, backend, crypto, PoC)
 
 **Secondary:**
 
 - JavaScript (ES2022) - Compilation target
-- SQL - PostgreSQL database schema (planned)
-- Rust - TEE/Phala Cloud workloads (planned, referenced in spec)
+- SQL - PostgreSQL database schema and migrations
+- Rust - TEE worker (Phala Cloud) and desktop FUSE filesystem
 
 ## Runtime
 
 **Environment:**
 
-- Node.js 20+ - PoC requires Node 20+
-- Browser (Chrome/Firefox/Safari) - Web app (planned)
-- Tauri/Electron - Desktop app (planned)
+- Node.js 20+ - Backend API and build tooling
+- Browser (Chrome/Firefox/Safari) - Web app
+- Tauri v2 - Desktop app (macOS)
 
 **Package Manager:**
 
-- npm/yarn - `yarn.lock` present in PoC
-- Lockfile: present at `00-Preliminary-R&D/poc/yarn.lock`
+- pnpm 9+ - Workspace-based monorepo management
+- Lockfile: `pnpm-lock.yaml` at workspace root
 
 ## Frameworks
 
-**PoC (Current):**
-
-- No framework - Raw Node.js + TypeScript
-- `tsx` 4.7.1 - TypeScript execution
-
-**Planned Web App:**
+**Web App:**
 
 - React 18 - Frontend framework
 - Tailwind CSS - Styling
-- Axios - HTTP client
+- Vite - Build tooling
 
-**Planned Backend:**
+**Backend:**
 
 - NestJS - Backend framework (Node.js)
-- jose - JWT verification
+- TypeORM - Database ORM
+- BullMQ + Redis - Job queue
 
-**Planned Desktop:**
+**Desktop:**
 
-- Tauri (preferred) or Electron - Desktop shell
-- macFUSE/FUSE3/WinFSP - Filesystem mount
+- Tauri v2 - Desktop shell
+- FUSE-T (SMB backend) - Virtual filesystem mount (macOS)
 
 **Build/Dev:**
 
-- TypeScript 5.4.2 - Type checking and compilation
-- ESLint 8.57.0 - Linting
-- tsx 4.7.1 - Dev execution
+- TypeScript 5.7+ - Type checking and compilation
+- ESLint 9 - Linting
+- Vitest - Unit testing (web, crypto)
+- Jest - Unit testing (API)
+- Playwright - E2E testing
 
 ## Key Dependencies
 
