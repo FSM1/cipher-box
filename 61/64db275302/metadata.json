@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "6164db275302",
+  "strategy": "manual-commit",
+  "branch": "docs/restructure-readme-product-docs",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/codebase/CONCERNS.md",
+    ".planning/codebase/INTEGRATIONS.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/61/64db275302/0/metadata.json",
+      "transcript": "/61/64db275302/0/full.jsonl",
+      "context": "/61/64db275302/0/context.md",
+      "content_hash": "/61/64db275302/0/content_hash.txt",
+      "prompt": "/61/64db275302/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 145,
+    "cache_creation_tokens": 338599,
+    "cache_read_tokens": 10580278,
+    "output_tokens": 49150,
+    "api_call_count": 123
+  }
+}
