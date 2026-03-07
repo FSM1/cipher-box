@@ -39,7 +39,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 3. Kubo node health metrics (peer count, bandwidth, datastore size) are visible in Prometheus via scraped Kubo endpoint
 4. TEE republish batch duration histogram captures per-batch timing with success/failure labels
 
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 
@@ -107,7 +107,7 @@ Phases execute in numeric order: 18 -> 19 -> 20 -> 21 -> 22
 
 | Phase                              | Milestone | Plans Complete | Status      | Completed |
 | ---------------------------------- | --------- | -------------- | ----------- | --------- |
-| 18. Performance Instrumentation    | v1.1      | 0/2            | Planning    | -         |
+| 18. Performance Instrumentation    | 1/2       | In Progress    |             | -         |
 | 19. IPNS Resolution Improvement    | v1.1      | 0/?            | Not started | -         |
 | 20. Vault Migration                | v1.1      | 0/?            | Not started | -         |
 | 21. BYO-IPFS Node Support          | v1.1      | 0/?            | Not started | -         |
