@@ -511,6 +511,13 @@ jobs:
                               else .uid end)
                     else . end)')
 
+          # Fail if any datasource placeholder survived the rewrite
+          if jq -e '.. | objects | .uid? | select(type == "string" and test("^\\$\\{DS_"))' \
+            >/dev/null <<<"$DASHBOARD"; then
+            echo "::error::Unresolved datasource placeholder(s) remain in dashboard JSON"
+            exit 1
+          fi
+
           # Wrap in import payload
           PAYLOAD=$(jq -n --argjson dashboard "$DASHBOARD" '{
             dashboard: $dashboard,
