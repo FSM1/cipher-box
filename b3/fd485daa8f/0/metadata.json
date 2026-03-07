@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "b3fd485daa8f",
+  "session_id": "d23204e9-b03c-4ee0-add6-4563428db16f",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-07T06:33:22.737999Z",
+  "branch": "feat/phase-18-performance-instrumentation",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/ipns/ipns.service.ts",
+    "docker/grafana/dashboards/cipherbox-staging.json"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "0eca5edd6d62",
+  "checkpoint_transcript_start": 146,
+  "transcript_lines_at_start": 146,
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 15501,
+    "cache_read_tokens": 604528,
+    "output_tokens": 3133,
+    "api_call_count": 15
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-07T06:33:21.66278Z",
+    "agent_lines": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 100
+  }
+}
