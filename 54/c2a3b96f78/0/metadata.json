@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "54c2a3b96f78",
+  "session_id": "d23204e9-b03c-4ee0-add6-4563428db16f",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-07T16:58:29.331564Z",
+  "branch": "docs/performance-baselines",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/baselines/18-performance-baselines.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "5a5d6cae30e9",
+  "checkpoint_transcript_start": 1176,
+  "transcript_lines_at_start": 1176,
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 105149,
+    "cache_read_tokens": 2217733,
+    "output_tokens": 4318,
+    "api_call_count": 26
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-07T16:58:27.76092Z",
+    "agent_lines": 17,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 17,
+    "agent_percentage": 100
+  }
+}
