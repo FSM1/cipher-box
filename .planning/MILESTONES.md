@@ -63,7 +63,11 @@
 
 **Last phase number:** 10 (Phase 11 MFA was scoped but not executed -- absorbed into Milestone 2)
 
-**Archived roadmap:** `.planning/archive/m1-ROADMAP.md`
+**Archived:**
+
+- Roadmap: `.planning/milestones/m1/m1-mvp-ROADMAP.md`
+- Requirements: `.planning/milestones/m1/m1-mvp-REQUIREMENTS.md`
+- Audit: `.planning/milestones/m1/m1-mvp-MILESTONE-AUDIT.md`
 
 ---
 
