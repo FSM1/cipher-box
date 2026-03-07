@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "be66316e94c4",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-18-performance-instrumentation",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/18-performance-instrumentation/18-CONTEXT.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/be/66316e94c4/0/metadata.json",
+      "transcript": "/be/66316e94c4/0/full.jsonl",
+      "context": "/be/66316e94c4/0/context.md",
+      "content_hash": "/be/66316e94c4/0/content_hash.txt",
+      "prompt": "/be/66316e94c4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 52,
+    "cache_creation_tokens": 58395,
+    "cache_read_tokens": 4071384,
+    "output_tokens": 11218,
+    "api_call_count": 42
+  }
+}
