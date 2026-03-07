@@ -1,14 +1,14 @@
-# Roadmap: CipherBox Milestone 3 -- Encrypted Productivity Suite
+# Roadmap: CipherBox Milestone 4 -- Encrypted Productivity Suite
 
 ## Overview
 
-Milestone 3 transforms CipherBox from an encrypted file locker into an encrypted productivity platform. Five phases follow the natural dependency chain: billing infrastructure (gates tier-based access), team accounts (enables shared vaults with ECIES-wrapped Per-Team Keys), document editors (TipTap rich text + Univer spreadsheets with decrypt-edit-encrypt pipeline), document signing (ECDSA attestation using existing Web3Auth keys), and AWS Nitro TEE (fallback republisher moved from M2). Real-time collaboration is explicitly deferred to M4; M3 delivers single-user editing with advisory locking for team documents.
+Milestone 4 transforms CipherBox from an encrypted file locker into an encrypted productivity platform. Five phases follow the natural dependency chain: billing infrastructure (gates tier-based access), team accounts (enables shared vaults with ECIES-wrapped Per-Team Keys), document editors (TipTap rich text + Univer spreadsheets with decrypt-edit-encrypt pipeline), document signing (ECDSA attestation using existing Web3Auth keys), and AWS Nitro TEE (fallback republisher moved from M2). Real-time collaboration is explicitly deferred to M4; M4 delivers single-user editing with advisory locking for team documents.
 
 ## Phases
 
 **Phase Numbering:**
 
-- Continues from M2 (Phases 12-17). M3 starts at Phase 18.
+- Continues from M2 (Phases 12-17). M4 starts at Phase 18.
 - Integer phases (18, 19, 20, 21, 22): Planned milestone work
 - Decimal phases (e.g., 19.1): Urgent insertions (marked with INSERTED)
 
@@ -43,7 +43,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Goal**: Users can create teams with shared encrypted vaults where team members access shared content through a zero-knowledge key hierarchy
 **Depends on**: Phase 18 (billing tier enforcement for team member limits)
 **Requirements**: TEAM-01, TEAM-02, TEAM-03, TEAM-04, TEAM-05, TEAM-06, TEAM-07, TEAM-08, TEAM-09
-**Research flag**: NEEDS `/gsd:research-phase` -- PTK rotation on member removal is the most complex protocol in M3. ECIES re-wrapping correctness with key epochs must be validated. IPNS record size under team metadata growth (N members x M wrapped keys) needs measurement.
+**Research flag**: NEEDS `/gsd:research-phase` -- PTK rotation on member removal is the most complex protocol in M4. ECIES re-wrapping correctness with key epochs must be validated. IPNS record size under team metadata growth (N members x M wrapped keys) needs measurement.
 **Success Criteria** (what must be TRUE):
 
 1. User can create a team, and the team vault is initialized with a team-scoped IPNS keypair and root folder key (all encrypted with the Per-Team Key, never plaintext on server)
@@ -107,15 +107,15 @@ Phases execute in numeric order: 18 -> 19 -> 20 -> 21 -> 22
 
 | Phase                      | Milestone | Plans Complete | Status      | Completed |
 | -------------------------- | --------- | -------------- | ----------- | --------- |
-| 18. Billing Infrastructure | M3        | 0/TBD          | Not started | -         |
-| 19. Team Accounts          | M3        | 0/TBD          | Not started | -         |
-| 20. Document Editors       | M3        | 0/TBD          | Not started | -         |
-| 21. Document Signing       | M3        | 0/TBD          | Not started | -         |
-| 22. AWS Nitro TEE          | M3        | 0/TBD          | Not started | -         |
+| 18. Billing Infrastructure | M4        | 0/TBD          | Not started | -         |
+| 19. Team Accounts          | M4        | 0/TBD          | Not started | -         |
+| 20. Document Editors       | M4        | 0/TBD          | Not started | -         |
+| 21. Document Signing       | M4        | 0/TBD          | Not started | -         |
+| 22. AWS Nitro TEE          | M4        | 0/TBD          | Not started | -         |
 
 ---
 
 Roadmap created: 2026-02-11
 Depth: Comprehensive (5 phases -- 4 original + Nitro TEE moved from M2)
-Total M3 phases: 5 (18-22) | Total M3 plans: TBD
+Total M4 phases: 5 (18-22) | Total M4 plans: TBD
 Coverage: 32/32 requirements mapped + TEE-06

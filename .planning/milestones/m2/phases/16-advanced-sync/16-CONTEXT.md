@@ -8,7 +8,7 @@
 
 Conflict detection via API-level optimistic concurrency on IPNS publishes. When two devices modify the same folder concurrently, the second publish is rejected and the client re-syncs before retrying.
 
-**Rescoped from original roadmap:** Offline queue and idempotent replay deferred to Milestone 3. This phase delivers conflict detection only.
+**Rescoped from original roadmap:** Offline queue and idempotent replay deferred to Milestone 4. This phase delivers conflict detection only.
 
 </domain>
 
@@ -27,7 +27,7 @@ Conflict detection via API-level optimistic concurrency on IPNS publishes. When 
 
 - Folder IPNS records only — per-file IPNS uses last-write-wins
 - Versioning (Phase 13) is the safety net for per-file content conflicts
-- No three-way merge or auto-merge of folder metadata — deferred to M3
+- No three-way merge or auto-merge of folder metadata — deferred to M4
 
 ### User experience
 
@@ -55,17 +55,17 @@ Conflict detection via API-level optimistic concurrency on IPNS publishes. When 
 
 - The `folder_ipns` table already tracks sequence numbers — the API-level check builds on existing infrastructure
 - This is deliberately lightweight: detect, alert, re-sync. No merge logic, no offline queue
-- The conflict detection pattern could later be extended with merge logic in M3 without API changes
+- The conflict detection pattern could later be extended with merge logic in M4 without API changes
 
 </specifics>
 
 <deferred>
 ## Deferred Ideas
 
-- **Auto-merge of non-conflicting folder changes** — three-way merge on encrypted folder metadata children arrays. High complexity, deferred to M3
-- **Offline operation queue** — persist write operations in IndexedDB for replay on reconnect. Deferred to M3
-- **Idempotent replay** — idempotency keys for queued operations to prevent duplicates. Tightly coupled to offline queue, deferred to M3 together
-- **Per-file IPNS conflict detection** — currently covered by versioning safety net. Re-evaluate in M3
+- **Auto-merge of non-conflicting folder changes** — three-way merge on encrypted folder metadata children arrays. High complexity, deferred to M4
+- **Offline operation queue** — persist write operations in IndexedDB for replay on reconnect. Deferred to M4
+- **Idempotent replay** — idempotency keys for queued operations to prevent duplicates. Tightly coupled to offline queue, deferred to M4 together
+- **Per-file IPNS conflict detection** — currently covered by versioning safety net. Re-evaluate in M4
 
 </deferred>
 

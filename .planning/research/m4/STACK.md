@@ -1,4 +1,4 @@
-# Technology Stack: Milestone 3
+# Technology Stack: Milestone 4
 
 **Project:** CipherBox - Encrypted Productivity Suite
 **Researched:** 2026-02-11

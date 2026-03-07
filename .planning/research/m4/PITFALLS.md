@@ -1,4 +1,4 @@
-# Milestone 3 Domain Pitfalls
+# Milestone 4 Domain Pitfalls
 
 **Domain:** Adding document editors, team accounts, billing, and document signing to a zero-knowledge encrypted storage system (CipherBox)
 **Researched:** 2026-02-11
@@ -10,7 +10,7 @@
 
 CipherBox's existing architecture enforces a strict invariant: the server never sees plaintext. Every key is either held in client RAM or wrapped with ECIES using the user's public key. IPNS metadata is encrypted with per-folder AES-256-GCM keys. The entire key hierarchy flows from a single user's secp256k1 keypair derived by Web3Auth.
 
-Milestone 3 introduces four features that each, in different ways, pressure this invariant:
+Milestone 4 introduces four features that each, in different ways, pressure this invariant:
 
 - **Document editors** require real-time state that must be encrypted at rest but editable in real time
 - **Team accounts** require multiple users to decrypt the same data without a shared private key
@@ -239,7 +239,7 @@ Mistakes in this category cause delays, rework, or degraded user experience but 
 
 #### Consequences
 
-- Milestone 3 scope explodes to 3-5x the estimated effort
+- Milestone 4 scope explodes to 3-5x the estimated effort
 - Half-built spreadsheet or slides implementation that lacks basic features (e.g., no formula support, no slide transitions)
 - Team burnout from underestimated scope
 

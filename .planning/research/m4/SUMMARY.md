@@ -1,4 +1,4 @@
-# Milestone 3 Research Summary
+# Milestone 4 Research Summary
 
 **Project:** CipherBox -- Encrypted Productivity Suite
 **Domain:** Zero-knowledge document editing, team accounts, billing, document signing
@@ -7,7 +7,7 @@
 
 ## Executive Summary
 
-Milestone 3 transforms CipherBox from an encrypted file locker into an encrypted productivity platform. The four feature pillars -- billing, team accounts, document editors, and document signing -- vary dramatically in complexity. Billing (Stripe + optional crypto payments) is straightforward with well-documented patterns. Team accounts introduce a real key hierarchy challenge but follow established models from Keybase and Tresorit. Document editors are the highest-risk, highest-effort feature: integrating TipTap + Yjs for rich text editing with encrypted CRDT transport is novel territory that CryptPad and Proton Docs each spent years building. Document signing is the simplest win, leveraging existing Web3Auth secp256k1 keys for ECDSA attestation.
+Milestone 4 transforms CipherBox from an encrypted file locker into an encrypted productivity platform. The four feature pillars -- billing, team accounts, document editors, and document signing -- vary dramatically in complexity. Billing (Stripe + optional crypto payments) is straightforward with well-documented patterns. Team accounts introduce a real key hierarchy challenge but follow established models from Keybase and Tresorit. Document editors are the highest-risk, highest-effort feature: integrating TipTap + Yjs for rich text editing with encrypted CRDT transport is novel territory that CryptPad and Proton Docs each spent years building. Document signing is the simplest win, leveraging existing Web3Auth secp256k1 keys for ECDSA attestation.
 
 The recommended approach is to build in strict dependency order: Billing first (enables tier gating), then Teams (enables shared vaults), then Document Editors (the flagship feature), then Signing (additive to existing documents). This order minimizes rework -- each phase builds on the previous one. Spreadsheets should ship as single-user-editable only (no real-time collaboration), and slides should be deferred entirely. Real-time collaboration for documents should also be deferred to M4+; M3 should implement single-user editing with advisory locking for team documents.
 

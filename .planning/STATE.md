@@ -5,7 +5,7 @@
 See: .planning/PROJECT.md (updated 2026-03-05)
 
 **Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Between milestones — v1.0 Production shipped, planning Milestone 3
+**Current focus:** Between milestones — v1.0 Production shipped, planning next milestone
 
 ## Current Position
 
@@ -33,8 +33,8 @@ See PROJECT.md Key Decisions table for full list with outcomes.
 ### Open Concerns
 
 - 9 LOW-priority tech debt items from M2 audit (see `.planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md`)
-- SYNC-05/SYNC-06 (offline queue) deferred to M3+
-- TEE-06 (AWS Nitro) deferred to M3 Phase 22
+- SYNC-05/SYNC-06 (offline queue) deferred to M4+
+- TEE-06 (AWS Nitro) deferred to M4
 
 ### Resolved
 

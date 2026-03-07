@@ -71,11 +71,11 @@
 
 ## Future Milestones
 
-### Milestone 3: Encrypted Productivity Suite (planned)
+### Milestone 4: Encrypted Productivity Suite (planned)
 
 **Goal:** Full encrypted productivity suite — docs/sheets/slides editors, team accounts, billing (Stripe or crypto), secure document signing, AWS Nitro TEE
-**Depends on:** Milestone 2
-**Phases:** 18-22
+**Depends on:** Milestone 3
+**Phases:** TBD
 
 ---
 

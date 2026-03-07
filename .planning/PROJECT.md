@@ -12,7 +12,7 @@ CipherBox is a production-grade, privacy-first encrypted cloud storage platform 
 
 **Goal:** Transform CipherBox into an encrypted productivity platform with billing, team accounts, document editors, document signing, and AWS Nitro TEE.
 
-**Phases:** 18-22 (see `.planning/milestones/m3/ROADMAP.md` for full details)
+**Phases:** TBD (see `.planning/milestones/m4/ROADMAP.md` for full details)
 
 ## Requirements
 
@@ -44,9 +44,9 @@ CipherBox is a production-grade, privacy-first encrypted cloud storage platform 
 - Per-file IPNS metadata split (content updates decoupled from folder publishes) — v1.0
 - Cross-platform E2E test matrix (macOS, Windows, Linux) — v1.0
 
-### Active (Milestone 3 — Encrypted Productivity Suite)
+### Active (Milestone 4 — Encrypted Productivity Suite)
 
-See `.planning/milestones/m3/REQUIREMENTS.md` for full requirements.
+See `.planning/milestones/m4/REQUIREMENTS.md` for full requirements.
 
 #### Billing
 
@@ -73,7 +73,7 @@ See `.planning/milestones/m3/REQUIREMENTS.md` for full requirements.
 
 - [ ] AWS Nitro enclave as fallback TEE provider
 
-### Out of Scope (Milestone 3)
+### Out of Scope (Milestone 4)
 
 - Mobile apps (iOS/Android) — deferred to Milestone 4+
 - Real-time collaborative editing — deferred to Milestone 4+
