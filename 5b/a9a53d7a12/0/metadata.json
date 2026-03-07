@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "5ba9a53d7a12",
+  "session_id": "61ac34cb-83a4-4557-a311-7f14b69dd12f",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-07T13:45:59.799684Z",
+  "branch": "phase-19-ipns-resolution-improvement",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/ipns/ipns.service.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "9c10d5445278",
+  "checkpoint_transcript_start": 666,
+  "transcript_lines_at_start": 666,
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 29928,
+    "cache_read_tokens": 1234170,
+    "output_tokens": 5305,
+    "api_call_count": 10
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-07T13:45:57.598295Z",
+    "agent_lines": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 100
+  }
+}
