@@ -1,0 +1,12 @@
+# Session Context
+
+## User Prompts
+
+### Prompt 1
+
+ok can you get a PR for these changes up?
+
+### Prompt 2
+
+Have all the architecture and project docs been updated with the new someguy setup details, and all stale references to delegated-ipns.dev removed - the public endpoint is still used for the TEE and recovery tool, so you will have to be a bit surgical about all of this.
+
