@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "02c46a4c0e6f",
+  "strategy": "manual-commit",
+  "branch": "phase-19-ipns-resolution-improvement",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/REQUIREMENTS.md",
+    ".planning/ROADMAP.md",
+    "apps/api/src/ipns/ipns.service.spec.ts",
+    "apps/api/src/ipns/ipns.service.ts",
+    "apps/api/src/metrics/metrics.service.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/02/c46a4c0e6f/0/metadata.json",
+      "transcript": "/02/c46a4c0e6f/0/full.jsonl",
+      "context": "/02/c46a4c0e6f/0/context.md",
+      "content_hash": "/02/c46a4c0e6f/0/content_hash.txt",
+      "prompt": "/02/c46a4c0e6f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 36462,
+    "cache_read_tokens": 2663283,
+    "output_tokens": 12215,
+    "api_call_count": 29
+  }
+}
