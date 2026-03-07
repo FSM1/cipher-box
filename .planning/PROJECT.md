@@ -10,13 +10,13 @@ CipherBox is a production-grade, privacy-first encrypted cloud storage platform 
 
 ## Current Milestone: v1.1 IPFS Infrastructure
 
-**Goal:** Make CipherBox IPFS-native — replace delegated-ipfs.dev, migrate server-side state to IPFS/IPNS, add BYO-IPFS node support, and establish performance baselines.
+**Goal:** Make CipherBox more IPFS-native — replace delegated-ipfs.dev, migrate selected vault state to IPFS/IPNS, add BYO-IPFS server-relay support, and establish performance baselines.
 
 **Target features:**
 
 - Reliable IPNS resolution (replace delegated-ipfs.dev with self-hosted or alternative provider)
-- Minimize database to auth-only — migrate vault keys, shares, device registry, folder tracking to IPFS/IPNS
-- Bring-your-own IPFS node support (user-configurable pinning endpoint)
+- Reduce database dependence where feasible — migrate vault crypto material to IPFS while retaining `folder_ipns`, shares, device approvals, quota tracking, and the DB fallback for `encryptedRootFolderKey` in v1.1
+- Bring-your-own IPFS node support via server-relay flow (client-direct deferred to v1.2)
 - Comprehensive performance baselines (API, client, IPFS/IPNS latency, end-to-end user journeys)
 
 ## Requirements
@@ -66,7 +66,7 @@ See `.planning/REQUIREMENTS.md` for full requirements.
 #### BYO-IPFS
 
 - [ ] User-configurable IPFS node endpoint
-- [ ] Client-direct or server-relay upload to user's node
+- [ ] Server-relay upload to user's node (client-direct deferred to v1.2)
 - [ ] Quota and conflict detection strategy for BYO mode
 
 #### Performance Baselines
