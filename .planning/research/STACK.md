@@ -1,744 +1,537 @@
-# Stack Research: Milestone 2
+# Technology Stack: v1.1 IPFS Infrastructure
 
 **Project:** CipherBox
-**Milestone:** 2 - Production v1.0
-**Research Date:** 2026-02-11
-**Confidence:** MEDIUM-HIGH
-**Mode:** Ecosystem (stack additions for new features)
+**Milestone:** v1.1 -- IPFS Infrastructure
+**Researched:** 2026-03-07
+**Confidence:** HIGH
+**Mode:** Ecosystem (stack additions for new IPFS infrastructure capabilities)
 
 ## Executive Summary
 
-Milestone 2 adds six major capability areas to an already-functioning zero-knowledge encrypted storage system: sharing, search, MFA, versioning, advanced sync, and AWS Nitro TEE fallback. The core constraint -- all encryption is client-side, the server is zero-knowledge -- severely limits what off-the-shelf solutions can be used. Most features require custom implementations atop cryptographic primitives the project already has (`eciesjs`, `@noble/*`, Web Crypto API).
+Milestone v1.1 is an infrastructure-hardening milestone, not a feature milestone. The four workstreams -- IPNS reliability, database minimization, BYO-IPFS, and performance baselines -- require **remarkably few new dependencies**. The dominant finding is that the existing Kubo v0.34.0 node already has the capabilities needed for reliable IPNS resolution; the problem is that CipherBox routes around Kubo and talks to `delegated-ipfs.dev` directly via HTTP. The fix is architectural, not technological.
 
-The key finding is that **most M2 features do NOT require new heavy dependencies**. Instead, they require careful protocol-level design using existing crypto primitives plus lightweight utility libraries. The two exceptions are MFA (which leverages Web3Auth's built-in MFA system) and WebAuthn passkeys (which require `@simplewebauthn/*` on both client and server).
+The key recommendations are:
+
+1. **IPNS reliability:** Enable `Gateway.ExposeRoutingAPI` on the existing Kubo v0.34.0 node (available since Kubo v0.23.0) and point the `DelegatedRoutingClient` at `http://localhost:8080/routing/v1` instead of `https://delegated-ipfs.dev`. This gives sub-second IPNS resolution via local DHT with zero new dependencies. Optionally upgrade to Kubo v0.40.1 for improved IPNS-over-PubSub and default routing API exposure.
+
+2. **Database minimization:** No new dependencies. This is a data migration and metadata schema evolution problem using existing TypeORM, IPFS pinning, and IPNS publishing infrastructure.
+
+3. **BYO-IPFS:** Implement a `RemotePinningProvider` that speaks the standard IPFS Pinning Service API (OpenAPI spec, bearer-token auth). No SDK needed -- the API is simple enough to call with native `fetch`. The existing `IpfsProvider` interface already abstracts pin/unpin/get.
+
+4. **Performance baselines:** `prom-client` (already installed) for server-side IPFS/IPNS latency histograms. Grafana k6 v1.0 (standalone Go binary, not an npm dependency) for load testing scripts. No changes to the web app.
+
+**Total new npm dependencies: zero.** The milestone adds configuration changes, data migrations, a new provider implementation, new Prometheus metrics, and k6 test scripts -- all using existing libraries.
+
+---
 
 ## Existing Stack (DO NOT CHANGE)
 
-These are validated and deployed. Listed for reference only -- research focuses on additions.
+These are validated and deployed. Listed for reference on integration points only.
 
-| Component          | Package                 | Version (Installed) |
-| ------------------ | ----------------------- | ------------------- |
-| Backend Framework  | `@nestjs/core`          | ^11.0.0             |
-| ORM                | `typeorm`               | ^0.3.28             |
-| Database           | PostgreSQL              | 16.x                |
-| Queue              | `bullmq` + `ioredis`    | ^5.67.3 / ^5.9.2    |
-| Frontend Framework | `react` + `react-dom`   | ^18.3.1             |
-| Build Tool         | `vite`                  | ^7.3.0              |
-| State Management   | `zustand`               | ^5.0.10             |
-| Server State       | `@tanstack/react-query` | ^5.62.0             |
-| Auth SDK           | `@web3auth/modal`       | ^10.13.1            |
-| ECIES              | `eciesjs`               | ^0.4.16             |
-| Ed25519            | `@noble/ed25519`        | ^2.2.3              |
-| Hashing            | `@noble/hashes`         | ^1.7.1              |
-| IPNS               | `ipns`                  | ^10.1.3             |
-| API Client Gen     | `orval`                 | ^7.3.0              |
-| Desktop            | `@tauri-apps/api`       | ^2.0.0              |
-| JWT                | `jose`                  | ^6.1.3              |
-| API Client         | `axios`                 | ^1.13.2             |
+| Component          | Package / Tool           | Version      |
+| ------------------ | ------------------------ | ------------ |
+| Backend Framework  | `@nestjs/core`           | ^11.0.0      |
+| ORM                | `typeorm`                | ^0.3.28      |
+| Database           | PostgreSQL               | 16.x         |
+| Queue              | `bullmq` + `ioredis`     | ^5.67 / ^5.9 |
+| IPFS Node          | Kubo (Docker)            | v0.34.0      |
+| IPFS Provider      | `LocalProvider` (custom) | N/A          |
+| IPNS Client        | `DelegatedRoutingClient` | N/A (custom) |
+| Prometheus Metrics | `prom-client`            | ^15.1.3      |
+| HTTP Metrics       | `HttpMetricsInterceptor` | N/A (custom) |
+| JWT / Auth         | `jose`                   | ^6.1.3       |
+| Frontend Framework | `react` + `react-dom`    | ^18.3.1      |
+| API Client Gen     | `orval`                  | ^7.3.0       |
+| API Client         | `axios`                  | ^1.13.2      |
 
 ---
 
-## Feature 1: File/Folder Sharing (Zero-Knowledge Key Exchange)
+## Feature 1: IPNS Reliability (Replace delegated-ipfs.dev)
 
 ### Architecture Decision
 
-Sharing in a zero-knowledge system requires the **sender to re-encrypt keys for the recipient's public key**. CipherBox already wraps every key (folderKey, fileKey, ipnsPrivateKey) with ECIES using the owner's publicKey. Sharing means producing additional ECIES-wrapped copies of those keys for each recipient's publicKey.
+The current system publishes and resolves IPNS records via `delegated-ipfs.dev`, a public delegated routing endpoint. This endpoint is unreliable (known 502 errors). However, the self-hosted Kubo v0.34.0 node **already participates in the Amino DHT** and can resolve IPNS records locally via its RPC API or via the Routing V1 HTTP API.
 
-No new cryptographic library is needed. The existing `eciesjs` (already `^0.4.16`) handles all required ECIES operations. The `wrapKey()` function in `packages/crypto/src/ecies/encrypt.ts` already accepts any recipient publicKey.
+**Recommendation: Use the local Kubo node as the primary IPNS routing endpoint.**
 
-### New Dependencies: NONE for crypto
+Since Kubo v0.23.0, the `Gateway.ExposeRoutingAPI` config option exposes the standard Delegated Routing V1 HTTP API at `http://127.0.0.1:8080/routing/v1`. This means the `DelegatedRoutingClient` can be pointed at the local Kubo gateway instead of the public internet, with zero code changes to its HTTP client logic (same API contract: `GET /routing/v1/ipns/{name}`, `PUT /routing/v1/ipns/{name}`).
 
-The sharing protocol is purely a server-side coordination + client-side key re-wrapping exercise.
+**Resolution path:** Local Kubo DHT lookup (primary) -> DB-cached CID (fallback, already implemented) -> `delegated-ipfs.dev` (tertiary fallback, degraded mode only).
 
-### Server-Side Additions
+### Configuration Changes Required
 
-| Need                          | Solution                                          | New Dependency?            |
-| ----------------------------- | ------------------------------------------------- | -------------------------- |
-| Share invitation records      | New TypeORM entities (`Share`, `ShareInvitation`) | No -- use existing TypeORM |
-| Recipient public key lookup   | New API endpoint `/users/lookup?publicKey=0x...`  | No                         |
-| Share token generation        | Use existing `jose` for signed share tokens       | No                         |
-| Permission model (read/write) | Metadata field in `Share` entity                  | No                         |
-| Notification of new shares    | BullMQ job (already have queue infrastructure)    | No                         |
+| What                                   | Current                                | New                                                 |
+| -------------------------------------- | -------------------------------------- | --------------------------------------------------- |
+| `DELEGATED_ROUTING_URL` env var        | `https://delegated-ipfs.dev`           | `http://localhost:8080`                             |
+| Kubo config `Gateway.ExposeRoutingAPI` | Not set (defaults to `false` on v0.34) | Set to `true`                                       |
+| Docker compose `ipfs` service          | No config volume mount                 | Mount custom config or use `ipfs config` init       |
+| Fallback routing                       | None (single source + DB cache)        | Chain: local Kubo -> DB cache -> delegated-ipfs.dev |
 
-### Client-Side Additions
+### Optional: Upgrade Kubo to v0.40.1
 
-| Need                                    | Solution                                          | New Dependency? |
-| --------------------------------------- | ------------------------------------------------- | --------------- |
-| Re-encrypt folderKey for recipient      | Existing `wrapKey(folderKey, recipientPublicKey)` | No              |
-| Re-encrypt ipnsPrivateKey for recipient | Same `wrapKey()`                                  | No              |
-| Share UI (invite dialog, share list)    | React components                                  | No              |
-| Recipient lookup by identifier          | New API call via existing axios/orval             | No              |
+| Benefit                                         | Kubo v0.34.0  | Kubo v0.40.1                         |
+| ----------------------------------------------- | ------------- | ------------------------------------ |
+| `Gateway.ExposeRoutingAPI` available            | Yes (opt-in)  | Yes (default on)                     |
+| IPNS-over-PubSub duplicate rejection            | Basic         | Improved (persists max seq per peer) |
+| DHT sweep provider (efficient content announce) | Not available | Default                              |
+| Default IPNS TTL                                | 5 minutes     | 5 minutes                            |
 
-### What to Build (Not Install)
+**Recommendation:** Upgrade to Kubo v0.40.1 for production. Keep v0.34.0 for initial development if the upgrade would delay the milestone. The API contract is identical -- only the Docker image tag changes.
 
-1. **Share metadata format** -- Extend `FolderMetadata` to include `sharedWith` array containing `{ publicKey, folderKeyEncrypted, ipnsPrivateKeyEncrypted, permissions }`
-2. **Share API endpoints** -- `POST /shares/invite`, `GET /shares/pending`, `POST /shares/accept`, `DELETE /shares/{id}`
-3. **Share database tables** -- `shares` and `share_invitations` in PostgreSQL
-4. **Key re-wrapping module** -- Thin wrapper in `@cipherbox/crypto` that takes a key + new recipient publicKey and produces a new ECIES ciphertext
+### Alternative Considered: Self-hosted Someguy
 
-### Confidence: HIGH
+[Someguy](https://github.com/ipfs/someguy) (v0.11.1, Feb 2026) is the software that powers `delegated-ipfs.dev`. It could be self-hosted as a Docker container (`ghcr.io/ipfs/someguy:v0.11.1`) alongside Kubo.
 
-This is a well-understood pattern. ECIES re-encryption is exactly what the existing crypto package does. The challenge is protocol design, not technology selection.
+**Why NOT Someguy:** Someguy is a proxy that forwards requests to the DHT via a Kubo-like client. Running Someguy next to Kubo adds a middleman with no benefit -- Kubo already does DHT lookups directly. Someguy makes sense for serving many light clients at scale (the `delegated-ipfs.dev` use case), not for a single application with its own Kubo node.
 
----
-
-## Feature 2: Client-Side Encrypted Search Index
-
-### The Zero-Knowledge Constraint
-
-The server MUST NOT know what the user is searching for or what the search results are. This eliminates all server-side search solutions (Elasticsearch, PostgreSQL full-text search, etc.).
-
-The search index must be:
-
-1. **Built client-side** from decrypted file/folder names and metadata
-2. **Stored client-side** (encrypted at rest in IndexedDB)
-3. **Queried client-side** in the browser/desktop
-
-### Recommended: MiniSearch
-
-| Library    | Version | Weekly Downloads | TypeScript         | Zero-Dep | Size       |
-| ---------- | ------- | ---------------- | ------------------ | -------- | ---------- |
-| MiniSearch | ^7.2.0  | ~700K            | Native (src in TS) | Yes      | ~7KB gzip  |
-| Fuse.js    | ^7.0.0  | ~5M              | Types included     | Yes      | ~15KB gzip |
-| FlexSearch | ^0.7.43 | ~420K            | Community types    | Yes      | ~6KB gzip  |
-| Lunr       | ^2.3.9  | ~3.7M            | Community types    | Yes      | ~8KB gzip  |
-
-Why MiniSearch over alternatives:
-
-1. **Written in TypeScript natively** (since v7.0.0) -- not just type declarations bolted on, but full TypeScript source. Aligns with project standards.
-2. **Supports index serialization/deserialization** -- Critical for persisting the encrypted index to IndexedDB. `JSON.stringify(miniSearch)` produces a serializable index that can be encrypted with AES-256-GCM and stored.
-3. **Prefix search + fuzzy search + field boosting** -- Covers all search UX needs for filename/path matching.
-4. **Zero runtime dependencies** -- No supply chain risk.
-5. **Memory efficient** -- Designed for browser environments and mobile-constrained memory.
-
-Why NOT Fuse.js: Fuse.js is purely a fuzzy matcher -- it re-scans the full document list on every query (O(n)). MiniSearch builds an inverted index (O(log n) queries). For a vault with thousands of files, MiniSearch is materially faster.
-
-Why NOT FlexSearch: FlexSearch has stale TypeScript types (@types/flexsearch is unmaintained) and the v0.7.x API has breaking changes with poor migration docs. Its index serialization story is more complex.
-
-### Index Persistence Layer: idb (IndexedDB wrapper)
-
-| Library | Version | Purpose                         |
-| ------- | ------- | ------------------------------- |
-| `idb`   | ^8.0.0  | Promise-based IndexedDB wrapper |
-
-Why `idb` over `idb-keyval`: The search index needs object stores with structured queries (e.g., "get all index chunks"), not just key-value. `idb` (~1KB) provides the full IndexedDB API with promises. `idb-keyval` is simpler but insufficient.
-
-Why NOT localForage: Adds unnecessary abstraction and fallback logic (localStorage, WebSQL) that we don't need.
-
-### Search Architecture
-
-```text
-Decrypted metadata (in memory)
-       |
-       v
-MiniSearch.addAll(documents)   <-- Build index from file names, paths, sizes, dates
-       |
-       v
-JSON.stringify(miniSearch)     <-- Serialize index
-       |
-       v
-AES-256-GCM encrypt            <-- Existing @cipherbox/crypto
-       |
-       v
-idb.put('search-index', encrypted)  <-- Persist to IndexedDB
-```
-
-On next session:
-
-```text
-idb.get('search-index')        <-- Load from IndexedDB
-       |
-       v
-AES-256-GCM decrypt            <-- Existing @cipherbox/crypto
-       |
-       v
-MiniSearch.loadJSON(parsed)    <-- Restore index
-       |
-       v
-miniSearch.search('query')     <-- Instant client-side search
-```
-
-### New Dependencies
-
-```bash
-# In apps/web
-pnpm add minisearch idb
-
-# In apps/desktop (if search is supported there too)
-pnpm add minisearch idb
-```
-
-### What NOT to Use
-
-| Library                   | Why Not                                                                   |
-| ------------------------- | ------------------------------------------------------------------------- |
-| CipherSweet               | Server-side searchable encryption -- irrelevant for client-side ZK search |
-| Elasticsearch / Typesense | Server-side search -- violates zero-knowledge                             |
-| localForage               | Unnecessary abstraction over IndexedDB                                    |
-| Fuse.js                   | O(n) per query, no inverted index                                         |
-
-### Confidence: HIGH
-
-MiniSearch is well-established (v7.2.0, actively maintained, TypeScript-native). The pattern of "build index client-side, encrypt, persist to IndexedDB" is straightforward. The `@cipherbox/crypto` package already has all needed encryption primitives.
-
----
-
-## Feature 3: MFA (Passkey/WebAuthn, TOTP, Recovery Phrase)
-
-### Two Layers of MFA
-
-CipherBox has a unique MFA architecture because authentication happens in two phases:
-
-1. **Web3Auth MFA** -- Protects the key derivation step (getting the ECDSA keypair)
-2. **CipherBox Backend MFA** -- Protects API access (optional additional layer)
-
-The PRD specifies MFA, and Web3Auth provides this natively. The recommended approach is to leverage Web3Auth's built-in MFA rather than building a separate MFA system.
-
-### Layer 1: Web3Auth Built-In MFA (PRIMARY)
-
-No new packages needed. The existing `@web3auth/modal` ^10.13.1 supports MFA configuration natively.
-
-Available factors (configured via `mfaSettings`):
-
-| Factor        | Config Key            | Description                        |
-| ------------- | --------------------- | ---------------------------------- |
-| Device Share  | `deviceShareFactor`   | Stores a key share on the device   |
-| Backup Phrase | `backUpShareFactor`   | 24-word seed phrase for recovery   |
-| Social Backup | `socialBackupFactor`  | Backup via social login            |
-| Password      | `passwordFactor`      | User-chosen password               |
-| Passkeys      | `passkeysFactor`      | WebAuthn passkey                   |
-| Authenticator | `authenticatorFactor` | TOTP (Google Authenticator, Authy) |
-
-Configuration:
-
-```typescript
-const web3auth = new Web3Auth({
-  // ... existing config
-  mfaSettings: {
-    deviceShareFactor: { enable: true, priority: 1, mandatory: true },
-    backUpShareFactor: { enable: true, priority: 2, mandatory: true },
-    passkeysFactor: { enable: true, priority: 3, mandatory: false },
-    authenticatorFactor: { enable: true, priority: 4, mandatory: false },
-    passwordFactor: { enable: false },
-    socialBackupFactor: { enable: false },
-  },
-});
-```
-
-IMPORTANT CAVEAT: The `mfaSettings` configuration is a paid feature on Web3Auth's SCALE Plan. Verify current pricing before committing to this approach. On the `sapphire_devnet` network (which CipherBox likely uses for development), it is free.
-
-### Layer 2: CipherBox Backend WebAuthn (SECONDARY -- for API access)
-
-If the project wants WebAuthn passkeys as an additional factor for CipherBox API authentication (beyond Web3Auth), use `@simplewebauthn/*`.
-
-### Recommended: @simplewebauthn
-
-| Package                   | Version | Purpose                              | Where      |
-| ------------------------- | ------- | ------------------------------------ | ---------- |
-| `@simplewebauthn/server`  | ^13.2.2 | Registration/verification on backend | `apps/api` |
-| `@simplewebauthn/browser` | ^13.2.2 | Browser WebAuthn API calls           | `apps/web` |
-
-Why @simplewebauthn:
-
-1. **TypeScript-first** -- 100% TypeScript source, excellent types
-2. **Most popular WebAuthn library for Node.js** -- 184 dependents for server, 284 for browser
-3. **Works with NestJS** -- Via `passport-simple-webauthn` or direct integration (no passport needed)
-4. **Actively maintained** -- v13.2.2 published October 2025
-5. **Handles complexity** -- WebAuthn has many edge cases (attestation formats, authenticator types, CBOR parsing). This library handles them all.
-
-NestJS Integration Pattern:
-
-Do NOT use `passport-simple-webauthn` (v0.1.0, 2 years stale). Instead, integrate `@simplewebauthn/server` directly into NestJS services:
-
-```typescript
-// apps/api/src/webauthn/webauthn.service.ts
-import {
-  generateRegistrationOptions,
-  verifyRegistrationResponse,
-  generateAuthenticationOptions,
-  verifyAuthenticationResponse,
-} from '@simplewebauthn/server';
-```
-
-### TOTP (Authenticator App) for CipherBox Backend
-
-If TOTP is needed as a CipherBox backend factor (separate from Web3Auth's authenticator), use `otpauth`.
-
-| Package   | Version | Purpose                    | Where                                            |
-| --------- | ------- | -------------------------- | ------------------------------------------------ |
-| `otpauth` | ^9.5.0  | TOTP generation/validation | `apps/api` (generation), `apps/web` (QR display) |
-
-Why `otpauth` over `otplib`:
-
-1. **Zero dependencies** -- `otplib` v13 has dependencies; `otpauth` v9 is self-contained
-2. **Multi-runtime** -- Works in Node.js, Deno, Bun, and browsers
-3. **RFC compliant** -- RFC 4226 (HOTP), RFC 6238 (TOTP)
-4. **Key URI format** -- Built-in `otpauth://` URI generation for QR codes
-5. **Actively maintained** -- v9.5.0 published February 2026
-
-### Recovery Phrase
-
-No new library needed. Recovery phrase generation uses existing crypto primitives:
-
-- Generate 256 bits of entropy via `crypto.getRandomValues()`
-- Convert to BIP-39 mnemonic using `@noble/hashes` (SHA-256 for checksum) plus a wordlist
-- OR use Web3Auth's built-in `backUpShareFactor` which handles this automatically
-
-If implementing independently (outside Web3Auth), consider:
-
-| Package        | Version | Purpose                                              |
-| -------------- | ------- | ---------------------------------------------------- |
-| `@scure/bip39` | ^1.4.0  | BIP-39 mnemonic generation (from `@noble` ecosystem) |
-
-Why `@scure/bip39`: Same author as `@noble/*` libraries (Paul Miller), audited, zero dependencies, TypeScript-native.
-
-### Recommended MFA Strategy
-
-Use Web3Auth's built-in MFA as the primary mechanism. It protects the most critical step (key derivation). Adding CipherBox-level WebAuthn/TOTP is optional hardening for API access.
-
-| Factor           | Provider              | Priority      | Package                                |
-| ---------------- | --------------------- | ------------- | -------------------------------------- |
-| Device share     | Web3Auth              | 1 (mandatory) | `@web3auth/modal` (existing)           |
-| Backup phrase    | Web3Auth              | 2 (mandatory) | `@web3auth/modal` (existing)           |
-| Passkey/WebAuthn | Web3Auth OR CipherBox | 3 (optional)  | `@simplewebauthn/*` if CipherBox-level |
-| TOTP             | Web3Auth OR CipherBox | 4 (optional)  | `otpauth` if CipherBox-level           |
-
-### New Dependencies (if implementing CipherBox-level MFA beyond Web3Auth)
-
-```bash
-# Backend
-cd apps/api && pnpm add @simplewebauthn/server otpauth
-
-# Frontend
-cd apps/web && pnpm add @simplewebauthn/browser
-
-# Crypto (if custom recovery phrase)
-cd packages/crypto && pnpm add @scure/bip39
-```
-
-### Database Additions
-
-New TypeORM entities needed for CipherBox-level MFA:
-
-- `webauthn_credentials` -- Store WebAuthn credential IDs, public keys, counter, transports
-- `totp_secrets` -- Store encrypted TOTP secrets (encrypt with user's publicKey before storing)
-- `recovery_codes` -- Store hashed recovery codes (use `argon2`, already installed)
-
-### Confidence: MEDIUM-HIGH
-
-Web3Auth MFA is well-documented but the `mfaSettings` is a paid feature (SCALE plan). SimpleWebAuthn v13 is mature. The open question is whether to implement MFA at the Web3Auth level, CipherBox level, or both. Recommend: Web3Auth level first, CipherBox level as optional hardening.
-
----
-
-## Feature 4: File Version History
-
-### IPFS Natural Fit
-
-IPFS is content-addressable -- every version of a file inherently has a different CID. The challenge is not storing versions (IPFS does this) but **tracking the version chain** (linking CIDs into a history).
-
-### Architecture: Version Chain in Metadata
-
-No new library needed. Version history is a metadata design problem, not a library problem.
-
-Extend the `FileEntry` type in `packages/crypto/src/folder/types.ts`:
-
-```typescript
-export type FileEntry = {
-  // ... existing fields
-  type: 'file';
-  id: string;
-  name: string;
-  cid: string;
-  fileKeyEncrypted: string;
-  fileIv: string;
-  encryptionMode: 'GCM';
-  size: number;
-  createdAt: number;
-  modifiedAt: number;
-
-  // NEW: Version history
-  /** Previous version CID chain (most recent first, capped) */
-  previousVersions?: FileVersionEntry[];
-  /** Current version number (starts at 1) */
-  versionNumber?: number;
-};
-
-export type FileVersionEntry = {
-  /** IPFS CID of this version */
-  cid: string;
-  /** ECIES-wrapped file key for this version */
-  fileKeyEncrypted: string;
-  /** IV used for this version */
-  fileIv: string;
-  /** File size at this version */
-  size: number;
-  /** When this version was created */
-  createdAt: number;
-  /** Version number */
-  versionNumber: number;
-};
-```
-
-### Version Retention Strategy
-
-Since file versions are pinned on IPFS, they consume storage quota. Need a configurable retention policy:
-
-| Strategy             | Implementation                                             |
-| -------------------- | ---------------------------------------------------------- |
-| Keep last N versions | `previousVersions.slice(0, N)` in metadata, unpin old CIDs |
-| Time-based retention | Filter `previousVersions` by `createdAt` threshold         |
-| Storage-based limit  | Track total version bytes, evict oldest when threshold hit |
-
-### Server-Side Support
-
-| Need                          | Solution                                   | New Dependency? |
-| ----------------------------- | ------------------------------------------ | --------------- |
-| Track pinned version CIDs     | Extend existing `pinned_cids` entity       | No              |
-| Unpinning old versions        | BullMQ job to unpin expired version CIDs   | No              |
-| Version count limits per user | Config in vault settings                   | No              |
-| Storage quota accounting      | Include version bytes in quota calculation | No              |
-
-### What NOT to Build
-
-| Approach                  | Why Not                                                               |
-| ------------------------- | --------------------------------------------------------------------- |
-| Git-like delta storage    | Over-engineered for file storage; IPFS is already content-addressable |
-| Separate version database | Violates zero-knowledge (server would know version relationships)     |
-| IPFS MFS versioning       | Deprecated/experimental; CipherBox doesn't use MFS                    |
-| IPVC / IPVFS              | Unmaintained projects, not suited for encrypted use case              |
+**When Someguy makes sense:** If CipherBox ever needs to serve delegated routing for many browser-based light clients that cannot run DHT, a Someguy instance behind the API reverse proxy would be the right approach. Not needed for v1.1.
 
 ### New Dependencies: NONE
 
 ### Confidence: HIGH
 
-Version history is purely a metadata schema extension plus IPFS pin management. The existing stack handles everything needed.
+The Delegated Routing V1 HTTP API is a stable IETF-track specification. Kubo has supported `Gateway.ExposeRoutingAPI` since v0.23.0 (over a year). The `DelegatedRoutingClient` already speaks this exact API contract -- only the base URL changes.
 
 ---
 
-## Feature 5: Advanced Sync (Conflict Resolution, Offline Queue, Selective Sync)
+## Feature 2: Database Minimization (Migrate State to IPFS/IPNS)
 
-### Current State
+### Architecture Decision
 
-CipherBox v1 uses IPNS polling (30s interval) with last-writer-wins based on IPNS sequence numbers. This is fragile under concurrent edits.
+Five categories of data currently live in PostgreSQL that should move to IPFS/IPNS:
 
-### Conflict Resolution Strategy
+| Data                      | Current Location        | Target Location                     | Migration Approach                |
+| ------------------------- | ----------------------- | ----------------------------------- | --------------------------------- |
+| `encryptedRootFolderKey`  | `vaults` table          | Root vault IPNS blob on IPFS        | New blob format, client migration |
+| Share records             | `shares` / `share_keys` | IPNS inbox per recipient (future)   | Defer to CRDT research            |
+| Device registry           | N/A (client-side)       | Vault IPNS blob extension           | Metadata schema extension         |
+| Folder/file IPNS tracking | `folder_ipns` table     | Derivable from folder metadata tree | Client-side traversal             |
+| Pinned CID tracking       | `pinned_cids` table     | Keep in DB (quota enforcement)      | No change                         |
 
-Recommendation: Do NOT adopt a full CRDT library. CipherBox's data model (encrypted file metadata in IPNS records) is fundamentally different from collaborative text editing. CRDTs like Yjs/Automerge are designed for real-time co-editing of shared data structures -- overkill for file metadata sync.
+**Key insight from the todo analysis:** Moving `encryptedRootFolderKey` to IPFS is the highest-value migration. It eliminates all crypto material from the server, making the database purely auth-related. The other migrations are either lower priority (share discovery via CRDT is research-only this milestone per PROJECT.md) or already partially in place (device registry is client-side).
 
-Instead, implement Operational Transform (OT) at the metadata level:
+### Technology Needed
 
-| Operation                       | Conflict Rule                   |
-| ------------------------------- | ------------------------------- |
-| Two users add different files   | Merge (union of children)       |
-| Two users delete same file      | Idempotent (already deleted)    |
-| Two users rename same file      | Last-writer-wins with timestamp |
-| Two users move same file        | Last-writer-wins with timestamp |
-| One adds, one deletes same file | Delete wins (conservative)      |
+**None new.** The migration uses:
 
-### Why NOT CRDTs
+- Existing `@cipherbox/crypto` package for metadata schema evolution (add `encryptedRootFolderKey` to the root vault IPNS blob format)
+- Existing `IpfsProvider.pinFile()` for writing the new blob
+- Existing `IpnsService.publishRecord()` for publishing the updated IPNS record
+- Existing TypeORM migrations for deprecating the `vaults.encrypted_root_folder_key` column
+- Existing `docs/METADATA_EVOLUTION_PROTOCOL.md` for the schema versioning process
 
-| Library   | Why Not for CipherBox                                                                                                                                                                                 |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Yjs       | Designed for real-time collaborative editing (text, JSON). CipherBox doesn't need real-time -- it syncs metadata blobs via IPNS. Adding Yjs would require restructuring the entire metadata format.   |
-| SecSync   | Interesting E2E encrypted CRDT architecture, but beta (v0.5.0), uses XChaCha20-Poly1305 (incompatible with existing AES-256-GCM), and requires a WebSocket server. Over-engineered for metadata sync. |
-| Automerge | Same issues as Yjs -- designed for collaborative documents, not file metadata sync.                                                                                                                   |
+### What to Build (Not Install)
 
-### Offline Queue
+1. **Vault blob v2 format** -- Extend the root IPNS blob to include `{ encryptedRootFolderKey, encryptedIpnsPrivateKey, metadata }` (currently only `metadata`)
+2. **Client-side migration** -- On login, if blob is v1 format, read `encryptedRootFolderKey` from API, write it into a v2 blob, publish to IPNS
+3. **Server-side deprecation path** -- Mark `vaults.encrypted_root_folder_key` as nullable, add `vault_format_version` column, stop writing after migration window
+4. **Recovery tool update** -- `apps/web/public/recovery.html` must handle v2 blob format
+5. **IPNS resolution on critical path** -- Moving rootFolderKey to IPFS means IPNS resolution is now required for login. The DB-cached CID fallback (already implemented in `IpnsService.resolveRecord()`) mitigates resolution failures.
 
-No new library needed. Implement a simple queue using IndexedDB persistence.
+### Database Changes
+
+| Entity       | Change                                                 | Migration Type  |
+| ------------ | ------------------------------------------------------ | --------------- |
+| `Vault`      | `encryptedRootFolderKey` becomes nullable              | ALTER COLUMN    |
+| `Vault`      | Add `vaultFormatVersion` (int, default 1)              | ADD COLUMN      |
+| `FolderIpns` | Possibly remove rows once client derives from metadata | Cleanup (later) |
+
+### New Dependencies: NONE
+
+### Confidence: HIGH
+
+This is a data migration, not a technology selection. The existing stack handles everything. The risk is in the migration protocol (see PITFALLS.md), not in missing libraries.
+
+---
+
+## Feature 3: BYO-IPFS Node Support
+
+### Architecture Decision
+
+Users should be able to configure their own IPFS pinning endpoint. The IPFS ecosystem has a vendor-agnostic [Pinning Service API specification](https://ipfs.github.io/pinning-services-api-spec/) (OpenAPI 3.0) that is implemented by Pinata, Filebase, web3.storage, IPFS Cluster, and can be self-hosted via Kubo's `ipfs pin remote` subsystem.
+
+**Recommendation: Implement a `RemotePinningProvider` that speaks the IPFS Pinning Service API.**
+
+The API is minimal (4 endpoints, bearer-token auth, JSON request/response):
+
+| Endpoint                   | Method | Purpose                  |
+| -------------------------- | ------ | ------------------------ |
+| `POST /pins`               | POST   | Request pinning of a CID |
+| `GET /pins`                | GET    | List pins with filters   |
+| `GET /pins/{requestid}`    | GET    | Check pin status         |
+| `DELETE /pins/{requestid}` | DELETE | Remove a pin             |
+
+Authentication is a bearer token in the `Authorization` header. Pin status values: `queued`, `pinning`, `pinned`, `failed`.
+
+**Important distinction:** The Pinning Service API pins by CID (the content must already be available on the IPFS network). For BYO-IPFS, the flow is:
+
+1. Client uploads encrypted blob to CipherBox's Kubo node (existing flow, gets CID)
+2. CipherBox backend requests remote pin of that CID on user's configured endpoint
+3. User's IPFS node fetches the content from CipherBox's Kubo via the DHT
+4. Once pinned remotely, content is available from both nodes
+
+This avoids the CORS and connectivity issues of client-direct upload while keeping the server zero-knowledge (it only sees encrypted blobs and CIDs).
+
+### Provider Implementation
+
+The existing `IpfsProvider` interface:
 
 ```typescript
-// Offline operation queue
-type QueuedOperation = {
-  id: string;
-  type: 'upload' | 'delete' | 'rename' | 'move' | 'mkdir';
-  payload: unknown; // operation-specific data
-  timestamp: number;
-  retryCount: number;
-};
+export interface IpfsProvider {
+  pinFile(data: Buffer, metadata?: Record<string, string>): Promise<{ cid: string; size: number }>;
+  unpinFile(cid: string): Promise<void>;
+  getFile(cid: string): Promise<Buffer>;
+}
 ```
 
-Use the same `idb` library (^8.0.0) recommended for search index persistence.
+For BYO-IPFS, add a **companion** provider that mirrors pins to the user's endpoint after local pinning succeeds:
 
-### Selective Sync (Desktop Only)
+```typescript
+// New: RemotePinningProvider (mirrors pins, does not replace local)
+export interface RemotePinningConfig {
+  endpoint: string; // e.g., "https://api.pinata.cloud/psa"
+  accessToken: string; // Bearer token
+  providerName: string; // Display name for UI
+}
+```
 
-Selective sync requires Tauri-side file system awareness. No new npm packages -- this is a Tauri/Rust concern:
+The `RemotePinningProvider` calls `POST /pins` with the CID after local pinning. It does NOT replace the local provider -- it supplements it. The local Kubo node remains the source of truth for reads.
 
-| Need                             | Solution                                    | Where             |
-| -------------------------------- | ------------------------------------------- | ----------------- |
-| Sync configuration               | JSON config in app data directory           | Tauri (Rust)      |
-| Folder inclusion/exclusion list  | UI component + persisted config             | React + Tauri IPC |
-| Placeholder files (like Dropbox) | macOS: Extended attributes; Linux: symlinks | Rust FUSE layer   |
+### User Settings Storage
 
-### New Dependencies: NONE (beyond `idb` already counted in search)
+Per-user IPFS configuration stored in the vault settings (encrypted, client-side):
 
-### Confidence: MEDIUM
+```typescript
+// In vault metadata (IPNS blob, client-encrypted)
+interface VaultSettings {
+  remotePinning?: {
+    enabled: boolean;
+    endpoint: string;
+    providerName: string;
+    // accessToken stored separately in memory, NOT in metadata
+  };
+}
+```
 
-Conflict resolution design is straightforward conceptually but tricky to get right in practice, especially with encrypted metadata where you can't do server-side merging. The "merge at client-side, resign IPNS" approach needs careful testing. Flagging for deeper research during implementation.
+The access token is stored encrypted in IndexedDB (using existing `idb` from M2) or entered per-session. It is NEVER sent to the CipherBox API -- the remote pinning calls are made by the NestJS backend using a token the user provides via an encrypted channel.
+
+**Alternative approach considered: Client-direct pinning.** The web app could call the user's pinning endpoint directly. This avoids the server seeing the access token but introduces CORS issues (most pinning services don't set `Access-Control-Allow-Origin` for arbitrary origins) and breaks desktop parity (Tauri apps don't have CORS restrictions but would need a different code path).
+
+**Recommendation: Server-relay for v1.1.** The server relays pin requests using an access token the user provides encrypted with the server's public key. The server sees the token but never the plaintext content (it only pins CIDs of encrypted blobs). Evaluate client-direct as a privacy upgrade in a future milestone.
+
+### Quota and Conflict Considerations
+
+| Concern            | BYO-IPFS Behavior                                             |
+| ------------------ | ------------------------------------------------------------- |
+| Storage quota      | Advisory only. Server can't enforce quotas on user's node.    |
+| Conflict detection | Still works -- IPNS publish goes through CipherBox API.       |
+| TEE republishing   | Unaffected -- TEE republishes IPNS records, not file content. |
+| File availability  | Content available from both local Kubo and user's node.       |
+| User's node down   | Content still available from CipherBox's Kubo node.           |
+| CipherBox down     | Content available from user's node (if user has IPNS keys).   |
+
+### New Dependencies: NONE
+
+The Pinning Service API is a REST API with 4 endpoints. Native `fetch` (already used by `LocalProvider` and `DelegatedRoutingClient`) is sufficient. No SDK needed.
+
+### What NOT to Use
+
+| Library / Approach                      | Why Not                                                                |
+| --------------------------------------- | ---------------------------------------------------------------------- |
+| `@ipfs-shipyard/pinning-service-client` | Adds a dependency for 4 simple HTTP calls. Use native `fetch`.         |
+| Kubo `ipfs pin remote` CLI              | Shell-out from NestJS is fragile. HTTP calls are more reliable.        |
+| Client-direct pinning                   | CORS issues with most pinning services. Server-relay is more reliable. |
+| Full IPFS node in browser (Helia)       | Massive bundle size (~500KB+), unnecessary when server has Kubo.       |
+
+### Confidence: HIGH
+
+The IPFS Pinning Service API is a stable, vendor-agnostic specification. Multiple production services implement it. The integration is straightforward REST calls with bearer-token auth.
 
 ---
 
-## Feature 6: AWS Nitro TEE Fallback
+## Feature 4: Performance Baselines
 
-### Current State
+### Architecture Decision
 
-CipherBox uses Phala Cloud as the primary TEE for IPNS republishing. AWS Nitro is specified as the fallback.
+Performance baselines require two tooling layers:
 
-### AWS Nitro Enclave Architecture
+1. **Runtime instrumentation** -- Prometheus metrics emitted by the running application (server-side) and measured by the client (client-side timing)
+2. **Load testing** -- Scripted scenarios that exercise the system under controlled conditions and record baseline measurements
 
-AWS Nitro Enclaves run inside a special VM partition on EC2 instances. The enclave has no network access, no persistent storage -- it communicates only via a vsock channel with the parent EC2 instance.
+CipherBox already has Prometheus metrics via `prom-client` ^15.1.3 with an `HttpMetricsInterceptor` that records HTTP request duration histograms. The existing `MetricsService` tracks file uploads, downloads, IPNS publishes, and resolves as counters.
 
-IMPORTANT: There is NO official JavaScript/TypeScript SDK for AWS Nitro Enclaves NSM (Nitro Security Module) API. The official SDK is Rust-only (`aws-nitro-enclaves-nsm-api` crate).
+### What to Add: IPFS/IPNS Latency Histograms
 
-### Recommended Architecture
+The existing metrics track **counts** but not **latency** for IPFS/IPNS operations. Add histograms to the existing `MetricsService`:
 
-| Component                      | Technology                             | Language   |
-| ------------------------------ | -------------------------------------- | ---------- |
-| Enclave application            | Rust binary                            | Rust       |
-| Attestation                    | `aws-nitro-enclaves-nsm-api` crate     | Rust       |
-| ECIES decryption               | `ecies` Rust crate (secp256k1)         | Rust       |
-| Ed25519 IPNS signing           | `ed25519-dalek` crate                  | Rust       |
-| IPNS record creation           | Custom (port from `@cipherbox/crypto`) | Rust       |
-| Parent-enclave communication   | vsock                                  | Rust       |
-| Orchestrator (parent instance) | Node.js (NestJS)                       | TypeScript |
-| KMS integration                | `@aws-sdk/client-kms`                  | TypeScript |
+| Metric Name                               | Type      | Labels                     | Purpose                             |
+| ----------------------------------------- | --------- | -------------------------- | ----------------------------------- |
+| `cipherbox_ipfs_pin_duration_seconds`     | Histogram | `provider` (local/remote)  | Time to pin a file to IPFS          |
+| `cipherbox_ipfs_get_duration_seconds`     | Histogram | `provider` (local/remote)  | Time to retrieve a file from IPFS   |
+| `cipherbox_ipns_publish_duration_seconds` | Histogram | `target` (local/delegated) | Time to publish an IPNS record      |
+| `cipherbox_ipns_resolve_duration_seconds` | Histogram | `source` (dht/db_cache)    | Time to resolve an IPNS name to CID |
+| `cipherbox_ipfs_pin_size_bytes`           | Histogram | `provider`                 | Size distribution of pinned files   |
 
-### New Dependencies
+**Bucket configuration for latency histograms:**
 
-For the NestJS orchestrator (parent EC2 instance):
+```typescript
+// IPFS operations are slower than HTTP -- wider buckets
+const ipfsBuckets = [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60];
 
-```bash
-cd apps/api && pnpm add @aws-sdk/client-kms @aws-sdk/client-ec2
+// IPNS resolution can be very slow via DHT
+const ipnsBuckets = [0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120];
 ```
 
-| Package               | Version | Purpose                                 |
-| --------------------- | ------- | --------------------------------------- |
-| `@aws-sdk/client-kms` | ^3.x    | KMS condition key attestation for Nitro |
-| `@aws-sdk/client-ec2` | ^3.x    | Enclave lifecycle management (optional) |
+These use the existing `prom-client` library (already installed) and the existing `MetricsService` singleton pattern. No new dependencies.
 
-For the enclave (Rust, separate from Node.js monorepo):
+### What to Add: k6 Load Testing Scripts
 
-```toml
-# Cargo.toml for enclave binary
-[dependencies]
-aws-nitro-enclaves-nsm-api = "0.4"
-ecies = { version = "0.2", default-features = false }
-ed25519-dalek = "2.1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-nix = { version = "0.29", features = ["socket"] }  # vsock
+[Grafana k6](https://k6.io/) v1.0 (released May 2025) is the standard for API load testing. It runs as a standalone Go binary -- it is NOT an npm dependency. Test scripts are written in TypeScript (natively supported since k6 v0.57 / v1.0).
+
+| Component        | Tool       | Version | Installation                      |
+| ---------------- | ---------- | ------- | --------------------------------- |
+| Load test runner | k6         | v1.0+   | `brew install k6` or Docker image |
+| Test scripts     | TypeScript | N/A     | `tests/perf/*.ts`                 |
+| Results storage  | JSON/CSV   | N/A     | `k6 run --out json=results.json`  |
+
+**k6 test script structure:**
+
+```text
+tests/perf/
+  api-health.ts          -- Baseline: GET /health response time
+  auth-login.ts          -- Auth flow latency
+  ipfs-upload.ts         -- File upload + pin latency
+  ipfs-download.ts       -- File download latency
+  ipns-publish.ts        -- IPNS record publish latency
+  ipns-resolve.ts        -- IPNS resolution latency (DHT vs DB cache)
+  e2e-upload-browse.ts   -- Full user journey: auth -> upload -> browse -> download
+  thresholds.json        -- Baseline thresholds (p95, p99, error rate)
 ```
 
-### Integration with Existing System
+**Threshold targets (based on project constraints):**
 
-The NestJS backend already has:
+| Operation         | p50 Target | p95 Target | p99 Target | Error Rate |
+| ----------------- | ---------- | ---------- | ---------- | ---------- |
+| API health        | <10ms      | <50ms      | <100ms     | <0.1%      |
+| Auth login        | <500ms     | <2s        | <5s        | <1%        |
+| IPFS upload (1MB) | <500ms     | <2s        | <5s        | <1%        |
+| IPFS download     | <200ms     | <1s        | <3s        | <0.5%      |
+| IPNS publish      | <1s        | <3s        | <10s       | <2%        |
+| IPNS resolve      | <500ms     | <2s        | <5s        | <1%        |
 
-- `republish-schedule.entity.ts` -- Stores encryptedIpnsPrivateKey and keyEpoch
-- `tee-key-state.entity.ts` -- Tracks TEE key epochs
-- BullMQ for job scheduling
+These are initial baselines to be established, not SLAs. The point is to have numbers to compare against after future changes.
 
-The Nitro fallback can reuse the same republish scheduling infrastructure. The only change is routing republish jobs to Nitro instead of Phala when Phala is unavailable.
+### Client-Side Timing (Web)
 
-### Phala Cloud SDK Update
+For client-side encryption throughput baselines, use the browser's built-in `Performance` API (no dependencies):
 
-The existing Phala integration may benefit from updating to the latest dstack SDK:
+```typescript
+performance.mark('encrypt-start');
+const encrypted = await encrypt(data, key);
+performance.mark('encrypt-end');
+performance.measure('encryption', 'encrypt-start', 'encrypt-end');
+```
 
-| Package             | Version | Purpose                                           |
-| ------------------- | ------- | ------------------------------------------------- |
-| `@phala/dstack-sdk` | latest  | TEE client SDK for attestation and key derivation |
+Results are logged to the browser console or sent to a lightweight telemetry endpoint. No npm package needed.
 
-Note: Verify whether CipherBox currently uses `@phala/dstack-sdk` or a different Phala integration. The existing codebase should be checked.
+### What NOT to Use
 
-### What NOT to Do
+| Tool / Library            | Why Not                                                                                                                                  |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Artillery                 | Less TypeScript-native than k6 v1.0. k6 has better Prometheus integration.                                                               |
+| Apache JMeter             | Java-based, XML config. Not developer-friendly for a TypeScript team.                                                                    |
+| autocannon                | Good for raw HTTP throughput but lacks k6's scenario/threshold model.                                                                    |
+| `nestjs-prometheus`       | Adds an abstraction over `prom-client` that is unnecessary -- CipherBox already has a custom `MetricsService` with fine-grained control. |
+| Grafana Cloud k6          | Paid service. Local k6 CLI is sufficient for baseline establishment.                                                                     |
+| `clinic.js`               | Node.js profiling tool, not load testing. Useful for debugging, not baselines.                                                           |
+| Web Vitals (`web-vitals`) | Measures page load metrics, not crypto/IPFS operation latency.                                                                           |
 
-| Approach                          | Why Not                                                                                 |
-| --------------------------------- | --------------------------------------------------------------------------------------- |
-| Run Node.js inside Nitro Enclave  | No official NSM API for JavaScript; would need WASM bridge. Rust is the supported path. |
-| Use community JS bindings for NSM | None exist that are production-quality                                                  |
-| Skip attestation                  | Defeats the purpose of TEE -- must verify enclave integrity                             |
+### New npm Dependencies: NONE
 
-### Confidence: MEDIUM
+### New Dev Tools (Not npm)
 
-The Rust enclave binary is well-understood architecturally but represents a new build target for the project. The vsock communication protocol needs custom implementation. This is the highest-effort feature in M2.
+| Tool | Version | Installation                            | Purpose          |
+| ---- | ------- | --------------------------------------- | ---------------- |
+| k6   | v1.0+   | `brew install k6` / Docker `grafana/k6` | Load test runner |
+
+### Confidence: HIGH
+
+`prom-client` is already installed and the `MetricsService` pattern is established. k6 v1.0 is the industry standard for developer-friendly load testing. TypeScript support is native. No new npm dependencies.
 
 ---
 
 ## Consolidated New Dependencies
 
-### apps/web (Frontend)
+### npm Dependencies: NONE
 
-```bash
-pnpm add minisearch idb @simplewebauthn/browser
-```
+This milestone requires zero new npm packages. Every capability is built using existing dependencies or configuration changes.
 
-| Package                   | Version | Purpose                             | Size      |
-| ------------------------- | ------- | ----------------------------------- | --------- |
-| `minisearch`              | ^7.2.0  | Client-side full-text search engine | ~7KB gzip |
-| `idb`                     | ^8.0.0  | Promise-based IndexedDB wrapper     | ~1KB gzip |
-| `@simplewebauthn/browser` | ^13.2.2 | WebAuthn browser API                | ~5KB gzip |
+### Docker Image Changes
 
-### apps/api (Backend)
+| Service | Current             | Recommended         | Reason                             |
+| ------- | ------------------- | ------------------- | ---------------------------------- |
+| IPFS    | `ipfs/kubo:v0.34.0` | `ipfs/kubo:v0.40.1` | Default routing API, improved IPNS |
+| (new)   | N/A                 | N/A                 | No new containers needed           |
 
-```bash
-pnpm add @simplewebauthn/server otpauth @aws-sdk/client-kms
-```
+**Kubo upgrade is optional for v1.1.** v0.34.0 supports `Gateway.ExposeRoutingAPI` (the critical feature). v0.40.1 makes it the default and adds IPNS reliability improvements. Recommend upgrading but it is not blocking.
 
-| Package                  | Version | Purpose                            | Notes                            |
-| ------------------------ | ------- | ---------------------------------- | -------------------------------- |
-| `@simplewebauthn/server` | ^13.2.2 | WebAuthn registration/verification | Only if CipherBox-level WebAuthn |
-| `otpauth`                | ^9.5.0  | TOTP generation/validation         | Only if CipherBox-level TOTP     |
-| `@aws-sdk/client-kms`    | ^3.x    | AWS KMS attestation for Nitro      | Only when Nitro fallback ships   |
+### Dev Tooling (Not Committed to Repo)
 
-### packages/crypto (Shared Crypto)
-
-```bash
-pnpm add @scure/bip39
-```
-
-| Package        | Version | Purpose                    | Notes                                             |
-| -------------- | ------- | -------------------------- | ------------------------------------------------- |
-| `@scure/bip39` | ^1.4.0  | BIP-39 mnemonic generation | Only if custom recovery phrase (outside Web3Auth) |
-
-### New Rust crate (AWS Nitro Enclave binary)
-
-This is a **separate build target**, not part of the pnpm monorepo:
-
-```toml
-[dependencies]
-aws-nitro-enclaves-nsm-api = "0.4"
-ecies = "0.2"
-ed25519-dalek = "2.1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-nix = { version = "0.29", features = ["socket"] }
-```
+| Tool | Version | Purpose                  | Installation      |
+| ---- | ------- | ------------------------ | ----------------- |
+| k6   | v1.0+   | Performance load testing | `brew install k6` |
 
 ---
 
 ## What NOT to Add (and Why)
 
-| Library/Tool              | Temptation               | Why Not                                                                                                                                       |
-| ------------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Yjs / Automerge           | "CRDTs solve sync"       | CipherBox syncs encrypted metadata blobs, not collaborative documents. CRDTs add ~50KB+ and require restructuring the entire metadata format. |
-| SecSync                   | "E2E encrypted CRDTs"    | Beta (v0.5.0), uses XChaCha20 (not AES-256-GCM), requires WebSocket server, over-engineered for metadata sync.                                |
-| Elasticsearch / Typesense | "Full-text search"       | Server-side search violates zero-knowledge. All search must be client-side.                                                                   |
-| Fuse.js                   | "Fuzzy search"           | No inverted index (O(n) per query). MiniSearch is faster for indexed search.                                                                  |
-| CipherSweet               | "Searchable encryption"  | Server-side blind indexes -- doesn't apply to client-side-only search.                                                                        |
-| jsonwebtoken              | "JWT for share tokens"   | `jose` (already installed) is better -- supports all JWK/JWS/JWE operations.                                                                  |
-| passport-simple-webauthn  | "Passport + WebAuthn"    | v0.1.0, 2 years stale. Integrate @simplewebauthn/server directly into NestJS services.                                                        |
-| localForage               | "IndexedDB wrapper"      | Unnecessary fallback logic. `idb` is lighter and more appropriate.                                                                            |
-| @noble/curves (new)       | "Need secp256k1"         | Already have `eciesjs` which wraps this. Don't duplicate.                                                                                     |
-| proxy-re-encryption libs  | "Re-encrypt for sharing" | ECIES re-wrapping with existing library is simpler and sufficient. Proxy re-encryption adds unnecessary complexity.                           |
+| Library / Tool                          | Temptation                    | Why Not                                                                                                           |
+| --------------------------------------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Helia (JS IPFS)                         | "Run IPFS in the browser"     | 500KB+ bundle, CipherBox uses server-side Kubo. Browser IPFS is unnecessary when API relays all operations.       |
+| `ipfs-http-client`                      | "Official IPFS client"        | Deprecated. CipherBox uses direct Kubo RPC calls via `fetch`, which is lighter and more maintainable.             |
+| `@ipfs-shipyard/pinning-service-client` | "IPFS Pinning API client"     | 4 REST endpoints. `fetch` is sufficient. Avoid dependency for trivial HTTP calls.                                 |
+| Someguy (self-hosted)                   | "Replace delegated-ipfs.dev"  | Kubo already does DHT lookups. Someguy adds a middleman with zero benefit for single-app use.                     |
+| `yjs` / Automerge                       | "CRDTs for IPNS conflict"     | CRDT-based IPNS inbox is research-only this milestone (per PROJECT.md). Do not add CRDT deps yet.                 |
+| `nestjs-prometheus`                     | "Prometheus NestJS module"    | CipherBox has a mature custom `MetricsService`. Adding a wrapper module would require refactoring for no benefit. |
+| Grafana / Loki / Tempo stack            | "Full observability"          | Over-engineered for baseline establishment. k6 JSON output + existing Prometheus metrics is sufficient.           |
+| DNSLink                                 | "Alternative IPNS resolution" | Requires DNS infrastructure per user. Not viable for per-folder IPNS names (hundreds per user).                   |
+| IPNS-over-PubSub (standalone)           | "Faster IPNS"                 | Already available in Kubo when both publisher and resolver are connected. Not a separate dependency.              |
 
 ---
 
 ## Integration Points with Existing Stack
 
-### TypeORM Migrations Needed
+### IPNS Reliability: DelegatedRoutingClient Refactor
 
-New entities and their relationships:
+The `DelegatedRoutingClient` (at `apps/api/src/ipns/delegated-routing.client.ts`) needs a small refactor:
+
+| Current                             | New                                                                              |
+| ----------------------------------- | -------------------------------------------------------------------------------- |
+| Single `delegatedRoutingUrl` config | `PRIMARY_ROUTING_URL` (local Kubo) + `FALLBACK_ROUTING_URL` (delegated-ipfs.dev) |
+| Retries only to same endpoint       | Try primary, fall through to fallback on failure                                 |
+| No latency tracking                 | Wrap calls with Prometheus histogram observations                                |
+
+The refactor preserves the existing interface (`publish()` and `resolve()` methods) while adding endpoint chaining.
+
+### BYO-IPFS: IpfsModule Provider Selection
+
+The `IpfsModule.forRootAsync()` currently creates a single `LocalProvider`. For BYO-IPFS, extend to support a `CompositeProvider` that:
+
+1. Pins locally via `LocalProvider` (always)
+2. Mirrors the pin to user's remote endpoint via `RemotePinningProvider` (if configured)
+3. Reads from `LocalProvider` (always -- remote pinning services don't serve content)
+
+The `IPFS_PROVIDER` injection token continues to provide a single interface. The composite pattern is internal.
+
+### Database Minimization: Migration Sequence
+
+| Step | Migration                                               | Reversible? |
+| ---- | ------------------------------------------------------- | ----------- |
+| 1    | Add `vault_format_version` column (default 1)           | Yes         |
+| 2    | Deploy client code that writes v2 blobs on next publish | N/A         |
+| 3    | Background job: migrate vaults still at v1              | Yes         |
+| 4    | Make `encrypted_root_folder_key` nullable               | Yes         |
+| 5    | (Future) Drop `encrypted_root_folder_key` column        | No          |
+
+Step 5 is deferred until all users have migrated and a full backup cycle has completed.
+
+### Performance: MetricsService Extensions
+
+New histogram registrations in the existing `MetricsService` constructor. New `observe()` calls in `LocalProvider`, `DelegatedRoutingClient`, and the new `RemotePinningProvider`. No structural changes to the metrics pipeline.
+
+### TypeORM Migrations
+
+| Migration Name                        | Type         | Table              |
+| ------------------------------------- | ------------ | ------------------ |
+| `AddVaultFormatVersion`               | ADD COLUMN   | `vaults`           |
+| `MakeEncryptedRootFolderKeyNullable`  | ALTER COLUMN | `vaults`           |
+| `AddUserIpfsConfig`                   | CREATE TABLE | `user_ipfs_config` |
+| (Future) `DropEncryptedRootFolderKey` | DROP COLUMN  | `vaults`           |
+
+The `user_ipfs_config` table stores server-side relay configuration (endpoint URL, encrypted access token). This is NOT the user's vault settings -- it is the server's record of where to mirror pins for this user.
 
 ```text
-shares
+user_ipfs_config
   - id (uuid PK)
-  - folder_ipns_name (FK to folder_ipns)
-  - owner_id (FK to users)
-  - recipient_id (FK to users)
-  - permissions ('read' | 'readwrite')
-  - folder_key_encrypted (text) -- ECIES-wrapped for recipient
-  - ipns_private_key_encrypted (text) -- ECIES-wrapped for recipient
+  - user_id (uuid FK to users, unique)
+  - endpoint_url (varchar 500)
+  - encrypted_access_token (bytea) -- encrypted with server's key, NOT user's
+  - provider_name (varchar 100)
+  - enabled (boolean, default false)
   - created_at, updated_at
-
-share_invitations
-  - id (uuid PK)
-  - share_id (FK to shares)
-  - invite_token_hash (text)
-  - status ('pending' | 'accepted' | 'rejected' | 'expired')
-  - expires_at (timestamp)
-
-webauthn_credentials (if CipherBox-level WebAuthn)
-  - id (uuid PK)
-  - user_id (FK to users)
-  - credential_id (bytea)
-  - public_key (bytea)
-  - counter (integer)
-  - transports (text[])
-  - created_at
-
-totp_secrets (if CipherBox-level TOTP)
-  - id (uuid PK)
-  - user_id (FK to users)
-  - encrypted_secret (text) -- encrypted with user's publicKey
-  - verified (boolean)
-  - created_at
 ```
 
-### BullMQ Job Types to Add
-
-| Job               | Queue           | Purpose                                        |
-| ----------------- | --------------- | ---------------------------------------------- |
-| `share.notify`    | `notifications` | Notify recipient of new share                  |
-| `version.cleanup` | `maintenance`   | Unpin expired version CIDs from IPFS           |
-| `search.reindex`  | `client-tasks`  | Trigger client-side reindex after bulk changes |
-| `nitro.republish` | `republish`     | Route to Nitro when Phala is unavailable       |
-
-### @cipherbox/crypto Package Extensions
-
-New modules to add:
-
-```text
-packages/crypto/src/
-  sharing/
-    re-wrap-key.ts        -- Re-encrypt a key for a new recipient
-    share-token.ts        -- Generate/verify share invitation tokens
-    types.ts              -- ShareMetadata types
-  search/
-    index-crypto.ts       -- Encrypt/decrypt search index blob
-    types.ts              -- SearchIndex types
-  versioning/
-    types.ts              -- FileVersionEntry types
-```
+**Security note:** The access token is encrypted with the server's operational key (not the user's publicKey) because the server needs to decrypt it to make pinning API calls. This is a pragmatic tradeoff -- the server sees the user's pinning service token but never sees plaintext file content. The alternative (client-direct pinning) has CORS issues.
 
 ---
 
-## Version Verification Summary
+## Version Compatibility
 
-| Package                   | Claimed Version | Verification Method                                 | Confidence                                                 |
-| ------------------------- | --------------- | --------------------------------------------------- | ---------------------------------------------------------- |
-| `minisearch`              | ^7.2.0          | WebSearch (Libraries.io confirms 7.2.0)             | HIGH                                                       |
-| `idb`                     | ^8.0.0          | WebSearch (npm page)                                | MEDIUM (exact latest not confirmed, 8.x series is current) |
-| `@simplewebauthn/server`  | ^13.2.2         | WebSearch (npm confirms 13.2.2, published Oct 2025) | HIGH                                                       |
-| `@simplewebauthn/browser` | ^13.2.2         | WebSearch (npm confirms 13.2.2)                     | HIGH                                                       |
-| `otpauth`                 | ^9.5.0          | WebSearch (npm confirms 9.5.0, published Feb 2026)  | HIGH                                                       |
-| `@scure/bip39`            | ^1.4.0          | Training data (noble ecosystem, likely current)     | MEDIUM                                                     |
-| `@aws-sdk/client-kms`     | ^3.x            | WebSearch (AWS SDK v3 is current)                   | HIGH                                                       |
-| `@phala/dstack-sdk`       | latest          | WebSearch (npm page exists, actively maintained)    | MEDIUM                                                     |
+| Component A              | Compatible With          | Notes                                                         |
+| ------------------------ | ------------------------ | ------------------------------------------------------------- |
+| Kubo v0.34.0             | Routing V1 API           | `Gateway.ExposeRoutingAPI = true` needed                      |
+| Kubo v0.40.1             | Routing V1 API           | Default on, improved IPNS-over-PubSub                         |
+| Kubo v0.34.0 / v0.40.1   | IPFS Pinning Service API | Supported via `ipfs pin remote` since v0.8.0                  |
+| `prom-client` ^15.1.3    | Node.js 18+              | Already validated in current deployment                       |
+| k6 v1.0+                 | TypeScript (native)      | No bundler needed. `.ts` files run directly.                  |
+| `DelegatedRoutingClient` | Routing V1 spec          | Same HTTP contract for both Kubo local and delegated-ipfs.dev |
 
 ---
 
-## Roadmap Implications
+## Roadmap Implications for Stack
 
-### Phase Ordering (by dependency chain)
+### Phase Ordering by Stack Dependency
 
-1. **Versioning first** -- Lowest risk, no new dependencies, purely metadata schema work. Good warmup.
-2. **Search second** -- Small new dependencies (minisearch, idb), client-only, no API changes needed.
-3. **MFA third** -- Web3Auth config change is fast; CipherBox-level WebAuthn/TOTP needs new API endpoints.
-4. **Sharing fourth** -- Most complex feature, touches crypto, API, and UI. Needs the other features stable first.
-5. **Advanced sync fifth** -- Conflict resolution is best designed after sharing is working (sharing introduces multi-writer scenarios that inform conflict rules).
-6. **Nitro fallback sixth** -- Separate build target (Rust enclave), can be developed in parallel but should ship last.
+1. **IPNS reliability first** -- Enables `Gateway.ExposeRoutingAPI`, points routing at local Kubo. No code dependencies on other features. Unblocks everything else.
+
+2. **Performance baselines second** -- Add Prometheus histograms before any other changes so you have "before" measurements. k6 scripts establish the baseline numbers.
+
+3. **Database minimization third** -- Depends on reliable IPNS (moving rootFolderKey to IPFS puts IPNS on the login critical path). Benefits from "before" performance baselines to measure migration impact.
+
+4. **BYO-IPFS fourth** -- Most self-contained feature. Benefits from all other infrastructure being stable. The `RemotePinningProvider` is additive (mirrors pins, doesn't replace local).
 
 ### Risk Assessment
 
-| Feature        | Risk                                           | Mitigation                                                          |
-| -------------- | ---------------------------------------------- | ------------------------------------------------------------------- |
-| Sharing        | MEDIUM -- Protocol design complexity           | Prototype key re-wrapping first, validate with test vectors         |
-| Search         | LOW -- Well-understood pattern                 | MiniSearch is battle-tested                                         |
-| MFA            | LOW-MEDIUM -- Web3Auth pricing dependency      | Verify SCALE plan pricing; fallback to CipherBox-level MFA          |
-| Versioning     | LOW -- Metadata extension only                 | Keep version chain short (max 50) to avoid metadata bloat           |
-| Advanced Sync  | MEDIUM-HIGH -- Conflict resolution edge cases  | Extensive test matrix; start with last-writer-wins, evolve          |
-| Nitro Fallback | HIGH -- New language (Rust enclave), new infra | Prototype vsock communication early; consider hiring Rust expertise |
+| Feature               | Stack Risk | Rationale                                                             |
+| --------------------- | ---------- | --------------------------------------------------------------------- |
+| IPNS reliability      | LOW        | Config change + URL swap. Same API contract.                          |
+| Performance baselines | LOW        | Existing `prom-client`, k6 is external tooling.                       |
+| DB minimization       | MEDIUM     | Data migration protocol. Risk is in migration correctness, not stack. |
+| BYO-IPFS              | LOW        | Standard REST API (Pinning Service). Simple `fetch` calls.            |
 
 ---
 
-_Research complete: 2026-02-11_
-_Sources verified via WebSearch, official documentation, and codebase inspection_
+## Sources
+
+### Primary (HIGH confidence)
+
+- [Delegated Routing V1 HTTP API Spec](https://specs.ipfs.tech/routing/http-routing-v1/) -- IPNS PUT/GET endpoint contract
+- [IPFS Pinning Service API Spec](https://ipfs.github.io/pinning-services-api-spec/) -- OpenAPI 3.0 spec for remote pinning
+- [Kubo v0.34.0 Release Notes](https://github.com/ipfs/kubo/releases/tag/v0.34.0) -- Current version, IPNS TTL change
+- [Kubo v0.40.0 Release Notes](https://github.com/ipfs/kubo/releases/tag/v0.40.0) -- Routing V1 default, IPNS-over-PubSub improvements
+- [Kubo Configuration Docs](https://github.com/ipfs/kubo/blob/master/docs/config.md) -- `Gateway.ExposeRoutingAPI` option
+- [Someguy GitHub](https://github.com/ipfs/someguy) -- Delegated routing server (v0.11.1, Feb 2026)
+- [Grafana k6 1.0 Release](https://grafana.com/blog/grafana-k6-1-0-release/) -- TypeScript-native load testing
+- [prom-client GitHub](https://github.com/siimon/prom-client) -- Prometheus client for Node.js
+- [Work with Pinning Services (IPFS Docs)](https://docs.ipfs.tech/how-to/work-with-pinning-services/) -- Kubo remote pinning integration
+
+### Secondary (MEDIUM confidence)
+
+- [IPIP-0379: Delegated IPNS HTTP API](https://specs.ipfs.tech/ipips/ipip-0379/) -- IPNS delegation spec
+- [Someguy Environment Variables](https://github.com/ipfs/someguy/blob/main/docs/environment-variables.md) -- Configuration for self-hosted routing
+- [Filebase Pinning Service API Docs](https://docs.filebase.com/api-documentation/ipfs-pinning-service-api) -- Example implementation
+- [IP Shipyard 2025 Year in Review](https://ipshipyard.com/blog/2025-shipyard-ipfs-year-in-review/) -- IPFS ecosystem state
+
+### Codebase (HIGH confidence)
+
+- `apps/api/src/ipns/delegated-routing.client.ts` -- Current routing client implementation
+- `apps/api/src/ipfs/providers/ipfs-provider.interface.ts` -- Provider abstraction interface
+- `apps/api/src/ipfs/providers/local.provider.ts` -- Current Kubo integration
+- `apps/api/src/metrics/metrics.service.ts` -- Existing Prometheus metrics
+- `apps/api/src/ipns/ipns.service.ts` -- IPNS publish/resolve with DB fallback
+- `docker/docker-compose.yml` -- Kubo v0.34.0 configuration
+
+---
+
+_Stack research for: CipherBox v1.1 IPFS Infrastructure_
+_Researched: 2026-03-07_
