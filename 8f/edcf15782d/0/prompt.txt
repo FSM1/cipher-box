@@ -1,0 +1,71 @@
+<objective>
+Execute all plans in a phase using wave-based parallel execution.
+
+Orchestrator stays lean: discover plans, analyze dependencies, group into waves, spawn subagents, collect results. Each subagent loads the full execute-plan context and handles its own plan.
+
+Context budget: ~15% orchestrator, 100% fresh per subagent.
+</objective>
+
+<execution_context>
+@./.claude/get-shit-done/workflows/execute-phase.md
+@./.claude/get-shit-done/references/ui-brand.md
+</execution_context>
+
+<context>
+Phase: 19
+
+**Flags:**
+
+- `--gaps-only` — Execute only gap closure plans (plans with `gap_closure: true` in frontmatter). Use after verify-work creates fix plans.
+
+Context files are resolved inside the workflow via `gsd-tools init execute-phase` and per-subagent `<files_to_read>` blocks.
+</context>
+
+<process>
+Execute the execute-phase workflow from @./.claude/get-shit-done/workflows/execute-phase.md end-to-end.
+Preserve all workflow gates (wave execution, checkpoint handling, verification, state updates, routing).
+</process>
+
+---
+
+<task-notification>
+<task-id>a33d7178dab436358</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-19/tasks/a33d7178dab436358.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute plan 19-01" completed</summary>
+<result>## PLAN COMPLETE
+
+**Plan:** 19-01
+**Tasks:** 2/2
+**SUMMARY:** `/Users/michael/Code/cipher-box-phase-19/.planning/phases/19-ipns-resolution-improvement/19-01-SUMMARY.md`
+
+**Commits:**
+
+- `fa8aa3dd5`: feat(19-01): add self-hosted Someguy service to Docker Compose staging
+- `9336171e9`: feat(19-01): point DELEGATED_ROUTING_URL to self-hosted Someguy
+- `3e1f85ecd`: docs(19-01): complete Someguy sidecar deployment plan
+
+**Duration:** 2min
+
+**Key files modified:**
+- `/Users/michael/Code/cipher-box-phase-19/docker/docker-compose.staging.yml` -- Someguy service added
+- `/Users/michael/Code/cipher-box-phase-19/.github/workflows/deploy-staging.yml` -- DELEGATED_ROUTING_URL swapped to `http://someguy:8190`
+- `/Users/michael/Code/cipher-box-phase-19/apps/api/.env.example` -- Someguy documented as recommended routing provider
+
+**Note:** Pre-existing uncommitted changes to `apps/api/src/ipns/ipns.service.ts` and `apps/api/src/ipns/ipns.service.spec.ts` (metrics instrumentation, likely from Phase 18 work) were left unstaged as they are out of scope for this plan.</result>
+<usage><total_tokens>56083</total_tokens><tool_uses>51</tool_uses><duration_ms>246505</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box-phase-19/tasks/a33d7178dab436358.output
+
+---
+
+I think you might need to pull in the just merged code from phase 18 for some of the new prom metrics
+
+---
+
+https://github.com/FSM1/cipher-box/commit/b3e8b7bc3a53ad00921d0ac7cfafdc94c1206ad7 is the current HEAD
+
+---
+
+2
