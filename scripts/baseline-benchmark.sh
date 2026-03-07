@@ -79,10 +79,16 @@ percentile() {
 timed_curl() {
   local output_file="$1"
   shift
-  local time_total
-  time_total=$(curl -s -o /dev/null -w "%{time_total}" \
+  local response
+  response=$(curl -s -o /dev/null -w "%{http_code} %{time_total}" \
     -H "Authorization: Bearer $JWT_TOKEN" \
     "$@" 2>/dev/null) || true
+  local http_code="${response%% *}"
+  local time_total="${response##* }"
+  if [[ ! "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+    >&2 echo "WARN: timed_curl got HTTP $http_code; sample skipped."
+    return
+  fi
   if [[ "$time_total" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
     echo "$time_total" >> "$output_file"
   else
@@ -95,7 +101,7 @@ timed_curl() {
 ##############################################################################
 echo ">> Discovering IPNS name from /vault..."
 VAULT_RESPONSE=$(curl -s -H "Authorization: Bearer $JWT_TOKEN" "$API_URL/vault" 2>/dev/null) || true
-IPNS_NAME=$(echo "$VAULT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ipnsName',''))" 2>/dev/null) || true
+IPNS_NAME=$(echo "$VAULT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('rootIpnsName',''))" 2>/dev/null) || true
 
 if [ -z "$IPNS_NAME" ]; then
   echo "   WARNING: Could not discover IPNS name from /vault (HTTP request failed or ipnsName missing). Skipping IPNS resolve test."
