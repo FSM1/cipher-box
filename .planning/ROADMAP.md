@@ -113,7 +113,7 @@ Phases execute in numeric order: 18 -> 19 -> 20 -> 21 -> 22
 | Phase                              | Milestone | Plans Complete | Status      | Completed  |
 | ---------------------------------- | --------- | -------------- | ----------- | ---------- |
 | 18. Performance Instrumentation    | v1.1      | 2/2            | Complete    | 2026-03-07 |
-| 19. IPNS Resolution Improvement    | v1.1      | 1/2            | In Progress | -          |
+| 19. IPNS Resolution Improvement    | v1.1      | 2/2            | Complete    | 2026-03-07 |
 | 20. Vault Migration                | v1.1      | 0/?            | Not started | -          |
 | 21. BYO-IPFS Node Support          | v1.1      | 0/?            | Not started | -          |
 | 22. Performance Baselines Complete | v1.1      | 0/?            | Not started | -          |

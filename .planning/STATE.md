@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: planning
-last_updated: '2026-03-07T06:48:57.105Z'
-last_activity: 2026-03-07 -- Roadmap created for v1.1 IPFS Infrastructure
+status: executing
+last_updated: '2026-03-07T06:51:56.000Z'
+last_activity: 2026-03-07 -- Completed 19-02 (IPNS latency metrics)
 progress:
   total_phases: 5
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
-  percent: 50
+  completed_plans: 2
+  percent: 100
 ---
 
 # Project State
@@ -20,16 +20,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 19 - IPNS Resolution Improvement (v1.1 IPFS Infrastructure)
+**Current focus:** Phase 19 - IPNS Resolution Improvement (v1.1 IPFS Infrastructure) -- COMPLETE
 
 ## Current Position
 
-Phase: 19 (IPNS Resolution Improvement)
-Plan: 02 of 2
-Status: Executing
-Last activity: 2026-03-07 -- Completed 19-01 (Someguy sidecar deployment)
+Phase: 19 (IPNS Resolution Improvement) -- ALL PLANS COMPLETE
+Plan: 2 of 2 (done)
+Status: Phase complete
+Last activity: 2026-03-07 -- Completed 19-02 (IPNS latency metrics)
 
-Progress: [█████░░░░░] 50%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -42,6 +42,7 @@ Progress: [█████░░░░░] 50%
 | Phase | Plan | Duration | Tasks | Files |
 | ----- | ---- | -------- | ----- | ----- |
 | 19    | 01   | 2min     | 2     | 3     |
+| 19    | 02   | 5min     | 2     | 5     |
 
 ## Accumulated Context
 
@@ -51,7 +52,7 @@ See PROJECT.md Key Decisions table for full list with outcomes.
 
 Recent for v1.1:
 
-- Network-first with self-hosted Someguy + DB fallback adopted as IPNS resolution strategy (revised from DB-first during Phase 19 context — see 19-SCOPING_RATIONALE.md #1)
+- Network-first with self-hosted Someguy + DB fallback adopted as IPNS resolution strategy (revised from DB-first during Phase 19 context -- see 19-SCOPING_RATIONALE.md #1)
 - rootFolderKey DB copy kept as permanent fallback (never drop column, IPFS copy for recovery independence)
 - BYO-IPFS affects pinning only, all IPNS publishes still route through CipherBox API
 - PERF requirements split across Phase 18 (server-side, pre-change) and Phase 22 (client + load testing, post-change)
@@ -59,6 +60,8 @@ Recent for v1.1:
 - Source label (db/network) only for resolve operations; empty string for pin/cat/publish
 - Alloy scrapes Kubo directly via Docker internal network (ipfs:5001), not proxied through API
 - Kubo Health dashboard panels use fallback Go runtime metrics alongside libp2p metrics pending post-deploy verification
+- IPNS-specific histograms: resolve 50ms-30s, publish 100ms-60s with source/outcome labels
+- Null resolve results (not found) excluded from IPNS histogram observations
 
 ### Open Concerns
 
@@ -74,4 +77,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-07 after completing 19-01 (Someguy sidecar deployment)
+Last updated: 2026-03-07 after completing 19-02 (IPNS latency metrics) -- Phase 19 complete
