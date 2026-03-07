@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.24.1](https://github.com/FSM1/cipher-box/compare/v0.24.0...v0.24.1) (2026-03-07)
+
+
+### Bug Fixes
+
+* auto-provision Grafana dashboard on staging deploy ([#282](https://github.com/FSM1/cipher-box/issues/282)) ([904663b](https://github.com/FSM1/cipher-box/commit/904663b399f6822408b053adef52e42736fa3d5f))
+
 ## [0.24.0](https://github.com/FSM1/cipher-box/compare/v0.23.1...v0.24.0) (2026-03-07)
 
 
