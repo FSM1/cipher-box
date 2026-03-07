@@ -35,8 +35,6 @@ JWT_TOKEN="${2:?Usage: $0 <api-url> <jwt-token>}"
 
 ITERATIONS=20
 WARMUP=3
-PUBLISH_ITERATIONS=5
-
 # Remove trailing slash from API_URL
 API_URL="${API_URL%/}"
 
@@ -85,7 +83,11 @@ timed_curl() {
   time_total=$(curl -s -o /dev/null -w "%{time_total}" \
     -H "Authorization: Bearer $JWT_TOKEN" \
     "$@" 2>/dev/null) || true
-  echo "$time_total" >> "$output_file"
+  if [[ "$time_total" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "$time_total" >> "$output_file"
+  else
+    >&2 echo "WARN: timed_curl received non-numeric time_total='$time_total'; sample skipped."
+  fi
 }
 
 ##############################################################################
@@ -96,8 +98,7 @@ VAULT_RESPONSE=$(curl -s -H "Authorization: Bearer $JWT_TOKEN" "$API_URL/vault" 
 IPNS_NAME=$(echo "$VAULT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ipnsName',''))" 2>/dev/null) || true
 
 if [ -z "$IPNS_NAME" ]; then
-  echo "   WARNING: Could not discover IPNS name from /vault. Skipping IPNS resolve test."
-  echo "   Response: $VAULT_RESPONSE"
+  echo "   WARNING: Could not discover IPNS name from /vault (HTTP request failed or ipnsName missing). Skipping IPNS resolve test."
   SKIP_RESOLVE=true
 else
   echo "   IPNS Name: ${IPNS_NAME:0:20}..."

@@ -22,6 +22,7 @@ export class RepublishProcessor extends WorkerHost {
     const endBatchTimer = this.metricsService.republishBatchDuration.startTimer({
       tee_provider: 'mock',
     });
+    let batchResult = 'success';
 
     try {
       const result = await this.republishService.processRepublishBatch();
@@ -38,13 +39,13 @@ export class RepublishProcessor extends WorkerHost {
       if (result.processed > 0 && result.succeeded === 0 && result.failed === result.processed) {
         this.logger.warn('All republish entries failed. TEE worker may be unreachable.');
       }
-
-      endBatchTimer({ result: 'success' });
     } catch (error) {
-      endBatchTimer({ result: 'error' });
+      batchResult = 'error';
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`Republish job failed: ${message}`);
       throw error; // Let BullMQ handle retry
+    } finally {
+      endBatchTimer({ result: batchResult });
     }
   }
 }

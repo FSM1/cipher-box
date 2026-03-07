@@ -336,6 +336,7 @@ export class IpnsService {
           this.logger.warn(`Delegated routing failed for ${ipnsName}, falling back to DB cache`);
           timerResult = 'error';
         } else {
+          timerResult = 'error';
           throw error;
         }
       }

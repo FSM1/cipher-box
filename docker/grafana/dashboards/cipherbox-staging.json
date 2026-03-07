@@ -590,17 +590,17 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"pin|cat\"}[$__rate_interval])) by (le, operation))",
+          "expr": "histogram_quantile(0.50, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"pin|cat\",result=\"success\"}[$__rate_interval])) by (le, operation))",
           "legendFormat": "p50 {{ operation }}",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"pin|cat\"}[$__rate_interval])) by (le, operation))",
+          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"pin|cat\",result=\"success\"}[$__rate_interval])) by (le, operation))",
           "legendFormat": "p95 {{ operation }}",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"pin|cat\"}[$__rate_interval])) by (le, operation))",
+          "expr": "histogram_quantile(0.99, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"pin|cat\",result=\"success\"}[$__rate_interval])) by (le, operation))",
           "legendFormat": "p99 {{ operation }}",
           "refId": "C"
         }
@@ -910,17 +910,17 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"resolve|publish\"}[$__rate_interval])) by (le, operation))",
+          "expr": "histogram_quantile(0.50, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"resolve|publish\",result=\"success\"}[$__rate_interval])) by (le, operation))",
           "legendFormat": "p50 {{ operation }}",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"resolve|publish\"}[$__rate_interval])) by (le, operation))",
+          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"resolve|publish\",result=\"success\"}[$__rate_interval])) by (le, operation))",
           "legendFormat": "p95 {{ operation }}",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"resolve|publish\"}[$__rate_interval])) by (le, operation))",
+          "expr": "histogram_quantile(0.99, sum(rate(cipherbox_ipfs_ipns_duration_seconds_bucket{operation=~\"resolve|publish\",result=\"success\"}[$__rate_interval])) by (le, operation))",
           "legendFormat": "p99 {{ operation }}",
           "refId": "C"
         }
