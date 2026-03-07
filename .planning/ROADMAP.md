@@ -20,7 +20,7 @@ CipherBox v1.1 transforms the platform from "IPFS as a storage backend with data
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 18: Performance Instrumentation** - Server-side Prometheus histograms and Kubo metrics scraping to establish baselines before any architectural changes (completed 2026-03-07)
-- [ ] **Phase 19: IPNS Resolution Improvement** - Replace delegated-ipfs.dev with self-hosted Someguy sidecar for reliable IPNS routing, add latency histograms for resolve/publish operations
+- [x] **Phase 19: IPNS Resolution Improvement** - Replace delegated-ipfs.dev with self-hosted Someguy sidecar for reliable IPNS routing, add latency histograms for resolve/publish operations (completed 2026-03-07)
 - [ ] **Phase 20: Vault Migration** - Move rootFolderKey to IPFS vault blob v2 format, making the server store zero crypto material
 - [ ] **Phase 21: BYO-IPFS Node Support** - User-configurable IPFS pinning endpoint with dual-pin strategy, Settings UI, and connection testing
 - [ ] **Phase 22: Performance Baselines Completion** - Client-side timing instrumentation, end-to-end journey timing, k6 load testing, and capacity documentation
@@ -113,7 +113,7 @@ Phases execute in numeric order: 18 -> 19 -> 20 -> 21 -> 22
 | Phase                              | Milestone | Plans Complete | Status      | Completed  |
 | ---------------------------------- | --------- | -------------- | ----------- | ---------- |
 | 18. Performance Instrumentation    | v1.1      | 2/2            | Complete    | 2026-03-07 |
-| 19. IPNS Resolution Improvement    | v1.1      | 2/2            | Complete    | 2026-03-07 |
+| 19. IPNS Resolution Improvement    | v1.1      | Complete       | 2026-03-07  | 2026-03-07 |
 | 20. Vault Migration                | v1.1      | 0/?            | Not started | -          |
 | 21. BYO-IPFS Node Support          | v1.1      | 0/?            | Not started | -          |
 | 22. Performance Baselines Complete | v1.1      | 0/?            | Not started | -          |
