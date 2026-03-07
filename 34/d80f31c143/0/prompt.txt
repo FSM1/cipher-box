@@ -1,0 +1,56 @@
+<objective>
+Validate `.planning/` directory integrity and report actionable issues. Checks for missing files, invalid configurations, inconsistent state, and orphaned plans.
+</objective>
+
+<execution_context>
+@./.claude/get-shit-done/workflows/health.md
+</execution_context>
+
+<process>
+Execute the health workflow from @./.claude/get-shit-done/workflows/health.md end-to-end.
+Parse --repair flag from arguments and pass to workflow.
+</process>
+
+---
+
+Tool loaded.
+
+---
+
+ok lets push this up and create a PR
+
+---
+
+One thing we missed is updating all the todos that are now scoped as part of this milestone.
+
+---
+
+Tool loaded.
+
+---
+
+Tool loaded.
+
+---
+
+Tool loaded.
+
+---
+
+Tool loaded.
+
+---
+
+also there was some really great content from our earlier scoping discussion around the IPNS infra and the folder_ipns scoping discussion. I feel that some of this should be documented as advisory/rationale and the tradeoffs.
+
+---
+
+can't you just parse your own logs for the previous session?
+
+---
+
+Tool loaded.
+
+---
+
+there was also some concessions made with the IPNS authoritative resolution still using db cache - not seeing this in the scoping rationale
