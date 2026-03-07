@@ -18,3 +18,4 @@ apps/desktop/src-tauri/target/
 
 # GSD plan files - XML task syntax not compatible with markdownlint
 .planning/phases/
+.planning/milestones/
