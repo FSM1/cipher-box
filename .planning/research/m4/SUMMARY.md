@@ -17,7 +17,7 @@ The critical risks center on two threats to the zero-knowledge guarantee: editor
 
 ### Recommended Stack
 
-The stack extends CipherBox's existing NestJS + React + TypeORM + IPFS architecture. No foundational technology changes are needed -- M3 is additive.
+The stack extends CipherBox's existing NestJS + React + TypeORM + IPFS architecture. No foundational technology changes are needed -- M4 is additive.
 
 Core technologies:
 
