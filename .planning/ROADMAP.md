@@ -38,7 +38,13 @@ Decimal phases appear between their surrounding integers in numeric order.
 2. API endpoint response times are captured at p50/p95/p99 for all critical routes (auth, IPNS resolve/publish, file upload/download, folder CRUD)
 3. Kubo node health metrics (peer count, bandwidth, datastore size) are visible in Prometheus via scraped Kubo endpoint
 4. TEE republish batch duration histogram captures per-batch timing with success/failure labels
-   **Plans**: TBD
+
+**Plans:** 2 plans
+
+Plans:
+
+- [ ] 18-01-PLAN.md -- Add IPFS/IPNS + TEE duration histograms to MetricsService and instrument service/controller timing
+- [ ] 18-02-PLAN.md -- Add Kubo scrape to Alloy, extend Grafana dashboard, create baseline benchmark script
 
 ### Phase 19: IPNS Resolution Improvement
 
@@ -101,7 +107,7 @@ Phases execute in numeric order: 18 -> 19 -> 20 -> 21 -> 22
 
 | Phase                              | Milestone | Plans Complete | Status      | Completed |
 | ---------------------------------- | --------- | -------------- | ----------- | --------- |
-| 18. Performance Instrumentation    | v1.1      | 0/?            | Not started | -         |
+| 18. Performance Instrumentation    | v1.1      | 0/2            | Planning    | -         |
 | 19. IPNS Resolution Improvement    | v1.1      | 0/?            | Not started | -         |
 | 20. Vault Migration                | v1.1      | 0/?            | Not started | -         |
 | 21. BYO-IPFS Node Support          | v1.1      | 0/?            | Not started | -         |
