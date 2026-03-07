@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "7665142dfffe",
+  "strategy": "manual-commit",
+  "branch": "docs/performance-baselines",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/baselines/18-performance-baselines.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/76/65142dfffe/0/metadata.json",
+      "transcript": "/76/65142dfffe/0/full.jsonl",
+      "context": "/76/65142dfffe/0/context.md",
+      "content_hash": "/76/65142dfffe/0/content_hash.txt",
+      "prompt": "/76/65142dfffe/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 505,
+    "cache_creation_tokens": 551261,
+    "cache_read_tokens": 29617295,
+    "output_tokens": 61877,
+    "api_call_count": 368
+  }
+}
