@@ -32,7 +32,7 @@ See PROJECT.md Key Decisions table for full list with outcomes.
 
 Recent for v1.1:
 
-- DB-first with async Kubo DHT verification adopted as IPNS resolution strategy (not Kubo-only or PubSub)
+- Network-first with self-hosted Someguy + DB fallback adopted as IPNS resolution strategy (revised from DB-first during Phase 19 context — see 19-SCOPING_RATIONALE.md #1)
 - rootFolderKey DB copy kept as permanent fallback (never drop column, IPFS copy for recovery independence)
 - BYO-IPFS affects pinning only, all IPNS publishes still route through CipherBox API
 - PERF requirements split across Phase 18 (server-side, pre-change) and Phase 22 (client + load testing, post-change)
@@ -55,4 +55,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-07 after 18-02 plan execution
+Last updated: 2026-03-07 after Phase 19 context gathered
