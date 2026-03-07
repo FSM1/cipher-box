@@ -473,3 +473,71 @@ jobs:
 
             # Cleanup old images
             docker image prune -f
+
+  provision-dashboard:
+    name: Provision Grafana Dashboard
+    needs: [deploy-vps]
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.staging_tag || github.ref_name }}
+
+      - name: Push dashboard to Grafana Cloud
+        env:
+          GRAFANA_URL: ${{ vars.GRAFANA_URL }}
+          GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
+          DS_METRICS_UID: ${{ vars.GRAFANA_DS_METRICS_UID }}
+          DS_LOGS_UID: ${{ vars.GRAFANA_DS_LOGS_UID }}
+        run: |
+          set -euo pipefail
+          : "${GRAFANA_URL:?GRAFANA_URL is required}"
+          : "${GRAFANA_API_KEY:?GRAFANA_API_KEY is required}"
+          : "${DS_METRICS_UID:?GRAFANA_DS_METRICS_UID is required}"
+          : "${DS_LOGS_UID:?GRAFANA_DS_LOGS_UID is required}"
+
+          # The dashboard JSON uses __inputs for datasource templating.
+          # Replace variable references with actual datasource UIDs.
+          DASHBOARD=$(cat docker/grafana/dashboards/cipherbox-staging.json \
+            | jq --arg metrics "$DS_METRICS_UID" --arg logs "$DS_LOGS_UID" \
+                 'del(.__inputs)
+                  | .id = null
+                  | walk(if type == "object" and .uid? and (.uid | test("\\$\\{DS_")) then
+                      .uid = (if .uid == "${DS_GRAFANA_CLOUD_METRICS}" then $metrics
+                              elif .uid == "${DS_GRAFANA_CLOUD_LOGS}" then $logs
+                              else .uid end)
+                    else . end)')
+
+          # Fail if any datasource placeholder survived the rewrite
+          if jq -e '.. | objects | .uid? | select(type == "string" and test("^\\$\\{DS_"))' \
+            >/dev/null <<<"$DASHBOARD"; then
+            echo "::error::Unresolved datasource placeholder(s) remain in dashboard JSON"
+            exit 1
+          fi
+
+          # Wrap in import payload
+          PAYLOAD=$(jq -n --argjson dashboard "$DASHBOARD" '{
+            dashboard: $dashboard,
+            overwrite: true,
+            message: "Provisioned by deploy-staging workflow"
+          }')
+
+          # Push to Grafana API
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 60 \
+            -o /tmp/grafana-response.json -w "%{http_code}" \
+            -X POST "${GRAFANA_URL}/api/dashboards/db" \
+            -H "Authorization: Bearer ${GRAFANA_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          if [[ ! "$HTTP_CODE" =~ ^2[0-9][0-9]$ ]]; then
+            echo "::error::Grafana API returned HTTP $HTTP_CODE"
+            cat /tmp/grafana-response.json
+            exit 1
+          fi
+
+          echo "Dashboard provisioned successfully (HTTP $HTTP_CODE)"
+          jq -r '.url // "unknown"' /tmp/grafana-response.json
