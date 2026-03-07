@@ -15,6 +15,8 @@ describe('IpfsController', () => {
   let controller: IpfsController;
   let ipfsProvider: jest.Mocked<IpfsProvider>;
   let vaultService: jest.Mocked<Pick<VaultService, 'checkQuota' | 'recordPin'>>;
+  let mockEndTimer: jest.Mock;
+  let mockStartTimer: jest.Mock;
 
   beforeEach(async () => {
     const mockIpfsProvider: jest.Mocked<IpfsProvider> = {
@@ -28,11 +30,15 @@ describe('IpfsController', () => {
       recordPin: jest.fn(),
     };
 
+    mockEndTimer = jest.fn();
+    mockStartTimer = jest.fn().mockReturnValue(mockEndTimer);
+
     const mockMetricsService = {
       fileUploads: { inc: jest.fn() },
       fileUploadBytes: { inc: jest.fn() },
       fileDownloads: { inc: jest.fn() },
       fileUnpins: { inc: jest.fn() },
+      ipfsIpnsDuration: { startTimer: mockStartTimer },
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -217,6 +223,70 @@ describe('IpfsController', () => {
       await controller.get(mockCid, mockRes);
 
       expect(ipfsProvider.getFile).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('duration instrumentation', () => {
+    const mockCid = 'bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrvwpfdi';
+    const mockSize = 1024;
+    const mockReq: RequestWithUser = { user: { id: 'user-123' } } as RequestWithUser;
+
+    it('should observe pin duration on upload success', async () => {
+      const mockFile = {
+        buffer: Buffer.from('encrypted file content'),
+        size: 22,
+      } as Express.Multer.File;
+
+      vaultService.checkQuota.mockResolvedValue(true);
+      ipfsProvider.pinFile.mockResolvedValue({ cid: mockCid, size: mockSize });
+      vaultService.recordPin.mockResolvedValue(undefined);
+
+      await controller.upload(mockReq, mockFile);
+
+      expect(mockStartTimer).toHaveBeenCalledWith({ operation: 'pin', source: '' });
+      expect(mockEndTimer).toHaveBeenCalledWith({ result: 'success' });
+    });
+
+    it('should observe error result when pinFile throws', async () => {
+      const mockFile = {
+        buffer: Buffer.from('encrypted file content'),
+        size: 22,
+      } as Express.Multer.File;
+
+      vaultService.checkQuota.mockResolvedValue(true);
+      ipfsProvider.pinFile.mockRejectedValue(new Error('IPFS error'));
+
+      await expect(controller.upload(mockReq, mockFile)).rejects.toThrow('IPFS error');
+
+      expect(mockStartTimer).toHaveBeenCalledWith({ operation: 'pin', source: '' });
+      expect(mockEndTimer).toHaveBeenCalledWith({ result: 'error' });
+    });
+
+    it('should observe cat duration on get success', async () => {
+      const mockRes = {
+        set: jest.fn(),
+      } as unknown as import('express').Response;
+      const mockContent = Buffer.from('encrypted file content');
+
+      ipfsProvider.getFile.mockResolvedValue(mockContent);
+
+      await controller.get(mockCid, mockRes);
+
+      expect(mockStartTimer).toHaveBeenCalledWith({ operation: 'cat', source: '' });
+      expect(mockEndTimer).toHaveBeenCalledWith({ result: 'success' });
+    });
+
+    it('should observe cat error result when getFile throws', async () => {
+      const mockRes = {
+        set: jest.fn(),
+      } as unknown as import('express').Response;
+
+      ipfsProvider.getFile.mockRejectedValue(new Error('IPFS fetch error'));
+
+      await expect(controller.get(mockCid, mockRes)).rejects.toThrow('IPFS fetch error');
+
+      expect(mockStartTimer).toHaveBeenCalledWith({ operation: 'cat', source: '' });
+      expect(mockEndTimer).toHaveBeenCalledWith({ result: 'error' });
     });
   });
 });

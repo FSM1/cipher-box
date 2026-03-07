@@ -7,6 +7,7 @@ import { PublishIpnsDto, BatchPublishIpnsDto } from './dto';
 import { User } from '../auth/entities/user.entity';
 import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
+import { MetricsService } from '../metrics/metrics.service';
 import { parseIpnsRecord } from './ipns-record-parser';
 
 jest.mock('./ipns-record-parser');
@@ -24,6 +25,8 @@ describe('IpnsService', () => {
     publish: jest.Mock;
     resolve: jest.Mock;
   };
+  let mockEndTimer: jest.Mock;
+  let mockStartTimer: jest.Mock;
 
   // Test data
   const testUserId = '550e8400-e29b-41d4-a716-446655440000';
@@ -60,6 +63,9 @@ describe('IpnsService', () => {
       resolve: jest.fn().mockResolvedValue(null),
     };
 
+    mockEndTimer = jest.fn();
+    mockStartTimer = jest.fn().mockReturnValue(mockEndTimer);
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         IpnsService,
@@ -75,6 +81,12 @@ describe('IpnsService', () => {
           provide: RepublishService,
           useValue: {
             enrollFolder: jest.fn().mockResolvedValue(undefined),
+          },
+        },
+        {
+          provide: MetricsService,
+          useValue: {
+            ipfsIpnsDuration: { startTimer: mockStartTimer },
           },
         },
       ],
@@ -746,6 +758,88 @@ describe('IpnsService', () => {
       });
       expect(result.success).toBe(true);
       expect(mockFolderIpnsRepo.save).toHaveBeenCalled();
+    });
+  });
+
+  describe('duration instrumentation', () => {
+    it('should observe resolve duration with correct labels on network success', async () => {
+      const mockRecordBytes = new Uint8Array([1, 2, 3]);
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
+      mockParseIpnsRecord.mockReturnValue({
+        value: '/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
+        sequence: 5n,
+      });
+
+      await service.resolveRecord(testIpnsName);
+
+      expect(mockStartTimer).toHaveBeenCalledWith({ operation: 'resolve' });
+      expect(mockEndTimer).toHaveBeenCalledWith({ result: 'success', source: 'network' });
+    });
+
+    it('should observe resolve duration with db source when DB has higher seq', async () => {
+      const mockRecordBytes = new Uint8Array([1, 2, 3]);
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
+      mockParseIpnsRecord.mockReturnValue({
+        value: '/ipfs/bafySTALE',
+        sequence: 3n,
+      });
+      mockFolderIpnsRepo.findOne.mockResolvedValue({
+        ...mockFolderEntity,
+        latestCid: 'bafyFRESH',
+        sequenceNumber: '10',
+      });
+
+      await service.resolveRecord(testIpnsName);
+
+      expect(mockEndTimer).toHaveBeenCalledWith({ result: 'success', source: 'db' });
+    });
+
+    it('should observe resolve duration with error label on delegated routing failure', async () => {
+      mockDelegatedRoutingClient.resolve.mockRejectedValue(
+        new HttpException('Failed to resolve', HttpStatus.BAD_GATEWAY)
+      );
+      const cachedFolder = {
+        ...mockFolderEntity,
+        latestCid: 'bafyCACHED',
+        sequenceNumber: '42',
+      };
+      mockFolderIpnsRepo.findOne.mockResolvedValue(cachedFolder);
+
+      await service.resolveRecord(testIpnsName);
+
+      expect(mockStartTimer).toHaveBeenCalledWith({ operation: 'resolve' });
+      expect(mockEndTimer).toHaveBeenCalledWith({ result: 'error', source: 'db' });
+    });
+
+    it('should observe publish duration on success', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '1' });
+
+      await service.publishRecord(testUserId, {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: testMetadataCid,
+      });
+
+      expect(mockStartTimer).toHaveBeenCalledWith({ operation: 'publish', source: '' });
+      expect(mockEndTimer).toHaveBeenCalledWith({ result: 'success' });
+    });
+
+    it('should observe publish duration with error label on failure', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockFolderIpnsRepo.save.mockRejectedValue(new Error('DB write error'));
+
+      await expect(
+        service.publishRecord(testUserId, {
+          ipnsName: testIpnsName,
+          record: testRecord,
+          metadataCid: testMetadataCid,
+        })
+      ).rejects.toThrow('DB write error');
+
+      expect(mockEndTimer).toHaveBeenCalledWith({ result: 'error' });
     });
   });
 
