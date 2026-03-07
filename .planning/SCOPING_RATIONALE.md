@@ -44,7 +44,46 @@ Skip advisory `folder_ipns` for v1.1. Deferred as IPNS-06 to v1.2 requirements. 
 
 ---
 
-## Decision 2: rootFolderKey Migration to IPFS (Accepted with Permanent DB Fallback)
+## Decision 2: IPNS Resolution Keeps DB-First Strategy (Not DHT-First)
+
+### The concession
+
+A milestone called "IPFS Infrastructure" might suggest moving IPNS resolution to be DHT-primary — resolve via self-hosted Someguy/Kubo first, fall back to DB only on failure. The scoping discussion explicitly chose the opposite: **DB-first with async DHT verification**.
+
+### Current flow (before v1.1)
+
+```text
+resolveRecord()
+  -> DelegatedRoutingClient.resolve() -> delegated-ipfs.dev (primary, 10s timeout)
+  -> folder_ipns DB query (fallback on 502/timeout)
+  -> Compare sequence numbers, return highest
+```
+
+### v1.1 flow (IPNS-02)
+
+```text
+resolveRecord()
+  -> folder_ipns DB query (primary, <5ms)
+  -> Return DB result immediately to caller
+  -> Async: Kubo DHT resolve via self-hosted Someguy (background)
+     -> If DHT has higher sequence number, update DB cache
+     -> If DHT fails, no-op (DB is authoritative for our own records)
+```
+
+### Why DB-first instead of DHT-first
+
+1. **Latency:** DB query completes in <5ms. DHT resolution, even self-hosted, has a median of 0.3-0.4s (ProbeLab data) and a long tail. Users should never wait for the DHT on the hot path.
+2. **DB is already correct for our own records.** Every publish writes to `folder_ipns` atomically. The DB always has the latest CID that _we_ published. The only scenario where DHT has a fresher value is if another node published for the same IPNS name — which doesn't happen in CipherBox's architecture.
+3. **Graceful degradation is free.** If Someguy/Kubo is down, nothing changes — the DB result is already returned. No timeout, no retry, no user-visible degradation (IPNS-04).
+4. **Async verification catches staleness.** The background DHT check is a consistency audit, not a user-facing operation. If a TEE republish advanced the sequence number and the DB hasn't caught up, the async check self-heals.
+
+### What this means for "IPFS-native"
+
+This is a pragmatic concession: the DB remains the primary source of truth for IPNS resolution, not IPFS. The milestone improves IPNS _infrastructure_ (self-hosting, reliability) without making it the _authority_. True DHT-primary resolution is deferred to v1.2 (IPNS-06: folder_ipns CID cache made advisory) and depends on proving Someguy reliability at scale.
+
+---
+
+## Decision 3: rootFolderKey Migration to IPFS (Accepted with Permanent DB Fallback)
 
 ### Tradeoff
 
@@ -62,7 +101,7 @@ This column is **already redundant** — the root IPNS private key is determinis
 
 ---
 
-## Decision 3: BYO-IPFS Uses Server-Relay (Not Client-Direct)
+## Decision 4: BYO-IPFS Uses Server-Relay (Not Client-Direct)
 
 ### Tradeoff
 
@@ -78,7 +117,7 @@ Server-relay mode for v1.1. Client-direct deferred as BYO-08 to v1.2 for power u
 
 ---
 
-## Decision 4: Performance Baselines Split Across Two Phases
+## Decision 5: Performance Baselines Split Across Two Phases
 
 ### Rationale
 
@@ -88,7 +127,7 @@ Phase 18 (server-side Prometheus, before any changes) establishes the "before" p
 
 ---
 
-## Decision 5: Shares/Device Approvals Stay in PostgreSQL
+## Decision 6: Shares/Device Approvals Stay in PostgreSQL
 
 ### Why not IPFS
 
@@ -102,7 +141,7 @@ CRDT-based share discovery via IPNS inbox is tracked as a v1.2 research item (IP
 
 ---
 
-## Decision 6: IPNS PubSub and DNSLink Rejected
+## Decision 7: IPNS PubSub and DNSLink Rejected
 
 | Alternative          | Why rejected                                                                                                                  |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
@@ -115,16 +154,16 @@ CRDT-based share discovery via IPNS inbox is tracked as a v1.2 research item (IP
 
 For reference, these PostgreSQL tables remain and why:
 
-| Table                     | Stays because                                                     |
-| ------------------------- | ----------------------------------------------------------------- |
-| `users`                   | Auth — indexed lookups by hashed identifier                       |
-| `auth_methods`            | Auth — MFA factor storage                                         |
-| `refresh_tokens`          | Auth — session management                                         |
-| `folder_ipns`             | TEE keys, sequence numbers, republish scheduling (see Decision 1) |
-| `ipns_republish_schedule` | Server-side cron scheduling                                       |
-| `shares` / `share_keys`   | Query-heavy, needs CRDT inbox for IPFS (see Decision 5)           |
-| `device_approvals`        | Transactional approve/reject workflow                             |
-| `pinned_cids`             | Quota tracking (alternative needed before removal)                |
+| Table                     | Stays because                                                        |
+| ------------------------- | -------------------------------------------------------------------- |
+| `users`                   | Auth — indexed lookups by hashed identifier                          |
+| `auth_methods`            | Auth — MFA factor storage                                            |
+| `refresh_tokens`          | Auth — session management                                            |
+| `folder_ipns`             | TEE keys, sequence numbers, republish scheduling (see Decisions 1-2) |
+| `ipns_republish_schedule` | Server-side cron scheduling                                          |
+| `shares` / `share_keys`   | Query-heavy, needs CRDT inbox for IPFS (see Decision 6)              |
+| `device_approvals`        | Transactional approve/reject workflow                                |
+| `pinned_cids`             | Quota tracking (alternative needed before removal)                   |
 
 ---
 
