@@ -9,7 +9,6 @@ import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
 import { MetricsService } from '../metrics/metrics.service';
 import { parseIpnsRecord } from './ipns-record-parser';
-import { MetricsService } from '../metrics/metrics.service';
 
 jest.mock('./ipns-record-parser');
 const mockParseIpnsRecord = parseIpnsRecord as jest.Mock;

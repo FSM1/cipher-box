@@ -22,7 +22,6 @@ import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
 import { MetricsService } from '../metrics/metrics.service';
 import { parseIpnsRecord } from './ipns-record-parser';
-import { MetricsService } from '../metrics/metrics.service';
 
 @Injectable()
 export class IpnsService {
@@ -80,13 +79,17 @@ export class IpnsService {
         await this.delegatedRouting.publish(dto.ipnsName, recordBytes);
       } catch (error) {
         result = 'delegated_error';
-        publishOutcome = error instanceof Error && error.name === 'AbortError' ? 'timeout' : 'error';
+        publishOutcome =
+          error instanceof Error && error.name === 'AbortError' ? 'timeout' : 'error';
         this.logger.warn(
           `Delegated routing publish failed for ${dto.ipnsName}, DB record saved: ${error instanceof Error ? error.message : String(error)}`
         );
       } finally {
         const publishElapsed = Number(process.hrtime.bigint() - publishStart) / 1e9;
-        this.metricsService.ipnsPublishDuration.observe({ outcome: publishOutcome }, publishElapsed);
+        this.metricsService.ipnsPublishDuration.observe(
+          { outcome: publishOutcome },
+          publishElapsed
+        );
       }
 
       return {
