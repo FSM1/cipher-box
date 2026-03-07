@@ -2059,7 +2059,7 @@
     },
     {
       "type": "stat",
-      "title": "Kubo Datastore / Memory",
+      "title": "Kubo Heap Memory",
       "gridPos": {
         "h": 6,
         "w": 8,
