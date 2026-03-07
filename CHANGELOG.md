@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.24.2](https://github.com/FSM1/cipher-box/compare/v0.24.1...v0.24.2) (2026-03-07)
+
+
+### Bug Fixes
+
+* strip trailing slash from GRAFANA_URL ([#285](https://github.com/FSM1/cipher-box/issues/285)) ([09ced7d](https://github.com/FSM1/cipher-box/commit/09ced7dd6a948f2ef3a56758cf2924ca0bf3807f))
+* strip trailing slash from GRAFANA_URL to prevent 301 redirect ([09ced7d](https://github.com/FSM1/cipher-box/commit/09ced7dd6a948f2ef3a56758cf2924ca0bf3807f))
+
 ## [0.24.1](https://github.com/FSM1/cipher-box/compare/v0.24.0...v0.24.1) (2026-03-07)
 
 
