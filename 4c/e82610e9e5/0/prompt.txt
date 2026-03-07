@@ -1,0 +1,218 @@
+<objective>
+Execute all plans in a phase using wave-based parallel execution.
+
+Orchestrator stays lean: discover plans, analyze dependencies, group into waves, spawn subagents, collect results. Each subagent loads the full execute-plan context and handles its own plan.
+
+Context budget: ~15% orchestrator, 100% fresh per subagent.
+</objective>
+
+<execution_context>
+@./.claude/get-shit-done/workflows/execute-phase.md
+@./.claude/get-shit-done/references/ui-brand.md
+</execution_context>
+
+<context>
+Phase: 18
+
+**Flags:**
+
+- `--gaps-only` — Execute only gap closure plans (plans with `gap_closure: true` in frontmatter). Use after verify-work creates fix plans.
+
+Context files are resolved inside the workflow via `gsd-tools init execute-phase` and per-subagent `<files_to_read>` blocks.
+</context>
+
+<process>
+Execute the execute-phase workflow from @./.claude/get-shit-done/workflows/execute-phase.md end-to-end.
+Preserve all workflow gates (wave execution, checkpoint handling, verification, state updates, routing).
+</process>
+
+---
+
+Tool loaded.
+
+---
+
+Tool loaded.
+
+---
+
+ok lets get a PR up and see what the performance baseline is like
+
+---
+
+<task-notification>
+<task-id>a12f766860acf8c9f</task-id>
+<tool-use-id>toolu_01BXEjxZdZz3fsoX7GUxPTjw</tool-use-id>
+<status>completed</status>
+<summary>Agent "Complete plan 18-02 checkpoint" completed</summary>
+<result>## PLAN COMPLETE
+
+**Plan:** 18-02
+**Tasks:** 3/3
+**SUMMARY:** `/Users/michael/Code/cipher-box/.planning/phases/18-performance-instrumentation/18-02-SUMMARY.md`
+
+**Commits:**
+
+- `7aeb8a361`: feat(18-02): add Kubo scrape target and IPFS/IPNS duration dashboard panels
+- `08cd9c6ec`: feat(18-02): add baseline benchmark script and performance baselines template
+- `13de10b46`: docs(18-02): complete monitoring dashboard and baselines plan
+- `889cd1cc9`: docs(18-02): finalize plan after human-verify approval
+
+**Duration:** ~6 min
+
+**Phase 18 is fully complete** (2/2 plans). All monitoring infrastructure is ready for staging deployment -- Alloy will scrape Kubo metrics, Grafana dashboard has IPFS/IPNS/TEE duration panels with Kubo Health row, and the baseline benchmark script is ready to capture pre-change performance numbers.</result>
+<usage><total_tokens>76924</total_tokens><tool_uses>10</tool_uses><duration_ms>53085</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/a12f766860acf8c9f.output
+
+---
+
+no, lets get some feedback in from coderabbit and copilot first
+
+---
+
+you can monitor the reviews coming in and use the resolve-pr-reviews skill when you notice something posted
+
+---
+
+Tool loaded.
+
+---
+
+# Resolve PR Review Comments
+
+Resolve all open review comments on the current PR from any automated reviewer (CodeRabbit, GitHub Copilot, etc.) or human reviewers.
+
+## Workflow
+
+### 1. Identify the PR
+
+```bash
+PR_NUMBER=$(gh pr view --json number --jq '.number')
+```
+
+If no PR exists for the current branch, stop and inform the user.
+
+### 2. Fetch all unresolved review threads
+
+Use the GraphQL `reviewThreads` query to get threads with `isResolved` status:
+
+```bash
+REPO_OWNER=$(gh repo view --json owner --jq '.owner.login')
+REPO_NAME=$(gh repo view --json name --jq '.name')
+
+gh api graphql -f query="
+{
+  repository(owner: \"$REPO_OWNER\", name: \"$REPO_NAME\") {
+    pullRequest(number: $PR_NUMBER) {
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          comments(first: 10) {
+            nodes {
+              id
+              author { login }
+              body
+              path
+              line
+              createdAt
+            }
+          }
+        }
+      }
+    }
+  }
+}"
+```
+
+Filter to only unresolved threads. If none, report "No unresolved review threads" and stop.
+
+### 3. Triage each comment
+
+For each unresolved thread, read the comment and the referenced code. Categorize as:
+
+- **Valid fix needed** — the comment identifies a real bug, security issue, or meaningful improvement
+- **Already addressed** — the issue was fixed in a later commit on this branch
+- **Not applicable** — the suggestion doesn't apply (explain why)
+
+### 4. Implement fixes
+
+For all "valid fix needed" comments:
+
+1. Read the referenced file and understand the context
+2. Implement the fix
+3. Track which thread the fix addresses
+
+Do NOT:
+
+- Make unrelated changes or refactors
+- Add features beyond what the comment requests
+- Increase timeouts or add retries as a first approach — fix root causes
+
+### 5. Run tests locally
+
+After ALL fixes are implemented:
+
+```bash
+# Type check
+pnpm typecheck
+
+# Run relevant unit tests
+pnpm test
+
+# If E2E-relevant changes were made, run E2E tests too
+cd tests/e2e && pnpm exec playwright test
+```
+
+Do NOT proceed to commit until tests pass. If tests fail, fix the failures first.
+
+### 6. Commit and push
+
+```bash
+git add <specific-files>
+git commit -m "fix: address PR review comments"
+git push
+```
+
+### 7. Reply to and resolve each thread
+
+For each thread, reply explaining what was done, then resolve:
+
+- **Fixed comments**: Reply with what was changed and where, then resolve
+- **Already addressed**: Reply explaining which commit addressed it, then resolve
+- **Not applicable**: Reply with clear reasoning for not making changes, then resolve
+
+Reply via REST (use `--field` not `-f` for `in_reply_to` — must be integer):
+
+```bash
+gh api repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/comments \
+  --field in_reply_to=COMMENT_ID \
+  --raw-field body='...'
+```
+
+Resolve via GraphQL (can batch multiple):
+
+```bash
+gh api graphql -f query='
+mutation {
+  resolveReviewThread(input: {threadId: "THREAD_ID"}) {
+    thread { isResolved }
+  }
+}'
+```
+
+### 8. Report summary
+
+Print a summary table:
+
+- Thread count resolved
+- Fixes made (with file:line references)
+- Comments marked as already addressed or not applicable
+
+
+ARGUMENTS: 281
+
+---
+
+Tool loaded.
