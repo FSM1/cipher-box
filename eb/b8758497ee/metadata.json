@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "ebb8758497ee",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-19",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/19-ipns-resolution-improvement/19-CONTEXT.md",
+    ".planning/phases/19-ipns-resolution-improvement/19-SCOPING_RATIONALE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/eb/b8758497ee/0/metadata.json",
+      "transcript": "/eb/b8758497ee/0/full.jsonl",
+      "context": "/eb/b8758497ee/0/context.md",
+      "content_hash": "/eb/b8758497ee/0/content_hash.txt",
+      "prompt": "/eb/b8758497ee/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 88487,
+    "cache_read_tokens": 2698039,
+    "output_tokens": 13034,
+    "api_call_count": 39
+  }
+}
