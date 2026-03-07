@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "7dfef737a1e2",
+  "strategy": "manual-commit",
+  "branch": "docs/milestone-v1.1-ipfs-infrastructure",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/pending/2026-02-14-bring-your-own-ipfs-node.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7d/fef737a1e2/0/metadata.json",
+      "transcript": "/7d/fef737a1e2/0/full.jsonl",
+      "context": "/7d/fef737a1e2/0/context.md",
+      "content_hash": "/7d/fef737a1e2/0/content_hash.txt",
+      "prompt": "/7d/fef737a1e2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 148,
+    "cache_creation_tokens": 344287,
+    "cache_read_tokens": 10930157,
+    "output_tokens": 49804,
+    "api_call_count": 126
+  }
+}
