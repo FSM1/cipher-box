@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "5453091f69b0",
+  "session_id": "d23204e9-b03c-4ee0-add6-4563428db16f",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-07T12:38:22.756452Z",
+  "branch": "fix/grafana-dashboard-provisioning",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".github/workflows/deploy-staging.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "46e5e5bc61b1",
+  "token_usage": {
+    "input_tokens": 133,
+    "cache_creation_tokens": 191487,
+    "cache_read_tokens": 5217817,
+    "output_tokens": 17148,
+    "api_call_count": 93
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-07T12:38:21.133902Z",
+    "agent_lines": 53,
+    "human_added": 21,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 74,
+    "agent_percentage": 71.62162162162163
+  }
+}
