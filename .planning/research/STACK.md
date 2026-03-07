@@ -100,13 +100,13 @@ The Delegated Routing V1 HTTP API is a stable IETF-track specification. Kubo has
 
 Five categories of data currently live in PostgreSQL that should move to IPFS/IPNS:
 
-| Data                      | Current Location        | Target Location                     | Migration Approach                |
-| ------------------------- | ----------------------- | ----------------------------------- | --------------------------------- |
-| `encryptedRootFolderKey`  | `vaults` table          | Root vault IPNS blob on IPFS        | New blob format, client migration |
-| Share records             | `shares` / `share_keys` | IPNS inbox per recipient (future)   | Defer to CRDT research            |
-| Device registry           | N/A (client-side)       | Vault IPNS blob extension           | Metadata schema extension         |
-| Folder/file IPNS tracking | `folder_ipns` table     | Derivable from folder metadata tree | Client-side traversal             |
-| Pinned CID tracking       | `pinned_cids` table     | Keep in DB (quota enforcement)      | No change                         |
+| Data                      | Current Location        | Target Location                   | Migration Approach                                                 |
+| ------------------------- | ----------------------- | --------------------------------- | ------------------------------------------------------------------ |
+| `encryptedRootFolderKey`  | `vaults` table          | Root vault IPNS blob on IPFS      | New blob format, client migration                                  |
+| Share records             | `shares` / `share_keys` | IPNS inbox per recipient (future) | Defer to CRDT research                                             |
+| Device registry           | N/A (client-side)       | Vault IPNS blob extension         | Metadata schema extension                                          |
+| Folder/file IPNS tracking | `folder_ipns` table     | Stays in DB (authoritative)       | No change -- sequence coordination and TEE republishing require DB |
+| Pinned CID tracking       | `pinned_cids` table     | Keep in DB (quota enforcement)    | No change                                                          |
 
 **Key insight from the todo analysis:** Moving `encryptedRootFolderKey` to IPFS is the highest-value migration. It eliminates all crypto material from the server, making the database purely auth-related. The other migrations are either lower priority (share discovery via CRDT is research-only this milestone per PROJECT.md) or already partially in place (device registry is client-side).
 
@@ -213,11 +213,11 @@ interface VaultSettings {
 }
 ```
 
-The access token is stored encrypted in IndexedDB (using existing `idb` from M2) or entered per-session. It is NEVER sent to the CipherBox API -- the remote pinning calls are made by the NestJS backend using a token the user provides via an encrypted channel.
+The access token is provided by the user and stored server-side, encrypted with the server's public key. The NestJS backend decrypts the token to make remote pinning calls on the user's behalf.
 
-**Alternative approach considered: Client-direct pinning.** The web app could call the user's pinning endpoint directly. This avoids the server seeing the access token but introduces CORS issues (most pinning services don't set `Access-Control-Allow-Origin` for arbitrary origins) and breaks desktop parity (Tauri apps don't have CORS restrictions but would need a different code path).
+**Scoping decision: Server-relay for v1.1.** The server relays pin requests using the user's access token. The server sees the token but never the plaintext file content (it only pins CIDs of already-encrypted blobs). This tradeoff was explicitly accepted: the server knowing a pinning service credential is less sensitive than the server seeing file contents, and server-relay preserves quota tracking and conflict detection.
 
-**Recommendation: Server-relay for v1.1.** The server relays pin requests using an access token the user provides encrypted with the server's public key. The server sees the token but never the plaintext content (it only pins CIDs of encrypted blobs). Evaluate client-direct as a privacy upgrade in a future milestone.
+**Alternative rejected: Client-direct pinning.** The web app could call the user's pinning endpoint directly, avoiding the server seeing the access token. Rejected for v1.1 because: CORS issues (most pinning services don't set `Access-Control-Allow-Origin` for arbitrary origins), breaks desktop parity, and bypasses server-side quota tracking and optimistic concurrency. Deferred as BYO-08 to v1.2.
 
 ### Quota and Conflict Considerations
 
@@ -482,13 +482,17 @@ user_ipfs_config
 
 ### Phase Ordering by Stack Dependency
 
-1. **IPNS reliability first** -- Enables `Gateway.ExposeRoutingAPI`, points routing at local Kubo. No code dependencies on other features. Unblocks everything else.
+1. **Performance instrumentation first (Phase 18)** -- Add Prometheus histograms before any architectural changes so "before" measurements exist. Zero risk, zero dependencies. k6 scripts establish the baseline numbers.
 
-2. **Performance baselines second** -- Add Prometheus histograms before any other changes so you have "before" measurements. k6 scripts establish the baseline numbers.
+2. **IPNS reliability second (Phase 19)** -- Enables DB-first resolution with async DHT verification via self-hosted Someguy. Must be reliable before rootFolderKey migration makes it login-critical.
 
-3. **Database minimization third** -- Depends on reliable IPNS (moving rootFolderKey to IPFS puts IPNS on the login critical path). Benefits from "before" performance baselines to measure migration impact.
+3. **Database minimization third (Phase 20)** -- Depends on reliable IPNS (Phase 19). Moves rootFolderKey to IPFS vault blob v2 with permanent DB fallback. Benefits from "before" performance baselines to measure migration impact.
 
-4. **BYO-IPFS fourth** -- Most self-contained feature. Benefits from all other infrastructure being stable. The `RemotePinningProvider` is additive (mirrors pins, doesn't replace local).
+4. **BYO-IPFS fourth (Phase 21)** -- Most self-contained feature. Benefits from all other infrastructure being stable. The `RemotePinningProvider` is additive (mirrors pins, doesn't replace local).
+
+5. **Performance baselines completion last (Phase 22)** -- Client-side timing, end-to-end journey timing, k6 load tests, capacity docs. All features must be stable for meaningful baselines.
+
+**Note:** The research initially recommended IPNS reliability before performance instrumentation. The final roadmap reversed this order because performance baselines must exist _before_ any changes to measure their impact. See `SCOPING_RATIONALE.md` Decision 5.
 
 ### Risk Assessment
 

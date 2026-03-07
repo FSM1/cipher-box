@@ -178,20 +178,11 @@ The current publishing flow has clients sign IPNS records locally and send pre-s
 2. Broadcasts the pre-signed record to the DHT via Kubo's `/api/v0/routing/put` (replaces delegated-ipfs.dev)
 3. Falls back to delegated-ipfs.dev only if Kubo routing put fails and the fallback is enabled
 
-**For TEE republishes:** The TEE already has the decrypted IPNS private key in hardware. Instead of TEE signing a record and the API broadcasting via delegated routing, the TEE can return the raw Ed25519 private key bytes (still inside the TEE boundary), and the API can:
+**For TEE republishes:** The existing flow is preserved: the TEE decrypts the IPNS private key in hardware, signs the IPNS record inside the TEE boundary, and returns the **signed record bytes** (not the raw key) to the API. The API then broadcasts the pre-signed record to the DHT via Kubo's `/api/v0/routing/put`, replacing delegated-ipfs.dev as the broadcast target.
 
-1. Import the key temporarily into Kubo's keystore (`/api/v0/key/import`)
-2. Call `/api/v0/name/publish` directly through Kubo
-3. Remove the key from Kubo's keystore (`/api/v0/key/rm`)
+The IPNS private key never leaves the TEE boundary. This maintains the security invariant that the API server never handles raw IPNS private keys.
 
-This bypasses delegated-ipfs.dev entirely for republishing. However, this is an optimization, not a requirement. The existing TEE->signed record->delegated routing path still works as a fallback.
-
-**Security note on Kubo key import:** The IPNS private key is transiently present in Kubo's memory during the publish call. This is acceptable because:
-
-- Kubo already runs on the same host as the API in a Docker network
-- The key is encrypted at rest in the DB (encrypted with TEE public key)
-- The key is removed from Kubo's keystore immediately after publish
-- The alternative (delegated-ipfs.dev) sends the signed record over the internet, which is a larger attack surface
+**Rejected alternative (Kubo key import):** An optimization was considered where the TEE returns raw Ed25519 private key bytes for temporary import into Kubo's keystore (`/api/v0/key/import` → `/api/v0/name/publish` → `/api/v0/key/rm`). This was rejected because it would export the private key from the trusted boundary, undermining the TEE security model even if the key is only transiently present in Kubo's memory.
 
 ### 2.5 Kubo Configuration Changes
 
@@ -338,18 +329,18 @@ The server must enforce storage quotas. If quota tracking moves to IPFS, a malic
 
 After v1.1 migrations, the database serves these purposes:
 
-| Purpose              | Tables                                                             | Why Server-Side                   |
-| -------------------- | ------------------------------------------------------------------ | --------------------------------- |
-| Identity             | `users`, `auth_methods`                                            | Server-mediated auth              |
-| Sessions             | `refresh_tokens`                                                   | JWT lifecycle                     |
-| Quota enforcement    | `pinned_cids`                                                      | Server must prevent quota abuse   |
-| Publish coordination | `folder_ipns`                                                      | Sequence numbers for concurrency  |
-| TEE orchestration    | `ipns_republish_schedule`, `tee_key_state`, `tee_key_rotation_log` | Server schedules TEE work         |
-| Sharing graph        | `shares`, `share_keys`, `share_invites`                            | Until CRDT inbox (v1.2+)          |
-| MFA                  | `device_approvals`                                                 | Short-lived approval state        |
-| Vault metadata       | `vaults` (reduced)                                                 | ownerPublicKey, rootIpnsName only |
+| Purpose              | Tables                                                             | Why Server-Side                                                           |
+| -------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| Identity             | `users`, `auth_methods`                                            | Server-mediated auth                                                      |
+| Sessions             | `refresh_tokens`                                                   | JWT lifecycle                                                             |
+| Quota enforcement    | `pinned_cids`                                                      | Server must prevent quota abuse                                           |
+| Publish coordination | `folder_ipns`                                                      | Sequence numbers for concurrency                                          |
+| TEE orchestration    | `ipns_republish_schedule`, `tee_key_state`, `tee_key_rotation_log` | Server schedules TEE work                                                 |
+| Sharing graph        | `shares`, `share_keys`, `share_invites`                            | Until CRDT inbox (v1.2+)                                                  |
+| MFA                  | `device_approvals`                                                 | Short-lived approval state                                                |
+| Vault metadata       | `vaults` (reduced)                                                 | ownerPublicKey, rootIpnsName, encryptedRootFolderKey (permanent fallback) |
 
-**What was eliminated:** Server no longer stores any user crypto material (encryptedRootFolderKey, encryptedRootIpnsPrivateKey). The server becomes a coordination relay, not a key escrow.
+**What changed:** `encryptedRootIpnsPrivateKey` is deprecated (HKDF-derivable, redundant). `encryptedRootFolderKey` is retained as a permanent DB fallback even after migration to vault blob v2 on IPFS -- the IPFS copy is the primary source for recovery tool independence, but the DB copy ensures login works even if IPNS resolution fails. The server's role shifts from key escrow to coordination relay, though it still holds one ECIES-wrapped key for resilience.
 
 ---
 

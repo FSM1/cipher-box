@@ -6,7 +6,7 @@
 
 ## Executive Summary
 
-M3 transforms CipherBox from encrypted file storage into an encrypted productivity suite.
+M4 transforms CipherBox from encrypted file storage into an encrypted productivity suite.
 The core constraint remains: all content is client-side encrypted and the server never sees
 plaintext. This constrains every technology choice -- editors must operate entirely in-browser
 on decrypted content, collaboration must use E2EE CRDTs (not server-mediated OT), and document
@@ -131,23 +131,23 @@ maintained with releases every few days.
 **Collaboration caveat:**
 
 Univer's built-in collaboration uses OT (Operational Transformation), which requires a
-server to mediate. This conflicts with CipherBox's zero-knowledge model. For M3, recommend
+server to mediate. This conflicts with CipherBox's zero-knowledge model. For M4, recommend
 **single-user editing only** for spreadsheets. Multi-user spreadsheet collaboration would
 require either:
 
 - Building a Yjs binding for Univer (significant effort, no existing solution)
 - Using Univer's OT in a TEE enclave (complex, possibly over-engineered for a demo)
 
-**Recommendation:** Ship spreadsheets as single-user-editable in M3. If team spreadsheet
+**Recommendation:** Ship spreadsheets as single-user-editable in M4. If team spreadsheet
 editing becomes a priority, evaluate building a Yjs adapter in a future milestone.
 
 ---
 
-## 3. Presentation Editor (Slides) -- Deferred to M4+
+## 3. Presentation Editor (Slides) -- Deferred to M5+
 
 Presentation editing is deferred to M4 or later. No mature, open-source, React-native
 slide editor exists, and building a custom one is a multi-month effort that is out of
-scope for M3. See ARCHITECTURE.md for the deferral rationale.
+scope for M4. See ARCHITECTURE.md for the deferral rationale.
 
 When revisited, the recommended approach is a custom TipTap-based slide editor with
 `pptxgenjs` for export and `html2canvas` for thumbnails.

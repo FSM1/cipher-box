@@ -60,11 +60,8 @@ See `.planning/REQUIREMENTS.md` for full requirements.
 
 #### Database Minimization
 
-- [ ] Move rootFolderKey to IPFS vault record
-- [ ] Migrate share discovery to IPFS/IPNS
-- [ ] Migrate device registry to IPFS/IPNS
-- [ ] Migrate folder/file IPNS tracking off database
-- [ ] Reduce database role to auth-method-to-userId mapping only
+- [ ] Move rootFolderKey to IPFS vault record (DB copy retained as permanent fallback)
+- [ ] Deprecate encryptedRootIpnsPrivateKey (already HKDF-derivable)
 
 #### BYO-IPFS
 

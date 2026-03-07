@@ -6,7 +6,7 @@
 
 ---
 
-## Context: Why M3 Is Uniquely Dangerous
+## Context: Why M4 Is Uniquely Dangerous
 
 CipherBox's existing architecture enforces a strict invariant: the server never sees plaintext. Every key is either held in client RAM or wrapped with ECIES using the user's public key. IPNS metadata is encrypted with per-folder AES-256-GCM keys. The entire key hierarchy flows from a single user's secp256k1 keypair derived by Web3Auth.
 
@@ -17,7 +17,7 @@ Milestone 4 introduces four features that each, in different ways, pressure this
 - **Billing** requires the server to enforce access tiers on data it cannot inspect
 - **Document signing** requires cryptographic proof of authorship within an encrypted context
 
-The overarching risk: every M3 feature creates a temptation to "just let the server see a little bit." Each small leak compounds into a broken zero-knowledge guarantee.
+The overarching risk: every M4 feature creates a temptation to "just let the server see a little bit." Each small leak compounds into a broken zero-knowledge guarantee.
 
 ---
 
@@ -251,7 +251,7 @@ Mistakes in this category cause delays, rework, or degraded user experience but 
 
 #### Prevention
 
-1. Scope M3 to document editing ONLY. Defer sheets and slides to separate milestones
+1. Scope M4 to document editing ONLY. Defer sheets and slides to separate milestones
 2. If sheets and slides are required, acknowledge that each needs its own editor library, data model, CRDT strategy, and encryption integration
 3. For spreadsheets specifically: evaluate whether a pure client-side formula engine exists that can work with encrypted data. Most formula engines (Hyperformula, FortuneSheet) assume trusted access to all cell values
 4. Consider leveraging existing open-source implementations (ONLYOFFICE, CryptPad) rather than building from scratch
@@ -468,7 +468,7 @@ Mistakes in this category cause annoyance or minor UX issues but are straightfor
 | Billing webhook handling      | Non-idempotent webhook processing causing state corruption                                     | Moderate | Implement event deduplication from day one                                                                               |
 | Billing enforcement           | Server cannot inspect content to enforce quotas                                                | Moderate | Enforce quotas at API level (upload size, pin count) not content level                                                   |
 | Document signing legal claims | Claiming legal validity without proper identity verification or TSA                            | Moderate | Label as "cryptographic attestation" unless proper PKI is integrated                                                     |
-| Spreadsheet scope             | Treating sheets as "just another editor"                                                       | Moderate | Scope M3 to documents only, or budget 3x for sheets/slides                                                               |
+| Spreadsheet scope             | Treating sheets as "just another editor"                                                       | Moderate | Scope M4 to documents only, or budget 3x for sheets/slides                                                               |
 | Large document performance    | Encrypting full document state on every save                                                   | Moderate | Use incremental (diff-based) encryption and Web Workers                                                                  |
 
 ---
