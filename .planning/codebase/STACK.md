@@ -80,7 +80,7 @@ CipherBox is a **technology demonstrator** with a working implementation. The we
 **IPFS/IPNS:**
 
 - Kubo HTTP API - File storage and pinning (via `apps/api/src/ipfs/providers/local.provider.ts`)
-- delegated-ipfs.dev - IPNS record publishing and resolution
+- Self-hosted Someguy (staging) / delegated-ipfs.dev (production fallback) - IPNS record publishing and resolution
 
 **Desktop (Rust):**
 

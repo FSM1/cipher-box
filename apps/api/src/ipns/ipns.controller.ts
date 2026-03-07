@@ -34,14 +34,14 @@ export class IpnsController {
   ) {}
 
   // [SECURITY: HIGH-04] Rate limit IPNS publish to prevent abuse
-  // Each publish makes external HTTP calls to delegated-ipfs.dev
+  // Each publish makes external HTTP calls to the delegated routing service
   @Throttle({ default: { limit: 10, ttl: 60000 } }) // 10 publishes per minute per user
   @Post('publish')
   @ApiOperation({
     summary: 'Publish IPNS record',
     description:
       'Relay a pre-signed IPNS record to the IPFS network via delegated routing. ' +
-      'The client signs the record locally; backend relays to delegated-ipfs.dev and tracks ' +
+      'The client signs the record locally; backend relays to the delegated routing service and tracks ' +
       'the folder for TEE republishing.',
   })
   @ApiResponse({

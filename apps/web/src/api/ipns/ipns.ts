@@ -33,7 +33,7 @@ import type {
 import { customInstance } from '../custom-instance';
 
 /**
- * Relay a pre-signed IPNS record to the IPFS network via delegated routing. The client signs the record locally; backend relays to delegated-ipfs.dev and tracks the folder for TEE republishing.
+ * Relay a pre-signed IPNS record to the IPFS network via delegated routing. The client signs the record locally; backend relays to the delegated routing service and tracks the folder for TEE republishing.
  * @summary Publish IPNS record
  */
 export const ipnsControllerPublishRecord = (

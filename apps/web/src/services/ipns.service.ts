@@ -2,7 +2,7 @@
  * IPNS Service - Record creation, publishing, and resolution
  *
  * Creates IPNS records locally using @cipherbox/crypto and publishes
- * via the backend API relay to delegated-ipfs.dev.
+ * via the backend API relay to the delegated routing service.
  */
 
 import {
@@ -139,7 +139,7 @@ export async function verifyIpnsSignature(
 /**
  * Resolve an IPNS name to its current CID and sequence number.
  *
- * Calls backend API which relays to delegated-ipfs.dev for resolution.
+ * Calls backend API which relays to the delegated routing service for resolution.
  * When the response includes IPNS signature data (from delegated routing),
  * verifies the Ed25519 signature before trusting the CID.
  *
