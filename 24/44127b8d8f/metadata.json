@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "2444127b8d8f",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-18-performance-instrumentation",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/ipfs/ipfs.controller.spec.ts",
+    "apps/api/src/ipfs/ipfs.controller.ts",
+    "apps/api/src/ipns/ipns.service.spec.ts",
+    "apps/api/src/ipns/ipns.service.ts",
+    "apps/api/src/republish/republish.processor.spec.ts",
+    "apps/api/src/republish/republish.processor.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/24/44127b8d8f/0/metadata.json",
+      "transcript": "/24/44127b8d8f/0/full.jsonl",
+      "context": "/24/44127b8d8f/0/context.md",
+      "content_hash": "/24/44127b8d8f/0/content_hash.txt",
+      "prompt": "/24/44127b8d8f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
