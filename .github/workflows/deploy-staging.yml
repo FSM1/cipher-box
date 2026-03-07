@@ -478,6 +478,9 @@ jobs:
     name: Provision Grafana Dashboard
     needs: [deploy-vps]
     runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -491,6 +494,10 @@ jobs:
           DS_LOGS_UID: ${{ vars.GRAFANA_DS_LOGS_UID }}
         run: |
           set -euo pipefail
+          : "${GRAFANA_URL:?GRAFANA_URL is required}"
+          : "${GRAFANA_API_KEY:?GRAFANA_API_KEY is required}"
+          : "${DS_METRICS_UID:?GRAFANA_DS_METRICS_UID is required}"
+          : "${DS_LOGS_UID:?GRAFANA_DS_LOGS_UID is required}"
 
           # The dashboard JSON uses __inputs for datasource templating.
           # Replace variable references with actual datasource UIDs.
@@ -512,7 +519,8 @@ jobs:
           }')
 
           # Push to Grafana API
-          HTTP_CODE=$(curl -s -o /tmp/grafana-response.json -w "%{http_code}" \
+          HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 60 \
+            -o /tmp/grafana-response.json -w "%{http_code}" \
             -X POST "${GRAFANA_URL}/api/dashboards/db" \
             -H "Authorization: Bearer ${GRAFANA_API_KEY}" \
             -H "Content-Type: application/json" \
