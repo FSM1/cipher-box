@@ -40,6 +40,8 @@ export class MetricsService implements OnModuleInit {
   readonly httpRequestDuration: client.Histogram;
   readonly ipfsIpnsDuration: client.Histogram;
   readonly republishBatchDuration: client.Histogram;
+  readonly ipnsResolveDuration: client.Histogram;
+  readonly ipnsPublishDuration: client.Histogram;
 
   constructor(
     @InjectRepository(PinnedCid)
@@ -168,6 +170,22 @@ export class MetricsService implements OnModuleInit {
       help: 'Duration of TEE republish batch processing in seconds',
       labelNames: ['tee_provider', 'result'] as const,
       buckets: [1, 2.5, 5, 10, 15, 30, 45, 60, 90, 120],
+      registers: [this.registry],
+    });
+
+    this.ipnsResolveDuration = new client.Histogram({
+      name: 'cipherbox_ipns_resolve_duration_seconds',
+      help: 'IPNS resolve duration in seconds (end-to-end including fallback)',
+      labelNames: ['source'],
+      buckets: [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
+      registers: [this.registry],
+    });
+
+    this.ipnsPublishDuration = new client.Histogram({
+      name: 'cipherbox_ipns_publish_duration_seconds',
+      help: 'IPNS publish duration to routing provider in seconds',
+      labelNames: ['outcome'],
+      buckets: [0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60],
       registers: [this.registry],
     });
   }
