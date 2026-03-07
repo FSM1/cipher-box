@@ -37,6 +37,7 @@ export class RepublishProcessor extends WorkerHost {
       // If all entries failed and none succeeded, TEE might be down.
       // When TEE recovers, reactivate stale entries.
       if (result.processed > 0 && result.succeeded === 0 && result.failed === result.processed) {
+        batchResult = 'error';
         this.logger.warn('All republish entries failed. TEE worker may be unreachable.');
       }
     } catch (error) {

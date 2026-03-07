@@ -162,7 +162,7 @@ describe('RepublishProcessor', () => {
       expect(mockEndBatchTimer).toHaveBeenCalledWith({ result: 'error' });
     });
 
-    it('should observe success result even when all entries failed (partial failure is success)', async () => {
+    it('should observe error result when all entries failed (TEE likely unreachable)', async () => {
       republishService.processRepublishBatch!.mockResolvedValue({
         processed: 5,
         succeeded: 0,
@@ -171,7 +171,7 @@ describe('RepublishProcessor', () => {
 
       await processor.process(createMockJob());
 
-      expect(mockEndBatchTimer).toHaveBeenCalledWith({ result: 'success' });
+      expect(mockEndBatchTimer).toHaveBeenCalledWith({ result: 'error' });
     });
   });
 });

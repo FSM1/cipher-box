@@ -347,6 +347,9 @@ export class IpnsService {
       }
 
       return null;
+    } catch (error) {
+      timerResult = 'error';
+      throw error;
     } finally {
       endTimer({ result: timerResult, source: timerSource });
     }
