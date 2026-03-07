@@ -32,9 +32,9 @@
 
 **Archived:**
 
-- Roadmap: `.planning/milestones/v1.0-ROADMAP.md`
-- Requirements: `.planning/milestones/v1.0-REQUIREMENTS.md`
-- Audit: `.planning/milestones/v1.0-production-MILESTONE-AUDIT.md`
+- Roadmap: `.planning/milestones/m2/m2-v1.0-ROADMAP.md`
+- Requirements: `.planning/milestones/m2/m2-v1.0-REQUIREMENTS.md`
+- Audit: `.planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md`
 
 ---
 
