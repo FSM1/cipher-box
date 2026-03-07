@@ -13,6 +13,7 @@ import { Repository } from 'typeorm';
 import { FolderIpns } from './entities/folder-ipns.entity';
 import {
   PublishIpnsDto,
+  PublishIpnsEntryDto,
   PublishIpnsResponseDto,
   BatchPublishIpnsDto,
   BatchPublishIpnsResponseDto,
@@ -39,7 +40,11 @@ export class IpnsService {
    * Publish a pre-signed IPNS record to the IPFS network via delegated routing
    * and track the folder in the database for TEE republishing
    */
-  async publishRecord(userId: string, dto: PublishIpnsDto): Promise<PublishIpnsResponseDto> {
+  async publishRecord(
+    userId: string,
+    dto: PublishIpnsDto | PublishIpnsEntryDto,
+    recordType: 'folder' | 'file' = 'folder'
+  ): Promise<PublishIpnsResponseDto> {
     const endTimer = this.metricsService.ipfsIpnsDuration.startTimer({
       operation: 'publish',
       source: '',
@@ -63,7 +68,7 @@ export class IpnsService {
         dto.metadataCid,
         dto.encryptedIpnsPrivateKey,
         dto.keyEpoch,
-        'folder',
+        recordType,
         dto.expectedSequenceNumber
       );
 
@@ -104,46 +109,12 @@ export class IpnsService {
 
     const CONCURRENCY = 10;
 
-    // Process records in batches of CONCURRENCY
+    // Process records in batches of CONCURRENCY, delegating to publishRecord
     for (let i = 0; i < dto.records.length; i += CONCURRENCY) {
       const batch = dto.records.slice(i, i + CONCURRENCY);
 
       const settled = await Promise.allSettled(
-        batch.map(async (entry) => {
-          // Validate base64 record
-          let recordBytes: Uint8Array;
-          try {
-            recordBytes = Uint8Array.from(atob(entry.record), (c) => c.charCodeAt(0));
-          } catch {
-            throw new BadRequestException(`Invalid base64-encoded record for ${entry.ipnsName}`);
-          }
-
-          // Save to DB first so resolve always has a fallback
-          const folder = await this.upsertFolderIpns(
-            userId,
-            entry.ipnsName,
-            entry.metadataCid,
-            entry.encryptedIpnsPrivateKey,
-            entry.keyEpoch,
-            entry.recordType ?? 'folder',
-            entry.expectedSequenceNumber
-          );
-
-          // Publish to delegated routing (best-effort)
-          try {
-            await this.delegatedRouting.publish(entry.ipnsName, recordBytes);
-          } catch (error) {
-            this.logger.warn(
-              `Delegated routing publish failed for ${entry.ipnsName}, DB record saved: ${error instanceof Error ? error.message : String(error)}`
-            );
-          }
-
-          return {
-            success: true,
-            ipnsName: entry.ipnsName,
-            sequenceNumber: folder.sequenceNumber,
-          } as PublishIpnsResponseDto;
-        })
+        batch.map((entry) => this.publishRecord(userId, entry, entry.recordType ?? 'folder'))
       );
 
       for (let j = 0; j < settled.length; j++) {
