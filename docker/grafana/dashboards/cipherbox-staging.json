@@ -1448,17 +1448,17 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(cipherbox_republish_batch_duration_seconds_bucket[$__rate_interval])) by (le, tee_provider))",
+          "expr": "histogram_quantile(0.50, sum(rate(cipherbox_republish_batch_duration_seconds_bucket{result=\"success\"}[$__rate_interval])) by (le, tee_provider))",
           "legendFormat": "p50 {{ tee_provider }}",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_republish_batch_duration_seconds_bucket[$__rate_interval])) by (le, tee_provider))",
+          "expr": "histogram_quantile(0.95, sum(rate(cipherbox_republish_batch_duration_seconds_bucket{result=\"success\"}[$__rate_interval])) by (le, tee_provider))",
           "legendFormat": "p95 {{ tee_provider }}",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(cipherbox_republish_batch_duration_seconds_bucket[$__rate_interval])) by (le, tee_provider))",
+          "expr": "histogram_quantile(0.99, sum(rate(cipherbox_republish_batch_duration_seconds_bucket{result=\"success\"}[$__rate_interval])) by (le, tee_provider))",
           "legendFormat": "p99 {{ tee_provider }}",
           "refId": "C"
         }

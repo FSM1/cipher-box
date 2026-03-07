@@ -170,19 +170,27 @@ echo ""
 
 # Measured
 for i in $(seq 1 $ITERATIONS); do
-  UPLOAD_RESPONSE=$(curl -s -w "\n%{time_total}" \
+  UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code} %{time_total}" \
     -H "Authorization: Bearer $JWT_TOKEN" \
     -F "file=@$TEST_FILE" "$API_URL/ipfs/upload" 2>/dev/null) || true
 
-  # Extract timing (last line) and response body (everything else)
-  TIME_TOTAL=$(echo "$UPLOAD_RESPONSE" | tail -1)
+  # Extract HTTP status + timing (last line) and response body (everything else)
+  STATUS_AND_TIME=$(echo "$UPLOAD_RESPONSE" | tail -1)
   BODY=$(echo "$UPLOAD_RESPONSE" | sed '$d')
-  echo "$TIME_TOTAL" >> "$UPLOAD_FILE"
+  HTTP_CODE="${STATUS_AND_TIME%% *}"
+  TIME_TOTAL="${STATUS_AND_TIME##* }"
 
-  # Try to extract CID from response
-  CID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cid',''))" 2>/dev/null) || true
-  if [ -n "$CID" ]; then
-    echo "$CID" >> "$UPLOAD_CIDS"
+  # Only record timings and CIDs for successful (2xx) responses
+  if [[ "$HTTP_CODE" =~ ^2[0-9][0-9]$ && "$TIME_TOTAL" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "$TIME_TOTAL" >> "$UPLOAD_FILE"
+
+    # Try to extract CID from response
+    CID=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cid',''))" 2>/dev/null) || true
+    if [ -n "$CID" ]; then
+      echo "$CID" >> "$UPLOAD_CIDS"
+    fi
+  else
+    >&2 echo "WARN: upload got HTTP $HTTP_CODE; sample skipped."
   fi
 
   printf "  iteration %d/%d\r" "$i" "$ITERATIONS"
