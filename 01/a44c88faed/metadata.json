@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "01a44c88faed",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-18-performance-instrumentation",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/metrics/metrics.service.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/01/a44c88faed/0/metadata.json",
+      "transcript": "/01/a44c88faed/0/full.jsonl",
+      "context": "/01/a44c88faed/0/context.md",
+      "content_hash": "/01/a44c88faed/0/content_hash.txt",
+      "prompt": "/01/a44c88faed/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 17128,
+    "cache_read_tokens": 47522,
+    "output_tokens": 394,
+    "api_call_count": 4
+  }
+}
