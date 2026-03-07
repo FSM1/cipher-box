@@ -2,19 +2,19 @@
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-05)
+See: .planning/PROJECT.md (updated 2026-03-07)
 
-**Core value:** Zero-knowledge privacy - files encrypted client-side, server never sees plaintext
-**Current focus:** Between milestones — v1.0 Production shipped, planning Milestone 3
+**Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
+**Current focus:** Phase 18 - Performance Instrumentation (v1.1 IPFS Infrastructure)
 
 ## Current Position
 
-Phase: None active (between milestones)
-Plan: Not started
-Status: Ready for `/gsd:new-milestone`
-Last activity: 2026-03-05 — v1.0 Production milestone completed
+Phase: 18 (first of 5 in v1.1 milestone)
+Plan: --
+Status: Ready to plan
+Last activity: 2026-03-07 -- Roadmap created for v1.1 IPFS Infrastructure
 
-Progress: [█████████████████████████] M1 complete (72 plans), M2 complete (83 plans)
+Progress: [░░░░░░░░░░░░░░░░░░░░░░░░░] M3 0%
 
 ## Performance Metrics
 
@@ -30,16 +30,25 @@ Progress: [███████████████████████
 
 See PROJECT.md Key Decisions table for full list with outcomes.
 
+Recent for v1.1:
+
+- DB-first with async Kubo DHT verification adopted as IPNS resolution strategy (not Kubo-only or PubSub)
+- rootFolderKey DB copy kept as permanent fallback (never drop column, IPFS copy for recovery independence)
+- BYO-IPFS affects pinning only, all IPNS publishes still route through CipherBox API
+- PERF requirements split across Phase 18 (server-side, pre-change) and Phase 22 (client + load testing, post-change)
+
 ### Open Concerns
 
 - 9 LOW-priority tech debt items from M2 audit (see `.planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md`)
-- SYNC-05/SYNC-06 (offline queue) deferred to M3+
-- TEE-06 (AWS Nitro) deferred to M3 Phase 22
+- rootFolderKey migration dual-write window duration TBD (forced migration strategy for dormant accounts)
+- BYO-IPFS auth token storage model needs explicit acceptance (server sees token but not plaintext content)
+- Kubo v0.34.0 -> v0.40.1 upgrade decision (recommended before Phase 19, not blocking)
+- Recovery tool independence must be verified after Phases 19+20 changes
 
 ### Resolved
 
-All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md` resolved_since_previous_audit section.
+All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md`.
 
 ---
 
-Last updated: 2026-03-05 after v1.0 milestone completion
+Last updated: 2026-03-07 after v1.1 roadmap created

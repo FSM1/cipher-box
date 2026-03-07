@@ -32,11 +32,9 @@
 
 **Archived:**
 
-- Roadmap: `.planning/milestones/v1.0-ROADMAP.md`
-- Requirements: `.planning/milestones/v1.0-REQUIREMENTS.md`
-- Audit: `.planning/milestones/v1.0-production-MILESTONE-AUDIT.md`
-
-**What's next:** Milestone 3 — Encrypted Productivity Suite (billing, team accounts, document editors, document signing, AWS Nitro TEE)
+- Roadmap: `.planning/milestones/m2/m2-v1.0-ROADMAP.md`
+- Requirements: `.planning/milestones/m2/m2-v1.0-REQUIREMENTS.md`
+- Audit: `.planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md`
 
 ---
 
@@ -63,21 +61,44 @@
 - Grafana Cloud log aggregation + Better Stack uptime monitoring
 - Comprehensive unit tests (85%+ coverage) and E2E test framework
 
-**Last phase number:** 10 (Phase 11 MFA was scoped but not executed — absorbed into Milestone 2)
+**Last phase number:** 10 (Phase 11 MFA was scoped but not executed -- absorbed into Milestone 2)
 
-**Archived roadmap:** `.planning/archive/m1-ROADMAP.md`
+**Archived:**
+
+- Roadmap: `.planning/milestones/m1/m1-mvp-ROADMAP.md`
+- Requirements: `.planning/milestones/m1/m1-mvp-REQUIREMENTS.md`
+- Audit: `.planning/milestones/m1/m1-mvp-MILESTONE-AUDIT.md`
+
+---
+
+## Active Milestone
+
+### Milestone 3: IPFS Infrastructure v1.1 (in progress)
+
+**Goal:** Make CipherBox IPFS-native -- replace delegated-ipfs.dev, migrate server-side state to IPFS/IPNS, add BYO-IPFS node support, and establish performance baselines
+**Depends on:** Milestone 2
+**Phases:** 18-22
+**Requirements:** 25 (4 IPNS + 6 VAULT + 7 BYO + 8 PERF)
+
+**Phase structure:**
+
+- Phase 18: Performance Instrumentation (PERF-01 to PERF-04)
+- Phase 19: IPNS Resolution Improvement (IPNS-01 to IPNS-04)
+- Phase 20: Vault Migration (VAULT-01 to VAULT-06)
+- Phase 21: BYO-IPFS Node Support (BYO-01 to BYO-07)
+- Phase 22: Performance Baselines Completion (PERF-05 to PERF-08)
 
 ---
 
 ## Future Milestones
 
-### Milestone 3: Encrypted Productivity Suite (planned)
+### Milestone 4: Encrypted Productivity Suite (planned)
 
-**Goal:** Full encrypted productivity suite — docs/sheets/slides editors, team accounts, billing (Stripe or crypto), secure document signing, AWS Nitro TEE
-**Depends on:** Milestone 2
-**Phases:** 18-22
+**Goal:** Full encrypted productivity suite -- docs/sheets/slides editors, team accounts, billing (Stripe or crypto), secure document signing, AWS Nitro TEE
+**Depends on:** Milestone 3
+**Phases:** 23+
 
 ---
 
 Created: 2026-02-11
-Last updated: 2026-03-05 after v1.0 Production milestone
+Last updated: 2026-03-07 after v1.1 IPFS Infrastructure roadmap created

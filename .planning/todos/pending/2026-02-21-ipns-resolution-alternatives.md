@@ -2,6 +2,8 @@
 created: 2026-02-21T00:00
 title: Investigate alternatives to delegated-ipfs.dev for IPNS resolution
 area: api
+milestone: v1.1
+phase: 19
 files:
   - apps/api/src/ipfs/ipfs.module.ts
   - apps/api/src/ipfs/services/ipns.service.ts

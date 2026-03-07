@@ -1,12 +1,12 @@
-# Requirements: CipherBox Milestone 3 -- Encrypted Productivity Suite
+# Requirements: CipherBox Milestone 4 -- Encrypted Productivity Suite
 
 **Defined:** 2026-02-11
 **Core Value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
 **Milestone Goal:** Transform CipherBox from encrypted file storage into an encrypted productivity platform with billing, teams, document editors, and document signing.
 
-## M3 Requirements
+## M4 Requirements
 
-Requirements for Milestone 3. Each maps to roadmap phases 18+.
+Requirements for Milestone 4. Each maps to roadmap phases 18+.
 
 ### Billing
 
@@ -54,7 +54,7 @@ Requirements for Milestone 3. Each maps to roadmap phases 18+.
 
 ## Deferred to M4+
 
-Tracked but not in M3 scope. Documented to prevent scope creep.
+Tracked but not in M4 scope. Documented to prevent scope creep.
 
 - **COLLAB-01**: Real-time collaborative editing via encrypted CRDT relay (Yjs + Hocuspocus with encrypted WebSocket transport)
 - **COLLAB-02**: Cursor and selection awareness for real-time co-editing
@@ -72,7 +72,7 @@ Tracked but not in M3 scope. Documented to prevent scope creep.
 
 ## Out of Scope
 
-Explicitly excluded from M3. Documented to prevent scope creep.
+Explicitly excluded from M4. Documented to prevent scope creep.
 
 | Feature                                | Reason                                                                    |
 | -------------------------------------- | ------------------------------------------------------------------------- |
@@ -125,9 +125,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SIGN-05     | Phase 21 | Pending |
 | SIGN-06     | Phase 21 | Pending |
 
-**Milestone 3 Coverage:**
+**Milestone 4 Coverage:**
 
-- M3 requirements: 32 total
+- M4 requirements: 32 total
 - Mapped to phases: 32
 - Unmapped: 0
 

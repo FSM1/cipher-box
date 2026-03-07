@@ -1,274 +1,187 @@
 # Project Research Summary
 
-**Project:** CipherBox -- Milestone 2
-**Domain:** Zero-knowledge encrypted cloud storage (sharing, search, MFA, versioning, advanced sync)
-**Researched:** 2026-02-11
-**Confidence:** MEDIUM-HIGH
+**Project:** CipherBox v1.1 -- IPFS Infrastructure
+**Domain:** IPFS/IPNS reliability, database minimization, BYO-IPFS node support, performance baselines
+**Researched:** 2026-03-07
+**Confidence:** HIGH
 
 ## Executive Summary
 
-Milestone 2 transforms CipherBox from a single-user encrypted storage demonstrator into a multi-user, feature-complete product. The research validates that the v1.0 architecture was designed with these features in mind: per-folder IPNS keypairs enable natural per-folder sharing, IPFS content-addressing makes versioning nearly free (stop unpinning old CIDs), and Web3Auth's threshold key scheme natively supports MFA. The dominant finding across all four research streams is that **most M2 features require zero new heavy dependencies**. They are protocol design and metadata schema problems, not technology selection problems. The existing cryptographic primitives (`eciesjs`, `@noble/*`, Web Crypto API) handle all required operations for sharing (ECIES re-wrapping), versioning (metadata extension), and search (client-side indexing).
+CipherBox v1.1 is an infrastructure-hardening milestone, not a feature milestone. The four workstreams -- IPNS reliability, database minimization, BYO-IPFS, and performance baselines -- aim to transform CipherBox from "IPFS as a storage backend with database fallbacks" to "IPFS-native with the database serving only coordination and auth." The dominant finding across all four research files is that the existing stack already has the capabilities needed. The Kubo v0.34.0 node can resolve IPNS records locally via its DHT; the `IpfsProvider` interface already abstracts pin/unpin/get for provider extension; `prom-client` is installed with an established `MetricsService` pattern; and TypeORM handles all necessary migrations. **Zero new npm dependencies are required for this entire milestone.**
 
-The recommended approach is to build sharing around direct ECIES re-wrapping of folder keys per-recipient (the same pattern proven by Tresorit and ProtonDrive), implement versioning as a metadata schema extension that retains old CIDs instead of unpinning them, configure MFA through Web3Auth's built-in factor system rather than building a custom MFA layer, and implement search as a pure client-side operation against already-decrypted data in memory. **Read-only sharing must come first** -- this is the consensus across all four research tracks. Multi-writer IPNS is the single hardest unsolved problem and should be deferred entirely; no competitor has solved encrypted multi-writer folders either. The only genuinely new build target is the AWS Nitro TEE enclave (Rust binary), which is the highest-effort, highest-risk item and should ship last.
+The recommended approach is a five-phase execution with strict ordering (Phases 18-22). Phase 18 (performance instrumentation) is zero-risk and establishes server-side baselines before any architectural changes. Phase 19 (IPNS reliability) inverts the resolution model to DB-first with async Kubo DHT verification via self-hosted Someguy, eliminating the `delegated-ipfs.dev` dependency. Phase 20 (database minimization) moves `encryptedRootFolderKey` into an IPFS blob via a versioned vault blob v2 format, with dual-write migration and permanent DB fallback. Phase 21 (BYO-IPFS) adds a `RemotePinningProvider` speaking the standard IPFS Pinning Service API, with dual-pin strategy (always pin to CipherBox node, best-effort mirror to user's node). Phase 22 (performance baselines completion) adds client-side timing instrumentation, end-to-end journey timing, k6 load tests, and capacity documentation after all features are stable.
 
-The key risks are: (1) breaking zero-knowledge guarantees during sharing implementation (folderKey leaking to server in plaintext), (2) incomplete share revocation (forgetting to rotate the folderKey when revoking access), (3) MFA enrollment accidentally changing the derived keypair and locking users out of their vaults, and (4) IPNS last-writer-wins causing silent data loss in shared folders with multiple writers. All four are preventable with the specific mitigations documented in the pitfalls research -- the patterns are well-understood from Tresorit, ProtonDrive, and Filen precedents.
+The primary risk is in Phase 3: moving rootFolderKey to IPFS creates a hard dependency on IPNS resolution for login. All four research files flag this independently. The mitigation is clear -- keep the DB copy as a permanent fallback, never make IPNS the sole access path for the root folder key. Secondary risks include sequence number divergence during routing provider migration (Phase 2) and quota tracking becoming unenforceable for BYO-IPFS users (Phase 4). Both have well-defined prevention strategies documented in PITFALLS.md.
 
 ## Key Findings
 
 ### Recommended Stack
 
-The existing stack handles nearly everything. Only two lightweight client-side packages are truly new for the core feature set. The total bundle impact is under 10KB gzipped. Most Milestone 2 features need **ZERO new heavy dependencies**.
+The milestone requires zero new npm dependencies. Every capability is built using existing libraries, configuration changes, and new provider implementations. The only external tooling addition is Grafana k6 v1.0 (a standalone Go binary, not an npm package) for load testing scripts.
 
-**New dependencies (confirmed needed):**
+**Core technologies (all existing):**
 
-- `minisearch` ^7.2.0: Client-side full-text search engine -- TypeScript-native, 7KB gzip, zero deps, inverted index with O(log n) queries. Chosen over Fuse.js (O(n) per query) and FlexSearch (stale TS types).
-- `idb` ^8.0.0: Promise-based IndexedDB wrapper -- 1KB gzip. For persisting encrypted search index and offline operation queue. Chosen over localForage (unnecessary fallback logic).
-
-**Conditional dependencies (only if implementing CipherBox-layer MFA beyond Web3Auth):**
-
-- `@simplewebauthn/browser` ^13.2.2 + `@simplewebauthn/server` ^13.2.2: WebAuthn passkey support -- TypeScript-first, actively maintained. Only if adding CipherBox-layer session MFA.
-- `otpauth` ^9.5.0: TOTP generation/validation -- zero deps, RFC compliant. Only if CipherBox-level TOTP.
-- `@scure/bip39` ^1.4.0: BIP-39 mnemonic generation -- same `@noble` ecosystem. Only if custom recovery phrase outside Web3Auth.
-
-**Deferred dependencies (AWS Nitro TEE):**
-
-- `@aws-sdk/client-kms` ^3.x: For NestJS orchestrator on parent EC2 instance.
-- Rust enclave binary (separate build target): `aws-nitro-enclaves-nsm-api`, `ecies`, `ed25519-dalek`.
-
-**What NOT to add (and why):**
-
-| Library                   | Temptation               | Why Not                                                                                                                                      |
-| ------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| Yjs / Automerge / SecSync | "CRDTs solve sync"       | CipherBox syncs encrypted metadata blobs, not collaborative documents. CRDTs add 50KB+ and require restructuring the entire metadata format. |
-| Elasticsearch / Typesense | "Full-text search"       | Server-side search violates zero-knowledge. All search must be client-side.                                                                  |
-| Fuse.js                   | "Fuzzy search"           | No inverted index (O(n) per query). MiniSearch is materially faster.                                                                         |
-| localForage               | "IndexedDB wrapper"      | Unnecessary fallback logic. `idb` is lighter and more appropriate.                                                                           |
-| Proxy re-encryption libs  | "Re-encrypt for sharing" | Direct ECIES re-wrapping with existing `eciesjs` is simpler and sufficient.                                                                  |
-| jsonwebtoken              | "JWT for share tokens"   | `jose` already installed, supports all JWK/JWS/JWE operations.                                                                               |
-| passport-simple-webauthn  | "Passport + WebAuthn"    | v0.1.0, 2 years stale. Use `@simplewebauthn/server` directly.                                                                                |
+- **Kubo v0.34.0 (recommend upgrade to v0.40.1):** Self-hosted IPFS node already participating in the Amino DHT. Supports `Gateway.ExposeRoutingAPI` and `Ipns.UsePubsub` for local IPNS resolution. v0.40.1 makes routing API default and improves IPNS-over-PubSub.
+- **`prom-client` ^15.1.3:** Already installed with `MetricsService` pattern established. Extend with 4 new histograms for IPFS/IPNS latency tracking.
+- **TypeORM ^0.3.28 + PostgreSQL 16.x:** Handles all migration needs. 2-3 new migrations (ADD COLUMN, ALTER COLUMN, CREATE TABLE for user IPFS config).
+- **IPFS Pinning Service API (HTTP standard):** Vendor-agnostic OpenAPI spec with 4 endpoints. Implemented by Pinata, Filebase, web3.storage, IPFS Cluster. No SDK needed -- native `fetch` is sufficient.
+- **k6 v1.0+ (dev tooling only):** Standalone load test runner with native TypeScript support. Install via `brew install k6`. Not committed to repo.
 
 ### Expected Features
 
 **Must have (table stakes):**
 
-- User-to-user folder sharing (read-only) with ECIES key re-wrapping -- every competitor has this
-- Share invitation flow (invite by email/publicKey, accept/decline)
-- Share revocation with folderKey rotation -- critical security requirement
-- File name search (global, across all folders) -- expected once vault exceeds 100+ files
-- Web3Auth MFA enablement (device share + backup phrase) -- mostly SDK configuration
-- Automatic version creation on file update (retain old CIDs) -- nearly free on IPFS
-- Version history view with restore capability
-- Conflict detection (IPNS sequence-based)
-- Sync status indicators
+- Reliable IPNS resolution (<2s, >99.5% availability) -- current `delegated-ipfs.dev` has documented 502s and stale records
+- DB-cached CID fallback with sequence number comparison -- already implemented, needs to become the primary resolution path
+- IPNS publish/resolve latency monitoring -- counters exist, need duration histograms
+- API endpoint response time baselines with p50/p95/p99 targets
+- Graceful degradation when IPFS/IPNS is slow -- timeout + fallback pattern, partially implemented
 
 **Should have (differentiators):**
 
-- Link-based sharing with URL fragment key (Tresorit/MEGA pattern, no account required)
-- Password-protected share links (PBKDF2 key derivation)
-- IPFS-native version immutability (cryptographic tamper-proof versions for free)
-- Per-folder granular sharing (share subfolder without exposing parent -- better than Tresorit's tresor-level)
-- WebAuthn/Passkey MFA factor
-- Selective sync for desktop (per-folder IPNS makes this architecturally natural)
+- Move rootFolderKey to IPFS vault record -- server retains DB copy as permanent fallback but primary access shifts to IPFS blob, reducing server's role toward zero-knowledge relay
+- BYO-IPFS node support via Pinning Service API -- unique among encrypted storage apps, enables self-sovereignty over data persistence
+- End-to-end user journey performance baselines -- login-to-vault, upload-to-visible timing
+- IPFS/IPNS latency histograms with per-operation breakdown in Prometheus
 
-**Defer to v3+:**
+**Defer (v1.2+):**
 
-- Read-write shared folders -- multi-writer IPNS is unsolved, no competitor has solved it for encrypted storage
-- Full-text content search (encrypted index stored on IPFS) -- no major competitor offers this either
-- CRDTs / automatic conflict merging
-- On-demand file hydration for FUSE mount
+- CRDT-based share discovery via IPNS inbox -- research-only in v1.1, architecturally desirable but premature
+- Migrate device registry off DB -- requires solving approval handshake without server coordination
+- Eliminate `pinned_cids` table -- requires alternative quota tracking
+- Client-direct IPFS upload mode -- CORS issues, breaks quota tracking and conflict detection
 
 ### Architecture Approach
 
-The architecture extends the existing system with minimal structural changes. Five key integration decisions emerged from the research:
+The architecture follows a "DB-first, IPFS-verify" pattern for IPNS resolution, a versioned blob format for metadata evolution, a provider factory pattern for BYO-IPFS extensibility, and additive histogram instrumentation for performance baselines. The key insight is that the DB already serves as the reliable source for IPNS CIDs -- making this explicit (instead of treating it as a fallback) simplifies the architecture and eliminates the external `delegated-ipfs.dev` dependency without adding new infrastructure.
 
-1. **Sharing uses ECIES re-wrapping, NOT proxy re-encryption.** The owner's client decrypts the folderKey, re-encrypts it with the recipient's publicKey using the existing `wrapKey()` function. Share key delivery happens through a new backend `shares` table -- not via IPNS metadata, because recipients need access before they have the folderKey. The server stores only ECIES ciphertexts it cannot decrypt.
+**Major components:**
 
-2. **Versioning is nearly free on IPFS.** Each file update already creates a new CID. The only change: stop unpinning old CIDs and add a `versions` array to FileEntry in the metadata schema. No new crypto, no new APIs, no new entities.
-
-3. **MFA is mostly Web3Auth configuration.** Set `mfaLevel: 'optional'` and configure `mfaSettings`. The keypair produced is identical whether or not MFA is enabled -- MFA only affects how many factors are needed to reconstruct it. This means: vault keys stay the same, no re-encryption needed, seamless enable/disable.
-
-4. **Search Tier 1 is trivial.** CipherBox already decrypts the full folder tree into memory on login. Searching file names against this in-memory data requires zero server interaction, zero new crypto, and produces <10ms query times for vaults under 10K files. MiniSearch adds an optional persistent index for Tier 2.
-
-5. **Advanced sync defers write-conflict resolution.** Use optimistic concurrency: server returns 409 on stale IPNS sequence numbers. Client performs three-way merge on decrypted metadata. Conflict copies ("filename (conflict).ext") for irreconcilable changes. No CRDTs.
-
-**New database entities (only 1 required for core features):**
-
-- `shares` table: owner_id, recipient_id, recipient_public_key, folder_ipns_name, shared_folder_key_encrypted, shared_ipns_key_encrypted, permission, status, timestamps
-- (Optional for CipherBox-layer MFA: `webauthn_credentials`, `totp_secrets`)
+1. **KuboIpnsClient** -- New NestJS injectable wrapping Kubo's RPC API (`/api/v0/name/resolve`, `/api/v0/name/publish`, `/api/v0/key/import`). Handles native DHT resolution and Kubo-native publishing for the TEE republish path.
+2. **Vault Blob v2 Format** -- Extends the root IPNS blob with a version byte and ECIES-wrapped `encryptedRootFolderKey` header, enabling client-side key extraction without a DB round-trip. Version-aware reading allows graceful fallback to blob v1.
+3. **Provider Factory + DualPinProvider** -- Per-user `IpfsProviderFactory` that returns either the default `LocalProvider` or a `DualPinProvider` wrapping both `LocalProvider` (always) and `UserCustomProvider` (best-effort mirror to user's node).
+4. **MetricsService Extensions** -- 4 new Prometheus histograms: IPNS resolve duration, IPNS publish duration, IPFS operation duration, TEE republish batch duration. All use the existing `prom-client` infrastructure.
 
 ### Critical Pitfalls
 
-The top 5 pitfalls across all 18 identified, ranked by severity:
+1. **Sequence number divergence during routing provider migration** -- The new Kubo DHT endpoint may have no records initially. Run the new provider in read-parallel mode for 48+ hours before cutting writes. Dual-write to old and new providers during transition. Monitor for 409 Conflict error spikes.
 
-1. **Sharing folderKey without ECIES re-wrapping breaks zero-knowledge (P1, CRITICAL)** -- The server must NEVER see a plaintext symmetric key. Always wrap with recipient's publicKey client-side. Add server-side format assertions rejecting plaintext-length key payloads. Network inspection test: verify no symmetric keys in API requests.
+2. **rootFolderKey on IPNS creates login-critical IPNS dependency** -- Moving rootFolderKey exclusively to IPFS means login fails when IPNS is down. The mitigation is absolute: keep the DB copy as the primary source for login, use the IPFS copy for recovery tool independence. This is a "both, not either" situation. Never drop the DB column.
 
-2. **Incomplete revocation: revoking access without rotating folderKey (P2, CRITICAL)** -- Revoked user retains cached key and can decrypt via IPFS gateways (IPFS content is public). On revocation: generate new folderKey, re-encrypt folder metadata, re-wrap for remaining recipients, re-publish IPNS. Accept that previously-downloaded content cannot be un-downloaded.
+3. **DHT record expiry during routing provider migration** -- IPNS records expire from the DHT after 48 hours regardless of the validity field. If both providers are misconfigured during a weekend deployment, ALL records expire simultaneously. Build an emergency republish endpoint that bypasses the 6-hour schedule.
 
-3. **MFA enrollment changes key derivation, locking user out of vault (P5, CRITICAL)** -- If MFA modifies Web3Auth's key derivation path, the output keypair changes and all encrypted data becomes inaccessible. Implement MFA as a gate on CipherBox API access AFTER Web3Auth returns the keypair, never as a key derivation input. **Must have integration test: publicKey unchanged after MFA enrollment.**
+4. **BYO-IPFS bypasses server-side optimistic concurrency** -- If users publish IPNS records directly to their node (bypassing the API), the server cannot check sequence numbers. The fix: BYO-IPFS affects ONLY where data is pinned, never how metadata is published. All IPNS publishes must still go through the CipherBox API.
 
-4. **Multi-writer IPNS causes silent data loss in shared folders (P3, CRITICAL)** -- Two users publishing to the same IPNS name simultaneously: last-writer-wins, changes silently lost. Prevention: read-only sharing only. Do NOT share ipnsPrivateKey. Defer write-sharing to v3.
-
-5. **Version metadata bloats folder IPNS records (P9, HIGH)** -- 100 files x 10 versions = ~2.8MB metadata JSON, degrading load/publish times. Cap at 10 versions inline. Separate version manifests for older versions. Lazy-load history only when requested.
+5. **Quota tracking becomes unenforceable with BYO-IPFS** -- Server cannot meter uploads it does not relay. For BYO users, skip server-side quota enforcement and require client-reported CID sizes. Mark `pinned_cids` entries with a `provider` column to distinguish server-pinned from BYO-pinned.
 
 ## Implications for Roadmap
 
-Based on combined dependency analysis, feature interactions, and risk assessment, the research suggests 5 phases within Milestone 2.
+Based on research, suggested phase structure:
 
-### Phase 1: Foundation -- MFA + Versioning
+### Phase 1: Performance Instrumentation
 
-**Rationale:** Both features are independent of each other and of sharing. MFA is the smallest surface area (SDK configuration, no backend changes, no crypto changes). Versioning extends the metadata schema to FolderMetadata v2, which must be stable before sharing adds its own schema requirements. Doing both first establishes the security posture and data model that downstream features depend on.
+**Rationale:** Zero risk to existing functionality. Purely additive. Establishes "before" measurements that Phase 2-4 can be compared against. Without baselines, we cannot prove that subsequent phases improve performance or detect regressions.
+**Delivers:** 4 new Prometheus histograms (IPNS resolve/publish duration, IPFS operation duration, TEE republish batch duration), client-side timing utility, baseline measurements document, k6 load test scripts.
+**Addresses:** Table stakes features -- IPNS publish latency monitoring, API endpoint baselines.
+**Avoids:** Pitfall P7 (instrumentation overhead) -- verify overhead < 5% on P95 latency with and without instrumentation.
+**Estimated scope:** Small. ~10 modified files, no new entities or migrations.
 
-**Delivers:** Web3Auth MFA factor configuration UI, metadata v2 schema with version history, automatic version retention on file update, version history view/restore, retention policy enforcement.
+### Phase 2: IPNS Resolution Improvement
 
-**Addresses features:** Web3Auth MFA enablement, backup phrase, automatic version creation, version history, version restore, retention policy.
+**Rationale:** Fixes the most critical reliability issue and is the gating dependency for Phase 3. The current `delegated-ipfs.dev` dependency causes 502 errors and stale records. Must be resolved before making IPNS a login-critical path.
+**Delivers:** `KuboIpnsClient` for native Kubo DHT resolution, DB-first resolution strategy, `delegated-ipfs.dev` demoted to disabled-by-default fallback, Kubo config with `Ipns.UsePubsub: true`, updated recovery tool resolution chain.
+**Addresses:** Table stakes -- reliable IPNS resolution, graceful degradation.
+**Avoids:** Pitfall P1 (sequence number divergence) -- run dual-provider for 48+ hours, compare sequence numbers across providers. Pitfall P5 (DHT record expiry) -- never take old provider offline until new one has processed a full republish cycle.
+**Estimated scope:** Medium. 1 new file, ~5 modified files, Kubo config change, recovery tool update.
 
-**Avoids pitfalls:** MFA enrollment breaking key derivation (P5) -- test publicKey invariance. Version storage explosion (P8) -- enforce retention limits from day one. Version metadata bloat (P9) -- cap at 10 versions inline.
+### Phase 3: Database Minimization (rootFolderKey to IPFS)
 
-**Stack needed:** No new dependencies. Existing `@web3auth/modal` mfaSettings. Existing TypeORM for metadata.
+**Rationale:** Requires reliable IPNS resolution from Phase 2. This is the highest-value zero-knowledge improvement: the server stores zero crypto material after migration. The vault blob v2 format is a breaking metadata change requiring careful migration across web, desktop, and recovery tool.
+**Delivers:** Vault blob v2 format with embedded `encryptedRootFolderKey`, version-aware blob reading, dual-write migration strategy, `encryptedRootIpnsPrivateKey` deprecation, updated recovery tool, metadata schema version bump per METADATA_EVOLUTION_PROTOCOL.
+**Addresses:** Differentiator -- server stores zero crypto material, true zero-knowledge relay.
+**Avoids:** Pitfall P2 (rootFolderKey on IPNS) -- keep DB copy as permanent fallback for login, use IPFS copy for recovery tool independence. Pitfall P3 (share discovery on IPFS) -- explicitly do NOT migrate shares, keep sharing graph in DB.
+**Estimated scope:** Large. New type definitions, serialization code, changes across 3 clients (web, desktop, recovery).
 
-**Research flag:** Standard patterns. Skip `/gsd:research-phase`. Web3Auth MFA docs are clear. IPFS versioning is a metadata-only change.
+### Phase 4: BYO-IPFS Node Support
 
-### Phase 2: Sharing (Read-Only)
-
-**Rationale:** Sharing is the highest-value feature gap (every competitor has it). It touches the most surface area (new backend entity, new API endpoints, crypto re-wrapping, UI). It depends on metadata v2 being stable from Phase 1. Read-only sharing avoids the multi-writer IPNS problem entirely.
-
-**Delivers:** User-to-user read-only folder sharing, share invitation/acceptance flow, share revocation with folderKey rotation, user publicKey lookup API, SharedWithMe view, re-wrap crypto helpers.
-
-**Addresses features:** User-to-user folder sharing (read), share invitation flow, share revocation, share notification, shared folder view.
-
-**Avoids pitfalls:** FolderKey leakage to server (P1) -- ECIES re-wrapping only, server-side format assertions. Incomplete revocation (P2) -- folderKey rotation on revoke. Multi-writer conflicts (P3) -- read-only only, no IPNS key sharing. Shared folder TEE republishing (P13) -- allow shared users to register for republishing.
-
-**Stack needed:** No new npm dependencies. New TypeORM entity (`shares`). New NestJS module with 6 endpoints.
-
-**Research flag:** NEEDS `/gsd:research-phase` -- share revocation key rotation flow is the most complex protocol in M2. Test vector generation needed for ECIES re-wrapping.
-
-### Phase 3: Link Sharing + Search
-
-**Rationale:** Link sharing extends Phase 2's sharing infrastructure (share record storage, permission model). Search is independent but benefits from the folder metadata schema being finalized. Both are medium-complexity, self-contained features that can be developed in parallel within the same phase.
-
-**Delivers:** Link-based sharing (URL fragment key), password-protected links, link expiration/download limits, global file/folder name search, search results with navigation.
-
-**Addresses features:** Link-based sharing, link expiration, link password protection, download limits, file name search, folder name search, search results with navigation.
-
-**Avoids pitfalls:** Link key leakage to server (P4) -- URL fragment only, static landing page, no analytics, `Referrer-Policy: no-referrer`. Search index leakage (P7) -- client-side only, no server communication. Stale index (P15) -- incremental updates tied to IPNS polling.
-
-**Stack needed:** `minisearch` ^7.2.0 + `idb` ^8.0.0 for search (~8KB total gzipped). Web viewer for link sharing (static page).
-
-**Research flag:** Link sharing NEEDS `/gsd:research-phase` -- the web viewer for unauthenticated access is a new page type that needs security review. Search Tier 1 is standard patterns (skip research).
-
-### Phase 4: Advanced Sync + Desktop Enhancements
-
-**Rationale:** Conflict resolution is a cross-cutting concern that must handle versioned files, shared folders, and all metadata types. It benefits from all other features being stable. Selective sync is desktop-specific and naturally scoped alongside conflict handling.
-
-**Delivers:** IPNS sequence-based conflict detection, three-way merge for folder metadata, conflict copy creation, sync status indicators, selective sync for desktop, offline operation queue.
-
-**Addresses features:** Conflict detection, conflict copies, conflict notification, selective sync, sync status indicators, offline edit queue.
-
-**Avoids pitfalls:** Conflict resolution without plaintext (P11) -- client-side only, optimistic concurrency with 409 responses. Selective sync breaking tree traversal (P16) -- sync all metadata, selective sync controls file content only. Offline replay duplication (P17) -- idempotency keys per queued operation.
-
-**Stack needed:** No new dependencies (reuse `idb` from Phase 3 for offline queue).
-
-**Research flag:** NEEDS `/gsd:research-phase` -- three-way merge edge cases with encrypted metadata need exhaustive test matrix. Selective sync FUSE integration is uncharted territory for this codebase.
-
-### Phase 5: CipherBox-Layer MFA + AWS Nitro TEE
-
-**Rationale:** Optional hardening features that add defense-in-depth. CipherBox-layer WebAuthn/TOTP protects sensitive API operations beyond what Web3Auth MFA covers. AWS Nitro is the TEE fallback specified in the architecture. Both are independent of core user-facing features and can ship after the product is functionally complete.
-
-**Delivers:** WebAuthn passkey registration/verification for CipherBox API, TOTP for sensitive operations, AWS Nitro Enclave binary (Rust), Nitro orchestrator integration in NestJS, fallback routing from Phala to Nitro.
-
-**Addresses features:** WebAuthn/Passkey MFA, CipherBox session MFA for sensitive operations, AWS Nitro TEE fallback.
-
-**Avoids pitfalls:** Recovery phrase backdoor (P6) -- hash-only storage, client-generated. MFA changes key derivation (P5) -- CipherBox MFA is an API gate, never touches Web3Auth.
-
-**Stack needed:** `@simplewebauthn/server` + `@simplewebauthn/browser` ^13.2.2, `otpauth` ^9.5.0, `@aws-sdk/client-kms` ^3.x. Rust enclave binary (new build target: `aws-nitro-enclaves-nsm-api`, `ecies`, `ed25519-dalek`).
-
-**Research flag:** NEEDS `/gsd:research-phase` -- AWS Nitro enclave is a new language (Rust), new build target, new infra. This is the highest-risk item in M2.
+**Rationale:** Largest surface area but most independent feature. Benefits from stable IPNS resolution (Phase 2) and reduced DB dependency (Phase 3) but does not strictly require them. The `RemotePinningProvider` is additive -- it mirrors pins without replacing the local provider.
+**Delivers:** `UserCustomProvider` (Kubo RPC + Pinning Service API), `DualPinProvider` wrapper, `ProviderFactory` for per-user resolution, `user_ipfs_config` entity and migration, IPFS config CRUD API endpoints, connection test endpoint, Settings page UI for IPFS node configuration, BYO-specific Prometheus metrics.
+**Addresses:** Differentiator -- BYO-IPFS node support, unique among encrypted storage apps.
+**Avoids:** Pitfall P4 (BYO bypasses concurrency) -- all IPNS publishes still go through API, BYO affects only pinning. Pitfall P6 (quota tracking) -- skip server-side quota for BYO users, require client-reported CID sizes, add `provider` column to `pinned_cids`.
+**Estimated scope:** Large. New entity, migration, 4+ new provider files, UI component, multiple API endpoints.
 
 ### Phase Ordering Rationale
 
-- **MFA before Sharing:** Shared vaults should encourage MFA. MFA must be verified to NOT change key derivation before sharing relies on stable publicKeys.
-- **Versioning before Sharing:** Establishes FolderMetadata v2 schema. Sharing adds fields to the same schema -- it must be stable first.
-- **Read-only Sharing before Link Sharing:** Link sharing reuses share infrastructure. Read-only avoids the multi-writer IPNS problem entirely.
-- **Search after Sharing:** Search needs to index both owned and shared folders. Metadata schema must be finalized.
-- **Advanced Sync last among core features:** Cross-cutting concern that must handle all metadata types (versions, shares). Highest risk of subtle bugs if schema is still changing.
-- **Nitro TEE last:** Separate build target (Rust), can be developed in parallel but should ship after core features are stable.
+- **Phase 1 before everything:** Baselines must exist before changes, or you cannot measure impact. Zero dependencies, zero risk.
+- **Phase 2 before Phase 3 (hard dependency):** Moving rootFolderKey to IPFS makes IPNS resolution login-critical. IPNS must be reliable first. All four research files independently flag this as the most important ordering constraint.
+- **Phase 3 before Phase 4 (soft dependency):** Not strictly required, but Phase 3 reduces DB dependency which aligns with BYO-IPFS goals. Phase 4's design work can proceed in parallel with Phase 3's implementation.
+- **Phase 4 last:** Largest surface area, most new code, benefits from all prior infrastructure improvements.
 
 ### Research Flags
 
 Phases likely needing deeper research during planning:
 
-- **Phase 2 (Sharing):** Share revocation key rotation protocol needs detailed test vectors. ECIES re-wrapping correctness must be validated end-to-end.
-- **Phase 3 (Link Sharing):** Web viewer for unauthenticated access is a new security surface. URL fragment key handling needs security review.
-- **Phase 4 (Advanced Sync):** Three-way merge edge cases with encrypted metadata. Selective sync FUSE integration.
-- **Phase 5 (Nitro TEE):** Rust enclave binary, vsock communication, KMS attestation -- entirely new technology for this project.
+- **Phase 3 (Database Minimization):** Migration protocol edge cases -- blob v2 format across 3 clients, dual-write/dual-read window management, recovery tool independence, desktop (Rust) blob parsing. This is the riskiest phase.
+- **Phase 4 (BYO-IPFS):** Per-user provider routing in NestJS DI, IPFS Pinning Service API real-world testing, auth token storage model (ECIES-wrapped vs server-encrypted), Settings UI design.
 
-Phases with standard patterns (skip `/gsd:research-phase`):
+Phases with standard patterns (skip research-phase):
 
-- **Phase 1 (MFA):** Web3Auth mfaSettings is documented SDK configuration.
-- **Phase 1 (Versioning):** Metadata schema extension plus "stop unpinning old CIDs." Straightforward.
-- **Phase 3 (Search Tier 1):** Client-side search against already-decrypted data using MiniSearch. Well-established pattern.
+- **Phase 1 (Performance Instrumentation):** Established `prom-client` + `MetricsService` pattern. k6 is well-documented. Purely additive.
+- **Phase 2 (IPNS Resolution):** Kubo RPC API is documented, DB-first resolution is architecturally straightforward. The main risk (sequence number divergence during transition) is an operational concern, not a research gap.
 
 ## Confidence Assessment
 
-| Area         | Confidence  | Notes                                                                                                                                                                                                                   |
-| ------------ | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Stack        | HIGH        | Most features need zero new dependencies. The 2 new packages (minisearch, idb) are mature, TypeScript-native, and well-maintained. Versions verified via npm.                                                           |
-| Features     | HIGH        | Table stakes validated against 8 competitors (Tresorit, ProtonDrive, Filen, MEGA, Cryptomator, Sync.com, NordLocker, Internxt). Sharing and versioning patterns directly confirmed by competitor whitepapers.           |
-| Architecture | MEDIUM-HIGH | Integration model is sound -- sharing via backend shares table, versioning via metadata extension, search client-side only. Two areas at MEDIUM: conflict resolution merge strategy and Nitro TEE enclave architecture. |
-| Pitfalls     | HIGH        | 18 pitfalls identified with specific prevention strategies. Top pitfalls (ZK violations in sharing, MFA key derivation) confirmed by multiple sources including Tresorit whitepapers and IPFS issue tracker.            |
+| Area         | Confidence                                               | Notes                                                                                                                                                                                                                        |
+| ------------ | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stack        | HIGH                                                     | Zero new npm dependencies. All capabilities use existing libraries. Kubo API contracts verified against official docs.                                                                                                       |
+| Features     | HIGH for IPNS/perf, MEDIUM for DB migration and BYO-IPFS | IPNS reliability and performance monitoring are well-documented domains. DB-to-IPFS migration has app-specific edge cases. BYO-IPFS Pinning Service API is well-specified but per-user provider routing patterns are sparse. |
+| Architecture | HIGH                                                     | Existing codebase analyzed in detail. DB-first resolution, provider factory, blob versioning are all established patterns. Build order validated against dependency graph.                                                   |
+| Pitfalls     | HIGH                                                     | 6 critical pitfalls identified with specific prevention strategies, warning signs, and recovery plans. Phase-to-pitfall mapping is complete.                                                                                 |
 
-**Overall confidence:** MEDIUM-HIGH
+**Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **Web3Auth MFA pricing:** The `mfaSettings` configuration requires Web3Auth's SCALE plan for production. Free on devnet. Verify current pricing before committing to Web3Auth MFA as the primary mechanism.
-- **Multi-writer shared folders:** No clear pattern exists in any competitor for encrypted multi-writer folders. Deliberately deferred but needs a design proposal before v3.0.
-- **Versioning + Sharing interaction:** When a folder with version history is shared, should the recipient see all versions or only current? This affects how many keys must be re-wrapped. Decide during Phase 2 planning.
-- **Offline queue + share revocation race condition:** If a user queues offline edits to a shared folder and the owner revokes access meanwhile, the queued operations will fail on reconnect. Need a graceful handling path.
-- **Metadata size at scale:** A vault with 1000+ files, each with 10 versions, across multiple shared folders could produce large metadata blobs. Monitor in practice; may need version manifest separation.
-- **Content search (Tier 2):** No competitor offers true encrypted content search. The encrypted index approach (Bloom filter or inverted index stored on IPFS) is academically sound but unvalidated in consumer products. Defer and validate separately.
+- **rootFolderKey migration dual-write window:** How long should the dual-write period last? What happens to users who never log in during the window? Need a forced migration strategy (background job that reads DB key, writes blob v2, publishes to IPNS) for dormant accounts.
+- **BYO-IPFS auth token storage model:** STACK.md recommends server-side encryption (server needs to decrypt to call user's node). ARCHITECTURE.md implements this. PITFALLS.md warns about server compromise exposing tokens. The tradeoff (server sees token but not plaintext content) needs explicit acceptance and documentation.
+- **Kubo version decision:** v0.34.0 works but v0.40.1 is recommended. The upgrade should happen before Phase 2 starts but is not blocking. Need to validate that Kubo v0.40.1 does not introduce breaking changes for the existing `LocalProvider` calls.
+- **CRDT inbox for shares:** Research-only this milestone. Need to document the CRDT approach as a design RFC during Phase 3 work so it feeds into v1.2 planning.
+- **Recovery tool independence:** The recovery tool currently resolves IPNS via `delegated-ipfs.dev` directly from the browser. Phases 2 and 3 both modify its behavior. Need to verify it works WITHOUT the CipherBox API running after all changes.
+- **IPNS routing approach reconciliation:** STACK.md recommends Kubo's `Gateway.ExposeRoutingAPI`, FEATURES.md recommends self-hosted Someguy, ARCHITECTURE.md recommends DB-first with Kubo RPC `/api/v0/name/resolve`. Adopt the ARCHITECTURE.md approach (DB-first with async Kubo DHT verification) as the definitive strategy -- it is the most robust because it makes the already-reliable DB the primary path and uses Kubo DHT only for background verification.
 
 ## Sources
 
 ### Primary (HIGH confidence)
 
-- Tresorit folder sharing architecture -- ECIES re-wrapping pattern, key rotation on revocation
-- Tresorit Encrypted Link Whitepaper -- URL fragment key delivery, password-protected links
-- ProtonDrive Version History docs -- Retention policies, encrypted versioning patterns
-- ProtonDrive Security model -- ECC-based sharing, zero-knowledge architecture
-- Filen Cryptography docs -- AES-GCM, RSA sharing, HMAC search implementation
-- Web3Auth MFA Documentation -- mfaSettings configuration, threshold key scheme, factor types
-- IPFS/IPNS specifications -- Content addressing, IPNS sequence numbers, pinning
-- SimpleWebAuthn npm package -- v13.2.2, TypeScript-first WebAuthn library
-- MiniSearch npm package -- v7.2.0, TypeScript-native search engine
+- [Delegated Routing V1 HTTP API Spec](https://specs.ipfs.tech/routing/http-routing-v1/) -- IPNS endpoint contract
+- [IPFS Pinning Service API Spec](https://ipfs.github.io/pinning-services-api-spec/) -- BYO-IPFS integration standard
+- [Kubo RPC API v0 Reference](https://docs.ipfs.tech/reference/kubo/rpc/) -- `/api/v0/name/resolve`, `/api/v0/name/publish`, `/api/v0/key/import`
+- [Kubo Configuration Reference](https://github.com/ipfs/kubo/blob/master/docs/config.md) -- `Ipns.UsePubsub`, `Routing.Type`, `Gateway.ExposeRoutingAPI`
+- [Kubo v0.34.0](https://github.com/ipfs/kubo/releases/tag/v0.34.0) and [v0.40.0](https://github.com/ipfs/kubo/releases/tag/v0.40.0) Release Notes
+- [Someguy GitHub](https://github.com/ipfs/someguy) -- Self-hosted delegated routing reference
+- [Grafana k6 1.0 Release](https://grafana.com/blog/grafana-k6-1-0-release/) -- Load testing
+- [prom-client GitHub](https://github.com/siimon/prom-client) -- Prometheus client for Node.js
+- [IPNS Record and Protocol spec](https://specs.ipfs.tech/ipns/ipns-record/) -- Sequence number semantics
 
 ### Secondary (MEDIUM confidence)
 
-- IPFS Kubo issue #8433 -- Multiple IPNS publishers causing conflicts (confirmed pattern)
-- IronCore Labs: Solving Search Over Encrypted Data -- searchable encryption tradeoffs
-- Understanding Leakage in Searchable Encryption (2024 ePrint) -- HMAC index privacy analysis
-- Proxy Re-Encryption analysis -- evaluated and rejected in favor of direct ECIES re-wrapping
-- Keeper Encryption Model docs -- record/folder key wrapping architecture validation
+- [ProbeLab IPFS KPIs](https://www.probelab.io/ipfs/kpi/) and [Week 07, 2026 Results](https://discuss.ipfs.tech/t/probelabs-notable-ipfs-performance-results-week-07-2026/20048) -- DHT performance baselines
+- [IPIP-0379: Delegated IPNS HTTP API](https://specs.ipfs.tech/ipips/ipip-0379/) -- IPNS delegation spec
+- [IP Shipyard 2025 Year in Review](https://ipshipyard.com/blog/2025-shipyard-ipfs-year-in-review/) -- IPFS ecosystem context
+- [Measuring IPNS Performance on the Public Amino DHT](https://www.probelab.network/blog/ipns-performance-amino-dht) -- Median 11s retrieval latency reference
+- [Empirical study on performance overhead of code instrumentation (2025)](https://www.sciencedirect.com/science/article/pii/S0164121225002420) -- Instrumentation overhead benchmarks
 
-### Tertiary (LOW confidence)
+### Codebase (HIGH confidence)
 
-- Bloom filter encrypted search (IEEE) -- academic approach, unvalidated in production
-- CRDT dictionary and challenges -- evaluated and deferred to v3.0
-- Zero-knowledge cloud storage limitations -- general landscape analysis
-
----
-
-## Files Created
-
-| File                                 | Description                                                                                  |
-| ------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `.planning/research/STACK.md`        | Technology selections for M2 features. Confirmed minimal new deps.                           |
-| `.planning/research/FEATURES.md`     | Feature landscape across 8 competitors. Table stakes and differentiators per category.       |
-| `.planning/research/ARCHITECTURE.md` | Integration model, component boundaries, data flow changes, build order consensus.           |
-| `.planning/research/PITFALLS.md`     | 18 pitfalls (7 critical, 6 high, 5 medium) with prevention strategies and detection methods. |
-| `.planning/research/SUMMARY.md`      | This file. Synthesized findings with roadmap implications.                                   |
+- `apps/api/src/ipns/ipns.service.ts` -- Current IPNS resolution logic with DB fallback
+- `apps/api/src/ipns/delegated-routing.client.ts` -- Current routing client (3 retries, 10s timeout)
+- `apps/api/src/ipfs/providers/ipfs-provider.interface.ts` -- 3-method provider abstraction
+- `apps/api/src/metrics/metrics.service.ts` -- Existing Prometheus infrastructure
+- `apps/api/src/republish/republish.service.ts` -- TEE republish via delegated routing
+- `apps/web/public/recovery.html` -- Standalone recovery tool with direct IPNS resolution
+- `docs/METADATA_SCHEMAS.md` and `docs/METADATA_EVOLUTION_PROTOCOL.md` -- Schema migration rules
 
 ---
 
-_Research completed: 2026-02-11_
+_Research completed: 2026-03-07_
 _Ready for roadmap: yes_

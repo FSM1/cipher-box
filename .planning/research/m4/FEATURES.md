@@ -1,4 +1,4 @@
-# Feature Landscape: Milestone 3
+# Feature Landscape: Milestone 4
 
 **Domain:** Encrypted productivity platform (docs, sheets, slides, teams, billing, signing)
 **Researched:** 2026-02-11
@@ -6,7 +6,7 @@
 
 ## Context
 
-CipherBox already provides (M1) or will provide (M2) zero-knowledge encrypted file storage with IPFS/IPNS, Web3Auth, file/folder sharing, versioning, encrypted search, and vault export. Milestone 3 extends CipherBox from an encrypted file locker into a full encrypted productivity platform.
+CipherBox already provides (M1) or will provide (M2) zero-knowledge encrypted file storage with IPFS/IPNS, Web3Auth, file/folder sharing, versioning, encrypted search, and vault export. Milestone 4 extends CipherBox from an encrypted file locker into a full encrypted productivity platform.
 
 The four feature pillars researched:
 

@@ -1,626 +1,459 @@
-# Feature Landscape: Milestone 2 -- Sharing, Search, MFA, Versioning, Advanced Sync
+# Feature Research: IPFS Infrastructure (v1.1)
 
-**Domain:** Zero-knowledge encrypted cloud storage (post-v1.0 features)
-**Researched:** 2026-02-11
-**Competitors Analyzed:** Tresorit, ProtonDrive, Filen.io, Internxt, MEGA, Cryptomator, Sync.com, NordLocker
-**Depends on:** CipherBox v1.0 (Web3Auth auth, AES-256-GCM encryption, ECIES key wrapping, IPFS/IPNS storage, TEE republishing, FUSE mount)
+**Domain:** IPFS/IPNS reliability, database minimization, BYO-IPFS, performance monitoring for zero-knowledge encrypted storage
+**Researched:** 2026-03-07
+**Confidence:** HIGH for IPNS resolution and performance monitoring (well-documented ecosystem), MEDIUM for DB-to-IPFS migration (app-specific trade-offs), MEDIUM for BYO-IPFS (standard exists but integration patterns are sparse)
 
----
+## Context
 
-## Executive Summary
-
-Milestone 2 adds five feature clusters that transform CipherBox from a storage demonstrator into a usable product. **Sharing is the highest priority** -- every competitor offers it and users expect it. The remaining features (search, MFA, versioning, advanced sync) are important but can follow sharing in phases.
-
-CipherBox's architecture creates both advantages and constraints for these features:
-
-- **Advantage:** Per-folder IPNS keypairs were explicitly designed for future per-folder sharing. Each folder already has its own encryption key wrapped with the owner's public key -- re-wrapping for a recipient's public key is the natural extension.
-- **Advantage:** IPFS content-addressing makes versioning cheap. Old CIDs remain valid indefinitely (while pinned), so version history is just a list of CIDs in metadata.
-- **Constraint:** No server-side computation on plaintext. Search must be entirely client-side or use privacy-preserving index techniques. The server cannot build indexes.
-- **Constraint:** Web3Auth already provides MFA via its threshold key scheme. Adding CipherBox-layer MFA means either layering on top of Web3Auth's MFA or replacing it -- both have UX complexity.
-- **Constraint:** IPNS last-writer-wins with sequence numbers means conflict resolution for sync must be designed carefully when sharing introduces multi-writer scenarios.
+CipherBox v1.0 ships with a working zero-knowledge encrypted vault backed by IPFS/IPNS. The current IPNS resolution path uses `delegated-ipfs.dev` which has known reliability issues (502 errors, stale records). A DB-cached CID fallback masks this, but the system has accumulated several centralized workarounds: the `folder_ipns` table caches CIDs and sequence numbers, the `vaults` table stores `encryptedRootFolderKey`, the `shares`/`share_keys` tables store the sharing graph, and `pinned_cids` tracks storage. Milestone 3 (v1.1) aims to make IPFS the primary data layer and reduce the database to auth-only.
 
 ---
 
-## 1. File/Folder Sharing
-
-### How Sharing Works in Zero-Knowledge Systems
-
-In zero-knowledge encrypted storage, sharing requires **client-side key re-wrapping**. The pattern across all competitors:
-
-1. Owner's client decrypts the folder/file key using their private key
-2. Owner's client re-encrypts that key with the recipient's public key (ECIES in CipherBox's case)
-3. The re-wrapped key is stored so the recipient can decrypt it
-4. The server never sees the plaintext key at any point
-
-This is fundamentally different from traditional cloud sharing where the server simply grants access. Here, the owner must actively perform cryptographic operations on their device.
-
-Three tiers of sharing exist across competitors:
-
-| Tier                    | Mechanism                                | Examples                       | Zero-Knowledge?                |
-| ----------------------- | ---------------------------------------- | ------------------------------ | ------------------------------ |
-| User-to-User            | Re-wrap keys with recipient's public key | Tresorit, ProtonDrive, Filen   | Yes                            |
-| Link (No Account)       | Embed key material in URL fragment       | MEGA, Tresorit Encrypted Links | Partial (key in URL)           |
-| Password-Protected Link | Derive key from password, embed in URL   | Tresorit, ProtonDrive          | Partial (PBKDF2 from password) |
-
-### Table Stakes
-
-| Feature                            | Why Expected                                     | Complexity | Dependencies                                                         | Notes                                                                                                                           |
-| ---------------------------------- | ------------------------------------------------ | ---------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| User-to-user folder sharing (read) | Core collaboration need; every competitor has it | High       | Recipient key discovery, shared metadata store                       | Tresorit, ProtonDrive, Filen all offer this. CipherBox's per-folder IPNS keypairs were designed for this                        |
-| Share invitation flow              | Users need to invite by email/username           | Medium     | User lookup API, notification system                                 | All competitors use email-based invitations                                                                                     |
-| Share revocation                   | Must be able to unshare                          | High       | Key rotation for shared folder, re-wrapping for remaining recipients | Critical security feature. Tresorit handles this by rotating the folder key                                                     |
-| Share notification                 | Recipient must know they received a share        | Low        | Email or in-app notification                                         | All competitors notify recipients                                                                                               |
-| Shared folder view                 | Users need a "Shared with me" section            | Low        | UI component, shared metadata query                                  | Standard UX pattern across all competitors                                                                                      |
-| Link-based sharing (view/download) | Share with non-users                             | High       | Link token generation, temporary key derivation, web viewer          | Tresorit and MEGA both embed decryption key in URL fragment (never sent to server). Tresorit whitepaper documents this approach |
-| Link expiration                    | Security control for shared links                | Low        | TTL metadata on share records                                        | All competitors offer this                                                                                                      |
-| Link password protection           | Extra security layer                             | Medium     | PBKDF2 key derivation from password, two-layer encryption            | Tresorit, ProtonDrive both offer this. Key in URL is encrypted with password-derived key                                        |
-| Download limit on links            | Prevent unlimited redistribution                 | Low        | Server-side counter (does not affect encryption)                     | Tresorit offers this                                                                                                            |
-
-### Differentiators
-
-| Feature                                    | Value Proposition                                                                                            | Complexity | Notes                                                                                                                                                                 |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------ | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| IPFS-native sharing via IPNS name exchange | Share a folder by sharing its IPNS name + encrypted folder key. Recipient can independently resolve and sync | Medium     | Unique to CipherBox. No competitor has decentralized sharing. Recipient gets their own copy of the IPNS pointer                                                       |
-| Read-write shared folders                  | Multiple users can add files to shared folder                                                                | Very High  | Requires multi-writer IPNS coordination or separate IPNS per writer. Major architectural challenge                                                                    |
-| Per-folder granular permissions            | Share individual folders without exposing parent structure                                                   | Low        | CipherBox already has per-folder keys and IPNS names -- sharing a subfolder does NOT require sharing parent keys. This is better than Tresorit's tresor-level sharing |
-| Offline-resilient sharing                  | Shared folders continue working via TEE republishing even when sharer is offline                             | Medium     | Extend TEE republishing to shared IPNS entries. Unique advantage                                                                                                      |
-| Share audit log                            | See who accessed shared content and when                                                                     | Medium     | Server-side access logging. Does not compromise zero-knowledge since server already sees access patterns                                                              |
-
-### Anti-Features
-
-| Anti-Feature                       | Why Avoid                                                                       | What to Do Instead                                                                                                  |
-| ---------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Server-side key re-encryption      | Server would need plaintext keys, breaking zero-knowledge                       | Client-side re-wrapping only. Owner's device must be online to share                                                |
-| Proxy re-encryption via server     | Tempting shortcut where server transforms ciphertexts. Adds trusted third party | Direct ECIES re-wrapping. Accept that owner must be online to initiate shares                                       |
-| Shared password for link access    | Password sent to server to unlock = server sees password                        | Derive key from password client-side (PBKDF2), embed encrypted link key in URL fragment. Server never sees password |
-| "Anyone with link" edit access     | Anonymous editing is chaos for encrypted systems                                | Links should be read/download only. Edit access requires authenticated user-to-user sharing                         |
-| Sharing by copying encrypted files | Duplicates storage, breaks version consistency                                  | Share by re-wrapping keys to the same IPFS CIDs. One copy of encrypted data, multiple key wrappers                  |
-
-### Implementation Architecture for CipherBox
-
-#### User-to-User Sharing Flow
-
-```text
-1. Owner selects folder to share, enters recipient email
-2. Client calls API to discover recipient's publicKey (new endpoint)
-3. Client decrypts folderKey: ECIES_Decrypt(folderKeyEncrypted, ownerPrivateKey)
-4. Client decrypts ipnsPrivateKey: ECIES_Decrypt(ipnsPrivateKeyEncrypted, ownerPrivateKey)
-5. Client re-wraps for recipient:
-   - recipientFolderKey = ECIES_Encrypt(folderKey, recipientPublicKey)
-   - recipientIpnsKey = ECIES_Encrypt(ipnsPrivateKey, recipientPublicKey)
-6. Client sends share record to server:
-   {folderId, recipientPublicKey, recipientFolderKey, recipientIpnsKey, permission: "read"}
-7. Server stores share record; notifies recipient
-8. Recipient's client fetches share records, decrypts folder key, resolves IPNS
-```
-
-#### Link-Based Sharing Flow (Tresorit/MEGA Pattern)
-
-```text
-1. Owner selects file/folder to share via link
-2. Client generates random linkKey (256-bit)
-3. Client encrypts folderKey with linkKey: AES-GCM(folderKey, linkKey)
-4. Client sends encrypted package to server, gets share token
-5. Server returns URL: https://cipherbox.io/s/{token}
-6. Owner distributes URL with fragment: https://cipherbox.io/s/{token}#base64(linkKey)
-   (Fragment never sent to server per HTTP spec)
-7. Recipient opens link; web viewer extracts linkKey from fragment
-8. Web viewer fetches encrypted package from server using token
-9. Web viewer decrypts folderKey with linkKey, then decrypts content
-
-Password protection adds a layer:
-- linkKey is encrypted with PBKDF2(password, salt)
-- Recipient enters password in browser to derive key, then unwrap linkKey
-```
-
-New Database Requirements:
-
-- `shared_folders` table: owner_id, recipient_id, folder_ipns_name, encrypted_folder_key, encrypted_ipns_key, permission, created_at, revoked_at
-- `share_links` table: token, folder_ipns_name, encrypted_package, password_salt (nullable), expires_at, download_limit, download_count
-
----
-
-## 2. Encrypted Search
-
-### How Search Works in Zero-Knowledge Systems
-
-Search is one of the hardest problems in zero-knowledge storage. The server cannot index files because it cannot see content or even file names. Three approaches exist in the industry:
-
-| Approach                    | How It Works                                                                                                | Used By                         | Tradeoffs                                                                                              |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Client-side full decryption | Decrypt all file names in memory, search locally                                                            | Cryptomator, early Filen        | Only works for currently-open folder. Cannot do global search                                          |
-| HMAC-hashed index           | Hash file name chunks with user's key, store hashes on server. Hash search query the same way, match hashes | Filen (2025+)                   | Fast global search, server sees hashed tokens (some metadata leakage), no content search               |
-| Encrypted client-side index | Build search index on client, encrypt it, store encrypted blob on server/IPFS, decrypt on client to search  | Academic (Bloom filter schemes) | Full privacy, but index must be downloaded and decrypted for every search. Index grows with vault size |
-
-### Table Stakes
-
-| Feature                        | Why Expected                                    | Complexity | Dependencies                            | Notes                                                                                                                                  |
-| ------------------------------ | ----------------------------------------------- | ---------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| File name search (global)      | Users cannot browse large vaults without search | Medium     | Client-side index or HMAC approach      | Filen solved this in 2025 with HMAC chunked hashing. ProtonDrive has global search. This is table stakes for any vault with 100+ files |
-| Folder name search             | Same as file name search                        | Low        | Same infrastructure as file name search | Bundle with file name search                                                                                                           |
-| Search results with navigation | Clicking result navigates to file location      | Low        | UI component                            | Standard UX                                                                                                                            |
-| Recent files                   | Quick access to recently used files             | Low        | Client-side timestamp tracking          | All competitors offer this                                                                                                             |
-
-### Differentiators
-
-| Feature                            | Value Proposition                                                            | Complexity | Notes                                                                                                                                                                                        |
-| ---------------------------------- | ---------------------------------------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Full-text content search           | Search inside documents, not just names                                      | Very High  | Requires client-side indexing of file contents. Must download, decrypt, index, then store encrypted index. Major resource use. ProtonDrive does NOT offer this. Tresorit does for enterprise |
-| IPFS-stored encrypted search index | Search index stored as encrypted IPFS object, synced across devices via IPNS | High       | Unique to CipherBox. Index is an encrypted blob pinned to IPFS with its own IPNS pointer. Any device can fetch and decrypt it                                                                |
-| Incremental index updates          | Only re-index changed files                                                  | Medium     | Track which files were indexed by CID. New CID = needs re-indexing                                                                                                                           |
-| Fuzzy/typo-tolerant search         | Find files even with misspellings                                            | Medium     | Client-side fuzzy matching (Levenshtein distance) after index decryption                                                                                                                     |
-
-### Anti-Features
-
-| Anti-Feature                                | Why Avoid                                         | What to Do Instead                                                                                                      |
-| ------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Server-side search index                    | Server sees search terms and file names           | Client-side only or HMAC-hashed approach                                                                                |
-| Sending search queries to server            | Leaks user intent even if results are encrypted   | All search processing on client                                                                                         |
-| Indexing file contents without user consent | Resource intensive, privacy concern               | Opt-in content indexing. Default to name-only search                                                                    |
-| Bloom filter with high false positive rates | Poor UX, wasted bandwidth downloading wrong files | Use HMAC chunked approach (Filen pattern) or client-side index. Bloom filters have academic appeal but practical issues |
-
-### Recommended Approach for CipherBox
-
-#### Phase 1: HMAC-Hashed Name Search (Filen Pattern)
-
-This is the pragmatic first step. HIGH confidence this approach works -- Filen shipped it in 2025.
-
-```text
-Index Build (on file upload/rename):
-1. Take decrypted file name "quarterly-report-2026.pdf"
-2. Generate search tokens: ["quarterly", "report", "2026", "pdf", "qua", "uar", "art", ...]
-   (trigrams + word boundaries)
-3. HMAC each token: HMAC-SHA256(token, searchKey) where searchKey = HKDF(masterKey, "search")
-4. Send hashed tokens to server, associated with file's encrypted reference
-
-Search (on query):
-1. User types "report"
-2. Client computes: HMAC-SHA256("report", searchKey)
-3. Client sends hashed query to server
-4. Server matches against stored hashes, returns matching file references
-5. Client decrypts file names for display
-```
-
-Privacy tradeoff: Server learns that "something" matches between a search query and certain files, but cannot learn what the actual names or queries are. This is the same tradeoff Filen accepted and users find acceptable.
-
-#### Phase 2: Encrypted Client-Side Index (Optional, for Content Search)
-
-```text
-1. Client maintains a search index (e.g., using MiniSearch or Lunr.js)
-2. Index is serialized to JSON, encrypted with vault-level search key
-3. Encrypted index stored as IPFS object, referenced from root IPNS metadata
-4. On search: fetch encrypted index from IPFS, decrypt in memory, query locally
-5. Index updated incrementally on file changes
-```
-
-Tradeoff: Index blob must be downloaded each session. For a vault with 10K files, index might be 5-20MB. Acceptable for desktop, potentially slow on mobile.
-
----
-
-## 3. Multi-Factor Authentication (MFA)
-
-### How MFA Works with Web3Auth
-
-This is a unique situation because **Web3Auth already provides MFA** through its threshold key scheme. When MFA is enabled in Web3Auth:
-
-1. User's private key is split into 3 shares (device share, Web3Auth share, recovery share)
-2. Any 2 of 3 shares are needed to reconstruct the key
-3. Additional factors (TOTP, passkey, backup phrase) serve as recovery mechanisms for shares
-
-Key insight: CipherBox-layer MFA would be **in addition to** Web3Auth's key protection. This is about protecting CipherBox API access, not the encryption key itself.
-
-### Table Stakes
-
-| Feature                  | Why Expected                       | Complexity | Dependencies                                          | Notes                                                                                                                                                                             |
-| ------------------------ | ---------------------------------- | ---------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Web3Auth MFA enablement  | Protect the encryption key itself  | Low        | Web3Auth SDK configuration                            | Web3Auth supports: device share, social recovery, TOTP, passkey, backup phrase. CipherBox just needs to expose the configuration UI and set mfaLevel to "optional" or "mandatory" |
-| TOTP (Authenticator App) | Standard 2FA that users understand | Low        | Web3Auth factor configuration OR CipherBox-layer TOTP | Web3Auth natively supports TOTP as a backup factor. Recommend using Web3Auth's TOTP rather than building a separate TOTP system                                                   |
-| Recovery codes           | Backup for lost 2FA device         | Low        | Generate during MFA setup, store encrypted            | Standard: 8-12 single-use codes. These serve as emergency access. In Web3Auth context, these map to the "backup share"                                                            |
-| MFA settings page        | Users must be able to manage MFA   | Low        | UI component                                          | Show enabled factors, allow adding/removing                                                                                                                                       |
-
-### Differentiators
-
-| Feature                           | Value Proposition                                                          | Complexity | Notes                                                                                                                                    |
-| --------------------------------- | -------------------------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| WebAuthn/Passkey support          | Phishing-resistant, biometric-based 2FA                                    | Medium     | Web3Auth supports passkeys as an MFA factor. Modern, hardware-backed security. Passkeys are bound to origin, preventing phishing attacks |
-| CipherBox-layer session MFA       | Additional verification for sensitive operations (sharing, export, delete) | Medium     | Separate from Web3Auth MFA. Requires TOTP/WebAuthn before performing destructive operations. Defense-in-depth                            |
-| Mandatory MFA for shared folders  | Require MFA-enabled accounts to access shared content                      | Low        | Policy flag on share records. Tresorit offers this for enterprise                                                                        |
-| Recovery phrase (BIP-39 mnemonic) | Human-readable backup for key recovery                                     | Low        | Web3Auth supports this as backup factor. 12/24-word phrase that encodes a key share                                                      |
-
-### Anti-Features
-
-| Anti-Feature                               | Why Avoid                                                              | What to Do Instead                                                                                                                    |
-| ------------------------------------------ | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| SMS-based 2FA                              | SIM-swapping attacks, not phishing-resistant                           | WebAuthn/Passkey or TOTP only                                                                                                         |
-| Building custom MFA separate from Web3Auth | Duplicates auth complexity, does not protect the actual encryption key | Leverage Web3Auth's MFA SDK. CipherBox-layer MFA only for session protection                                                          |
-| MFA that blocks vault recovery             | User locks themselves out permanently                                  | Always provide recovery codes. Web3Auth's 2-of-3 threshold means losing one factor is survivable                                      |
-| Storing TOTP seeds on CipherBox server     | Server compromise reveals all TOTP secrets                             | Web3Auth manages TOTP seeds in their distributed infrastructure. If CipherBox-layer TOTP needed, encrypt seeds with user's public key |
-
-### Recommended Approach for CipherBox
-
-#### Layer 1: Web3Auth MFA (Key Protection)
-
-- Configure Web3Auth mfaLevel to "optional" (user chooses)
-- Expose MFA setup in CipherBox settings UI
-- Support: device share (automatic), TOTP, passkey, recovery phrase
-- This protects the encryption keypair itself
-
-#### Layer 2: CipherBox Session MFA (Operation Protection)
-
-- For sensitive operations: require re-authentication or TOTP verification
-- Operations: share creation, vault export, folder deletion, MFA settings change
-- Store TOTP seed encrypted with user's public key in CipherBox backend
-- WebAuthn credentials registered with CipherBox backend (standard WebAuthn RP)
-
-```text
-Web3Auth MFA protects: Key reconstruction (login)
-CipherBox MFA protects: Sensitive API operations (during session)
-
-Both layers work independently. User could have:
-- Web3Auth MFA enabled (key protected by threshold scheme)
-- CipherBox MFA enabled (sensitive operations require re-auth)
-- Either or both
-```
-
----
-
-## 4. File Versioning
-
-### How Versioning Works in Encrypted Storage
-
-File versioning in zero-knowledge systems follows a simple principle: **old encrypted versions are immutable artifacts that can be retained alongside new versions**. Since each file version has its own encryption key and CID, version history is fundamentally a list management problem.
-
-How competitors implement it:
-
-| Competitor  | Approach                                                                                                                                       | Retention                            | Storage Cost                 |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ | ---------------------------- |
-| ProtonDrive | Automatic version save on update/replace. Versions stored as separate encrypted blobs with their own keys. 200 versions, up to 10 years (paid) | 7 days (free), 10 years (paid)       | Versions count against quota |
-| Tresorit    | Unlimited versions per file. Each version is a separate encrypted blob                                                                         | 10 versions (free), unlimited (paid) | Counts against quota         |
-| Filen       | File history with restoration                                                                                                                  | Limited by plan                      | Counts against quota         |
-| MEGA        | Versioning available                                                                                                                           | Per plan                             | Counts against quota         |
-
-### Table Stakes
-
-| Feature                                   | Why Expected                                            | Complexity | Dependencies                                                                    | Notes                                                                              |
-| ----------------------------------------- | ------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Automatic version creation on file update | Users expect to recover from accidental overwrites      | Medium     | Metadata schema change to store version list per file                           | ProtonDrive does this automatically. No explicit user action required              |
-| Version history view                      | See list of previous versions with timestamps and sizes | Low        | UI component, version metadata in IPNS                                          | Right-click -> "Version history" pattern (ProtonDrive, Tresorit)                   |
-| Version download                          | Download a specific previous version                    | Low        | Existing file download flow, just with historical CID                           | Standard across all competitors                                                    |
-| Version restore                           | Replace current version with an older one               | Medium     | Creates new version entry pointing to old CID. Must update folder metadata IPNS | Standard across all competitors                                                    |
-| Version retention policy                  | Control how long versions are kept                      | Low        | Configurable: time-based (7/30/90 days) and count-based (max N versions)        | ProtonDrive: 7 days free, 10 years paid. CipherBox can start with a simpler policy |
-| Versions count toward storage quota       | Users understand storage implications                   | Low        | Sum version sizes in quota calculation                                          | Universal pattern. No competitor gives free version storage                        |
-
-### Differentiators
-
-| Feature                                | Value Proposition                                                                               | Complexity | Notes                                                                                                                                                                                                                  |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| IPFS-native version immutability       | Old CIDs are cryptographically immutable. Version integrity is guaranteed by content addressing | Zero       | CipherBox gets this for free from IPFS. Old versions cannot be tampered with as long as they remain pinned. This is stronger than traditional cloud where old versions could theoretically be modified by the provider |
-| Version diff (metadata only)           | Show what changed between versions (size, date)                                                 | Low        | Client-side comparison of version metadata                                                                                                                                                                             |
-| Branching versions from shared folders | When a shared folder has a conflict, versions capture both branches                             | High       | Requires conflict detection in shared folders                                                                                                                                                                          |
-
-### Anti-Features
-
-| Anti-Feature                   | Why Avoid                                                                                    | What to Do Instead                                                                                              |
-| ------------------------------ | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| Server-side version management | Server would need to understand file structure                                               | Client manages version list in IPNS metadata. Server just pins/unpins CIDs                                      |
-| Unlimited free versions        | Storage costs spiral. IPFS pinning is not free                                               | Enforce retention policy. Auto-cleanup expired versions                                                         |
-| Delta/diff storage             | Storing encrypted diffs is complex and cannot be deduplicated due to unique keys per version | Store full encrypted copies. IPFS pinning cost is per-CID, and full copies are simpler to implement and restore |
-| Version locking                | Preventing updates while viewing history                                                     | Optimistic concurrency. Versions are immutable; new writes create new versions                                  |
-
-### Implementation Architecture for CipherBox
-
-IPFS makes versioning architecturally elegant. Each file update already creates a new CID. The only change is **retaining old CIDs instead of unpinning them**.
-
-Metadata Schema Change:
-
-```json
-{
-  "type": "file",
-  "nameEncrypted": "0x...",
-  "nameIv": "0x...",
-  "cid": "QmCurrentVersion...",
-  "fileKeyEncrypted": "0x...",
-  "fileIv": "0x...",
-  "encryptionMode": "GCM",
-  "size": 2048576,
-  "created": 1705268100,
-  "modified": 1705368100,
-  "versions": [
-    {
-      "cid": "QmPreviousVersion2...",
-      "fileKeyEncrypted": "0x...",
-      "fileIv": "0x...",
-      "encryptionMode": "GCM",
-      "size": 1948576,
-      "modified": 1705268100
-    },
-    {
-      "cid": "QmPreviousVersion1...",
-      "fileKeyEncrypted": "0x...",
-      "fileIv": "0x...",
-      "encryptionMode": "GCM",
-      "size": 1848576,
-      "modified": 1705168100
-    }
-  ]
-}
-```
-
-#### Update Flow Change (Compared to Current v1.0)
-
-```text
-Current v1.0:
-1. Upload new encrypted file -> new CID
-2. Update metadata: replace old CID with new CID
-3. Unpin old CID (data lost)
-
-With Versioning:
-1. Upload new encrypted file -> new CID
-2. Move current {cid, fileKeyEncrypted, fileIv, size, modified} to versions array
-3. Update metadata: set new CID as current
-4. Do NOT unpin old CID (version retained)
-5. Publish updated IPNS
-6. Background: enforce retention policy (unpin versions exceeding limit/age)
-```
-
-Storage Impact: Each version is a full encrypted copy. A 10MB file with 5 versions = 50MB of pinned IPFS data. Retention policy is essential.
-
----
-
-## 5. Advanced Sync
-
-### How Sync/Conflict Resolution Works in Encrypted Storage
-
-CipherBox v1.0 uses IPNS polling (30s interval) with last-writer-wins (highest IPNS sequence number). This works for single-user multi-device but breaks down with:
-
-- Two devices editing the same folder simultaneously
-- Shared folders with multiple writers
-- Offline edits that need to sync later
-
-How competitors handle conflicts:
-
-| Competitor  | Approach                                                                                            | Notes                                                   |
-| ----------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| Dropbox     | Detects conflicts, creates "conflicted copy" with user name and timestamp                           | Simple, user resolves manually                          |
-| Tresorit    | Similar conflict copies. File locking for enterprise                                                | Prioritizes data preservation over automatic resolution |
-| Cryptomator | Defers to underlying cloud provider's conflict handling. Encrypted conflict copies can be confusing | Weakness of the overlay approach                        |
-| ProtonDrive | Detects conflicts in desktop client, creates conflict copies                                        | Standard approach                                       |
-| Syncthing   | Vector clocks for conflict detection, user resolution                                               | Open-source, more sophisticated                         |
-
-Key insight: No major encrypted storage product uses automatic conflict resolution (CRDTs, OT). They all create conflict copies and let users resolve. This is because:
-
-1. File-level operations are not mergeable (unlike text documents)
-2. Encrypted content cannot be merged server-side
-3. User judgment is needed to pick the "right" version
-
-### Table Stakes
-
-| Feature                  | Why Expected                                                      | Complexity | Dependencies                                                                                                                  | Notes                                                                                    |
-| ------------------------ | ----------------------------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Conflict detection       | Must know when two devices edited simultaneously                  | Medium     | Compare IPNS sequence numbers and timestamps. If local has unpublished changes and remote has newer sequence, conflict exists | Current v1.0 has NO conflict detection. Remote silently overwrites local state           |
-| Conflict copies          | Preserve both versions when conflict detected                     | Medium     | Create "filename (conflict from Device on Date).ext"                                                                          | Universal pattern. Better to over-preserve than lose data                                |
-| Conflict notification    | Alert user to resolve conflict                                    | Low        | UI notification component                                                                                                     | All competitors show conflict indicators                                                 |
-| Selective sync (desktop) | Choose which folders sync to local disk                           | Medium     | FUSE mount configuration, folder-level sync settings                                                                          | Dropbox, Tresorit, ProtonDrive all offer this. Essential for large vaults on limited SSD |
-| Sync status indicators   | Show sync state per file/folder (synced, syncing, pending, error) | Low        | UI state management                                                                                                           | Standard in all desktop sync clients                                                     |
-| Offline edit queue       | Queue changes made while offline, sync when reconnected           | High       | Local change log, reconciliation on reconnect                                                                                 | CipherBox desktop CLIENT_SPECIFICATION mentions this as "outstanding question"           |
-
-### Differentiators
-
-| Feature                                | Value Proposition                                                                           | Complexity | Notes                                                                                           |
-| -------------------------------------- | ------------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------- |
-| IPNS sequence-based conflict detection | IPNS records have built-in sequence numbers providing natural ordering                      | Low        | CipherBox gets causal ordering for free from IPNS. Sequence number gaps indicate missed updates |
-| Per-folder sync granularity            | Since each folder has its own IPNS, selective sync is naturally folder-granular             | Low        | Stop polling specific IPNS names = stop syncing those folders. Architecturally elegant          |
-| Decentralized conflict resolution      | In shared folders, conflicts can be detected by any participant by comparing IPNS sequences | Medium     | Unique to IPFS/IPNS architecture. No central server needed to detect conflicts                  |
-| On-demand file hydration               | FUSE mount shows all files but only downloads when accessed                                 | High       | File stubs in FUSE that trigger IPFS fetch on read. Tresorit Drive 2.0 does this                |
-| Bandwidth-aware sync                   | Prioritize sync by file importance, defer large files on slow connections                   | Medium     | Sync priority metadata per folder                                                               |
-
-### Anti-Features
-
-| Anti-Feature                                   | Why Avoid                                                                                               | What to Do Instead                                                     |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Automatic merge of conflicting folder metadata | Silent data loss if merge logic is wrong. Encrypted metadata cannot be inspected by server              | Create conflict copies. Let user resolve                               |
-| CRDTs for file operations                      | Massive over-engineering for file-level operations. CRDTs make sense for text documents, not file trees | Simple conflict copy pattern. Last-writer-wins with conflict detection |
-| Server-side conflict resolution                | Server cannot see decrypted content or metadata                                                         | All conflict detection and resolution must be client-side              |
-| Invisible background sync without status       | Users panic when they cannot see sync state                                                             | Always show sync status. Transparent progress indicators               |
-| Full vault download for offline                | Storage and bandwidth prohibitive for large vaults                                                      | Selective sync. Only sync explicitly chosen folders offline            |
-
-### Recommended Conflict Resolution for CipherBox
-
-#### Single-User Multi-Device (No Sharing)
-
-```text
-Device A and Device B both have folder at IPNS sequence 5.
-
-Device A edits: publishes sequence 6
-Device B edits offline, has local changes based on sequence 5
-
-Device B comes online, polls IPNS:
-1. Sees sequence 6 from Device A
-2. Has local unpublished changes based on sequence 5
-3. CONFLICT DETECTED
-
-Resolution:
-1. Fetch remote metadata (sequence 6), decrypt
-2. Compare with local pending changes
-3. For file additions: merge (both additions are valid)
-4. For file modifications to same file: create conflict copy
-5. For contradictory operations (A deleted file that B modified):
-   preserve B's modification as conflict copy
-6. Publish merged result as sequence 7
-```
-
-#### Multi-Writer Shared Folders
-
-This is significantly harder. Two users modifying the same shared folder creates race conditions that IPNS sequence numbers alone cannot fully resolve.
-
-Recommended approach: Do NOT implement multi-writer shared folders in the initial sharing phase. Start with:
-
-- Read-only sharing (recipient can view/download but not modify)
-- Single-writer sharing (only owner can modify shared folder)
-- Defer read-write sharing to a later phase with proper conflict handling
+## Feature Landscape
+
+### Table Stakes (Users Expect These)
+
+Features that any IPFS-native encrypted storage app must have to be credible. Missing these makes the product feel like a prototype relying on centralized crutches.
+
+| Feature                                                | Why Expected                                                                                                                           | Complexity | Notes                                                                                                                                                 |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reliable IPNS resolution (<2s, >99.5% availability)    | Core functionality -- users cannot access their vault if IPNS fails. Current delegated-ipfs.dev has documented 502s and stale records. | MEDIUM     | Self-hosted Someguy is the clear path. Kubo already runs; Someguy adds HTTP delegated routing on top. DB-cached CID remains as fallback, not primary. |
+| DB-cached CID fallback with sequence number comparison | Already built. When network returns stale data, DB is authoritative.                                                                   | DONE       | Implemented in PR after staging IPNS stale resolution issue (2026-02-25). Sequence number comparison picks freshest source.                           |
+| IPNS publish latency monitoring                        | Users need to know if publishes propagated. Operations team needs to detect degradation before users notice.                           | LOW        | Prometheus histograms for publish/resolve latency already partially exist (`cipherbox_ipns_publishes_total` counter). Need duration histograms.       |
+| API endpoint response time baselines                   | Standard operational practice. Without baselines, you cannot detect regressions or set SLOs.                                           | LOW        | HTTP request duration histogram exists. Need to define p50/p95/p99 baseline values and alert thresholds.                                              |
+| Graceful degradation when IPFS/IPNS is slow            | Network is inherently variable (DHT lookups 0.3-0.4s median, but p95 can be 10s+). App must not hang.                                  | MEDIUM     | Timeout + fallback pattern. Already partially implemented with DB cache fallback and 10s request timeout in DelegatedRoutingClient.                   |
+
+### Differentiators (Competitive Advantage)
+
+Features that set CipherBox apart from typical IPFS-backed apps. These demonstrate true IPFS-native architecture rather than "IPFS as dumb blob store."
+
+| Feature                                       | Value Proposition                                                                                                                                                                           | Complexity | Notes                                                                                                                                                                                                                                                                 |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Move rootFolderKey to IPFS vault record       | Server stores zero crypto material. True zero-knowledge relay -- the database becomes auth-mapping-only. No other encrypted storage app achieves this level of server-side key elimination. | HIGH       | Breaking change to vault bootstrap flow. Login now requires IPNS resolution before vault access. IPNS reliability is a hard prerequisite. Migration strategy needed per METADATA_EVOLUTION_PROTOCOL.                                                                  |
+| BYO-IPFS node support                         | Users can pin encrypted data to their own IPFS node. Self-sovereignty over data persistence -- not relying on CipherBox's infrastructure for pinning. Unique among encrypted storage apps.  | HIGH       | Standard IPFS Pinning Service API exists (OpenAPI spec). Provider abstraction (`IpfsProvider` interface) already supports this. Two modes: server-relay (easier, quota tracking works) vs client-direct (true decentralization, CORS/connectivity issues).            |
+| Migrate share discovery to IPFS/IPNS          | Sharing graph moves off server. Server no longer knows who shared with whom. Stronger privacy than any competitor (Tresorit, Proton Drive servers all know the sharing graph).              | VERY HIGH  | Requires solving IPNS multi-writer conflicts (CRDT approach). Currently deferred to research-only for v1.1. The `shares` table has complex state: revocation, key rotation, hidden flags. Moving this to IPFS is architecturally desirable but practically premature. |
+| Migrate device registry to IPFS/IPNS          | Device approval workflow moves off server. Server no longer knows which devices a user has.                                                                                                 | HIGH       | Device registry is already an IPNS record (`DeviceRegistry` schema, Section 11 of METADATA_SCHEMAS.md). The DB tracks device approval state -- moving approval to client-side IPNS would require solving the approval handshake without server coordination.          |
+| End-to-end user journey performance baselines | Measure real user flows (login-to-first-file, upload-to-visible, share-to-accessible) not just API endpoints. Enables data-driven optimization.                                             | MEDIUM     | Requires client-side timing instrumentation (Performance API / custom Prometheus pushgateway or structured logging). No standard IPFS tooling for this -- must be custom.                                                                                             |
+| IPFS/IPNS latency histograms in Prometheus    | Granular per-operation latency (publish, resolve, pin, cat) with p50/p95/p99 breakdowns. Goes beyond counters to expose distribution.                                                       | LOW        | Extend existing MetricsService with Histogram metrics for each IPFS/IPNS operation. Kubo itself exposes Prometheus metrics at `/debug/metrics/prometheus` -- scrape those too.                                                                                        |
+
+### Anti-Features (Commonly Requested, Often Problematic)
+
+| Feature                                       | Why Requested                                                                               | Why Problematic                                                                                                                                                                                                                                                                                                                                                                                         | Alternative                                                                                                                                                                                                  |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Full database elimination (zero DB)           | Philosophical purity -- "everything on IPFS." Sounds clean.                                 | Auth-method-to-userId mapping requires indexed, queryable storage. IPFS is content-addressed immutable blobs -- not a database. Refresh tokens need server-side revocation. Session management needs server state. Forcing these into IPFS adds complexity without improving privacy (auth data is inherently server-known).                                                                            | Keep auth tables (users, auth_methods, refresh_tokens) in PostgreSQL. Migrate everything else to IPFS/IPNS. The remaining DB is ~3 tables with no crypto material.                                           |
+| IPNS PubSub as primary resolution             | Faster than DHT after subscription (instant updates vs seconds). Sounds like the speed fix. | Only works when both publisher and resolver are connected to common PubSub peers. Not persistent -- if resolver was offline during publish, it misses the update and falls back to DHT. Adds connection overhead (6 connections per subscription by default). CipherBox has potentially thousands of IPNS names per user (folders + files). PubSub subscription per name is not feasible at that scale. | Use DHT via self-hosted Someguy as primary. PubSub is useful for real-time collab (future) but not for general IPNS resolution at CipherBox's scale.                                                         |
+| CRDT-based IPNS for all metadata (v1.1 scope) | Solves multi-writer conflicts once as a horizontal concern. Theoretically clean.            | CRDTs require all writers to have the IPNS private key. For folder metadata, only the owner (and write-sharing recipients) should publish. CRDTs add state size growth (monotonic), compaction complexity, and merge semantics that must be correct across TypeScript and Rust implementations. Premature optimization for a problem that optimistic concurrency already solves.                        | Keep optimistic concurrency (sequence number checks) for v1.1. Research CRDTs for share inbox only (the one true multi-writer case). Implement in v1.2+ if research validates.                               |
+| Client-direct IPFS upload as default          | True decentralization -- client talks directly to IPFS without server relay.                | Breaks quota tracking (server cannot meter what it does not relay). Breaks conflict detection (server cannot check sequence numbers on bypassed publishes). CORS issues with Kubo API. User's IPFS node may be behind NAT/firewall. Client needs to handle Kubo API directly -- fragile and version-dependent.                                                                                          | Server-relay as default. BYO-IPFS uses server-relay to user's configured node (server proxies to user's endpoint). Client-direct is an opt-in advanced mode with explicit "quota tracking disabled" warning. |
+| DNSLink as IPNS alternative                   | Human-readable names, fast resolution, well-supported.                                      | Requires DNS infrastructure management per user. TXT record propagation is slow (minutes to hours). Not self-sovereign -- depends on DNS provider. Does not support the per-folder/per-file IPNS keypair model (would need a DNS record per folder). Not feasible at CipherBox's scale of IPNS names.                                                                                                   | Keep IPNS for all mutable pointers. DNSLink is useful for public web content, not for per-user encrypted vaults with thousands of mutable pointers.                                                          |
 
 ---
 
 ## Feature Dependencies
 
 ```text
-Milestone 2 Dependencies:
+[Self-hosted IPNS resolution (Someguy)]
+    |
+    |-- required by --> [Move rootFolderKey to IPFS]
+    |                       |
+    |                       |-- required by --> [Eliminate vault crypto from DB]
+    |
+    |-- required by --> [IPNS latency baselines]
+    |
+    |-- enhances --> [BYO-IPFS node support]
 
-Sharing (Phase A -- highest priority)
-|-- User-to-user sharing (read-only)
-|   |-- Requires: Recipient public key discovery API
-|   |-- Requires: Share record storage (new DB table)
-|   |-- Requires: Client-side key re-wrapping
-|   +-- Requires: "Shared with me" UI
-|-- Link sharing
-|   |-- Requires: User-to-user sharing infrastructure
-|   |-- Requires: Web viewer for non-authenticated access
-|   |-- Requires: Link token management
-|   +-- Password protection (extends link sharing)
-|-- Share revocation
-|   |-- Requires: Key rotation for shared folders
-|   +-- Requires: Re-wrapping for remaining recipients
+[Performance baselines (API + IPFS histograms)]
+    |
+    |-- independent (can proceed in parallel)
 
-MFA (Phase B -- should accompany sharing)
-|-- Web3Auth MFA configuration UI
-|   |-- Requires: Web3Auth SDK mfaSettings integration
-|   +-- Requires: Recovery phrase backup flow
-|-- CipherBox session MFA (optional enhancement)
-|   |-- Requires: TOTP verification endpoint
-|   +-- Requires: WebAuthn registration/verification
+[BYO-IPFS node support]
+    |
+    |-- requires --> [IPFS Pinning Service API integration]
+    |-- requires --> [Provider abstraction extension]
+    |-- conflicts with --> [Server-side quota tracking]
+    |                       (quota becomes advisory in BYO mode)
 
-File Versioning (Phase C -- independent, can parallel)
-|-- Version retention in metadata
-|   |-- Requires: Metadata schema migration (add versions array)
-|   |-- Requires: Changed unpin logic (skip versioned CIDs)
-|   +-- Requires: Retention policy enforcement
-|-- Version history UI
-|   +-- Requires: Version metadata in IPNS records
+[Move rootFolderKey to IPFS]
+    |
+    |-- requires --> [Reliable IPNS resolution] (HARD prerequisite)
+    |-- requires --> [Metadata schema version bump]
+    |-- requires --> [Recovery tool update]
 
-Search (Phase D -- independent, can parallel)
-|-- HMAC-hashed name search
-|   |-- Requires: Search token generation on upload/rename
-|   |-- Requires: Server-side hash matching endpoint
-|   +-- Requires: Search UI component
-|-- Encrypted content index (optional, later)
-|   |-- Requires: HMAC search working first
-|   +-- Requires: IPFS-stored encrypted index blob
+[Migrate folder/file IPNS tracking off DB]
+    |
+    |-- requires --> [Reliable IPNS resolution]
+    |-- enhances --> [Move rootFolderKey to IPFS]
 
-Advanced Sync (Phase E -- depends on sharing for multi-writer)
-|-- Conflict detection
-|   |-- Requires: Local change tracking
-|   +-- Requires: IPNS sequence comparison logic
-|-- Selective sync
-|   |-- Requires: Per-folder sync configuration
-|   +-- Requires: FUSE mount selective filtering
-|-- Offline queue
-|   |-- Requires: Local operation log
-|   +-- Requires: Reconciliation on reconnect
+[Migrate shares to IPFS/IPNS]
+    |
+    |-- requires --> [CRDT research validated] (NOT in v1.1 scope)
+    |-- conflicts with --> [v1.1 timeline]
 ```
 
----
+### Dependency Notes
 
-## Phase Ordering Recommendation
-
-Based on dependency analysis, user expectations, and complexity:
-
-### Phase 1: Sharing (User-to-User) + MFA
-
-Rationale: Sharing is the largest feature gap. MFA should ship alongside sharing because sharing exposes data to others -- security must accompany access expansion.
-
-Includes:
-
-- User-to-user read-only folder sharing
-- Share invitation and acceptance flow
-- Share revocation (key rotation)
-- Web3Auth MFA configuration
-- Recovery codes/phrase
-
-### Phase 2: File Versioning + Link Sharing
-
-Rationale: Versioning is architecturally simple (metadata change + skip unpin) and high value. Link sharing extends Phase 1's sharing infrastructure.
-
-Includes:
-
-- Automatic version creation on file update
-- Version history view and restore
-- Retention policy
-- Link-based sharing (no account required)
-- Password-protected links
-
-### Phase 3: Search + Advanced Sync
-
-Rationale: Search and sync improvements are polish features that matter more as vault size and user count grow. Conflict resolution matters most when sharing enables multi-writer scenarios.
-
-Includes:
-
-- HMAC-hashed name search
-- Conflict detection and conflict copies
-- Selective sync for desktop
-- Sync status indicators
-
-### Phase 4: Advanced Features (optional)
-
-- Full-text content search (encrypted index)
-- Read-write shared folders with conflict handling
-- On-demand file hydration for FUSE
-- CipherBox-layer session MFA
+- **Self-hosted IPNS is the gating dependency.** Everything else either requires it or benefits from it. Without reliable IPNS, moving rootFolderKey to IPFS puts the vault bootstrap path at risk -- login would fail when IPNS is slow.
+- **Performance baselines are independent.** They can proceed in parallel with any other feature. They are instrumenting existing behavior, not changing it.
+- **BYO-IPFS and rootFolderKey migration are independent of each other** but both benefit from reliable IPNS. They can be phased in any order.
+- **Share migration to IPFS conflicts with v1.1 timeline.** The CRDT approach is research-only this milestone. The `shares` table stays in PostgreSQL.
+- **Folder/file IPNS tracking migration** depends on reliable IPNS but is lower risk than rootFolderKey migration because the DB already serves as a cache, and the migration makes the cache optional rather than eliminating a critical path.
 
 ---
 
-## Complexity Summary
+## Feature Deep Dives
 
-| Feature Area                | Estimated Complexity | Key Risk                                                     |
-| --------------------------- | -------------------- | ------------------------------------------------------------ |
-| User-to-user sharing (read) | High                 | Key re-wrapping correctness, revocation key rotation         |
-| Link sharing                | High                 | Web viewer for unauthenticated access, URL fragment security |
-| MFA (Web3Auth)              | Low                  | SDK configuration, mostly UI work                            |
-| MFA (CipherBox-layer)       | Medium               | Additional TOTP/WebAuthn infrastructure                      |
-| File versioning             | Medium               | Metadata migration, retention policy enforcement             |
-| Name search (HMAC)          | Medium               | Token generation strategy, search quality tuning             |
-| Content search              | Very High            | Index size management, cross-device sync of index            |
-| Conflict detection          | Medium               | Edge cases with offline edits, IPNS sequence gaps            |
-| Selective sync              | Medium               | FUSE mount integration, folder-level toggle                  |
-| Read-write sharing          | Very High            | Multi-writer IPNS coordination, conflict explosion           |
+### 1. Self-Hosted IPNS Resolution
+
+**Current state:** `DelegatedRoutingClient` points at `https://delegated-ipfs.dev/routing/v1`. This is a public good endpoint maintained by the IPFS Foundation, backed by Someguy. It proxies to the Amino DHT and IPNI (cid.contact indexer). Known issues: 502 errors, rate limiting (429), stale records due to caching.
+
+**Recommendation: Self-host Someguy alongside Kubo.**
+
+Someguy is the same software powering `delegated-ipfs.dev`. Self-hosting it gives:
+
+- Full control over caching, rate limits, and availability
+- Same DHT and IPNI backends, but without shared public infrastructure load
+- Docker deployment: `ghcr.io/ipfs/someguy:latest`
+- Minimum resources: runs alongside existing Kubo node, shares its DHT participation
+- Configuration via environment variables (endpoints, caching, DHT toggles)
+
+**Architecture:**
+
+```text
+Client -> CipherBox API -> Self-hosted Someguy -> Amino DHT / IPNI
+                        -> DB cache (fallback, sequence-number-aware)
+```
+
+**Fallback chain:**
+
+1. Self-hosted Someguy (primary)
+2. DB-cached CID (always fresh for own publishes)
+3. delegated-ipfs.dev (emergency fallback, best-effort)
+
+**Performance expectations (from ProbeLab Week 07, 2026):**
+
+- DHT lookup: 0.3-0.4s median across regions
+- Self-hosted avoids public endpoint queuing -- expect lower variance
+- Kubo 0.34+ default IPNS TTL: 5 minutes (down from 1 hour) -- faster propagation
+
+**Complexity:** MEDIUM
+
+- Docker Compose addition for Someguy
+- Update `DELEGATED_ROUTING_URL` env var
+- Update `DelegatedRoutingClient` for fallback chain
+- Scrape Someguy's Prometheus metrics
+
+**Confidence:** HIGH -- Someguy is the reference implementation for Routing V1. Self-hosting is explicitly documented.
+
+### 2. Move rootFolderKey to IPFS Vault Record
+
+**Current state:** `vaults` table stores `encryptedRootFolderKey` (ECIES-wrapped with user's publicKey) and `encryptedRootIpnsPrivateKey`. The IPNS private key is deterministically derivable via HKDF, so only `encryptedRootFolderKey` truly needs storage.
+
+**Recommendation: Embed ECIES-wrapped rootFolderKey in the IPFS blob pointed to by the root vault IPNS record.**
+
+**New bootstrap flow:**
+
+1. Login with Web3Auth, derive secp256k1 keypair
+2. Derive root IPNS private key via HKDF (deterministic, no storage needed)
+3. Resolve root IPNS name to get CID
+4. Fetch IPFS blob at CID
+5. Blob contains: `{ encryptedRootFolderKey: <ECIES>, metadata: <AES-GCM encrypted FolderMetadata> }`
+6. Unwrap rootFolderKey with privateKey
+7. Decrypt FolderMetadata with rootFolderKey
+
+**Migration strategy:**
+
+- New blob format versioned (per METADATA_EVOLUTION_PROTOCOL)
+- Dual-read period: client checks IPFS blob first, falls back to DB vault record
+- Lazy migration: on next folder metadata publish, client writes new-format blob
+- After migration period, `vaults.encrypted_root_folder_key` column becomes nullable/deprecated
+- Recovery tool updated for new blob format
+
+**What stays in DB:** `vaults` table retains `owner_id`, `root_ipns_name`, and timestamps. The `owner_public_key` column stays (needed for share ECIES wrapping lookups). Crypto material columns become nullable.
+
+**Risk:** IPNS resolution failure during login is a hard blocker. Mitigated by:
+
+- DB-cached CID fallback (server stores latest CID in `folder_ipns` table)
+- Self-hosted Someguy improving baseline reliability
+- Client retries with exponential backoff
+
+**Complexity:** HIGH
+
+- New IPFS blob envelope format
+- Metadata schema version bump
+- Migration path (dual-read, lazy migration)
+- Recovery tool update
+- Desktop app (Rust) must parse new format
+- E2E test updates for new login flow
+
+**Confidence:** MEDIUM -- The approach is sound, but the migration path has edge cases (what if user never logs in during dual-read period? stale recovery tools?).
+
+### 3. BYO-IPFS Node Support
+
+**Current state:** `IpfsProvider` interface (`pinFile`, `unpinFile`, `getFile`) with single `LocalProvider` implementation pointing at the server's Kubo instance via env var `IPFS_LOCAL_API_URL`.
+
+**Recommendation: Add a `RemotePinningProvider` implementing `IpfsProvider` against the IPFS Pinning Service API standard, configured per-user.**
+
+**The IPFS Pinning Service API** is a vendor-agnostic OpenAPI spec. Endpoints:
+
+- `POST /pins` -- Pin by CID (with origins hint for faster retrieval)
+- `GET /pins` -- List pins with filtering
+- `GET /pins/{requestid}` -- Status of specific pin
+- `DELETE /pins/{requestid}` -- Unpin
+- Auth: Bearer token per service
+
+**Supported services:** Filebase, Pinata (partial -- no IPNS), web3.storage, IPFS Cluster, any self-hosted Kubo with pinning API enabled.
+
+**Architecture (server-relay mode -- recommended default):**
+
+```text
+Client -> CipherBox API -> Provider Router -> LocalProvider (default)
+                                           -> RemotePinningProvider (user's node)
+```
+
+**Per-user configuration model:**
+
+- New `user_ipfs_config` table or extend vault settings:
+  - `pinning_endpoint_url` (e.g., `https://api.filebase.io/v1`)
+  - `pinning_auth_token` (encrypted at rest with server key -- or ECIES-wrapped with user's publicKey for zero-knowledge)
+  - `provider_type` enum: `default` | `pinning-api` | `kubo-direct`
+- Settings UI: endpoint URL, auth token, "test connection" button
+
+**Key design decisions:**
+
+1. **Server-relay vs client-direct:** Server-relay because:
+   - Quota tracking works (server meters bytes relayed)
+   - Conflict detection works (server sees all publishes)
+   - No CORS issues
+   - User's auth token stored server-side (encrypted)
+   - Tradeoff: server sees encrypted blobs transit (acceptable -- data is already encrypted client-side)
+
+2. **Dual-pin strategy:** Pin to BOTH default node AND user's node. User's node is "additional persistence," not replacement. Ensures CipherBox can still serve the data if user's node goes down.
+
+3. **IPNS implications:** IPNS publishing still goes through self-hosted Someguy/DHT, not user's node. IPNS is a naming layer, independent of pinning. User's node provides content persistence, not name resolution.
+
+4. **Quota tracking:** When BYO-IPFS is configured, server-side quota is advisory ("you have X bytes on our node"). User's node quota is user's problem.
+
+**Complexity:** HIGH
+
+- New provider implementation against Pinning Service API
+- Per-user configuration storage
+- Provider routing logic (which user gets which provider)
+- Settings UI
+- "Test connection" flow
+- Error handling for unreachable user nodes
+- Dual-pin logic
+
+**Confidence:** MEDIUM -- The Pinning Service API is well-specified, but per-user provider routing in a NestJS DI context needs careful design. Zero-knowledge storage of auth tokens (ECIES-wrapped) adds crypto complexity.
+
+### 4. Database Minimization (Beyond rootFolderKey)
+
+**Current DB tables and migration analysis:**
+
+| Table                     | Rows Per User     | Contains Crypto?                                              | Can Move to IPFS?                                          | Recommendation                                |
+| ------------------------- | ----------------- | ------------------------------------------------------------- | ---------------------------------------------------------- | --------------------------------------------- |
+| `users`                   | 1                 | No                                                            | No -- auth identity                                        | KEEP                                          |
+| `auth_methods`            | 1-5               | No                                                            | No -- auth lookup                                          | KEEP                                          |
+| `refresh_tokens`          | 1-10              | No                                                            | No -- session management                                   | KEEP                                          |
+| `vaults`                  | 1                 | Yes (`encryptedRootFolderKey`, `encryptedRootIpnsPrivateKey`) | Partially -- crypto to IPFS, metadata stays                | MIGRATE crypto columns                        |
+| `folder_ipns`             | N (folders+files) | Yes (`encryptedIpnsPrivateKey`)                               | Partially -- CID cache useful, TEE keys needed server-side | KEEP as cache, make optional                  |
+| `pinned_cids`             | N (files)         | No                                                            | Could derive from IPFS pin list                            | DEFER -- `ipfs pin ls` is slow for large sets |
+| `shares`                  | N (shares)        | Yes (`encryptedKey`)                                          | Theoretically via CRDT inbox                               | KEEP for v1.1, research CRDT for v1.2         |
+| `share_keys`              | N (per-share)     | Yes (`encryptedKey`)                                          | Same as shares                                             | KEEP for v1.1                                 |
+| `share_invites`           | N (pending)       | Yes                                                           | Same as shares                                             | KEEP for v1.1                                 |
+| `ipns_republish_schedule` | N (folders)       | No                                                            | No -- TEE coordination needs server-side scheduling        | KEEP                                          |
+
+**What realistically moves to IPFS in v1.1:**
+
+1. `vaults.encryptedRootFolderKey` and `vaults.encryptedRootIpnsPrivateKey` -> IPFS blob
+2. `folder_ipns.latestCid` becomes advisory cache, not authoritative source
+3. `folder_ipns.encryptedIpnsPrivateKey` stays -- TEE needs server-accessible copy
+
+**What stays in DB and why:**
+
+- Auth tables: Indexed lookups required for login flow
+- Shares: Complex query patterns (list by recipient, filter by status, revocation state)
+- Pinned CIDs: Quota tracking requires fast aggregation queries
+- Republish schedule: TEE coordination requires server-side cron state
+- Folder IPNS: Sequence numbers needed for conflict detection; CID cache needed for IPNS fallback
+
+**Realistic v1.1 DB state after migration:**
+
+- Auth-only: `users`, `auth_methods`, `refresh_tokens` (3 tables, no crypto)
+- Vault metadata: `vaults` with crypto columns nullable (1 table, crypto migrated)
+- IPFS operations: `folder_ipns`, `pinned_cids`, `ipns_republish_schedule` (3 tables, operational cache)
+- Sharing: `shares`, `share_keys`, `share_invites` (3 tables, unchanged)
+
+**Reality check:** The goal of "reduce database to auth-only" is aspirational for v1.1. Realistically, v1.1 can eliminate crypto from `vaults` and make `folder_ipns` an advisory cache. Full share migration requires CRDT research. Full `pinned_cids` elimination requires alternative quota tracking.
+
+**Complexity:** Per-table varies (see table above). Overall: HIGH for rootFolderKey migration, LOW for making `folder_ipns` advisory, VERY HIGH for share migration (deferred).
+
+**Confidence:** MEDIUM -- rootFolderKey migration is well-understood. The gap between "auth-only DB" and "realistic v1.1" is significant.
+
+### 5. Performance Baselines
+
+**Current monitoring state:**
+
+- Prometheus metrics: counters for uploads, downloads, publishes, resolves, logins
+- HTTP request duration histogram (method, route, status_code)
+- Grafana Cloud dashboard with overview, file ops, IPNS ops, TEE, auth, HTTP performance panels
+- Better Stack uptime monitoring for health endpoint
+- Kubo exposes Prometheus at `/debug/metrics/prometheus` (not currently scraped)
+
+**What's missing for comprehensive baselines:**
+
+| Metric Category                   | Current State      | Needed                                                                            | Priority |
+| --------------------------------- | ------------------ | --------------------------------------------------------------------------------- | -------- |
+| API endpoint latency              | Histogram exists   | Define p50/p95/p99 baselines per route                                            | P1       |
+| IPFS pin latency                  | Counter only       | Histogram: time from upload request to CID returned                               | P1       |
+| IPFS cat latency                  | Not measured       | Histogram: time from cat request to bytes returned                                | P1       |
+| IPNS publish latency              | Counter only       | Histogram: time from publish request to DHT confirmation                          | P1       |
+| IPNS resolve latency              | Counter only       | Histogram: time to resolve, labeled by source (network/db_cache/fallback)         | P1       |
+| TEE republish duration            | Counter only       | Histogram: time per republish batch                                               | P2       |
+| Client-side encryption throughput | Not measured       | Client-side Performance API timing (optional pushgateway)                         | P2       |
+| End-to-end user journey timing    | Not measured       | Structured client logging: login-to-vault, upload-to-visible, share-to-accessible | P2       |
+| Kubo node health                  | Not scraped        | Scrape Kubo Prometheus endpoint: peer count, bandwidth, datastore size            | P2       |
+| Someguy routing latency           | N/A (not deployed) | Scrape Someguy metrics once deployed                                              | P2       |
+
+**Recommended approach:**
+
+1. Add Histogram metrics to existing MetricsService for all IPFS/IPNS operations
+2. Instrument DelegatedRoutingClient with timing around publish/resolve calls
+3. Instrument LocalProvider (and future RemotePinningProvider) with timing around pin/unpin/cat
+4. Scrape Kubo's built-in Prometheus endpoint via Grafana Alloy
+5. Run a baseline capture period (1-2 weeks on staging with synthetic load) to establish p50/p95/p99 values
+6. Set alerting thresholds at 2x baseline p95
+7. Client-side timing as stretch goal -- requires either structured logs shipped to Loki or a Prometheus pushgateway
+
+**IPFS network baselines (from ProbeLab, Feb 2026):**
+
+- DHT lookup: 0.3-0.4s median, regional variation (Europe faster than APAC)
+- Kubo provide duration: <1s with Optimistic Provide (v0.39+), was 13s+ before
+- IPNI ingestion: >5 minutes delay ~15% of the time
+- Gateway TTFB (cached): ~0.75-1s improvement with Service Workers
+
+**Complexity:** LOW for server-side histograms (extend existing MetricsService), MEDIUM for Kubo scraping and Grafana dashboard updates, HIGH for client-side instrumentation
+
+**Confidence:** HIGH -- Prometheus histograms are well-understood. ProbeLab provides reference methodology.
+
+---
+
+## MVP Definition
+
+### Launch With (v1.1)
+
+- [ ] Self-hosted IPNS resolution via Someguy -- eliminates delegated-ipfs.dev dependency, gating prerequisite for all other features
+- [ ] Move rootFolderKey to IPFS vault record -- eliminates server-side crypto material, largest zero-knowledge improvement
+- [ ] IPFS/IPNS latency histograms -- extends existing Prometheus metrics with duration measurements
+- [ ] API endpoint p50/p95/p99 baselines -- define SLO targets from measured staging data
+- [ ] Kubo Prometheus scraping -- visibility into IPFS node health
+
+### Add After Core (v1.1.x)
+
+- [ ] BYO-IPFS node support -- requires provider abstraction, per-user config, Settings UI. Independent of other features but significant scope.
+- [ ] End-to-end user journey timing -- requires client-side instrumentation, lower urgency than server-side baselines
+- [ ] Make `folder_ipns` CID cache advisory (not authoritative) -- shifts primary source to IPNS resolution, requires confidence in self-hosted Someguy reliability
+
+### Future Consideration (v1.2+)
+
+- [ ] CRDT-based share discovery via IPNS inbox -- research-only in v1.1, implement if validated
+- [ ] Migrate device registry fully off DB -- requires solving approval handshake without server coordination
+- [ ] Eliminate `pinned_cids` table -- requires alternative quota tracking (e.g., IPFS MFS size, client-reported)
+- [ ] Client-direct IPFS upload mode -- advanced option for power users
+
+---
+
+## Feature Prioritization Matrix
+
+| Feature                      | User Value           | Implementation Cost | Risk                                 | Priority |
+| ---------------------------- | -------------------- | ------------------- | ------------------------------------ | -------- |
+| Self-hosted IPNS (Someguy)   | HIGH                 | MEDIUM              | LOW (reference impl, Docker)         | P1       |
+| IPFS/IPNS latency histograms | MEDIUM               | LOW                 | LOW (extend existing metrics)        | P1       |
+| API response time baselines  | MEDIUM               | LOW                 | LOW (measure existing)               | P1       |
+| Kubo Prometheus scraping     | MEDIUM               | LOW                 | LOW (standard config)                | P1       |
+| Move rootFolderKey to IPFS   | HIGH                 | HIGH                | MEDIUM (migration edge cases)        | P1       |
+| Make folder_ipns advisory    | MEDIUM               | MEDIUM              | MEDIUM (depends on IPNS reliability) | P2       |
+| BYO-IPFS node support        | HIGH (privacy users) | HIGH                | MEDIUM (new provider, UI)            | P2       |
+| End-to-end journey baselines | MEDIUM               | MEDIUM              | LOW                                  | P2       |
+| CRDT share inbox (research)  | LOW (research only)  | LOW (research)      | HIGH (may not pan out)               | P3       |
+| Device registry off DB       | LOW                  | HIGH                | HIGH (approval handshake)            | P3       |
+
+**Priority key:**
+
+- P1: Must have for v1.1 launch
+- P2: Should have, add when P1s are stable
+- P3: Nice to have / research only, defer to v1.2
+
+---
+
+## Competitor Feature Analysis
+
+| Capability                  | Proton Drive        | Tresorit              | CryptPad            | CipherBox v1.1 Plan                         |
+| --------------------------- | ------------------- | --------------------- | ------------------- | ------------------------------------------- |
+| IPFS-native storage         | No (proprietary)    | No (proprietary)      | No (own server)     | Yes -- IPFS for all data                    |
+| Self-sovereign key recovery | No (Proton account) | No (Tresorit account) | Partial (IPFS seed) | Yes -- deterministic HKDF from secp256k1    |
+| Server-side crypto material | Yes (encrypted)     | Yes (encrypted)       | Yes (encrypted)     | v1.1: No (rootFolderKey moves to IPFS)      |
+| BYO storage backend         | No                  | No                    | Limited (self-host) | v1.1: Yes (IPFS Pinning Service API)        |
+| Server knows sharing graph  | Yes                 | Yes                   | Yes                 | v1.1: Yes (v1.2: research CRDT alternative) |
+| Performance observability   | Internal            | Internal              | Internal            | v1.1: Prometheus + Grafana, open            |
+
+**Key insight:** No competitor offers BYO storage backend with a standard API. CipherBox's IPFS Pinning Service API integration is genuinely novel for encrypted storage. Moving rootFolderKey off-server is also unique -- competitors store encrypted key material server-side as standard practice.
 
 ---
 
 ## Sources
 
-Research compiled from:
+### IPNS Resolution and Routing
 
-- [Tresorit Encrypted Link Whitepaper](https://cdn.tresorit.com/media-storage/20220223143452794encrypted-link-whitepaper.pdf) -- Encrypted link architecture (PDF)
-- [Tresorit Zero-Knowledge Encryption](https://tresorit.com/features/zero-knowledge-encryption) -- ZK architecture overview
-- [Tresorit Security](https://tresorit.com/security) -- RSA-4096, PKI, symmetric key tree
-- [ProtonDrive Version History](https://proton.me/blog/drive-version-history) -- Version retention policies, encrypted versioning
-- [ProtonDrive Version History Support](https://proton.me/support/version-history) -- Version management details
-- [ProtonDrive Security](https://proton.me/drive/security) -- ECC Curve25519, OpenPGP key hierarchy
-- [Filen Cryptography Docs](https://docs.filen.io/docs/api/guides/cryptography/) -- AES-GCM, RSA sharing, HMAC search
-- [Filen Encryption](https://filen.io/encryption) -- HMAC hashed search implementation
-- [Filen Status Update March 2025](https://filen.io/hub/status-update-march-2025/) -- Global search launch
-- [MEGA Security Discussion](https://github.com/meganz/webclient/discussions/124) -- Node keys, RSA-ECB wrapping
-- [MEGA Malleable Encryption (Vulnerability)](https://mega-awry.io/) -- ECB mode vulnerability in MEGA
-- [Web3Auth MFA Documentation](https://web3auth.io/docs/features/mfa) -- Threshold key scheme, factor types
-- [Web3Auth MFA SDK](https://web3auth.io/docs/sdk/web/modal/mfa) -- mfaSettings configuration
-- [Web3Auth Passkeys Blog](https://blog.web3auth.io/passkeys-authentication-factor/) -- Passkey integration
-- [IPFS/IPNS Versioning Discussion](https://discuss.ipfs.tech/t/history-versioning-of-documents-ipfs-ipns/564) -- CID-based version tracking patterns
-- [IPFS IPNS Docs](https://docs.ipfs.tech/concepts/ipns/) -- IPNS sequence numbers, mutable pointers
-- [Cryptomator Sync Conflicts](https://docs.cryptomator.org/desktop/sync-conflicts/) -- Conflict copy pattern
-- [Bloom Filter Encrypted Search](https://ieeexplore.ieee.org/document/10148628/) -- Privacy-preserving search
-- [Hivenet Zero-Knowledge Guide](https://www.hivenet.com/post/zero-knowledge-encryption-the-ultimate-guide-to-unbreakable-data-security) -- ZK architecture patterns
-- [CyberNews Secure Cloud Storage 2026](https://cybernews.com/reviews/most-secure-cloud-storage/) -- Competitor landscape
+- [IPNS Concepts (IPFS Docs)](https://docs.ipfs.tech/concepts/ipns/) -- MEDIUM confidence (official docs)
+- [Someguy GitHub](https://github.com/ipfs/someguy) -- HIGH confidence (reference implementation)
+- [Public IPFS Utilities](https://docs.ipfs.tech/concepts/public-utilities/) -- HIGH confidence (official docs)
+- [IPIP-0379: Delegated IPNS HTTP API](https://specs.ipfs.tech/ipips/ipip-0379/) -- HIGH confidence (spec)
+- [Delegated Routing V1 HTTP API Spec](https://specs.ipfs.tech/routing/http-routing-v1/) -- HIGH confidence (spec)
+- [Kubo v0.34 Release (IPNS TTL change)](https://github.com/ipfs/kubo/releases/tag/v0.34.0) -- HIGH confidence (release notes)
+- [IP Shipyard 2025 Year in Review](https://ipshipyard.com/blog/2025-shipyard-ipfs-year-in-review/) -- MEDIUM confidence (blog)
+- [Delegated Routing Caching Blog](https://blog.ipfs.tech/2025-delegated-routing-caching/) -- MEDIUM confidence (blog)
 
-### Confidence Assessment
+### IPFS Pinning Service API
 
-| Area                       | Confidence | Rationale                                                                                                                                                     |
-| -------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sharing architecture       | HIGH       | Multiple competitor whitepapers, well-understood cryptographic patterns (ECIES re-wrapping). CipherBox's per-folder IPNS was designed for this                |
-| Link sharing               | MEDIUM     | Tresorit whitepaper confirms URL fragment approach. MEGA uses similar pattern. Implementation details for CipherBox-specific IPFS integration need validation |
-| Encrypted search (HMAC)    | HIGH       | Filen shipped this in production (2025). Well-documented approach with clear privacy tradeoffs                                                                |
-| Encrypted search (content) | LOW        | Academic approaches exist but no major competitor offers true encrypted content search. Complexity is very high                                               |
-| MFA via Web3Auth           | HIGH       | Official Web3Auth documentation confirms MFA factor support. SDK configuration is documented                                                                  |
-| CipherBox-layer MFA        | MEDIUM     | Standard WebAuthn/TOTP patterns, but interaction with Web3Auth auth flow needs validation                                                                     |
-| File versioning            | HIGH       | ProtonDrive confirms the "retain old versions" pattern. IPFS content addressing makes this architecturally natural for CipherBox                              |
-| Conflict resolution        | MEDIUM     | Competitor pattern (conflict copies) is well-established. CipherBox-specific IPNS sequence-based detection needs implementation validation                    |
-| Selective sync             | MEDIUM     | Standard pattern in desktop clients. FUSE mount integration specifics need validation                                                                         |
-| Multi-writer sharing       | LOW        | No clear pattern from competitors for encrypted multi-writer. Very complex problem. Recommend deferring                                                       |
+- [IPFS Pinning Service API Spec](https://ipfs.github.io/pinning-services-api-spec/) -- HIGH confidence (official spec)
+- [Pinning Service API OpenAPI YAML](https://github.com/ipfs/pinning-services-api-spec) -- HIGH confidence (canonical source)
+- [Work with Pinning Services (IPFS Docs)](https://docs.ipfs.tech/how-to/work-with-pinning-services/) -- HIGH confidence (official docs)
+- [Filebase vs Web3.Storage Comparison](https://filebase.com/web3-storage-alternative/) -- LOW confidence (vendor comparison)
+
+### Performance and Monitoring
+
+- [ProbeLab IPFS KPIs](https://www.probelab.io/ipfs/kpi/) -- HIGH confidence (official measurement)
+- [ProbeLab Week 07, 2026 Results](https://discuss.ipfs.tech/t/probelabs-notable-ipfs-performance-results-week-07-2026/20048) -- HIGH confidence (published metrics)
+- [Measuring the IPFS Network (IPFS Docs)](https://docs.ipfs.tech/concepts/measuring/) -- HIGH confidence (official docs)
+- [IPFS Monitoring (Netdata)](https://www.netdata.cloud/monitoring-101/ipfs-monitoring/) -- MEDIUM confidence (third-party guide)
+- [Kubo Prometheus Metrics Config](https://github.com/ipfs/kubo/blob/master/docs/config.md) -- HIGH confidence (official docs)
+- [Kubo Prometheus Issue #5604](https://github.com/ipfs/kubo/issues/5604) -- MEDIUM confidence (issue discussion)
+
+### Kubo and DHT Performance
+
+- [DHT Provide Sweep](https://ipshipyard.com/blog/2025-dht-provide-sweep/) -- MEDIUM confidence (blog, technical detail)
+- [Kubo v0.39 Release](https://github.com/ipfs/kubo/releases/tag/v0.39.0) -- HIGH confidence (release notes)
+- [Kubo v0.40 Release](https://github.com/ipfs/kubo/releases/tag/v0.40.0) -- HIGH confidence (release notes)
+
+### IPNS PubSub
+
+- [IPNS over PubSub discussion](https://discuss.libp2p.io/t/how-is-ipns-over-pubsub-faster-than-dht/1722) -- MEDIUM confidence (forum)
+- [Kubo Experimental Features](https://github.com/ipfs/kubo/blob/master/docs/experimental-features.md) -- HIGH confidence (official docs)
+
+### CipherBox Internal
+
+- `apps/api/src/ipns/delegated-routing.client.ts` -- current IPNS resolution implementation
+- `apps/api/src/ipfs/providers/ipfs-provider.interface.ts` -- provider abstraction
+- `apps/api/src/metrics/metrics.service.ts` -- current Prometheus metrics
+- `docs/METADATA_SCHEMAS.md` -- metadata schema reference
+- `docs/METADATA_EVOLUTION_PROTOCOL.md` -- schema migration rules
+- `.learnings/2026-02-25-ipns-stale-resolution-staging.md` -- IPNS stale resolution debugging
+- `.planning/todos/pending/2026-02-21-ipns-resolution-alternatives.md` -- IPNS research todo
+- `.planning/todos/pending/2026-02-14-bring-your-own-ipfs-node.md` -- BYO-IPFS todo
+- `.planning/todos/pending/2026-02-21-move-root-folder-key-to-ipfs.md` -- rootFolderKey migration todo
+- `.planning/todos/pending/2026-02-22-crdt-ipns-inbox-sharing.md` -- CRDT inbox research todo
+
+---
+
+_Feature research for: IPFS Infrastructure improvements (CipherBox v1.1)_
+_Researched: 2026-03-07_

@@ -8,11 +8,16 @@ CipherBox is a production-grade, privacy-first encrypted cloud storage platform 
 
 **Zero-knowledge privacy**: Files are encrypted client-side before leaving the device, and encryption keys exist only in client memory. The server is cryptographically unable to access user data.
 
-## Current Milestone: v2.0 Encrypted Productivity Suite
+## Current Milestone: v1.1 IPFS Infrastructure
 
-**Goal:** Transform CipherBox into an encrypted productivity platform with billing, team accounts, document editors, document signing, and AWS Nitro TEE.
+**Goal:** Make CipherBox more IPFS-native — replace delegated-ipfs.dev, migrate selected vault state to IPFS/IPNS, add BYO-IPFS server-relay support, and establish performance baselines.
 
-**Phases:** 18-22 (see `.planning/milestones/m3/ROADMAP.md` for full details)
+**Target features:**
+
+- Reliable IPNS resolution (replace delegated-ipfs.dev with self-hosted or alternative provider)
+- Reduce database dependence where feasible — migrate vault crypto material to IPFS while retaining `folder_ipns`, shares, device approvals, quota tracking, and the DB fallback for `encryptedRootFolderKey` in v1.1
+- Bring-your-own IPFS node support via server-relay flow (client-direct deferred to v1.2)
+- Comprehensive performance baselines (API, client, IPFS/IPNS latency, end-to-end user journeys)
 
 ## Requirements
 
@@ -44,42 +49,41 @@ CipherBox is a production-grade, privacy-first encrypted cloud storage platform 
 - Per-file IPNS metadata split (content updates decoupled from folder publishes) — v1.0
 - Cross-platform E2E test matrix (macOS, Windows, Linux) — v1.0
 
-### Active (Milestone 3 — Encrypted Productivity Suite)
+### Active (Milestone 3 — IPFS Infrastructure v1.1)
 
-See `.planning/milestones/m3/REQUIREMENTS.md` for full requirements.
+See `.planning/REQUIREMENTS.md` for full requirements.
 
-#### Billing
+#### IPNS Reliability
 
-- [ ] Stripe subscriptions with tier enforcement (Free/Pro/Team)
-- [ ] NOWPayments cryptocurrency billing
+- [ ] Replace delegated-ipfs.dev with reliable IPNS resolution
+- [ ] Sub-2s resolution latency, >99.5% availability
 
-#### Team Accounts
+#### Database Minimization
 
-- [ ] Team CRUD with ECIES-wrapped Per-Team Key hierarchy
-- [ ] CASL role-based permissions (owner, admin, editor, viewer)
+- [ ] Move rootFolderKey to IPFS vault record (DB copy retained as permanent fallback)
+- [ ] Deprecate encryptedRootIpnsPrivateKey (already HKDF-derivable)
 
-#### Document Editors
+#### BYO-IPFS
 
-- [ ] TipTap rich text editor with decrypt-edit-encrypt pipeline
-- [ ] Univer spreadsheet editor (single-user)
-- [ ] Export to PDF/Markdown/XLSX/CSV
+- [ ] User-configurable IPFS node endpoint
+- [ ] Server-relay upload to user's node (client-direct deferred to v1.2)
+- [ ] Quota and conflict detection strategy for BYO mode
 
-#### Document Signing
+#### Performance Baselines
 
-- [ ] ECDSA signing with visual signature capture
-- [ ] Multi-party signing workflows
+- [ ] API endpoint response time baselines
+- [ ] IPFS/IPNS publish and resolve latency baselines
+- [ ] Client-side encryption throughput baselines
+- [ ] End-to-end user journey timing baselines
 
-#### TEE Enhancements
+### Out of Scope (Milestone 3 — v1.1)
 
-- [ ] AWS Nitro enclave as fallback TEE provider
-
-### Out of Scope (Milestone 3)
-
+- Encrypted Productivity Suite (billing, teams, doc editors, signing) — deferred to Milestone 4 (v2.0)
 - Mobile apps (iOS/Android) — deferred to Milestone 4+
 - Real-time collaborative editing — deferred to Milestone 4+
-- Offline write queue / selective sync — deferred to Milestone 4+ (conflict detection shipped in v1.0)
+- Offline write queue / selective sync — deferred to Milestone 4+
 - Full-text content search — encrypted index leaks access patterns
-- Read-write shared folders — multi-writer IPNS unsolved
+- CRDT-based IPNS inbox — research only this milestone, implement in future if viable
 - eIDAS/QES compliance — requires certified CA
 - SSO/LDAP — enterprise scope
 
@@ -138,4 +142,4 @@ See `.planning/milestones/m3/REQUIREMENTS.md` for full requirements.
 
 ---
 
-Last updated: 2026-03-05 after v1.0 Production milestone
+Last updated: 2026-03-07 after Milestone v1.1 IPFS Infrastructure started
