@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "d86dcdbbc7b7",
+  "strategy": "manual-commit",
+  "branch": "docs/milestone-v1.1-ipfs-infrastructure",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/PROJECT.md",
+    ".planning/milestones/m4/ROADMAP.md",
+    ".planning/research/ARCHITECTURE.md",
+    ".planning/research/STACK.md",
+    ".planning/research/SUMMARY.md",
+    ".planning/research/m4/PITFALLS.md",
+    ".planning/research/m4/STACK.md",
+    ".planning/research/m4/SUMMARY.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d8/6dcdbbc7b7/0/metadata.json",
+      "transcript": "/d8/6dcdbbc7b7/0/full.jsonl",
+      "context": "/d8/6dcdbbc7b7/0/context.md",
+      "content_hash": "/d8/6dcdbbc7b7/0/content_hash.txt",
+      "prompt": "/d8/6dcdbbc7b7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 36,
+    "cache_creation_tokens": 57878,
+    "cache_read_tokens": 4110059,
+    "output_tokens": 12914,
+    "api_call_count": 35
+  }
+}
