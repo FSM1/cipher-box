@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "a1f6ba207c5e",
+  "strategy": "manual-commit",
+  "branch": "docs/grafana-cloud-learnings",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".learnings/2026-03-07-grafana-cloud-dashboard-provisioning.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a1/f6ba207c5e/0/metadata.json",
+      "transcript": "/a1/f6ba207c5e/0/full.jsonl",
+      "context": "/a1/f6ba207c5e/0/context.md",
+      "content_hash": "/a1/f6ba207c5e/0/content_hash.txt",
+      "prompt": "/a1/f6ba207c5e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 221,
+    "cache_creation_tokens": 263161,
+    "cache_read_tokens": 8856293,
+    "output_tokens": 28359,
+    "api_call_count": 154
+  }
+}
