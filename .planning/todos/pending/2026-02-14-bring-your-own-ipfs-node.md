@@ -2,6 +2,8 @@
 created: 2026-02-14T00:00
 title: Add bring-your-own IPFS node support
 area: api
+milestone: v1.1
+phase: 21
 files:
   - apps/api/src/ipfs/ipfs.module.ts
   - apps/api/src/ipfs/providers/ipfs-provider.interface.ts

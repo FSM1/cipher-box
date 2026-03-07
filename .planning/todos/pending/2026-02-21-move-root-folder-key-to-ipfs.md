@@ -2,6 +2,8 @@
 created: 2026-02-21T00:00
 title: Move rootFolderKey to IPFS vault record, eliminate server-side key storage
 area: crypto
+milestone: v1.1
+phase: 20
 files:
   - packages/crypto/src/vault/types.ts
   - packages/crypto/src/vault/init.ts
