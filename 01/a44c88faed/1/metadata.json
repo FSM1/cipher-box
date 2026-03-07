@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "01a44c88faed",
+  "session_id": "822b6932-d0ac-4f6b-ac69-30b43133f17d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-07T05:13:51.820562Z",
+  "branch": "feat/phase-18-performance-instrumentation",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/api/src/metrics/metrics.service.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "5ae145029220",
+  "token_usage": {
+    "input_tokens": 11,
+    "cache_creation_tokens": 52270,
+    "cache_read_tokens": 186225,
+    "output_tokens": 2069,
+    "api_call_count": 6
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-07T05:13:51.647548Z",
+    "agent_lines": 0,
+    "human_added": 143,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 143,
+    "agent_percentage": 0
+  }
+}
