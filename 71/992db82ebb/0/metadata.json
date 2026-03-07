@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "71992db82ebb",
+  "session_id": "d23204e9-b03c-4ee0-add6-4563428db16f",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-07T06:20:51.628284Z",
+  "branch": "feat/phase-18-performance-instrumentation",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "scripts/baseline-benchmark.sh",
+    "docker/grafana/dashboards/cipherbox-staging.json"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "7f5f753412b7",
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 31116,
+    "cache_read_tokens": 435850,
+    "output_tokens": 4795,
+    "api_call_count": 20
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-07T06:20:50.664762Z",
+    "agent_lines": 19,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 19,
+    "agent_percentage": 100
+  }
+}

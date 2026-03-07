@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "71992db82ebb",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-18-performance-instrumentation",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "docker/grafana/dashboards/cipherbox-staging.json",
+    "scripts/baseline-benchmark.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/71/992db82ebb/0/metadata.json",
+      "transcript": "/71/992db82ebb/0/full.jsonl",
+      "context": "/71/992db82ebb/0/context.md",
+      "content_hash": "/71/992db82ebb/0/content_hash.txt",
+      "prompt": "/71/992db82ebb/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 31116,
+    "cache_read_tokens": 435850,
+    "output_tokens": 4795,
+    "api_call_count": 20
+  }
+}
