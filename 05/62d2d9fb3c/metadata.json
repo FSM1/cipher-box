@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "0562d2d9fb3c",
+  "strategy": "manual-commit",
+  "branch": "feat/phase-19",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/phases/19-ipns-resolution-improvement/19-VALIDATION.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/05/62d2d9fb3c/0/metadata.json",
+      "transcript": "/05/62d2d9fb3c/0/full.jsonl",
+      "context": "/05/62d2d9fb3c/0/context.md",
+      "content_hash": "/05/62d2d9fb3c/0/content_hash.txt",
+      "prompt": "/05/62d2d9fb3c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 9,
+    "cache_creation_tokens": 15182,
+    "cache_read_tokens": 297762,
+    "output_tokens": 2124,
+    "api_call_count": 7
+  }
+}
