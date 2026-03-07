@@ -498,6 +498,7 @@ jobs:
           : "${GRAFANA_API_KEY:?GRAFANA_API_KEY is required}"
           : "${DS_METRICS_UID:?GRAFANA_DS_METRICS_UID is required}"
           : "${DS_LOGS_UID:?GRAFANA_DS_LOGS_UID is required}"
+          GRAFANA_URL="${GRAFANA_URL%/}"
 
           # The dashboard JSON uses __inputs for datasource templating.
           # Replace variable references with actual datasource UIDs.
