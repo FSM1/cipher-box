@@ -6,9 +6,12 @@ import { Job } from 'bullmq';
 describe('RepublishProcessor', () => {
   let processor: RepublishProcessor;
   let republishService: jest.Mocked<Partial<RepublishService>>;
+  let mockEndBatchTimer: jest.Mock;
+  let mockStartBatchTimer: jest.Mock;
   let metricsService: {
     republishRuns: { inc: jest.Mock };
     republishEntriesProcessed: { inc: jest.Mock };
+    republishBatchDuration: { startTimer: jest.Mock };
   };
 
   function createMockJob(overrides: Partial<Job> = {}): Job {
@@ -24,9 +27,13 @@ describe('RepublishProcessor', () => {
       processRepublishBatch: jest.fn(),
     };
 
+    mockEndBatchTimer = jest.fn();
+    mockStartBatchTimer = jest.fn().mockReturnValue(mockEndBatchTimer);
+
     metricsService = {
       republishRuns: { inc: jest.fn() },
       republishEntriesProcessed: { inc: jest.fn() },
+      republishBatchDuration: { startTimer: mockStartBatchTimer },
     };
 
     // Construct directly instead of using Test.createTestingModule,
@@ -128,5 +135,43 @@ describe('RepublishProcessor', () => {
 
     // Even with 9/10 failed, having 1 success means TEE is working, so no warning
     await expect(processor.process(createMockJob())).resolves.toBeUndefined();
+  });
+
+  describe('batch duration instrumentation', () => {
+    it('should observe batch duration with success result', async () => {
+      republishService.processRepublishBatch!.mockResolvedValue({
+        processed: 5,
+        succeeded: 5,
+        failed: 0,
+      });
+
+      await processor.process(createMockJob());
+
+      expect(mockStartBatchTimer).toHaveBeenCalledWith({ tee_provider: 'mock' });
+      expect(mockEndBatchTimer).toHaveBeenCalledWith({ result: 'success' });
+    });
+
+    it('should observe batch duration with error result when processRepublishBatch throws', async () => {
+      republishService.processRepublishBatch!.mockRejectedValue(
+        new Error('Database connection lost')
+      );
+
+      await expect(processor.process(createMockJob())).rejects.toThrow('Database connection lost');
+
+      expect(mockStartBatchTimer).toHaveBeenCalledWith({ tee_provider: 'mock' });
+      expect(mockEndBatchTimer).toHaveBeenCalledWith({ result: 'error' });
+    });
+
+    it('should observe error result when all entries failed (TEE likely unreachable)', async () => {
+      republishService.processRepublishBatch!.mockResolvedValue({
+        processed: 5,
+        succeeded: 0,
+        failed: 5,
+      });
+
+      await processor.process(createMockJob());
+
+      expect(mockEndBatchTimer).toHaveBeenCalledWith({ result: 'error' });
+    });
   });
 });

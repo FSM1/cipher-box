@@ -19,7 +19,7 @@ CipherBox v1.1 transforms the platform from "IPFS as a storage backend with data
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 18: Performance Instrumentation** - Server-side Prometheus histograms and Kubo metrics scraping to establish baselines before any architectural changes
+- [x] **Phase 18: Performance Instrumentation** - Server-side Prometheus histograms and Kubo metrics scraping to establish baselines before any architectural changes (completed 2026-03-07)
 - [ ] **Phase 19: IPNS Resolution Improvement** - Replace delegated-ipfs.dev with DB-first resolution and self-hosted Someguy, achieving sub-2s resolution with >99.5% availability
 - [ ] **Phase 20: Vault Migration** - Move rootFolderKey to IPFS vault blob v2 format, making the server store zero crypto material
 - [ ] **Phase 21: BYO-IPFS Node Support** - User-configurable IPFS pinning endpoint with dual-pin strategy, Settings UI, and connection testing
@@ -38,7 +38,13 @@ Decimal phases appear between their surrounding integers in numeric order.
 2. API endpoint response times are captured at p50/p95/p99 for all critical routes (auth, IPNS resolve/publish, file upload/download, folder CRUD)
 3. Kubo node health metrics (peer count, bandwidth, datastore size) are visible in Prometheus via scraped Kubo endpoint
 4. TEE republish batch duration histogram captures per-batch timing with success/failure labels
-   **Plans**: TBD
+
+**Plans:** 2/2 plans complete
+
+Plans:
+
+- [x] 18-01-PLAN.md -- Add IPFS/IPNS + TEE duration histograms to MetricsService and instrument service/controller timing
+- [x] 18-02-PLAN.md -- Add Kubo scrape to Alloy, extend Grafana dashboard, create baseline benchmark script
 
 ### Phase 19: IPNS Resolution Improvement
 
@@ -99,13 +105,13 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Execution Order:**
 Phases execute in numeric order: 18 -> 19 -> 20 -> 21 -> 22
 
-| Phase                              | Milestone | Plans Complete | Status      | Completed |
-| ---------------------------------- | --------- | -------------- | ----------- | --------- |
-| 18. Performance Instrumentation    | v1.1      | 0/?            | Not started | -         |
-| 19. IPNS Resolution Improvement    | v1.1      | 0/?            | Not started | -         |
-| 20. Vault Migration                | v1.1      | 0/?            | Not started | -         |
-| 21. BYO-IPFS Node Support          | v1.1      | 0/?            | Not started | -         |
-| 22. Performance Baselines Complete | v1.1      | 0/?            | Not started | -         |
+| Phase                              | Milestone | Plans Complete | Status      | Completed  |
+| ---------------------------------- | --------- | -------------- | ----------- | ---------- |
+| 18. Performance Instrumentation    | v1.1      | 2/2            | Complete    | 2026-03-07 |
+| 19. IPNS Resolution Improvement    | v1.1      | 0/?            | Not started | -          |
+| 20. Vault Migration                | v1.1      | 0/?            | Not started | -          |
+| 21. BYO-IPFS Node Support          | v1.1      | 0/?            | Not started | -          |
+| 22. Performance Baselines Complete | v1.1      | 0/?            | Not started | -          |
 
 ---
 

@@ -35,10 +35,10 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 
 ### Performance Baselines
 
-- [ ] **PERF-01**: IPFS/IPNS duration histograms added to Prometheus (publish, resolve, pin, cat)
-- [ ] **PERF-02**: API endpoint p50/p95/p99 baselines defined per critical route
-- [ ] **PERF-03**: Kubo Prometheus endpoint scraped for node health metrics (peers, bandwidth, datastore)
-- [ ] **PERF-04**: TEE republish batch duration histogram added
+- [x] **PERF-01**: IPFS/IPNS duration histograms added to Prometheus (publish, resolve, pin, cat)
+- [x] **PERF-02**: API endpoint p50/p95/p99 baselines defined per critical route
+- [x] **PERF-03**: Kubo Prometheus endpoint scraped for node health metrics (peers, bandwidth, datastore)
+- [x] **PERF-04**: TEE republish batch duration histogram added
 - [ ] **PERF-05**: Client-side timing instrumentation for encrypt/decrypt, upload/download, IPNS operations
 - [ ] **PERF-06**: End-to-end user journey timing captured (login-to-vault, upload-to-visible, share-to-accessible)
 - [ ] **PERF-07**: k6 load testing scripts simulating concurrent users (upload, download, publish, resolve)
@@ -80,33 +80,33 @@ Explicitly excluded. Documented to prevent scope creep.
 
 Which phases cover which requirements. Updated during roadmap creation.
 
-| Requirement | Phase    | Status  |
-| ----------- | -------- | ------- |
-| IPNS-01     | Phase 19 | Pending |
-| IPNS-02     | Phase 19 | Pending |
-| IPNS-03     | Phase 19 | Pending |
-| IPNS-04     | Phase 19 | Pending |
-| VAULT-01    | Phase 20 | Pending |
-| VAULT-02    | Phase 20 | Pending |
-| VAULT-03    | Phase 20 | Pending |
-| VAULT-04    | Phase 20 | Pending |
-| VAULT-05    | Phase 20 | Pending |
-| VAULT-06    | Phase 20 | Pending |
-| BYO-01      | Phase 21 | Pending |
-| BYO-02      | Phase 21 | Pending |
-| BYO-03      | Phase 21 | Pending |
-| BYO-04      | Phase 21 | Pending |
-| BYO-05      | Phase 21 | Pending |
-| BYO-06      | Phase 21 | Pending |
-| BYO-07      | Phase 21 | Pending |
-| PERF-01     | Phase 18 | Pending |
-| PERF-02     | Phase 18 | Pending |
-| PERF-03     | Phase 18 | Pending |
-| PERF-04     | Phase 18 | Pending |
-| PERF-05     | Phase 22 | Pending |
-| PERF-06     | Phase 22 | Pending |
-| PERF-07     | Phase 22 | Pending |
-| PERF-08     | Phase 22 | Pending |
+| Requirement | Phase    | Status   |
+| ----------- | -------- | -------- |
+| IPNS-01     | Phase 19 | Pending  |
+| IPNS-02     | Phase 19 | Pending  |
+| IPNS-03     | Phase 19 | Pending  |
+| IPNS-04     | Phase 19 | Pending  |
+| VAULT-01    | Phase 20 | Pending  |
+| VAULT-02    | Phase 20 | Pending  |
+| VAULT-03    | Phase 20 | Pending  |
+| VAULT-04    | Phase 20 | Pending  |
+| VAULT-05    | Phase 20 | Pending  |
+| VAULT-06    | Phase 20 | Pending  |
+| BYO-01      | Phase 21 | Pending  |
+| BYO-02      | Phase 21 | Pending  |
+| BYO-03      | Phase 21 | Pending  |
+| BYO-04      | Phase 21 | Pending  |
+| BYO-05      | Phase 21 | Pending  |
+| BYO-06      | Phase 21 | Pending  |
+| BYO-07      | Phase 21 | Pending  |
+| PERF-01     | Phase 18 | Complete |
+| PERF-02     | Phase 18 | Complete |
+| PERF-03     | Phase 18 | Complete |
+| PERF-04     | Phase 18 | Complete |
+| PERF-05     | Phase 22 | Pending  |
+| PERF-06     | Phase 22 | Pending  |
+| PERF-07     | Phase 22 | Pending  |
+| PERF-08     | Phase 22 | Pending  |
 
 **Coverage:**
 

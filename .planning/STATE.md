@@ -10,19 +10,19 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 18 (first of 5 in v1.1 milestone)
-Plan: --
-Status: Ready to plan
-Last activity: 2026-03-07 -- Roadmap created for v1.1 IPFS Infrastructure
+Plan: 2 of 2 complete
+Status: Phase 18 Complete
+Last activity: 2026-03-07 -- Completed 18-02 (Monitoring dashboard, Kubo scraping, baselines)
 
-Progress: [░░░░░░░░░░░░░░░░░░░░░░░░░] M3 0%
+Progress: [████░░░░░░░░░░░░░░░░░░░░░] M3 10%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 155 (72 M1 + 83 M2)
+- Total plans completed: 157 (72 M1 + 83 M2 + 2 M3)
 - Average duration: 5.5 min
-- Total execution time: ~16.4 hours
+- Total execution time: ~16.5 hours
 
 ## Accumulated Context
 
@@ -36,6 +36,10 @@ Recent for v1.1:
 - rootFolderKey DB copy kept as permanent fallback (never drop column, IPFS copy for recovery independence)
 - BYO-IPFS affects pinning only, all IPNS publishes still route through CipherBox API
 - PERF requirements split across Phase 18 (server-side, pre-change) and Phase 22 (client + load testing, post-change)
+- IPFS/IPNS histogram buckets: 1ms-30s exponential (14 buckets); republish batch: 1s-120s (10 buckets)
+- Source label (db/network) only for resolve operations; empty string for pin/cat/publish
+- Alloy scrapes Kubo directly via Docker internal network (ipfs:5001), not proxied through API
+- Kubo Health dashboard panels use fallback Go runtime metrics alongside libp2p metrics pending post-deploy verification
 
 ### Open Concerns
 
@@ -51,4 +55,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-07 after v1.1 roadmap created
+Last updated: 2026-03-07 after 18-02 plan execution

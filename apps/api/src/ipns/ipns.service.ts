@@ -13,12 +13,14 @@ import { Repository } from 'typeorm';
 import { FolderIpns } from './entities/folder-ipns.entity';
 import {
   PublishIpnsDto,
+  PublishIpnsEntryDto,
   PublishIpnsResponseDto,
   BatchPublishIpnsDto,
   BatchPublishIpnsResponseDto,
 } from './dto';
 import { RepublishService } from '../republish/republish.service';
 import { DelegatedRoutingClient } from './delegated-routing.client';
+import { MetricsService } from '../metrics/metrics.service';
 import { parseIpnsRecord } from './ipns-record-parser';
 
 @Injectable()
@@ -30,48 +32,67 @@ export class IpnsService {
     private readonly folderIpnsRepository: Repository<FolderIpns>,
     private readonly delegatedRouting: DelegatedRoutingClient,
     @Inject(forwardRef(() => RepublishService))
-    private readonly republishService: RepublishService
+    private readonly republishService: RepublishService,
+    private readonly metricsService: MetricsService
   ) {}
 
   /**
    * Publish a pre-signed IPNS record to the IPFS network via delegated routing
    * and track the folder in the database for TEE republishing
    */
-  async publishRecord(userId: string, dto: PublishIpnsDto): Promise<PublishIpnsResponseDto> {
-    // Validate base64 record
-    let recordBytes: Uint8Array;
-    try {
-      recordBytes = Uint8Array.from(atob(dto.record), (c) => c.charCodeAt(0));
-    } catch {
-      throw new BadRequestException('Invalid base64-encoded record');
-    }
+  async publishRecord(
+    userId: string,
+    dto: PublishIpnsDto | PublishIpnsEntryDto,
+    recordType: 'folder' | 'file' = 'folder'
+  ): Promise<PublishIpnsResponseDto> {
+    const endTimer = this.metricsService.ipfsIpnsDuration.startTimer({
+      operation: 'publish',
+      source: '',
+    });
+    let result = 'success';
 
-    // Save to DB first so resolve always has a fallback, even if delegated
-    // routing fails (e.g. rate-limited, network error, DHT propagation delay).
-    const folder = await this.upsertFolderIpns(
-      userId,
-      dto.ipnsName,
-      dto.metadataCid,
-      dto.encryptedIpnsPrivateKey,
-      dto.keyEpoch,
-      'folder',
-      dto.expectedSequenceNumber
-    );
-
-    // Publish to delegated routing API (best-effort — DB is the reliable source)
     try {
-      await this.delegatedRouting.publish(dto.ipnsName, recordBytes);
-    } catch (error) {
-      this.logger.warn(
-        `Delegated routing publish failed for ${dto.ipnsName}, DB record saved: ${error instanceof Error ? error.message : String(error)}`
+      // Validate base64 record
+      let recordBytes: Uint8Array;
+      try {
+        recordBytes = Uint8Array.from(atob(dto.record), (c) => c.charCodeAt(0));
+      } catch {
+        throw new BadRequestException('Invalid base64-encoded record');
+      }
+
+      // Save to DB first so resolve always has a fallback, even if delegated
+      // routing fails (e.g. rate-limited, network error, DHT propagation delay).
+      const folder = await this.upsertFolderIpns(
+        userId,
+        dto.ipnsName,
+        dto.metadataCid,
+        dto.encryptedIpnsPrivateKey,
+        dto.keyEpoch,
+        recordType,
+        dto.expectedSequenceNumber
       );
-    }
 
-    return {
-      success: true,
-      ipnsName: dto.ipnsName,
-      sequenceNumber: folder.sequenceNumber,
-    };
+      // Publish to delegated routing API (best-effort — DB is the reliable source)
+      try {
+        await this.delegatedRouting.publish(dto.ipnsName, recordBytes);
+      } catch (error) {
+        result = 'delegated_error';
+        this.logger.warn(
+          `Delegated routing publish failed for ${dto.ipnsName}, DB record saved: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+
+      return {
+        success: true,
+        ipnsName: dto.ipnsName,
+        sequenceNumber: folder.sequenceNumber,
+      };
+    } catch (error) {
+      result = 'error';
+      throw error;
+    } finally {
+      endTimer({ result });
+    }
   }
 
   /**
@@ -89,46 +110,12 @@ export class IpnsService {
 
     const CONCURRENCY = 10;
 
-    // Process records in batches of CONCURRENCY
+    // Process records in batches of CONCURRENCY, delegating to publishRecord
     for (let i = 0; i < dto.records.length; i += CONCURRENCY) {
       const batch = dto.records.slice(i, i + CONCURRENCY);
 
       const settled = await Promise.allSettled(
-        batch.map(async (entry) => {
-          // Validate base64 record
-          let recordBytes: Uint8Array;
-          try {
-            recordBytes = Uint8Array.from(atob(entry.record), (c) => c.charCodeAt(0));
-          } catch {
-            throw new BadRequestException(`Invalid base64-encoded record for ${entry.ipnsName}`);
-          }
-
-          // Save to DB first so resolve always has a fallback
-          const folder = await this.upsertFolderIpns(
-            userId,
-            entry.ipnsName,
-            entry.metadataCid,
-            entry.encryptedIpnsPrivateKey,
-            entry.keyEpoch,
-            entry.recordType ?? 'folder',
-            entry.expectedSequenceNumber
-          );
-
-          // Publish to delegated routing (best-effort)
-          try {
-            await this.delegatedRouting.publish(entry.ipnsName, recordBytes);
-          } catch (error) {
-            this.logger.warn(
-              `Delegated routing publish failed for ${entry.ipnsName}, DB record saved: ${error instanceof Error ? error.message : String(error)}`
-            );
-          }
-
-          return {
-            success: true,
-            ipnsName: entry.ipnsName,
-            sequenceNumber: folder.sequenceNumber,
-          } as PublishIpnsResponseDto;
-        })
+        batch.map((entry) => this.publishRecord(userId, entry, entry.recordType ?? 'folder'))
       );
 
       for (let j = 0; j < settled.length; j++) {
@@ -294,59 +281,78 @@ export class IpnsService {
     data?: string;
     pubKey?: string;
   } | null> {
-    let result: {
-      cid: string;
-      sequenceNumber: string;
-      signatureV2?: string;
-      data?: string;
-      pubKey?: string;
-    } | null = null;
+    const endTimer = this.metricsService.ipfsIpnsDuration.startTimer({
+      operation: 'resolve',
+    });
+    let timerResult = 'success';
+    let timerSource = 'network';
 
     try {
-      const recordBytes = await this.delegatedRouting.resolve(ipnsName);
-      if (recordBytes) {
-        result = this.parseIpnsRecordBytes(recordBytes);
-        this.logger.debug(`IPNS name resolved successfully: ${ipnsName} -> ${result.cid}`);
-      }
-    } catch (error) {
-      // Fall back to DB cache on BAD_GATEWAY (delegated routing failures)
-      if (error instanceof HttpException && error.getStatus() === HttpStatus.BAD_GATEWAY) {
-        this.logger.warn(`Delegated routing failed for ${ipnsName}, falling back to DB cache`);
-      } else {
-        throw error;
-      }
-    }
+      let result: {
+        cid: string;
+        sequenceNumber: string;
+        signatureV2?: string;
+        data?: string;
+        pubKey?: string;
+      } | null = null;
 
-    // Always check DB cache — it's written synchronously during publish
-    // and may be ahead of the network (delegated routing can serve stale records)
-    const cached = await this.folderIpnsRepository.findOne({
-      where: { ipnsName },
-    });
+      try {
+        const recordBytes = await this.delegatedRouting.resolve(ipnsName);
+        if (recordBytes) {
+          result = this.parseIpnsRecordBytes(recordBytes);
+          this.logger.debug(`IPNS name resolved successfully: ${ipnsName} -> ${result.cid}`);
+        }
+      } catch (error) {
+        // Fall back to DB cache on BAD_GATEWAY (delegated routing failures)
+        if (error instanceof HttpException && error.getStatus() === HttpStatus.BAD_GATEWAY) {
+          this.logger.warn(`Delegated routing failed for ${ipnsName}, falling back to DB cache`);
+          timerResult = 'error';
+        } else {
+          timerResult = 'error';
+          throw error;
+        }
+      }
 
-    if (result && cached?.latestCid) {
-      // Both sources available — prefer the one with the higher sequence number
-      const networkSeq = BigInt(result.sequenceNumber);
-      const dbSeq = BigInt(cached.sequenceNumber);
-      if (dbSeq > networkSeq) {
-        this.logger.log(
-          `DB cache has newer sequence (${dbSeq} > ${networkSeq}) for ${ipnsName}, using DB: ${cached.latestCid}`
-        );
+      // Always check DB cache — it's written synchronously during publish
+      // and may be ahead of the network (delegated routing can serve stale records)
+      const cached = await this.folderIpnsRepository.findOne({
+        where: { ipnsName },
+      });
+
+      if (result && cached?.latestCid) {
+        // Both sources available — prefer the one with the higher sequence number
+        const networkSeq = BigInt(result.sequenceNumber);
+        const dbSeq = BigInt(cached.sequenceNumber);
+        if (dbSeq > networkSeq) {
+          this.logger.log(
+            `DB cache has newer sequence (${dbSeq} > ${networkSeq}) for ${ipnsName}, using DB: ${cached.latestCid}`
+          );
+          timerSource = 'db';
+          return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
+        }
+        timerSource = 'network';
+        return result;
+      }
+
+      if (result) {
+        timerSource = 'network';
+        return result;
+      }
+
+      // Delegated routing returned null (404) or threw BAD_GATEWAY — try DB cache
+      if (cached?.latestCid) {
+        this.logger.log(`Resolved ${ipnsName} from DB cache: ${cached.latestCid}`);
+        timerSource = 'db';
         return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
       }
-      return result;
-    }
 
-    if (result) {
-      return result;
+      return null;
+    } catch (error) {
+      timerResult = 'error';
+      throw error;
+    } finally {
+      endTimer({ result: timerResult, source: timerSource });
     }
-
-    // Delegated routing returned null (404) or threw BAD_GATEWAY — try DB cache
-    if (cached?.latestCid) {
-      this.logger.log(`Resolved ${ipnsName} from DB cache: ${cached.latestCid}`);
-      return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
-    }
-
-    return null;
   }
 
   /**

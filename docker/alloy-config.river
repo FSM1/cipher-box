@@ -66,6 +66,17 @@ prometheus.scrape "cipherbox_api" {
   forward_to = [prometheus.remote_write.grafana_cloud.receiver]
 }
 
+// Scrape Kubo /debug/metrics/prometheus endpoint for IPFS node health
+prometheus.scrape "kubo" {
+  targets = [{
+    __address__ = "ipfs:5001",
+  }]
+  metrics_path = "/debug/metrics/prometheus"
+  scrape_interval = "30s"
+
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
 // Ship metrics to Grafana Cloud Mimir (Prometheus-compatible)
 prometheus.remote_write "grafana_cloud" {
   endpoint {

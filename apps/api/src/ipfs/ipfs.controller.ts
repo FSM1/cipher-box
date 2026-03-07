@@ -94,7 +94,20 @@ export class IpfsController {
   ): Promise<UploadResponseDto> {
     const hasQuota = await this.vaultService.checkQuota(req.user.id, file.size);
     if (!hasQuota) throw new PayloadTooLargeException('Storage quota exceeded');
-    const result = await this.ipfsProvider.pinFile(file.buffer);
+
+    const endPinTimer = this.metricsService.ipfsIpnsDuration.startTimer({
+      operation: 'pin',
+      source: '',
+    });
+    let result: { cid: string; size: number };
+    try {
+      result = await this.ipfsProvider.pinFile(file.buffer);
+      endPinTimer({ result: 'success' });
+    } catch (err) {
+      endPinTimer({ result: 'error' });
+      throw err;
+    }
+
     try {
       await this.vaultService.recordPin(req.user.id, result.cid, result.size);
     } catch (err) {
@@ -155,7 +168,19 @@ export class IpfsController {
     @Param('cid') cid: string,
     @Res({ passthrough: true }) res: Response
   ): Promise<StreamableFile> {
-    const buffer = await this.ipfsProvider.getFile(cid);
+    const endCatTimer = this.metricsService.ipfsIpnsDuration.startTimer({
+      operation: 'cat',
+      source: '',
+    });
+    let buffer: Buffer;
+    try {
+      buffer = await this.ipfsProvider.getFile(cid);
+      endCatTimer({ result: 'success' });
+    } catch (err) {
+      endCatTimer({ result: 'error' });
+      throw err;
+    }
+
     this.metricsService.fileDownloads.inc();
     res.set({
       'Content-Type': 'application/octet-stream',

@@ -38,6 +38,8 @@ export class MetricsService implements OnModuleInit {
 
   // --- Histograms ---
   readonly httpRequestDuration: client.Histogram;
+  readonly ipfsIpnsDuration: client.Histogram;
+  readonly republishBatchDuration: client.Histogram;
 
   constructor(
     @InjectRepository(PinnedCid)
@@ -150,6 +152,22 @@ export class MetricsService implements OnModuleInit {
       help: 'HTTP request duration in seconds',
       labelNames: ['method', 'route', 'status_code'],
       buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+      registers: [this.registry],
+    });
+
+    this.ipfsIpnsDuration = new client.Histogram({
+      name: 'cipherbox_ipfs_ipns_duration_seconds',
+      help: 'Duration of IPFS/IPNS operations in seconds',
+      labelNames: ['operation', 'result', 'source'] as const,
+      buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30],
+      registers: [this.registry],
+    });
+
+    this.republishBatchDuration = new client.Histogram({
+      name: 'cipherbox_republish_batch_duration_seconds',
+      help: 'Duration of TEE republish batch processing in seconds',
+      labelNames: ['tee_provider', 'result'] as const,
+      buckets: [1, 2.5, 5, 10, 15, 30, 45, 60, 90, 120],
       registers: [this.registry],
     });
   }
