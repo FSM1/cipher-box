@@ -944,7 +944,7 @@ describe('IpnsService', () => {
       );
     });
 
-    it('should observe publish duration with error label on DB failure', async () => {
+    it('should not observe ipnsPublishDuration when DB write fails before delegated publish', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
       mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
       mockFolderIpnsRepo.save.mockRejectedValue(new Error('DB write error'));
@@ -958,6 +958,7 @@ describe('IpnsService', () => {
       ).rejects.toThrow('DB write error');
 
       expect(mockEndTimer).toHaveBeenCalledWith({ result: 'error' });
+      expect(mockMetricsService.ipnsPublishDuration.observe).not.toHaveBeenCalled();
     });
 
     it('should observe ipnsPublishDuration with outcome=error on BAD_GATEWAY', async () => {
