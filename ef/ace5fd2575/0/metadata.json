@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "eface5fd2575",
+  "session_id": "72557f18-483f-4d2b-b5ad-642253d41b88",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-07T02:24:46.209657Z",
+  "branch": "docs/milestone-v1.1-ipfs-infrastructure",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/PROJECT.md",
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ce383b8b3521",
+  "token_usage": {
+    "input_tokens": 23,
+    "cache_creation_tokens": 61131,
+    "cache_read_tokens": 650833,
+    "output_tokens": 6168,
+    "api_call_count": 14
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-07T02:24:45.061633Z",
+    "agent_lines": 0,
+    "human_added": 38,
+    "human_modified": 36,
+    "human_removed": 0,
+    "total_committed": 38,
+    "agent_percentage": 0
+  }
+}
