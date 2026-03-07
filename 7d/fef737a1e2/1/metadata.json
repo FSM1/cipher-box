@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "7dfef737a1e2",
+  "session_id": "78bab3ef-95f4-4bfa-b12d-d659d1f10336",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-07T03:36:36.923002Z",
+  "branch": "docs/milestone-v1.1-ipfs-infrastructure",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/pending/2026-02-21-ipns-resolution-alternatives.md",
+    ".planning/todos/pending/2026-02-21-move-root-folder-key-to-ipfs.md",
+    ".planning/todos/pending/2026-02-14-bring-your-own-ipfs-node.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "4e42fae7bab7",
+  "token_usage": {
+    "input_tokens": 1104,
+    "cache_creation_tokens": 41967,
+    "cache_read_tokens": 574770,
+    "output_tokens": 4412,
+    "api_call_count": 20
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-07T03:36:36.187092Z",
+    "agent_lines": 6,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 6,
+    "agent_percentage": 100
+  }
+}
