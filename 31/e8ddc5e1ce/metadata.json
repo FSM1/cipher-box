@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "31e8ddc5e1ce",
+  "strategy": "manual-commit",
+  "branch": "fix/grafana-dashboard-provisioning",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/deploy-staging.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/31/e8ddc5e1ce/0/metadata.json",
+      "transcript": "/31/e8ddc5e1ce/0/full.jsonl",
+      "context": "/31/e8ddc5e1ce/0/context.md",
+      "content_hash": "/31/e8ddc5e1ce/0/content_hash.txt",
+      "prompt": "/31/e8ddc5e1ce/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 23,
+    "cache_creation_tokens": 40697,
+    "cache_read_tokens": 744197,
+    "output_tokens": 2735,
+    "api_call_count": 15
+  }
+}
