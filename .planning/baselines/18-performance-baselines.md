@@ -2,16 +2,16 @@
 
 ## Capture Information
 
-| Field            | Value                                                    |
-| ---------------- | -------------------------------------------------------- |
-| **Capture Date** | TBD -- run baseline-benchmark.sh on staging after deploy |
-| **Environment**  | Staging (api-staging.cipherbox.cc)                       |
-| **Kubo Version** | v0.34.0                                                  |
-| **API Image**    | TBD (tag from deploy)                                    |
-| **VPS**          | Hostinger 76.13.151.200, 4 vCPU, 8GB RAM                 |
-| **Script**       | `scripts/baseline-benchmark.sh`                          |
-| **Iterations**   | 20 measured + 3 warmup per operation                     |
-| **File Size**    | 10KB random data (upload/download)                       |
+| Field            | Value                                    |
+| ---------------- | ---------------------------------------- |
+| **Capture Date** | 2026-03-07T16:55:31Z                     |
+| **Environment**  | Staging (api-staging.cipherbox.cc)       |
+| **Kubo Version** | v0.34.0                                  |
+| **API Image**    | v0.24.2-staging-rc-1                     |
+| **VPS**          | Hostinger 76.13.151.200, 4 vCPU, 8GB RAM |
+| **Script**       | `scripts/baseline-benchmark.sh`          |
+| **Iterations**   | 20 measured + 3 warmup per operation     |
+| **File Size**    | 10KB random data (upload/download)       |
 
 ## Methodology
 
@@ -27,12 +27,12 @@ Server-side histograms (`cipherbox_ipfs_ipns_duration_seconds`) provide internal
 
 ## Client-Side Timings (curl round-trip)
 
-| Operation           | p50 | p95 | p99 | Notes                                   |
-| ------------------- | --- | --- | --- | --------------------------------------- |
-| IPNS Resolve        | TBD | TBD | TBD | `GET /ipns/resolve?ipnsName=<name>`     |
-| IPNS Publish        | --  | --  | --  | See Prometheus (requires signed record) |
-| IPFS Pin (upload)   | TBD | TBD | TBD | `POST /ipfs/upload` with 10KB file      |
-| IPFS Cat (download) | TBD | TBD | TBD | `GET /ipfs/<cid>` for 10KB file         |
+| Operation           | p50    | p95    | p99    | Notes                                   |
+| ------------------- | ------ | ------ | ------ | --------------------------------------- |
+| IPNS Resolve        | 0.147s | 0.224s | 0.278s | `GET /ipns/resolve?ipnsName=<name>`     |
+| IPNS Publish        | --     | --     | --     | See Prometheus (requires signed record) |
+| IPFS Pin (upload)   | 0.138s | 0.218s | 0.227s | `POST /ipfs/upload` with 10KB file      |
+| IPFS Cat (download) | 0.133s | 0.215s | 0.219s | `GET /ipfs/<cid>` for 10KB file         |
 
 ## Server-Side Histograms (Prometheus)
 
@@ -70,7 +70,7 @@ Captured from Grafana Cloud after sufficient organic staging usage.
 
 ## Notes
 
-- All TBD values will be filled after Phase 18 code is deployed to staging
+- Client-side timings captured 2026-03-07; server-side Prometheus histograms pending organic usage
 - IPNS Publish baseline requires organic usage or E2E test runs to populate histogram buckets
 - Kubo v0.34.0 may not expose all libp2p metrics -- fallback metrics noted in Kubo Health section
 - These baselines will be compared against Phase 22 (post-architectural-change) measurements
