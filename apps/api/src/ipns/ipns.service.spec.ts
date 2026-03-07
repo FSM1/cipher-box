@@ -980,12 +980,14 @@ describe('IpnsService', () => {
       );
     });
 
-    it('should observe ipnsPublishDuration with outcome=timeout on AbortError', async () => {
+    it('should observe ipnsPublishDuration with outcome=error on HttpException BAD_GATEWAY (timeout)', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
       mockFolderIpnsRepo.save.mockResolvedValue(mockFolderEntity);
-      const abortError = new Error('The operation was aborted');
-      abortError.name = 'AbortError';
-      mockDelegatedRoutingClient.publish.mockRejectedValue(abortError);
+      // DelegatedRoutingClient wraps timeouts/network errors into HttpException(BAD_GATEWAY)
+      // after exhausting retries — AbortError never surfaces to IpnsService
+      mockDelegatedRoutingClient.publish.mockRejectedValue(
+        new HttpException('Failed to publish', HttpStatus.BAD_GATEWAY)
+      );
 
       await service.publishRecord(testUserId, {
         ipnsName: testIpnsName,
@@ -994,7 +996,7 @@ describe('IpnsService', () => {
       });
 
       expect(mockMetricsService.ipnsPublishDuration.observe).toHaveBeenCalledWith(
-        { outcome: 'timeout' },
+        { outcome: 'error' },
         expect.any(Number)
       );
     });

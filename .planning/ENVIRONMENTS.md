@@ -405,17 +405,17 @@ export const web3AuthOptions: Web3AuthOptions = {
 
 ### API (NestJS)
 
-| Variable                | Local           | CI             | Staging               | Production         |
-| ----------------------- | --------------- | -------------- | --------------------- | ------------------ |
-| `NODE_ENV`              | development     | test           | production            | production         |
-| `CIPHERBOX_ENVIRONMENT` | local           | ci             | staging               | production         |
-| `DB_DATABASE`           | cipherbox_local | cipherbox_ci   | cipherbox_staging     | cipherbox_prod     |
-| `IPFS_PROVIDER`         | local           | local          | local                 | local              |
-| `DELEGATED_ROUTING_URL` | localhost:3001  | localhost:3001 | someguy:8190          | delegated-ipfs.dev |
-| `JWT_SECRET`            | dev-secret      | ci-secret      | secrets.JWT_STAGING   | secrets.JWT_PROD   |
-| `TEE_ENABLED`           | **false**       | **false**      | true                  | true               |
-| `TEE_PROVIDER`          | -               | -              | phala                 | phala              |
-| `PHALA_API_URL`         | -               | -              | testnet.phala.network | api.phala.network  |
+| Variable                | Local                   | CI                      | Staging               | Production                   |
+| ----------------------- | ----------------------- | ----------------------- | --------------------- | ---------------------------- |
+| `NODE_ENV`              | development             | test                    | production            | production                   |
+| `CIPHERBOX_ENVIRONMENT` | local                   | ci                      | staging               | production                   |
+| `DB_DATABASE`           | cipherbox_local         | cipherbox_ci            | cipherbox_staging     | cipherbox_prod               |
+| `IPFS_PROVIDER`         | local                   | local                   | local                 | local                        |
+| `DELEGATED_ROUTING_URL` | <http://localhost:3001> | <http://localhost:3001> | <http://someguy:8190> | <https://delegated-ipfs.dev> |
+| `JWT_SECRET`            | dev-secret              | ci-secret               | secrets.JWT_STAGING   | secrets.JWT_PROD             |
+| `TEE_ENABLED`           | **false**               | **false**               | true                  | true                         |
+| `TEE_PROVIDER`          | -                       | -                       | phala                 | phala                        |
+| `PHALA_API_URL`         | -                       | -                       | testnet.phala.network | api.phala.network            |
 
 ## TEE Infrastructure by Environment
 

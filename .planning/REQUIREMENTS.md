@@ -83,8 +83,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase    | Status   |
 | ----------- | -------- | -------- |
 | IPNS-01     | Phase 19 | Complete |
-| IPNS-02     | Phase 19 | Complete |
-| IPNS-03     | Phase 19 | Complete |
+| IPNS-02     | Phase 19 | Pending  |
+| IPNS-03     | Phase 19 | Pending  |
 | IPNS-04     | Phase 19 | Complete |
 | VAULT-01    | Phase 20 | Pending  |
 | VAULT-02    | Phase 20 | Pending  |

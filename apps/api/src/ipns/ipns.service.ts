@@ -79,8 +79,7 @@ export class IpnsService {
         await this.delegatedRouting.publish(dto.ipnsName, recordBytes);
       } catch (error) {
         result = 'delegated_error';
-        publishOutcome =
-          error instanceof Error && error.name === 'AbortError' ? 'timeout' : 'error';
+        publishOutcome = 'error';
         this.logger.warn(
           `Delegated routing publish failed for ${dto.ipnsName}, DB record saved: ${error instanceof Error ? error.message : String(error)}`
         );
