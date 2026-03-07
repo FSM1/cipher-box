@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.24.0](https://github.com/FSM1/cipher-box/compare/v0.23.1...v0.24.0) (2026-03-07)
+
+
+### Features
+
+* add performance instrumentation for IPFS/IPNS and TEE operations ([#281](https://github.com/FSM1/cipher-box/issues/281)) ([509188d](https://github.com/FSM1/cipher-box/commit/509188dcee2b63c0c12eee61887ba928c3523818))
+
+
+### Bug Fixes
+
+* remove project-level statusLine config ([#276](https://github.com/FSM1/cipher-box/issues/276)) ([a6878a4](https://github.com/FSM1/cipher-box/commit/a6878a47e21e273645fac46c50c52d96692a1fad))
+
 ## [0.23.1](https://github.com/FSM1/cipher-box/compare/v0.23.0...v0.23.1) (2026-03-05)
 
 
