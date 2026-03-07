@@ -736,7 +736,7 @@ describe('IpnsService', () => {
         await service.resolveRecord(testIpnsName);
 
         expect(mockMetricsService.ipnsResolveDuration.observe).toHaveBeenCalledWith(
-          { source: 'network' },
+          { source: 'network', outcome: 'success' },
           expect.any(Number)
         );
       });
@@ -754,7 +754,7 @@ describe('IpnsService', () => {
         await service.resolveRecord(testIpnsName);
 
         expect(mockMetricsService.ipnsResolveDuration.observe).toHaveBeenCalledWith(
-          { source: 'db_cache' },
+          { source: 'db_cache', outcome: 'error' },
           expect.any(Number)
         );
       });
@@ -775,7 +775,7 @@ describe('IpnsService', () => {
         await service.resolveRecord(testIpnsName);
 
         expect(mockMetricsService.ipnsResolveDuration.observe).toHaveBeenCalledWith(
-          { source: 'network_stale' },
+          { source: 'network_stale', outcome: 'success' },
           expect.any(Number)
         );
       });
@@ -801,7 +801,7 @@ describe('IpnsService', () => {
         await service.resolveRecord(testIpnsName);
 
         expect(mockMetricsService.ipnsResolveDuration.observe).toHaveBeenCalledWith(
-          { source: 'db_cache' },
+          { source: 'db_cache', outcome: 'success' },
           expect.any(Number)
         );
       });
@@ -867,7 +867,7 @@ describe('IpnsService', () => {
       expect(mockStartTimer).toHaveBeenCalledWith({ operation: 'resolve' });
       expect(mockEndTimer).toHaveBeenCalledWith({ result: 'success', source: 'network' });
       expect(mockMetricsService.ipnsResolveDuration.observe).toHaveBeenCalledWith(
-        { source: 'network' },
+        { source: 'network', outcome: 'success' },
         expect.any(Number)
       );
     });
@@ -889,7 +889,7 @@ describe('IpnsService', () => {
 
       expect(mockEndTimer).toHaveBeenCalledWith({ result: 'success', source: 'db' });
       expect(mockMetricsService.ipnsResolveDuration.observe).toHaveBeenCalledWith(
-        { source: 'network_stale' },
+        { source: 'network_stale', outcome: 'success' },
         expect.any(Number)
       );
     });
@@ -910,7 +910,7 @@ describe('IpnsService', () => {
       expect(mockStartTimer).toHaveBeenCalledWith({ operation: 'resolve' });
       expect(mockEndTimer).toHaveBeenCalledWith({ result: 'error', source: 'db' });
       expect(mockMetricsService.ipnsResolveDuration.observe).toHaveBeenCalledWith(
-        { source: 'db_cache' },
+        { source: 'db_cache', outcome: 'error' },
         expect.any(Number)
       );
     });

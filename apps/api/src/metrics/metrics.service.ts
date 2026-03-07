@@ -176,7 +176,7 @@ export class MetricsService implements OnModuleInit {
     this.ipnsResolveDuration = new client.Histogram({
       name: 'cipherbox_ipns_resolve_duration_seconds',
       help: 'IPNS resolve duration in seconds (end-to-end including fallback)',
-      labelNames: ['source'],
+      labelNames: ['source', 'outcome'],
       buckets: [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
       registers: [this.registry],
     });

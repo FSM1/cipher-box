@@ -298,7 +298,7 @@ export class IpnsService {
     let timerSource = 'network';
     const startTime = process.hrtime.bigint();
     let source = 'network';
-    let resolveFound = true;
+    let resolveFound = false;
 
     try {
       let result: {
@@ -343,14 +343,17 @@ export class IpnsService {
           );
           timerSource = 'db';
           source = 'network_stale';
+          resolveFound = true;
           return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
         }
         timerSource = 'network';
+        resolveFound = true;
         return result;
       }
 
       if (result) {
         timerSource = 'network';
+        resolveFound = true;
         return result;
       }
 
@@ -359,10 +362,10 @@ export class IpnsService {
         this.logger.log(`Resolved ${ipnsName} from DB cache: ${cached.latestCid}`);
         timerSource = 'db';
         source = 'db_cache';
+        resolveFound = true;
         return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
       }
 
-      resolveFound = false;
       return null;
     } catch (error) {
       timerResult = 'error';
@@ -371,7 +374,7 @@ export class IpnsService {
       endTimer({ result: timerResult, source: timerSource });
       if (resolveFound) {
         const elapsed = Number(process.hrtime.bigint() - startTime) / 1e9;
-        this.metricsService.ipnsResolveDuration.observe({ source }, elapsed);
+        this.metricsService.ipnsResolveDuration.observe({ source, outcome: timerResult }, elapsed);
       }
     }
   }

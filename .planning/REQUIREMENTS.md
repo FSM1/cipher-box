@@ -10,8 +10,8 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 ### IPNS Reliability
 
 - [x] **IPNS-01**: Self-hosted Someguy deployed alongside Kubo, replacing delegated-ipfs.dev as primary IPNS routing provider
-- [x] **IPNS-02**: IPNS resolution uses DB-first strategy with async Kubo DHT verification via self-hosted Someguy
-- [x] **IPNS-03**: Recovery tool resolves IPNS via self-hosted Someguy instead of delegated-ipfs.dev
+- [ ] **IPNS-02**: IPNS resolution uses DB-first strategy with async Kubo DHT verification via self-hosted Someguy
+- [ ] **IPNS-03**: Recovery tool resolves IPNS via self-hosted Someguy instead of delegated-ipfs.dev
 - [x] **IPNS-04**: System degrades gracefully when DHT resolution is slow (timeout + DB fallback within 2s)
 
 ### Vault Migration
