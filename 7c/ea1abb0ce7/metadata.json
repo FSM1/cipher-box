@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "7cea1abb0ce7",
+  "strategy": "manual-commit",
+  "branch": "fix/someguy-max-memory-bytes",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docker/docker-compose.staging.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/7c/ea1abb0ce7/0/metadata.json",
+      "transcript": "/7c/ea1abb0ce7/0/full.jsonl",
+      "context": "/7c/ea1abb0ce7/0/context.md",
+      "content_hash": "/7c/ea1abb0ce7/0/content_hash.txt",
+      "prompt": "/7c/ea1abb0ce7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 77,
+    "cache_creation_tokens": 84763,
+    "cache_read_tokens": 4140117,
+    "output_tokens": 17745,
+    "api_call_count": 57
+  }
+}
