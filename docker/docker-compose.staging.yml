@@ -92,7 +92,7 @@ services:
       SOMEGUY_DHT: standard
       SOMEGUY_LIBP2P_CONNMGR_LOW: 50
       SOMEGUY_LIBP2P_CONNMGR_HIGH: 300
-      SOMEGUY_LIBP2P_MAX_MEMORY: 512MB
+      SOMEGUY_LIBP2P_MAX_MEMORY: 536870912 # 512MB in bytes
       GOLOG_LOG_LEVEL: info
       GOLOG_LOG_FMT: json
     logging: *default-logging
