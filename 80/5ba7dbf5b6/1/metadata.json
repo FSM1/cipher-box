@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "805ba7dbf5b6",
+  "session_id": "d23204e9-b03c-4ee0-add6-4563428db16f",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-08T02:08:21.678511Z",
+  "branch": "docs/performance-baselines",
+  "checkpoints_count": 6,
+  "files_touched": [
+    ".planning/baselines/18-performance-baselines.md",
+    "tests/e2e/playwright.load.config.ts",
+    "tests/e2e/tests/load-test.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "97c8688def34",
+  "token_usage": {
+    "input_tokens": 2333,
+    "cache_creation_tokens": 964633,
+    "cache_read_tokens": 43148945,
+    "output_tokens": 124571,
+    "api_call_count": 503
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-08T02:08:18.752061Z",
+    "agent_lines": 758,
+    "human_added": 59,
+    "human_modified": 92,
+    "human_removed": 0,
+    "total_committed": 876,
+    "agent_percentage": 86.5296803652968
+  }
+}
