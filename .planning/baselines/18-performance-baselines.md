@@ -4,7 +4,7 @@
 
 | Field            | Value                                            |
 | ---------------- | ------------------------------------------------ |
-| **Capture Date** | 2026-03-07T16:55:31Z (updated 2026-03-07T17:30Z) |
+| **Capture Date** | 2026-03-07T16:55:31Z (updated 2026-03-08T09:00Z) |
 | **Environment**  | Staging (api-staging.cipherbox.cc)               |
 | **Kubo Version** | v0.34.0                                          |
 | **API Image**    | v0.24.2-staging-rc-1                             |
@@ -36,19 +36,30 @@ Server-side histograms (`cipherbox_ipfs_ipns_duration_seconds`) provide internal
 
 ## Server-Side Histograms (Prometheus)
 
-Captured from Grafana Cloud dashboard snapshot after stress test (~43 UI operations + 60 benchmark iterations).
-Snapshot: `CipherBox Staging - 2026-03-07 18:30`
+Captured from the API's `/metrics` endpoint via SSH on 2026-03-08, plus Grafana Cloud dashboard snapshot from 2026-03-07 18:30 UTC.
 
-| Metric                                       | Operation  | p50 | p95       | p99 | Notes                                      |
-| -------------------------------------------- | ---------- | --- | --------- | --- | ------------------------------------------ |
-| `cipherbox_ipfs_ipns_duration_seconds`       | resolve    | --  | --        | --  | See HTTP table below (internal metric TBD) |
-| `cipherbox_ipfs_ipns_duration_seconds`       | publish    | --  | --        | --  | See HTTP table below (internal metric TBD) |
-| `cipherbox_ipfs_ipns_duration_seconds`       | pin        | --  | --        | --  | See HTTP table below (internal metric TBD) |
-| `cipherbox_ipfs_ipns_duration_seconds`       | cat        | --  | --        | --  | See HTTP table below (internal metric TBD) |
-| `cipherbox_republish_batch_duration_seconds` | batch      | --  | --        | --  | No data (mock TEE provider doesn't report) |
-| `cipherbox_http_request_duration_seconds`    | all routes | --  | see below | --  | Per-route breakdown in HTTP table          |
+### `cipherbox_ipfs_ipns_duration_seconds` — per-operation breakdown
 
-Note: The internal `cipherbox_ipfs_ipns_duration_seconds` histogram values could not be extracted from the Grafana snapshot (new dashboard format does not embed query results for anonymous viewers). The per-route HTTP duration histogram below provides equivalent server-side timing data.
+Percentiles computed from Prometheus histogram buckets (linear interpolation within bucket boundaries).
+
+| Operation        | Source  | Count | p50    | p95    | p99    | Mean   | Notes                                      |
+| ---------------- | ------- | ----- | ------ | ------ | ------ | ------ | ------------------------------------------ |
+| **publish**      | --      | 71    | 299 ms | 864 ms | 973 ms | 325 ms | Kubo IPNS publish — dominant bottleneck    |
+| **resolve**      | network | 26    | 153 ms | 675 ms | 935 ms | 160 ms | Kubo DHT lookup (when cache miss)          |
+| **resolve**      | db      | 23    | 39 ms  | 74 ms  | 90 ms  | 38 ms  | DB cache hit (success path)                |
+| **resolve** (fb) | db      | 121   | 19 ms  | 48 ms  | 58 ms  | 26 ms  | DB cache fallback (Kubo resolve failed)    |
+| **resolve**      | network | 1     | --     | --     | --     | 229 ms | Single network error (insufficient data)   |
+| **pin**          | --      | 201   | 8 ms   | 24 ms  | 83 ms  | 9.7 ms | Kubo `pin add` — very fast for small files |
+| **cat**          | --      | 142   | 3 ms   | 5 ms   | 5 ms   | 1.5 ms | Kubo `cat` — sub-5ms for cached content    |
+
+Note: Resolve has 4 series because the API tries Kubo first (source=network), then falls back to DB cache (source=db). The `result` label distinguishes success/error at the Kubo level.
+
+### Other histograms
+
+| Metric                                       | Status  | Notes                                      |
+| -------------------------------------------- | ------- | ------------------------------------------ |
+| `cipherbox_republish_batch_duration_seconds` | No data | Mock TEE provider doesn't report durations |
+| `cipherbox_http_request_duration_seconds`    | Below   | Per-route breakdown in HTTP table          |
 
 ## HTTP API Performance (from Grafana dashboard)
 
@@ -102,7 +113,10 @@ Concurrently, `baseline-benchmark.sh` ran 20 iterations of resolve/pin/cat (+ wa
 
 - Client-side timings captured 2026-03-07 via `baseline-benchmark.sh` (5 total runs, 100 data points)
 - Server-side HTTP timings captured from Grafana Cloud dashboard snapshot at 18:30 UTC
-- IPNS Publish is the dominant bottleneck at ~860ms p95 — this is Kubo's native IPNS publish latency
+- Server-side histogram values captured 2026-03-08 via SSH to staging VPS (`curl http://localhost:3000/metrics`)
+- IPNS Publish is the dominant bottleneck at ~864ms p95 server-side — essentially all time in Kubo, negligible HTTP overhead
+- IPNS Resolve fails frequently on Kubo (121/148 resolve calls fell back to DB cache) — DB fallback is fast (~19ms p50)
+- Pin and Cat are extremely fast server-side (8ms and 3ms p50) — client-side timings (~130ms) are dominated by network latency
 - Kubo v0.34.0 does not expose libp2p metrics — Kubo Health section is N/A
 - TEE Republish Batch Duration shows "No data" — mock TEE provider doesn't report real durations
 - These baselines will be compared against post-Phase 19 and Phase 22 measurements
