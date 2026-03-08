@@ -23,7 +23,7 @@ CipherBox is a **technology demonstrator** with the following integrations imple
   - Fetch: `GET /ipfs/:cid`
   - Unpin: `POST /ipfs/unpin`
 
-- Delegated routing (delegated-ipfs.dev) - IPNS record publishing and resolution
+- Delegated routing (self-hosted Someguy on staging, delegated-ipfs.dev fallback) - IPNS record publishing and resolution
   - Client: `apps/api/src/ipns/delegated-routing.client.ts`
   - Publish: `POST /ipns/publish`, `POST /ipns/publish-batch`
   - Resolve: `GET /ipns/resolve`

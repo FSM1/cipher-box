@@ -149,11 +149,11 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 - Safe modification: Never update without re-applying the `channel.rs` receive() patch. Document patch diff in vendor directory.
 - Test coverage: No tests for the patched receive() function.
 
-**Delegated routing (delegated-ipfs.dev) dependency:**
+**Delegated routing dependency:**
 
 - Files: `apps/api/src/ipns/delegated-routing.client.ts`
-- Why fragile: The external service at `delegated-ipfs.dev` has been unreliable historically (502 errors documented in memory). It is the sole path for IPNS record publishing and resolution from the API.
-- Safe modification: The client has retry with exponential backoff (3 retries, 1s base delay, 30s cap). Changes to the API or rate limits could break publishing.
+- Why fragile: Staging uses self-hosted Someguy sidecar (<http://someguy:8190>). Production still uses delegated-ipfs.dev (public, no SLA). The recovery tool also uses delegated-ipfs.dev directly from the browser.
+- Safe modification: The client has retry with exponential backoff (3 retries, 1s base delay, 30s cap). Changes to the API or rate limits could break publishing. The `DELEGATED_ROUTING_URL` env var controls which endpoint is used.
 - Test coverage: Unit tests at `apps/api/src/ipns/delegated-routing.client.spec.ts` cover retry logic. No integration tests against real service.
 
 **Web3Auth MPC Core Kit integration:**
@@ -191,11 +191,11 @@ Previous known bugs (upload modal stuck, auth refresh race) were fixed in PRs #5
 
 ## Dependencies at Risk
 
-**delegated-ipfs.dev (external service):**
+**Delegated routing service availability:**
 
-- Risk: Third-party service with documented unreliability. No SLA. Single point of failure for IPNS operations.
-- Impact: If down, no IPNS records can be published or resolved. File metadata becomes temporarily inaccessible.
-- Migration plan: DB-cached CID fallback exists for resolution. Consider self-hosting a delegated routing endpoint or adding a secondary provider.
+- Risk: Staging mitigated by self-hosted Someguy sidecar (Phase 19). Production still uses delegated-ipfs.dev (no SLA). Recovery tool uses delegated-ipfs.dev directly.
+- Impact: If the routing service is down, no IPNS records can be published or resolved. File metadata becomes temporarily inaccessible (DB-cached CID fallback exists for resolution).
+- Migration plan: Deploy Someguy to production (same pattern as staging). Recovery tool could be made configurable to point at a user-provided routing endpoint.
 
 **Web3Auth MPC Core Kit (@web3auth/mpc-core-kit@^3.5.0):**
 

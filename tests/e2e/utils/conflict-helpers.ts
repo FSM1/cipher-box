@@ -70,7 +70,7 @@ export async function bumpServerSequence(params: {
   // publish path which always succeeds and increments the sequence by 1.
   //
   // The dummy base64 record string is intentionally invalid as an IPNS record.
-  // The API will log a warning when trying to relay it to delegated-ipfs.dev,
+  // The API will log a warning when trying to relay it to the delegated routing service,
   // but the DB sequence bump succeeds regardless.
   const dummyRecord = Buffer.from('conflict-test-dummy-record-not-a-valid-ipns-record').toString(
     'base64'

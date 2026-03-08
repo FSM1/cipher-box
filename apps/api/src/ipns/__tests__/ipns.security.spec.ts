@@ -43,6 +43,9 @@ describe('IPNS API Security Tests', () => {
     const mockMetricsService = {
       ipnsPublishes: { inc: jest.fn() },
       ipnsResolves: { inc: jest.fn() },
+      ipfsIpnsDuration: { startTimer: jest.fn().mockReturnValue(jest.fn()) },
+      ipnsResolveDuration: { observe: jest.fn() },
+      ipnsPublishDuration: { observe: jest.fn() },
     };
 
     const module: TestingModule = await Test.createTestingModule({

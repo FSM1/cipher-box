@@ -89,7 +89,7 @@ pub struct IpnsPublishRequest {
 /// Publish a signed IPNS record via the backend.
 ///
 /// POST /ipns/publish with the signed record. The backend relays
-/// to delegated-ipfs.dev and tracks the folder for TEE republishing.
+/// to the delegated routing service and tracks the folder for TEE republishing.
 ///
 /// Returns `PublishResult::Success` on 2xx, `PublishResult::Conflict`
 /// on 409 (another device published a higher sequence), or `Err` on

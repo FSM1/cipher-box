@@ -27,6 +27,11 @@ describe('IpnsService', () => {
   };
   let mockEndTimer: jest.Mock;
   let mockStartTimer: jest.Mock;
+  let mockMetricsService: {
+    ipfsIpnsDuration: { startTimer: jest.Mock };
+    ipnsResolveDuration: { observe: jest.Mock };
+    ipnsPublishDuration: { observe: jest.Mock };
+  };
 
   // Test data
   const testUserId = '550e8400-e29b-41d4-a716-446655440000';
@@ -65,6 +70,11 @@ describe('IpnsService', () => {
 
     mockEndTimer = jest.fn();
     mockStartTimer = jest.fn().mockReturnValue(mockEndTimer);
+    mockMetricsService = {
+      ipfsIpnsDuration: { startTimer: mockStartTimer },
+      ipnsResolveDuration: { observe: jest.fn() },
+      ipnsPublishDuration: { observe: jest.fn() },
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -85,9 +95,7 @@ describe('IpnsService', () => {
         },
         {
           provide: MetricsService,
-          useValue: {
-            ipfsIpnsDuration: { startTimer: mockStartTimer },
-          },
+          useValue: mockMetricsService,
         },
       ],
     }).compile();
@@ -714,6 +722,90 @@ describe('IpnsService', () => {
       expect(result!.cid).toBe('bafyNETWORK');
       expect(result!.sequenceNumber).toBe('10');
     });
+
+    describe('resolve latency metrics', () => {
+      it('should observe ipnsResolveDuration with source=network on successful network resolution', async () => {
+        const mockRecordBytes = new Uint8Array([1, 2, 3]);
+        mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
+        mockParseIpnsRecord.mockReturnValue({
+          value: '/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi',
+          sequence: 5n,
+        });
+        mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+
+        await service.resolveRecord(testIpnsName);
+
+        expect(mockMetricsService.ipnsResolveDuration.observe).toHaveBeenCalledWith(
+          { source: 'network', outcome: 'success' },
+          expect.any(Number)
+        );
+      });
+
+      it('should observe ipnsResolveDuration with source=db_cache on DB fallback', async () => {
+        mockDelegatedRoutingClient.resolve.mockRejectedValue(
+          new HttpException('Failed to resolve', HttpStatus.BAD_GATEWAY)
+        );
+        mockFolderIpnsRepo.findOne.mockResolvedValue({
+          ...mockFolderEntity,
+          latestCid: 'bafyCACHED',
+          sequenceNumber: '42',
+        });
+
+        await service.resolveRecord(testIpnsName);
+
+        expect(mockMetricsService.ipnsResolveDuration.observe).toHaveBeenCalledWith(
+          { source: 'db_cache', outcome: 'error' },
+          expect.any(Number)
+        );
+      });
+
+      it('should observe ipnsResolveDuration with source=network_stale when DB has newer sequence', async () => {
+        const mockRecordBytes = new Uint8Array([1, 2, 3]);
+        mockDelegatedRoutingClient.resolve.mockResolvedValue(mockRecordBytes);
+        mockParseIpnsRecord.mockReturnValue({
+          value: '/ipfs/bafySTALE',
+          sequence: 3n,
+        });
+        mockFolderIpnsRepo.findOne.mockResolvedValue({
+          ...mockFolderEntity,
+          latestCid: 'bafyFRESH',
+          sequenceNumber: '10',
+        });
+
+        await service.resolveRecord(testIpnsName);
+
+        expect(mockMetricsService.ipnsResolveDuration.observe).toHaveBeenCalledWith(
+          { source: 'network_stale', outcome: 'success' },
+          expect.any(Number)
+        );
+      });
+
+      it('should NOT observe ipnsResolveDuration when result is null (not found)', async () => {
+        mockDelegatedRoutingClient.resolve.mockResolvedValue(null);
+        mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+
+        const result = await service.resolveRecord(testIpnsName);
+
+        expect(result).toBeNull();
+        expect(mockMetricsService.ipnsResolveDuration.observe).not.toHaveBeenCalled();
+      });
+
+      it('should observe ipnsResolveDuration with source=db_cache when network returns null but DB has data', async () => {
+        mockDelegatedRoutingClient.resolve.mockResolvedValue(null);
+        mockFolderIpnsRepo.findOne.mockResolvedValue({
+          ...mockFolderEntity,
+          latestCid: 'bafyCACHED_NULL_NET',
+          sequenceNumber: '7',
+        });
+
+        await service.resolveRecord(testIpnsName);
+
+        expect(mockMetricsService.ipnsResolveDuration.observe).toHaveBeenCalledWith(
+          { source: 'db_cache', outcome: 'success' },
+          expect.any(Number)
+        );
+      });
+    });
   });
 
   describe('delegated routing failures are non-fatal', () => {
@@ -774,6 +866,10 @@ describe('IpnsService', () => {
 
       expect(mockStartTimer).toHaveBeenCalledWith({ operation: 'resolve' });
       expect(mockEndTimer).toHaveBeenCalledWith({ result: 'success', source: 'network' });
+      expect(mockMetricsService.ipnsResolveDuration.observe).toHaveBeenCalledWith(
+        { source: 'network', outcome: 'success' },
+        expect.any(Number)
+      );
     });
 
     it('should observe resolve duration with db source when DB has higher seq', async () => {
@@ -792,6 +888,10 @@ describe('IpnsService', () => {
       await service.resolveRecord(testIpnsName);
 
       expect(mockEndTimer).toHaveBeenCalledWith({ result: 'success', source: 'db' });
+      expect(mockMetricsService.ipnsResolveDuration.observe).toHaveBeenCalledWith(
+        { source: 'network_stale', outcome: 'success' },
+        expect.any(Number)
+      );
     });
 
     it('should observe resolve duration with error label on delegated routing failure', async () => {
@@ -809,6 +909,20 @@ describe('IpnsService', () => {
 
       expect(mockStartTimer).toHaveBeenCalledWith({ operation: 'resolve' });
       expect(mockEndTimer).toHaveBeenCalledWith({ result: 'error', source: 'db' });
+      expect(mockMetricsService.ipnsResolveDuration.observe).toHaveBeenCalledWith(
+        { source: 'db_cache', outcome: 'error' },
+        expect.any(Number)
+      );
+    });
+
+    it('should not observe ipnsResolveDuration when result is null (not found)', async () => {
+      mockDelegatedRoutingClient.resolve.mockResolvedValue(null);
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+
+      const result = await service.resolveRecord(testIpnsName);
+
+      expect(result).toBeNull();
+      expect(mockMetricsService.ipnsResolveDuration.observe).not.toHaveBeenCalled();
     });
 
     it('should observe publish duration on success', async () => {
@@ -824,9 +938,13 @@ describe('IpnsService', () => {
 
       expect(mockStartTimer).toHaveBeenCalledWith({ operation: 'publish', source: '' });
       expect(mockEndTimer).toHaveBeenCalledWith({ result: 'success' });
+      expect(mockMetricsService.ipnsPublishDuration.observe).toHaveBeenCalledWith(
+        { outcome: 'success' },
+        expect.any(Number)
+      );
     });
 
-    it('should observe publish duration with error label on failure', async () => {
+    it('should not observe ipnsPublishDuration when DB write fails before delegated publish', async () => {
       mockFolderIpnsRepo.findOne.mockResolvedValue(null);
       mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
       mockFolderIpnsRepo.save.mockRejectedValue(new Error('DB write error'));
@@ -840,6 +958,47 @@ describe('IpnsService', () => {
       ).rejects.toThrow('DB write error');
 
       expect(mockEndTimer).toHaveBeenCalledWith({ result: 'error' });
+      expect(mockMetricsService.ipnsPublishDuration.observe).not.toHaveBeenCalled();
+    });
+
+    it('should observe ipnsPublishDuration with outcome=error on BAD_GATEWAY', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
+      mockFolderIpnsRepo.save.mockResolvedValue(mockFolderEntity);
+      mockDelegatedRoutingClient.publish.mockRejectedValue(
+        new HttpException('Failed to publish', HttpStatus.BAD_GATEWAY)
+      );
+
+      await service.publishRecord(testUserId, {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: testMetadataCid,
+      });
+
+      expect(mockMetricsService.ipnsPublishDuration.observe).toHaveBeenCalledWith(
+        { outcome: 'error' },
+        expect.any(Number)
+      );
+    });
+
+    it('should observe ipnsPublishDuration with outcome=error on HttpException BAD_GATEWAY (timeout)', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(mockFolderEntity);
+      mockFolderIpnsRepo.save.mockResolvedValue(mockFolderEntity);
+      // DelegatedRoutingClient wraps timeouts/network errors into HttpException(BAD_GATEWAY)
+      // after exhausting retries — AbortError never surfaces to IpnsService
+      mockDelegatedRoutingClient.publish.mockRejectedValue(
+        new HttpException('Failed to publish', HttpStatus.BAD_GATEWAY)
+      );
+
+      await service.publishRecord(testUserId, {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: testMetadataCid,
+      });
+
+      expect(mockMetricsService.ipnsPublishDuration.observe).toHaveBeenCalledWith(
+        { outcome: 'error' },
+        expect.any(Number)
+      );
     });
   });
 

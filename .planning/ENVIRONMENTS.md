@@ -21,7 +21,7 @@ CipherBox requires isolated environments to prevent cross-environment interferen
 | -------------- | -------------- | ---------------- | ---------------------- | ------------------- | -------------------- | -------------------------- |
 | **Local Dev**  | Kubo (offline) | Sapphire Devnet  | Mock service           | Local Postgres      | **Disabled**         | Full                       |
 | **CI E2E**     | Kubo (offline) | Sapphire Devnet  | Mock service (per-run) | Ephemeral Postgres  | **Disabled**         | Full per-run               |
-| **Staging**    | Kubo (online)  | Sapphire Devnet  | delegated-ipfs.dev     | Managed Postgres    | **Active** (testnet) | Shared with Local/CI users |
+| **Staging**    | Kubo (online)  | Sapphire Devnet  | Self-hosted Someguy    | Managed Postgres    | **Active** (testnet) | Shared with Local/CI users |
 | **Production** | Kubo (managed) | Sapphire Mainnet | delegated-ipfs.dev     | Production Postgres | **Active** (mainnet) | Full                       |
 
 ## Solution: Environment-Aware Key Derivation
@@ -273,14 +273,14 @@ VITE_ENVIRONMENT=staging
 CIPHERBOX_ENVIRONMENT=staging
 NODE_ENV=production
 IPFS_PROVIDER=local
-DELEGATED_ROUTING_URL=https://delegated-ipfs.dev  # Real routing
+DELEGATED_ROUTING_URL=http://someguy:8190  # Self-hosted Someguy sidecar
 JWT_SECRET=${{ secrets.JWT_SECRET_STAGING }}
 ```
 
 **Characteristics:**
 
 - Kubo publishes to real DHT (content discoverable)
-- Uses real delegated-ipfs.dev for IPNS
+- Uses self-hosted Someguy sidecar for IPNS delegated routing
 - Same Sapphire Devnet Web3Auth (shared identity with local/CI)
 - Environment context: `staging` (different IPNS keys than local/CI)
 - Can be used for user acceptance testing
@@ -405,17 +405,17 @@ export const web3AuthOptions: Web3AuthOptions = {
 
 ### API (NestJS)
 
-| Variable                | Local           | CI             | Staging               | Production         |
-| ----------------------- | --------------- | -------------- | --------------------- | ------------------ |
-| `NODE_ENV`              | development     | test           | production            | production         |
-| `CIPHERBOX_ENVIRONMENT` | local           | ci             | staging               | production         |
-| `DB_DATABASE`           | cipherbox_local | cipherbox_ci   | cipherbox_staging     | cipherbox_prod     |
-| `IPFS_PROVIDER`         | local           | local          | local                 | local              |
-| `DELEGATED_ROUTING_URL` | localhost:3001  | localhost:3001 | delegated-ipfs.dev    | delegated-ipfs.dev |
-| `JWT_SECRET`            | dev-secret      | ci-secret      | secrets.JWT_STAGING   | secrets.JWT_PROD   |
-| `TEE_ENABLED`           | **false**       | **false**      | true                  | true               |
-| `TEE_PROVIDER`          | -               | -              | phala                 | phala              |
-| `PHALA_API_URL`         | -               | -              | testnet.phala.network | api.phala.network  |
+| Variable                | Local                   | CI                      | Staging               | Production                   |
+| ----------------------- | ----------------------- | ----------------------- | --------------------- | ---------------------------- |
+| `NODE_ENV`              | development             | test                    | production            | production                   |
+| `CIPHERBOX_ENVIRONMENT` | local                   | ci                      | staging               | production                   |
+| `DB_DATABASE`           | cipherbox_local         | cipherbox_ci            | cipherbox_staging     | cipherbox_prod               |
+| `IPFS_PROVIDER`         | local                   | local                   | local                 | local                        |
+| `DELEGATED_ROUTING_URL` | <http://localhost:3001> | <http://localhost:3001> | <http://someguy:8190> | <https://delegated-ipfs.dev> |
+| `JWT_SECRET`            | dev-secret              | ci-secret               | secrets.JWT_STAGING   | secrets.JWT_PROD             |
+| `TEE_ENABLED`           | **false**               | **false**               | true                  | true                         |
+| `TEE_PROVIDER`          | -                       | -                       | phala                 | phala                        |
+| `PHALA_API_URL`         | -                       | -                       | testnet.phala.network | api.phala.network            |
 
 ## TEE Infrastructure by Environment
 

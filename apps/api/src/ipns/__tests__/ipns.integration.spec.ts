@@ -45,6 +45,9 @@ describe('IPNS Integration Tests', () => {
       const mockMetricsService = {
         ipnsPublishes: { inc: jest.fn() },
         ipnsResolves: { inc: jest.fn() },
+        ipfsIpnsDuration: { startTimer: jest.fn().mockReturnValue(jest.fn()) },
+        ipnsResolveDuration: { observe: jest.fn() },
+        ipnsPublishDuration: { observe: jest.fn() },
       };
 
       const module: TestingModule = await Test.createTestingModule({
@@ -170,6 +173,9 @@ describe('IPNS Integration Tests', () => {
       const mockMetricsService2 = {
         ipnsPublishes: { inc: jest.fn() },
         ipnsResolves: { inc: jest.fn() },
+        ipfsIpnsDuration: { startTimer: jest.fn().mockReturnValue(jest.fn()) },
+        ipnsResolveDuration: { observe: jest.fn() },
+        ipnsPublishDuration: { observe: jest.fn() },
       };
 
       const module: TestingModule = await Test.createTestingModule({
@@ -331,6 +337,9 @@ describe('Attack Scenario Tests', () => {
       const mockMetricsService3 = {
         ipnsPublishes: { inc: jest.fn() },
         ipnsResolves: { inc: jest.fn() },
+        ipfsIpnsDuration: { startTimer: jest.fn().mockReturnValue(jest.fn()) },
+        ipnsResolveDuration: { observe: jest.fn() },
+        ipnsPublishDuration: { observe: jest.fn() },
       };
 
       const module: TestingModule = await Test.createTestingModule({

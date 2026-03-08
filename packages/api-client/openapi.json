@@ -785,7 +785,7 @@
     },
     "/ipns/publish": {
       "post": {
-        "description": "Relay a pre-signed IPNS record to the IPFS network via delegated routing. The client signs the record locally; backend relays to delegated-ipfs.dev and tracks the folder for TEE republishing.",
+        "description": "Relay a pre-signed IPNS record to the IPFS network via delegated routing. The client signs the record locally; backend relays to the delegated routing service and tracks the folder for TEE republishing.",
         "operationId": "IpnsController_publishRecord",
         "parameters": [],
         "requestBody": {

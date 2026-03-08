@@ -1,3 +1,18 @@
+---
+gsd_state_version: 1.0
+milestone: v1.1
+milestone_name: milestone
+status: completed
+last_updated: '2026-03-07T07:07:38.898Z'
+last_activity: 2026-03-07 -- Completed 19-02 (IPNS latency metrics)
+progress:
+  total_phases: 5
+  completed_phases: 2
+  total_plans: 4
+  completed_plans: 4
+  percent: 100
+---
+
 # Project State
 
 ## Project Reference
@@ -5,16 +20,16 @@
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 18 - Performance Instrumentation (v1.1 IPFS Infrastructure)
+**Current focus:** Phase 19 - IPNS Resolution Improvement (v1.1 IPFS Infrastructure) -- COMPLETE
 
 ## Current Position
 
-Phase: 18 (first of 5 in v1.1 milestone)
-Plan: 2 of 2 complete
-Status: Phase 18 Complete
-Last activity: 2026-03-07 -- Completed 18-02 (Monitoring dashboard, Kubo scraping, baselines)
+Phase: 19 (IPNS Resolution Improvement) -- ALL PLANS COMPLETE
+Plan: 2 of 2 (done)
+Status: Phase complete
+Last activity: 2026-03-07 -- Completed 19-02 (IPNS latency metrics)
 
-Progress: [████░░░░░░░░░░░░░░░░░░░░░] M3 10%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -24,6 +39,11 @@ Progress: [████░░░░░░░░░░░░░░░░░░░
 - Average duration: 5.5 min
 - Total execution time: ~16.5 hours
 
+| Phase | Plan | Duration | Tasks | Files |
+| ----- | ---- | -------- | ----- | ----- |
+| 19    | 01   | 2min     | 2     | 3     |
+| 19    | 02   | 5min     | 2     | 5     |
+
 ## Accumulated Context
 
 ### Key Decisions
@@ -32,7 +52,7 @@ See PROJECT.md Key Decisions table for full list with outcomes.
 
 Recent for v1.1:
 
-- DB-first with async Kubo DHT verification adopted as IPNS resolution strategy (not Kubo-only or PubSub)
+- Network-first with self-hosted Someguy + DB fallback adopted as IPNS resolution strategy (revised from DB-first during Phase 19 context -- see 19-SCOPING_RATIONALE.md #1)
 - rootFolderKey DB copy kept as permanent fallback (never drop column, IPFS copy for recovery independence)
 - BYO-IPFS affects pinning only, all IPNS publishes still route through CipherBox API
 - PERF requirements split across Phase 18 (server-side, pre-change) and Phase 22 (client + load testing, post-change)
@@ -40,6 +60,8 @@ Recent for v1.1:
 - Source label (db/network) only for resolve operations; empty string for pin/cat/publish
 - Alloy scrapes Kubo directly via Docker internal network (ipfs:5001), not proxied through API
 - Kubo Health dashboard panels use fallback Go runtime metrics alongside libp2p metrics pending post-deploy verification
+- IPNS-specific histograms: resolve 50ms-30s, publish 100ms-60s with source/outcome labels
+- Null resolve results (not found) excluded from IPNS histogram observations
 
 ### Open Concerns
 
@@ -55,4 +77,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-07 after 18-02 plan execution
+Last updated: 2026-03-07 after completing 19-02 (IPNS latency metrics) -- Phase 19 complete

@@ -53,7 +53,7 @@
 - Purpose: Automatic IPNS republishing without user devices online
 - Location: `tee-worker/`
 - Contains: Phala Cloud worker for IPNS key decryption and record signing
-- Depends on: Backend republish schedule, delegated-ipfs.dev
+- Depends on: Backend republish schedule, delegated routing service (Someguy on staging, delegated-ipfs.dev on production)
 - Used by: Backend cron jobs (every 6 hours)
 
 **Legacy PoC (Historical Reference Only):**

@@ -73,12 +73,21 @@ export class IpnsService {
       );
 
       // Publish to delegated routing API (best-effort — DB is the reliable source)
+      const publishStart = process.hrtime.bigint();
+      let publishOutcome = 'success';
       try {
         await this.delegatedRouting.publish(dto.ipnsName, recordBytes);
       } catch (error) {
         result = 'delegated_error';
+        publishOutcome = 'error';
         this.logger.warn(
           `Delegated routing publish failed for ${dto.ipnsName}, DB record saved: ${error instanceof Error ? error.message : String(error)}`
+        );
+      } finally {
+        const publishElapsed = Number(process.hrtime.bigint() - publishStart) / 1e9;
+        this.metricsService.ipnsPublishDuration.observe(
+          { outcome: publishOutcome },
+          publishElapsed
         );
       }
 
@@ -286,6 +295,9 @@ export class IpnsService {
     });
     let timerResult = 'success';
     let timerSource = 'network';
+    const startTime = process.hrtime.bigint();
+    let source = 'network';
+    let resolveFound = false;
 
     try {
       let result: {
@@ -307,6 +319,7 @@ export class IpnsService {
         if (error instanceof HttpException && error.getStatus() === HttpStatus.BAD_GATEWAY) {
           this.logger.warn(`Delegated routing failed for ${ipnsName}, falling back to DB cache`);
           timerResult = 'error';
+          source = 'db_cache';
         } else {
           timerResult = 'error';
           throw error;
@@ -328,14 +341,18 @@ export class IpnsService {
             `DB cache has newer sequence (${dbSeq} > ${networkSeq}) for ${ipnsName}, using DB: ${cached.latestCid}`
           );
           timerSource = 'db';
+          source = 'network_stale';
+          resolveFound = true;
           return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
         }
         timerSource = 'network';
+        resolveFound = true;
         return result;
       }
 
       if (result) {
         timerSource = 'network';
+        resolveFound = true;
         return result;
       }
 
@@ -343,6 +360,8 @@ export class IpnsService {
       if (cached?.latestCid) {
         this.logger.log(`Resolved ${ipnsName} from DB cache: ${cached.latestCid}`);
         timerSource = 'db';
+        source = 'db_cache';
+        resolveFound = true;
         return { cid: cached.latestCid, sequenceNumber: cached.sequenceNumber };
       }
 
@@ -352,6 +371,10 @@ export class IpnsService {
       throw error;
     } finally {
       endTimer({ result: timerResult, source: timerSource });
+      if (resolveFound) {
+        const elapsed = Number(process.hrtime.bigint() - startTime) / 1e9;
+        this.metricsService.ipnsResolveDuration.observe({ source, outcome: timerResult }, elapsed);
+      }
     }
   }
 
