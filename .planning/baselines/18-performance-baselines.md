@@ -111,7 +111,7 @@ Concurrently, `baseline-benchmark.sh` ran 20 iterations of resolve/pin/cat (+ wa
 
 ## Notes
 
-- Client-side timings captured 2026-03-07 via `baseline-benchmark.sh` (5 total runs, 100 data points)
+- Client-side timings captured 2026-03-07 via `baseline-benchmark.sh` (5 runs × 20 iterations per operation = 100 data points per operation, 300 total across resolve/pin/cat)
 - Server-side HTTP timings captured from Grafana Cloud dashboard snapshot at 18:30 UTC
 - Server-side histogram values captured 2026-03-08 via SSH to staging VPS (`curl http://localhost:3000/metrics`)
 - IPNS Publish is the dominant bottleneck at ~864ms p95 server-side — essentially all time in Kubo, negligible HTTP overhead
