@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "3d4bc6e65c0a",
+  "strategy": "manual-commit",
+  "branch": "chore/update-gsd-1.26.0",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".markdownlintignore"
+  ],
+  "sessions": [
+    {
+      "metadata": "/3d/4bc6e65c0a/0/metadata.json",
+      "transcript": "/3d/4bc6e65c0a/0/full.jsonl",
+      "context": "/3d/4bc6e65c0a/0/context.md",
+      "content_hash": "/3d/4bc6e65c0a/0/content_hash.txt",
+      "prompt": "/3d/4bc6e65c0a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 35785,
+    "cache_read_tokens": 279284,
+    "output_tokens": 1753,
+    "api_call_count": 10
+  }
+}
