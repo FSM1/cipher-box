@@ -1,7 +1,9 @@
 ---
 created: 2026-03-08T01:27:44.049Z
+completed: 2026-03-19
 title: Extract core crypto SDK as shared package
 area: architecture
+resolution: Superseded by Phase 19.1 in v1.1 roadmap
 files:
   - apps/web/src/hooks/useFolderMutations.ts
   - apps/web/src/hooks/useFileOperations.ts

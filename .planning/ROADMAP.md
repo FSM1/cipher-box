@@ -64,6 +64,17 @@ Plans:
 - [x] 19-01-PLAN.md -- Deploy Someguy Docker sidecar, update routing URL in deploy workflow and .env.example
 - [x] 19-02-PLAN.md -- Add IPNS resolve/publish latency histograms and instrument IpnsService with timing
 
+### Phase 19.1: Extract core crypto SDK as shared package (INSERTED)
+
+**Goal:** [Urgent work - to be planned]
+**Requirements**: TBD
+**Depends on:** Phase 19
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd:plan-phase 19.1 to break down)
+
 ### Phase 20: Vault Migration
 
 **Goal**: The server stores zero crypto material -- rootFolderKey lives in the IPFS vault blob, making the server a true zero-knowledge relay
