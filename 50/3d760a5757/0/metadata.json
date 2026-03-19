@@ -1,0 +1,62 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "503d760a5757",
+  "session_id": "af1640c7-cfe6-4af0-9ef4-9c33ad8b49dc",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-19T21:46:32.038733Z",
+  "branch": "chore/someguy-monitoring-improvements",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/e2e/.gitignore"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f83c972c32be",
+  "checkpoint_transcript_start": 805,
+  "transcript_lines_at_start": 805,
+  "token_usage": {
+    "input_tokens": 17,
+    "cache_creation_tokens": 8672,
+    "cache_read_tokens": 856142,
+    "output_tokens": 2326,
+    "api_call_count": 16
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments on PR #291 in the cipher-box repo, addressing each thread appropriately and pushing a fix.",
+    "outcome": "Identified two unresolved CodeRabbit threads: one false positive (wget→curl change was correct) and one valid gitignore issue. Fixed the .gitignore to stop tracking generated test files while preserving static fixtures, committed, pushed, and resolved both threads.",
+    "learnings": {
+      "repo": [
+        "The someguy container image has curl available but NOT wget — healthcheck commands must use curl.",
+        "tests/e2e has static fixture files (test-image.png, .gitkeep) committed to git that must remain tracked; generated test files should be gitignored.",
+        "createTestImageFile in tests/e2e/utils/test-files.ts copies from a static test-image.png fixture rather than generating from scratch."
+      ],
+      "code": [
+        {
+          "path": "tests/e2e/.gitignore",
+          "finding": "Was incorrectly ignoring static fixture files; fixed to only ignore generated files while keeping test-image.png and .gitkeep tracked."
+        },
+        {
+          "path": "tests/e2e/utils/test-files.ts",
+          "finding": "createTestImageFile depends on a committed static test-image.png fixture file."
+        }
+      ],
+      "workflow": [
+        "CodeRabbit automated review comments can be incorrect — always verify by inspecting the actual container image or environment before accepting suggestions.",
+        "When resolving PR threads, triage validity before implementing: check the actual runtime environment (Dockerfile, running containers) to confirm whether a suggestion is valid."
+      ]
+    },
+    "friction": [
+      "The someguy container was not running (branch not yet deployed), requiring a Dockerfile inspection to verify curl availability instead of checking a live container.",
+      "CodeRabbit flagged the wget→curl change as a regression when it was actually the correct fix, requiring extra investigation to confirm."
+    ],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-19T21:46:19.066478Z",
+    "agent_lines": 3,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 3,
+    "agent_percentage": 100
+  }
+}
