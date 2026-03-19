@@ -1,0 +1,88 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "6b58c35aa82e",
+  "session_id": "943c2c60-882f-4afa-a2e7-8090c086f230",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-19T22:37:41.847676Z",
+  "branch": "chore/insert-phase-19.1-crypto-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "0bbfdcede87b",
+  "checkpoint_transcript_start": 158,
+  "transcript_lines_at_start": 158,
+  "token_usage": {
+    "input_tokens": 31,
+    "cache_creation_tokens": 14553,
+    "cache_read_tokens": 1518388,
+    "output_tokens": 3044,
+    "api_call_count": 20
+  },
+  "summary": {
+    "intent": "Review pending todos, select the 'Extract core crypto SDK as shared package' todo, and convert it into a formal roadmap phase inserted at position 19.1.",
+    "outcome": "Phase 19.1 ('Extract core crypto SDK as shared package') was inserted into the roadmap immediately after the current phase 19, STATE.md was updated with a roadmap evolution note, and the originating todo was marked as done/superseded and moved to done/.",
+    "learnings": {
+      "repo": [
+        "Core crypto + IPFS/IPNS + metadata logic is tightly coupled to React hooks and Zustand stores; web reimplements in TS, desktop reimplements in Rust — no shared SDK exists yet.",
+        "The roadmap uses decimal phase numbering (e.g., 19.1) to insert urgent/discovered work between integer phases without renumbering the entire sequence.",
+        "The current active phase is Phase 19; Phase 20 is Vault Migration and Phase 21 is BYO-IPFS Node Support — both would benefit from the SDK extraction.",
+        "Pending todos dropped from 11 to 8 after 3 IPFS-related duplicates (bring-your-own-ipfs-node, ipns-resolution-alternatives, move-root-folder-key-to-ipfs) were resolved in the prior session."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "finding": "Contains crypto/vault logic that should be extracted into packages/sdk"
+        },
+        {
+          "path": "apps/web/src/hooks/useFileOperations.ts",
+          "finding": "Contains crypto/vault logic that should be extracted into packages/sdk"
+        },
+        {
+          "path": "apps/web/src/lib/crypto/",
+          "finding": "TS crypto implementation tightly coupled to web app; candidate for SDK extraction"
+        },
+        {
+          "path": "apps/web/src/lib/ipfs/",
+          "finding": "IPFS logic coupled to web app; candidate for SDK extraction"
+        },
+        {
+          "path": "apps/web/src/lib/ipns/",
+          "finding": "IPNS logic coupled to web app; candidate for SDK extraction"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/",
+          "finding": "Desktop reimplements crypto in Rust — duplication that SDK extraction would resolve"
+        },
+        {
+          "path": ".planning/STATE.md",
+          "finding": "Updated with Roadmap Evolution section noting Phase 19.1 insertion"
+        }
+      ],
+      "workflow": [
+        "The gsd:insert-phase workflow uses decimal numbering and an (INSERTED) marker in ROADMAP.md to handle mid-milestone urgent work without disrupting existing phase numbering.",
+        "When a todo is superseded by a new phase rather than completed directly, it should be moved to done/ with a note indicating supersession and the phase number.",
+        "Inserting a phase immediately after the current active phase (rather than later) is preferable when there are no dependency blockers and downstream phases would benefit from the work."
+      ]
+    },
+    "friction": [
+      "Initial phase insertion suggestion placed the phase at 20.1 (between Phase 20 and 21) — user had to correct this to 19.1 to slot it immediately after the current phase.",
+      "The workflow required manually coordinating both the insert-phase skill and the todo done/superseded marking as separate steps."
+    ],
+    "open_items": [
+      "Phase 19.1 ('Extract core crypto SDK as shared package') is inserted but not yet planned — requires /gsd:plan-phase 19.1 in a fresh context.",
+      "7 remaining pending todos still unreviewed: Web Worker encryption offload (ui), ERC-1271 contract wallet auth (auth), Tauri auto-update (desktop), Desktop TEE enrollment (desktop), CRDT-based IPNS inbox research (architecture), async search index build (ui), alternative MFA factors (auth).",
+      "Should verify whether Phase 20 (Vault Migration) and Phase 21 (BYO-IPFS) have any dependency notes that reference the crypto/IPFS layer — they may need updating now that an SDK extraction phase precedes them."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-19T22:37:17.920263Z",
+    "agent_lines": 4,
+    "human_added": 60,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 64,
+    "agent_percentage": 6.25
+  }
+}

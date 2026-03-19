@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "6b58c35aa82e",
+  "strategy": "manual-commit",
+  "branch": "chore/insert-phase-19.1-crypto-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6b/58c35aa82e/0/metadata.json",
+      "transcript": "/6b/58c35aa82e/0/full.jsonl",
+      "context": "/6b/58c35aa82e/0/context.md",
+      "content_hash": "/6b/58c35aa82e/0/content_hash.txt",
+      "prompt": "/6b/58c35aa82e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 31,
+    "cache_creation_tokens": 14553,
+    "cache_read_tokens": 1518388,
+    "output_tokens": 3044,
+    "api_call_count": 20
+  }
+}
