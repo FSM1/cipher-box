@@ -4,4 +4,6 @@ node_modules/
 /blob-report/
 /playwright/.cache/
 /.auth/
-/fixtures/files/
+/fixtures/files/*
+!/fixtures/files/.gitkeep
+!/fixtures/files/test-image.png
