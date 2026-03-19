@@ -1,0 +1,456 @@
+ok lets push these up to a chore branch and get a PR up
+
+---
+
+<objective>
+Check project progress, summarize recent work and what's ahead, then intelligently route to the next action - either executing an existing plan or creating the next one.
+
+Provides situational awareness before continuing work.
+</objective>
+
+<execution_context>
+@/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/progress.md
+</execution_context>
+
+<process>
+Execute the progress workflow from @/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/progress.md end-to-end.
+Preserve all routing logic (Routes A through F) and edge case handling.
+</process>
+
+---
+
+<objective>
+List all pending todos, allow selection, load full context for the selected todo, and route to appropriate action.
+
+Routes to the check-todos workflow which handles:
+
+- Todo counting and listing with area filtering
+- Interactive selection with full context loading
+- Roadmap correlation checking
+- Action routing (work now, add to phase, brainstorm, create phase)
+- STATE.md updates and git commits
+  </objective>
+
+<execution_context>
+@/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/check-todos.md
+</execution_context>
+
+<context>
+Arguments:  (optional area filter)
+
+Todo state and roadmap correlation are loaded in-workflow using `init todos` and targeted reads.
+</context>
+
+<process>
+**Follow the check-todos workflow** from `@/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/check-todos.md`.
+
+The workflow handles all logic including:
+
+1. Todo existence checking
+2. Area filtering
+3. Interactive listing and selection
+4. Full context loading with file summaries
+5. Roadmap correlation checking
+6. Action offering and execution
+7. STATE.md updates
+8. Git commits
+   </process>
+
+---
+
+Is it just me or have some of these todos already been converted in to phases in this milestone?
+
+---
+
+<bash-input>git switch main && git pull</bash-input>
+
+---
+
+<bash-stdout>Switched to branch 'main'
+Your branch is up to date with 'origin/main'.
+From https://github.com/FSM1/cipher-box
+   78b1b3d38..7e5a970b7  main       -> origin/main
+Updating 78b1b3d38..7e5a970b7
+Fast-forward
+ .claude/agents/gsd-codebase-mapper.md              |    2 -
+ .claude/agents/gsd-debugger.md                     |   95 +-
+ .claude/agents/gsd-executor.md                     |   32 +-
+ .claude/agents/gsd-integration-checker.md          |    2 -
+ .claude/agents/gsd-nyquist-auditor.md              |    2 -
+ .claude/agents/gsd-phase-researcher.md             |   14 +-
+ .claude/agents/gsd-plan-checker.md                 |   34 +-
+ .claude/agents/gsd-planner.md                      |   20 +-
+ .claude/agents/gsd-project-researcher.md           |    4 +-
+ .claude/agents/gsd-research-synthesizer.md         |    8 +-
+ .claude/agents/gsd-roadmapper.md                   |    6 +-
+ .claude/agents/gsd-ui-auditor.md                   |  458 +++++++
+ .claude/agents/gsd-ui-checker.md                   |  332 +++++
+ .claude/agents/gsd-ui-researcher.md                |  375 ++++++
+ .claude/agents/gsd-user-profiler.md                |  178 +++
+ .claude/agents/gsd-verifier.md                     |   14 +-
+ .claude/commands/gsd/add-phase.md                  |    4 +-
+ .claude/commands/gsd/add-tests.md                  |    4 +-
+ .claude/commands/gsd/add-todo.md                   |    4 +-
+ .claude/commands/gsd/audit-milestone.md            |    4 +-
+ .claude/commands/gsd/autonomous.md                 |   43 +
+ .claude/commands/gsd/check-todos.md                |    4 +-
+ .claude/commands/gsd/cleanup.md                    |    4 +-
+ .claude/commands/gsd/complete-milestone.md         |   12 +-
+ .claude/commands/gsd/debug.md                      |    4 +-
+ .claude/commands/gsd/discuss-phase.md              |    9 +-
+ .claude/commands/gsd/do.md                         |   31 +
+ .claude/commands/gsd/execute-phase.md              |    9 +-
+ .claude/commands/gsd/health.md                     |    4 +-
+ .claude/commands/gsd/help.md                       |    4 +-
+ .claude/commands/gsd/insert-phase.md               |    4 +-
+ .claude/commands/gsd/list-phase-assumptions.md     |    2 +-
+ .claude/commands/gsd/map-codebase.md               |   12 +-
+ .claude/commands/gsd/new-milestone.md              |   12 +-
+ .claude/commands/gsd/new-project.md                |   12 +-
+ .claude/commands/gsd/next.md                       |   25 +
+ .claude/commands/gsd/note.md                       |   36 +
+ .claude/commands/gsd/pause-work.md                 |    4 +-
+ .claude/commands/gsd/plan-milestone-gaps.md        |    4 +-
+ .claude/commands/gsd/plan-phase.md                 |    6 +-
+ .claude/commands/gsd/profile-user.md               |   47 +
+ .claude/commands/gsd/progress.md                   |    4 +-
+ .claude/commands/gsd/quick.md                      |   10 +-
+ .claude/commands/gsd/reapply-patches.md            |    2 +-
+ .claude/commands/gsd/remove-phase.md               |    4 +-
+ .claude/commands/gsd/research-phase.md             |    6 +-
+ .claude/commands/gsd/resume-work.md                |    4 +-
+ .claude/commands/gsd/session-report.md             |   20 +
+ .claude/commands/gsd/set-profile.md                |   34 +-
+ .claude/commands/gsd/settings.md                   |    4 +-
+ .claude/commands/gsd/ship.md                       |   24 +
+ .claude/commands/gsd/stats.md                      |   19 +
+ .claude/commands/gsd/ui-phase.md                   |   35 +
+ .claude/commands/gsd/ui-review.md                  |   33 +
+ .claude/commands/gsd/update.md                     |    4 +-
+ .claude/commands/gsd/validate-phase.md             |    4 +-
+ .claude/commands/gsd/verify-work.md                |    6 +-
+ .claude/get-shit-done/VERSION                      |    2 +-
+ .claude/get-shit-done/bin/gsd-tools.cjs            |  130 ++
+ .claude/get-shit-done/bin/lib/commands.cjs         |  163 ++-
+ .claude/get-shit-done/bin/lib/config.cjs           |  176 ++-
+ .claude/get-shit-done/bin/lib/core.cjs             |  310 ++++-
+ .claude/get-shit-done/bin/lib/frontmatter.cjs      |   16 +-
+ .claude/get-shit-done/bin/lib/init.cjs             |  112 +-
+ .claude/get-shit-done/bin/lib/milestone.cjs        |   21 +-
+ .claude/get-shit-done/bin/lib/model-profiles.cjs   |   68 +
+ .claude/get-shit-done/bin/lib/phase.cjs            |   84 +-
+ .claude/get-shit-done/bin/lib/profile-output.cjs   |  931 +++++++++++++
+ .claude/get-shit-done/bin/lib/profile-pipeline.cjs |  537 ++++++++
+ .claude/get-shit-done/bin/lib/roadmap.cjs          |   32 +-
+ .claude/get-shit-done/bin/lib/state.cjs            |  135 +-
+ .claude/get-shit-done/bin/lib/template.cjs         |    4 +-
+ .claude/get-shit-done/bin/lib/verify.cjs           |   38 +-
+ .claude/get-shit-done/references/checkpoints.md    |   22 +-
+ .../references/decimal-phase-calculation.md        |    8 +-
+ .../get-shit-done/references/git-integration.md    |    6 +-
+ .../references/git-planning-commit.md              |    4 +-
+ .../references/model-profile-resolution.md         |    4 +-
+ .claude/get-shit-done/references/model-profiles.md |   59 +-
+ .../references/phase-argument-parsing.md           |    6 +-
+ .../get-shit-done/references/planning-config.md    |   12 +-
+ .claude/get-shit-done/references/user-profiling.md |  681 ++++++++++
+ .../references/verification-patterns.md            |    2 +-
+ .claude/get-shit-done/templates/UI-SPEC.md         |  100 ++
+ .claude/get-shit-done/templates/claude-md.md       |  115 ++
+ .../get-shit-done/templates/codebase/structure.md  |    6 +-
+ .claude/get-shit-done/templates/config.json        |    3 +
+ .claude/get-shit-done/templates/context.md         |   70 +-
+ .../templates/copilot-instructions.md              |    7 +
+ .claude/get-shit-done/templates/dev-preferences.md |   21 +
+ .claude/get-shit-done/templates/phase-prompt.md    |   74 +-
+ .claude/get-shit-done/templates/user-profile.md    |  146 +++
+ .claude/get-shit-done/workflows/add-phase.md       |    4 +-
+ .claude/get-shit-done/workflows/add-tests.md       |    4 +-
+ .claude/get-shit-done/workflows/add-todo.md        |    6 +-
+ .claude/get-shit-done/workflows/audit-milestone.md |   12 +-
+ .claude/get-shit-done/workflows/autonomous.md      |  776 +++++++++++
+ .claude/get-shit-done/workflows/check-todos.md     |    4 +-
+ .claude/get-shit-done/workflows/cleanup.md         |    2 +-
+ .../get-shit-done/workflows/complete-milestone.md  |   16 +-
+ .claude/get-shit-done/workflows/diagnose-issues.md |    2 +-
+ .claude/get-shit-done/workflows/discovery-phase.md |   10 +-
+ .claude/get-shit-done/workflows/discuss-phase.md   |  294 ++---
+ .claude/get-shit-done/workflows/do.md              |  107 ++
+ .claude/get-shit-done/workflows/execute-phase.md   |  299 ++++-
+ .claude/get-shit-done/workflows/execute-plan.md    |   96 +-
+ .claude/get-shit-done/workflows/health.md          |    4 +-
+ .claude/get-shit-done/workflows/help.md            |   62 +-
+ .claude/get-shit-done/workflows/insert-phase.md    |    4 +-
+ .claude/get-shit-done/workflows/map-codebase.md    |   62 +-
+ .claude/get-shit-done/workflows/new-milestone.md   |   33 +-
+ .claude/get-shit-done/workflows/new-project.md     |   34 +-
+ .claude/get-shit-done/workflows/next.md            |  102 ++
+ .claude/get-shit-done/workflows/node-repair.md     |   97 ++
+ .claude/get-shit-done/workflows/note.md            |  159 +++
+ .claude/get-shit-done/workflows/pause-work.md      |   69 +-
+ .../get-shit-done/workflows/plan-milestone-gaps.md |    4 +-
+ .claude/get-shit-done/workflows/plan-phase.md      |  247 +++-
+ .claude/get-shit-done/workflows/profile-user.md    |  476 +++++++
+ .claude/get-shit-done/workflows/progress.md        |   14 +-
+ .claude/get-shit-done/workflows/quick.md           |  215 ++-
+ .claude/get-shit-done/workflows/remove-phase.md    |    8 +-
+ .claude/get-shit-done/workflows/research-phase.md  |    8 +-
+ .claude/get-shit-done/workflows/resume-project.md  |   30 +-
+ .claude/get-shit-done/workflows/session-report.md  |  157 +++
+ .claude/get-shit-done/workflows/settings.md        |   60 +-
+ .claude/get-shit-done/workflows/ship.md            |  252 ++++
+ .claude/get-shit-done/workflows/stats.md           |   61 +
+ .claude/get-shit-done/workflows/transition.md      |   25 +-
+ .claude/get-shit-done/workflows/ui-phase.md        |  306 +++++
+ .claude/get-shit-done/workflows/ui-review.md       |  162 +++
+ .claude/get-shit-done/workflows/update.md          |  132 +-
+ .claude/get-shit-done/workflows/validate-phase.md  |   14 +-
+ .claude/get-shit-done/workflows/verify-phase.md    |   29 +-
+ .claude/get-shit-done/workflows/verify-work.md     |   33 +-
+ .claude/gsd-file-manifest.json                     |  241 ++--
+ .../agents/gsd-codebase-mapper.md                  |  850 ++++++++++++
+ .claude/gsd-local-patches/agents/gsd-debugger.md   | 1355 +++++++++++++++++++
+ .claude/gsd-local-patches/agents/gsd-executor.md   |  509 ++++++++
+ .../agents/gsd-integration-checker.md              |  445 +++++++
+ .../agents/gsd-nyquist-auditor.md                  |  188 +++
+ .../agents/gsd-phase-researcher.md                 |  603 +++++++++
+ .../gsd-local-patches/agents/gsd-plan-checker.md   |  749 +++++++++++
+ .claude/gsd-local-patches/agents/gsd-planner.md    | 1372 ++++++++++++++++++++
+ .../agents/gsd-project-researcher.md               |  661 ++++++++++
+ .../agents/gsd-research-synthesizer.md             |  262 ++++
+ .claude/gsd-local-patches/agents/gsd-roadmapper.md |  696 ++++++++++
+ .claude/gsd-local-patches/agents/gsd-verifier.md   |  593 +++++++++
+ .claude/gsd-local-patches/backup-meta.json         |  105 ++
+ .../gsd-local-patches/commands/gsd/add-phase.md    |   45 +
+ .../gsd-local-patches/commands/gsd/add-tests.md    |   42 +
+ .claude/gsd-local-patches/commands/gsd/add-todo.md |   49 +
+ .../commands/gsd/audit-milestone.md                |   37 +
+ .../gsd-local-patches/commands/gsd/check-todos.md  |   47 +
+ .claude/gsd-local-patches/commands/gsd/cleanup.md  |   19 +
+ .claude/gsd-local-patches/commands/gsd/debug.md    |  178 +++
+ .../commands/gsd/discuss-phase.md                  |   96 ++
+ .../commands/gsd/execute-phase.md                  |   43 +
+ .claude/gsd-local-patches/commands/gsd/health.md   |   23 +
+ .claude/gsd-local-patches/commands/gsd/help.md     |   24 +
+ .../commands/gsd/list-phase-assumptions.md         |   46 +
+ .../commands/gsd/new-milestone.md                  |   46 +
+ .../gsd-local-patches/commands/gsd/new-project.md  |   44 +
+ .../gsd-local-patches/commands/gsd/pause-work.md   |   40 +
+ .../commands/gsd/plan-milestone-gaps.md            |   35 +
+ .../gsd-local-patches/commands/gsd/plan-phase.md   |   47 +
+ .claude/gsd-local-patches/commands/gsd/progress.md |   25 +
+ .claude/gsd-local-patches/commands/gsd/quick.md    |   47 +
+ .../commands/gsd/reapply-patches.md                |  126 ++
+ .../gsd-local-patches/commands/gsd/remove-phase.md |   32 +
+ .../commands/gsd/research-phase.md                 |  199 +++
+ .../gsd-local-patches/commands/gsd/set-profile.md  |   36 +
+ .claude/gsd-local-patches/commands/gsd/settings.md |   38 +
+ .claude/gsd-local-patches/commands/gsd/update.md   |   39 +
+ .../commands/gsd/validate-phase.md                 |   36 +
+ .../gsd-local-patches/commands/gsd/verify-work.md  |   39 +
+ .../get-shit-done/references/checkpoints.md        |  806 ++++++++++++
+ .../references/decimal-phase-calculation.md        |   68 +
+ .../get-shit-done/references/git-integration.md    |  257 ++++
+ .../references/git-planning-commit.md              |   38 +
+ .../get-shit-done/references/model-profiles.md     |   97 ++
+ .../references/phase-argument-parsing.md           |   63 +
+ .../get-shit-done/references/planning-config.md    |  214 +++
+ .../get-shit-done/references/questioning.md        |  168 +++
+ .../references/verification-patterns.md            |  655 ++++++++++
+ .../get-shit-done/templates/DEBUG.md               |  183 +++
+ .../get-shit-done/templates/UAT.md                 |  271 ++++
+ .../get-shit-done/templates/VALIDATION.md          |   76 ++
+ .../get-shit-done/templates/codebase/structure.md  |  293 +++++
+ .../get-shit-done/templates/context.md             |  321 +++++
+ .../get-shit-done/templates/phase-prompt.md        |  588 +++++++++
+ .../templates/planner-subagent-prompt.md           |  121 ++
+ .../templates/research-project/ARCHITECTURE.md     |  211 +++
+ .../get-shit-done/templates/research.md            |  622 +++++++++
+ .../get-shit-done/templates/retrospective.md       |   60 +
+ .../get-shit-done/templates/roadmap.md             |  226 ++++
+ .../get-shit-done/templates/state.md               |  193 +++
+ .../get-shit-done/templates/summary-complex.md     |   67 +
+ .../get-shit-done/templates/summary-minimal.md     |   46 +
+ .../get-shit-done/templates/summary-standard.md    |   54 +
+ .../get-shit-done/templates/summary.md             |  268 ++++
+ .../get-shit-done/templates/user-setup.md          |  323 +++++
+ .../get-shit-done/templates/verification-report.md |  334 +++++
+ .../get-shit-done/workflows/add-phase.md           |  117 ++
+ .../get-shit-done/workflows/add-tests.md           |  374 ++++++
+ .../get-shit-done/workflows/add-todo.md            |  167 +++
+ .../get-shit-done/workflows/audit-milestone.md     |  345 +++++
+ .../get-shit-done/workflows/check-todos.md         |  182 +++
+ .../get-shit-done/workflows/complete-milestone.md  |  789 +++++++++++
+ .../get-shit-done/workflows/diagnose-issues.md     |  234 ++++
+ .../get-shit-done/workflows/discovery-phase.md     |  280 ++++
+ .../get-shit-done/workflows/discuss-phase.md       |  881 +++++++++++++
+ .../get-shit-done/workflows/execute-phase.md       |  526 ++++++++
+ .../get-shit-done/workflows/execute-plan.md        |  457 +++++++
+ .../get-shit-done/workflows/health.md              |  168 +++
+ .../get-shit-done/workflows/help.md                |  496 +++++++
+ .../get-shit-done/workflows/insert-phase.md        |  134 ++
+ .../workflows/list-phase-assumptions.md            |  185 +++
+ .../get-shit-done/workflows/map-codebase.md        |  322 +++++
+ .../get-shit-done/workflows/new-milestone.md       |  399 ++++++
+ .../get-shit-done/workflows/new-project.md         | 1145 ++++++++++++++++
+ .../get-shit-done/workflows/pause-work.md          |  125 ++
+ .../get-shit-done/workflows/plan-milestone-gaps.md |  292 +++++
+ .../get-shit-done/workflows/plan-phase.md          |  591 +++++++++
+ .../get-shit-done/workflows/progress.md            |  386 ++++++
+ .../get-shit-done/workflows/quick.md               |  631 +++++++++
+ .../get-shit-done/workflows/remove-phase.md        |  157 +++
+ .../get-shit-done/workflows/research-phase.md      |   75 ++
+ .../get-shit-done/workflows/resume-project.md      |  312 +++++
+ .../get-shit-done/workflows/set-profile.md         |    0
+ .../get-shit-done/workflows/settings.md            |  220 ++++
+ .../get-shit-done/workflows/transition.md          |  549 ++++++++
+ .../get-shit-done/workflows/update.md              |  249 ++++
+ .../get-shit-done/workflows/validate-phase.md      |  175 +++
+ .../get-shit-done/workflows/verify-phase.md        |  253 ++++
+ .../get-shit-done/workflows/verify-work.md         |  637 +++++++++
+ .claude/hooks/gsd-check-update.js                  |   34 +-
+ .claude/hooks/gsd-context-monitor.js               |   25 +-
+ .claude/hooks/gsd-statusline.js                    |    4 +
+ .markdownlintignore                                |    1 +
+ 240 files changed, 38321 insertions(+), 1015 deletions(-)
+ create mode 100644 .claude/agents/gsd-ui-auditor.md
+ create mode 100644 .claude/agents/gsd-ui-checker.md
+ create mode 100644 .claude/agents/gsd-ui-researcher.md
+ create mode 100644 .claude/agents/gsd-user-profiler.md
+ create mode 100644 .claude/commands/gsd/autonomous.md
+ create mode 100644 .claude/commands/gsd/do.md
+ create mode 100644 .claude/commands/gsd/next.md
+ create mode 100644 .claude/commands/gsd/note.md
+ create mode 100644 .claude/commands/gsd/profile-user.md
+ create mode 100644 .claude/commands/gsd/session-report.md
+ create mode 100644 .claude/commands/gsd/ship.md
+ create mode 100644 .claude/commands/gsd/stats.md
+ create mode 100644 .claude/commands/gsd/ui-phase.md
+ create mode 100644 .claude/commands/gsd/ui-review.md
+ create mode 100644 .claude/get-shit-done/bin/lib/model-profiles.cjs
+ create mode 100644 .claude/get-shit-done/bin/lib/profile-output.cjs
+ create mode 100644 .claude/get-shit-done/bin/lib/profile-pipeline.cjs
+ create mode 100644 .claude/get-shit-done/references/user-profiling.md
+ create mode 100644 .claude/get-shit-done/templates/UI-SPEC.md
+ create mode 100644 .claude/get-shit-done/templates/claude-md.md
+ create mode 100644 .claude/get-shit-done/templates/copilot-instructions.md
+ create mode 100644 .claude/get-shit-done/templates/dev-preferences.md
+ create mode 100644 .claude/get-shit-done/templates/user-profile.md
+ create mode 100644 .claude/get-shit-done/workflows/autonomous.md
+ create mode 100644 .claude/get-shit-done/workflows/do.md
+ create mode 100644 .claude/get-shit-done/workflows/next.md
+ create mode 100644 .claude/get-shit-done/workflows/node-repair.md
+ create mode 100644 .claude/get-shit-done/workflows/note.md
+ create mode 100644 .claude/get-shit-done/workflows/profile-user.md
+ create mode 100644 .claude/get-shit-done/workflows/session-report.md
+ create mode 100644 .claude/get-shit-done/workflows/ship.md
+ create mode 100644 .claude/get-shit-done/workflows/stats.md
+ create mode 100644 .claude/get-shit-done/workflows/ui-phase.md
+ create mode 100644 .claude/get-shit-done/workflows/ui-review.md
+ create mode 100644 .claude/gsd-local-patches/agents/gsd-codebase-mapper.md
+ create mode 100644 .claude/gsd-local-patches/agents/gsd-debugger.md
+ create mode 100644 .claude/gsd-local-patches/agents/gsd-executor.md
+ create mode 100644 .claude/gsd-local-patches/agents/gsd-integration-checker.md
+ create mode 100644 .claude/gsd-local-patches/agents/gsd-nyquist-auditor.md
+ create mode 100644 .claude/gsd-local-patches/agents/gsd-phase-researcher.md
+ create mode 100644 .claude/gsd-local-patches/agents/gsd-plan-checker.md
+ create mode 100644 .claude/gsd-local-patches/agents/gsd-planner.md
+ create mode 100644 .claude/gsd-local-patches/agents/gsd-project-researcher.md
+ create mode 100644 .claude/gsd-local-patches/agents/gsd-research-synthesizer.md
+ create mode 100644 .claude/gsd-local-patches/agents/gsd-roadmapper.md
+ create mode 100644 .claude/gsd-local-patches/agents/gsd-verifier.md
+ create mode 100644 .claude/gsd-local-patches/backup-meta.json
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/add-phase.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/add-tests.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/add-todo.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/audit-milestone.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/check-todos.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/cleanup.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/debug.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/discuss-phase.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/execute-phase.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/health.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/help.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/list-phase-assumptions.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/new-milestone.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/new-project.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/pause-work.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/plan-milestone-gaps.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/plan-phase.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/progress.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/quick.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/reapply-patches.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/remove-phase.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/research-phase.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/set-profile.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/settings.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/update.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/validate-phase.md
+ create mode 100644 .claude/gsd-local-patches/commands/gsd/verify-work.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/references/checkpoints.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/references/decimal-phase-calculation.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/references/git-integration.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/references/git-planning-commit.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/references/model-profiles.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/references/phase-argument-parsing.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/references/planning-config.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/references/questioning.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/references/verification-patterns.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/DEBUG.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/UAT.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/VALIDATION.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/codebase/structure.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/context.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/phase-prompt.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/planner-subagent-prompt.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/research-project/ARCHITECTURE.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/research.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/retrospective.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/roadmap.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/state.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/summary-complex.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/summary-minimal.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/summary-standard.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/summary.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/user-setup.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/templates/verification-report.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/add-phase.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/add-tests.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/add-todo.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/audit-milestone.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/check-todos.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/complete-milestone.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/diagnose-issues.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/discovery-phase.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/discuss-phase.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/execute-phase.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/execute-plan.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/health.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/help.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/insert-phase.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/list-phase-assumptions.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/map-codebase.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/new-milestone.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/new-project.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/pause-work.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/plan-milestone-gaps.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/plan-phase.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/progress.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/quick.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/remove-phase.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/research-phase.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/resume-project.md
+ rename .claude/{ => gsd-local-patches}/get-shit-done/workflows/set-profile.md (100%)
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/settings.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/transition.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/update.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/validate-phase.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/verify-phase.md
+ create mode 100644 .claude/gsd-local-patches/get-shit-done/workflows/verify-work.md
+ mode change 100644 => 100755 .claude/hooks/gsd-check-update.js
+ mode change 100644 => 100755 .claude/hooks/gsd-context-monitor.js
+ mode change 100644 => 100755 .claude/hooks/gsd-statusline.js</bash-stdout><bash-stderr></bash-stderr>
+
+---
+
+yes please sort that out

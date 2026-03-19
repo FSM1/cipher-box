@@ -1,0 +1,60 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "df30c22a1332",
+  "session_id": "943c2c60-882f-4afa-a2e7-8090c086f230",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-19T22:29:53.95162Z",
+  "branch": "chore/cleanup-duplicate-todos",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/done/2026-02-14-bring-your-own-ipfs-node.md",
+    ".planning/todos/done/2026-02-21-ipns-resolution-alternatives.md",
+    ".planning/todos/done/2026-02-21-move-root-folder-key-to-ipfs.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "8880d0a4752e",
+  "checkpoint_transcript_start": 66,
+  "transcript_lines_at_start": 66,
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 32472,
+    "cache_read_tokens": 705374,
+    "output_tokens": 3251,
+    "api_call_count": 14
+  },
+  "summary": {
+    "intent": "Upgrade GSD tooling from v1.22.4 to v1.26.0, check project progress on CipherBox milestone v1.1, and clean up stale todos that had already been absorbed into roadmap phases.",
+    "outcome": "GSD v1.26.0 PR merged (240 files, 38k+ insertions). Confirmed CipherBox is at Phase 19/22 with Phase 20 (Vault Migration) next. Cleaned up 3 todos already covered by roadmap phases.",
+    "learnings": {
+      "repo": [
+        "GSD v1.26.0 introduces new agents (gsd-ui-auditor, gsd-ui-checker, gsd-ui-researcher, gsd-user-profiler), new commands (/gsd:autonomous, /gsd:do, /gsd:next, /gsd:note, /gsd:ship, /gsd:stats, /gsd:ui-phase, /gsd:ui-review, /gsd:session-report, /gsd:profile-user), and model-profiles library supporting user profiling pipeline.",
+        "GSD local patches are now stored in .claude/gsd-local-patches/ — full workflow/agent/template copies live there as the patch source of truth.",
+        "Todos and roadmap phases can drift out of sync; 3 of 11 pending todos were already covered by active milestone phases (Phase 19, 20, 21).",
+        "CipherBox milestone v1.1 is Phase 19/22 complete; Phase 20 is Vault Migration (rootFolderKey moves to IPFS vault blob for zero-knowledge architecture), depends on Phase 19 IPNS reliability (already done)."
+      ],
+      "code": [],
+      "workflow": [
+        "When running /gsd:check-todos, cross-reference against the active roadmap to identify stale todos that have been promoted to phases — move them to done/ to keep the list actionable.",
+        "Pre-commit markdownlint hook will block commits containing new directories unless they are added to .markdownlintignore."
+      ]
+    },
+    "friction": [
+      "Pre-commit markdownlint hook blocked the GSD update PR — required adding .claude/gsd-local-patches/ to .markdownlintignore before the commit could land.",
+      "Todo list had accumulated 3 entries already covered by roadmap phases, requiring manual cross-referencing to identify and clean up."
+    ],
+    "open_items": [
+      "8 remaining pending todos not yet covered by roadmap phases (web worker encryption offload, ERC-1271 contract wallet auth, Tauri auto-update, desktop TEE enrollment, CRDT-based IPNS inbox, async search index, alternative MFA factors, extract core crypto SDK).",
+      "Phase 20 (Vault Migration) needs discussion/planning — /gsd:discuss-phase 20 or /gsd:plan-phase 20.",
+      "Phases 21 (BYO-IPFS Node) and 22 still unplanned for milestone v1.1."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-19T22:29:24.928721Z",
+    "agent_lines": 0,
+    "human_added": 126,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 126,
+    "agent_percentage": 0
+  }
+}

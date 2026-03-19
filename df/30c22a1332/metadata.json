@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "df30c22a1332",
+  "strategy": "manual-commit",
+  "branch": "chore/cleanup-duplicate-todos",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/done/2026-02-14-bring-your-own-ipfs-node.md",
+    ".planning/todos/done/2026-02-21-ipns-resolution-alternatives.md",
+    ".planning/todos/done/2026-02-21-move-root-folder-key-to-ipfs.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/df/30c22a1332/0/metadata.json",
+      "transcript": "/df/30c22a1332/0/full.jsonl",
+      "context": "/df/30c22a1332/0/context.md",
+      "content_hash": "/df/30c22a1332/0/content_hash.txt",
+      "prompt": "/df/30c22a1332/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 20,
+    "cache_creation_tokens": 32472,
+    "cache_read_tokens": 705374,
+    "output_tokens": 3251,
+    "api_call_count": 14
+  }
+}
