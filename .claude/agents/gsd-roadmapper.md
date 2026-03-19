@@ -3,8 +3,6 @@ name: gsd-roadmapper
 description: Creates project roadmaps with phase breakdown, requirement mapping, success criteria derivation, and coverage validation. Spawned by /gsd:new-project orchestrator.
 tools: Read, Write, Bash, Glob, Grep
 color: purple
-skills:
-  - gsd-roadmapper-workflow
 # hooks:
 #   PostToolUse:
 #     - matcher: "Write|Edit"
@@ -356,11 +354,11 @@ After roadmap creation, REQUIREMENTS.md gets updated with phase mappings:
 | 2. Name | 0/2            | Not started | -         |
 ```
 
-Reference full template: `./.claude/get-shit-done/templates/roadmap.md`
+Reference full template: `/Users/michael/Code/cipher-box/.claude/get-shit-done/templates/roadmap.md`
 
 ## STATE.md Structure
 
-Use template from `./.claude/get-shit-done/templates/state.md`.
+Use template from `/Users/michael/Code/cipher-box/.claude/get-shit-done/templates/state.md`.
 
 Key sections:
 

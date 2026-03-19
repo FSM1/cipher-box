@@ -26,7 +26,7 @@ fi
 **Run health validation:**
 
 ```bash
-node "./.claude/get-shit-done/bin/gsd-tools.cjs" validate health $REPAIR_FLAG
+node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" validate health $REPAIR_FLAG
 ```
 
 Parse JSON output:
@@ -120,7 +120,7 @@ If yes, re-run with --repair flag and display results.
 Re-run health check without --repair to confirm issues are resolved:
 
 ```bash
-node "./.claude/get-shit-done/bin/gsd-tools.cjs" validate health
+node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" validate health
 ```
 
 Report final status.
