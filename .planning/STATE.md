@@ -63,6 +63,10 @@ Recent for v1.1:
 - IPNS-specific histograms: resolve 50ms-30s, publish 100ms-60s with source/outcome labels
 - Null resolve results (not found) excluded from IPNS histogram observations
 
+### Roadmap Evolution
+
+- Phase 19.1 inserted after Phase 19: Extract core crypto SDK as shared package (URGENT)
+
 ### Open Concerns
 
 - 9 LOW-priority tech debt items from M2 audit (see `.planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md`)
