@@ -66,6 +66,17 @@ prometheus.scrape "cipherbox_api" {
   forward_to = [prometheus.remote_write.grafana_cloud.receiver]
 }
 
+// Scrape someguy delegated routing sidecar for DHT and HTTP routing metrics
+prometheus.scrape "someguy" {
+  targets = [{
+    __address__ = "someguy:8190",
+  }]
+  metrics_path = "/debug/metrics/prometheus"
+  scrape_interval = "30s"
+
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
 // Scrape Kubo /debug/metrics/prometheus endpoint for IPFS node health
 prometheus.scrape "kubo" {
   targets = [{
