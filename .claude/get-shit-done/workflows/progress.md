@@ -12,7 +12,7 @@ Read all files referenced by the invoking prompt's execution_context before star
 **Load progress context (paths only):**
 
 ```bash
-INIT=$(node "./.claude/get-shit-done/bin/gsd-tools.cjs" init progress)
+INIT=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" init progress)
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
@@ -42,8 +42,8 @@ If missing both ROADMAP.md and PROJECT.md: suggest `/gsd:new-project`.
 
 Instead of reading full files, use targeted tools to get only the data needed for the report:
 
-- `ROADMAP=$(node "./.claude/get-shit-done/bin/gsd-tools.cjs" roadmap analyze)`
-- `STATE=$(node "./.claude/get-shit-done/bin/gsd-tools.cjs" state-snapshot)`
+- `ROADMAP=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" roadmap analyze)`
+- `STATE=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" state-snapshot)`
 
 This minimizes orchestrator context usage.
 </step>
@@ -52,7 +52,7 @@ This minimizes orchestrator context usage.
 **Get comprehensive roadmap analysis (replaces manual parsing):**
 
 ```bash
-ROADMAP=$(node "./.claude/get-shit-done/bin/gsd-tools.cjs" roadmap analyze)
+ROADMAP=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" roadmap analyze)
 ```
 
 This returns structured JSON with:
@@ -72,7 +72,7 @@ Use this instead of manually reading/parsing ROADMAP.md.
 - Find the 2-3 most recent SUMMARY.md files
 - Use `summary-extract` for efficient parsing:
   ```bash
-  node "./.claude/get-shit-done/bin/gsd-tools.cjs" summary-extract <path> --fields one_liner
+  node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" summary-extract <path> --fields one_liner
   ```
 - This shows "what we've been working on"
   </step>
@@ -91,7 +91,7 @@ Use this instead of manually reading/parsing ROADMAP.md.
 
 ```bash
 # Get formatted progress bar
-PROGRESS_BAR=$(node "./.claude/get-shit-done/bin/gsd-tools.cjs" progress bar --raw)
+PROGRESS_BAR=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" progress bar --raw)
 ```
 
 Present:
@@ -100,7 +100,7 @@ Present:
 # [Project Name]
 
 **Progress:** {PROGRESS_BAR}
-**Profile:** [quality/balanced/budget]
+**Profile:** [quality/balanced/budget/inherit]
 
 ## Recent Work
 - [Phase X, Plan Y]: [what was accomplished - 1 line from summary-extract]

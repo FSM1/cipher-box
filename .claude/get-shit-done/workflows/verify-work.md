@@ -15,31 +15,8 @@ Claude presents what SHOULD happen. User confirms or describes what's different.
 No Pass/Fail buttons. No severity questions. Just: "Here's what should happen. Does it?"
 </philosophy>
 
-<automation_first>
-**Prefer Playwright MCP for verification when available.**
-
-When Playwright MCP tools are accessible, Claude should drive the application directly rather than asking the user to test manually. This is faster, more repeatable, and reduces user burden.
-
-**Automation workflow:**
-
-1. Navigate to the running app (typically http://localhost:5173)
-2. Authenticate if needed (use E2E credentials from tests/e2e/.env)
-3. For each test: perform the actions via Playwright, take screenshots, evaluate results
-4. Record pass/issue based on observed behavior (screenshots, DOM state, network calls)
-5. Present results with screenshots to the user for final confirmation
-
-**When to fall back to manual:**
-
-- Playwright MCP is unavailable
-- Test requires physical device interaction (mobile gestures, hardware)
-- Test requires subjective visual judgment the user must make
-- App is not running locally
-
-**Key rule:** If Claude can drive the test, Claude drives the test. Only ask the user when automation cannot determine the result.
-</automation_first>
-
 <template>
-@./.claude/get-shit-done/templates/UAT.md
+@/Users/michael/Code/cipher-box/.claude/get-shit-done/templates/UAT.md
 </template>
 
 <process>
@@ -48,7 +25,7 @@ When Playwright MCP tools are accessible, Claude should drive the application di
 If $ARGUMENTS contains a phase number, load context:
 
 ```bash
-INIT=$(node "./.claude/get-shit-done/bin/gsd-tools.cjs" init verify-work "${PHASE_ARG}")
+INIT=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" init verify-work "${PHASE_ARG}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
@@ -348,7 +325,7 @@ Clear Current Test section:
 Commit the UAT file:
 
 ```bash
-node "./.claude/get-shit-done/bin/gsd-tools.cjs" commit "test({phase_num}): complete UAT - {passed} passed, {issues} issues" --files ".planning/phases/XX-name/{phase_num}-UAT.md"
+node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" commit "test({phase_num}): complete UAT - {passed} passed, {issues} issues" --files ".planning/phases/XX-name/{phase_num}-UAT.md"
 ```
 
 Present summary:
@@ -377,7 +354,7 @@ All tests passed. Ready to continue.
 
 - `/gsd:plan-phase {next}` — Plan next phase
 - `/gsd:execute-phase {next}` — Execute next phase
-- `/design:sync check` — Check if design file needs updating (UI phases)
+- `/gsd:ui-review {phase}` — visual quality audit (if frontend files were modified)
 ```
 
 </step>
@@ -394,7 +371,7 @@ Spawning parallel debug agents to investigate each issue.
 ```
 
 - Load diagnose-issues workflow
-- Follow @./.claude/get-shit-done/workflows/diagnose-issues.md
+- Follow @/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/diagnose-issues.md
 - Spawn parallel debug agents for each issue
 - Collect root causes
 - Update UAT.md with root causes

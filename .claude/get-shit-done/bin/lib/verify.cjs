@@ -4,7 +4,8 @@
 
 const fs = require('fs');
 const path = require('path');
-const { safeReadFile, normalizePhaseName, execGit, findPhaseInternal, getMilestoneInfo, output, error } = require('./core.cjs');
+const os = require('os');
+const { safeReadFile, normalizePhaseName, execGit, findPhaseInternal, getMilestoneInfo, stripShippedMilestones, extractCurrentMilestone, output, error } = require('./core.cjs');
 const { extractFrontmatter, parseMustHavesBlock } = require('./frontmatter.cjs');
 const { writeStateMd } = require('./state.cjs');
 
@@ -407,9 +408,10 @@ function cmdValidateConsistency(cwd, raw) {
     return;
   }
 
-  const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
+  const roadmapContentRaw = fs.readFileSync(roadmapPath, 'utf-8');
+  const roadmapContent = extractCurrentMilestone(roadmapContentRaw, cwd);
 
-  // Extract phases from ROADMAP
+  // Extract phases from ROADMAP (archived milestones already stripped)
   const roadmapPhases = new Set();
   const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:/gi;
   let m;
@@ -515,6 +517,19 @@ function cmdValidateConsistency(cwd, raw) {
 }
 
 function cmdValidateHealth(cwd, options, raw) {
+  // Guard: detect if CWD is the home directory (likely accidental)
+  const resolved = path.resolve(cwd);
+  if (resolved === os.homedir()) {
+    output({
+      status: 'error',
+      errors: [{ code: 'E010', message: `CWD is home directory (${resolved}) — health check would read the wrong .planning/ directory. Run from your project root instead.`, fix: 'cd into your project directory and retry' }],
+      warnings: [],
+      info: [{ code: 'I010', message: `Resolved CWD: ${resolved}` }],
+      repairable_count: 0,
+    }, raw);
+    return;
+  }
+
   const planningDir = path.join(cwd, '.planning');
   const projectPath = path.join(planningDir, 'PROJECT.md');
   const roadmapPath = path.join(planningDir, 'ROADMAP.md');
@@ -607,7 +622,7 @@ function cmdValidateHealth(cwd, options, raw) {
       const raw = fs.readFileSync(configPath, 'utf-8');
       const parsed = JSON.parse(raw);
       // Validate known fields
-      const validProfiles = ['quality', 'balanced', 'budget'];
+      const validProfiles = ['quality', 'balanced', 'budget', 'inherit'];
       if (parsed.model_profile && !validProfiles.includes(parsed.model_profile)) {
         addIssue('warning', 'W004', `config.json: invalid model_profile "${parsed.model_profile}"`, `Valid values: ${validProfiles.join(', ')}`);
       }
@@ -679,7 +694,8 @@ function cmdValidateHealth(cwd, options, raw) {
   // ─── Check 8: Run existing consistency checks ─────────────────────────────
   // Inline subset of cmdValidateConsistency
   if (fs.existsSync(roadmapPath)) {
-    const roadmapContent = fs.readFileSync(roadmapPath, 'utf-8');
+    const roadmapContentRaw = fs.readFileSync(roadmapPath, 'utf-8');
+    const roadmapContent = extractCurrentMilestone(roadmapContentRaw, cwd);
     const roadmapPhases = new Set();
     const phasePattern = /#{2,4}\s*Phase\s+(\d+[A-Z]?(?:\.\d+)*)\s*:/gi;
     let m;
@@ -728,10 +744,16 @@ function cmdValidateHealth(cwd, options, raw) {
               commit_docs: true,
               search_gitignored: false,
               branching_strategy: 'none',
-              research: true,
-              plan_checker: true,
-              verifier: true,
+              phase_branch_template: 'gsd/phase-{phase}-{slug}',
+              milestone_branch_template: 'gsd/{milestone}-{slug}',
+              workflow: {
+                research: true,
+                plan_check: true,
+                verifier: true,
+                nyquist_validation: true,
+              },
               parallelization: true,
+              brave_search: false,
             };
             fs.writeFileSync(configPath, JSON.stringify(defaults, null, 2), 'utf-8');
             repairActions.push({ action: repair, success: true, path: 'config.json' });

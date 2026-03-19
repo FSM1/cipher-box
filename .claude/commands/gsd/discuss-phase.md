@@ -1,6 +1,6 @@
 ---
 name: gsd:discuss-phase
-description: Gather phase context through adaptive questioning before planning
+description: Gather phase context through adaptive questioning before planning. Use --auto to skip interactive questions (Claude picks recommended defaults).
 argument-hint: '<phase> [--auto]'
 allowed-tools:
   - Read
@@ -30,8 +30,8 @@ Extract implementation decisions that downstream agents need — researcher and 
 </objective>
 
 <execution_context>
-@./.claude/get-shit-done/workflows/discuss-phase.md
-@./.claude/get-shit-done/templates/context.md
+@/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/discuss-phase.md
+@/Users/michael/Code/cipher-box/.claude/get-shit-done/templates/context.md
 </execution_context>
 
 <context>
@@ -72,7 +72,8 @@ Generate 3-4 **phase-specific** gray areas, not generic categories.
 **Probing depth:**
 
 - Ask 4 questions per area before checking
-- "More questions about [area], or move to next?"
+- "More questions about [area], or move to next? (Remaining: [list unvisited areas])"
+- Show remaining unvisited areas so user knows what's still ahead
 - If more → ask 4 more, check again
 - After all areas → "Ready to create context?"
 

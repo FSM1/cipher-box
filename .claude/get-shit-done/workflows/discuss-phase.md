@@ -111,6 +111,14 @@ Phase: "API documentation"
 - Scope (roadmap defines this)
   </gray_area_identification>
 
+<answer_validation>
+**IMPORTANT: Answer validation** — After every AskUserQuestion call, check if the response is empty or whitespace-only. If so:
+
+1. Retry the question once with the same parameters
+2. If still empty, present the options as a plain-text numbered list and ask the user to type their choice number
+   Never proceed with an empty answer.
+   </answer_validation>
+
 <process>
 
 **Express path available:** If you already have a PRD or acceptance criteria document, use `/gsd:plan-phase {phase} --prd path/to/prd.md` to skip this discussion and go straight to planning.
@@ -119,7 +127,7 @@ Phase: "API documentation"
 Phase number from argument (required).
 
 ```bash
-INIT=$(node "./.claude/get-shit-done/bin/gsd-tools.cjs" init phase-op "${PHASE}")
+INIT=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" init phase-op "${PHASE}")
 if [[ "$INIT" == @file:* ]]; then INIT=$(cat "${INIT#@file:}"); fi
 ```
 
@@ -136,7 +144,15 @@ Use /gsd:progress to see available phases.
 Exit workflow.
 
 **If `phase_found` is true:** Continue to check_existing.
-</step>
+
+**Auto mode** — If `--auto` is present in ARGUMENTS:
+
+- In `check_existing`: auto-select "Skip" (if context exists) or continue without prompting (if no context/plans)
+- In `present_gray_areas`: auto-select ALL gray areas without asking the user
+- In `discuss_areas`: for each discussion question, choose the recommended option (first option, or the one marked "recommended") without using AskUserQuestion
+- Log each auto-selected choice inline so the user can review decisions in the context file
+- After discussion completes, auto-advance to plan-phase (existing behavior)
+  </step>
 
 <step name="check_existing">
 Check if CONTEXT.md already exists using `has_context` from init.
@@ -146,7 +162,10 @@ ls ${phase_dir}/*-CONTEXT.md 2>/dev/null
 ```
 
 **If exists:**
-Use AskUserQuestion:
+
+**If `--auto`:** Auto-select "Update it" — load existing context and continue to analyze_phase. Log: `[auto] Context exists — updating with auto-selected decisions.`
+
+**Otherwise:** Use AskUserQuestion:
 
 - header: "Context"
 - question: "Phase [X] already has context. What do you want to do?"
@@ -163,7 +182,9 @@ If "Skip": Exit workflow
 
 Check `has_plans` and `plan_count` from init. **If `has_plans` is true:**
 
-Use AskUserQuestion:
+**If `--auto`:** Auto-select "Continue and replan after". Log: `[auto] Plans exist — continuing with context capture, will replan after.`
+
+**Otherwise:** Use AskUserQuestion:
 
 - header: "Plans exist"
 - question: "Phase [X] already has {plan_count} plan(s) created without user context. Your decisions here won't affect existing plans unless you replan."
@@ -291,6 +312,15 @@ Analyze the phase to identify gray areas worth discussing. **Use both `prior_dec
 
 1. **Domain boundary** — What capability is this phase delivering? State it clearly.
 
+1b. **Initialize canonical refs accumulator** — Start building the `<canonical_refs>` list for CONTEXT.md. This accumulates throughout the entire discussion, not just this step.
+
+**Source 1 (now):** Copy `Canonical refs:` from ROADMAP.md for this phase. Expand each to a full relative path.
+**Source 2 (now):** Check REQUIREMENTS.md and PROJECT.md for any specs/ADRs referenced for this phase.
+**Source 3 (scout_codebase):** If existing code references docs (e.g., comments citing ADRs), add those.
+**Source 4 (discuss_areas):** When the user says "read X", "check Y", or references any doc/spec/ADR during discussion — add it immediately. These are often the MOST important refs because they represent docs the user specifically wants followed.
+
+This list is MANDATORY in CONTEXT.md. Every ref must have a full relative path so downstream agents can read it directly. If no external docs exist, note that explicitly.
+
 2. **Check prior decisions** — Before generating gray areas, check if any were already decided:
    - Scan `<prior_decisions>` for relevant choices (e.g., "Ctrl+C only, no single-key shortcuts")
    - These are **pre-answered** — don't re-ask unless this phase has conflicting needs
@@ -336,7 +366,9 @@ We'll clarify HOW to implement this.
 - [Decision from Phase M that applies here]
 ```
 
-**Then use AskUserQuestion (multiSelect: true):**
+**If `--auto`:** Auto-select ALL gray areas. Log: `[auto] Selected all gray areas: [list area names].` Skip the AskUserQuestion below and continue directly to discuss_areas with all areas selected.
+
+**Otherwise, use AskUserQuestion (multiSelect: true):**
 
 - header: "Discuss"
 - question: "Which areas do you want to discuss for [phase name]?"
@@ -403,9 +435,29 @@ Continue to discuss_areas with selected areas.
 <step name="discuss_areas">
 For each selected area, conduct a focused discussion loop.
 
-**Philosophy: 4 questions, then check.**
+**Batch mode support:** Parse optional `--batch` from `$ARGUMENTS`.
 
-Ask 4 questions per area before offering to continue or move on. Each answer often reveals the next question.
+- Accept `--batch`, `--batch=N`, or `--batch N`
+- Default to 4 questions per batch when no number is provided
+- Clamp explicit sizes to 2-5 so a batch stays answerable
+- If `--batch` is absent, keep the existing one-question-at-a-time flow
+
+**Philosophy:** stay adaptive, but let the user choose the pacing.
+
+- Default mode: 4 single-question turns, then check whether to continue
+- `--batch` mode: 1 grouped turn with 2-5 numbered questions, then check whether to continue
+
+Each answer (or answer set, in batch mode) should reveal the next question or next batch.
+
+**Auto mode (`--auto`):** For each area, Claude selects the recommended option (first option, or the one explicitly marked "recommended") for every question without using AskUserQuestion. Log each auto-selected choice:
+
+```
+[auto] [Area] — Q: "[question text]" → Selected: "[chosen option]" (recommended default)
+```
+
+After all areas are auto-resolved, skip the "Explore more gray areas" prompt and proceed directly to write_context.
+
+**Interactive mode (no `--auto`):**
 
 **For each area:**
 
@@ -415,7 +467,9 @@ Ask 4 questions per area before offering to continue or move on. Each answer oft
    Let's talk about [Area].
    ```
 
-2. **Ask 4 questions using AskUserQuestion:**
+2. **Ask questions using the selected pacing:**
+
+   **Default (no `--batch`): Ask 4 questions using AskUserQuestion**
    - header: "[Area]" (max 12 chars — abbreviate if needed)
    - question: Specific decision for this area
    - options: 2-3 concrete choices (AskUserQuestion adds "Other" automatically), with the recommended choice highlighted and brief explanation why
@@ -429,12 +483,21 @@ Ask 4 questions per area before offering to continue or move on. Each answer oft
    - Include "You decide" as an option when reasonable — captures Claude discretion
    - **Context7 for library choices:** When a gray area involves library selection (e.g., "magic links" → query next-auth docs) or API approach decisions, use `mcp__context7__*` tools to fetch current documentation and inform the options. Don't use Context7 for every question — only when library-specific knowledge improves the options.
 
-3. **After 4 questions, check:**
+   **Batch mode (`--batch`): Ask 2-5 numbered questions in one plain-text turn**
+   - Group closely related questions for the current area into a single message
+   - Keep each question concrete and answerable in one reply
+   - When options are helpful, include short inline choices per question rather than a separate AskUserQuestion for every item
+   - After the user replies, reflect back the captured decisions, note any unanswered items, and ask only the minimum follow-up needed before moving on
+   - Preserve adaptiveness between batches: use the full set of answers to decide the next batch or whether the area is sufficiently clear
+
+3. **After the current set of questions, check:**
    - header: "[Area]" (max 12 chars)
-   - question: "More questions about [area], or move to next?"
+   - question: "More questions about [area], or move to next? (Remaining: [list other unvisited areas])"
    - options: "More questions" / "Next area"
 
-   If "More questions" → ask 4 more, then check again
+   When building the question text, list the remaining unvisited areas so the user knows what's ahead. For example: "More questions about Layout, or move to next? (Remaining: Loading behavior, Content ordering)"
+
+   If "More questions" → ask another 4 single questions, or another 2-5 question batch when `--batch` is active, then check again
    If "Next area" → proceed to next selected area
    If "Other" (free text) → interpret intent: continuation phrases ("chat more", "keep going", "yes", "more") map to "More questions"; advancement phrases ("done", "move on", "next", "skip") map to "Next area". If ambiguous, ask: "Continue with more questions about [area], or move to the next area?"
 
@@ -450,11 +513,20 @@ Ask 4 questions per area before offering to continue or move on. Each answer oft
      - Loop: discuss new areas, then prompt again
    - If "I'm ready for context": Proceed to write_context
 
+**Canonical ref accumulation during discussion:**
+When the user references a doc, spec, or ADR during any answer — e.g., "read adr-014", "check the MCP spec", "per browse-spec.md" — immediately:
+
+1. Read the referenced doc (or confirm it exists)
+2. Add it to the canonical refs accumulator with full relative path
+3. Use what you learned from the doc to inform subsequent questions
+
+These user-referenced docs are often MORE important than ROADMAP.md refs because they represent docs the user specifically wants downstream agents to follow. Never drop them.
+
 **Question design:**
 
 - Options should be concrete, not abstract ("Cards" not "Option A")
-- Each answer should inform the next question
-- If user picks "Other" to provide freeform input (e.g., "let me describe it", "something else", or an open-ended reply), ask your follow-up as plain text — NOT another AskUserQuestion. Wait for them to type at the normal prompt, then reflect their input back and confirm before resuming AskUserQuestion for the next question.
+- Each answer should inform the next question or next batch
+- If user picks "Other" to provide freeform input (e.g., "let me describe it", "something else", or an open-ended reply), ask your follow-up as plain text — NOT another AskUserQuestion. Wait for them to type at the normal prompt, then reflect their input back and confirm before resuming AskUserQuestion or the next numbered batch.
 
 **Scope creep handling:**
 If user mentions something outside the phase domain:
@@ -517,6 +589,30 @@ mkdir -p ".planning/phases/${padded_phase}-${phase_slug}"
 
 </decisions>
 
+<canonical_refs>
+
+## Canonical References
+
+**Downstream agents MUST read these before planning or implementing.**
+
+[MANDATORY section. Write the FULL accumulated canonical refs list here.
+Sources: ROADMAP.md refs + REQUIREMENTS.md refs + user-referenced docs during
+discussion + any docs discovered during codebase scout. Group by topic area.
+Every entry needs a full relative path — not just a name.]
+
+### [Topic area 1]
+
+- `path/to/adr-or-spec.md` — [What it decides/defines that's relevant]
+- `path/to/doc.md` §N — [Specific section reference]
+
+### [Topic area 2]
+
+- `path/to/feature-doc.md` — [What this doc defines]
+
+[If no external specs: "No external specs — requirements fully captured in decisions above"]
+
+</canonical_refs>
+
 <code_context>
 
 ## Existing Code Insights
@@ -562,157 +658,6 @@ _Context gathered: [date]_
 Write file.
 </step>
 
-<step name="ui_phase_detection">
-**Detect if this is a UI phase:**
-
-<!-- SYNC: UI keyword heuristic also in execute-phase.md, design/sync.md -->
-
-```bash
-PHASE_TEXT=$(grep -i "Phase ${PHASE}:" .planning/ROADMAP.md)
-if echo "$PHASE_TEXT" | grep -iqE "ui|ux|style|restyle|design|layout|component|page|view|screen|display|button|form|modal|dialog|popover|tooltip|toast|dropdown|sidebar|header|footer|nav|menu|card|list|table|grid|icon|badge|avatar|breadcrumb|tab|color|font|typography|spacing|padding|margin|responsive|mobile|css|visual|appearance|interface|frontend|dashboard|browser|drag|drop|dnd|hover|focus|animation|transition|overlay|scroll|carousel|interaction|gesture|click|swipe|resize|collapse|expand|accordion|input|checkbox|radio|select|slider|toggle|switch|picker|upload|panel|drawer|toolbar|statusbar|banner|alert|notification|snackbar|thumbnail|preview|placeholder|skeleton|spinner|progress|loading"; then
-  IS_UI_PHASE=true
-else
-  IS_UI_PHASE=false
-fi
-```
-
-**If UI phase:**
-
-1. Check for existing Pencil design file
-2. Load existing design tokens (colors, typography, spacing) if available
-3. Enable design mockup generation during discussion
-4. Note to user: "This is a UI phase — I can generate design mockups to help visualize options."
-   </step>
-
-<step name="generate_design_mockups">
-**Only for UI phases.** After discussing gray areas, offer to generate design mockups.
-
-**Trigger:**
-After all areas discussed, before confirming creation:
-
-```text
-We've discussed the implementation details. Since this is a UI phase,
-I can generate design mockups in Pencil to visualize the options.
-
-Would you like me to create design mockups based on our discussion?
-```
-
-- Options: "Yes, generate mockups" / "Skip mockups"
-
-**If "Skip mockups":** Continue to confirm_creation step.
-
-**If "Yes, generate mockups":**
-
-## Step 1: Validate Design Context
-
-```bash
-if [ ! -f "designs/DESIGN.md" ]; then
-  echo "WARNING: designs/DESIGN.md not found"
-fi
-ls designs/*.pen 2>/dev/null
-```
-
-**If DESIGN.md missing:**
-
-Use AskUserQuestion:
-
-- header: "Design context"
-- question: "Design system file (DESIGN.md) not found. How should we proceed?"
-- options:
-  - "Create DESIGN.md" — Extract tokens from existing .pen file
-  - "Skip mockups" — Continue without visual mockups
-  - "Describe in text" — I'll describe the design options verbally
-
-## Step 2: Prepare Discussion Context Summary
-
-```markdown
-## MOCKUP REQUEST
-
-**Phase:** ${PHASE} - ${PHASE_NAME}
-**Phase Goal:** [From ROADMAP.md]
-
-### Discussion Summary
-
-**Gray areas discussed:**
-
-- [Area 1]: [Decision made]
-
-**User quotes (preserve exact wording):**
-
-- "[Quote 1]"
-
-**Key decisions:**
-
-- Layout: [choice]
-- Density: [choice]
-- Interactions: [choice]
-
-### Mockup Request
-
-Generate 2-3 options that visualize these decisions.
-Show each option within the app layout context.
-```
-
-## Step 3: Spawn ui-design-discusser Agent
-
-```text
-Task(
-  subagent_type: "ui-design-discusser",
-  prompt: [Discussion context summary from Step 2],
-  description: "Generate UI mockups for Phase ${PHASE}"
-)
-```
-
-**Files the agent will access:**
-
-- `designs/DESIGN.md` — Design system tokens (required)
-- `designs/*.pen` — Existing design file
-- `.planning/phases/${PADDED_PHASE}-*/CONTEXT.md` — If exists
-
-## Step 4: Handle Agent Return
-
-**Use AskUserQuestion:**
-
-- header: "Design direction"
-- question: "Which direction resonates with your vision?"
-- options:
-  - "Option A" — [Brief description]
-  - "Option B" — [Brief description]
-  - "Refine" — I want to adjust one of these options
-  - "Neither" — Let me describe what I'm looking for
-
-## Step 5: Handle Iteration (if needed)
-
-**If "Refine":** Ask which option and what changes, re-spawn agent.
-**If "Neither":** Ask user to describe their vision, re-spawn agent.
-**Iteration limit:** Maximum 3 refinement rounds.
-
-## Step 6: Mark Selection and Capture Final Screenshot
-
-The agent will:
-
-1. Add "SELECTED" badge to chosen option frame
-2. Update stroke to 3px primary color (#00D084)
-3. Dim non-selected options (50% opacity)
-4. Capture final screenshot: `${PHASE_DIR}/screenshots/selected-option-[letter].png`
-
-## Step 7: Capture Approved Direction
-
-```markdown
-### Approved Design Direction
-
-**Frame:** [Frame name] (ID: [frame-id])
-**Screenshot:** `.planning/phases/${PADDED_PHASE}-*/screenshots/selected-option-[letter].png`
-**Canvas location:** `Drafts - Phase [X]`
-
-**Key design decisions:**
-
-- [Decision 1]
-- [Decision 2]
-```
-
-</step>
-
 <step name="confirm_creation">
 Present summary and next steps:
 
@@ -745,6 +690,7 @@ Created: .planning/phases/${PADDED_PHASE}-${SLUG}/${PADDED_PHASE}-CONTEXT.md
 
 **Also available:**
 - `/gsd:plan-phase ${PHASE} --skip-research` — plan without research
+- `/gsd:ui-phase ${PHASE}` — generate UI design contract before planning (if phase has frontend work)
 - Review/edit CONTEXT.md before continuing
 
 ---
@@ -756,7 +702,7 @@ Created: .planning/phases/${PADDED_PHASE}-${SLUG}/${PADDED_PHASE}-CONTEXT.md
 Commit phase context (uses `commit_docs` from init internally):
 
 ```bash
-node "./.claude/get-shit-done/bin/gsd-tools.cjs" commit "docs(${padded_phase}): capture phase context" --files "${phase_dir}/${padded_phase}-CONTEXT.md"
+node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" commit "docs(${padded_phase}): capture phase context" --files "${phase_dir}/${padded_phase}-CONTEXT.md"
 ```
 
 Confirm: "Committed: docs(${padded_phase}): capture phase context"
@@ -766,7 +712,7 @@ Confirm: "Committed: docs(${padded_phase}): capture phase context"
 Update STATE.md with session info:
 
 ```bash
-node "./.claude/get-shit-done/bin/gsd-tools.cjs" state record-session \
+node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" state record-session \
   --stopped-at "Phase ${PHASE} context gathered" \
   --resume-file "${phase_dir}/${padded_phase}-CONTEXT.md"
 ```
@@ -774,7 +720,7 @@ node "./.claude/get-shit-done/bin/gsd-tools.cjs" state record-session \
 Commit STATE.md:
 
 ```bash
-node "./.claude/get-shit-done/bin/gsd-tools.cjs" commit "docs(state): record phase ${PHASE} context session" --files .planning/STATE.md
+node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" commit "docs(state): record phase ${PHASE} context session" --files .planning/STATE.md
 ```
 
 </step>
@@ -786,19 +732,19 @@ Check for auto-advance trigger:
 2. **Sync chain flag with intent** — if user invoked manually (no `--auto`), clear the ephemeral chain flag from any previous interrupted `--auto` chain. This does NOT touch `workflow.auto_advance` (the user's persistent settings preference):
    ```bash
    if [[ ! "$ARGUMENTS" =~ --auto ]]; then
-     node "./.claude/get-shit-done/bin/gsd-tools.cjs" config-set workflow._auto_chain_active false 2>/dev/null
+     node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" config-set workflow._auto_chain_active false 2>/dev/null
    fi
    ```
 3. Read both the chain flag and user preference:
    ```bash
-   AUTO_CHAIN=$(node "./.claude/get-shit-done/bin/gsd-tools.cjs" config-get workflow._auto_chain_active 2>/dev/null || echo "false")
-   AUTO_CFG=$(node "./.claude/get-shit-done/bin/gsd-tools.cjs" config-get workflow.auto_advance 2>/dev/null || echo "false")
+   AUTO_CHAIN=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" config-get workflow._auto_chain_active 2>/dev/null || echo "false")
+   AUTO_CFG=$(node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" config-get workflow.auto_advance 2>/dev/null || echo "false")
    ```
 
 **If `--auto` flag present AND `AUTO_CHAIN` is not true:** Persist chain flag to config (handles direct `--auto` usage without new-project):
 
 ```bash
-node "./.claude/get-shit-done/bin/gsd-tools.cjs" config-set workflow._auto_chain_active true
+node "/Users/michael/Code/cipher-box/.claude/get-shit-done/bin/gsd-tools.cjs" config-set workflow._auto_chain_active true
 ```
 
 **If `--auto` flag present OR `AUTO_CHAIN` is true OR `AUTO_CFG` is true:**
@@ -868,13 +814,9 @@ Route to `confirm_creation` step (existing behavior — show manual next steps).
 - User selected which areas to discuss
 - Each selected area explored until user satisfied (with code-informed and prior-decision-informed options)
 - Scope creep redirected to deferred ideas
-- **For UI phases:** Design mockups generated and user approved a direction
-- **For UI phases:** Mockups placed in dedicated "Drafts - Phase N" canvas area
-- **For UI phases:** Screenshots saved to `.planning/phases/*/screenshots/`
-- **For UI phases:** Selected option visually marked in .pen file
 - CONTEXT.md captures actual decisions, not vague vision
+- CONTEXT.md includes canonical_refs section with full file paths to every spec/ADR/doc downstream agents need (MANDATORY — never omit)
 - CONTEXT.md includes code_context section with reusable assets and patterns
-- **For UI phases:** CONTEXT.md references approved Pencil design frame and screenshot
 - Deferred ideas preserved for future phases
 - STATE.md updated with session info
 - User knows next steps
