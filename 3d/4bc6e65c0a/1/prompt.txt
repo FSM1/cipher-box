@@ -1,0 +1,195 @@
+ok can we quickly run the load test to make sure things are actually operational
+
+---
+
+Tool loaded.
+
+---
+
+<task-notification>
+<task-id>bvi4l7clp</task-id>
+<tool-use-id>toolu_01YCRvHtP5nKUYNRDYDM4Rda</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/bvi4l7clp.output</output-file>
+<status>failed</status>
+<summary>Background command "Run load test against staging (5 concurrent clients, ~70 ops each)" failed with exit code 1</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/tasks/bvi4l7clp.output
+
+---
+
+ok can you commit these updates to a new chore branch
+
+---
+
+Can we add the test run artifacts to gitignore?
+
+---
+
+yeah untrack the sucker
+
+---
+
+# Resolve PR Review Comments
+
+Resolve all open review comments on the current PR from any automated reviewer (CodeRabbit, GitHub Copilot, etc.) or human reviewers.
+
+## Workflow
+
+### 1. Identify the PR
+
+```bash
+PR_NUMBER=$(gh pr view --json number --jq '.number')
+```
+
+If no PR exists for the current branch, stop and inform the user.
+
+### 2. Fetch all unresolved review threads
+
+Use the GraphQL `reviewThreads` query to get threads with `isResolved` status:
+
+```bash
+REPO_OWNER=$(gh repo view --json owner --jq '.owner.login')
+REPO_NAME=$(gh repo view --json name --jq '.name')
+
+gh api graphql -f query="
+{
+  repository(owner: \"$REPO_OWNER\", name: \"$REPO_NAME\") {
+    pullRequest(number: $PR_NUMBER) {
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          comments(first: 10) {
+            nodes {
+              id
+              author { login }
+              body
+              path
+              line
+              createdAt
+            }
+          }
+        }
+      }
+    }
+  }
+}"
+```
+
+Filter to only unresolved threads. If none, report "No unresolved review threads" and stop.
+
+### 3. Triage each comment
+
+For each unresolved thread, read the comment and the referenced code. Categorize as:
+
+- **Valid fix needed** — the comment identifies a real bug, security issue, or meaningful improvement
+- **Already addressed** — the issue was fixed in a later commit on this branch
+- **Not applicable** — the suggestion doesn't apply (explain why)
+
+### 4. Implement fixes
+
+For all "valid fix needed" comments:
+
+1. Read the referenced file and understand the context
+2. Implement the fix
+3. Track which thread the fix addresses
+
+Do NOT:
+
+- Make unrelated changes or refactors
+- Add features beyond what the comment requests
+- Increase timeouts or add retries as a first approach — fix root causes
+
+### 5. Run tests locally
+
+After ALL fixes are implemented:
+
+```bash
+# Type check
+pnpm typecheck
+
+# Run relevant unit tests
+pnpm test
+
+# If E2E-relevant changes were made, run E2E tests too
+cd tests/e2e && pnpm exec playwright test
+```
+
+Do NOT proceed to commit until tests pass. If tests fail, fix the failures first.
+
+### 6. Commit and push
+
+```bash
+git add <specific-files>
+git commit -m "fix: address PR review comments"
+git push
+```
+
+### 7. Reply to and resolve each thread
+
+For each thread, reply explaining what was done, then resolve:
+
+- **Fixed comments**: Reply with what was changed and where, then resolve
+- **Already addressed**: Reply explaining which commit addressed it, then resolve
+- **Not applicable**: Reply with clear reasoning for not making changes, then resolve
+
+Reply via REST (use `--field` not `-f` for `in_reply_to` — must be integer):
+
+```bash
+gh api repos/$REPO_OWNER/$REPO_NAME/pulls/$PR_NUMBER/comments \
+  --field in_reply_to=COMMENT_ID \
+  --raw-field body='...'
+```
+
+Resolve via GraphQL (can batch multiple):
+
+```bash
+gh api graphql -f query='
+mutation {
+  resolveReviewThread(input: {threadId: "THREAD_ID"}) {
+    thread { isResolved }
+  }
+}'
+```
+
+### 8. Report summary
+
+Print a summary table:
+
+- Thread count resolved
+- Fixes made (with file:line references)
+- Comments marked as already addressed or not applicable
+
+---
+
+<objective>
+Check for GSD updates, install if available, and display what changed.
+
+Routes to the update workflow which handles:
+
+- Version detection (local vs global installation)
+- npm version checking
+- Changelog fetching and display
+- User confirmation with clean install warning
+- Update execution and cache clearing
+- Restart reminder
+  </objective>
+
+<execution_context>
+@./.claude/get-shit-done/workflows/update.md
+</execution_context>
+
+<process>
+**Follow the update workflow** from `@./.claude/get-shit-done/workflows/update.md`.
+
+The workflow handles all logic including:
+
+1. Installed version detection (local/global)
+2. Latest version checking via npm
+3. Version comparison
+4. Changelog fetching and extraction
+5. Clean install warning display
+6. User confirmation
+7. Update execution
+8. Cache clearing
+   </process>
