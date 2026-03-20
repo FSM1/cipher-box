@@ -1,0 +1,110 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "dd240746615f",
+  "session_id": "8ae64815-e645-461a-ae6b-d66403649a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T04:26:51.390349Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useDropUpload.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f8208b9f97f3",
+  "token_usage": {
+    "input_tokens": 848,
+    "cache_creation_tokens": 370052,
+    "cache_read_tokens": 71953687,
+    "output_tokens": 117723,
+    "api_call_count": 289
+  },
+  "summary": {
+    "intent": "Execute phase 19.1 (Extract Core Crypto SDK as Shared Package) using the GSD wave-based parallel execution workflow, then debug and fix SDK integration issues discovered during checkpoint verification of plan 19.1-05.",
+    "outcome": "Waves 1-4 executed successfully. During checkpoint verification of plan 19.1-05, multiple SDK integration bugs were found and fixed (IPNS API client not configured, dual-path upload conflicts, download decryption failures, folder UUID mismatch). 9/10 operations verified working via Playwright; bin/delete-to-bin remains broken. Commits being made atomically per fix.",
+    "learnings": {
+      "repo": [
+        "The web app uses a dual-path architecture: SDK handles folder CRUD while the old service handles file upload — this creates irreconcilable IPNS sequence number conflicts when both write to the same IPNS record.",
+        "`setApiClientConfig()` must be called during SDK initialization or all `@cipherbox/api-client` generated functions (used for IPNS operations) throw 'API client not configured'.",
+        "The `@cipherbox/api-client` package uses its own axios instance factory separate from the web app's `custom-instance.ts` — they are not the same HTTP client.",
+        "`initializeBin` (old service) must complete before `client.loadBin()` is called, otherwise SDK can't load the bin IPNS record.",
+        "Playwright E2E tests in this repo use page objects under `tests/e2e/page-objects/` and helpers in `tests/e2e/utils/web3auth-helpers.ts`.",
+        "A `TEST_LOGIN_SECRET` env var enables passwordless test login via a `/test-login` endpoint — used to avoid OTP flow in integration tests.",
+        "The GSD workflow's `classifyHandoffIfNeeded` error is a known Claude Code runtime bug that fires after tool calls finish — treat as success if spot-checks pass.",
+        "pnpm dev runs the API and web simultaneously; OTPs are logged to the API stdout and can be retrieved via TaskOutput on background tasks."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "finding": "SDK init must call setApiClientConfig() with the JWT token, and client.loadBin() must be called AFTER the old initializeBin() service completes to avoid the SDK loading an uninitialized bin record."
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "finding": "ensureFolderRegistered should skip registration if the SDK already has the folder (to avoid overwriting SDK's correct IPNS private key and sequence number with stale store data). The bridge pattern is fundamentally fragile when two systems write to the same IPNS record."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "createFolder must return the FolderEntry's UUID (not ipnsName) so the Zustand store can look up folders by the same ID used in children arrays. Also needs getFolderState() and downloadFromIpns() methods exposed for web app consumption."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "finding": "updateFolderMetadataAndPublish needs a 409 conflict retry that re-resolves the current IPNS sequence number — stale seq numbers from any external writer (old upload service, previous session) cause failures without it."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "finding": "Must use client.uploadFile() (SDK path) instead of the old two-step upload.service + useFileOperations.addFiles() path to avoid dual-path IPNS conflicts."
+        },
+        {
+          "path": "apps/web/src/hooks/useFileDownload.ts",
+          "finding": "Must use client.downloadFromIpns() instead of the old file-metadata.service → ipns.service chain to ensure consistent IPNS resolution and decryption."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "finding": "Was using old download service directly for file decryption — must use SDK client's downloadFromIpns() for consistent decryption."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "finding": "Full SDK lifecycle integration test (create folder, upload, download+verify, rename file/folder, delete) passes against real API. IPNS delegated routing retries cause ~30s per publish operation — expected behavior."
+        }
+      ],
+      "workflow": [
+        "Using random emails per E2E test run avoids filesystem pollution from previous runs — critical when testing against a real API with persistent state.",
+        "Playwright MCP tools can drive a headed browser session for live verification — useful for observing the user's app behavior without the user needing to drive the UI.",
+        "When debugging SDK vs web app issues, writing a vitest integration test against the real API isolates whether the problem is in the SDK layer or the web app layer.",
+        "Background bash commands via run_in_background + TaskOutput allow non-blocking monitoring (API logs for OTPs, test output) without polling.",
+        "Atomic commits per logical fix (not per file) make the history reviewable — even when multiple files are changed for one fix, stage only those files.",
+        "Git worktree reset (reset branch to latest main) is the right response when the user rejects implementation decisions — don't try to incrementally patch bad architecture.",
+        "The GSD checkpoint plan pattern (autonomous: false) is the right place to surface integration bugs that pure unit tests miss."
+      ]
+    },
+    "friction": [
+      "The dual-path architecture (SDK for folder CRUD, old service for file upload) was a known gap in plan 19.1-05 but its cascading effects (IPNS seq conflicts, stale state) were not fully understood until Playwright verification.",
+      "ensureFolderRegistered as a bridge between SDK and Zustand store is fundamentally fragile — every edge case fix introduced a new one (preserve seq, preserve key, sync children). The real fix was eliminating the dual path.",
+      "Playwright E2E file upload requires the file to be in the project directory — /tmp files aren't accessible to the browser's file input.",
+      "TaskOutput notifications for background tasks arrived after decisions were already made, creating noise and confusion about which results were current.",
+      "The user had to repeatedly remind Claude to stop asking the user to verify things manually and to use Playwright instead.",
+      "Hot module reloading (Vite dev server) sometimes requires a full page reload to pick up SDK package changes that were rebuilt.",
+      "The __dirname ESM compatibility issue in E2E test scripts required switching to Vitest's import.meta.url pattern.",
+      "Wave 1 was interrupted mid-execution when the user rejected plan 19.1-02's implementation, requiring a full branch reset."
+    ],
+    "open_items": [
+      "Delete-to-bin is broken: SDK's loadBin() cannot load the bin IPNS record created by the old initializeBin() service, causing silent fallback to hard delete. The bin IPNS resolution path needs to be unified.",
+      "Wave 5 (plan 19.1-06: final cleanup, imports, release config) has not yet been executed.",
+      "The old upload service (upload.service.ts), file operations service (useFileOperations.ts), and folder/bin/share services marked DEPRECATED need to be removed once all paths are confirmed migrated.",
+      "useFileUpload (the split-step upload for progress tracking) and useFileDelete were explicitly NOT rewired to SDK in plan 19.1-05 due to architectural differences — still on old service path.",
+      "Pre-existing DTS circular dependency between @cipherbox/core and @cipherbox/crypto causes pnpm -r run build to fail (though pnpm --filter web build succeeds).",
+      "The sdk-debug.spec.ts E2E test file created for debugging should be cleaned up or promoted to a proper regression test suite.",
+      "The SDK integration test (packages/sdk/src/__tests__/integration.test.ts) should be retained as a regression test but may need the TEST_LOGIN_SECRET dependency documented.",
+      "409 conflict retry in updateFolderMetadataAndPublish retries only once — may need exponential backoff for high-concurrency scenarios.",
+      "Phase 19.1 verification (gsd-verifier) has not been run yet — still in checkpoint handling for plan 19.1-05."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T04:25:54.038956Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 139,
+    "human_removed": 3,
+    "total_committed": 100,
+    "agent_percentage": 0
+  }
+}
