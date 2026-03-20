@@ -167,6 +167,20 @@ export function useAuth() {
         rootIpnsName: vaultState.rootIpnsName,
         rootFolderKey: vaultState.rootFolderKey,
         teeKeys: authState.teeKeys ?? undefined,
+        shareCallbacks: {
+          getCoveringShares: async (folderIpnsName: string) => {
+            const { findCoveringShares } = await import('../services/share.service');
+            const folders = useFolderStore.getState().folders;
+            // Find the folder ID from IPNS name for ancestor traversal
+            const folderId =
+              Object.keys(folders).find((id) => folders[id].ipnsName === folderIpnsName) ?? null;
+            return findCoveringShares(folderIpnsName, folders, folderId);
+          },
+          addShareKeys: async (shareId, keys) => {
+            const { addShareKeys } = await import('../services/share.service');
+            await addShareKeys(shareId, keys);
+          },
+        },
       });
 
       // Subscribe folder store to SDK events

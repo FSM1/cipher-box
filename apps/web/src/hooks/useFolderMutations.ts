@@ -2,13 +2,11 @@ import { useState, useCallback } from 'react';
 import { useFolderStore } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import * as folderService from '../services/folder.service';
-import { reWrapForRecipients } from '../services/share.service';
 import type { FolderNode } from '../stores/folder.store';
 import { getSdkClient, ensureFolderRegistered } from '../lib/sdk-provider';
 import { BinNotLoadedError } from '@cipherbox/sdk';
 import { MAX_FOLDER_DEPTH, getRootFolderState } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
-import { useNotificationStore } from '../stores/notification.store';
 
 /**
  * Build a breadcrumb-style path string for a folder by walking up the tree.
@@ -106,26 +104,8 @@ export function useFolderMutations() {
         };
         useFolderStore.getState().setFolder(newFolderNode);
 
-        // Post-create: re-wrap new subfolder key for share recipients (fire-and-forget)
-        reWrapForRecipients({
-          folderIpnsName: parentFolder.ipnsName,
-          folders: useFolderStore.getState().folders,
-          currentFolderId: actualParentId,
-          newItems: [{ keyType: 'folder', itemId: result.id, plaintextKey: result.folderKey }],
-        })
-          .then(({ failedRecipients }) => {
-            if (failedRecipients.length > 0) {
-              useNotificationStore
-                .getState()
-                .addNotification(
-                  'warning',
-                  `Failed to update share keys for ${failedRecipients.length} recipient(s). They may not be able to access the new folder until you re-share.`
-                );
-            }
-          })
-          .catch((err) => {
-            console.warn('[share] Post-create subfolder re-wrapping failed:', err);
-          });
+        // Post-create re-wrapping is handled by the SDK's shareCallbacks.
+        // The CipherBoxClient.createFolder() calls reWrapNewItems() internally.
 
         setState({ isLoading: false, error: null });
         return { ipnsName: result.ipnsName };

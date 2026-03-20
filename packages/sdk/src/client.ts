@@ -15,6 +15,7 @@
 
 import type { SdkContext, ProgressCallback, DownloadProgressCallback } from '@cipherbox/sdk-core';
 import * as sdkCore from '@cipherbox/sdk-core';
+import { clearBytes } from '@cipherbox/crypto';
 import type { FolderChild } from '@cipherbox/core';
 import type { CipherBoxClientConfig, FolderState } from './types';
 import { SdkEventEmitter, type SdkEvent, type SdkEventHandler } from './events';
@@ -78,6 +79,44 @@ export class CipherBoxClient {
   }
 
   // ---- Lifecycle ----
+
+  // ---- Share re-wrapping (internal) ----
+
+  /**
+   * Re-wrap keys for share recipients after adding items to a folder.
+   *
+   * Queries the share callbacks for active shares covering the folder,
+   * then wraps each new item's plaintext key for each recipient.
+   * Failures are logged but do not propagate (re-wrapping is best-effort).
+   */
+  private async reWrapNewItems(
+    folderIpnsName: string,
+    items: Array<{ keyType: 'file' | 'folder'; itemId: string; plaintextKey: Uint8Array }>
+  ): Promise<void> {
+    const callbacks = this.config.shareCallbacks;
+    if (!callbacks) return;
+
+    const coveringShares = await callbacks.getCoveringShares(folderIpnsName);
+    if (coveringShares.length === 0) return;
+
+    const { failedRecipients } = await shareOps.reWrapForRecipients({
+      coveringShares,
+      newItems: items,
+      addShareKeysFn: callbacks.addShareKeys,
+    });
+
+    if (failedRecipients.length > 0) {
+      console.warn(
+        `[SDK] Re-wrapping failed for ${failedRecipients.length} recipient(s):`,
+        failedRecipients.map((k) => k.slice(0, 10) + '...')
+      );
+      this.emitter.emit({
+        type: 'share:reWrapFailed',
+        folderIpnsName,
+        failedRecipients,
+      } as SdkEvent);
+    }
+  }
 
   /**
    * Destroy the client, clearing all sensitive state.
@@ -306,6 +345,16 @@ export class CipherBoxClient {
         children: updatedChildren,
         sequenceNumber: newSequenceNumber,
       });
+
+      // 8. Re-wrap subfolder key for share recipients (non-blocking)
+      if (this.config.shareCallbacks) {
+        // Don't await — re-wrapping shouldn't block folder creation return
+        this.reWrapNewItems(parentIpnsName, [
+          { keyType: 'folder', itemId: folder.id, plaintextKey: folderKey },
+        ]).catch((err) => {
+          console.warn('[SDK] Post-createFolder re-wrapping failed:', err);
+        });
+      }
 
       return { id: folder.id, ipnsName: folder.ipnsName, folderKey, ipnsPrivateKey };
     });
@@ -564,6 +613,19 @@ export class CipherBoxClient {
         children: updatedChildren,
         sequenceNumber: newSequenceNumber,
       });
+
+      // 6. Re-wrap file key for share recipients (non-blocking)
+      if (this.config.shareCallbacks) {
+        try {
+          await this.reWrapNewItems(folderIpnsName, [
+            { keyType: 'file', itemId: fileId, plaintextKey: uploadResult.fileKey },
+          ]);
+        } finally {
+          clearBytes(uploadResult.fileKey);
+        }
+      } else {
+        clearBytes(uploadResult.fileKey);
+      }
 
       return { cid: uploadResult.cid };
     });

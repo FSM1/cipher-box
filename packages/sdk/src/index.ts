@@ -37,7 +37,7 @@
 export { CipherBoxClient, BinNotLoadedError } from './client';
 
 // Types
-export type { CipherBoxClientConfig, FolderState } from './types';
+export type { CipherBoxClientConfig, FolderState, ShareCallbacks } from './types';
 
 // Events
 export type { SdkEvent, SdkEventHandler } from './events';

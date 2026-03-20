@@ -37,6 +37,7 @@ export type SdkEvent =
   | { type: 'file:uploaded'; folderId: string; fileName: string; cid: string }
   | { type: 'file:downloaded'; cid: string }
   | { type: 'bin:updated'; entries: BinEntry[] }
+  | { type: 'share:reWrapFailed'; folderIpnsName: string; failedRecipients: string[] }
   | { type: 'operation:start'; operation: string }
   | { type: 'operation:end'; operation: string; durationMs: number }
   | { type: 'error'; operation: string; error: Error };

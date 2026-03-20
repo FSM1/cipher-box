@@ -33,6 +33,12 @@ export type UploadResult = {
   ipnsRecord: FileIpnsRecordPayload;
   /** ECIES-wrapped IPNS private key (hex) for storage in FilePointer */
   ipnsPrivateKeyEncrypted: string;
+  /**
+   * Plaintext file key (AES-256) for post-upload re-wrapping.
+   * The caller MUST clear this with clearBytes() after use.
+   * Only present when the caller needs to re-wrap for share recipients.
+   */
+  fileKey: Uint8Array;
 };
 
 /**
@@ -94,15 +100,20 @@ export async function uploadFile(params: {
       encryptionMode: 'GCM',
     });
 
+    // Return a defensive copy of the file key for re-wrapping.
+    // The caller is responsible for clearing it after use.
+    const fileKeyCopy = new Uint8Array(fileKey);
+
     return {
       cid,
       encryptedSize,
       fileMetaIpnsName: fileMetaResult.fileMetaIpnsName,
       ipnsRecord: fileMetaResult.ipnsRecord,
       ipnsPrivateKeyEncrypted: fileMetaResult.ipnsPrivateKeyEncrypted,
+      fileKey: fileKeyCopy,
     };
   } finally {
-    // 6. Clear sensitive key from memory
+    // 6. Clear the internal copy of the key from memory
     clearBytes(fileKey);
   }
 }

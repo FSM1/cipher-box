@@ -7,6 +7,23 @@
 
 import type { TeeKeys } from '@cipherbox/sdk-core';
 import type { FolderChild, FolderMetadata } from '@cipherbox/core';
+import type { SentShareInfo } from './share';
+
+/**
+ * Callbacks for share-aware key re-wrapping.
+ *
+ * The SDK uses these to discover active shares and store re-wrapped keys
+ * without taking a direct dependency on the shares API or stores.
+ */
+export type ShareCallbacks = {
+  /** Find active shares covering a folder (including ancestor shares). */
+  getCoveringShares: (folderIpnsName: string) => Promise<SentShareInfo[]>;
+  /** Store re-wrapped keys for a share via the API. */
+  addShareKeys: (
+    shareId: string,
+    keys: Array<{ keyType: 'file' | 'folder'; itemId: string; encryptedKey: string }>
+  ) => Promise<void>;
+};
 
 /**
  * Configuration for initializing a CipherBoxClient instance.
@@ -27,6 +44,17 @@ export type CipherBoxClientConfig = {
   rootFolderKey: Uint8Array;
   /** TEE keys for IPNS key wrapping */
   teeKeys?: TeeKeys;
+  /**
+   * Callbacks for share-aware operations (re-wrapping).
+   *
+   * When provided, the SDK will automatically re-wrap file and folder keys
+   * for share recipients after uploadFile() and createFolder(). This ensures
+   * recipients can decrypt items added to shared folders after the share
+   * was created.
+   *
+   * If not provided, re-wrapping is skipped (consumer must handle it).
+   */
+  shareCallbacks?: ShareCallbacks;
   /** Callback when an operation starts */
   onOperationStart?: (operation: string) => void;
   /** Callback when an operation completes */
