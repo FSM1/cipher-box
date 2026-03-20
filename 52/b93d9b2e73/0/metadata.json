@@ -1,0 +1,120 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "52b93d9b2e73",
+  "session_id": "8ae64815-e645-461a-ae6b-d66403649a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T05:06:43.871156Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".learnings/2026-03-20-sdk-rewiring-dual-path-pitfalls.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "cefd2ad69313",
+  "token_usage": {
+    "input_tokens": 1033,
+    "cache_creation_tokens": 525002,
+    "cache_read_tokens": 92861840,
+    "output_tokens": 154061,
+    "api_call_count": 448
+  },
+  "summary": {
+    "intent": "Execute Phase 19.1 (Extract Core Crypto SDK as Shared Package) via the GSD workflow, executing 6 plans across 5 waves. The bulk of the session was spent debugging and fixing integration failures discovered during the Plan 19.1-05 checkpoint verification — rewiring web app hooks to use the new SDK.",
+    "outcome": "10 atomic commits fixing SDK-web app integration, with 9/10 operations verified working (create folder, rename, upload, download, edit, rename file, move, delete). Delete-to-bin was diagnosed and fixed last. Plan 19.1-06 was not started; the checkpoint for Plan 19.1-05 was not formally closed and the phase execution workflow is still paused.",
+    "learnings": {
+      "repo": [
+        "The web app has a dual-path IPNS write problem: old services and new SDK both write to the same IPNS records with independent sequence counters, causing 409 conflicts on any interleaved operation.",
+        "`setApiClientConfig()` from `@cipherbox/api-client` must be called before any generated API functions (including IPNS operations). It was never wired into the SDK init path, silently failing all IPNS-dependent SDK operations.",
+        "FolderEntry.id is a UUID used for UI navigation and store lookups; ipnsName (k51...) is for IPNS operations. These must not be conflated when storing new folders.",
+        "`CipherBoxClient.deleteToBin()` requires `binState` to be non-null (loaded via `loadBin()`). If `loadBin()` returns null (no IPNS record yet), deleteToBin silently falls back to hard `deleteItem()`.",
+        "The old `initializeBin()` service creates the bin IPNS record lazily on first delete; the SDK's `loadBin()` must be called *after* this completes or it will find no record and return null.",
+        "`ensureFolderRegistered` caused a cascade of bugs by overwriting SDK's correct IPNS private key and sequence number with stale Zustand store values. The safest pattern is: skip entirely if SDK already has the folder.",
+        "The `useDropUpload` hook had 3 separate `useUploadStore` selector calls; collapsing to 1 is required to avoid React HMR hook count errors when the hook is rewritten.",
+        "The web app's old download/resolve path (`file-metadata.service.ts` → `ipns.service.ts`) uses the web app's own axios instance, not `@cipherbox/api-client`. Files uploaded via SDK but downloaded via the old path fail to decrypt because the IPNS resolution uses a different code path.",
+        "The `@cipherbox/web` app should depend on `@cipherbox/sdk` only, not `@cipherbox/sdk-core` directly. Leaking sdk-core into the web app is an architectural smell — functionality should be surfaced via the SDK client.",
+        "IPNS delegated routing retries add 20-30s per integration test run against the live API. This is normal and not a test infra bug.",
+        "OTP rate limit is 5 sends per 15-minute window, stored in Redis. Clearing the rate limit key allows test re-runs without waiting."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "finding": "Two fixes added: (1) `setApiClientConfig({ baseUrl, getAccessToken })` called during SDK init so all `@cipherbox/api-client` generated functions have a working axios instance; (2) `client.loadBin()` called after old `initializeBin()` completes (non-blocking) so SDK bin state is populated before first delete."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "finding": "`loadBin()` previously returned `null` when no IPNS record existed (fresh account). Changed to return an empty `BinState` so `deleteToBin()` can succeed on first use without requiring a pre-existing IPNS bin record."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "Extended with `hasFolder()`, `getFolderSequenceNumber()`, `getFolderIpnsPrivateKey()`, and `downloadFromIpns()`. `createFolder()` return type extended to include `id` (UUID from FolderEntry) and `ipnsPrivateKey` so callers don't have to use empty placeholder keys."
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "finding": "`ensureFolderRegistered` simplified to a no-op if `client.hasFolder(folder.ipnsName)` — prevents overwriting SDK's sequence number and IPNS private key with stale store data."
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "finding": "`handleCreate` must use `result.id` (UUID) not `result.ipnsName` for the Zustand store entry. Navigation uses the UUID to look up folders in the children array, not the IPNS name."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "finding": "Complete rewrite to use `client.uploadFile()` instead of old two-step encrypt+upload+addFilePointer service chain. Eliminates the dual-path IPNS write problem for file uploads."
+        },
+        {
+          "path": "apps/web/src/hooks/useFileDownload.ts",
+          "finding": "Simplified to use `client.downloadFromIpns()`. Old `downloadFileFromIpns` service path removed from this hook."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "finding": "Owner file path now uses `client.downloadFromIpns()`. Share path still uses old service because it requires re-wrapped file keys from share_keys — not yet migrated."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "finding": "`updateFolderMetadataAndPublish` now retries once on 409 by re-resolving the current IPNS sequence number via `resolveIpnsRecord`. Handles stale seq numbers from any source without requiring callers to manage retry logic."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "finding": "Full SDK lifecycle integration test against live API: login via test-login endpoint → create folder → upload → download (content verified) → rename → delete → bin lifecycle. Uses `TEST_LOGIN_SECRET` env var. Runtime ~27s due to IPNS delegated routing."
+        }
+      ],
+      "workflow": [
+        "When a checkpoint verification reveals bugs, validate fixes at the SDK unit/integration level first (vitest against live API), then use Playwright MCP for UI verification. This gives a faster feedback loop than starting with E2E browser tests.",
+        "Headed Playwright via MCP tools is effective for browser verification without requiring the user to drive the UI. The assistant can navigate, interact, and read console errors autonomously.",
+        "Use random emails per Playwright test run to get a clean vault state. Avoids state pollution from prior runs that causes misleading failures.",
+        "OTP retrieval in dev: send OTP via curl, read from the server log file output path. Rate limiting (5/15min in Redis) can be cleared manually if needed for test iteration.",
+        "Atomic commits per fix (not per session or per wave) makes it easy to bisect and revert individual changes. Stash + selective staging works well when a file contains multiple orthogonal fixes.",
+        "When the SDK's internal state can be queried (e.g., `hasFolder`, `getFolderSequenceNumber`), expose those as methods rather than relying on Zustand store as the source of truth — the store lags behind SDK mutations.",
+        "The GSD workflow's dual-path architecture (old service + new SDK) is a migration hazard. Any operation where both paths write to the same IPNS record will produce 409 conflicts. Fully migrate each operation atomically rather than running them in parallel."
+      ]
+    },
+    "friction": [
+      "Web3Auth OTP login in test environment is fragile: rate limiting (5/15min), session expiry, and duplicate DB key errors for reused emails all blocked Playwright verification sessions.",
+      "No direct access to API process stdout — OTP retrieval required curl + log file polling, which only works if the log file path is known and the process writes there.",
+      "Long IPNS delegated routing delays (~30s per integration test run) slow iteration significantly.",
+      "The `ensureFolderRegistered` bridge pattern caused 4 separate bugs before being simplified to skip-if-has. Each 'fix' introduced a new edge case (wrong seq, wrong private key, wrong UUID).",
+      "React HMR hook count errors when rewriting hooks mid-session (caused by inconsistent `useUploadStore` call count in `useDropUpload`) were confusing and hard to attribute to the right cause.",
+      "ESM `__dirname` not available in Playwright test spec file — required `fileURLToPath(import.meta.url)` workaround.",
+      "User had to push back multiple times before the assistant stopped asking them to manually drive the UI for verification.",
+      "The initial plan 02 execution was discarded and the branch reset — the plan had been updated between planning and execution but the executor used the stale version."
+    ],
+    "open_items": [
+      "Plan 19.1-06 (final cleanup, import rewiring, release config) not yet executed — phase execution workflow is paused at the Plan 19.1-05 checkpoint.",
+      "Plan 19.1-05 checkpoint not formally approved — the GSD orchestrator never received an 'approved' signal to continue to Wave 5.",
+      "`TextEditorDialog` share path still uses the old `downloadFileFromIpns` service because it requires re-wrapped file keys from share_keys. Needs SDK support for shared file download.",
+      "Duplicate file handling in `useDropUpload` still uses old encrypt+upload path (doesn't register in folder until user confirms Replace dialog) — not migrated to SDK.",
+      "`useFileDelete` not migrated to SDK — kept on old service pattern because the delete flow is architecturally different for shared files.",
+      "Pre-existing DTS circular dependency between `@cipherbox/core` and `@cipherbox/crypto` causes `pnpm -r run build` to fail. Only `pnpm --filter @cipherbox/web build` works. Noted as deviation in Plan 05 SUMMARY but not fixed.",
+      "The `.learnings/` directory and `README.md` index were created but may need a more systematic cross-session index if it grows large.",
+      "Integration test runtime of ~27s is acceptable for now but IPNS resolution performance should be profiled — multiple delegated routing retries per operation suggest the API's IPNS resolution is slow in the test environment."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T05:05:16.185582Z",
+    "agent_lines": 0,
+    "human_added": 8,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 8,
+    "agent_percentage": 0
+  }
+}
