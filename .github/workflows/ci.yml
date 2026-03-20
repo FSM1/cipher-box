@@ -377,7 +377,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build packages (excluding desktop)
-        run: pnpm --filter @cipherbox/crypto --filter @cipherbox/api --filter @cipherbox/web build
+        run: pnpm --filter @cipherbox/crypto --filter @cipherbox/core --filter @cipherbox/api-client --filter @cipherbox/sdk-core --filter @cipherbox/sdk --filter @cipherbox/api --filter @cipherbox/web build
 
   cargo-windows:
     name: Cargo Check & Test (Windows)
