@@ -9,6 +9,8 @@ reviews:
     enabled: true
     # Ignore drafts until ready for review
     drafts: false
+    # Large PRs (e.g., package extractions) can exceed the default 150 file limit
+    max_files_to_review: 300
     # Review based on changed files
     base_branches:
       - main
@@ -85,6 +87,10 @@ reviews:
     - '!**/coverage/**'
     - '!**/pnpm-lock.yaml'
     - '!**/generated/**'
+    - '!packages/api-client/**'
+    - '!apps/web/src/api/**'
+    - '!.planning/**'
+    - '!.learnings/**'
     - '!.claude/agents/**'
     - '!.claude/commands/**'
     - '!.claude/get-shit-done/**'
