@@ -1,0 +1,90 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "36d0e7759995",
+  "session_id": "6838d6a8-ad86-4233-8edf-81daae3f1aef",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T14:57:36.988205Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk-core/src/file/index.ts",
+    "packages/sdk/src/__tests__/client-extended.test.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "147004d7c1f2",
+  "checkpoint_transcript_start": 1179,
+  "transcript_lines_at_start": 1179,
+  "token_usage": {
+    "input_tokens": 31,
+    "cache_creation_tokens": 31319,
+    "cache_read_tokens": 5840355,
+    "output_tokens": 9140,
+    "api_call_count": 27
+  },
+  "summary": {
+    "intent": "Monitor a PR for CodeRabbit review comments, resolve all threads by fixing valid issues or marking non-applicable ones, and repeat until no serious comments remain.",
+    "outcome": "10 of 19 initial CodeRabbit threads were fixed and all 19 resolved. A second round of review surfaced 1-2 additional issues (key zeroization bug, test quality) which were fixed and staged, but the commit could not be pushed due to a 1Password SSH signing agent failure.",
+    "learnings": {
+      "repo": [
+        "IPFS/IPNS share key field is 'id', not 'ipnsName' — using the wrong field was a real bug in useFolderMutations.ts",
+        "IPNS sequenceNumber should start at 1n, not 0n",
+        "Blob .buffer should not be used directly; pass the Uint8Array instead in useDropUpload.ts",
+        "Bin cleanup on permanentDelete is a known limitation, not a bug to fix",
+        "IPNS signature verification being skipped is intentional",
+        "Publish order in the SDK requires careful analysis before changing — deferred"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/file/index.ts",
+          "line": 77,
+          "end_line": 78,
+          "finding": "wrapKey() was outside the try block — if it threw, the IPNS private key would leak without being zeroed. Fix: move wrapKey() inside try/finally to guarantee zeroization on all exit paths."
+        },
+        {
+          "path": "packages/sdk-core/src/file/index.ts",
+          "finding": "Pattern: use try/finally (not try/catch + re-zero) for key zeroization so cleanup always runs regardless of throw path."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/client-extended.test.ts",
+          "finding": "Test named 'emits bin:updated' only checked no-throw, not the actual event — test name and assertion were mismatched. Also had 'as any' casts that could be replaced with typed predicates."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/share.test.ts",
+          "finding": "Missing beforeEach(clearAllMocks) — test state could leak between cases."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "Duplicate name checks for both createFolder and upload need to happen before the operation, not after."
+        },
+        {
+          "path": "packages/sdk-core/src/key-cache.ts",
+          "finding": "Previous key was not being zeroed in cache on error path."
+        }
+      ],
+      "workflow": [
+        "CodeRabbit does an incremental re-review after a push — wait ~3 min after pushing to check for new threads before declaring done.",
+        "Batch-resolving GitHub PR threads via CLI is viable but requires careful thread ID management.",
+        "1Password SSH agent can fail intermittently, blocking signed commits — staged changes survive the session."
+      ]
+    },
+    "friction": [
+      "1Password SSH signing agent failed repeatedly, blocking the final commit and push — required manual user intervention.",
+      "CodeRabbit posted duplicate threads (e.g., #19 same as #14) adding noise to the review process.",
+      "User was AFK during the SSH failure window, causing a pause in the workflow."
+    ],
+    "open_items": [
+      "Final commit with key zeroization fix and test improvements is staged but not yet pushed — user needs to push after 1Password recovery.",
+      "Publish order safety in the SDK needs careful analysis before any changes are made (CodeRabbit thread #16 deferred).",
+      "Bin cleanup on permanentDelete is a known limitation with no current fix planned."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T14:57:12.459179Z",
+    "agent_lines": 17,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 17,
+    "agent_percentage": 100
+  }
+}
