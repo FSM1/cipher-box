@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-20T01:22:15.665Z'
+last_updated: '2026-03-20T01:38:05.295Z'
 progress:
   total_phases: 6
   completed_phases: 2
   total_plans: 10
-  completed_plans: 6
+  completed_plans: 7
 ---
 
 # Project State
@@ -23,7 +23,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 19.1 (extract-core-crypto-sdk-as-shared-package) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 
 ## Performance Metrics
 
@@ -39,6 +39,7 @@ Plan: 2 of 6
 | 19    | 02   | 5min     | 2     | 5     |
 | 19.1  | 02   | 4min     | 2     | 133   |
 | 19.1  | 01   | 17min    | 2     | 42    |
+| 19.1  | 03   | 12min    | 3     | 18    |
 
 ## Accumulated Context
 
@@ -59,6 +60,7 @@ Recent for v1.1:
 - IPNS-specific histograms: resolve 50ms-30s, publish 100ms-60s with source/outcome labels
 - Null resolve results (not found) excluded from IPNS histogram observations
 - Used axios-functions orval client for @cipherbox/api-client (plain functions, no React deps)
+- sdk-core IPFS ops use direct axios/fetch (not api-client) for upload progress; IPNS ops use api-client generated functions
 
 ### Roadmap Evolution
 
@@ -78,4 +80,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-20 after completing 19.1-02 (API client package with orval generation)
+Last updated: 2026-03-20 after completing 19.1-03 (SDK core package with stateless operations)
