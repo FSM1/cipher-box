@@ -1,11 +1,11 @@
 import { test, expect, Browser } from '@playwright/test';
 import {
-  createTestAccount,
-  closeTestAccounts,
+  createWalletTestAccount,
+  closeWalletTestAccounts,
   navigateToShared,
   navigateToFiles,
-  type TestAccount,
-} from '../utils/multi-account';
+  type WalletTestAccount,
+} from '../utils/multi-account-wallet';
 import { createTestTextFile, createTestImageFile, cleanupTestFiles } from '../utils/test-files';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
 import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';
@@ -37,9 +37,9 @@ import { SharedFileBrowserPage } from '../page-objects/file-browser/shared-file-
  */
 test.describe.serial('Sharing Workflow', () => {
   let browser: Browser;
-  let alice: TestAccount;
-  let bob: TestAccount;
-  let charlie: TestAccount;
+  let alice: WalletTestAccount;
+  let bob: WalletTestAccount;
+  let charlie: WalletTestAccount;
 
   // Page objects per account
   let aliceFileList: FileListPage;
@@ -141,7 +141,7 @@ test.describe.serial('Sharing Workflow', () => {
   test.afterAll(async () => {
     cleanupTestFiles();
     if (alice || bob || charlie) {
-      await closeTestAccounts([alice, bob, charlie].filter(Boolean));
+      await closeWalletTestAccounts([alice, bob, charlie].filter(Boolean));
     }
   });
 
@@ -150,10 +150,11 @@ test.describe.serial('Sharing Workflow', () => {
   // ============================================
 
   test('1.1 Create test accounts (Alice, Bob, Charlie)', async () => {
-    // Create accounts sequentially (each needs its own context + vault init)
-    alice = await createTestAccount(browser, 'alice', runId);
-    bob = await createTestAccount(browser, 'bob', runId);
-    charlie = await createTestAccount(browser, 'charlie', runId);
+    test.setTimeout(180_000); // 3 wallet logins with Core Kit init
+    // Create accounts sequentially (each needs its own context + wallet login)
+    alice = await createWalletTestAccount(browser, 'alice');
+    bob = await createWalletTestAccount(browser, 'bob');
+    charlie = await createWalletTestAccount(browser, 'charlie');
 
     // Initialize page objects for Alice
     aliceFileList = new FileListPage(alice.page);

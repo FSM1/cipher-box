@@ -1,9 +1,6 @@
 import { test, expect, Page, Browser, BrowserContext } from '@playwright/test';
-import {
-  loginViaEmail,
-  reinjectTestAuthAfterReload,
-  TEST_CREDENTIALS,
-} from '../utils/web3auth-helpers';
+import type { PrivateKeyAccount } from 'viem/accounts';
+import { createTestAccount, setupMockWallet, loginViaWallet } from '../utils/wallet-login-helpers';
 import { createTestTextFile, cleanupTestFiles } from '../utils/test-files';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
 import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';
@@ -121,10 +118,16 @@ test.describe.serial('Full Workflow', () => {
   // Track CID before/after text editor save to verify re-encryption
   let cidBeforeEdit = '';
 
+  let account: PrivateKeyAccount;
+
   test.beforeAll(async ({ browser: testBrowser }) => {
     browser = testBrowser;
     context = await browser.newContext();
     page = await context.newPage();
+
+    // Generate a random wallet identity and install mock wallet
+    account = createTestAccount();
+    await setupMockWallet(page, account);
 
     // Initialize page objects
     fileList = new FileListPage(page);
@@ -283,16 +286,13 @@ test.describe.serial('Full Workflow', () => {
   // Phase 1: Login
   // ============================================
 
-  test('1.1 Login with Web3Auth credentials', async () => {
-    expect(TEST_CREDENTIALS.email, 'WEB3AUTH_TEST_EMAIL must be set').toBeTruthy();
-    expect(TEST_CREDENTIALS.otp, 'WEB3AUTH_TEST_OTP must be set').toBeTruthy();
+  test('1.1 Login with wallet', async () => {
+    test.setTimeout(90_000); // Core Kit init + SIWE can be slow
+    // Login via wallet (mock wallet auto-approves connect + SIWE)
+    await loginViaWallet(page, { timeout: 60_000 });
 
-    await page.goto('/');
-    await loginViaEmail(page, TEST_CREDENTIALS.email, TEST_CREDENTIALS.otp);
-
-    // Phase 6.3: /dashboard redirects to /files
+    // Verify we're on the files page with user menu visible
     await expect(page).toHaveURL(/.*files/);
-    // Phase 6.3: Logout is now in UserMenu dropdown, check for user menu trigger instead
     await expect(page.locator('[data-testid="user-menu"]')).toBeVisible();
   });
 
@@ -542,11 +542,7 @@ test.describe.serial('Full Workflow', () => {
     navigationStack.length = 0;
     navigationStack.push('root');
 
-    // Re-inject test auth state after reload (test-login bypasses Core Kit
-    // so there's no persistent session to auto-restore). For real Core Kit
-    // flow this is a no-op.
-    await reinjectTestAuthAfterReload(page);
-
+    // Core Kit session auto-restores after reload (real wallet login persists)
     // Wait for auth to restore (user menu becomes visible)
     await page.locator('[data-testid="user-menu"]').waitFor({
       state: 'visible',
