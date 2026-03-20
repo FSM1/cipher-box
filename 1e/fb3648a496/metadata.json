@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "1efb3648a496",
+  "strategy": "manual-commit",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/codecov-base.yml",
+    ".release-please-manifest.json",
+    "apps/api/src/tee/dto/tee-keys.dto.ts",
+    "apps/api/src/vault/dto/init-vault.dto.ts",
+    "packages/sdk-core/README.md",
+    "packages/sdk/README.md",
+    "packages/sdk/src/__tests__/client-extended.test.ts",
+    "packages/sdk/src/client.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1e/fb3648a496/0/metadata.json",
+      "transcript": "/1e/fb3648a496/0/full.jsonl",
+      "context": "/1e/fb3648a496/0/context.md",
+      "content_hash": "/1e/fb3648a496/0/content_hash.txt",
+      "prompt": "/1e/fb3648a496/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 37,
+    "cache_creation_tokens": 69035,
+    "cache_read_tokens": 2289663,
+    "output_tokens": 10447,
+    "api_call_count": 36
+  }
+}

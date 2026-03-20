@@ -1,0 +1,83 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "1efb3648a496",
+  "session_id": "6838d6a8-ad86-4233-8edf-81daae3f1aef",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T12:21:06.356112Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "packages/sdk/src/client.ts",
+    "apps/api/src/tee/dto/tee-keys.dto.ts",
+    "apps/api/src/vault/dto/init-vault.dto.ts",
+    ".release-please-manifest.json",
+    ".github/workflows/codecov-base.yml",
+    ".github/workflows/ci.yml",
+    "packages/sdk/README.md",
+    "packages/sdk-core/README.md",
+    "packages/sdk/src/__tests__/client-extended.test.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "6d94224fc481",
+  "token_usage": {
+    "input_tokens": 37,
+    "cache_creation_tokens": 69035,
+    "cache_read_tokens": 2289663,
+    "output_tokens": 10447,
+    "api_call_count": 36
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments on PR #296 by triaging, implementing fixes, running tests, committing, and replying to/resolving each thread.",
+    "outcome": "All 11 unresolved review threads were addressed: 6 valid fixes implemented, 1 marked as already addressed. All 53 tests passed, types regenerated, and changes committed and pushed.",
+    "learnings": {
+      "repo": [
+        "API client (packages/api-client) is generated via orval from an OpenAPI spec — DTO changes in apps/api require running the API server to regenerate openapi.json, then running orval separately to regenerate the client",
+        "Standalone type alias files like teeKeysDtoPreviousEpoch.ts are orval artifacts and may be stale; actual types used in the codebase are in the parent DTO interface files (e.g., teeKeysDto.ts, vaultResponseDto.ts)",
+        "Release Please manifest lives at .release-please-manifest.json and tracks per-package versions",
+        "Codecov configuration split across codecov.yml (thresholds/flags) and .github/workflows/codecov-base.yml (upload steps) — api-client package was missing coverage collection and upload",
+        "CI workflow at .github/workflows/ci.yml needed an explicit coverage step for api-client to match other packages"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "destroy() method needed to zero out key material buffers; the fix involved ensuring caller-owned buffers are zeroed rather than internal copies"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/client-extended.test.ts",
+          "finding": "Test assertions for destroy() were checking old zeroing behavior and needed updating to match the corrected implementation"
+        },
+        {
+          "path": "apps/api/src/tee/dto/tee-keys.dto.ts",
+          "finding": "previousPublicKey and previousEpoch fields had incorrect types that caused orval to generate wrong TypeScript types in the API client"
+        },
+        {
+          "path": "apps/api/src/vault/dto/init-vault.dto.ts",
+          "finding": "initializedAt field had incorrect type causing orval to generate string instead of the correct nullable type"
+        }
+      ],
+      "workflow": [
+        "orval must be run from the api-client package directory with its own config (packages/api-client/orval.config.ts), not from repo root",
+        "Two-step client regeneration required: (1) regenerate openapi.json from the running API, (2) run orval to regenerate TypeScript client from the spec",
+        "Checking parent DTO interface files rather than standalone type alias files is the reliable way to verify correct orval output"
+      ]
+    },
+    "friction": [
+      "Initial commit attempt failed because DTO changes required API client regeneration first — not immediately obvious that generated files needed to be included",
+      "orval did not update standalone type alias files (e.g., teeKeysDtoPreviousPublicKey.ts) even after spec was corrected, causing confusion about whether types were actually fixed",
+      "Had to run orval separately from repo root regeneration step — two distinct commands with different working directories and configs"
+    ],
+    "open_items": [
+      "Standalone orval type alias files (teeKeysDtoPreviousEpoch.ts, teeKeysDtoPreviousPublicKey.ts, vaultResponseDtoInitializedAt.ts) remain stale/potentially misleading — worth investigating whether they can be cleaned up or if orval config can be adjusted to keep them in sync",
+      "apps/web/src/lib/sdk-provider.ts was flagged as related to the destroy() fix but only marked 'already addressed' — worth verifying no direct callers rely on old zeroing behavior"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T12:20:46.314031Z",
+    "agent_lines": 52,
+    "human_added": 10,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 62,
+    "agent_percentage": 83.87096774193549
+  }
+}
