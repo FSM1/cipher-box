@@ -1,0 +1,65 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "126eae3ab3e7",
+  "session_id": "6838d6a8-ad86-4233-8edf-81daae3f1aef",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T14:01:56.177904Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".coderabbit.yaml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "878ebffc2594",
+  "checkpoint_transcript_start": 897,
+  "transcript_lines_at_start": 897,
+  "token_usage": {
+    "input_tokens": 39,
+    "cache_creation_tokens": 8903,
+    "cache_read_tokens": 4960229,
+    "output_tokens": 3213,
+    "api_call_count": 29
+  },
+  "summary": {
+    "intent": "Update CodeRabbit config to increase file review limit and add path exclusions, then rebase the feature branch on top of the updated main.",
+    "outcome": "Config PR #297 merged to main, feature branch rebased successfully, CodeRabbit processing 136 of 140 files. Then removed .planning/** and .learnings/** exclusions directly on feature branch so those docs are available for context review.",
+    "learnings": {
+      "repo": [
+        "CodeRabbit config lives at .coderabbit.yaml and is read from main branch — changes must land on main to affect open PR reviews",
+        "path_filters with ! completely excludes files from CodeRabbit's context, overriding any path_instructions directives",
+        ".planning/** and .learnings/** directories exist and contain useful context for PR reviews",
+        "The repo has a change-detection CI step that skips most checks when only YAML files change"
+      ],
+      "code": [
+        {
+          "path": ".coderabbit.yaml",
+          "finding": "path_filters exclusions prevent CodeRabbit from reading files even for context; path_instructions alone does not exclude files from processing"
+        }
+      ],
+      "workflow": [
+        "GitHub Actions can show 'in_progress' status after a job has already succeeded — rendering lag, not a real blocker",
+        "Git rebase auto-drops commits that are already upstream when the content is identical, cleaning up redundant config commits",
+        "For config-only changes that only need to affect a single PR, modifying the file directly on the feature branch avoids the branch/PR/merge/rebase cycle"
+      ]
+    },
+    "friction": [
+      "GitHub status checks showed 'in_progress' after job succeeded, causing confusion and unnecessary merge retries",
+      "Stale background task failure notification surfaced mid-session for an already-resolved conflict, creating noise",
+      "Auto-merge and admin merge both attempted before CI completed, requiring multiple merge attempts",
+      "Rebase conflict on .coderabbit.yaml required manual resolution — the file existed independently on both branches"
+    ],
+    "open_items": [
+      "PR #296 (phase-19.1-extract-core-sdk) review by CodeRabbit is in progress — 136 files selected for processing",
+      "After PR #296 merges, the .coderabbit.yaml on main will reflect the restored .planning/** and .learnings/** inclusions"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T14:01:26.870952Z",
+    "agent_lines": 0,
+    "human_added": 15852,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 15852,
+    "agent_percentage": 0
+  }
+}
