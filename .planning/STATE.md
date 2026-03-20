@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-20T05:28:54.420Z'
+last_updated: '2026-03-20T05:46:19.844Z'
 progress:
   total_phases: 6
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 10
-  completed_plans: 8
+  completed_plans: 10
 ---
 
 # Project State
@@ -22,8 +22,8 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 
 ## Current Position
 
-Phase: 19.1 (extract-core-crypto-sdk-as-shared-package) — EXECUTING
-Plan: 1 of 6
+Phase: 19.1 (extract-core-crypto-sdk-as-shared-package) — COMPLETE
+Plan: 6 of 6
 
 ## Performance Metrics
 
@@ -41,6 +41,7 @@ Plan: 1 of 6
 | 19.1  | 01   | 17min    | 2     | 42    |
 | 19.1  | 03   | 12min    | 3     | 18    |
 | 19.1  | 04   | 10min    | 2     | 14    |
+| 19.1  | 06   | 13min    | 3     | 52    |
 
 ## Accumulated Context
 
@@ -64,6 +65,7 @@ Recent for v1.1:
 - sdk-core IPFS ops use direct axios/fetch (not api-client) for upload progress; IPNS ops use api-client generated functions
 - Bin/share operations take explicit context objects (BinOperationContext, ShareOperationContext) instead of Zustand stores
 - Share module accepts callback functions for API calls to stay transport-decoupled
+- Moved @cipherbox/core from dependencies to devDependencies in crypto (test-only cross-package assertions)
 
 ### Roadmap Evolution
 
@@ -83,4 +85,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-20 after completing 19.1-04 (SDK package with CipherBoxClient, bin/share, event system)
+Last updated: 2026-03-20 after completing 19.1-06 (final cleanup: removed re-exports, Release Please, Codecov, READMEs)

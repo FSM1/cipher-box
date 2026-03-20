@@ -55,8 +55,8 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 - [x] **SDK-07**: SDK bin operations (add, restore, permanent delete, empty) and share operations (create, revoke) work through stateful client
 - [ ] **SDK-08**: Web app creates CipherBoxClient on vault load and destroys on logout; Zustand stores subscribe to SDK events
 - [ ] **SDK-09**: React hooks refactored to thin wrappers calling SDK client methods instead of service functions directly
-- [ ] **SDK-10**: All transitional re-exports removed from @cipherbox/crypto; domain type imports enforced at compile time
-- [ ] **SDK-11**: Release Please configured for independent per-package versioning
+- [x] **SDK-10**: All transitional re-exports removed from @cipherbox/crypto; domain type imports enforced at compile time
+- [x] **SDK-11**: Release Please configured for independent per-package versioning
 
 ## v1.2 Requirements
 
@@ -130,8 +130,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SDK-07      | Phase 19.1 | Complete |
 | SDK-08      | Phase 19.1 | Pending  |
 | SDK-09      | Phase 19.1 | Pending  |
-| SDK-10      | Phase 19.1 | Pending  |
-| SDK-11      | Phase 19.1 | Pending  |
+| SDK-10      | Phase 19.1 | Complete |
+| SDK-11      | Phase 19.1 | Complete |
 
 **Coverage:**
 
