@@ -10,6 +10,7 @@ import { useVaultStore } from '../stores/vault.store';
 import { useDeviceRegistryStore } from '../stores/device-registry.store';
 import { clearAllUserStores } from '../lib/clear-user-stores';
 import { initSdkClient } from '../lib/sdk-provider';
+import { setApiClientConfig } from '@cipherbox/api-client';
 import {
   initializeVault,
   encryptVaultKeys,
@@ -152,12 +153,18 @@ export function useAuth() {
     const vaultState = useVaultStore.getState();
     const authState = useAuthStore.getState();
     if (vaultState.rootFolderKey && vaultState.rootIpnsKeypair && vaultState.rootIpnsName) {
+      const apiUrl = import.meta.env.VITE_API_URL || window.location.origin + '/api';
+      const getAccessToken = async () => {
+        const state = useAuthStore.getState();
+        return state.accessToken || '';
+      };
+
+      // Configure @cipherbox/api-client for SDK-core IPNS operations
+      setApiClientConfig({ baseUrl: apiUrl, getAccessToken });
+
       const sdkClient = initSdkClient({
-        apiUrl: import.meta.env.VITE_API_URL || window.location.origin + '/api',
-        getAccessToken: async () => {
-          const state = useAuthStore.getState();
-          return state.accessToken || '';
-        },
+        apiUrl,
+        getAccessToken,
         vaultKeypair: {
           publicKey: userKeypair.publicKey,
           privateKey: userKeypair.privateKey,
