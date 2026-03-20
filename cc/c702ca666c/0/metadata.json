@@ -1,0 +1,59 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "ccc702ca666c",
+  "session_id": "8ae64815-e645-461a-ae6b-d66403649a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T00:40:47.725778Z",
+  "branch": "phase-19.1-extract-core-crypto-sdk-as-shared-package",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "pnpm-lock.yaml",
+    "apps/web/package.json"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "a16bb09ac222",
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 24498,
+    "cache_read_tokens": 229474,
+    "output_tokens": 3572,
+    "api_call_count": 7
+  },
+  "summary": {
+    "intent": "Execute phase 19.1 (Extract Core Crypto SDK as Shared Package) using GSD wave-based parallel execution, starting with Wave 1 plans to split the crypto package and expand the API client.",
+    "outcome": "Wave 1 was initiated with 2 parallel subagents spawned for plans 19.1-01 and 19.1-02; execution was interrupted before completion. An earlier attempt on phase 9.1 was also interrupted.",
+    "learnings": {
+      "repo": [
+        "Phase 19.1 has 6 plans across 5 waves, targeting extraction of a shared crypto SDK",
+        "Planning docs for phase 19.1 live on the `docs/phase-19.1-context` branch, requiring the execution branch to be created from there",
+        "The project uses pnpm workspaces with packages like @cipherbox/crypto, @cipherbox/core, and @cipherbox/api-client",
+        "The api-client package was previously a bare openapi.json file without a full typed HTTP client"
+      ],
+      "code": [],
+      "workflow": [
+        "GSD execute-phase initializes via `gsd-tools init execute-phase` which returns phase_found, plans, waves, and executor_model config in one call",
+        "The stale auto-chain flag must be cleared before reading config when --auto is not passed to prevent unintended auto-advance",
+        "Subagents are spawned with subagent_type=gsd-executor and pass only file paths — executors read files themselves to keep orchestrator context lean (~10-15%)",
+        "Wave grouping is retrieved via `gsd-tools phase-plan-index` which returns each plan's wave assignment, autonomy flag, and task count"
+      ]
+    },
+    "friction": [
+      "First invocation targeted wrong phase (9.1 instead of 19.1) and was manually interrupted by the user",
+      "Branch management complexity: planning docs were on a non-main branch, requiring the execution branch to be derived from it rather than main"
+    ],
+    "open_items": [
+      "Waves 2-5 not yet executed: stateless SDK-core operations (19.1-03), stateful CipherBoxClient (19.1-04), rewire web app hooks (19.1-05, checkpoint), and final cleanup/release config (19.1-06)",
+      "pnpm-lock.yaml and apps/web/package.json were modified by Wave 1 agents but outcome of those agents was not confirmed before transcript ended",
+      "Verification step (gsd-verifier) not yet run for phase 19.1"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T00:40:30.866551Z",
+    "agent_lines": 29,
+    "human_added": 2779,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2808,
+    "agent_percentage": 1.0327635327635327
+  }
+}
