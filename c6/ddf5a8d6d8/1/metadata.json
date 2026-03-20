@@ -1,0 +1,90 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "c6ddf5a8d6d8",
+  "session_id": "3f8e1927-1b97-4c98-97c7-a19b3c057640",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T23:50:10.124194Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/e2e/tests/sharing-workflow.spec.ts",
+    "tests/e2e/utils/multi-account-wallet.ts",
+    "packages/crypto/README.md",
+    "packages/sdk/src/client.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "081ef6da63dc",
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 38253,
+    "cache_read_tokens": 899765,
+    "output_tokens": 8153,
+    "api_call_count": 23
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments by triaging, implementing fixes, running tests, committing, and replying to/resolving each thread.",
+    "outcome": "5 of 6 threads fixed (1 marked not applicable), all 57 unit tests passing, changes committed and pushed across 4 files.",
+    "learnings": {
+      "repo": [
+        "cipher-box is a monorepo with packages: crypto, sdk, and tests/e2e",
+        "crypto/README.md maintains a manual API list that must be kept in sync with exports (deriveIpnsName, generateIv, generateCtrIv, clearAll were missing)",
+        "sdk/client.ts uses clearBytes for secure key material cleanup — already imported",
+        "E2E tests use a multi-account-wallet utility that creates Playwright browser contexts per account"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 628,
+          "end_line": 628,
+          "finding": "fileKey was not cleared in a finally block — if an exception occurred before the re-wrap try/catch, the key would leak in memory; fixed by wrapping the post-upload section in try/finally"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 947,
+          "end_line": 947,
+          "finding": "Lifecycle hooks could throw and break operations; fixed with error isolation so hook exceptions don't propagate"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 360,
+          "end_line": 360,
+          "finding": "Concurrent mutations to the same folder can lose updates — acknowledged architectural concern, deferred as out of scope for this extraction PR"
+        },
+        {
+          "path": "tests/e2e/tests/sharing-workflow.spec.ts",
+          "line": 157,
+          "end_line": 157,
+          "finding": "180s timeout too tight for 3 sequential wallet logins; increased"
+        },
+        {
+          "path": "tests/e2e/utils/multi-account-wallet.ts",
+          "line": 105,
+          "end_line": 105,
+          "finding": "Playwright browser contexts leaked on partial failure during account creation; fixed with cleanup on failure path"
+        }
+      ],
+      "workflow": [
+        "Used GraphQL reviewThreads query to fetch isResolved status for PR threads",
+        "REST API requires --field (not -f) for integer parameters like in_reply_to when replying to review comments",
+        "Ran SDK-specific tests (pnpm test scoped to packages/sdk) rather than waiting for full monorepo test suite"
+      ]
+    },
+    "friction": [
+      "Unit test run hung or was slow — had to use TaskOutput to poll status, then fell back to running SDK tests directly",
+      "Had to read client.ts multiple times at different offsets to get full context for the fileKey finally-block restructure",
+      "A stale lock file required removal before the final commit could complete"
+    ],
+    "open_items": [
+      "Concurrent mutation safety for same-folder operations (sdk/client.ts:360) — marked not applicable for this PR but flagged as a real architectural concern to address separately"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T23:49:55.428857Z",
+    "agent_lines": 0,
+    "human_added": 25,
+    "human_modified": 80,
+    "human_removed": 0,
+    "total_committed": 25,
+    "agent_percentage": 0
+  }
+}

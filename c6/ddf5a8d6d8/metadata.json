@@ -5,6 +5,8 @@
   "branch": "phase-19.1-extract-core-sdk",
   "checkpoints_count": 1,
   "files_touched": [
+    "packages/crypto/README.md",
+    "packages/sdk/src/client.ts",
     "tests/e2e/tests/sharing-workflow.spec.ts",
     "tests/e2e/utils/multi-account-wallet.ts"
   ],
@@ -15,13 +17,20 @@
       "context": "/c6/ddf5a8d6d8/0/context.md",
       "content_hash": "/c6/ddf5a8d6d8/0/content_hash.txt",
       "prompt": "/c6/ddf5a8d6d8/0/prompt.txt"
+    },
+    {
+      "metadata": "/c6/ddf5a8d6d8/1/metadata.json",
+      "transcript": "/c6/ddf5a8d6d8/1/full.jsonl",
+      "context": "/c6/ddf5a8d6d8/1/context.md",
+      "content_hash": "/c6/ddf5a8d6d8/1/content_hash.txt",
+      "prompt": "/c6/ddf5a8d6d8/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 357,
-    "cache_creation_tokens": 837141,
-    "cache_read_tokens": 57446454,
-    "output_tokens": 75825,
-    "api_call_count": 325
+    "input_tokens": 383,
+    "cache_creation_tokens": 875394,
+    "cache_read_tokens": 58346219,
+    "output_tokens": 83978,
+    "api_call_count": 348
   }
 }
