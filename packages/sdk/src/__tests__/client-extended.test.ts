@@ -377,6 +377,9 @@ describe('CipherBoxClient - extended', () => {
     });
 
     it('permanentDelete emits bin:updated', async () => {
+      const events: SdkEvent[] = [];
+      client.on((e) => events.push(e));
+
       vi.mocked(binOps.loadBin).mockResolvedValue({
         entries: [
           {
@@ -400,7 +403,8 @@ describe('CipherBoxClient - extended', () => {
       });
 
       await client.permanentDelete('e1');
-      // No throw = success
+
+      expect(events.some((e) => e.type === 'bin:updated')).toBe(true);
     });
 
     it('emptyBin clears all entries', async () => {
@@ -430,8 +434,11 @@ describe('CipherBoxClient - extended', () => {
       client.on((e) => events.push(e));
       await client.emptyBin();
 
-      const binEvent = events.find((e) => e.type === 'bin:updated') as any;
-      expect(binEvent.entries).toEqual([]);
+      const binEvent = events.find(
+        (e): e is Extract<SdkEvent, { type: 'bin:updated' }> => e.type === 'bin:updated'
+      );
+      expect(binEvent).toBeDefined();
+      expect(binEvent?.entries).toEqual([]);
     });
   });
 

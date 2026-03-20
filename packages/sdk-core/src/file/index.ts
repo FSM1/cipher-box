@@ -73,15 +73,12 @@ export async function createFileMetadata(params: {
   // 1. Generate random Ed25519 IPNS keypair for this file
   const ipnsKeypair = await generateFileIpnsKeypair();
 
-  // 2. ECIES-wrap the IPNS private key with user's public key for storage in FilePointer
-  const wrappedIpnsKey = await wrapKey(ipnsKeypair.privateKey, params.userPublicKey);
-  const ipnsPrivateKeyEncrypted = bytesToHex(wrappedIpnsKey);
-
-  // 3. Create FileMetadata object, upload, sign, and TEE-enroll.
-  //    Wrap in try/catch to zero IPNS private key on error paths.
-  //    On success the caller receives the key (via ipnsPrivateKeyEncrypted),
-  //    so we only zero on failure.
+  // All key-using operations inside try/finally to guarantee zeroization
   try {
+    // 2. ECIES-wrap the IPNS private key with user's public key for storage in FilePointer
+    const wrappedIpnsKey = await wrapKey(ipnsKeypair.privateKey, params.userPublicKey);
+    const ipnsPrivateKeyEncrypted = bytesToHex(wrappedIpnsKey);
+
     const now = Date.now();
     const metadata: FileMetadata = {
       version: 'v1',
@@ -126,9 +123,6 @@ export async function createFileMetadata(params: {
       keyEpoch = params.teeKeys.currentEpoch;
     }
 
-    // Zero the private key now that wrapping, signing, and TEE enrollment are done
-    ipnsKeypair.privateKey.fill(0);
-
     return {
       fileMetaIpnsName: ipnsKeypair.ipnsName,
       ipnsRecord: {
@@ -140,9 +134,9 @@ export async function createFileMetadata(params: {
       },
       ipnsPrivateKeyEncrypted,
     };
-  } catch (error) {
+  } finally {
+    // Zero the private key on all exit paths (success and failure)
     ipnsKeypair.privateKey.fill(0);
-    throw error;
   }
 }
 
