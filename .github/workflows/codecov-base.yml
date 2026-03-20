@@ -52,6 +52,6 @@ jobs:
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: apps/api/coverage/lcov.info,packages/crypto/coverage/lcov.info
-          flags: api,crypto
+          files: apps/api/coverage/lcov.info,packages/crypto/coverage/lcov.info,packages/core/coverage/lcov.info,packages/sdk-core/coverage/lcov.info,packages/sdk/coverage/lcov.info
+          flags: api,crypto,core,sdk-core,sdk
           fail_ci_if_error: false
