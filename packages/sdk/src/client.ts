@@ -20,6 +20,10 @@ import type { CipherBoxClientConfig, FolderState } from './types';
 import { SdkEventEmitter, type SdkEvent, type SdkEventHandler } from './events';
 import { FolderTree } from './state/folder-tree';
 import { KeyCache } from './state/key-cache';
+import * as binOps from './bin';
+import type { BinState } from './bin';
+import * as shareOps from './share';
+import type { SentShareInfo } from './share';
 
 export class CipherBoxClient {
   private config: CipherBoxClientConfig;
@@ -27,6 +31,7 @@ export class CipherBoxClient {
   private emitter: SdkEventEmitter;
   private folderTree: FolderTree;
   private keyCache: KeyCache;
+  private binState: BinState | null = null;
 
   constructor(config: CipherBoxClientConfig) {
     this.config = config;
@@ -491,6 +496,219 @@ export class CipherBoxClient {
 
       return plaintext;
     });
+  }
+
+  // ---- Bin operations ----
+
+  /**
+   * Load the recycle bin metadata.
+   *
+   * @returns Current bin state, or null if no bin exists yet
+   */
+  async loadBin(): Promise<BinState | null> {
+    return this.withOperation('loadBin', async () => {
+      const result = await binOps.loadBin({
+        binCtx: this.getBinContext(),
+      });
+
+      if (result) {
+        this.binState = result;
+        this.emitter.emit({ type: 'bin:updated', entries: result.entries });
+      }
+
+      return result;
+    });
+  }
+
+  /**
+   * Soft-delete an item by moving it to the recycle bin.
+   *
+   * Removes the item from the folder's metadata, adds a BinEntry,
+   * and publishes both folder and bin IPNS records.
+   *
+   * @param folderIpnsName - IPNS name of the folder containing the item
+   * @param childId - ID of the child to delete
+   * @param parentPath - Breadcrumb path for restore (e.g., "My Vault / Documents")
+   */
+  async deleteToBin(folderIpnsName: string, childId: string, parentPath: string): Promise<void> {
+    return this.withOperation('deleteToBin', async () => {
+      if (!this.binState) throw new Error('Bin not loaded');
+
+      const { updatedBinState } = await binOps.addToBin({
+        folderIpnsName,
+        childId,
+        parentPath,
+        folderTree: this.folderTree,
+        binState: this.binState,
+        binCtx: this.getBinContext(),
+      });
+
+      this.binState = updatedBinState;
+
+      // Emit events
+      this.emitter.emit({
+        type: 'folder:updated',
+        folderId: folderIpnsName,
+        ipnsName: folderIpnsName,
+        children: this.folderTree.get(folderIpnsName)?.children ?? [],
+      });
+      this.emitter.emit({ type: 'bin:updated', entries: updatedBinState.entries });
+    });
+  }
+
+  /**
+   * Restore an item from the recycle bin to its target folder.
+   *
+   * @param entryId - ID of the bin entry to restore
+   * @param targetFolderIpnsName - IPNS name of the folder to restore to
+   */
+  async restoreFromBin(entryId: string, targetFolderIpnsName: string): Promise<void> {
+    return this.withOperation('restoreFromBin', async () => {
+      if (!this.binState) throw new Error('Bin not loaded');
+
+      const { updatedBinState } = await binOps.restoreFromBin({
+        entryId,
+        targetFolderIpnsName,
+        folderTree: this.folderTree,
+        binState: this.binState,
+        binCtx: this.getBinContext(),
+      });
+
+      this.binState = updatedBinState;
+
+      // Emit events
+      this.emitter.emit({
+        type: 'folder:updated',
+        folderId: targetFolderIpnsName,
+        ipnsName: targetFolderIpnsName,
+        children: this.folderTree.get(targetFolderIpnsName)?.children ?? [],
+      });
+      this.emitter.emit({ type: 'bin:updated', entries: updatedBinState.entries });
+    });
+  }
+
+  /**
+   * Permanently delete a bin entry (unpin CIDs, remove from bin).
+   *
+   * @param entryId - ID of the bin entry to permanently delete
+   */
+  async permanentDelete(entryId: string): Promise<void> {
+    return this.withOperation('permanentDelete', async () => {
+      if (!this.binState) throw new Error('Bin not loaded');
+
+      const { updatedBinState } = await binOps.permanentDeleteFromBin({
+        entryId,
+        binState: this.binState,
+        binCtx: this.getBinContext(),
+      });
+
+      this.binState = updatedBinState;
+      this.emitter.emit({ type: 'bin:updated', entries: updatedBinState.entries });
+    });
+  }
+
+  /**
+   * Permanently delete all bin entries.
+   */
+  async emptyBin(): Promise<void> {
+    return this.withOperation('emptyBin', async () => {
+      if (!this.binState) throw new Error('Bin not loaded');
+
+      const { updatedBinState } = await binOps.emptyBin({
+        binState: this.binState,
+        binCtx: this.getBinContext(),
+      });
+
+      this.binState = updatedBinState;
+      this.emitter.emit({ type: 'bin:updated', entries: [] });
+    });
+  }
+
+  // ---- Share operations ----
+
+  /**
+   * Create an ECIES-wrapped key for sharing a folder with a recipient.
+   *
+   * @param folderIpnsName - IPNS name of the folder to share
+   * @param recipientPublicKey - Recipient's secp256k1 public key
+   * @returns Hex-encoded wrapped key for the recipient
+   */
+  async shareFolder(
+    folderIpnsName: string,
+    recipientPublicKey: Uint8Array
+  ): Promise<{ encryptedKey: string }> {
+    return this.withOperation('shareFolder', async () => {
+      const folder = this.folderTree.get(folderIpnsName);
+      if (!folder) throw new Error('Folder not loaded');
+
+      return shareOps.createShareKey({
+        folderKey: folder.folderKey,
+        recipientPublicKey,
+        folderIpnsName,
+        shareCtx: this.getShareContext(),
+      });
+    });
+  }
+
+  /**
+   * Revoke a share (soft-delete).
+   *
+   * @param shareId - Share ID to revoke
+   * @param revokeShareFn - Function to call the API revoke endpoint
+   */
+  async revokeShare(
+    shareId: string,
+    revokeShareFn: (shareId: string) => Promise<void>
+  ): Promise<void> {
+    return this.withOperation('revokeShare', async () => {
+      await shareOps.revokeShare({ shareId, revokeShareFn });
+    });
+  }
+
+  /**
+   * Re-wrap keys for share recipients after adding items to a shared folder.
+   *
+   * @param coveringShares - Active shares covering the folder
+   * @param newItems - New items whose keys need re-wrapping
+   * @param addShareKeysFn - Function to add wrapped keys to a share via API
+   */
+  async reWrapForRecipients(
+    coveringShares: SentShareInfo[],
+    newItems: Array<{ keyType: 'file' | 'folder'; itemId: string; plaintextKey: Uint8Array }>,
+    addShareKeysFn: (
+      shareId: string,
+      keys: Array<{ keyType: 'file' | 'folder'; itemId: string; encryptedKey: string }>
+    ) => Promise<void>
+  ): Promise<{ failedRecipients: string[] }> {
+    return this.withOperation('reWrapForRecipients', async () => {
+      return shareOps.reWrapForRecipients({
+        coveringShares,
+        newItems,
+        addShareKeysFn,
+      });
+    });
+  }
+
+  // ---- Private helpers ----
+
+  /** Build bin operation context from client config */
+  private getBinContext(): binOps.BinOperationContext {
+    return {
+      ctx: this.ctx,
+      userPrivateKey: this.config.vaultKeypair.privateKey,
+      userPublicKey: this.config.vaultKeypair.publicKey,
+      rootFolderKey: this.config.rootFolderKey,
+      teeKeys: this.config.teeKeys,
+    };
+  }
+
+  /** Build share operation context from client config */
+  private getShareContext(): shareOps.ShareOperationContext {
+    return {
+      ctx: this.ctx,
+      userPrivateKey: this.config.vaultKeypair.privateKey,
+      userPublicKey: this.config.vaultKeypair.publicKey,
+    };
   }
 
   // ---- Operation wrapper ----

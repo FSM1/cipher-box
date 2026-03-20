@@ -42,3 +42,9 @@ export type { CipherBoxClientConfig, FolderState } from './types';
 // Events
 export type { SdkEvent, SdkEventHandler } from './events';
 export { SdkEventEmitter } from './events';
+
+// Bin operations (types only -- operations accessed via CipherBoxClient)
+export type { BinOperationContext, BinState } from './bin';
+
+// Share operations (types only -- operations accessed via CipherBoxClient)
+export type { ShareOperationContext, SentShareInfo } from './share';
