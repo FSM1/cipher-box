@@ -1,0 +1,60 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "18f6a0542261",
+  "session_id": "6838d6a8-ad86-4233-8edf-81daae3f1aef",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T13:47:07.211589Z",
+  "branch": "chore/coderabbit-config",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".coderabbit.yaml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "d369779faf98",
+  "checkpoint_transcript_start": 863,
+  "transcript_lines_at_start": 863,
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 8105,
+    "cache_read_tokens": 1286298,
+    "output_tokens": 1713,
+    "api_call_count": 8
+  },
+  "summary": {
+    "intent": "Get CodeRabbit to review a large PR with proper path exclusions by ensuring the config is on the base branch before review.",
+    "outcome": "Created a separate branch off main with the updated .coderabbit.yaml, pushed it, and prepared to merge it before rebasing the original PR on top.",
+    "learnings": {
+      "repo": [
+        "CodeRabbit reads .coderabbit.yaml from the base branch (main), not the PR branch — config changes in a PR won't apply to that same PR's review.",
+        "The PR had 265 files, which hit CodeRabbit's default file review limit."
+      ],
+      "code": [
+        {
+          "path": ".coderabbit.yaml",
+          "finding": "Added max_files_to_review: 300 and path exclusions; these settings only take effect for PRs opened after the config merges to main."
+        }
+      ],
+      "workflow": [
+        "To apply CodeRabbit config to a current PR: merge config changes to main first, then rebase the feature branch on top of main before requesting review.",
+        "Encountered a stale lock file that needed removal before switching branches."
+      ]
+    },
+    "friction": [
+      "Stale lock file blocked the initial branch switch to main.",
+      "CodeRabbit's base-branch config behavior created a multi-step workaround just to get correct review behavior on the current PR."
+    ],
+    "open_items": [
+      "The original large PR still needs to be rebased on top of main after the config PR merges, then CodeRabbit review needs to be re-triggered.",
+      "Path exclusions added to .coderabbit.yaml will apply to future PRs — worth verifying they work as expected on the next PR."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T13:46:53.034076Z",
+    "agent_lines": 0,
+    "human_added": 5179,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 5179,
+    "agent_percentage": 0
+  }
+}
