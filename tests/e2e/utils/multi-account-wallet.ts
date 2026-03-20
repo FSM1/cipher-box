@@ -74,35 +74,43 @@ export async function createWalletTestAccount(
 ): Promise<WalletTestAccount> {
   const account = privateKeyToAccount(generatePrivateKey());
   const context = await browser.newContext();
-  const page = await context.newPage();
 
-  // Install mock wallet BEFORE navigating (EIP-6963 provider announcement)
-  await setupMockWallet(page, account);
+  try {
+    const page = await context.newPage();
 
-  // Drive the real wallet login flow through the UI
-  const result = await loginViaWallet(page, { timeout: 90_000 });
-  if (result.outcome !== 'success') {
-    throw new Error(`Wallet login for "${name}" did not reach /files (outcome: ${result.outcome})`);
+    // Install mock wallet BEFORE navigating (EIP-6963 provider announcement)
+    await setupMockWallet(page, account);
+
+    // Drive the real wallet login flow through the UI
+    const result = await loginViaWallet(page, { timeout: 90_000 });
+    if (result.outcome !== 'success') {
+      throw new Error(
+        `Wallet login for "${name}" did not reach /files (outcome: ${result.outcome})`
+      );
+    }
+
+    // Wait for file list or empty state to confirm vault is accessible
+    await Promise.race([
+      page.locator('.file-list[role="grid"]').waitFor({ state: 'visible', timeout: 30_000 }),
+      page.locator('[data-testid="empty-state"]').waitFor({ state: 'visible', timeout: 30_000 }),
+    ]);
+
+    // Extract auth state from browser
+    const authState = await extractAuthState(page);
+
+    return {
+      name,
+      context,
+      page,
+      account,
+      publicKey: authState.publicKey,
+      accessToken: authState.accessToken,
+      rootIpnsName: authState.rootIpnsName,
+    };
+  } catch (err) {
+    await context.close();
+    throw err;
   }
-
-  // Wait for file list or empty state to confirm vault is accessible
-  await Promise.race([
-    page.locator('.file-list[role="grid"]').waitFor({ state: 'visible', timeout: 30_000 }),
-    page.locator('[data-testid="empty-state"]').waitFor({ state: 'visible', timeout: 30_000 }),
-  ]);
-
-  // Extract auth state from browser
-  const authState = await extractAuthState(page);
-
-  return {
-    name,
-    context,
-    page,
-    account,
-    publicKey: authState.publicKey,
-    accessToken: authState.accessToken,
-    rootIpnsName: authState.rootIpnsName,
-  };
 }
 
 /**
@@ -114,10 +122,16 @@ export async function createWalletTestAccounts(
   names: string[]
 ): Promise<WalletTestAccount[]> {
   const accounts: WalletTestAccount[] = [];
-  for (const name of names) {
-    accounts.push(await createWalletTestAccount(browser, name));
+  try {
+    for (const name of names) {
+      accounts.push(await createWalletTestAccount(browser, name));
+    }
+    return accounts;
+  } catch (err) {
+    // Clean up already-created accounts before re-throwing
+    await closeWalletTestAccounts(accounts);
+    throw err;
   }
-  return accounts;
 }
 
 /**

@@ -150,7 +150,7 @@ test.describe.serial('Sharing Workflow', () => {
   // ============================================
 
   test('1.1 Create test accounts (Alice, Bob, Charlie)', async () => {
-    test.setTimeout(180_000); // 3 wallet logins with Core Kit init
+    test.setTimeout(300_000); // 3 sequential wallet logins (up to 90s each) + vault init
     // Create accounts sequentially (each needs its own context + wallet login)
     alice = await createWalletTestAccount(browser, 'alice');
     bob = await createWalletTestAccount(browser, 'bob');

@@ -38,7 +38,7 @@ import {
 ### Key Derivation
 
 - `deriveKey`, `deriveContextKey`, `generateFolderKey`, `generateFileKey`
-- `deriveVaultIpnsKeypair`
+- `deriveVaultIpnsKeypair`, `deriveIpnsName`
 
 ### Device Keys
 
@@ -46,7 +46,8 @@ import {
 
 ### Utilities
 
-- `hexToBytes`, `bytesToHex`, `concatBytes`, `clearBytes`, `generateRandomBytes`
+- `hexToBytes`, `bytesToHex`, `concatBytes`, `clearBytes`, `clearAll`, `generateRandomBytes`
+- `generateIv`, `generateCtrIv`
 
 ## Architecture
 

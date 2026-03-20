@@ -572,62 +572,64 @@ export class CipherBoxClient {
         teeKeys: this.config.teeKeys,
       });
 
-      // 2. Add FilePointer to folder's children
-      const { updatedChildren } = sdkCore.addFilePointerToFolder({
-        children: folder.children,
-        fileId,
-        fileName,
-        fileMetaIpnsName: uploadResult.fileMetaIpnsName,
-        ipnsPrivateKeyEncrypted: uploadResult.ipnsPrivateKeyEncrypted,
-      });
-
-      // 3. Batch publish: file metadata IPNS + folder metadata IPNS
-      await sdkCore.batchPublishIpnsRecords([uploadResult.ipnsRecord]);
-
-      const { newSequenceNumber } = await sdkCore.updateFolderMetadataAndPublish({
-        children: updatedChildren,
-        folderKey: folder.folderKey,
-        ipnsPrivateKey: folder.ipnsKeypair.privateKey,
-        ipnsName: folderIpnsName,
-        sequenceNumber: folder.sequenceNumber,
-        ctx: this.ctx,
-      });
-
-      // 4. Update internal state
-      folder.children = updatedChildren;
-      folder.sequenceNumber = newSequenceNumber;
-      folder.lastLoadedAt = Date.now();
-      this.folderTree.set(folderIpnsName, folder);
-
-      // 5. Emit events
-      this.emitter.emit({
-        type: 'file:uploaded',
-        folderId: folderIpnsName,
-        fileName,
-        cid: uploadResult.cid,
-      });
-      this.emitter.emit({
-        type: 'folder:updated',
-        folderId: folderIpnsName,
-        ipnsName: folderIpnsName,
-        children: updatedChildren,
-        sequenceNumber: newSequenceNumber,
-      });
-
-      // 6. Re-wrap file key for share recipients (best-effort)
       try {
-        if (this.config.shareCallbacks) {
-          await this.reWrapNewItems(folderIpnsName, [
-            { keyType: 'file', itemId: fileId, plaintextKey: uploadResult.fileKey },
-          ]);
+        // 2. Add FilePointer to folder's children
+        const { updatedChildren } = sdkCore.addFilePointerToFolder({
+          children: folder.children,
+          fileId,
+          fileName,
+          fileMetaIpnsName: uploadResult.fileMetaIpnsName,
+          ipnsPrivateKeyEncrypted: uploadResult.ipnsPrivateKeyEncrypted,
+        });
+
+        // 3. Batch publish: file metadata IPNS + folder metadata IPNS
+        await sdkCore.batchPublishIpnsRecords([uploadResult.ipnsRecord]);
+
+        const { newSequenceNumber } = await sdkCore.updateFolderMetadataAndPublish({
+          children: updatedChildren,
+          folderKey: folder.folderKey,
+          ipnsPrivateKey: folder.ipnsKeypair.privateKey,
+          ipnsName: folderIpnsName,
+          sequenceNumber: folder.sequenceNumber,
+          ctx: this.ctx,
+        });
+
+        // 4. Update internal state
+        folder.children = updatedChildren;
+        folder.sequenceNumber = newSequenceNumber;
+        folder.lastLoadedAt = Date.now();
+        this.folderTree.set(folderIpnsName, folder);
+
+        // 5. Emit events
+        this.emitter.emit({
+          type: 'file:uploaded',
+          folderId: folderIpnsName,
+          fileName,
+          cid: uploadResult.cid,
+        });
+        this.emitter.emit({
+          type: 'folder:updated',
+          folderId: folderIpnsName,
+          ipnsName: folderIpnsName,
+          children: updatedChildren,
+          sequenceNumber: newSequenceNumber,
+        });
+
+        // 6. Re-wrap file key for share recipients (best-effort)
+        try {
+          if (this.config.shareCallbacks) {
+            await this.reWrapNewItems(folderIpnsName, [
+              { keyType: 'file', itemId: fileId, plaintextKey: uploadResult.fileKey },
+            ]);
+          }
+        } catch (err) {
+          console.warn('[SDK] Post-upload re-wrapping failed:', err);
         }
-      } catch (err) {
-        console.warn('[SDK] Post-upload re-wrapping failed:', err);
+
+        return { cid: uploadResult.cid };
       } finally {
         clearBytes(uploadResult.fileKey);
       }
-
-      return { cid: uploadResult.cid };
     });
   }
 
@@ -931,19 +933,27 @@ export class CipherBoxClient {
    */
   private async withOperation<T>(name: string, fn: () => Promise<T>): Promise<T> {
     const start = Date.now();
-    this.config.onOperationStart?.(name);
+    this.notifySafely(() => this.config.onOperationStart?.(name));
     this.emitter.emit({ type: 'operation:start', operation: name });
 
     try {
       const result = await fn();
       const durationMs = Date.now() - start;
-      this.config.onOperationEnd?.(name);
+      this.notifySafely(() => this.config.onOperationEnd?.(name));
       this.emitter.emit({ type: 'operation:end', operation: name, durationMs });
       return result;
     } catch (error) {
-      this.config.onError?.(error as Error);
+      this.notifySafely(() => this.config.onError?.(error as Error));
       this.emitter.emit({ type: 'error', operation: name, error: error as Error });
       throw error;
+    }
+  }
+
+  private notifySafely(fn: () => void): void {
+    try {
+      fn();
+    } catch (err) {
+      console.warn('[SDK] Lifecycle callback threw:', err);
     }
   }
 }
