@@ -68,6 +68,40 @@ export class CipherBoxClient {
     this.emitter.removeAll();
   }
 
+  /**
+   * Register an externally-loaded folder into the SDK's internal state.
+   *
+   * Used when folder metadata is loaded outside the SDK (e.g., by a navigation
+   * hook) but the SDK needs to know about the folder for mutation operations
+   * (create, rename, move, delete, upload).
+   *
+   * This is a bridge method for gradual SDK adoption -- eventually all folder
+   * loading should go through client.loadFolder().
+   *
+   * @param ipnsName - Folder's IPNS name
+   * @param folderKey - Decrypted AES-256 folder key
+   * @param ipnsKeypair - Ed25519 keypair for IPNS signing
+   * @param children - Current folder children
+   * @param sequenceNumber - Current IPNS sequence number
+   */
+  registerFolder(
+    ipnsName: string,
+    folderKey: Uint8Array,
+    ipnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array },
+    children: FolderChild[],
+    sequenceNumber: bigint
+  ): void {
+    this.folderTree.set(ipnsName, {
+      ipnsName,
+      folderKey,
+      ipnsKeypair,
+      sequenceNumber,
+      children,
+      metadata: null,
+      lastLoadedAt: Date.now(),
+    });
+  }
+
   // ---- Internal state access (for bin/share modules) ----
 
   /** @internal Get the folder tree for bin/share operations */

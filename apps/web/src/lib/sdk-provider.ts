@@ -8,6 +8,7 @@
  * Hooks call client methods, and stores subscribe to client events.
  */
 import { CipherBoxClient, type CipherBoxClientConfig } from '@cipherbox/sdk';
+import type { FolderNode } from '../stores/folder.store';
 
 let _client: CipherBoxClient | null = null;
 
@@ -53,4 +54,26 @@ export function destroySdkClient(): void {
     _client.destroy();
     _client = null;
   }
+}
+
+/**
+ * Ensure a folder from the Zustand store is registered in the SDK's
+ * internal FolderTree. This bridges the gap between folder navigation
+ * (which loads folders into Zustand) and SDK operations (which require
+ * folders in the SDK's internal state).
+ *
+ * Safe to call multiple times -- just overwrites with current state.
+ */
+export function ensureFolderRegistered(folder: FolderNode): void {
+  const client = getSdkClient();
+  client.registerFolder(
+    folder.ipnsName,
+    folder.folderKey,
+    {
+      publicKey: new Uint8Array(0), // Public key derived from private key when needed
+      privateKey: folder.ipnsPrivateKey,
+    },
+    folder.children,
+    folder.sequenceNumber
+  );
 }

@@ -1,12 +1,12 @@
 import { useCallback } from 'react';
 import {
-  downloadAndSaveFile,
   downloadFileFromIpns,
   triggerBrowserDownload,
   FileMetadata,
 } from '../services/download.service';
 import { useDownloadStore } from '../stores/download.store';
 import { useAuthStore } from '../stores/auth.store';
+import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
 
 export function useFileDownload() {
   const {
@@ -26,6 +26,12 @@ export function useFileDownload() {
 
   const { vaultKeypair } = useAuthStore();
 
+  /**
+   * Download a file using SDK client (v1: CID + encrypted key + IV).
+   *
+   * The SDK handles fetching, key unwrapping, and decryption.
+   * Browser download dialog is triggered after decryption completes.
+   */
   const download = useCallback(
     async (metadata: FileMetadata): Promise<void> => {
       if (!vaultKeypair) {
@@ -35,15 +41,39 @@ export function useFileDownload() {
       try {
         startDownload(metadata.originalName);
 
-        // Download with progress tracking
-        await downloadAndSaveFile(metadata, vaultKeypair.privateKey, (loaded, total) => {
-          setProgress(loaded, total);
-        });
+        let decryptedBytes: Uint8Array;
+
+        if (hasSdkClient()) {
+          // Use SDK for download + decrypt
+          const client = getSdkClient();
+          decryptedBytes = await client.downloadFile(
+            metadata.cid,
+            metadata.wrappedKey,
+            metadata.iv,
+            metadata.encryptionMode,
+            (loaded, total) => {
+              setProgress(loaded, total);
+            }
+          );
+        } else {
+          // Fallback to direct service call (SDK not initialized)
+          const { downloadFile } = await import('../services/download.service');
+          decryptedBytes = await downloadFile(
+            metadata,
+            vaultKeypair.privateKey,
+            (loaded, total) => {
+              setProgress(loaded, total);
+            }
+          );
+        }
 
         setDecrypting();
 
         // Small delay for UX - show decrypting state
         await new Promise((resolve) => setTimeout(resolve, 100));
+
+        // Browser-specific: trigger download dialog (stays in hook, NOT in SDK)
+        triggerBrowserDownload(decryptedBytes, metadata.originalName);
 
         setSuccess();
       } catch (err) {

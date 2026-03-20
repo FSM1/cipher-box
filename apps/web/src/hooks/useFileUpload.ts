@@ -3,47 +3,16 @@ import { uploadFiles, UploadedFile } from '../services/upload.service';
 import { useUploadStore } from '../stores/upload.store';
 import { useQuotaStore } from '../stores/quota.store';
 import { useAuthStore } from '../stores/auth.store';
+// Note: Upload uses upload.service.ts which has its own encryption, progress tracking,
+// cancellation, and retry logic tightly coupled to useUploadStore. The SDK's uploadFile()
+// combines encryption + upload + metadata in one call, which is a different flow.
+// Full migration to SDK upload will happen when useFileOperations.addFile() is also migrated.
 
 /**
  * React hook for file upload with encryption, progress tracking, and quota management.
  *
- * @example
- * ```tsx
- * function UploadButton() {
- *   const {
- *     upload,
- *     cancel,
- *     reset,
- *     isUploading,
- *     progress,
- *     currentFile,
- *     error,
- *     canUpload,
- *   } = useFileUpload();
- *
- *   const handleFiles = async (files: File[]) => {
- *     const totalSize = files.reduce((s, f) => s + f.size, 0);
- *     if (!canUpload(totalSize)) {
- *       alert('Not enough space');
- *       return;
- *     }
- *     try {
- *       const results = await upload(files);
- *       console.log('Uploaded:', results);
- *     } catch (err) {
- *       // Error already in state via error
- *     }
- *   };
- *
- *   return (
- *     <div>
- *       {isUploading && <div>Uploading {currentFile}... {progress}%</div>}
- *       {error && <div>Error: {error}</div>}
- *       <button onClick={() => cancel()} disabled={!isUploading}>Cancel</button>
- *     </div>
- *   );
- * }
- * ```
+ * Currently uses upload.service.ts for the upload flow. The SDK client is used
+ * for post-upload operations (adding files to folders) via useFileOperations.
  */
 export function useFileUpload() {
   const { status, progress, currentFile, totalFiles, completedFiles, error, cancel, reset } =

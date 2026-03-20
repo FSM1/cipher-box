@@ -1,3 +1,6 @@
+// DEPRECATED: Use @cipherbox/sdk instead. Will be removed in 19.1-06.
+// Hooks now delegate to CipherBoxClient SDK methods for bin operations.
+// Remaining usages: initializeBin (useAuth login flow), purgeExpired (useBin).
 /**
  * Bin Service - Recycle bin metadata IPNS lifecycle
  *

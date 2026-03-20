@@ -1,3 +1,7 @@
+// DEPRECATED: Use @cipherbox/sdk instead. Will be removed in 19.1-06.
+// Hooks now delegate to CipherBoxClient SDK methods.
+// Remaining usages: validation helpers (getDepth, isDescendantOf, calculateSubtreeDepth),
+// folder loading (loadFolder, fetchAndDecryptMetadata), and file registration (addFileToFolder).
 /**
  * Folder Service - Folder CRUD operations with encryption
  *
