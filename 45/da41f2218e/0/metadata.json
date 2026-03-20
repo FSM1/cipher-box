@@ -1,0 +1,65 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "45da41f2218e",
+  "session_id": "6838d6a8-ad86-4233-8edf-81daae3f1aef",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T12:46:21.026139Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "cb2952f7682b",
+  "checkpoint_transcript_start": 550,
+  "transcript_lines_at_start": 550,
+  "token_usage": {
+    "input_tokens": 7,
+    "cache_creation_tokens": 1698,
+    "cache_read_tokens": 626073,
+    "output_tokens": 815,
+    "api_call_count": 5
+  },
+  "summary": {
+    "intent": "Fix a failing CI/CD build for the cipher-box project by resolving package build order issues.",
+    "outcome": "Fixed the CI build by converting parallel `--filter` flags to sequential build steps, ensuring `@cipherbox/crypto` is built before `@cipherbox/core` which depends on its type declarations.",
+    "learnings": {
+      "repo": [
+        "The monorepo has a dependency chain: @cipherbox/crypto must be built before @cipherbox/core due to type declaration dependencies.",
+        "The CI test job already used sequential steps correctly, but the build job used parallel --filter flags which don't respect inter-package dependencies.",
+        "CodeRabbit path exclusions need explicit entries for non-standard directory names like `models/` and root-level generated files like `openapi.json` — `!**/generated/**` glob is insufficient."
+      ],
+      "code": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "finding": "Build job used multiple --filter flags (parallel execution) instead of sequential steps; the test job was already structured correctly with separate steps as a reference."
+        },
+        {
+          "path": ".coderabbit.yaml",
+          "finding": "Added three explicit path filters for generated files: packages/api-client/openapi.json, packages/api-client/src/generated/**, and packages/api-client/src/models/**."
+        }
+      ],
+      "workflow": [
+        "In Turborepo/monorepo setups, multiple --filter flags on a single command run tasks in parallel and do not respect cross-package type dependencies at build time.",
+        "When debugging monorepo build failures involving missing type declarations, check whether the dependency package has been built first rather than assuming a type error in source code."
+      ]
+    },
+    "friction": [
+      "The CodeRabbit glob pattern `!**/generated/**` silently failed to exclude `models/` directory and root-level generated files, requiring manual investigation and explicit path additions.",
+      "CI build failure required inspecting the GitHub Actions run URL to identify the root cause of missing type declarations."
+    ],
+    "open_items": [
+      "Verify the sequential build fix resolves the CI failure once the pushed workflow runs.",
+      "Consider whether the `models/` directory naming convention should be standardized to `generated/` to align with existing glob exclusion patterns."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T12:46:06.287527Z",
+    "agent_lines": 8,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 8,
+    "agent_percentage": 100
+  }
+}
