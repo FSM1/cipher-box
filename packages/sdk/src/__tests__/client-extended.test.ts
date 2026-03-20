@@ -44,7 +44,7 @@ vi.mock('../bin', () => ({
 vi.mock('../share', () => ({
   createShareKey: vi.fn(),
   revokeShare: vi.fn(),
-  reWrapForRecipients: vi.fn(),
+  reWrapForRecipients: vi.fn().mockResolvedValue({ failedRecipients: [] }),
 }));
 
 import * as sdkCore from '@cipherbox/sdk-core';

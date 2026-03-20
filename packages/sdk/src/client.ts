@@ -614,16 +614,16 @@ export class CipherBoxClient {
         sequenceNumber: newSequenceNumber,
       });
 
-      // 6. Re-wrap file key for share recipients (non-blocking)
-      if (this.config.shareCallbacks) {
-        try {
+      // 6. Re-wrap file key for share recipients (best-effort)
+      try {
+        if (this.config.shareCallbacks) {
           await this.reWrapNewItems(folderIpnsName, [
             { keyType: 'file', itemId: fileId, plaintextKey: uploadResult.fileKey },
           ]);
-        } finally {
-          clearBytes(uploadResult.fileKey);
         }
-      } else {
+      } catch (err) {
+        console.warn('[SDK] Post-upload re-wrapping failed:', err);
+      } finally {
         clearBytes(uploadResult.fileKey);
       }
 
