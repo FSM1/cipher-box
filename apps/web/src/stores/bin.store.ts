@@ -28,8 +28,10 @@ type BinState = {
 
   // SDK event subscription
   subscribeToSdk: (client: CipherBoxClient) => void;
-  _sdkUnsubscribe: (() => void) | null;
 };
+
+// Module-level unsubscribe callback — not part of Zustand state to avoid spurious re-renders
+let _binSdkUnsubscribe: (() => void) | null = null;
 
 /**
  * Bin store for managing recycle bin state.
@@ -74,10 +76,10 @@ export const useBinStore = create<BinState>((set) => ({
     }),
 
   clearBin: () => {
-    const state = useBinStore.getState();
     // Unsubscribe from SDK events before clearing
-    if (state._sdkUnsubscribe) {
-      state._sdkUnsubscribe();
+    if (_binSdkUnsubscribe) {
+      _binSdkUnsubscribe();
+      _binSdkUnsubscribe = null;
     }
 
     set({
@@ -88,12 +90,8 @@ export const useBinStore = create<BinState>((set) => ({
       sequenceNumber: 0,
       binIpnsName: null,
       retentionDays: 30,
-      _sdkUnsubscribe: null,
     });
   },
-
-  // SDK event subscription
-  _sdkUnsubscribe: null,
 
   /**
    * Subscribe to SDK bin events. Called after SDK client is initialized.
@@ -101,12 +99,11 @@ export const useBinStore = create<BinState>((set) => ({
    */
   subscribeToSdk: (client: CipherBoxClient) => {
     // Unsubscribe any existing subscription
-    const currentUnsub = useBinStore.getState()._sdkUnsubscribe;
-    if (currentUnsub) {
-      currentUnsub();
+    if (_binSdkUnsubscribe) {
+      _binSdkUnsubscribe();
     }
 
-    const unsubscribe = client.on((event) => {
+    _binSdkUnsubscribe = client.on((event) => {
       if (event.type === 'bin:updated') {
         const currentSeq = useBinStore.getState().sequenceNumber;
         set({
@@ -118,7 +115,5 @@ export const useBinStore = create<BinState>((set) => ({
         });
       }
     });
-
-    set({ _sdkUnsubscribe: unsubscribe });
   },
 }));

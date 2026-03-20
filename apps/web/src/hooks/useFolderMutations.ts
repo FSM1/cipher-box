@@ -5,6 +5,7 @@ import * as folderService from '../services/folder.service';
 import { reWrapForRecipients } from '../services/share.service';
 import type { FolderNode } from '../stores/folder.store';
 import { getSdkClient, ensureFolderRegistered } from '../lib/sdk-provider';
+import { BinNotLoadedError } from '@cipherbox/sdk';
 import { MAX_FOLDER_DEPTH, getRootFolderState } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
 import { useNotificationStore } from '../stores/notification.store';
@@ -296,12 +297,6 @@ export function useFolderMutations() {
         // Move each item via SDK
         const client = getSdkClient();
         for (const item of items) {
-          // Re-register folders between moves because SDK updates its internal state
-          const freshSource = getParentFolder(sourceParentId);
-          const freshDest = getParentFolder(destParentId);
-          if (freshSource) ensureFolderRegistered(freshSource);
-          if (freshDest) ensureFolderRegistered(freshDest);
-
           await client.moveItem(sourceFolder.ipnsName, destFolder.ipnsName, item.id);
 
           if (item.type === 'folder') {
@@ -351,7 +346,7 @@ export function useFolderMutations() {
           await client.deleteToBin(parentFolder.ipnsName, itemId, parentPath);
         } catch (binErr) {
           // Bin not loaded -- fall back to hard metadata delete
-          if ((binErr as Error).message?.includes('Bin not loaded')) {
+          if (binErr instanceof BinNotLoadedError) {
             await client.deleteItem(parentFolder.ipnsName, itemId);
           } else {
             throw binErr;
@@ -436,7 +431,7 @@ export function useFolderMutations() {
           try {
             await client.deleteToBin(parentFolder.ipnsName, item.id, parentPath);
           } catch (binErr) {
-            if ((binErr as Error).message?.includes('Bin not loaded')) {
+            if (binErr instanceof BinNotLoadedError) {
               await client.deleteItem(parentFolder.ipnsName, item.id);
             } else {
               throw binErr;

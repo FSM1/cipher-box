@@ -87,29 +87,26 @@ async function loadBinMetadataInternal(params: {
  */
 async function saveBinMetadata(params: {
   metadata: RecycleBinMetadata;
-  userPublicKey: Uint8Array;
-  userPrivateKey: Uint8Array;
-  ctx: SdkContext;
-  teeKeys?: TeeKeys;
+  binCtx: BinOperationContext;
 }): Promise<void> {
-  const binIpns = await deriveBinIpnsKeypair(params.userPrivateKey);
+  const binIpns = await deriveBinIpnsKeypair(params.binCtx.userPrivateKey);
 
   // Encrypt metadata with user's public key (ECIES)
-  const encryptedBytes = await encryptBinMetadata(params.metadata, params.userPublicKey);
+  const encryptedBytes = await encryptBinMetadata(params.metadata, params.binCtx.userPublicKey);
 
   // Pin to IPFS
-  const { cid } = await sdkCore.addToIpfs(params.ctx, encryptedBytes);
+  const { cid } = await sdkCore.addToIpfs(params.binCtx.ctx, encryptedBytes);
 
   // TEE enrollment (optional)
   let encryptedIpnsKey: string | undefined;
   let keyEpoch: number | undefined;
 
-  if (params.teeKeys?.currentPublicKey) {
+  if (params.binCtx.teeKeys?.currentPublicKey) {
     try {
-      const teePublicKey = hexToBytes(params.teeKeys.currentPublicKey);
+      const teePublicKey = hexToBytes(params.binCtx.teeKeys.currentPublicKey);
       const wrappedKey = await wrapKey(binIpns.privateKey, teePublicKey);
       encryptedIpnsKey = bytesToHex(wrappedKey);
-      keyEpoch = params.teeKeys.currentEpoch;
+      keyEpoch = params.binCtx.teeKeys.currentEpoch;
     } catch {
       // TEE enrollment failure is non-blocking
     }
@@ -230,13 +227,7 @@ export async function addToBin(params: {
     entries: updatedEntries,
   };
 
-  await saveBinMetadata({
-    metadata,
-    userPublicKey: params.binCtx.userPublicKey,
-    userPrivateKey: params.binCtx.userPrivateKey,
-    ctx: params.binCtx.ctx,
-    teeKeys: params.binCtx.teeKeys,
-  });
+  await saveBinMetadata({ metadata, binCtx: params.binCtx });
 
   const updatedBinState: BinState = {
     entries: updatedEntries,
@@ -318,13 +309,7 @@ export async function restoreFromBin(params: {
     entries: remainingEntries,
   };
 
-  await saveBinMetadata({
-    metadata,
-    userPublicKey: params.binCtx.userPublicKey,
-    userPrivateKey: params.binCtx.userPrivateKey,
-    ctx: params.binCtx.ctx,
-    teeKeys: params.binCtx.teeKeys,
-  });
+  await saveBinMetadata({ metadata, binCtx: params.binCtx });
 
   const updatedBinState: BinState = {
     entries: remainingEntries,
@@ -368,13 +353,7 @@ export async function permanentDeleteFromBin(params: {
     entries: remainingEntries,
   };
 
-  await saveBinMetadata({
-    metadata,
-    userPublicKey: params.binCtx.userPublicKey,
-    userPrivateKey: params.binCtx.userPrivateKey,
-    ctx: params.binCtx.ctx,
-    teeKeys: params.binCtx.teeKeys,
-  });
+  await saveBinMetadata({ metadata, binCtx: params.binCtx });
 
   return {
     updatedBinState: {
@@ -413,13 +392,7 @@ export async function emptyBin(params: {
     entries: [],
   };
 
-  await saveBinMetadata({
-    metadata,
-    userPublicKey: params.binCtx.userPublicKey,
-    userPrivateKey: params.binCtx.userPrivateKey,
-    ctx: params.binCtx.ctx,
-    teeKeys: params.binCtx.teeKeys,
-  });
+  await saveBinMetadata({ metadata, binCtx: params.binCtx });
 
   return {
     updatedBinState: {

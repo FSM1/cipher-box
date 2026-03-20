@@ -140,6 +140,10 @@ export function useDropUpload() {
       if (duplicateFiles.length > 0) {
         const replacements: PendingReplacement[] = [];
 
+        // Hoist dynamic imports before the loop to avoid per-iteration async overhead
+        const { encryptFile } = await import('../services/file-crypto.service');
+        const { addToIpfs } = await import('../lib/api/ipfs');
+
         for (const file of duplicateFiles) {
           if (useUploadStore.getState().status === 'cancelled') {
             throw new Error('Upload cancelled by user');
@@ -149,14 +153,11 @@ export function useDropUpload() {
 
           // For duplicates, we only encrypt + upload to IPFS (don't register in folder)
           // Use the old upload service for this since SDK's uploadFile registers in folder
-          const { encryptFile } = await import('../services/file-crypto.service');
-          const { addToIpfs } = await import('../lib/api/ipfs');
-
           const userPublicKey = useAuthStore.getState().vaultKeypair?.publicKey;
           if (!userPublicKey) throw new Error('No keypair available');
           const encrypted = await encryptFile(file, userPublicKey);
-          // Cast for TypeScript 5.9 compat
-          const blob = new Blob([encrypted.ciphertext.buffer as ArrayBuffer], {
+          // Use .slice() for a clean ArrayBuffer copy — never use .buffer directly (may include extra bytes)
+          const blob = new Blob([encrypted.ciphertext.slice().buffer as ArrayBuffer], {
             type: 'application/octet-stream',
           });
           const ipfsResult = await addToIpfs(blob, (percent) =>
@@ -194,6 +195,16 @@ export function useDropUpload() {
       const message = (err as Error).message;
       if (message !== 'Upload cancelled by user') {
         useUploadStore.getState().setError(message);
+      }
+      // Best-effort cleanup: unpin orphaned CIDs from failed upload
+      if (uploadedCids.length > 0) {
+        import('../lib/api/ipfs')
+          .then(({ unpinFromIpfs }) => {
+            for (const cid of uploadedCids) {
+              unpinFromIpfs(cid).catch(() => {});
+            }
+          })
+          .catch(() => {});
       }
       return false;
     } finally {

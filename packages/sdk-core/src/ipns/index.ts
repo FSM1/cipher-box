@@ -50,8 +50,12 @@ export async function createAndPublishIpnsRecord(params: {
   // 2. Marshal to bytes for transport
   const recordBytes = marshalIpnsRecord(record);
 
-  // 3. Base64 encode for API transmission
-  const recordBase64 = btoa(String.fromCharCode(...recordBytes));
+  // 3. Base64 encode for API transmission (loop-based to avoid call stack overflow on large records)
+  let binary = '';
+  for (let i = 0; i < recordBytes.length; i++) {
+    binary += String.fromCharCode(recordBytes[i]);
+  }
+  const recordBase64 = btoa(binary);
 
   // 4. Call backend API to relay to IPFS network
   const response = await ipnsControllerPublishRecord({

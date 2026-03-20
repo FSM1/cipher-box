@@ -34,7 +34,7 @@
  */
 
 // Main client
-export { CipherBoxClient } from './client';
+export { CipherBoxClient, BinNotLoadedError } from './client';
 
 // Types
 export type { CipherBoxClientConfig, FolderState } from './types';

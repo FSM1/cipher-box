@@ -35,14 +35,24 @@ export function createAxiosInstance(config: ApiClientConfig): AxiosInstance {
  * The consumer must call setApiClientConfig() before using generated functions.
  */
 let _config: ApiClientConfig | null = null;
+let _instance: AxiosInstance | null = null;
 
 export function setApiClientConfig(config: ApiClientConfig): void {
   _config = config;
+  _instance = null; // Reset cached instance when config changes
 }
 
 export function getApiClientConfig(): ApiClientConfig {
   if (!_config) throw new Error('API client not configured. Call setApiClientConfig() first.');
   return _config;
+}
+
+function getCachedInstance(): AxiosInstance {
+  if (!_instance) {
+    const clientConfig = getApiClientConfig();
+    _instance = axios.create({ baseURL: clientConfig.baseUrl });
+  }
+  return _instance;
 }
 
 export const customInstance = async <T>(
@@ -51,8 +61,7 @@ export const customInstance = async <T>(
 ): Promise<T> => {
   const clientConfig = getApiClientConfig();
   const token = await clientConfig.getAccessToken();
-
-  const instance = axios.create({ baseURL: clientConfig.baseUrl });
+  const instance = getCachedInstance();
 
   const response = await instance.request<T>({
     ...config,

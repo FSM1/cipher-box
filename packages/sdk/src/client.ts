@@ -25,6 +25,14 @@ import type { BinState } from './bin';
 import * as shareOps from './share';
 import type { SentShareInfo } from './share';
 
+/** Thrown when a bin operation is attempted before loadBin() has been called. */
+export class BinNotLoadedError extends Error {
+  constructor() {
+    super('Bin not loaded');
+    this.name = 'BinNotLoadedError';
+  }
+}
+
 export class CipherBoxClient {
   private config: CipherBoxClientConfig;
   private ctx: SdkContext;
@@ -633,7 +641,7 @@ export class CipherBoxClient {
    */
   async deleteToBin(folderIpnsName: string, childId: string, parentPath: string): Promise<void> {
     return this.withOperation('deleteToBin', async () => {
-      if (!this.binState) throw new Error('Bin not loaded');
+      if (!this.binState) throw new BinNotLoadedError();
 
       const { updatedBinState } = await binOps.addToBin({
         folderIpnsName,
@@ -665,7 +673,7 @@ export class CipherBoxClient {
    */
   async restoreFromBin(entryId: string, targetFolderIpnsName: string): Promise<void> {
     return this.withOperation('restoreFromBin', async () => {
-      if (!this.binState) throw new Error('Bin not loaded');
+      if (!this.binState) throw new BinNotLoadedError();
 
       const { updatedBinState } = await binOps.restoreFromBin({
         entryId,
@@ -695,7 +703,7 @@ export class CipherBoxClient {
    */
   async permanentDelete(entryId: string): Promise<void> {
     return this.withOperation('permanentDelete', async () => {
-      if (!this.binState) throw new Error('Bin not loaded');
+      if (!this.binState) throw new BinNotLoadedError();
 
       const { updatedBinState } = await binOps.permanentDeleteFromBin({
         entryId,
@@ -713,7 +721,7 @@ export class CipherBoxClient {
    */
   async emptyBin(): Promise<void> {
     return this.withOperation('emptyBin', async () => {
-      if (!this.binState) throw new Error('Bin not loaded');
+      if (!this.binState) throw new BinNotLoadedError();
 
       const { updatedBinState } = await binOps.emptyBin({
         binState: this.binState,

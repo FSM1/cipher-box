@@ -62,8 +62,10 @@ type FolderState = {
 
   // SDK event subscription
   subscribeToSdk: (client: CipherBoxClient) => void;
-  _sdkUnsubscribe: (() => void) | null;
 };
+
+// Module-level unsubscribe callback — not part of Zustand state to avoid spurious re-renders
+let _folderSdkUnsubscribe: (() => void) | null = null;
 
 /**
  * Folder store for managing folder tree state.
@@ -166,8 +168,9 @@ export const useFolderStore = create<FolderState>((set, get) => ({
     const state = get();
 
     // Unsubscribe from SDK events before clearing
-    if (state._sdkUnsubscribe) {
-      state._sdkUnsubscribe();
+    if (_folderSdkUnsubscribe) {
+      _folderSdkUnsubscribe();
+      _folderSdkUnsubscribe = null;
     }
 
     // Best-effort memory clearing - overwrite all folder keys with zeros
@@ -185,12 +188,8 @@ export const useFolderStore = create<FolderState>((set, get) => ({
       currentFolderId: null,
       breadcrumbs: [],
       pendingPublishes: new Set<string>(),
-      _sdkUnsubscribe: null,
     });
   },
-
-  // SDK event subscription
-  _sdkUnsubscribe: null,
 
   /**
    * Subscribe to SDK folder events. Called after SDK client is initialized.
@@ -200,12 +199,11 @@ export const useFolderStore = create<FolderState>((set, get) => ({
    */
   subscribeToSdk: (client: CipherBoxClient) => {
     // Unsubscribe any existing subscription
-    const currentUnsub = get()._sdkUnsubscribe;
-    if (currentUnsub) {
-      currentUnsub();
+    if (_folderSdkUnsubscribe) {
+      _folderSdkUnsubscribe();
     }
 
-    const unsubscribe = client.on((event) => {
+    _folderSdkUnsubscribe = client.on((event) => {
       switch (event.type) {
         case 'folder:loaded':
         case 'folder:updated': {
@@ -228,8 +226,6 @@ export const useFolderStore = create<FolderState>((set, get) => ({
         }
       }
     });
-
-    set({ _sdkUnsubscribe: unsubscribe });
   },
 }));
 
