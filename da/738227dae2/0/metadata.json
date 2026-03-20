@@ -1,0 +1,129 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "da738227dae2",
+  "session_id": "8ae64815-e645-461a-ae6b-d66403649a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T12:09:53.524504Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk/vitest.config.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "0218d108faf1",
+  "token_usage": {
+    "input_tokens": 1325,
+    "cache_creation_tokens": 1184668,
+    "cache_read_tokens": 153025270,
+    "output_tokens": 206672,
+    "api_call_count": 674
+  },
+  "summary": {
+    "intent": "Execute GSD Phase 19.1 to extract a core crypto SDK as a shared package, splitting @cipherbox/crypto into @cipherbox/core and @cipherbox/crypto, creating @cipherbox/api-client, @cipherbox/sdk-core, and @cipherbox/sdk packages, then rewiring the web app hooks to use the new SDK.",
+    "outcome": "All 6 plans executed and verified. 4 new packages created and published. Web app rewired to use SDK for folder CRUD, file upload, download, and bin operations. 9/9 Playwright UAT tests passing. PR #296 opened with CI fixes and review comments resolved.",
+    "learnings": {
+      "repo": [
+        "setApiClientConfig() from @cipherbox/api-client must be called during SDK initialization in useAuth.ts before any IPNS operations — without it all SDK folder/file mutations silently fail with 'API client not configured'",
+        "FolderEntry.id is a UUID used for navigation lookups, while ipnsName (k51...) is used for IPNS operations — conflating them breaks folder navigation after create",
+        "The web app has a dual-path IPNS write problem: old services and SDK both increment IPNS sequence numbers independently causing 409 Conflicts — the fix is to route all operations through one path (SDK)",
+        "SDK bin state requires loadBin() to be called AFTER initializeBin() (old service), not before — the old service creates the bin IPNS record which SDK then reads",
+        "ensureFolderRegistered must skip if SDK already has the folder — overwriting SDK's internal state (seq number, keys) with stale Zustand store data causes 409 Conflicts on subsequent mutations",
+        "The _sdkUnsubscribe cleanup function should be stored at module-level, not in Zustand state — storing it in state triggers spurious re-renders on every subscribe call",
+        "btoa(String.fromCharCode(...spread)) on Uint8Array throws stack overflow for large payloads — use loop-based base64 encoding instead (already fixed in file module but missed in ipns module)",
+        "Axios instance must be cached after setApiClientConfig() — creating a new axios.create() per API call prevents connection reuse",
+        "CI typecheck runs tsc -b before packages are built — the root typecheck script must build all dependent packages first",
+        "CI api:generate runs the full pipeline (start API, regenerate openapi.json, regenerate clients) — local partial regeneration (orval only) produces different output"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 291,
+          "end_line": 301,
+          "finding": "SDK bin loading must happen after initializeBin() completes, not before — old service creates the bin IPNS record, then SDK reads it"
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "line": 76,
+          "end_line": 86,
+          "finding": "ensureFolderRegistered skips if SDK already has the folder (client.hasFolder check) — overwriting is harmful because SDK's seq number and keys are authoritative after first registration"
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 149,
+          "end_line": 165,
+          "finding": "loadBin returns empty BinState (not null) when no IPNS record exists — this allows deleteToBin to work on fresh accounts without throwing 'Bin not loaded'"
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 255,
+          "end_line": 290,
+          "finding": "updateFolderMetadataAndPublish retries once on 409 by re-resolving IPNS sequence number — handles stale seq from concurrent sessions or background polling"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 78,
+          "end_line": 80,
+          "finding": "destroy() zeros vault key material (privateKey, publicKey, rootFolderKey) — addresses M-2 from security review"
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 112,
+          "end_line": 198,
+          "finding": "uploadedCids array tracks CIDs for cleanup on failure but was never used in catch block — re-added unpin calls for orphan cleanup"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 289,
+          "end_line": 295,
+          "finding": "createFolder returns id (UUID from FolderEntry), ipnsName, folderKey, and ipnsPrivateKey — callers need the UUID for store lookup, not the ipnsName"
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 50,
+          "end_line": 70,
+          "finding": "axiosInstance is now cached module-level after setApiClientConfig — previously created a new axios.create() on every API call"
+        }
+      ],
+      "workflow": [
+        "When debugging SDK/web integration issues, first validate at the SDK level with a direct integration test (vitest against live API) before touching the browser — isolates whether the bug is in the SDK or the web wiring",
+        "For Playwright MCP debugging sessions: get OTP by reading the backgrounded pnpm dev task output file (grep for 'DEV OTP') — not from Web3Auth static test credentials",
+        "For Playwright file upload: use browser_evaluate to click the hidden \u003cinput type='file'\u003e element directly — the upload zone overlay intercepts pointer events on the visible button",
+        "Use fresh email addresses for each Playwright test run to avoid auth_methods constraint violations and slow vault sync from accumulated IPNS records",
+        "When making atomic commits during a session with many changes, save full file state before splitting — use git stash or temp files to restore/restore incrementally",
+        "Running integration tests requires the dev server — always start pnpm dev before running SDK integration tests, don't skip them",
+        "CI coverage thresholds should reflect unit-test-only coverage (what CI actually runs), not combined unit+integration coverage that runs locally"
+      ]
+    },
+    "friction": [
+      "1Password SSH agent signing blocked commits repeatedly when running in background subprocess — required user to be physically present at keyboard to unlock",
+      "OTP rate limiting (5 sends per 15 minutes) blocked Playwright login loops — had to clear Redis rate limit keys manually",
+      "pnpm dev task output file (OTP source) gets killed between sessions, requiring restart and fresh OTP each Playwright session",
+      "CI detected API spec drift because local orval regeneration differs from CI's full pnpm api:generate pipeline — needed full API running to regenerate properly",
+      "CI test step ran crypto package tests before building @cipherbox/core, causing vault-ipns.test.ts import to fail — required adding a package build step before tests in CI",
+      "Branch was initially reset to main mid-session after user was unhappy with Plan 02 decisions — lost first run's partial work",
+      "Multiple rounds of debugging the ensureFolderRegistered bridge before realizing the real fix was eliminating the dual-path entirely by routing upload through SDK",
+      "Playwright MCP browser_file_upload doesn't work directly on hidden inputs — requires browser_evaluate workaround to trigger the file chooser"
+    ],
+    "open_items": [
+      "Batch SDK operations: N sequential IPNS publishes for multi-select operations (move 10 items = 20 publishes) — SDK needs moveItems/deleteItems batch methods for O(1) publish count",
+      "uint8ToBase64 has 3 copies (sdk-core/file, web/folder.service, web/file-metadata.service) — should be consolidated into @cipherbox/crypto per REFACTORING.md row 3.3",
+      "TEE key wrapping pattern duplicated 3+ times across sdk-core/folder, sdk-core/file, sdk/bin — needs shared helper",
+      "Constants IPNS_LIFETIME_MS, MAX_VERSIONS_PER_FILE, BIN_METADATA_VERSION duplicated between sdk-core and web app services — should be exported from @cipherbox/core",
+      "Dual bin loading on login (initializeBin + loadBin) does double IPNS resolution — deferred until Plan 06's old service removal",
+      "@internal methods on CipherBoxClient (getConfig, getContext, emitEvent) are public TypeScript — consider friend-pattern or restructuring bin/share as class methods",
+      "O(N) linear folder lookup on every SDK folder:loaded/folder:updated event — should use reverse lookup map ipnsName-\u003efolderId",
+      "Deprecated services (folder.service, bin.service, share.service, ipns.service) still have active callers in folder-helpers.ts resyncFolder — need full migration in a future phase",
+      "SDK unit test coverage for bin/share modules is 34% in CI (no unit tests, only integration tests which are skipped in CI) — needs dedicated unit tests",
+      "deferred-items.md in phase directory tracks additional items noted during execution that weren't in scope"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T12:08:41.963147Z",
+    "agent_lines": 4,
+    "human_added": 29,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 33,
+    "agent_percentage": 12.121212121212121
+  }
+}
