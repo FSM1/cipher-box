@@ -62,10 +62,17 @@ export function destroySdkClient(): void {
  * (which loads folders into Zustand) and SDK operations (which require
  * folders in the SDK's internal state).
  *
- * Safe to call multiple times -- just overwrites with current state.
+ * Only registers if the SDK doesn't already have the folder. The SDK's
+ * internal state (sequence number, children, keys) is authoritative once
+ * a folder is registered — all mutations go through the SDK.
  */
 export function ensureFolderRegistered(folder: FolderNode): void {
   const client = getSdkClient();
+
+  // Don't overwrite if SDK already has this folder — its internal state
+  // is authoritative (correct sequence number, keys, children from mutations)
+  if (client.hasFolder(folder.ipnsName)) return;
+
   client.registerFolder(
     folder.ipnsName,
     folder.folderKey,
