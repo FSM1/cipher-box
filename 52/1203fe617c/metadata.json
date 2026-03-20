@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "521203fe617c",
+  "strategy": "manual-commit",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useAuth.ts",
+    "tests/e2e/tests/sharing-workflow.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/52/1203fe617c/0/metadata.json",
+      "transcript": "/52/1203fe617c/0/full.jsonl",
+      "context": "/52/1203fe617c/0/context.md",
+      "content_hash": "/52/1203fe617c/0/content_hash.txt",
+      "prompt": "/52/1203fe617c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 313,
+    "cache_creation_tokens": 521885,
+    "cache_read_tokens": 46301603,
+    "output_tokens": 69649,
+    "api_call_count": 287
+  }
+}

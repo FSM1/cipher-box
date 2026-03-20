@@ -1,0 +1,114 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "521203fe617c",
+  "session_id": "34bbe85d-e855-459b-8466-d8f88151f839",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T23:06:50.702173Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useAuth.ts",
+    "tests/e2e/tests/sharing-workflow.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "4c65c7cfbd04",
+  "token_usage": {
+    "input_tokens": 313,
+    "cache_creation_tokens": 521885,
+    "cache_read_tokens": 46301603,
+    "output_tokens": 69649,
+    "api_call_count": 287
+  },
+  "summary": {
+    "intent": "Run the full E2E test suite against SDK extraction branch changes, diagnose failures, and restore CI coverage to a mergeable state.",
+    "outcome": "Fixed E2E import breakage from SDK extraction, migrated all 6 test suites from brittle Web3Auth test-login to wallet-based auth, fixed a race condition in the web app's auth flow, resolved rate-limiting flakiness, and added automatic key re-wrapping to the SDK — bringing the suite from 14 passing / 7 failing to 96 passing / 1 failing (pre-existing intermittent reload timing).",
+    "learnings": {
+      "repo": [
+        "The SDK extraction (this branch) moved initializeVault, encryptVaultKeys, decryptVaultKeys from @cipherbox/crypto to @cipherbox/core — E2E imports were not updated as part of the refactor.",
+        "E2E tests broken in CI since March 8 (PR #288) due to load-test.spec.ts being included in the default Playwright config and hanging for 10 min, causing the 15-min CI timeout to kill all tests. Root cause was not the someguy sidecar.",
+        "The someguy sidecar is only in the staging docker-compose and is not present in CI at all.",
+        "Web3Auth-based test login (loginViaTestEndpoint) requires Zustand state injection (reinjectTestAuthAfterReload) and is environment-dependent; wallet-based auth via @johanneskares/wallet-mock uses real SIWE flow and works in all environments without special config.",
+        "Conflict-detection tests hit the API rate limiter (10 req/s, 100/min) when bumpServerSequence is called rapidly across 3 consecutive serial tests — each call makes 2 API requests (resolve + publish).",
+        "Sharing test 7.3 was revealing a real app bug: files uploaded to a shared folder after sharing was established were not having their keys re-wrapped for share recipients.",
+        "The CipherBoxClient SDK was not performing automatic key re-wrapping on uploadFile/createFolder; this logic lived entirely in the web app layer.",
+        "sdk-core uploadFile did not return the plaintext file key, requiring a return type change to enable SDK-level re-wrapping."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 259,
+          "end_line": 265,
+          "finding": "Race condition: setAccessToken() at line 259 sets isAuthenticated:true immediately, triggering Login.tsx redirect before initializeOrLoadVault() at line 265 completes — SDK client not initialized when files page loads. Fixed by adding setAuthenticated() action called only after vault+SDK init completes."
+        },
+        {
+          "path": "apps/web/src/stores/auth.store.ts",
+          "finding": "setAccessToken action was setting both accessToken and isAuthenticated:true. Split into setAccessToken (token only) and new setAuthenticated() action to decouple token storage from auth state."
+        },
+        {
+          "path": "apps/web/src/lib/api/client.ts",
+          "line": 52,
+          "end_line": 52,
+          "finding": "Token refresh interceptor calls setAccessToken — this is a valid call site where the user is already authenticated, so setAuthenticated() call must also be added here after the token refresh."
+        },
+        {
+          "path": "tests/e2e/utils/wallet-login-helpers.ts",
+          "finding": "loginViaWallet needed a waitForFunction check for vault keys in Zustand store to prevent SDK-not-initialized errors on subsequent file operations — vault init can still be in-flight when the /files page renders."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "uploadFile and createFolder now call private reWrapNewItems() after publishing, which uses ShareCallbacks to find covering shares and re-wraps the item's encryption key for all recipients via ECIES. Emits share:reWrapFailed event on non-fatal errors."
+        },
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "finding": "Return type extended to include plaintext fileKey (Uint8Array) so the stateful CipherBoxClient can perform re-wrapping without re-deriving the key."
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "finding": "Manual re-wrapping logic removed after moving it into the SDK layer."
+        },
+        {
+          "path": "tests/e2e/playwright.config.ts",
+          "finding": "load-test.spec.ts excluded from default testMatch glob — it must be run explicitly, not as part of the standard CI suite."
+        },
+        {
+          "path": "tests/e2e/tests/conflict-detection.spec.ts",
+          "finding": "Added 2s delay before bumpServerSequence calls to avoid rate limiting. Increased afterAll hook timeout to handle cleanup of multiple items after rate-limited test run."
+        },
+        {
+          "path": "tests/e2e/tests/full-workflow.spec.ts",
+          "finding": "Reload tests (3.8, 6.6.x) need vault-ready waitForFunction after page.reload() before asserting on folder contents — Core Kit session restoration is async and variable-latency from Sapphire Devnet."
+        }
+      ],
+      "workflow": [
+        "When diagnosing CI test failures, check if a new test file was added without exclusion rules before assuming a code change is the root cause.",
+        "Wallet-mock based auth is strictly more reliable than test-login endpoint injection for E2E tests because it uses the real authentication flow and doesn't depend on environment-specific secrets or Zustand internals.",
+        "Serial Playwright test suites amplify flaky failures — one flaky test can skip 10+ downstream dependents. Fix the root cause rather than accepting high skip rates.",
+        "When a test reveals an actual app bug (like the re-wrapping failure), skipping it with a known-bug comment unblocks the suite but the correct resolution is to fix the app and remove the skip."
+      ]
+    },
+    "friction": [
+      "TypeScript replace_all on 'TestAccount' also hit import type alias names (e.g. WalletTestAccount → WalletWalletTestAccount), requiring manual cleanup passes.",
+      "Background task output was delivered as stale notifications after the results had already been processed, creating noise.",
+      "The race condition fix required tracing through 4 separate call sites of setAccessToken across auth.store.ts, useAuth.ts, and client.ts to ensure none were missed.",
+      "Full-workflow 3.8 reload test remained intermittently flaky even after the vault-ready wait — Core Kit's Sapphire Devnet latency is non-deterministic and causes variable session restoration times.",
+      "1Password agent hiccup required a retry on one git commit.",
+      "Multiple rounds of re-running the full E2E suite were needed as fixes for one set of failures revealed new failures in different tests."
+    ],
+    "open_items": [
+      "Full-workflow test 3.8 (reload subfolder navigation) remains intermittently flaky due to Core Kit Sapphire Devnet latency — timeout increases help but don't eliminate the flakiness. Consider mocking the IPNS resolution in reload tests or using a local devnet.",
+      "load-test.spec.ts has a pre-existing TypeScript error and is excluded from CI — needs its own dedicated run configuration and the type error fixed.",
+      "The reWrapNewItems SDK method should also be triggered on moveItem when a file is moved into a shared folder.",
+      "share:reWrapFailed event is emitted but the web app has no UI handler wired up to surface re-wrapping failures to users.",
+      "VITE_API_URL fallback in sdk-provider.ts uses window.location.origin + '/api' which would be wrong in production — should be validated at build time."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T23:05:51.917998Z",
+    "agent_lines": 40,
+    "human_added": 425,
+    "human_modified": 6,
+    "human_removed": 0,
+    "total_committed": 471,
+    "agent_percentage": 8.492569002123142
+  }
+}
