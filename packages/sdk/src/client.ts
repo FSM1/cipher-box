@@ -605,18 +605,17 @@ export class CipherBoxClient {
   /**
    * Load the recycle bin metadata.
    *
-   * @returns Current bin state, or null if no bin exists yet
+   * Always returns a BinState — if no bin IPNS record exists yet,
+   * returns empty state so deleteToBin can create the first record.
    */
-  async loadBin(): Promise<BinState | null> {
+  async loadBin(): Promise<BinState> {
     return this.withOperation('loadBin', async () => {
       const result = await binOps.loadBin({
         binCtx: this.getBinContext(),
       });
 
-      if (result) {
-        this.binState = result;
-        this.emitter.emit({ type: 'bin:updated', entries: result.entries });
-      }
+      this.binState = result;
+      this.emitter.emit({ type: 'bin:updated', entries: result.entries });
 
       return result;
     });

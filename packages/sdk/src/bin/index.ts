@@ -133,15 +133,29 @@ async function saveBinMetadata(params: {
 /**
  * Load the recycle bin metadata from IPNS.
  *
- * @returns Current bin state, or null if no bin exists yet
+ * If no bin IPNS record exists yet (first login / never deleted anything),
+ * returns an empty BinState so that deleteToBin can create the first record.
+ * The old bin service handled this by creating in-memory-only empty state;
+ * the SDK must do the same to avoid "Bin not loaded" errors on first delete.
+ *
+ * @returns Current bin state (never null — empty state if no record exists)
  */
-export async function loadBin(params: { binCtx: BinOperationContext }): Promise<BinState | null> {
+export async function loadBin(params: { binCtx: BinOperationContext }): Promise<BinState> {
   const loaded = await loadBinMetadataInternal({
     userPrivateKey: params.binCtx.userPrivateKey,
     ctx: params.binCtx.ctx,
   });
 
-  if (!loaded) return null;
+  if (!loaded) {
+    // No bin IPNS record exists yet — return empty state.
+    // The first addToBin call will create the IPNS record.
+    const binIpns = await deriveBinIpnsKeypair(params.binCtx.userPrivateKey);
+    return {
+      entries: [],
+      sequenceNumber: 0,
+      ipnsName: binIpns.ipnsName,
+    };
+  }
 
   return {
     entries: loaded.metadata.entries,

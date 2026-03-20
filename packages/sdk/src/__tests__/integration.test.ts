@@ -127,4 +127,91 @@ describeIf('SDK Integration (live API)', () => {
       }
     }
   );
+
+  it(
+    'bin lifecycle: loadBin on fresh account, deleteToBin, verify bin entries',
+    { timeout: 120000 },
+    async () => {
+      const email = `sdk-bin-${Date.now()}@example.com`;
+
+      // --- Setup (same as main test) ---
+      const loginRes = await fetch(`${API}/auth/test-login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, secret: SECRET }),
+      });
+      expect(loginRes.ok).toBe(true);
+      const { accessToken, publicKeyHex, privateKeyHex } = await loginRes.json();
+      const publicKey = hexToBytes(publicKeyHex);
+      const privateKey = hexToBytes(privateKeyHex);
+
+      const vault = await initializeVault(privateKey);
+      const encrypted = await encryptVaultKeys(vault, publicKey);
+      const rootIpnsName = await deriveIpnsName(vault.rootIpnsKeypair.publicKey);
+
+      const initRes = await fetch(`${API}/vault/init`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ownerPublicKey: bytesToHex(publicKey),
+          encryptedRootFolderKey: bytesToHex(encrypted.encryptedRootFolderKey),
+          encryptedRootIpnsPrivateKey: bytesToHex(encrypted.encryptedIpnsPrivateKey),
+          rootIpnsName,
+        }),
+      });
+      expect(initRes.ok).toBe(true);
+
+      setApiClientConfig({ baseUrl: API, getAccessToken: async () => accessToken });
+
+      const client = new CipherBoxClient({
+        apiUrl: API,
+        getAccessToken: async () => accessToken,
+        vaultKeypair: { publicKey, privateKey },
+        rootIpnsName,
+        rootFolderKey: vault.rootFolderKey,
+      });
+      client.registerFolder(rootIpnsName, vault.rootFolderKey, vault.rootIpnsKeypair, [], 0n);
+
+      try {
+        // 1. loadBin on fresh account — should return empty state (not null)
+        const binState = await client.loadBin();
+        expect(binState).toBeTruthy();
+        expect(binState.entries).toEqual([]);
+        expect(binState.sequenceNumber).toBe(0);
+        console.log('  ✓ loadBin on fresh account returns empty state');
+
+        // 2. Upload a file
+        const fileData = new TextEncoder().encode('bin test ' + Date.now());
+        await client.uploadFile(rootIpnsName, fileData, 'bin-test.txt', 'text/plain');
+        const root = (client as any).folderTree.get(rootIpnsName);
+        const fileChild = root.children.find((c: any) => c.name === 'bin-test.txt');
+        expect(fileChild).toBeTruthy();
+        console.log('  ✓ Uploaded file for bin test');
+
+        // 3. deleteToBin — should NOT throw "Bin not loaded"
+        await client.deleteToBin(rootIpnsName, fileChild.id, 'My Vault');
+        console.log('  ✓ deleteToBin succeeded (no "Bin not loaded" error)');
+
+        // 4. Verify bin state has the entry
+        const updatedBin = (client as any).binState;
+        expect(updatedBin.entries.length).toBe(1);
+        expect(updatedBin.entries[0].name).toBe('bin-test.txt');
+        expect(updatedBin.entries[0].itemType).toBe('file');
+        console.log('  ✓ Bin contains deleted file entry');
+
+        // 5. Verify file removed from root
+        const rootAfterDelete = (client as any).folderTree.get(rootIpnsName);
+        expect(rootAfterDelete.children.length).toBe(0);
+        console.log('  ✓ File removed from root folder');
+
+        // 6. Reload bin from IPNS — should find the persisted entry
+        const reloaded = await client.loadBin();
+        expect(reloaded.entries.length).toBe(1);
+        expect(reloaded.entries[0].name).toBe('bin-test.txt');
+        console.log('  ✓ Bin entry persisted to IPNS (verified via reload)');
+      } finally {
+        client.destroy();
+      }
+    }
+  );
 });
