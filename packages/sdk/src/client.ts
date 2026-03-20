@@ -74,6 +74,11 @@ export class CipherBoxClient {
     this.folderTree.clear();
     this.keyCache.clear();
     this.emitter.removeAll();
+    // Zero vault key material (defense-in-depth; JS GC may retain copies)
+    this.config.vaultKeypair.privateKey.fill(0);
+    this.config.vaultKeypair.publicKey.fill(0);
+    this.config.rootFolderKey.fill(0);
+    this.binState = null;
   }
 
   /**
