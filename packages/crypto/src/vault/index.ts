@@ -1,9 +1,8 @@
 /**
- * @cipherbox/crypto - Vault Management
+ * @cipherbox/crypto - Vault IPNS Key Derivation
  *
- * Vault initialization, key encryption/decryption, and IPNS derivation.
+ * Only the deterministic IPNS keypair derivation remains in crypto.
+ * Vault initialization and key management moved to @cipherbox/core.
  */
 
-export { initializeVault, encryptVaultKeys, decryptVaultKeys } from './init';
 export { deriveVaultIpnsKeypair } from './derive-ipns';
-export type { VaultInit, EncryptedVaultKeys } from './types';
