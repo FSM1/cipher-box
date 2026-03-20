@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "9a58f99f188f",
+  "strategy": "manual-commit",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk/src/client.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9a/58f99f188f/0/metadata.json",
+      "transcript": "/9a/58f99f188f/0/full.jsonl",
+      "context": "/9a/58f99f188f/0/context.md",
+      "content_hash": "/9a/58f99f188f/0/content_hash.txt",
+      "prompt": "/9a/58f99f188f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 845,
+    "cache_creation_tokens": 368207,
+    "cache_read_tokens": 70815248,
+    "output_tokens": 116986,
+    "api_call_count": 286
+  }
+}

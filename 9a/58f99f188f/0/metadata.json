@@ -1,0 +1,102 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "9a58f99f188f",
+  "session_id": "8ae64815-e645-461a-ae6b-d66403649a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T04:22:58.379156Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk/src/client.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f8208b9f97f3",
+  "token_usage": {
+    "input_tokens": 845,
+    "cache_creation_tokens": 368207,
+    "cache_read_tokens": 70815248,
+    "output_tokens": 116986,
+    "api_call_count": 286
+  },
+  "summary": {
+    "intent": "Execute Phase 19.1 (Extract Core Crypto SDK as Shared Package) via the GSD wave-based orchestration workflow, then debug and fix the resulting SDK integration issues in the web app.",
+    "outcome": "Completed Wave 1-3 plans via subagents, then spent the majority of the session debugging the checkpoint for Plan 19.1-05 (Rewire Web App Hooks to SDK). Fixed 5 critical integration bugs through Playwright-driven testing. 9/10 operations verified working; bin/delete-to-bin remains broken.",
+    "learnings": {
+      "repo": [
+        "The web app uses a dual-path architecture: SDK handles folder CRUD while old service handles file upload — any mixed IPNS writes cause 409 Conflict due to stale sequence numbers.",
+        "setApiClientConfig() must be called on @cipherbox/api-client before any IPNS operations — it was never called during SDK init, silently breaking all publish/resolve flows.",
+        "New folders created via SDK are stored in Zustand with ipnsPrivateKey: new Uint8Array(0) — the createFolder return value needed to include the actual private key and UUID.",
+        "The SDK's loadBin() must be called AFTER the old initializeBin service finishes, otherwise it can't resolve the bin IPNS record (different initialization timing).",
+        "ensureFolderRegistered() created a state corruption loop: it preserved stale seq numbers from the store, overwriting the SDK's post-mutation seq number and causing 409s on subsequent operations.",
+        "The old download service chain (file-metadata.service.ts → ipns.service.ts → custom-instance.ts) uses a different IPNS resolution path than the SDK, causing decryption failures for SDK-uploaded files.",
+        "updateFolderMetadataAndPublish in sdk-core needed a 409 retry that re-resolves the current IPNS sequence number — the old service had withConflictRetry + resyncFolder but sdk-core did not.",
+        "The @cipherbox/api-client generated functions (e.g. ipnsControllerPublishRecord) are used by sdk-core/ipns but require setApiClientConfig() to be called first in the consuming app.",
+        "TextEditorDialog.tsx used the old download service directly, bypassing the SDK — needed to be rewired to client.downloadFromIpns()."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "finding": "SDK init location — setApiClientConfig() and client.loadBin() must both be called here, with loadBin deferred until after the old initializeBin service completes."
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "finding": "ensureFolderRegistered — final simplified form: skip entirely if SDK already has the folder. Earlier attempts to sync children/seq/privateKey from the store all created new edge cases."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "createFolder must return both the FolderEntry UUID (for store id) and the IPNS private key. The store was using ipnsName as the folder id, causing navigation lookup failures."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "finding": "updateFolderMetadataAndPublish needed a single 409 retry that re-resolves the current sequence number from the API before retrying the publish."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "finding": "Rewired from two-step (upload.service + useFileOperations.addFiles) to single client.uploadFile() call to eliminate dual-path IPNS write conflicts."
+        },
+        {
+          "path": "apps/web/src/hooks/useFileDownload.ts",
+          "finding": "Rewired to client.downloadFromIpns() — old path used different IPNS resolution that couldn't decrypt SDK-uploaded files."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "finding": "Integration test covering full lifecycle (create folder, upload, download, rename, delete) using test-login secret endpoint. All 8 operations pass at SDK level."
+        }
+      ],
+      "workflow": [
+        "Playwright MCP (headed, manual drive) is more effective than Playwright scripts for debugging UI integration bugs — avoids selector brittleness and lets you observe real browser state.",
+        "When debugging dual-path state bugs, SDK-level integration tests (vitest, real API) cleanly separate SDK correctness from web app wiring issues.",
+        "Random email per E2E test run prevents state pollution from previous runs — critical for filesystem-per-user apps.",
+        "GSD checkpoint plans (autonomous: false) allow pausing mid-phase for human verification, but extended debugging sessions can be driven by the agent via Playwright without user interaction.",
+        "classifyHandoffIfNeeded error in Claude Code is a runtime bug (fires after all tool calls complete) — spot-check SUMMARY.md + git commits to determine actual success."
+      ]
+    },
+    "friction": [
+      "Initial plan 19.1-02 was rejected by user after execution — required resetting the branch to main and re-running Wave 1, wasting agent execution.",
+      "ensureFolderRegistered became a whack-a-mole: each fix (preserve seq, preserve privateKey, sync children) introduced a new edge case, eventually requiring full removal.",
+      "Playwright file upload required mcp__playwright__browser_run_code workaround since the upload zone uses a hidden file input — standard file_upload tool couldn't target it.",
+      "Background task notifications arrived after work was already completed, creating noise and confusion about which test run results were being referenced.",
+      "SDK integration tests hit 30s timeouts due to IPNS delegated routing retries — not a bug but makes the test suite slow.",
+      "The test-login endpoint required a secret that had to be discovered (TEST_LOGIN_SECRET) — not documented near the auth code.",
+      "HMR hook count change error from restructuring useDropUpload — React's rules of hooks caused a visible error in the running dev server mid-session."
+    ],
+    "open_items": [
+      "Bin/delete-to-bin is broken: SDK's loadBin() can't load bin state initialized by the old service, so deleteToBin silently falls back to hard delete. Needs investigation into SDK bin IPNS resolution path.",
+      "useFileUpload and useFileDelete were explicitly left on the old service path (architecturally different from SDK upload) — still tech debt to fully remove old upload service.",
+      "Pre-existing DTS circular dependency between @cipherbox/core and @cipherbox/crypto causes pnpm -r run build to fail (though pnpm --filter web build succeeds).",
+      "Atomic commits for all fixes were in progress but only Commits 1-2 were completed before transcript end — remaining fixes (folder UUID, upload rewire, download rewire, 409 retry, bin loadBin) still need individual commits.",
+      "sdk-debug.spec.ts test file was created for debugging and should either be promoted to a permanent E2E test or deleted.",
+      "packages/sdk/src/__tests__/integration.test.ts is a new integration test suite — should be reviewed for inclusion in CI pipeline.",
+      "The old upload service, download service, and ipns service are now partially deprecated but still in the codebase — full removal deferred."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T04:21:58.838822Z",
+    "agent_lines": 71,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 71,
+    "agent_percentage": 100
+  }
+}
