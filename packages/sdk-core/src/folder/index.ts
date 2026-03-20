@@ -172,19 +172,41 @@ export async function updateFolderMetadataAndPublish(params: {
   const encryptedBytes = new TextEncoder().encode(jsonStr);
   const { cid } = await addToIpfs(params.ctx, encryptedBytes);
 
-  // 4. Publish IPNS record pointing to new CID
-  const newSeq = params.sequenceNumber + 1n;
-  await createAndPublishIpnsRecord({
-    ipnsPrivateKey: params.ipnsPrivateKey,
-    ipnsName: params.ipnsName,
-    metadataCid: cid,
-    sequenceNumber: newSeq,
-    encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
-    keyEpoch: params.keyEpoch,
-    expectedSequenceNumber: params.sequenceNumber.toString(),
-  });
+  // 4. Publish IPNS record with conflict retry
+  //    On 409, resolve current seq from IPNS and retry once
+  let currentSeq = params.sequenceNumber;
 
-  return { cid, newSequenceNumber: newSeq };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const newSeq = currentSeq + 1n;
+    try {
+      await createAndPublishIpnsRecord({
+        ipnsPrivateKey: params.ipnsPrivateKey,
+        ipnsName: params.ipnsName,
+        metadataCid: cid,
+        sequenceNumber: newSeq,
+        encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
+        keyEpoch: params.keyEpoch,
+        expectedSequenceNumber: currentSeq.toString(),
+      });
+      return { cid, newSequenceNumber: newSeq };
+    } catch (err) {
+      const is409 =
+        (err as Error & { status?: number }).status === 409 ||
+        (err as Error & { response?: { status?: number } }).response?.status === 409;
+      if (!is409 || attempt > 0) throw err;
+
+      // Re-sync: resolve current seq from IPNS
+      const resolved = await resolveIpnsRecord(params.ipnsName);
+      if (resolved) {
+        currentSeq = resolved.sequenceNumber;
+      } else {
+        throw err; // Can't resolve → give up
+      }
+    }
+  }
+
+  // Should not reach here, but TypeScript needs it
+  throw new Error('Publish failed after retry');
 }
 
 /**
