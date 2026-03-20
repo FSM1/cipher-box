@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "e1abb08a418c",
+  "session_id": "6838d6a8-ad86-4233-8edf-81daae3f1aef",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T12:49:38.859438Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".coderabbit.yaml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "21f82b3a9b22",
+  "checkpoint_transcript_start": 575,
+  "transcript_lines_at_start": 575,
+  "token_usage": {
+    "input_tokens": 11,
+    "cache_creation_tokens": 6069,
+    "cache_read_tokens": 1156963,
+    "output_tokens": 3256,
+    "api_call_count": 9
+  },
+  "summary": {
+    "intent": "Fix CodeRabbit's PR review being skipped due to too many files (265) by adding path filters to exclude generated/model files and bring the count under the 150-file threshold.",
+    "outcome": "Added broader path exclusions to .coderabbit.yaml (models, web api client, planning/learnings dirs) and pushed, but it was not confirmed whether CodeRabbit subsequently processed the PR correctly.",
+    "learnings": {
+      "repo": [
+        "cipher-box uses pnpm with a monorepo structure; build order must be sequential following the dependency chain: crypto → core → api-client → sdk-core → sdk → api → web",
+        "api-client contains ~102 generated model files under packages/api-client/src/models/ that should be excluded from code review",
+        "apps/web/src/api/ contains generated web client files",
+        ".planning/ and .learnings/ are documentation directories, not code"
+      ],
+      "code": [
+        {
+          "path": ".coderabbit.yaml",
+          "finding": "Path filters using glob patterns like !packages/api-client/src/models/** may not take effect on the same commit that introduces them — CodeRabbit may evaluate file counts before applying newly added filters"
+        }
+      ],
+      "workflow": [
+        "CodeRabbit skips reviews when PR file count exceeds ~150 files; path filters in .coderabbit.yaml are the mechanism to exclude generated files",
+        "CodeRabbit reports the commit hash it processed — cross-referencing this against when config changes were introduced helps diagnose filter timing issues",
+        "Multiple --filter flags in a single pnpm build run packages in parallel, which can cause failures when packages have type declaration dependencies on each other"
+      ]
+    },
+    "friction": [
+      "CodeRabbit may not apply newly added path filters on the same commit that introduces them, creating a chicken-and-egg problem",
+      "Unclear whether the glob format !packages/api-client/src/models/** is valid in .coderabbit.yaml or needs adjustment",
+      "Had to manually count files by directory to understand why the file count was still 265 despite the models/ exclusion being present"
+    ],
+    "open_items": [
+      "Verify that CodeRabbit processes the PR correctly after the broader exclusion push and confirm file count drops below threshold",
+      "Confirm the correct glob syntax for path filters in .coderabbit.yaml — the models exclusion did not appear to work as expected"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T12:49:21.464395Z",
+    "agent_lines": 4,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 4,
+    "agent_percentage": 100
+  }
+}

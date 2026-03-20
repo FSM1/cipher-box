@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "e1abb08a418c",
+  "strategy": "manual-commit",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".coderabbit.yaml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e1/abb08a418c/0/metadata.json",
+      "transcript": "/e1/abb08a418c/0/full.jsonl",
+      "context": "/e1/abb08a418c/0/context.md",
+      "content_hash": "/e1/abb08a418c/0/content_hash.txt",
+      "prompt": "/e1/abb08a418c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 11,
+    "cache_creation_tokens": 6069,
+    "cache_read_tokens": 1156963,
+    "output_tokens": 3256,
+    "api_call_count": 9
+  }
+}
