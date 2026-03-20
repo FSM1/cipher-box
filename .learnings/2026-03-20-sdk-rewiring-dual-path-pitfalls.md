@@ -54,11 +54,19 @@ After rewiring upload to SDK, download still used the old `file-metadata.service
 
 **Prevention:** Upload and download paths for the same data must use the same resolution chain. When rewiring writes, always check that the corresponding reads are also rewired.
 
-### 5. SDK bin state never loaded
+### 5. SDK bin state never loaded (two-part fix)
 
-The SDK's `deleteToBin()` requires `binState` to be loaded via `client.loadBin()`. This was never called because the old `initializeBin` service created the bin independently. `deleteToBin` silently fell back to `deleteItem` (hard delete, no bin entry).
+The SDK's `deleteToBin()` requires `binState` to be loaded via `client.loadBin()`. This had two issues:
 
-**Fix:** Call `client.loadBin()` after `initializeBin()` completes.
+**Part A:** `loadBin()` was never called because the old `initializeBin` service created the bin independently. `deleteToBin` silently fell back to `deleteItem` (hard delete, no bin entry).
+
+**Fix A:** Call `client.loadBin()` after `initializeBin()` completes.
+
+**Part B:** Even after calling `loadBin()`, it returned `null` on fresh accounts (no bin IPNS record exists yet), leaving `client.binState` as null. The old service handled "no bin" gracefully by creating in-memory-only empty state; the SDK returned null, so `deleteToBin()` still threw "Bin not loaded" and fell back to hard delete.
+
+**Fix B:** Changed `loadBin()` to return an empty `BinState` (entries: [], sequenceNumber: 0) when no IPNS record exists, matching the old service's behavior. The first `addToBin` call creates the IPNS record.
+
+**Prevention:** When extracting service logic into an SDK, edge cases like "resource doesn't exist yet" must be handled identically to the original service. Check not just the happy path but also the initialization/first-use path.
 
 ## Testing Approach Lessons
 
