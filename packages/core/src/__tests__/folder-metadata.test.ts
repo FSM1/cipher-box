@@ -1,16 +1,15 @@
 /**
- * @cipherbox/crypto - Folder Metadata Tests
+ * @cipherbox/core - Folder Metadata Tests
  *
  * Tests for folder metadata encryption and decryption (v2 schema only).
  */
 
 import { describe, it, expect } from 'vitest';
+import { generateFileKey, CryptoError } from '@cipherbox/crypto';
 import {
   encryptFolderMetadata,
   decryptFolderMetadata,
   validateFolderMetadata,
-  generateFileKey, // Uses sync 32-byte key generation
-  CryptoError,
   type FolderMetadata,
   type FolderEntry,
   type FilePointer,

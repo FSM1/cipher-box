@@ -1,13 +1,13 @@
 /**
- * @cipherbox/crypto - Vault Tests
+ * @cipherbox/core - Vault Tests
  *
  * Tests for vault initialization and key encryption/decryption.
  */
 
 import { describe, it, expect } from 'vitest';
 import * as secp256k1 from '@noble/secp256k1';
+import { ED25519_PUBLIC_KEY_SIZE, ED25519_PRIVATE_KEY_SIZE, AES_KEY_SIZE } from '@cipherbox/crypto';
 import { initializeVault, encryptVaultKeys, decryptVaultKeys } from '../vault';
-import { ED25519_PUBLIC_KEY_SIZE, ED25519_PRIVATE_KEY_SIZE, AES_KEY_SIZE } from '../constants';
 
 /**
  * Generate a secp256k1 keypair for testing.

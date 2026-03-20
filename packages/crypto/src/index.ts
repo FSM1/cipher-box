@@ -96,3 +96,58 @@ export {
   ED25519_PRIVATE_KEY_SIZE,
   ED25519_SIGNATURE_SIZE,
 } from './constants';
+
+// ============================================================
+// Transitional re-exports from @cipherbox/core
+// These maintain backward compatibility during the SDK migration.
+// TODO(19.1-06): Remove these re-exports in the final cleanup plan.
+// ============================================================
+export {
+  // Folder metadata
+  encryptFolderMetadata,
+  decryptFolderMetadata,
+  validateFolderMetadata,
+  type FolderMetadata,
+  type FolderChild,
+  type FolderEntry,
+  type EncryptedFolderMetadata,
+  // File metadata
+  deriveFileIpnsKeypair,
+  generateFileIpnsKeypair,
+  encryptFileMetadata,
+  decryptFileMetadata,
+  validateFileMetadata,
+  type FileMetadata,
+  type FilePointer,
+  type EncryptedFileMetadata,
+  type VersionEntry,
+  // Device registry
+  encryptRegistry,
+  decryptRegistry,
+  deriveRegistryIpnsKeypair,
+  validateDeviceRegistry,
+  type DeviceEntry,
+  type DeviceRegistry,
+  type DeviceAuthStatus,
+  type DevicePlatform,
+  // Recycle bin
+  encryptBinMetadata,
+  decryptBinMetadata,
+  deriveBinIpnsKeypair,
+  validateBinMetadata,
+  type BinEntry,
+  type RecycleBinMetadata,
+  // Vault init
+  initializeVault,
+  encryptVaultKeys,
+  decryptVaultKeys,
+  type VaultInit,
+  type EncryptedVaultKeys,
+  // IPNS records
+  createIpnsRecord,
+  marshalIpnsRecord,
+  unmarshalIpnsRecord,
+  signIpnsData,
+  IPNS_SIGNATURE_PREFIX,
+  type IPNSRecord,
+} from '@cipherbox/core';

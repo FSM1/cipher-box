@@ -1,5 +1,5 @@
 /**
- * @cipherbox/crypto - File IPNS Derivation & File Metadata Tests
+ * @cipherbox/core - File IPNS Derivation & File Metadata Tests
  *
  * Tests for:
  * - Deterministic file IPNS keypair derivation
@@ -10,6 +10,7 @@
 
 import { describe, it, expect } from 'vitest';
 import * as secp256k1 from '@noble/secp256k1';
+import { generateFileKey, CryptoError } from '@cipherbox/crypto';
 import { deriveFileIpnsKeypair, generateFileIpnsKeypair } from '../file/derive-ipns';
 import { encryptFileMetadata, decryptFileMetadata } from '../file/metadata';
 import {
@@ -17,8 +18,6 @@ import {
   decryptFolderMetadata,
   validateFolderMetadata,
 } from '../folder/metadata';
-import { generateFileKey } from '../utils';
-import { CryptoError } from '../types';
 import type { FileMetadata } from '../file/types';
 import type { FolderMetadata } from '../folder/types';
 import type { FolderEntry } from '../folder/types';

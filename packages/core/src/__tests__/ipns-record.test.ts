@@ -1,17 +1,12 @@
 /**
- * @cipherbox/crypto - IPNS Record Tests
+ * @cipherbox/core - IPNS Record Tests
  *
  * Tests for IPNS record creation, name derivation, and marshaling.
  */
 
 import { describe, it, expect } from 'vitest';
-import {
-  createIpnsRecord,
-  deriveIpnsName,
-  marshalIpnsRecord,
-  unmarshalIpnsRecord,
-  generateEd25519Keypair,
-} from '../index';
+import { generateEd25519Keypair } from '@cipherbox/crypto';
+import { createIpnsRecord, deriveIpnsName, marshalIpnsRecord, unmarshalIpnsRecord } from '../index';
 
 describe('createIpnsRecord', () => {
   it('creates valid record with correct value', async () => {

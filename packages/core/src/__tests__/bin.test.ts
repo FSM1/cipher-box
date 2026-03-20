@@ -1,5 +1,5 @@
 /**
- * @cipherbox/crypto - Recycle Bin Tests
+ * @cipherbox/core - Recycle Bin Tests
  *
  * Tests for bin crypto operations: IPNS derivation, ECIES encryption/decryption,
  * and schema validation.

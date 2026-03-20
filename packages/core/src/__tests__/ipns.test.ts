@@ -1,13 +1,12 @@
 /**
- * @cipherbox/crypto - IPNS Tests
+ * @cipherbox/core - IPNS Tests
  *
  * Tests for IPNS record signing utilities.
  */
 
 import { describe, it, expect } from 'vitest';
+import { generateEd25519Keypair, verifyEd25519, ED25519_SIGNATURE_SIZE } from '@cipherbox/crypto';
 import { signIpnsData, IPNS_SIGNATURE_PREFIX } from '../ipns';
-import { generateEd25519Keypair, verifyEd25519 } from '../ed25519';
-import { ED25519_SIGNATURE_SIZE } from '../constants';
 
 describe('IPNS Signature Prefix', () => {
   it('has correct bytes for "ipns-signature:"', () => {

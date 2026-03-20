@@ -1,5 +1,5 @@
 /**
- * @cipherbox/crypto - Device Registry Tests
+ * @cipherbox/core - Device Registry Tests
  *
  * Tests for registry crypto operations: IPNS derivation, ECIES encryption/decryption,
  * schema validation, and device keypair generation.
@@ -7,10 +7,10 @@
 
 import { describe, it, expect } from 'vitest';
 import * as secp256k1 from '@noble/secp256k1';
+import { generateDeviceKeypair, deriveDeviceId } from '@cipherbox/crypto';
 import { deriveRegistryIpnsKeypair } from '../registry/derive-ipns';
 import { encryptRegistry, decryptRegistry } from '../registry/encrypt';
 import { validateDeviceRegistry } from '../registry/schema';
-import { generateDeviceKeypair, deriveDeviceId } from '../device/keygen';
 import type { DeviceRegistry } from '../registry/types';
 
 /**

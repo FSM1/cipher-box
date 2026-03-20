@@ -8,8 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import * as secp256k1 from '@noble/secp256k1';
 import { deriveVaultIpnsKeypair } from '../vault/derive-ipns';
-import { deriveRegistryIpnsKeypair } from '../registry/derive-ipns';
-import { initializeVault } from '../vault';
+import { deriveRegistryIpnsKeypair, initializeVault } from '@cipherbox/core';
 import { CryptoError } from '../types';
 
 /**
