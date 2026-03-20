@@ -89,10 +89,10 @@ export function useFolderMutations() {
         const client = getSdkClient();
         const result = await client.createFolder(parentFolder.ipnsName, name);
 
-        // SDK emits folder:updated -> store subscription updates children
-        // But we also need to add the new folder node to the store with its keys
+        // SDK emits folder:updated -> store subscription updates parent's children
+        // But we also need to add the new folder as a store node so navigation works
         const newFolderNode: FolderNode = {
-          id: result.ipnsName, // Use ipnsName as ID for new SDK-created folders
+          id: result.id, // UUID from the FolderEntry in parent's children
           name,
           ipnsName: result.ipnsName,
           parentId: actualParentId,
@@ -101,7 +101,7 @@ export function useFolderMutations() {
           isLoading: false,
           sequenceNumber: 0n,
           folderKey: result.folderKey,
-          ipnsPrivateKey: new Uint8Array(0), // SDK manages IPNS keys internally
+          ipnsPrivateKey: result.ipnsPrivateKey,
         };
         useFolderStore.getState().setFolder(newFolderNode);
 
