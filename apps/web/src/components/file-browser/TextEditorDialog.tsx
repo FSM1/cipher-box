@@ -3,13 +3,10 @@ import type { FilePointer } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useAuthStore } from '../../stores/auth.store';
 import { useFolder } from '../../hooks/useFolder';
-import {
-  downloadFile,
-  downloadFileFromIpns,
-  triggerBrowserDownload,
-} from '../../services/download.service';
+import { downloadFile, triggerBrowserDownload } from '../../services/download.service';
 import { resolveFileMetadata } from '../../services/file-metadata.service';
 import { fetchShareKeys } from '../../services/share.service';
+import { getSdkClient, hasSdkClient } from '../../lib/sdk-provider';
 import { encryptFile } from '../../services/file-crypto.service';
 import { addToIpfs } from '../../lib/api/ipfs';
 import '../../styles/text-editor-dialog.css';
@@ -112,14 +109,12 @@ export function TextEditorDialog({
             },
             auth.vaultKeypair.privateKey
           );
+        } else if (hasSdkClient()) {
+          // Owner path via SDK: resolves IPNS, decrypts metadata, downloads + decrypts content
+          const client = getSdkClient();
+          plaintext = await client.downloadFromIpns(item.fileMetaIpnsName, folderKey!);
         } else {
-          // Owner path: use file key from metadata directly
-          plaintext = await downloadFileFromIpns({
-            fileMetaIpnsName: item.fileMetaIpnsName,
-            folderKey: folderKey!,
-            privateKey: auth.vaultKeypair.privateKey,
-            fileName: item.name,
-          });
+          throw new Error('SDK not initialized — please log in again');
         }
 
         if (cancelled) return;
