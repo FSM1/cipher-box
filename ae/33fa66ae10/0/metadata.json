@@ -1,0 +1,71 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "ae33fa66ae10",
+  "session_id": "6838d6a8-ad86-4233-8edf-81daae3f1aef",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T12:36:30.224298Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "packages/core/package.json",
+    "packages/sdk/src/state/folder-tree.ts",
+    "packages/sdk/src/__tests__/client.test.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "c6c076cdff6e",
+  "checkpoint_transcript_start": 444,
+  "transcript_lines_at_start": 444,
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 7516,
+    "cache_read_tokens": 1254764,
+    "output_tokens": 2682,
+    "api_call_count": 11
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments by triaging, implementing fixes, and replying to/resolving each thread.",
+    "outcome": "Two valid fixes were implemented (core package.json version bump and FolderTree key material cloning), one comment was dismissed as not applicable (orval-generated artifact), all 53 tests pass, and changes were committed and pushed.",
+    "learnings": {
+      "repo": [
+        "packages/api-client contains mostly orval-generated code — coverage thresholds were set to 0% and generated directories excluded from coverage",
+        "FolderTree previously zeroed caller-provided key buffers on insert rather than cloning them first, which was a security/correctness issue",
+        "teeKeysDtoPreviousPublicKey.ts is an orval-generated artifact; parent type correctness makes direct suggestions not applicable"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/state/folder-tree.ts",
+          "finding": "Key material passed by callers must be cloned on insert, not zeroed in place — callers still hold references to those buffers"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/client.test.ts",
+          "finding": "Test was asserting that caller buffers got zeroed after insert; had to be updated to reflect the new clone-on-insert contract"
+        },
+        {
+          "path": "packages/core/package.json",
+          "finding": "Package version was incorrect and required a fix per review comment"
+        }
+      ],
+      "workflow": [
+        "Use GraphQL reviewThreads query to fetch unresolved PR threads; REST API does not expose thread resolution status cleanly",
+        "Reply to threads via REST (gh api with --field for integer in_reply_to) and resolve via GraphQL mutation separately — these are two distinct API calls",
+        "Run full test suite before committing even when fixes seem small — the FolderTree change required a corresponding test update"
+      ]
+    },
+    "friction": [
+      "Existing test for FolderTree was coupled to the old (incorrect) behavior of zeroing caller buffers, requiring a test fix alongside the production fix"
+    ],
+    "open_items": [
+      "api-client package has 0% coverage thresholds and passWithNoTests — should revisit whether any non-generated logic needs tests added",
+      "orval-generated files are excluded from coverage but may drift from API spec; no automated check for that currently"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T12:36:13.143564Z",
+    "agent_lines": 17,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 17,
+    "agent_percentage": 100
+  }
+}
