@@ -246,6 +246,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@cipherbox/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
       '@cipherbox/crypto':
         specifier: workspace:*
         version: link:../../packages/crypto

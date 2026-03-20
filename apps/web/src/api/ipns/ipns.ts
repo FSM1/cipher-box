@@ -28,9 +28,9 @@ import type {
   PublishIpnsDto,
   PublishIpnsResponseDto,
   ResolveIpnsResponseDto,
-} from '../models';
+} from '.././models';
 
-import { customInstance } from '../custom-instance';
+import { customInstance } from '.././custom-instance';
 
 /**
  * Relay a pre-signed IPNS record to the IPFS network via delegated routing. The client signs the record locally; backend relays to the delegated routing service and tracks the folder for TEE republishing.

@@ -35,9 +35,9 @@ import type {
   TokenResponseDto,
   UnlinkMethodDto,
   UnlinkMethodResponseDto,
-} from '../models';
+} from '.././models';
 
-import { customInstance } from '../custom-instance';
+import { customInstance } from '.././custom-instance';
 
 /**
  * @summary Authenticate user with Web3Auth ID token

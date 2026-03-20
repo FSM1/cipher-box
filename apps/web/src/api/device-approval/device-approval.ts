@@ -27,9 +27,9 @@ import type {
   DeviceApprovalControllerGetPending200Item,
   DeviceApprovalControllerGetStatus200,
   RespondApprovalDto,
-} from '../models';
+} from '.././models';
 
-import { customInstance } from '../custom-instance';
+import { customInstance } from '.././custom-instance';
 
 /**
  * New device creates an approval request with an ephemeral public key for ECIES key exchange. Request expires after 5 minutes.

@@ -26,9 +26,9 @@ import type {
   ClaimInviteResponseDto,
   InviteDataResponseDto,
   InviteStatusResponseDto,
-} from '../models';
+} from '.././models';
 
-import { customInstance } from '../custom-instance';
+import { customInstance } from '.././custom-instance';
 
 /**
  * Check the status of an invite link. Returns only status -- no file name or sharer identity is revealed before authentication.
