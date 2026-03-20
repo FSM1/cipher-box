@@ -69,6 +69,37 @@ export class CipherBoxClient {
   }
 
   /**
+   * Check if the SDK already has state for a folder.
+   *
+   * @param ipnsName - Folder's IPNS name
+   * @returns true if the folder is registered in the SDK's FolderTree
+   */
+  hasFolder(ipnsName: string): boolean {
+    return this.folderTree.has(ipnsName);
+  }
+
+  /**
+   * Get the current sequence number for a folder in the SDK's internal state.
+   * Returns undefined if the folder is not registered.
+   */
+  getFolderSequenceNumber(ipnsName: string): bigint | undefined {
+    return this.folderTree.get(ipnsName)?.sequenceNumber;
+  }
+
+  /**
+   * Get the IPNS private key for a folder in the SDK's internal state.
+   * Returns undefined if the folder is not registered or has no key.
+   *
+   * Used by ensureFolderRegistered to preserve SDK's correct IPNS key
+   * when the store has an empty placeholder (SDK-created folders store
+   * keys internally, not in Zustand).
+   */
+  getFolderIpnsPrivateKey(ipnsName: string): Uint8Array | undefined {
+    const key = this.folderTree.get(ipnsName)?.ipnsKeypair?.privateKey;
+    return key && key.length > 0 ? key : undefined;
+  }
+
+  /**
    * Register an externally-loaded folder into the SDK's internal state.
    *
    * Used when folder metadata is loaded outside the SDK (e.g., by a navigation
@@ -183,12 +214,12 @@ export class CipherBoxClient {
    *
    * @param parentIpnsName - IPNS name of the parent folder
    * @param name - Name for the new subfolder
-   * @returns Created folder's IPNS name and folder key
+   * @returns Created folder's UUID, IPNS name, folder key, and IPNS private key
    */
   async createFolder(
     parentIpnsName: string,
     name: string
-  ): Promise<{ ipnsName: string; folderKey: Uint8Array }> {
+  ): Promise<{ id: string; ipnsName: string; folderKey: Uint8Array; ipnsPrivateKey: Uint8Array }> {
     return this.withOperation('createFolder', async () => {
       const parent = this.folderTree.get(parentIpnsName);
       if (!parent) throw new Error('Parent folder not loaded');
@@ -242,7 +273,7 @@ export class CipherBoxClient {
         children: updatedChildren,
       });
 
-      return { ipnsName: folder.ipnsName, folderKey };
+      return { id: folder.id, ipnsName: folder.ipnsName, folderKey, ipnsPrivateKey };
     });
   }
 
@@ -492,6 +523,43 @@ export class CipherBoxClient {
       });
 
       return { cid: uploadResult.cid };
+    });
+  }
+
+  /**
+   * Download a file using its per-file IPNS metadata.
+   *
+   * Resolves the file's IPNS record, decrypts the metadata with the
+   * folder key, then downloads and decrypts the file content.
+   * This is the primary download path for v2 folder metadata.
+   *
+   * @param fileMetaIpnsName - IPNS name of the file's metadata record
+   * @param folderKey - Parent folder's decrypted AES-256 key
+   * @param onProgress - Optional download progress callback
+   * @returns Decrypted file content
+   */
+  async downloadFromIpns(
+    fileMetaIpnsName: string,
+    folderKey: Uint8Array,
+    onProgress?: DownloadProgressCallback
+  ): Promise<Uint8Array> {
+    return this.withOperation('downloadFromIpns', async () => {
+      // 1. Resolve per-file IPNS to get FileMetadata
+      const resolved = await sdkCore.resolveFileMetadata(fileMetaIpnsName, folderKey, this.ctx);
+
+      // 2. Download and decrypt file content
+      const plaintext = await sdkCore.downloadAndDecrypt({
+        cid: resolved.metadata.cid,
+        fileKeyEncrypted: resolved.metadata.fileKeyEncrypted,
+        fileIv: resolved.metadata.fileIv,
+        userPrivateKey: this.config.vaultKeypair.privateKey,
+        encryptionMode: resolved.metadata.encryptionMode,
+        ctx: this.ctx,
+        onProgress,
+      });
+
+      this.emitter.emit({ type: 'file:downloaded', cid: resolved.metadata.cid });
+      return plaintext;
     });
   }
 
