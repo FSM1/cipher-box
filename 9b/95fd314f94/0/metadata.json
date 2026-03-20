@@ -1,0 +1,108 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "9b95fd314f94",
+  "session_id": "8ae64815-e645-461a-ae6b-d66403649a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T04:30:52.56368Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useAuth.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f8208b9f97f3",
+  "token_usage": {
+    "input_tokens": 852,
+    "cache_creation_tokens": 375733,
+    "cache_read_tokens": 73488915,
+    "output_tokens": 118544,
+    "api_call_count": 293
+  },
+  "summary": {
+    "intent": "Execute Phase 19.1 (Extract Core Crypto SDK as Shared Package) and verify the SDK integration at the Plan 19.1-05 checkpoint, where web app hooks were rewired to use the new SDK packages.",
+    "outcome": "Plans 19.1-01 through 19.1-05 were completed with 8 atomic fix commits resolving critical SDK integration bugs discovered via Playwright-driven verification. 9/10 core file system operations work; delete-to-bin falls back to hard delete (known gap).",
+    "learnings": {
+      "repo": [
+        "The project uses a monorepo with pnpm workspaces: @cipherbox/crypto, @cipherbox/core, @cipherbox/api-client, @cipherbox/sdk-core, @cipherbox/sdk, and the web app.",
+        "@cipherbox/api-client generated functions require setApiClientConfig() to be called before use — this was never wired into the SDK initialization path, silently breaking all IPNS operations.",
+        "The old service layer and new SDK both wrote to the same IPNS records, causing irreconcilable 409 conflicts. The fix was to route all mutations through the SDK exclusively.",
+        "Folder entries use a UUID (crypto.randomUUID()) as their id — returning ipnsName as id from createFolder broke store lookups and folder navigation.",
+        "The SDK's deleteToBin requires client.loadBin() to be called first; without it, deletes fall back to hard deleteItem silently.",
+        "The bin IPNS record created by the old initializeBin service cannot be loaded by the SDK's loadBin due to timing: SDK loadBin fires before the old service creates the bin record.",
+        "updateFolderMetadataAndPublish needs a retry on 409 — the old service had withConflictRetry + resyncFolder; the SDK did not.",
+        "The web app uses a split-step upload flow (encrypt → upload → create IPNS → register FilePointer) while the SDK handles this atomically; useFileDelete was also not rewired to SDK.",
+        "TextEditorDialog imported from the old file-metadata.service path directly rather than going through the download hook, causing decryption failures after SDK migration.",
+        "E2E tests can use TEST_LOGIN_SECRET env var to bypass OTP flow for integration testing."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "finding": "setApiClientConfig() must be called here during SDK init, and client.loadBin() must be called after the old initializeBin() service completes — not before."
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "finding": "ensureFolderRegistered should skip sync if SDK already has the folder (has() check), to prevent stale store data from overwriting SDK's up-to-date sequence number and IPNS private key."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "createFolder must return the FolderEntry id (UUID) not ipnsName; downstream store uses id for lookups. Also needed downloadFromIpns and getFolderState methods added as public API."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "finding": "updateFolderMetadataAndPublish needs a 409 retry: re-resolve current IPNS sequence number from API on conflict before retrying publish."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "finding": "Rewired from two-step old service (encrypt+upload then addFile) to client.uploadFile() — the SDK handles the full atomic operation including IPNS publish."
+        },
+        {
+          "path": "apps/web/src/hooks/useFileDownload.ts",
+          "finding": "Rewired from old downloadFromIpns service chain to client.downloadFromIpns() to use the same IPNS resolution path as uploads."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "finding": "Was importing from old file-metadata.service directly instead of going through the download hook — caused decryption failures. Fixed to use SDK client."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "finding": "Full SDK lifecycle integration test created: login via TEST_LOGIN_SECRET, create folder, upload, download+verify content, rename file/folder, delete. All 8 operations pass at SDK level."
+        }
+      ],
+      "workflow": [
+        "The assistant was directed to drive verification via Playwright MCP (headed browser) rather than asking the user to manually test — the user explicitly prefers observing, not driving.",
+        "Atomic commits per logical fix (not per file or per wave) are the preferred commit style for this project.",
+        "When a GSD checkpoint plan has autonomous: false, the user expects to verify via a Playwright session, not manual browser interaction.",
+        "Using random emails per E2E test run prevents state pollution from prior runs — important for IPNS-based storage where sequence numbers must be fresh.",
+        "The OTP for dev login is available in API stdout logs and can be extracted with grep on the background task output.",
+        "Background Playwright task outputs should be consumed via TaskOutput rather than letting them accumulate.",
+        "Playwright MCP (browser_* tools) is preferred over writing playwright spec files for interactive debugging sessions."
+      ]
+    },
+    "friction": [
+      "The dual-path IPNS write architecture (old service + new SDK both publishing) caused cascading state conflicts that required multiple rounds of debugging — ensureFolderRegistered went through ~5 iterations before being simplified away.",
+      "The GSD workflow was interrupted mid-Wave 1 because the user was unhappy with Plan 2 implementation decisions — required full branch reset and re-execution.",
+      "E2E test 409 conflicts were hard to distinguish from real SDK bugs vs test environment IPNS cache lag.",
+      "The Playwright MCP file upload required writing files to a specific path accessible from the browser context rather than using standard file input selectors.",
+      "The assistant kept asking the user to manually verify things — the user had to explicitly redirect to Playwright-driven verification.",
+      "classifyHandoffIfNeeded is a known Claude Code runtime bug that can cause false failure reports from subagents after their tool calls complete.",
+      "loadBin ordering issue: SDK bin load must happen after old initializeBin completes, but there is no event/hook to signal when the old service is done."
+    ],
+    "open_items": [
+      "Delete-to-bin falls back to hard delete — SDK's loadBin cannot resolve the bin IPNS record created by the old service due to initialization ordering. Needs a proper fix.",
+      "useFileDelete not rewired to SDK — noted in Plan 19.1-05 checkpoint as architecturally different from folder CRUD, deferred.",
+      "Plan 19.1-06 (final cleanup, imports, release config) not executed — the session ended at the 19.1-05 checkpoint.",
+      "Pre-existing DTS circular dependency between @cipherbox/core and @cipherbox/crypto causes pnpm -r run build to fail (though per-package builds work).",
+      "The debug E2E test file (tests/e2e/tests/sdk-debug.spec.ts) and SDK integration test (packages/sdk/src/__tests__/integration.test.ts) were created as debugging artifacts — decision needed on whether to keep, clean up, or promote to permanent test suite.",
+      "useFileUpload still not fully rewired — share re-wrapping logic for uploaded files may differ between old service and SDK paths."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T04:29:55.36859Z",
+    "agent_lines": 0,
+    "human_added": 6,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 6,
+    "agent_percentage": 0
+  }
+}
