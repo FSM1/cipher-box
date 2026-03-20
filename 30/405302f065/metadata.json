@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "30405302f065",
+  "strategy": "manual-commit",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+    "apps/web/src/hooks/useFileDownload.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/30/405302f065/0/metadata.json",
+      "transcript": "/30/405302f065/0/full.jsonl",
+      "context": "/30/405302f065/0/context.md",
+      "content_hash": "/30/405302f065/0/content_hash.txt",
+      "prompt": "/30/405302f065/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 849,
+    "cache_creation_tokens": 373266,
+    "cache_read_tokens": 72334426,
+    "output_tokens": 117987,
+    "api_call_count": 290
+  }
+}

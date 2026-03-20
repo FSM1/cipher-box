@@ -1,0 +1,101 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "30405302f065",
+  "session_id": "8ae64815-e645-461a-ae6b-d66403649a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T04:28:20.478123Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+    "apps/web/src/hooks/useFileDownload.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f8208b9f97f3",
+  "token_usage": {
+    "input_tokens": 849,
+    "cache_creation_tokens": 373266,
+    "cache_read_tokens": 72334426,
+    "output_tokens": 117987,
+    "api_call_count": 290
+  },
+  "summary": {
+    "intent": "Execute Phase 19.1 ('Extract Core Crypto SDK as Shared Package') across 6 plans in wave-based parallel execution, then verify the SDK integration works correctly in the web app via a checkpoint on plan 19.1-05.",
+    "outcome": "Plans 19.1-01 through 19.1-05 were executed with the SDK packages created successfully, but the 19.1-05 checkpoint surfaced a cascade of integration bugs that required significant debugging and re-architecture of the upload, download, and folder mutation paths. 9/10 operations verified working; delete-to-bin remains broken. Plan 19.1-06 not yet started.",
+    "learnings": {
+      "repo": [
+        "@cipherbox/api-client generated functions require setApiClientConfig() to be called before use — this was never called in the web app, silently failing all IPNS publish operations",
+        "Folder children use UUID ids (from FolderEntry), NOT ipnsName — createFolder was returning ipnsName as the store id, breaking all subsequent lookup by id",
+        "The old upload service (upload.service.ts) and old bin service each maintain their own IPNS sequence numbers independently of the SDK's internal state, making dual-path operation impossible",
+        "SDK bin requires client.loadBin() to be called after the old initializeBin service creates the bin IPNS record; calling it before causes silent failure with no bin state loaded",
+        "The project has a TEST_LOGIN_SECRET env var and test-login API endpoint for E2E test authentication without OTP",
+        "sdk-core's IPNS publish (updateFolderMetadataAndPublish) had no 409 conflict retry — the old service had withConflictRetry; this needed to be re-added to the SDK layer",
+        "ensureFolderRegistered was designed as a bridge to sync Zustand store state into the SDK on demand, but it cannot safely reconcile two independent IPNS writers to the same record"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "finding": "setApiClientConfig() must be called during SDK init; client.loadBin() must be called after old initializeBin service completes, not before"
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "finding": "ensureFolderRegistered should only skip registration if SDK already has the folder — attempting to sync children/seq/privateKey from store into SDK causes state corruption when the two systems have diverged"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "createFolder must return the FolderEntry id (UUID) alongside ipnsName; the web app store keys entries by UUID not by ipnsName"
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "finding": "updateFolderMetadataAndPublish needs a single 409 retry that re-resolves the current IPNS sequence number before retrying publish"
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "finding": "Must use client.uploadFile() (SDK) not the old two-step service — mixing paths creates irreconcilable IPNS sequence number conflicts"
+        },
+        {
+          "path": "apps/web/src/hooks/useFileDownload.ts",
+          "finding": "Must use client.downloadFromIpns() (SDK) not old file-metadata.service + ipns.service chain — old chain uses different IPNS resolution that diverges from SDK-published records"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "finding": "Text editor used old service for decrypt/load — must use SDK downloadFromIpns to correctly decrypt SDK-uploaded files"
+        }
+      ],
+      "workflow": [
+        "Playwright MCP (headed browser automation) is preferred for integration verification over script-based Playwright tests — allows real-time observation without writing brittle selectors",
+        "Random email per E2E test run gives a clean vault state and avoids pollution from previous runs",
+        "Atomic commits per logical fix (not per file) makes the git history reviewable and reversible",
+        "SDK-level vitest integration tests (hitting real API) are useful for isolating whether bugs are in the SDK or in web app wiring — confirmed SDK operations pass before debugging web app paths",
+        "Background bash tasks (run_in_background) require TaskOutput polling; stale task notifications from earlier runs can be ignored if already processed"
+      ]
+    },
+    "friction": [
+      "Plan 19.1-02 had to be re-executed after user reset the branch — implementation decisions were unacceptable, losing the first wave's work",
+      "ensureFolderRegistered became a trap: each fix (preserve seq, preserve privateKey, sync children) introduced a new edge case; ultimately the correct fix was to eliminate the dual-path architecture entirely",
+      "E2E Playwright test had ESM (__dirname) compatibility issues and workspace package resolution failures when run outside of the project's normal test runner context",
+      "Playwright file upload required injecting a DataTransfer object via page.evaluate because the file input was hidden behind an empty-state overlay",
+      "Multiple rounds of build-test-fix cycles (\u003e10 rebuilds) due to cascading issues from the dual-path architecture",
+      "OTP retrieval required manual log tailing; user had to ask for OTP multiple times during testing",
+      "Background task completion notifications arrived out of order, referencing already-processed test runs"
+    ],
+    "open_items": [
+      "Delete-to-bin not working: SDK's loadBin() fails to load bin state from the IPNS record created by the old initializeBin service — needs investigation of bin IPNS resolution path",
+      "Plan 19.1-06 not yet executed: final cleanup, imports, and release config for the SDK packages",
+      "useFileDelete still uses old service architecture (not SDK) — noted as architectural gap in plan 19.1-05",
+      "Pre-existing DTS circular dependency between @cipherbox/core and @cipherbox/crypto causes pnpm -r run build to fail (though pnpm --filter web build succeeds)",
+      "sdk-debug.spec.ts E2E test file created in tests/e2e/tests/ for debugging — should be cleaned up or converted to a real regression test",
+      "SDK integration test (packages/sdk/src/__tests__/integration.test.ts) created during debugging — should be reviewed for inclusion as a permanent test or removed",
+      "Share re-wrapping on folder create (in useFolderMutations.handleCreate) was preserved from old flow but its correctness with the new SDK path was not verified"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T04:27:18.940353Z",
+    "agent_lines": 18,
+    "human_added": 0,
+    "human_modified": 1,
+    "human_removed": 3,
+    "total_committed": 19,
+    "agent_percentage": 94.73684210526315
+  }
+}
