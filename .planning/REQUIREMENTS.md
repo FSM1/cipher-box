@@ -44,6 +44,20 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 - [ ] **PERF-07**: k6 load testing scripts simulating concurrent users (upload, download, publish, resolve)
 - [ ] **PERF-08**: Capacity thresholds documented with scaling recommendations
 
+### SDK Extraction (Phase 19.1)
+
+- [ ] **SDK-01**: @cipherbox/core package contains all CipherBox domain types, metadata schemas, validators, metadata encrypt/decrypt, vault init, IPNS record utilities (extracted from crypto)
+- [ ] **SDK-02**: @cipherbox/crypto package contains only pure crypto primitives and key derivation (no domain-aware functions after cleanup)
+- [ ] **SDK-03**: @cipherbox/api-client generates typed HTTP functions from openapi.json without React dependencies, with configurable instance factory
+- [ ] **SDK-04**: @cipherbox/sdk-core provides stateless folder-aware operations with explicit parameter passing (no Zustand/browser deps)
+- [ ] **SDK-05**: sdk-core IPFS/IPNS functions accept SdkContext (apiUrl + getAccessToken) instead of reading browser globals
+- [ ] **SDK-06**: @cipherbox/sdk provides stateful CipherBoxClient class with internal folder tree, key cache, and event emission
+- [ ] **SDK-07**: SDK bin operations (add, restore, permanent delete, empty) and share operations (create, revoke) work through stateful client
+- [ ] **SDK-08**: Web app creates CipherBoxClient on vault load and destroys on logout; Zustand stores subscribe to SDK events
+- [ ] **SDK-09**: React hooks refactored to thin wrappers calling SDK client methods instead of service functions directly
+- [ ] **SDK-10**: All transitional re-exports removed from @cipherbox/crypto; domain type imports enforced at compile time
+- [ ] **SDK-11**: Release Please configured for independent per-package versioning
+
 ## v1.2 Requirements
 
 Deferred to future release. Tracked but not in current roadmap.
@@ -80,41 +94,52 @@ Explicitly excluded. Documented to prevent scope creep.
 
 Which phases cover which requirements. Updated during roadmap creation.
 
-| Requirement | Phase    | Status   |
-| ----------- | -------- | -------- |
-| IPNS-01     | Phase 19 | Complete |
-| IPNS-02     | Phase 19 | Pending  |
-| IPNS-03     | Phase 19 | Pending  |
-| IPNS-04     | Phase 19 | Complete |
-| VAULT-01    | Phase 20 | Pending  |
-| VAULT-02    | Phase 20 | Pending  |
-| VAULT-03    | Phase 20 | Pending  |
-| VAULT-04    | Phase 20 | Pending  |
-| VAULT-05    | Phase 20 | Pending  |
-| VAULT-06    | Phase 20 | Pending  |
-| BYO-01      | Phase 21 | Pending  |
-| BYO-02      | Phase 21 | Pending  |
-| BYO-03      | Phase 21 | Pending  |
-| BYO-04      | Phase 21 | Pending  |
-| BYO-05      | Phase 21 | Pending  |
-| BYO-06      | Phase 21 | Pending  |
-| BYO-07      | Phase 21 | Pending  |
-| PERF-01     | Phase 18 | Complete |
-| PERF-02     | Phase 18 | Complete |
-| PERF-03     | Phase 18 | Complete |
-| PERF-04     | Phase 18 | Complete |
-| PERF-05     | Phase 22 | Pending  |
-| PERF-06     | Phase 22 | Pending  |
-| PERF-07     | Phase 22 | Pending  |
-| PERF-08     | Phase 22 | Pending  |
+| Requirement | Phase      | Status   |
+| ----------- | ---------- | -------- |
+| IPNS-01     | Phase 19   | Complete |
+| IPNS-02     | Phase 19   | Pending  |
+| IPNS-03     | Phase 19   | Pending  |
+| IPNS-04     | Phase 19   | Complete |
+| VAULT-01    | Phase 20   | Pending  |
+| VAULT-02    | Phase 20   | Pending  |
+| VAULT-03    | Phase 20   | Pending  |
+| VAULT-04    | Phase 20   | Pending  |
+| VAULT-05    | Phase 20   | Pending  |
+| VAULT-06    | Phase 20   | Pending  |
+| BYO-01      | Phase 21   | Pending  |
+| BYO-02      | Phase 21   | Pending  |
+| BYO-03      | Phase 21   | Pending  |
+| BYO-04      | Phase 21   | Pending  |
+| BYO-05      | Phase 21   | Pending  |
+| BYO-06      | Phase 21   | Pending  |
+| BYO-07      | Phase 21   | Pending  |
+| PERF-01     | Phase 18   | Complete |
+| PERF-02     | Phase 18   | Complete |
+| PERF-03     | Phase 18   | Complete |
+| PERF-04     | Phase 18   | Complete |
+| PERF-05     | Phase 22   | Pending  |
+| PERF-06     | Phase 22   | Pending  |
+| PERF-07     | Phase 22   | Pending  |
+| PERF-08     | Phase 22   | Pending  |
+| SDK-01      | Phase 19.1 | Pending  |
+| SDK-02      | Phase 19.1 | Pending  |
+| SDK-03      | Phase 19.1 | Pending  |
+| SDK-04      | Phase 19.1 | Pending  |
+| SDK-05      | Phase 19.1 | Pending  |
+| SDK-06      | Phase 19.1 | Pending  |
+| SDK-07      | Phase 19.1 | Pending  |
+| SDK-08      | Phase 19.1 | Pending  |
+| SDK-09      | Phase 19.1 | Pending  |
+| SDK-10      | Phase 19.1 | Pending  |
+| SDK-11      | Phase 19.1 | Pending  |
 
 **Coverage:**
 
-- v1.1 requirements: 25 total
-- Mapped to phases: 25
+- v1.1 requirements: 36 total
+- Mapped to phases: 36
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-07_
-_Last updated: 2026-03-07 after roadmap creation (traceability populated)_
+_Last updated: 2026-03-20 after Phase 19.1 SDK extraction requirements added_

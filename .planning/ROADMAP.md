@@ -66,14 +66,19 @@ Plans:
 
 ### Phase 19.1: Extract core crypto SDK as shared package (INSERTED)
 
-**Goal:** [Urgent work - to be planned]
-**Requirements**: TBD
+**Goal:** Web app's crypto and file operation logic is extracted into a five-package layered SDK architecture (@cipherbox/crypto, @cipherbox/core, @cipherbox/api-client, @cipherbox/sdk-core, @cipherbox/sdk) enabling load testing, integration testing, and future CLI usage without a browser context
+**Requirements**: SDK-01, SDK-02, SDK-03, SDK-04, SDK-05, SDK-06, SDK-07, SDK-08, SDK-09, SDK-10, SDK-11
 **Depends on:** Phase 19
-**Plans:** 0 plans
+**Plans:** 6 plans
 
 Plans:
 
-- [ ] TBD (run /gsd:plan-phase 19.1 to break down)
+- [ ] 19.1-01-PLAN.md -- Split crypto into crypto + core packages with transitional re-exports
+- [ ] 19.1-02-PLAN.md -- Expand api-client package with orval generation and configurable instance
+- [ ] 19.1-03-PLAN.md -- Create sdk-core with stateless folder/file/IPFS/IPNS operations
+- [ ] 19.1-04-PLAN.md -- Create sdk with stateful CipherBoxClient, events, bin, and share operations
+- [ ] 19.1-05-PLAN.md -- Rewire web app hooks and stores to use SDK
+- [ ] 19.1-06-PLAN.md -- Remove re-exports, update imports, configure Release Please
 
 ### Phase 20: Vault Migration
 
@@ -119,12 +124,13 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 18 -> 19 -> 20 -> 21 -> 22
+Phases execute in numeric order: 18 -> 19 -> 19.1 -> 20 -> 21 -> 22
 
 | Phase                              | Milestone | Plans Complete | Status      | Completed  |
 | ---------------------------------- | --------- | -------------- | ----------- | ---------- |
 | 18. Performance Instrumentation    | v1.1      | 2/2            | Complete    | 2026-03-07 |
 | 19. IPNS Resolution Improvement    | v1.1      | 2/2            | Complete    | 2026-03-07 |
+| 19.1 Extract Core Crypto SDK       | v1.1      | 0/6            | Not started | -          |
 | 20. Vault Migration                | v1.1      | 0/?            | Not started | -          |
 | 21. BYO-IPFS Node Support          | v1.1      | 0/?            | Not started | -          |
 | 22. Performance Baselines Complete | v1.1      | 0/?            | Not started | -          |
@@ -132,4 +138,4 @@ Phases execute in numeric order: 18 -> 19 -> 20 -> 21 -> 22
 ---
 
 _Roadmap created: 2026-03-07_
-_Last updated: 2026-03-07_
+_Last updated: 2026-03-20_
