@@ -1,0 +1,142 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "47c83f21c51f",
+  "session_id": "8ae64815-e645-461a-ae6b-d66403649a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T12:00:33.296061Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/api-client/src/instance.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "866a0485e64a",
+  "token_usage": {
+    "input_tokens": 1292,
+    "cache_creation_tokens": 1164559,
+    "cache_read_tokens": 143323180,
+    "output_tokens": 201574,
+    "api_call_count": 647
+  },
+  "summary": {
+    "intent": "Execute Phase 19.1 to extract core crypto functionality into shared SDK packages (@cipherbox/core, @cipherbox/api-client, @cipherbox/sdk-core, @cipherbox/sdk) and rewire the web app to consume them.",
+    "outcome": "All 6 plans completed across 5 waves. PR #296 created. Significant debugging occurred during Plan 05 checkpoint, resolving 7 integration bugs before all file operations were verified via Playwright MCP.",
+    "learnings": {
+      "repo": [
+        "IPNS sequence numbers are authoritative in the SDK after first registration — overwriting with Zustand store data causes 409 conflicts. ensureFolderRegistered must skip if SDK already knows the folder.",
+        "@cipherbox/api-client requires setApiClientConfig() to be called before any generated functions work — SDK init in useAuth.ts is the right place.",
+        "Folder navigation uses UUID (FolderEntry.id), not ipnsName. createFolder() must return the UUID for correct store registration.",
+        "Dual-path IPNS writes (SDK + old service writing to same IPNS records) cause irreconcilable sequence number conflicts. Single writer pattern is required.",
+        "SDK bin requires loadBin() after old initializeBin() completes so binState is populated. Fresh accounts have no IPNS record — loadBin should return empty BinState not null.",
+        "The .buffer accessor on a Uint8Array slice is unsafe per CLAUDE.md — must use .slice().buffer to get a copy-backed ArrayBuffer.",
+        "TEE key wrapping pattern (hexToBytes → wrapKey → bytesToHex) is duplicated 5+ times across packages — flagged for consolidation in future phase.",
+        "Integration tests require TEST_LOGIN_SECRET env var and a running API. Never skip them — run pnpm dev first.",
+        "Codecov baseline thresholds: core ~76%, sdk ~69%, sdk-core 100%, crypto ~85%, api ~98%.",
+        "The root typecheck script must build all 5 packages (crypto, core, api-client, sdk-core, sdk) before running tsc -b on the web app, or CI type declarations are missing.",
+        "orval regeneration must be re-run after import changes touch the web app's API client — otherwise CI API spec check fails."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 78,
+          "end_line": 85,
+          "finding": "destroy() zeros vault privateKey, publicKey, and rootFolderKey. Security review M-2 fix."
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 40,
+          "end_line": 65,
+          "finding": "axios instance is now cached after setApiClientConfig() and reused across all API calls — was creating a new instance per request previously."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 145,
+          "end_line": 160,
+          "finding": "loadBin() returns empty BinState (entries:[], sequenceNumber:0) when no IPNS record exists. Enables deleteToBin() on fresh accounts without 'Bin not loaded' error."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 255,
+          "end_line": 290,
+          "finding": "updateFolderMetadataAndPublish retries once on 409 by re-resolving current IPNS sequence number. Handles stale seq from background polling or previous sessions."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 54,
+          "end_line": 54,
+          "finding": "btoa(String.fromCharCode(...spread)) replaced with loop-based base64 — the spread approach can stack-overflow for large records (\u003e65k bytes)."
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "line": 76,
+          "end_line": 86,
+          "finding": "ensureFolderRegistered() early-returns if client.hasFolder(ipnsName) — prevents corrupting SDK's internal sequence number and IPNS private key with stale Zustand store data."
+        },
+        {
+          "path": "apps/web/src/stores/folder.store.ts",
+          "line": 1,
+          "end_line": 10,
+          "finding": "_sdkUnsubscribe moved to module-level variable instead of Zustand state — was triggering spurious re-renders on every subscribe/unsubscribe call."
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "line": 91,
+          "end_line": 107,
+          "finding": "handleCreate uses result.id (UUID from FolderEntry) not result.ipnsName for store key. Navigation lookup by child ID uses UUID, not ipnsName."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 95,
+          "end_line": 120,
+          "finding": "saveBinMetadata now accepts BinOperationContext directly instead of destructuring 4 fields at every call site — was 4x4 lines of mechanical field forwarding."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 15,
+          "end_line": 20,
+          "finding": "BinNotLoadedError typed error class exported from @cipherbox/sdk — replaces string matching (.message.includes('Bin not loaded')) in useFolderMutations."
+        }
+      ],
+      "workflow": [
+        "Playwright MCP login flow: trigger OTP via UI, then grep the backgrounded pnpm dev task output file for 'DEV OTP' — the local API generates random OTPs, not the static Web3Auth test OTP from .env.",
+        "Playwright MCP file upload: use browser_evaluate to call .click() on the hidden \u003cinput type='file'\u003e element, then use browser_file_upload. The upload zone overlay intercepts pointer events.",
+        "Use fresh random emails (e.g. test-${Date.now()}@example.com) for each Playwright test run to avoid auth_methods constraint violations and slow vault sync from accumulated IPNS records.",
+        "Parallel code review via 3 simultaneous agents (reuse, quality, efficiency) is effective — all 3 found the same critical issues (N+1 IPNS publishes, orphan cleanup, btoa spread) independently.",
+        "Atomic commits per fix (not per file) makes git history readable and PR review tractable — especially important when fixing 7+ distinct bugs in one checkpoint.",
+        "For SDK integration: always validate at SDK level first (unit/integration tests), then validate UI behavior via Playwright — avoids wasting Playwright time on bugs detectable in pure TS.",
+        "When branch reset is needed after unhappy implementation, prefer reset to main and re-execute rather than incremental revert — cleaner history.",
+        "Code review agents should be given the full diff — they found 9 actionable issues that weren't caught in initial implementation."
+      ]
+    },
+    "friction": [
+      "1Password SSH agent is not accessible from Claude subprocess — git commit signing failed repeatedly, requiring user to be at keyboard. Blocked phase completion commits multiple times.",
+      "OTP retrieval was unnecessarily complex: initial attempts used Web3Auth static test OTP instead of reading from local API task output. Then hit rate limits requiring Redis cache clearing.",
+      "First execute-phase invocation had a typo (Phase 9.1 instead of 19.1) — caused an interrupt and restart.",
+      "Plan 02 implementation was rejected by user and required full branch reset to main, re-running waves 1-2 from scratch.",
+      "Playwright MCP file upload required multiple failed attempts (file chooser modal, overlay intercept) before finding the browser_evaluate workaround.",
+      "CI had 3 separate failures after push (typecheck missing package builds, API spec drift from regeneration, coverage thresholds too high) requiring an additional fix commit.",
+      "The bin empty-state fix required multiple iteration cycles: loadBin timing issue → ordering fix → still empty → discovered different resolution paths between old service and SDK."
+    ],
+    "open_items": [
+      "Batch SDK operations: useBin.restoreMultiple/permanentDeleteMultiple and useFolderMutations batch move/delete do N sequential IPNS publishes instead of batch. Needs SDK batch API (moveItems, deleteItems, etc.).",
+      "@internal methods (getConfig, getContext, getFolderTree, emitEvent) are public on CipherBoxClient — getConfig() exposes vault private key to any consumer with a client reference.",
+      "Duplicate bin loading on login: initializeBin (old service) + getSdkClient().loadBin() both resolve same IPNS record. Deferred until old service is removed.",
+      "uint8ToBase64 has 3 copies across packages (sdk-core/file, web/folder.service, web/file-metadata.service) — should be in @cipherbox/crypto or @cipherbox/core.",
+      "TEE key wrapping pattern duplicated 5+ times — extract to shared helper in sdk-core.",
+      "Duplicate file upload path (replace dialog flow) still uses old encryptFile + addToIpfs services, not SDK.",
+      "O(N) linear scan for folder lookup on every SDK folder:loaded/folder:updated event — needs reverse lookup map (ipnsName → folderId).",
+      "revokeShare and reWrapForRecipients take injected callback functions instead of calling @cipherbox/api-client directly — pushes API wiring responsibility to consumers.",
+      "publicKey: new Uint8Array(0) placeholder in FolderState — field is never read but the type requires it. Should be removed from FolderState type or made optional.",
+      "Deferred items documented in .planning/phases/19.1-extract-core-crypto-sdk-as-shared-package/deferred-items.md."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T11:59:07.020167Z",
+    "agent_lines": 0,
+    "human_added": 16,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 16,
+    "agent_percentage": 0
+  }
+}
