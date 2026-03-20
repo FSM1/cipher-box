@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { FilePointer } from '@cipherbox/crypto';
+import type { FilePointer } from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
 import { useAuthStore } from '../../stores/auth.store';
 import { useFolder } from '../../hooks/useFolder';

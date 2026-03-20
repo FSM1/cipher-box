@@ -438,9 +438,6 @@ importers:
 
   packages/crypto:
     dependencies:
-      '@cipherbox/core':
-        specifier: workspace:*
-        version: link:../core
       '@libp2p/crypto':
         specifier: ^5.1.13
         version: 5.1.13
@@ -463,6 +460,9 @@ importers:
         specifier: ^13.4.2
         version: 13.4.2
     devDependencies:
+      '@cipherbox/core':
+        specifier: workspace:*
+        version: link:../core
       '@noble/secp256k1':
         specifier: ^2.2.3
         version: 2.3.0

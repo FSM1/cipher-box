@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { FolderChild } from '@cipherbox/crypto';
+import type { FolderChild } from '@cipherbox/core';
 import type { CipherBoxClient } from '@cipherbox/sdk';
 
 /**

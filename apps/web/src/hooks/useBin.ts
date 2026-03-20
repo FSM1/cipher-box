@@ -3,7 +3,7 @@ import { useBinStore } from '../stores/bin.store';
 import { useAuthStore } from '../stores/auth.store';
 import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
 import { initializeBin, purgeExpired } from '../services/bin.service';
-import type { BinEntry } from '@cipherbox/crypto';
+import type { BinEntry } from '@cipherbox/core';
 
 /**
  * React hook for recycle bin operations.

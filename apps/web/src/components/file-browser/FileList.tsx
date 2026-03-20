@@ -1,5 +1,5 @@
 import { type DragEvent, type MouseEvent } from 'react';
-import type { FolderChild } from '@cipherbox/crypto';
+import type { FolderChild } from '@cipherbox/core';
 import { FileListItem, type DragItem } from './FileListItem';
 import { ParentDirRow } from './ParentDirRow';
 

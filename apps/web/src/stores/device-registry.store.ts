@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { DeviceRegistry } from '@cipherbox/crypto';
+import type { DeviceRegistry } from '@cipherbox/core';
 
 type DeviceRegistryState = {
   /** The decrypted device registry */

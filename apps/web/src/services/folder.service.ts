@@ -12,12 +12,6 @@
  */
 
 import {
-  generateEd25519Keypair,
-  deriveIpnsName,
-  generateRandomBytes,
-  wrapKey,
-  bytesToHex,
-  hexToBytes,
   encryptFolderMetadata,
   decryptFolderMetadata,
   createIpnsRecord,
@@ -27,6 +21,14 @@ import {
   type FolderEntry,
   type FolderChild,
   type FilePointer,
+} from '@cipherbox/core';
+import {
+  generateEd25519Keypair,
+  deriveIpnsName,
+  generateRandomBytes,
+  wrapKey,
+  bytesToHex,
+  hexToBytes,
 } from '@cipherbox/crypto';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from './ipns.service';

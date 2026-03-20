@@ -14,7 +14,7 @@ import {
   getFileIpnsPrivateKey,
 } from '../services/file-metadata.service';
 import type { FileIpnsRecordPayload } from '../services/file-metadata.service';
-import type { FolderChild, FilePointer } from '@cipherbox/crypto';
+import type { FolderChild, FilePointer } from '@cipherbox/core';
 import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import { getRootFolderState, resyncFolder, withConflictRetry } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';

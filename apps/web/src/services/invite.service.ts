@@ -11,7 +11,7 @@
 
 import * as secp256k1 from '@noble/secp256k1';
 import { wrapKey, unwrapKey, hexToBytes, bytesToHex } from '@cipherbox/crypto';
-import type { FolderChild, FolderEntry, FilePointer } from '@cipherbox/crypto';
+import type { FolderChild, FolderEntry, FilePointer } from '@cipherbox/core';
 import { useAuthStore } from '../stores/auth.store';
 import {
   invitesControllerGetInviteStatus,
@@ -27,7 +27,7 @@ import { collectChildKeys } from '../lib/crypto/key-wrapping';
 import { resolveFileMetadata } from './file-metadata.service';
 import { resolveIpnsRecord } from './ipns.service';
 import { fetchFromIpfs } from '../lib/api/ipfs';
-import { decryptFolderMetadata } from '@cipherbox/crypto';
+import { decryptFolderMetadata } from '@cipherbox/core';
 
 // ---------------------------------------------------------------------------
 // Types

@@ -19,10 +19,6 @@ import {
   deriveBinIpnsKeypair,
   encryptBinMetadata,
   decryptBinMetadata,
-  bytesToHex,
-  hexToBytes,
-  wrapKey,
-  unwrapKey,
   decryptFileMetadata,
   decryptFolderMetadata,
   type RecycleBinMetadata,
@@ -32,7 +28,8 @@ import {
   type FolderEntry,
   type EncryptedFileMetadata,
   type EncryptedFolderMetadata,
-} from '@cipherbox/crypto';
+} from '@cipherbox/core';
+import { bytesToHex, hexToBytes, wrapKey, unwrapKey } from '@cipherbox/crypto';
 import { addToIpfs, fetchFromIpfs, unpinFromIpfs } from '../lib/api/ipfs';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from './ipns.service';
 import { resolveFileMetadata } from './file-metadata.service';

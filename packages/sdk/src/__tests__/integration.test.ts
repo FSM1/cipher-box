@@ -5,13 +5,8 @@
 import { describe, it, expect } from 'vitest';
 import { CipherBoxClient } from '../client';
 import { setApiClientConfig } from '@cipherbox/api-client';
-import {
-  initializeVault,
-  encryptVaultKeys,
-  deriveIpnsName,
-  hexToBytes,
-  bytesToHex,
-} from '@cipherbox/crypto';
+import { initializeVault, encryptVaultKeys } from '@cipherbox/core';
+import { deriveIpnsName, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 
 const API = 'http://localhost:3000';
 const SECRET = 'e2e-test-secret-do-not-use-in-production';

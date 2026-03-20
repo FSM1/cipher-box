@@ -1,4 +1,4 @@
-import type { FilePointer } from '@cipherbox/crypto';
+import type { FilePointer } from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
 import { useFilePreview } from '../../hooks/useFilePreview';
 import '../../styles/image-preview-dialog.css';

@@ -9,14 +9,9 @@
  * in finally blocks.
  */
 
-import type { FolderChild, FolderEntry, FilePointer } from '@cipherbox/crypto';
-import {
-  wrapKey,
-  unwrapKey,
-  hexToBytes,
-  bytesToHex,
-  decryptFolderMetadata,
-} from '@cipherbox/crypto';
+import type { FolderChild, FolderEntry, FilePointer } from '@cipherbox/core';
+import { decryptFolderMetadata } from '@cipherbox/core';
+import { wrapKey, unwrapKey, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import { resolveFileMetadata } from '../../services/file-metadata.service';
 import { resolveIpnsRecord } from '../../services/ipns.service';
 import { fetchFromIpfs } from '../api/ipfs';

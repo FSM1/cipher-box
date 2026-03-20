@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import type { FolderChild } from '@cipherbox/crypto';
+import type { FolderChild } from '@cipherbox/core';
 
 /**
  * Context menu state shape.

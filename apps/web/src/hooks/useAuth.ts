@@ -11,14 +11,8 @@ import { useDeviceRegistryStore } from '../stores/device-registry.store';
 import { clearAllUserStores } from '../lib/clear-user-stores';
 import { initSdkClient } from '../lib/sdk-provider';
 import { setApiClientConfig } from '@cipherbox/api-client';
-import {
-  initializeVault,
-  encryptVaultKeys,
-  decryptVaultKeys,
-  deriveIpnsName,
-  hexToBytes,
-  bytesToHex,
-} from '@cipherbox/crypto';
+import { initializeVault, encryptVaultKeys, decryptVaultKeys } from '@cipherbox/core';
+import { deriveIpnsName, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import { getOrCreateDeviceIdentity } from '../lib/device/identity';
 import { detectDeviceInfo } from '../lib/device/info';
 import { initializeOrSyncRegistry } from '../services/device-registry.service';

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { BinEntry } from '@cipherbox/crypto';
+import type { BinEntry } from '@cipherbox/core';
 import type { CipherBoxClient } from '@cipherbox/sdk';
 
 type BinState = {
