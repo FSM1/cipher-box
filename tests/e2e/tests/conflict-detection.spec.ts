@@ -110,6 +110,7 @@ test.describe.serial('Conflict Detection', () => {
   });
 
   test.afterAll(async () => {
+    test.setTimeout(60_000); // Cleanup can be slow with rate-limited API
     // Clean up remote items created during tests (runs even if earlier serial tests fail)
     try {
       const itemsToDelete = [...createdItems].reverse();
@@ -268,6 +269,8 @@ test.describe.serial('Conflict Detection', () => {
 
     // Step 2: Bump the folder's server-side sequence number.
     // This makes the client's local folder sequence stale.
+    // Brief pause to avoid API rate limiting (10 req/s) from rapid test transitions.
+    await page.waitForTimeout(2000);
     const accessToken = await getAccessToken();
     const rootIpnsName = await getRootIpnsName();
 

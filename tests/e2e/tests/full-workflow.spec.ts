@@ -542,12 +542,32 @@ test.describe.serial('Full Workflow', () => {
     navigationStack.length = 0;
     navigationStack.push('root');
 
-    // Core Kit session auto-restores after reload (real wallet login persists)
-    // Wait for auth to restore (user menu becomes visible)
+    // Core Kit session auto-restores after reload (real wallet login persists).
+    // This involves Core Kit init from localStorage + exportTssKey (4-10s on
+    // Sapphire Devnet) + token refresh + vault load + SDK init.
+    // Use generous timeout as Sapphire Devnet latency varies.
     await page.locator('[data-testid="user-menu"]').waitFor({
       state: 'visible',
-      timeout: 30000,
+      timeout: 120000,
     });
+
+    // Wait for vault + SDK to be fully initialized after session restore.
+    // Without this, navigating into subfolders may fail because the SDK client
+    // isn't ready to decrypt subfolder IPNS records.
+    await page.waitForFunction(
+      () => {
+        const stores = (
+          window as unknown as Record<
+            string,
+            Record<string, { getState: () => Record<string, unknown> }>
+          >
+        ).__ZUSTAND_STORES;
+        if (!stores?.vault) return false;
+        const vault = stores.vault.getState();
+        return !!vault.rootFolderKey && !!vault.rootIpnsKeypair && !!vault.rootIpnsName;
+      },
+      { timeout: 60_000 }
+    );
 
     // Wait for initial sync to complete — all root items must appear.
     // This proves IPNS root metadata was re-fetched and decrypted.
@@ -578,11 +598,13 @@ test.describe.serial('Full Workflow', () => {
   });
 
   test('3.8 Navigate into subfolder after reload and verify contents', async () => {
+    test.setTimeout(120_000); // Nested IPNS resolves after reload can be slow
+
     // Double-click workspace folder → exercises navigateTo cold-load
     await navigateIntoFolder(workspaceFolder);
 
     // Wait for subfolder contents to load (IPNS resolve + decrypt after reload)
-    await fileList.waitForItemToAppear(documentsFolder, { timeout: 30000 });
+    await fileList.waitForItemToAppear(documentsFolder, { timeout: 60000 });
 
     // Verify workspace children are visible (documents, images, projects)
     expect(await fileList.isItemVisible(documentsFolder)).toBe(true);
@@ -592,8 +614,8 @@ test.describe.serial('Full Workflow', () => {
     // Navigate deeper into documents — exercises nested IPNS resolve + key unwrap
     await navigateIntoFolder(documentsFolder);
 
-    // Wait for document folder contents to load
-    await fileList.waitForItemToAppear(documentFiles[0].name, { timeout: 30000 });
+    // Wait for document folder contents to load (nested IPNS resolve + key unwrap)
+    await fileList.waitForItemToAppear(documentFiles[0].name, { timeout: 60000 });
 
     // Verify uploaded document files are visible
     for (const file of documentFiles) {
