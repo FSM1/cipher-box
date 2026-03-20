@@ -520,3 +520,7 @@ ci/test and ci/verify api spec are still failing on the latest commit.
 
 ok only the ci/test failing now
 
+### Prompt 67
+
+surely it is possible to improve test coverage in the sdk package without resorting to integration tests?
+
