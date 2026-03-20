@@ -1,0 +1,35 @@
+# Session Context
+
+## User Prompts
+
+### Prompt 1
+
+<task-notification>
+<task-id>b1lsgotde</task-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b1lsgotde.output</output-file>
+<status>killed</status>
+<summary>Background command "pnpm dev" was stopped</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b1lsgotde.output
+
+### Prompt 2
+
+have you run the full e2e test suite against these code changes?
+
+### Prompt 3
+
+<task-notification>
+<task-id>bp42owu9z</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bp42owu9z.output</output-file>
+<status>failed</status>
+<summary>Background command "Run full E2E test suite after fixing imports" failed with exit code 1</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-ciphe...
+
+### Prompt 4
+
+ok, commit the import fixes, and then I want you to analyze the last few e2e test runs, to figure out at which point these started breaking. You can check the e2e tests that were run in GH actions. The last known good config was after phase 18 which just added instrumentation and should not have broken any e2e tests. Phase 19 added the someguy sidecar, which could be causing some mischief in the e2e tests and might be the root cause of the failures.
+
+If the auth path is flakey using the worka...
+

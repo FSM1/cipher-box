@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "bcaf9c4061ef",
+  "strategy": "manual-commit",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/e2e/package.json",
+    "tests/e2e/utils/web3auth-helpers.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bc/af9c4061ef/0/metadata.json",
+      "transcript": "/bc/af9c4061ef/0/full.jsonl",
+      "context": "/bc/af9c4061ef/0/context.md",
+      "content_hash": "/bc/af9c4061ef/0/content_hash.txt",
+      "prompt": "/bc/af9c4061ef/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 48,
+    "cache_creation_tokens": 60000,
+    "cache_read_tokens": 1672411,
+    "output_tokens": 8983,
+    "api_call_count": 38
+  }
+}
