@@ -1,0 +1,106 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "07d7d2940da1",
+  "session_id": "8ae64815-e645-461a-ae6b-d66403649a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T04:21:42.748701Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "apps/web/src/hooks/useAuth.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f8208b9f97f3",
+  "checkpoint_transcript_start": 435,
+  "transcript_lines_at_start": 435,
+  "token_usage": {
+    "input_tokens": 836,
+    "cache_creation_tokens": 343155,
+    "cache_read_tokens": 70207434,
+    "output_tokens": 113157,
+    "api_call_count": 278
+  },
+  "summary": {
+    "intent": "Complete phase 19.1 of a monorepo extraction, verifying and fixing the SDK integration checkpoint (plan 19.1-05) that rewires the web app's React hooks and Zustand stores to use the new CipherBoxClient SDK instead of calling service functions directly.",
+    "outcome": "9/10 SDK operations verified working via Playwright (create/rename folder, upload, download, text edit, rename file, move file via dialog and DnD, delete file). Delete-to-bin remains broken due to SDK bin state not loading from the old service's IPNS record. Multiple atomic bug fixes committed.",
+    "learnings": {
+      "repo": [
+        "CipherBox is a pnpm monorepo with packages: @cipherbox/crypto, @cipherbox/core, @cipherbox/sdk-core, @cipherbox/sdk, @cipherbox/api-client. Build order matters — sdk-core must build before sdk.",
+        "The orval-generated @cipherbox/api-client requires setApiClientConfig() to be called at runtime before any generated functions work — this is a silent failure (throws 'API client not configured') that was never wired up in the web app.",
+        "A dual-path architecture where SDK handles folder CRUD but old services handle file upload causes irreconcilable IPNS sequence number conflicts — both write to the same IPNS records independently.",
+        "The old service bin initialization (initializeBin) must complete before SDK loadBin() is called, otherwise SDK can't resolve the bin IPNS record. Initialization order matters.",
+        "Pre-existing DTS circular dependency between @cipherbox/core and @cipherbox/crypto causes pnpm -r run build to fail, but per-package builds succeed.",
+        "The web app's upload toolbar button renders as '+folder', not 'New Folder' — existing E2E selectors were stale.",
+        "E2E tests use web3auth OTP flow; the API logs DEV OTPs to stdout under the pattern 'DEV OTP for \u003cemail\u003e'.",
+        "The API has a test-login secret (TEST_LOGIN_SECRET env var) enabling passwordless auth for integration tests."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "finding": "setApiClientConfig() was never called during SDK initialization, silently breaking all @cipherbox/api-client generated functions (IPNS publish, resolve, etc.). Fix: call it with the auth token after vault load, before initSdkClient."
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "finding": "ensureFolderRegistered was a problematic bridge that tried to sync store state into SDK state but repeatedly corrupted SDK's internal IPNS private key and sequence number. Root fix was eliminating dual-path writes; simplified to skip-if-SDK-has-it."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "createFolder was returning ipnsName as the folder id, but the store expects a UUID (the FolderEntry child id). Fix: return the UUID from FolderEntry so the store can look up the folder correctly during navigation."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "finding": "updateFolderMetadataAndPublish needed a 409 conflict retry: on conflict, re-resolve current IPNS sequence number and retry once. Without this, any stale seq number causes a permanent failure."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "finding": "Was a two-step flow (upload.service encrypts+uploads, then useFileOperations creates per-file IPNS + registers FilePointer). Rewired to call client.uploadFile() which handles everything atomically, eliminating dual-path IPNS conflicts."
+        },
+        {
+          "path": "apps/web/src/hooks/useFileDownload.ts",
+          "finding": "Was using old file-metadata.service -\u003e ipns.service chain for IPNS resolution, which resolves differently from SDK. Rewired to client.downloadFromIpns() which uses the same resolution path as upload."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "finding": "Was calling old download service directly for file decryption, causing 'decryption failed'. Rewired to use SDK client download path."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "finding": "Full SDK lifecycle integration test (create folder, upload, download+verify, rename file/folder, delete, check empty) using test-login secret. Tests must be in a single describe block due to shared state — interdependent operations can't be split into independent test cases."
+        }
+      ],
+      "workflow": [
+        "Using random emails per E2E test run gives a clean vault each time, avoiding state pollution from previous runs.",
+        "Playwright MCP tools can drive a headed browser session for interactive debugging — useful when the user wants to observe without driving the UI themselves.",
+        "When debugging IPNS 409 conflicts, check which code paths are writing to the same IPNS record — dual writers are the root cause, not timing.",
+        "Vitest workspace package resolution works for SDK integration tests; Node.js direct execution cannot resolve workspace packages without additional tooling.",
+        "Atomic commits require restoring original files, applying only the specific change, committing, then applying the next change — cannot stage partial hunks of a rewritten file easily."
+      ]
+    },
+    "friction": [
+      "E2E Playwright test setup repeatedly broke: wrong button selectors (+folder vs 'New Folder'), __dirname ESM incompatibility in .spec.ts files, workspace package resolution failures in Node.js.",
+      "Multiple rounds of ensureFolderRegistered fixes that each created new edge cases — the bridge approach was fundamentally flawed and should have been eliminated earlier.",
+      "Background task notifications for stale/earlier test runs kept arriving and required reading output files that were already processed.",
+      "User had to manually provide OTPs for manual verification before Playwright automation was set up.",
+      "The user had to explicitly instruct the assistant to stop asking for manual verification and drive Playwright autonomously.",
+      "Initial plan reset was required because the user was unhappy with prior implementation decisions — prior work was discarded.",
+      "409 IPNS conflicts recurred at multiple layers (upload, rename, folder create in E2E) requiring the retry logic to be added to sdk-core."
+    ],
+    "open_items": [
+      "Delete-to-bin via SDK is broken — SDK loadBin() can't load the bin IPNS record created by the old initializeBin service. Needs investigation into why SDK's bin resolution differs from old service.",
+      "useFileDelete not refactored to SDK (noted as checkpoint deviation) — still on old service pattern.",
+      "Pre-existing DTS circular dependency between @cipherbox/core and @cipherbox/crypto breaks pnpm -r run build.",
+      "Deprecated folder/bin/share services (marked DEPRECATED in plan 19.1-05) are still in use for bin operations and file delete — need full removal once SDK covers those paths.",
+      "Debug test file tests/e2e/tests/sdk-debug.spec.ts was created during debugging — should be cleaned up or promoted to a proper regression suite.",
+      "Atomic commits for the remaining fixes (after setApiClientConfig) were started but not completed in the transcript — folder UUID fix, upload rewire, download rewire, and bin loadBin commits are pending."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T04:20:33.649974Z",
+    "agent_lines": 0,
+    "human_added": 9775,
+    "human_modified": 323,
+    "human_removed": 0,
+    "total_committed": 9817,
+    "agent_percentage": 0
+  }
+}

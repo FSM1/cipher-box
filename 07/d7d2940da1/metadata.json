@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "07d7d2940da1",
+  "strategy": "manual-commit",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "apps/web/src/hooks/useAuth.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/07/d7d2940da1/0/metadata.json",
+      "transcript": "/07/d7d2940da1/0/full.jsonl",
+      "context": "/07/d7d2940da1/0/context.md",
+      "content_hash": "/07/d7d2940da1/0/content_hash.txt",
+      "prompt": "/07/d7d2940da1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 836,
+    "cache_creation_tokens": 343155,
+    "cache_read_tokens": 70207434,
+    "output_tokens": 113157,
+    "api_call_count": 278
+  }
+}
