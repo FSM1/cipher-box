@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "c6ddf5a8d6d8",
+  "strategy": "manual-commit",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/e2e/tests/sharing-workflow.spec.ts",
+    "tests/e2e/utils/multi-account-wallet.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c6/ddf5a8d6d8/0/metadata.json",
+      "transcript": "/c6/ddf5a8d6d8/0/full.jsonl",
+      "context": "/c6/ddf5a8d6d8/0/context.md",
+      "content_hash": "/c6/ddf5a8d6d8/0/content_hash.txt",
+      "prompt": "/c6/ddf5a8d6d8/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 357,
+    "cache_creation_tokens": 837141,
+    "cache_read_tokens": 57446454,
+    "output_tokens": 75825,
+    "api_call_count": 325
+  }
+}
