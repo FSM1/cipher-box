@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "2aa3e8926776",
+  "strategy": "manual-commit",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/phases/19.1-extract-core-crypto-sdk-as-shared-package/19.1-VERIFICATION.md",
+    ".planning/security/REVIEW-2026-03-20-phase19.1-post-implementation.md",
+    "packages/sdk/src/client.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/2a/a3e8926776/0/metadata.json",
+      "transcript": "/2a/a3e8926776/0/full.jsonl",
+      "context": "/2a/a3e8926776/0/context.md",
+      "content_hash": "/2a/a3e8926776/0/content_hash.txt",
+      "prompt": "/2a/a3e8926776/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1224,
+    "cache_creation_tokens": 1108127,
+    "cache_read_tokens": 125801379,
+    "output_tokens": 188869,
+    "api_call_count": 594
+  }
+}

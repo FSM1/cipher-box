@@ -1,0 +1,1986 @@
+<objective>
+Execute all plans in a phase using wave-based parallel execution.
+
+Orchestrator stays lean: discover plans, analyze dependencies, group into waves, spawn subagents, collect results. Each subagent loads the full execute-plan context and handles its own plan.
+
+Context budget: ~15% orchestrator, 100% fresh per subagent.
+</objective>
+
+<execution_context>
+@/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/execute-phase.md
+@/Users/michael/Code/cipher-box/.claude/get-shit-done/references/ui-brand.md
+</execution_context>
+
+<context>
+Phase: 9.1
+
+**Flags:**
+
+- `--gaps-only` — Execute only gap closure plans (plans with `gap_closure: true` in frontmatter). Use after verify-work creates fix plans.
+- `--interactive` — Execute plans sequentially inline (no subagents) with user checkpoints between tasks. Lower token usage, pair-programming style. Best for small phases, bug fixes, and verification gaps.
+
+Context files are resolved inside the workflow via `gsd-tools init execute-phase` and per-subagent `<files_to_read>` blocks.
+</context>
+
+<process>
+Execute the execute-phase workflow from @/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/execute-phase.md end-to-end.
+Preserve all workflow gates (wave execution, checkpoint handling, verification, state updates, routing).
+</process>
+
+---
+
+[Request interrupted by user]
+
+---
+
+<objective>
+Execute all plans in a phase using wave-based parallel execution.
+
+Orchestrator stays lean: discover plans, analyze dependencies, group into waves, spawn subagents, collect results. Each subagent loads the full execute-plan context and handles its own plan.
+
+Context budget: ~15% orchestrator, 100% fresh per subagent.
+</objective>
+
+<execution_context>
+@/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/execute-phase.md
+@/Users/michael/Code/cipher-box/.claude/get-shit-done/references/ui-brand.md
+</execution_context>
+
+<context>
+Phase: 19.1
+
+**Flags:**
+
+- `--gaps-only` — Execute only gap closure plans (plans with `gap_closure: true` in frontmatter). Use after verify-work creates fix plans.
+- `--interactive` — Execute plans sequentially inline (no subagents) with user checkpoints between tasks. Lower token usage, pair-programming style. Best for small phases, bug fixes, and verification gaps.
+
+Context files are resolved inside the workflow via `gsd-tools init execute-phase` and per-subagent `<files_to_read>` blocks.
+</context>
+
+<process>
+Execute the execute-phase workflow from @/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/execute-phase.md end-to-end.
+Preserve all workflow gates (wave execution, checkpoint handling, verification, state updates, routing).
+</process>
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+ok, I am not happy with some of the decisions that were made in the implementation of plan 2 - I have since updated the plan and merged these changes to main. please reset this branch to the latest main commit, and start again.
+
+---
+
+<bash-input>pnpm dev</bash-input>
+
+---
+
+<bash-stdout>Command running in background with ID: b9vb83da3. Output is being written to: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b9vb83da3.output</bash-stdout><bash-stderr></bash-stderr>
+
+---
+
+can you monitor the api logs for the otp?
+
+---
+
+all good, i am logged in now.
+
+---
+
+ok, so file create and update works, but renaming and deleting are not working. 
+
+I propose you start a headed playwright instance, so that you can drive this all yourself. if possible use the playwright cli over the mcp.
+
+---
+
+<task-notification>
+<task-id>b7iurmefp</task-id>
+<tool-use-id>toolu_011XMRhwts9Xo1qXDAKYeQdb</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b7iurmefp.output</output-file>
+<status>failed</status>
+<summary>Background command "Run SDK debug test with fix" failed with exit code 1</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b7iurmefp.output
+
+---
+
+what about further file system operations such as moving folders around in the folder tree, moving files around in the tree, etc.
+
+---
+
+[Request interrupted by user]
+
+---
+
+<task-notification>
+<task-id>b3ieq0vmv</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b3ieq0vmv.output</output-file>
+<status>completed</status>
+<summary>Background command "Run comprehensive test (filtered output)" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b3ieq0vmv.output
+
+---
+
+<task-notification>
+<task-id>bgttikjsr</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bgttikjsr.output</output-file>
+<status>completed</status>
+<summary>Background command "Run comprehensive test (filtered)" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bgttikjsr.output
+
+---
+
+<task-notification>
+<task-id>b8jx41jp3</task-id>
+<tool-use-id>toolu_012U7ppt5XEcwyPXmHwL8ccu</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b8jx41jp3.output</output-file>
+<status>completed</status>
+<summary>Background command "Run comprehensive test" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b8jx41jp3.output
+
+---
+
+yes 1 is the way to go - getting rid of the ensureFolderRegistered unless its actually necessary in the longer term.
+
+---
+
+I think the timeouts can be shortened even more - also, feel free to use a random email for each test run so that the filesystem is clean each time and not polluted by all the previous runs. the only longer timeout should remain for the login, but most other operations should be sub 1000 ms
+
+---
+
+<task-notification>
+<task-id>bmmi6ebxr</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bmmi6ebxr.output</output-file>
+<status>completed</status>
+<summary>Background command "Run comprehensive test with SDK upload" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bmmi6ebxr.output
+
+---
+
+<task-notification>
+<task-id>bn711gw6i</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bn711gw6i.output</output-file>
+<status>completed</status>
+<summary>Background command "Run test with vault init wait" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bn711gw6i.output
+
+---
+
+could you get me the otp?
+
+---
+
+what were the steps? the upload to a folder worked.
+
+---
+
+create a folder, rename the folder, upload a file, create a subfolder, move a file via dialog and DnD works. editing the file (text) fails with `decryption failed`. download also doesnt work. deleted file is not shown in the bin (i think it was deleted).
+
+---
+
+you're a big boy, you can handle the verification of this in a playwright instance. stop trying to get me to verify things. if you really want me to verify, you just manually drive a headed playwright session (not via playwright scripts), and I will observe and guide you, but I am not actually driving the UI
+
+---
+
+yeah please try keep the commits atomic to the individual fixes.
+
+---
+
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+Summary:
+1. Primary Request and Intent:
+   The user invoked `/gsd:execute-phase 19.1` to execute Phase 19.1 (Extract Core Crypto SDK as Shared Package) with 6 plans across 5 waves. After Plans 01-04 executed via subagents, Plan 05 (rewire web app hooks to SDK) reached a checkpoint requiring human verification. The bulk of the conversation was debugging and fixing integration issues found during this checkpoint verification. The user explicitly requested:
+   - Reset branch to latest main after being unhappy with Plan 02 decisions (first run)
+   - Use Playwright for automated verification instead of manual testing
+   - Use random emails per test run for clean filesystem
+   - Reduce test timeouts (sub-1000ms for most operations)
+   - Make atomic commits for each fix
+   - Write a `.learnings/` document capturing architectural lessons
+   - Continue with automated testing rather than asking user to verify
+
+2. Key Technical Concepts:
+   - **Dual-path IPNS writes**: Two independent code paths (SDK + old service) writing to the same IPNS records with conflicting sequence numbers
+   - **`ensureFolderRegistered` bridge**: Pattern for syncing folder state between Zustand store and SDK's internal FolderTree
+   - **IPNS sequence number conflict detection**: API returns 409 when `expectedSequenceNumber` doesn't match stored value
+   - **`@cipherbox/api-client` runtime configuration**: `setApiClientConfig()` must be called before any generated API functions work
+   - **Folder entry UUID vs ipnsName**: FolderEntry.id (UUID) is used for navigation, ipnsName (k51...) for IPNS operations
+   - **Per-file IPNS metadata (v2)**: Each file has its own IPNS record encrypted with the parent folder's key
+   - **SDK bin state lifecycle**: `deleteToBin()` requires `binState` loaded via `loadBin()`, falls back to hard `deleteItem()` if null
+   - **CipherBoxClient**: Stateful SDK client wrapping sdk-core stateless functions with FolderTree, KeyCache, and event emission
+
+3. Files and Code Sections:
+
+   - **`apps/web/src/hooks/useAuth.ts`**
+     - Two fixes: (1) `setApiClientConfig()` call during SDK init, (2) `loadBin()` after old `initializeBin()` completes
+     - Critical for all SDK operations that use `@cipherbox/api-client` generated functions
+     ```typescript
+     import { setApiClientConfig } from '@cipherbox/api-client';
+     // ...
+     const apiUrl = import.meta.env.VITE_API_URL || window.location.origin + '/api';
+     const getAccessToken = async () => {
+       const state = useAuthStore.getState();
+       return state.accessToken || '';
+     };
+     setApiClientConfig({ baseUrl: apiUrl, getAccessToken });
+     ```
+     - Bin loading fix:
+     ```typescript
+     // Non-blocking bin initialization (fire-and-forget)
+     // After old service creates/loads bin, also load into SDK for deleteToBin support
+     void (async () => {
+       try {
+         await initializeBin({
+           userPrivateKey: userKeypair.privateKey,
+           userPublicKey: userKeypair.publicKey,
+         });
+         // Now load bin into SDK (old service ensures bin IPNS record exists)
+         const { getSdkClient, hasSdkClient } = await import('../lib/sdk-provider');
+         if (hasSdkClient()) {
+           await getSdkClient().loadBin();
+         }
+       } catch (error) {
+         console.error('[Auth] Bin initialization failed (non-blocking):', error);
+       }
+     })();
+     ```
+
+   - **`packages/sdk/src/client.ts`**
+     - Extended with `hasFolder()`, `getFolderSequenceNumber()`, `getFolderIpnsPrivateKey()`, `downloadFromIpns()`
+     - `createFolder()` return type changed to include `id` (UUID) and `ipnsPrivateKey`
+     ```typescript
+     async createFolder(parentIpnsName: string, name: string): Promise<{ id: string; ipnsName: string; folderKey: Uint8Array; ipnsPrivateKey: Uint8Array }>
+     ```
+     - `downloadFromIpns()` resolves per-file IPNS + downloads + decrypts in one call:
+     ```typescript
+     async downloadFromIpns(fileMetaIpnsName: string, folderKey: Uint8Array, onProgress?: DownloadProgressCallback): Promise<Uint8Array> {
+       return this.withOperation('downloadFromIpns', async () => {
+         const resolved = await sdkCore.resolveFileMetadata(fileMetaIpnsName, folderKey, this.ctx);
+         const plaintext = await sdkCore.downloadAndDecrypt({
+           cid: resolved.metadata.cid,
+           fileKeyEncrypted: resolved.metadata.fileKeyEncrypted,
+           fileIv: resolved.metadata.fileIv,
+           userPrivateKey: this.config.vaultKeypair.privateKey,
+           encryptionMode: resolved.metadata.encryptionMode,
+           ctx: this.ctx,
+           onProgress,
+         });
+         this.emitter.emit({ type: 'file:downloaded', cid: resolved.metadata.cid });
+         return plaintext;
+       });
+     }
+     ```
+
+   - **`apps/web/src/lib/sdk-provider.ts`**
+     - `ensureFolderRegistered` simplified to skip if SDK already has the folder:
+     ```typescript
+     export function ensureFolderRegistered(folder: FolderNode): void {
+       const client = getSdkClient();
+       if (client.hasFolder(folder.ipnsName)) return;
+       client.registerFolder(
+         folder.ipnsName, folder.folderKey,
+         { publicKey: new Uint8Array(0), privateKey: folder.ipnsPrivateKey },
+         folder.children, folder.sequenceNumber
+       );
+     }
+     ```
+
+   - **`apps/web/src/hooks/useFolderMutations.ts`**
+     - Fixed `handleCreate` to use `result.id` (UUID) instead of `result.ipnsName` for store entry
+     - Fixed `ipnsPrivateKey: result.ipnsPrivateKey` instead of `new Uint8Array(0)`
+
+   - **`apps/web/src/hooks/useDropUpload.ts`**
+     - Complete rewrite to use SDK's `client.uploadFile()` instead of old two-step service
+     - Eliminates dual-path IPNS writes
+     - Duplicate file handling still uses old encrypt+upload (doesn't register in folder until user confirms via Replace dialog)
+
+   - **`apps/web/src/hooks/useFileDownload.ts`**
+     - Simplified to use `client.downloadFromIpns()` instead of old `downloadFileFromIpns` service
+     - Removed old `download()` method (v1 path), kept only `downloadFromIpns`
+
+   - **`apps/web/src/components/file-browser/TextEditorDialog.tsx`**
+     - Owner path now uses `client.downloadFromIpns()` instead of old `downloadFileFromIpns`
+     - Share path still uses old service (needs re-wrapped file keys from share_keys)
+
+   - **`packages/sdk-core/src/folder/index.ts`**
+     - `updateFolderMetadataAndPublish` now retries once on 409 by re-resolving IPNS seq:
+     ```typescript
+     for (let attempt = 0; attempt < 2; attempt++) {
+       const newSeq = currentSeq + 1n;
+       try {
+         await createAndPublishIpnsRecord({ ...params, sequenceNumber: newSeq, expectedSequenceNumber: currentSeq.toString() });
+         return { cid, newSequenceNumber: newSeq };
+       } catch (err) {
+         const is409 = (err as Error & { status?: number }).status === 409 ||
+           (err as Error & { response?: { status?: number } }).response?.status === 409;
+         if (!is409 || attempt > 0) throw err;
+         const resolved = await resolveIpnsRecord(params.ipnsName);
+         if (resolved) { currentSeq = resolved.sequenceNumber; }
+         else { throw err; }
+       }
+     }
+     ```
+
+   - **`packages/sdk/src/__tests__/integration.test.ts`**
+     - Full lifecycle test against live API: login → vault → folder → upload → download → rename → delete
+     - Uses `test-login` endpoint with secret `e2e-test-secret-do-not-use-in-production`
+     - All 8 operations pass (27s runtime due to IPNS delegated routing retries)
+
+   - **`.learnings/2026-03-20-sdk-rewiring-dual-path-pitfalls.md`**
+     - Documents 5 root causes and prevention recommendations
+
+   - **SDK bin architecture (for debugging delete-to-bin)**:
+     - `packages/sdk/src/bin/index.ts` - SDK bin operations (`loadBin`, `addToBin`, `restoreFromBin`, etc.)
+     - `packages/sdk/src/client.ts` - `loadBin()` calls `binOps.loadBin({ binCtx })`, stores result in `this.binState`
+     - `apps/web/src/services/bin.service.ts` - Old service `initializeBin()` creates/loads bin IPNS record
+     - `apps/web/src/hooks/useFolderMutations.ts` `handleDelete` - tries `client.deleteToBin()`, falls back to `client.deleteItem()` if "Bin not loaded"
+     - `apps/web/src/hooks/useBin.ts` - Was rewired to use SDK for restore/permanentDelete/emptyBin
+
+4. Errors and Fixes:
+   - **`setApiClientConfig()` not called**: All SDK IPNS operations silently failed. Fixed by adding call in `useAuth.ts` during SDK init.
+   - **409 Conflict on rename after create**: `ensureFolderRegistered` overwrote SDK's incremented sequence number with stale store value. Fixed by skipping registration if SDK already has the folder.
+   - **"Item not found" on file rename**: File uploaded via old service added children to store but not SDK's FolderTree. Fixed by rewiring upload to use SDK's `client.uploadFile()`.
+   - **"Invalid Ed25519 private key size" on move**: `ensureFolderRegistered` overwrote SDK's correct IPNS private key with store's empty placeholder (`new Uint8Array(0)`). Fixed by the skip-if-has approach + returning ipnsPrivateKey from `createFolder`.
+   - **Wrong folder ID**: `handleCreate` used `id: result.ipnsName` but navigation uses UUID from FolderEntry.id. Fixed by having `createFolder` return `folder.id` (UUID).
+   - **"decryption failed" on download/edit**: Old download path used web app's IPNS resolution while upload used SDK's. Fixed by adding `downloadFromIpns()` to SDK client and rewiring hooks.
+   - **Bin empty after delete**: SDK's `binState` never loaded because `loadBin()` was called before old `initializeBin()` created the bin record. Partially fixed by calling `loadBin()` after `initializeBin()`, but **bin still shows empty** — likely same dual-path issue where SDK's bin module uses `@cipherbox/api-client` for IPNS resolution while old service uses web app's API client.
+   - **User feedback**: "is the real problem here not the fact that the sdk is missing functionality required by the webapp" — led to rewiring upload to SDK instead of trying to sync state.
+   - **User feedback**: "does it make sense for the webapp to depend on sdk-core?" — led to adding `downloadFromIpns()` to SDK client instead of importing sdk-core in web app.
+   - **User feedback**: "you should continue with the automated testing, I should not be dealing with this" — switched to Playwright MCP-driven verification.
+   - **User feedback**: "stop trying to get me to verify things" — switched to fully automated Playwright MCP verification.
+   - **E2E test `__dirname` not defined**: ESM compatibility issue, fixed with `fileURLToPath(import.meta.url)`.
+   - **React hooks error**: `useDropUpload` rewrite changed hook count (3 `useUploadStore` calls → 1), caused HMR error. Fixed by using single `useUploadStore` selector.
+
+5. Problem Solving:
+   - **Solved**: setApiClientConfig wiring, dual-path IPNS writes (upload), folder UUID mismatch, download/edit decryption, 409 conflict retry, ensureFolderRegistered bridge
+   - **Partially solved**: SDK bin loading (timing fixed but bin still empty after delete)
+   - **Root cause pattern identified**: Any operation where old service and SDK both write to IPNS records will fail. The bin issue follows the same pattern — old `initializeBin` creates/manages bin IPNS records, SDK's `loadBin` tries to read them via different API client path (`@cipherbox/api-client` vs web app's `../api/` generated client).
+
+6. All User Messages:
+   - "ok, I am not happy with some of the decisions that were made in the implementation of plan 2 - I have since updated the plan and merged these changes to main. please reset this branch to the latest main commit, and start again."
+   - "can you monitor the api logs for the otp?"
+   - "all good, i am logged in now."
+   - "ok, so file create and update works, but renaming and deleting are not working. I propose you start a headed playwright instance, so that you can drive this all yourself. if possible use the playwright cli over the mcp."
+   - "also i was unable to create folders in the root vault, so that limited testing."
+   - "rename folder now works fine"
+   - "looks like the move dialog is stuck again"
+   - "is the real problem here not the fact that the sdk is missing functionality required by the webapp, and this led to the upload still using the old hooks, which is now causing a whole bunch of issues."
+   - "yes 1 is the way to go - getting rid of the ensureFolderRegistered unless its actually necessary in the longer term."
+   - "getting a 409 uploading a file to a folder"
+   - "could you get me the otp?"
+   - "what were the steps? the upload to a folder worked."
+   - "create a folder, rename the folder, upload a file, create a subfolder, move a file via dialog and DnD works. editing the file (text) fails with `decryption failed`. download also doesnt work. deleted file is not shown in the bin (i think it was deleted)."
+   - "you should continue with the automated testing, I should not be dealing with this. you can also just use scripts and the sdk instance to test proper operations without a UI for most functionality."
+   - "does it make sense for the webapp to depend on sdk-core? should this function not just be re-exported from the sdk package if it is necessary? seems like a leaky approach to me."
+   - "30 seconds is way too long for iteration right now - lets be reasonable."
+   - "think the rename button issue in the testing script is still glitching"
+   - "please reduce the timeouts in the debugging script to shorten the feedback loop. everything is running locally so responses should be pretty fast."
+   - "what about further file system operations such as moving folders around in the folder tree, moving files around in the tree, etc."
+   - "looks like the move dialog is stuck again"
+   - "you're a big boy, you can handle the verification of this in a playwright instance. stop trying to get me to verify things. if you really want me to verify, you just manually drive a headed playwright session (not via playwright scripts), and I will observe and guide you, but I am not actually driving the UI"
+   - "is the real problem here not the fact that the sdk is missing functionality required by the webapp..."
+   - "yeah please try keep the commits atomic to the individual fixes."
+   - "also please log a @.learnings/README.md entry for this sesssion as I think there's a lot to unpack here, both testing approach, actual architectural decisions during phase plan leading to problems, and generally preventable issues given the amount of context that you have."
+
+7. Pending Tasks:
+   - **Delete-to-bin still not working**: Verified via Playwright that bin shows empty after delete. The `loadBin()` call after `initializeBin()` didn't resolve the issue. This is likely the same dual-path problem as upload — SDK bin module uses `@cipherbox/api-client` IPNS resolution while old bin service uses web app's API client.
+   - **Plan 19.1-05 checkpoint not yet approved**: 9/10 operations verified, bin gap remains.
+   - **Remaining plans (19.1-06)**: Not started. Wave 5 depends on Plan 05 checkpoint completion.
+   - **Phase execution workflow**: The execute-phase workflow is paused at the checkpoint step.
+
+8. Current Work:
+   Immediately before the summary request, I had just completed making 10 atomic commits for the SDK rewiring fixes and learnings document. The commits are on branch `phase-19.1-extract-core-sdk`. The user asked for the learnings document and atomic commits, which are now done.
+
+   The Playwright MCP verification showed:
+   - ✓ Create folder, ✓ Rename folder, ✓ Upload file, ✓ Download file (content verified), ✓ Edit text file (decrypted correctly), ✓ Rename file, ✓ Move file
+   - ✗ Delete to bin (falls back to hard delete — bin page shows empty)
+
+   The bin issue remains unresolved. The SDK's `loadBin()` is called after `initializeBin()` but the bin still shows empty. Key files for debugging:
+   - `packages/sdk/src/bin/index.ts` — SDK bin operations, likely uses `@cipherbox/api-client` for IPNS
+   - `apps/web/src/services/bin.service.ts` — Old `initializeBin()` that creates bin IPNS record
+   - `apps/web/src/hooks/useFolderMutations.ts` handleDelete — tries `deleteToBin`, falls back to `deleteItem`
+   - `packages/sdk/src/client.ts` — `loadBin()` method, `deleteToBin()` method, `getBinContext()`
+
+9. Optional Next Step:
+   Debug the delete-to-bin issue. Based on the pattern established by the upload dual-path fix, the SDK's bin module likely uses `@cipherbox/api-client` for IPNS operations while the old bin service uses the web app's own API client. The fix would be to either:
+   1. Ensure the SDK's `loadBin()` can read what the old `initializeBin()` created (verify IPNS resolution paths match)
+   2. OR have the old service's bin state feed into the SDK directly (bypass SDK's own loadBin)
+   
+   The user's quote: "also please log a @.learnings/README.md entry for this session" — this was completed. The user hasn't explicitly asked to fix the bin issue next, but it's the only remaining failing operation from the checkpoint verification. Before proceeding, should confirm with user whether to investigate the bin issue or move forward with the checkpoint as-is (noting the bin gap).
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /Users/michael/.claude/projects/-Users-michael-Code-cipher-box/8ae64815-e645-461a-ae6b-d66403649a99.jsonl
+
+---
+
+ok please continue with the delete to bin investigation and remember to first validate the functionality at the sdk level if possible, falling black to playwright mcp headed session - not asking me to drive.
+
+---
+
+[Request interrupted by user]
+
+---
+
+<task-notification>
+<task-id>b9vb83da3</task-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b9vb83da3.output</output-file>
+<status>killed</status>
+<summary>Background command "pnpm dev" was stopped</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b9vb83da3.output
+
+---
+
+[Request interrupted by user]
+
+---
+
+<bash-input>pnpm dev</bash-input>
+
+---
+
+<bash-stdout>Command was manually backgrounded by user with ID: b329k4khk. Output is being written to: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b329k4khk.output</bash-stdout><bash-stderr></bash-stderr>
+
+---
+
+ok I restarted the server. its Command was manually backgrounded by user with ID: b329k4khk. Output is being written to: /private/tmp/
+     claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b329k4khk.output
+
+---
+
+also please log a @.learnings/README.md entry to assist when using playwright mcp for debugging sessions. focus on the login issues you had (attempting to use test account rather than reading the otp from console, and the multiple unsuccessful attempts to upload files, before you figure out an approach that works.
+
+---
+
+we already have working approaches to all of this in the e2e automation tests, so no need to reinvent the wheel here.
+
+---
+
+make sure that the learnings don't rely on the e2e tests for login flow, and utilize extracting the otp from the locally running shell script.
+
+---
+
+great stuff, commit this.
+
+---
+
+# Simplify: Code Review and Cleanup
+
+Review all changed files for reuse, quality, and efficiency. Fix any issues found.
+
+## Phase 1: Identify Changes
+
+Run `git diff` (or `git diff HEAD` if there are staged changes) to see what changed. If there are no git changes, review the most recently modified files that the user mentioned or that you edited earlier in this conversation.
+
+## Phase 2: Launch Three Review Agents in Parallel
+
+Use the Agent tool to launch all three agents concurrently in a single message. Pass each agent the full diff so it has the complete context.
+
+### Agent 1: Code Reuse Review
+
+For each change:
+
+1. **Search for existing utilities and helpers** that could replace newly written code. Look for similar patterns elsewhere in the codebase — common locations are utility directories, shared modules, and files adjacent to the changed ones.
+2. **Flag any new function that duplicates existing functionality.** Suggest the existing function to use instead.
+3. **Flag any inline logic that could use an existing utility** — hand-rolled string manipulation, manual path handling, custom environment checks, ad-hoc type guards, and similar patterns are common candidates.
+
+### Agent 2: Code Quality Review
+
+Review the same changes for hacky patterns:
+
+1. **Redundant state**: state that duplicates existing state, cached values that could be derived, observers/effects that could be direct calls
+2. **Parameter sprawl**: adding new parameters to a function instead of generalizing or restructuring existing ones
+3. **Copy-paste with slight variation**: near-duplicate code blocks that should be unified with a shared abstraction
+4. **Leaky abstractions**: exposing internal details that should be encapsulated, or breaking existing abstraction boundaries
+5. **Stringly-typed code**: using raw strings where constants, enums (string unions), or branded types already exist in the codebase
+6. **Unnecessary JSX nesting**: wrapper Boxes/elements that add no layout value — check if inner component props (flexShrink, alignItems, etc.) already provide the needed behavior
+
+### Agent 3: Efficiency Review
+
+Review the same changes for efficiency:
+
+1. **Unnecessary work**: redundant computations, repeated file reads, duplicate network/API calls, N+1 patterns
+2. **Missed concurrency**: independent operations run sequentially when they could run in parallel
+3. **Hot-path bloat**: new blocking work added to startup or per-request/per-render hot paths
+4. **Recurring no-op updates**: state/store updates inside polling loops, intervals, or event handlers that fire unconditionally — add a change-detection guard so downstream consumers aren't notified when nothing changed. Also: if a wrapper function takes an updater/reducer callback, verify it honors same-reference returns (or whatever the "no change" signal is) — otherwise callers' early-return no-ops are silently defeated
+5. **Unnecessary existence checks**: pre-checking file/resource existence before operating (TOCTOU anti-pattern) — operate directly and handle the error
+6. **Memory**: unbounded data structures, missing cleanup, event listener leaks
+7. **Overly broad operations**: reading entire files when only a portion is needed, loading all items when filtering for one
+
+## Phase 3: Fix Issues
+
+Wait for all three agents to complete. Aggregate their findings and fix each issue directly. If a finding is a false positive or not worth addressing, note it and move on — do not argue with the finding, just skip it.
+
+When done, briefly summarize what was fixed (or confirm the code was already clean).
+
+
+## Additional Focus
+
+all phase 19.1 code
+
+---
+
+<task-notification>
+<task-id>b329k4khk</task-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b329k4khk.output</output-file>
+<status>killed</status>
+<summary>Background command "pnpm dev" was stopped</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b329k4khk.output
+
+---
+
+<task-notification>
+<task-id>ae61f486acf8a2ec1</task-id>
+<tool-use-id>toolu_01BzJhRN9TyKdhTywFjTidBi</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/ae61f486acf8a2ec1.output</output-file>
+<status>completed</status>
+<summary>Agent "Code quality review" completed</summary>
+<result>Now I have a thorough understanding of the codebase changes. Let me compile my findings.
+
+---
+
+Here is my code quality review of the phase 19.1 changes.
+
+## 1. Redundant State
+
+### 1a. Dual bin loading: `initializeBin` + `getSdkClient().loadBin()` do the same work twice
+
+**Files:** `/Users/michael/Code/cipher-box/apps/web/src/hooks/useBin.ts` (lines 37-50), `/Users/michael/Code/cipher-box/apps/web/src/hooks/useAuth.ts` (lines 291-301 in diff, the bin init block)
+
+Both the old `initializeBin` service and the SDK's `loadBin()` resolve the bin IPNS record, fetch/decrypt metadata, and populate state. They are called back-to-back in two places:
+
+- In `useAuth.ts`, the login flow calls `initializeBin()` then `getSdkClient().loadBin()`.
+- In `useBin.ts`, the `loadBin` callback calls `initializeBin()` then `getSdkClient().loadBin()`.
+
+This means every bin load resolves the same IPNS name twice, fetches the same CID from IPFS twice, and decrypts the same blob twice. The comment says "bin service already populated the store" and the SDK load is "non-blocking," but the SDK's `loadBin` emits a `bin:updated` event that overwrites the store entries anyway. One path should be authoritative. During the migration this may be intentional for safety, but it should be called out as tech debt to consolidate.
+
+### 1b. `_sdkUnsubscribe` stored in Zustand state
+
+**Files:** `/Users/michael/Code/cipher-box/apps/web/src/stores/folder.store.ts` (line 112 in diff), `/Users/michael/Code/cipher-box/apps/web/src/stores/bin.store.ts` (line 36 in diff)
+
+The `_sdkUnsubscribe` callback is stored as part of the Zustand state, which means every call to `set({ _sdkUnsubscribe })` triggers a re-render for any component subscribing to the store. This is an internal implementation detail (a cleanup function) that should not be reactive state. It should be stored as a module-level variable or a closure-captured variable instead, similar to how `_client` is stored in `sdk-provider.ts`.
+
+### 1c. `folder.store.ts` event subscription does O(n) reverse lookup on every event
+
+**File:** `/Users/michael/Code/cipher-box/apps/web/src/stores/folder.store.ts` (lines 155-172 in diff)
+
+```typescript
+const matchingFolder = Object.values(folders).find((f) => f.ipnsName === event.ipnsName);
+```
+
+This linear scan runs on every `folder:loaded` and `folder:updated` event. With many loaded folders, this is wasteful. A reverse lookup map (`ipnsName -> folderId`) would be more efficient and could be maintained alongside the existing `folders` record.
+
+## 2. Parameter Sprawl
+
+### 2a. `saveBinMetadata` repeats the same 4-field context bag every call
+
+**File:** `/Users/michael/Code/cipher-box/packages/sdk/src/bin/index.ts` (lines 9734-9773 in diff, called at lines 9879, 9967, 10017, 10062)
+
+`saveBinMetadata` takes `{ metadata, userPublicKey, userPrivateKey, ctx, teeKeys }` -- four of those five fields come directly from `BinOperationContext`. The function should accept `BinOperationContext` directly rather than destructuring and re-spreading at every call site. Each caller currently does:
+
+```typescript
+await saveBinMetadata({
+  metadata,
+  userPublicKey: params.binCtx.userPublicKey,
+  userPrivateKey: params.binCtx.userPrivateKey,
+  ctx: params.binCtx.ctx,
+  teeKeys: params.binCtx.teeKeys,
+});
+```
+
+This is 4 lines of mechanical field forwarding repeated 4 times.
+
+### 2b. `CipherBoxClient.revokeShare` takes a `revokeShareFn` callback instead of calling the API client
+
+**File:** `/Users/michael/Code/cipher-box/packages/sdk/src/client.ts` (lines 10843-10850 in diff)
+
+```typescript
+async revokeShare(shareId: string, revokeShareFn: (shareId: string) => Promise<void>): Promise<void>
+```
+
+The SDK already depends on `@cipherbox/api-client`. Requiring the consumer to inject a one-line API call function breaks the SDK's goal of being a self-contained client. The same pattern appears in `reWrapForRecipients` with `addShareKeysFn`. This pushes API wiring responsibility back onto the consumer, defeating the purpose of the SDK abstraction. Either the SDK should call the generated API client functions directly, or if it genuinely cannot (because the web app has a custom interceptor), the function injection should be part of `CipherBoxClientConfig` rather than per-call parameters.
+
+## 3. Copy-Paste with Slight Variation
+
+### 3a. `handleDeleteItems` / `handleDelete` share identical soft-delete-with-fallback logic
+
+**File:** `/Users/michael/Code/cipher-box/apps/web/src/hooks/useFolderMutations.ts`
+
+The delete and batch-delete handlers both contain this identical pattern:
+
+```typescript
+try {
+  await client.deleteToBin(parentFolder.ipnsName, item.id, parentPath);
+} catch (binErr) {
+  if ((binErr as Error).message?.includes('Bin not loaded')) {
+    await client.deleteItem(parentFolder.ipnsName, item.id);
+  } else {
+    throw binErr;
+  }
+}
+```
+
+In the batch case, this exact block is inside a for-loop. Extract a helper like `deleteWithBinFallback(client, folderIpnsName, itemId, parentPath)`.
+
+### 3b. `ensureFolderRegistered` re-registration pattern repeated in `handleMoveItems`
+
+**File:** `/Users/michael/Code/cipher-box/apps/web/src/hooks/useFolderMutations.ts` (lines 1594-1601 in diff)
+
+Inside the batch move loop:
+
+```typescript
+const freshSource = getParentFolder(sourceParentId);
+const freshDest = getParentFolder(destParentId);
+if (freshSource) ensureFolderRegistered(freshSource);
+if (freshDest) ensureFolderRegistered(freshDest);
+```
+
+This 4-line block appears both inside the loop and before the loop. The same pattern appears in `handleDeleteItems` (re-register parent between deletes). This "re-register between SDK calls" concern should be a utility or handled internally by the SDK -- the consumer should not need to know that the SDK's internal state drifts after each mutation.
+
+### 3c. Batch operations are sequential loops that re-publish IPNS per item
+
+**Files:** `/Users/michael/Code/cipher-box/apps/web/src/hooks/useBin.ts` (lines 128-143, 149-161), `/Users/michael/Code/cipher-box/apps/web/src/hooks/useFolderMutations.ts` (batch move and batch delete)
+
+The old code did batch operations with a single IPNS publish. The new code does `for (const item of items) { await client.moveItem(...) }` which publishes IPNS twice per item (source + dest) for moves, and once per item for deletes. For N items, this is O(N) IPNS publishes instead of O(1). This is a functional regression hidden behind the SDK's per-operation API. The SDK should expose batch methods (e.g., `moveItems`, `deleteItems`) that collect all mutations and publish once.
+
+## 4. Leaky Abstractions
+
+### 4a. `ensureFolderRegistered` passes `new Uint8Array(0)` as publicKey
+
+**File:** `/Users/michael/Code/cipher-box/apps/web/src/lib/sdk-provider.ts` (line 80)
+
+```typescript
+publicKey: new Uint8Array(0), // Public key derived from private key when needed
+```
+
+The comment says the public key is "derived when needed," but the SDK's `FolderState` type requires `ipnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array }`. An empty array is not a valid Ed25519 public key. If the SDK ever uses this public key (e.g., for IPNS name derivation or signature verification), it will silently produce incorrect results rather than failing clearly. Either the SDK should make `publicKey` optional, or the web app should derive it before passing it in.
+
+### 4b. SDK exposes `@internal` methods as public API
+
+**File:** `/Users/michael/Code/cipher-box/packages/sdk/src/client.ts` (lines 10221-10239 in diff)
+
+```typescript
+/** @internal Get the folder tree for bin/share operations */
+getFolderTree(): FolderTree { ... }
+/** @internal Get the SDK context */
+getContext(): SdkContext { ... }
+/** @internal Get the client config */
+getConfig(): CipherBoxClientConfig { ... }
+/** @internal Emit an event (used by bin/share modules) */
+emitEvent(event: SdkEvent): void { ... }
+```
+
+These are marked `@internal` but are `public` methods. TypeScript does not enforce `@internal` jsdoc -- any consumer can call them. `getConfig()` exposes the vault private key to any code with a reference to the client. `emitEvent()` lets consumers forge SDK events. These should be made truly package-private (e.g., using a friend-pattern symbol key, or restructuring bin/share as methods on the class rather than external modules that need backdoor access).
+
+### 4c. `sdk-core/ipns` uses `btoa(String.fromCharCode(...recordBytes))` which will throw for large records
+
+**File:** `/Users/michael/Code/cipher-box/packages/sdk-core/src/ipns/index.ts` (line 8614 in diff)
+
+```typescript
+const recordBase64 = btoa(String.fromCharCode(...recordBytes));
+```
+
+The spread operator creates a huge argument list. For IPNS records larger than ~65K bytes, this will hit the V8 max call stack size. The `file/index.ts` module in the same package already has a `uint8ToBase64` helper (lines 7845-7851) that loops safely. The IPNS module should use the same helper instead of the spread-based approach.
+
+### 4d. `api-client/instance.ts` creates a new axios instance per request
+
+**File:** `/Users/michael/Code/cipher-box/packages/api-client/src/instance.ts` (lines 3463 in diff)
+
+```typescript
+const instance = axios.create({ baseURL: clientConfig.baseUrl });
+```
+
+This is inside `customInstance` which is called for every API request. Creating a new axios instance per request is wasteful (no connection pooling, interceptor setup overhead). The `createAxiosInstance()` function exists and creates a configured instance with interceptors, but `customInstance` doesn't use it. The instance should be cached after `setApiClientConfig` is called.
+
+## 5. Stringly-Typed Code
+
+### 5a. Bin-not-loaded detection uses string matching
+
+**File:** `/Users/michael/Code/cipher-box/apps/web/src/hooks/useFolderMutations.ts` (lines 1685-1686 in diff)
+
+```typescript
+if ((binErr as Error).message?.includes('Bin not loaded')) {
+```
+
+The error message "Bin not loaded" is a raw string thrown in `client.ts` line 10719. This is fragile -- if the message changes, the fallback silently stops working. Either the SDK should export a typed error class (`BinNotLoadedError`), or the bin state check should be done before calling `deleteToBin` rather than catching the error after.
+
+### 5b. `encryptionMode` uses raw string `'GCM' | 'CTR'` instead of a shared constant/type
+
+**Files:** `/Users/michael/Code/cipher-box/packages/sdk-core/src/download/index.ts` (line 7783), `/Users/michael/Code/cipher-box/packages/sdk-core/src/upload/index.ts` (line 8881), `/Users/michael/Code/cipher-box/packages/sdk/src/client.ts` (line 10666)
+
+The string literals `'GCM'` and `'CTR'` appear in multiple parameter types across packages. There should be a shared `EncryptionMode` type exported from `@cipherbox/core` or `@cipherbox/crypto` and re-used everywhere, rather than inlining the string union at each call site.
+
+## 6. Miscellaneous Issues
+
+### 6a. `useDropUpload` duplicate file path uses old service, bypassing SDK
+
+**File:** `/Users/michael/Code/cipher-box/apps/web/src/hooks/useDropUpload.ts` (lines 150-163)
+
+The duplicate file handling path uses dynamic imports of `encryptFile` from the old service and `addToIpfs` from the old API module. This creates a split: new files go through the SDK, duplicate files go through the old path. The `.buffer` pattern on line 159 (`encrypted.ciphertext.buffer as ArrayBuffer`) is flagged in the web app's CLAUDE.md as a data-corruption risk:
+
+> Never use `.buffer` on Uint8Array for Blob construction.
+
+This specific instance casts it `as ArrayBuffer` which masks the problem rather than fixing it.
+
+### 6b. Missing cleanup of orphaned IPFS pins on upload failure
+
+**File:** `/Users/michael/Code/cipher-box/apps/web/src/hooks/useDropUpload.ts` (lines 112, 193-198)
+
+The old code cleaned up orphaned IPFS pins (`unpinFromIpfs`) when upload succeeded but registration failed. The new code tracks `uploadedCids` (line 112) but never uses them for cleanup in the catch block. The array is populated but the cleanup was removed. If a multi-file upload fails partway through, the already-uploaded files remain pinned on IPFS with no metadata reference -- orphaned storage consuming quota.
+
+### 6c. `useBin.loadBin` calls `initializeBin` from the old service AND `getSdkClient().loadBin()` from the SDK, with the old service also reading `useAuthStore`
+
+**File:** `/Users/michael/Code/cipher-box/apps/web/src/hooks/useBin.ts` (lines 31-67)
+
+The `loadBin` hook still depends on `useAuthStore` for the keypair (line 32-33), but other operations in the same hook (`restore`, `permanentDelete`, etc.) no longer check auth and go directly to the SDK. This inconsistency means `loadBin` will silently skip if auth state is stale, but `restore` will throw a different error from the SDK. The auth check pattern should be uniform.
+
+---
+
+## Summary
+
+The most impactful issues are:
+
+1. **Batch operation regression** (finding 3c): Sequential per-item IPNS publishes instead of batch publishes is both a performance regression and a consistency concern.
+2. **Orphaned pin cleanup removed** (finding 6b): `uploadedCids` is tracked but never cleaned up, leading to quota leaks on partial failures.
+3. **Empty publicKey placeholder** (finding 4a): Passing `new Uint8Array(0)` as a required Ed25519 key is a latent bug.
+4. **`@internal` methods publicly accessible** (finding 4b): `getConfig()` exposes private keys to any consumer.
+5. **String-matched error fallback** (finding 5a): "Bin not loaded" string matching is fragile.
+6. **`.buffer` usage in duplicate file path** (finding 6a): Violates the project's own coding guidelines and risks data corruption.</result>
+<usage><total_tokens>143355</total_tokens><tool_uses>27</tool_uses><duration_ms>166165</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/ae61f486acf8a2ec1.output
+
+---
+
+<task-notification>
+<task-id>af26e526aa03fd3a8</task-id>
+<tool-use-id>toolu_01BZnL9oo2NGwu3CA9EvAhzV</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/af26e526aa03fd3a8.output</output-file>
+<status>completed</status>
+<summary>Agent "Efficiency review" completed</summary>
+<result>I have now thoroughly reviewed all the changes. Here is my analysis:
+
+---
+
+## Efficiency Review: Phase 19.1 SDK Extraction
+
+### Finding 1: Batch Operations Serialized to N Sequential IPNS Publishes (CRITICAL)
+
+**Files:**
+- `/Users/michael/Code/cipher-box/apps/web/src/hooks/useBin.ts` lines 128-143 (`restoreMultiple`), lines 149-162 (`permanentDeleteMultiple`)
+- `/Users/michael/Code/cipher-box/apps/web/src/hooks/useFolderMutations.ts` lines 296-313 (`handleMoveItems`), lines 397-439 (`handleDeleteItems`)
+
+The old code did batch operations with a single IPNS publish. The new code calls SDK methods sequentially in a `for` loop, each of which does its own IPNS resolve + encrypt + IPFS upload + IPNS publish. For N items:
+
+- `restoreMultiple(entryIds)`: Each `client.restoreFromBin()` call does 1 IPNS publish for the folder + 1 IPNS publish for the bin = 2N publishes vs. old code's 2 total.
+- `permanentDeleteMultiple(entryIds)`: Each `client.permanentDelete()` call does 1 bin IPNS publish = N publishes vs. old code's 1.
+- `handleMoveItems`: Each `client.moveItem()` does 2 IPNS publishes (source + dest) = 2N publishes vs. old code's 2 total.
+- `handleDeleteItems`: Each `client.deleteToBin()` does 1 folder IPNS publish + 1 bin IPNS publish = 2N publishes vs. old code's 2 total.
+
+This is a significant regression. Selecting 10 files and deleting them will fire 20 sequential IPNS publishes instead of 2. Each IPNS publish involves: encrypt metadata, upload to IPFS, sign IPNS record, call backend API. This will make multi-select operations orders of magnitude slower.
+
+**Recommendation:** Add batch methods to `CipherBoxClient` (e.g., `moveItems`, `deleteItems`, `restoreFromBinBatch`) that collect all metadata changes and perform a single folder publish + single bin publish per affected folder.
+
+### Finding 2: Redundant `deriveBinIpnsKeypair` Calls on Every Bin Operation
+
+**File:** `/Users/michael/Code/cipher-box/packages/sdk/src/bin/index.ts` lines 70, 95, and 149 (`loadBin` when empty)
+
+`deriveBinIpnsKeypair()` is called in `loadBinMetadataInternal` (line 70) and again in `saveBinMetadata` (line 95). Since `addToBin`, `restoreFromBin`, `permanentDeleteFromBin`, and `emptyBin` all call `saveBinMetadata`, and `loadBin` also calls both, the keypair is derived repeatedly. This is a cryptographic HKDF derivation from the user's private key.
+
+Furthermore, in `loadBin` (line 149), when the IPNS record doesn't exist, `deriveBinIpnsKeypair` is called a second time just to get the `ipnsName` -- after `loadBinMetadataInternal` already called it once.
+
+**Recommendation:** Derive the bin IPNS keypair once in `loadBin`, cache it in `BinState`, and pass it to `saveBinMetadata` instead of re-deriving each time. The `KeyCache` class exists precisely for this but is never used.
+
+### Finding 3: `ensureFolderRegistered` Called Redundantly Inside Loops
+
+**File:** `/Users/michael/Code/cipher-box/apps/web/src/hooks/useFolderMutations.ts` lines 292-303
+
+In `handleMoveItems`, both source and dest folders are registered before the loop (lines 293-294), then re-registered on every iteration (lines 300-303):
+
+```typescript
+ensureFolderRegistered(sourceFolder); // Before loop
+ensureFolderRegistered(destFolder);   // Before loop
+for (const item of items) {
+  const freshSource = getParentFolder(sourceParentId);
+  const freshDest = getParentFolder(destParentId);
+  if (freshSource) ensureFolderRegistered(freshSource);  // Every iteration
+  if (freshDest) ensureFolderRegistered(freshDest);      // Every iteration
+  ...
+}
+```
+
+The comment says "Re-register folders between moves because SDK updates its internal state" -- but `ensureFolderRegistered` explicitly skips registration if the SDK already has the folder (`if (client.hasFolder(folder.ipnsName)) return;`). So these re-registrations are always no-ops after the first move. The `getParentFolder` calls are also redundant -- they do a store lookup plus `getRootFolderState` computation each time.
+
+**Recommendation:** Remove the re-registration inside the loop. If the intent was to update the SDK's internal state from the Zustand store after each move, the early-return guard in `ensureFolderRegistered` defeats that anyway.
+
+### Finding 4: `customInstance` Creates a New Axios Instance Per API Call
+
+**File:** `/Users/michael/Code/cipher-box/packages/api-client/src/instance.ts` line 55
+
+```typescript
+export const customInstance = async <T>(config, options): Promise<T> => {
+  const clientConfig = getApiClientConfig();
+  const token = await clientConfig.getAccessToken();
+  const instance = axios.create({ baseURL: clientConfig.baseUrl }); // NEW INSTANCE EVERY CALL
+  ...
+};
+```
+
+Every orval-generated API call (IPNS resolve, IPNS publish, IPFS upload, etc.) creates a fresh `axios.create()` instance. This prevents connection reuse (HTTP keep-alive), forces re-establishment of TLS sessions, and adds GC pressure. Given that the SDK's folder mutation path calls multiple API endpoints sequentially (IPFS upload + IPNS publish per operation), this creates many throwaway instances.
+
+Note: `createAxiosInstance()` (line 20) creates a reusable instance with an interceptor, but `customInstance` does not use it.
+
+**Recommendation:** Create the axios instance once in `setApiClientConfig()` and reuse it in `customInstance`.
+
+### Finding 5: `btoa(String.fromCharCode(...recordBytes))` Stack Overflow Risk
+
+**File:** `/Users/michael/Code/cipher-box/packages/sdk-core/src/ipns/index.ts` line 54
+
+```typescript
+const recordBase64 = btoa(String.fromCharCode(...recordBytes));
+```
+
+The spread operator (`...recordBytes`) pushes every byte onto the call stack as a `String.fromCharCode` argument. For IPNS records, this is typically only ~300-500 bytes so it works, but it's inconsistent with the file metadata module at `/Users/michael/Code/cipher-box/packages/sdk-core/src/file/index.ts` lines 44-48 which already has a safe loop-based `uint8ToBase64` helper. The file module was presumably fixed after hitting this exact problem.
+
+**Recommendation:** Use the same `uint8ToBase64` loop-based helper from `file/index.ts` instead of the spread operator.
+
+### Finding 6: O(N) Linear Scan for Folder Lookup in Every SDK Event
+
+**File:** `/Users/michael/Code/cipher-box/apps/web/src/stores/folder.store.ts` line 214
+
+```typescript
+const matchingFolder = Object.values(folders).find((f) => f.ipnsName === event.ipnsName);
+```
+
+Every `folder:loaded`, `folder:updated`, and `folder:deleted` event triggers an O(N) scan of all folders to find the one matching the event's `ipnsName`. With the batch operation serialization from Finding 1, moving 10 items fires 20 `folder:updated` events, each scanning all folders.
+
+**Recommendation:** Maintain a reverse lookup map `ipnsName -> folderId` in the folder store. This converts each event handler to O(1).
+
+### Finding 7: Duplicate Bin Loading on Login
+
+**File:** `/Users/michael/Code/cipher-box/apps/web/src/hooks/useAuth.ts` lines 297-302
+
+```typescript
+// After old service creates/loads bin, also load into SDK for deleteToBin support
+const { getSdkClient, hasSdkClient } = await import('../lib/sdk-provider');
+if (hasSdkClient()) {
+  await getSdkClient().loadBin();
+}
+```
+
+During login, `initializeBin()` is called first (which resolves bin IPNS, fetches + decrypts metadata, populates the Zustand store). Then `getSdkClient().loadBin()` is called, which does the exact same work again: resolves the same IPNS record, fetches the same CID from IPFS, decrypts the same metadata. This doubles the network I/O on the login path for bin initialization.
+
+The same duplication exists in `useBin.loadBin()` at `/Users/michael/Code/cipher-box/apps/web/src/hooks/useBin.ts` lines 37-50.
+
+**Recommendation:** Either have the SDK's `loadBin()` accept pre-loaded data, or remove the old `initializeBin` call and have the SDK do it once.
+
+### Finding 8: Dynamic Imports Inside a Per-File Loop
+
+**File:** `/Users/michael/Code/cipher-box/apps/web/src/hooks/useDropUpload.ts` lines 152-153
+
+```typescript
+for (const file of duplicateFiles) {
+  const { encryptFile } = await import('../services/file-crypto.service');
+  const { addToIpfs } = await import('../lib/api/ipfs');
+  ...
+}
+```
+
+Two dynamic `import()` calls execute on every iteration of the duplicate-files loop. Although bundlers typically cache the module after the first import, the `await import()` still suspends the microtask queue and causes a promise resolution round-trip on each iteration.
+
+**Recommendation:** Hoist the dynamic imports before the loop.
+
+### Finding 9: Missing Orphan Cleanup on Failed Upload
+
+**File:** `/Users/michael/Code/cipher-box/apps/web/src/hooks/useDropUpload.ts` lines 112, 193-198
+
+The `uploadedCids` array tracks uploaded CIDs for cleanup, but the error handler does not unpin them:
+
+```typescript
+const uploadedCids: string[] = []; // Track for cleanup on failure
+...
+} catch (err) {
+  const message = (err as Error).message;
+  if (message !== 'Upload cancelled by user') {
+    useUploadStore.getState().setError(message);
+  }
+  return false;
+  // uploadedCids never cleaned up!
+}
+```
+
+The old code had explicit `unpinFromIpfs(f.cid)` calls in the catch block. The new code collects CIDs but never uses them. This means a failed multi-file upload leaves orphaned IPFS pins consuming quota.
+
+**Recommendation:** Re-add the CID cleanup in the catch block, using the SDK's or direct IPFS unpin function.
+
+### Finding 10: Unconditional Store Updates from SDK Events (No Change Detection)
+
+**File:** `/Users/michael/Code/cipher-box/apps/web/src/stores/bin.store.ts` lines 78-88
+
+```typescript
+if (event.type === 'bin:updated') {
+  const currentSeq = useBinStore.getState().sequenceNumber;
+  set({
+    entries: event.entries,
+    sequenceNumber: currentSeq + 1,
+    isLoaded: true,
+    isLoading: false,
+    error: null,
+  });
+}
+```
+
+Every `bin:updated` event fires `set()` unconditionally, even if the entries haven't changed. This triggers Zustand subscribers (and React re-renders in any component using `useBinStore`). The `sequenceNumber` is incremented locally on every event, disconnected from the actual IPNS sequence number, making it a monotonic "update counter" that always changes -- guaranteeing a re-render on every event even for no-ops.
+
+Similarly in `folder.store.ts` (line 216), `updateFolderChildren` is called unconditionally. That function does at least check `if (!folder) return state`, but it always creates a new object reference when the folder exists, triggering re-renders.
+
+**Recommendation:** Compare `event.entries` with current entries (or use the actual IPNS sequence number) before calling `set()`. For folder events, compare children arrays before updating.
+
+### Summary
+
+| # | Severity | Category | Location |
+|---|----------|----------|----------|
+| 1 | Critical | N+1 IPNS publishes | `useBin`, `useFolderMutations` batch operations |
+| 2 | Medium | Redundant crypto | `sdk/bin/index.ts` - repeated `deriveBinIpnsKeypair` |
+| 3 | Low | Redundant no-op calls | `useFolderMutations.handleMoveItems` re-registration loop |
+| 4 | Medium | Per-call object allocation | `api-client/instance.ts` - new axios instance per call |
+| 5 | Low | Stack overflow risk | `sdk-core/ipns/index.ts` - spread operator in btoa |
+| 6 | Medium | O(N) hot-path scan | `folder.store.ts` - linear scan on every SDK event |
+| 7 | Medium | Duplicate network I/O | `useAuth.ts` + `useBin.ts` - bin loaded twice |
+| 8 | Low | Unnecessary async round-trips | `useDropUpload.ts` - dynamic imports in loop |
+| 9 | Medium | Resource leak | `useDropUpload.ts` - orphaned IPFS pins on failure |
+| 10 | Low | No-op re-renders | `bin.store.ts`, `folder.store.ts` - unconditional `set()` |</result>
+<usage><total_tokens>140710</total_tokens><tool_uses>34</tool_uses><duration_ms>214271</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/af26e526aa03fd3a8.output
+
+---
+
+<task-notification>
+<task-id>a3e88b09807319fbb</task-id>
+<tool-use-id>toolu_01EwXeAHxrkmFg9JrGri5Gow</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/a3e88b09807319fbb.output</output-file>
+<status>completed</status>
+<summary>Agent "Code reuse review" completed</summary>
+<result>I now have a comprehensive understanding of the entire diff and the existing codebase. Let me compile my findings.
+
+---
+
+Here is my analysis of code reuse opportunities in the Phase 19.1 changes:
+
+## Finding 1: `uint8ToBase64` duplicated (now 3 copies, was 2)
+
+**Files with copies:**
+- `/Users/michael/Code/cipher-box/packages/sdk-core/src/file/index.ts` (line 31) -- NEW
+- `/Users/michael/Code/cipher-box/apps/web/src/services/folder.service.ts` (line 43)
+- `/Users/michael/Code/cipher-box/apps/web/src/services/file-metadata.service.ts` (line 39)
+
+This was already flagged in `/Users/michael/Code/cipher-box/.planning/REFACTORING.md` (row 3.3) as a known duplication. The phase 19.1 research document (`19.1-RESEARCH.md`, line 342) explicitly recommends consolidating it into `@cipherbox/core`. Instead, a third copy was added to `sdk-core/src/file/index.ts`. The function should live in `@cipherbox/crypto` (as a general utility) or `@cipherbox/core`, then be imported from there.
+
+Meanwhile, `sdk-core/src/ipns/index.ts` uses the inline `btoa(String.fromCharCode(...recordBytes))` pattern (which is functionally identical but stack-overflow-unsafe for large payloads), copied directly from `apps/web/src/services/ipns.service.ts` (line 58). This is the same function under a different spelling -- it should use the same consolidated utility.
+
+## Finding 2: TEE key wrapping pattern duplicated 3 times within new packages
+
+The 6-line pattern of checking `teeKeys?.currentPublicKey`, converting with `hexToBytes`, calling `wrapKey`, and encoding with `bytesToHex` appears in:
+
+- `/Users/michael/Code/cipher-box/packages/sdk-core/src/folder/index.ts` (lines 114-119)
+- `/Users/michael/Code/cipher-box/packages/sdk-core/src/file/index.ts` (lines 118-123)
+- `/Users/michael/Code/cipher-box/packages/sdk/src/bin/index.ts` (lines 107-112)
+
+Plus the existing web app copies in `folder.service.ts` and `file-metadata.service.ts`. This should be extracted into a helper like `wrapKeyForTee(privateKey: Uint8Array, teeKeys?: TeeKeys): Promise<{encryptedIpnsPrivateKey?: string, keyEpoch?: number}>` in `@cipherbox/sdk-core` or `@cipherbox/core`.
+
+## Finding 3: `IPNS_LIFETIME_MS` constant duplicated
+
+The constant `24 * 60 * 60 * 1000` (24 hours in ms) is hardcoded in:
+
+- `/Users/michael/Code/cipher-box/packages/sdk-core/src/file/index.ts` (line 25) as `const IPNS_LIFETIME_MS`
+- `/Users/michael/Code/cipher-box/packages/sdk-core/src/ipns/index.ts` (line 52) as inline `24 * 60 * 60 * 1000`
+- `/Users/michael/Code/cipher-box/apps/web/src/services/ipns.service.ts` (line 51) as inline
+- `/Users/michael/Code/cipher-box/apps/web/src/services/folder.service.ts`
+- `/Users/michael/Code/cipher-box/apps/web/src/services/file-metadata.service.ts`
+- `/Users/michael/Code/cipher-box/apps/web/src/services/bin.service.ts`
+
+This should be a single exported constant from `@cipherbox/core` (it is a domain-level decision, not a generic crypto constant).
+
+## Finding 4: `MAX_VERSIONS_PER_FILE` duplicated between sdk-core and web
+
+- `/Users/michael/Code/cipher-box/packages/sdk-core/src/file/index.ts` (line 28): `const MAX_VERSIONS_PER_FILE = 10`
+- `/Users/michael/Code/cipher-box/apps/web/src/services/file-metadata.service.ts` (line 33): `const MAX_VERSIONS_PER_FILE = 10`
+
+This was already noted in `REFACTORING.md` (row header mention). Since `@cipherbox/core` now contains the FileMetadata types and schema, this domain constant belongs there.
+
+## Finding 5: `BIN_METADATA_VERSION` duplicated
+
+- `/Users/michael/Code/cipher-box/packages/sdk/src/bin/index.ts` (line 33): `const BIN_METADATA_VERSION = 'v1'`
+- `/Users/michael/Code/cipher-box/apps/web/src/services/bin.service.ts` (line 50): `const BIN_METADATA_VERSION = 'v1'`
+
+Since `@cipherbox/core` already owns the `RecycleBinMetadata` type and the bin schema, the version constant should be exported from `@cipherbox/core/bin`.
+
+## Finding 6: IPFS operations duplicated between `sdk-core/src/ipfs/` and `apps/web/src/lib/api/ipfs.ts`
+
+The three functions `addToIpfs`, `unpinFromIpfs`, and `fetchFromIpfs` in `/Users/michael/Code/cipher-box/packages/sdk-core/src/ipfs/index.ts` are near-identical rewrites of `/Users/michael/Code/cipher-box/apps/web/src/lib/api/ipfs.ts`. The only difference is the context injection pattern (`SdkContext` vs `useAuthStore.getState()`). Since the web services are marked DEPRECATED, this is acceptable for now, but the web app hooks (`useDropUpload`) still import from `apps/web/src/services/file-crypto.service.ts` and `apps/web/src/lib/api/ipfs.ts` for the duplicate-file-handling code path (lines 700-710 in the diff). These should use the SDK's `addToIpfs` through the client instead of importing the old path.
+
+## Finding 7: IPNS service duplicated between `sdk-core/src/ipns/` and `apps/web/src/services/ipns.service.ts`
+
+The functions `createAndPublishIpnsRecord`, `batchPublishIpnsRecords`, `resolveIpnsRecord`, and `verifyIpnsSignature` in `/Users/michael/Code/cipher-box/packages/sdk-core/src/ipns/index.ts` are line-for-line copies of the existing `/Users/michael/Code/cipher-box/apps/web/src/services/ipns.service.ts`. The only difference is the import path for the API client (from `@cipherbox/api-client` vs from `../api/ipns/ipns`). The web file is not marked deprecated and is still imported by `folder-helpers.ts` (line 7). The web service should be deprecated and re-exported from `@cipherbox/sdk-core` to eliminate the duplication.
+
+## Finding 8: `getParentFolder` pattern inlined 4+ times in hooks
+
+The pattern of resolving `parentId === 'root'` via `getRootFolderState(vault, folders)` appears in:
+- `useFolderMutations.ts` (extracted to local `getParentFolder` helper -- good)
+- `useDropUpload.ts` (inline, line 101)
+- `useFileOperations.ts` (3 times, lines 68, 206, 363)
+- `useFileVersions.ts` (2 times, lines 55, 182)
+
+The new `getParentFolder` function in `useFolderMutations.ts` is a module-level function (not exported). It should be moved to `/Users/michael/Code/cipher-box/apps/web/src/hooks/folder-helpers.ts` alongside the existing `getRootFolderState` and used across all hooks.
+
+## Finding 9: `api-client/src/instance.ts` creates a new axios instance per request
+
+In `/Users/michael/Code/cipher-box/packages/api-client/src/instance.ts` (line 55), the `customInstance` function calls `axios.create({ baseURL: clientConfig.baseUrl })` on every single API call. This creates a new axios instance with a new HTTP agent each time. The `createAxiosInstance` factory (line 20) with interceptor-based auth is the correct pattern but is never used by the generated code. The `customInstance` should cache the axios instance or use the factory.
+
+## Finding 10: `sdk-core/src/download/index.ts` duplicates `apps/web/src/services/download.service.ts:downloadFile`
+
+The `downloadAndDecrypt` function in `/Users/michael/Code/cipher-box/packages/sdk-core/src/download/index.ts` is functionally identical to `downloadFile` in `/Users/michael/Code/cipher-box/apps/web/src/services/download.service.ts` (lines 23-49). The only difference is `SdkContext` injection vs `fetchFromIpfs` from the web's IPFS module. The web service's `downloadFile` function is still used by the old code paths. Once the SDK migration is complete, the web version should be removed.
+
+## Finding 11: `sdk-core/src/folder/fetchAndDecryptMetadata` duplicates `apps/web/src/services/folder.service.ts`
+
+The function `/Users/michael/Code/cipher-box/packages/sdk-core/src/folder/index.ts:fetchAndDecryptMetadata` (line 27) is functionally identical to `/Users/michael/Code/cipher-box/apps/web/src/services/folder.service.ts:fetchAndDecryptMetadata`. The web version is still imported by `folder-helpers.ts` (line 23) for the `resyncFolder` function. This creates a dual-path risk where one gets updated and the other doesn't.
+
+## Finding 12: Share `reWrapForRecipients` duplicated with subtle difference
+
+The SDK version in `/Users/michael/Code/cipher-box/packages/sdk/src/share/index.ts:reWrapForRecipients` (line 43) takes `addShareKeysFn` as a parameter (dependency injection). The web version in `/Users/michael/Code/cipher-box/apps/web/src/services/share.service.ts:reWrapForRecipients` (line 277) calls `addShareKeys` directly and also does `findCoveringShares` lookup internally. The core wrapping loop (lines 298-332 in web, lines 169-196 in SDK) is identical. The web hook `useFolderMutations.ts` still imports and calls the web version (not the SDK version). This should be consolidated.
+
+## Finding 13: `MAX_FOLDER_DEPTH` still duplicated (3 definitions)
+
+This pre-existing issue was not addressed:
+- `/Users/michael/Code/cipher-box/apps/web/src/services/folder.service.ts` (line 40)
+- `/Users/michael/Code/cipher-box/apps/web/src/hooks/folder-helpers.ts` (line 66)
+- `/Users/michael/Code/cipher-box/apps/web/src/components/file-browser/MoveDialog.tsx` (line 9)
+
+The diff adds imports from `folder-helpers` for `MAX_FOLDER_DEPTH` in `useFolderMutations.ts`, but `folder.service.ts` still has its own copy. This should be a single definition.
+
+## Summary of Priority Actions
+
+1. **High**: Extract `uint8ToBase64` into `@cipherbox/crypto` as a shared utility. Remove all 3+ copies.
+2. **High**: Extract the TEE key wrapping pattern into a shared helper in `@cipherbox/sdk-core`.
+3. **Medium**: Export `IPNS_LIFETIME_MS`, `MAX_VERSIONS_PER_FILE`, and `BIN_METADATA_VERSION` from `@cipherbox/core`.
+4. **Medium**: Export `getParentFolder` from `folder-helpers.ts` and use it in all hooks.
+5. **Medium**: Fix `api-client/instance.ts` to cache the axios instance instead of creating one per request.
+6. **Low**: The remaining service-level duplication (IPFS, IPNS, download, folder metadata, share) is acceptable during the migration period since the web services are marked DEPRECATED, but the web's `folder-helpers.ts:resyncFolder` and `useFolderMutations.ts` share service imports should be migrated to SDK equivalents to avoid divergence.</result>
+<usage><total_tokens>149137</total_tokens><tool_uses>52</tool_uses><duration_ms>240180</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/a3e88b09807319fbb.output
+
+---
+
+<bash-input>pnpm dev</bash-input>
+
+---
+
+<bash-stdout>Command was manually backgrounded by user with ID: b1lsgotde. Output is being written to: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b1lsgotde.output</bash-stdout><bash-stderr></bash-stderr>
+
+---
+
+Please dont skip running integration tests - you're entirely capable of starting up the dev environment should this be required.
+
+---
+
+<task-notification>
+<task-id>bsfe9nupa</task-id>
+<tool-use-id>toolu_011aGUvVDa3CVQtDXSixXZP1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bsfe9nupa.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit review fixes" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bsfe9nupa.output
+
+---
+
+<objective>
+
+Review produced code through the lens of a cryptography and security testing expert. This command evaluates cryptographic implementations, validates security assumptions, and generates comprehensive test cases and edge cases.
+
+**This command is NOT overwritten by GSD updates.**
+
+**Use when:**
+- After implementing cryptographic features
+- Before merging security-critical code
+- When you want test case ideas for crypto operations
+- To validate security assumptions in the design
+
+**Creates:**
+- `.planning/security/REVIEW-[timestamp].md` — Security review report
+- Test case suggestions (inline or as file)
+
+</objective>
+
+<execution_context>
+
+## Project Security Rules
+
+Reference the project's CLAUDE.md security rules:
+- Never store privateKey in localStorage/sessionStorage
+- Never log sensitive keys
+- Never send unencrypted keys to server
+- Always use ECIES for key wrapping
+- Always use AES-256-GCM for content encryption
+- Server NEVER has access to plaintext or unencrypted keys
+- Always encrypt ipnsPrivateKey with TEE public key before sending
+- TEE decrypts IPNS keys in hardware only, signs, and immediately discards
+
+## Cryptographic Standards
+
+| Algorithm | Use Case | Notes |
+|-----------|----------|-------|
+| AES-256-GCM | Content encryption | Authenticated encryption required |
+| ECIES | Key wrapping | For asymmetric key transport |
+| Web Crypto API | Browser crypto | No polyfills or JS implementations |
+| Uint8Array | Binary data | Never strings for crypto data |
+
+</execution_context>
+
+<process>
+
+## Phase 1: Scope Definition
+
+Use AskUserQuestion:
+- header: "Review Scope"
+- question: "What should I review?"
+- multiSelect: false
+- options:
+  - "Specific files" — I'll provide file paths or patterns
+  - "Recent changes" — Review uncommitted or recent commits
+  - "Phase code" — Review code from a specific GSD phase
+  - "Full crypto audit" — Comprehensive review of all crypto-related code
+
+**If "Specific files":** Ask for file paths/patterns
+**If "Recent changes":** Run `git diff` and `git diff --cached` to identify changed files
+**If "Phase code":** Ask which phase, then read the phase's PLAN.md to identify relevant files
+**If "Full crypto audit":** Search for crypto-related patterns across codebase
+
+## Phase 2: Code Discovery
+
+Based on scope, identify files to review:
+
+```bash
+# Find crypto-related files
+grep -r -l "encrypt\|decrypt\|crypto\|Crypto\|cipher\|AES\|ECIES\|privateKey\|publicKey" --include="*.ts" --include="*.js" . | grep -v node_modules | grep -v ".test."
+```
+
+Also search for:
+- Key management code
+- Authentication/authorization
+- Data serialization of sensitive data
+- API endpoints handling secrets
+- Storage operations for keys
+
+## Phase 3: Security Analysis
+
+For each file/section, analyze through these lenses:
+
+### 3.1 Cryptographic Correctness
+
+- [ ] Correct algorithm usage (AES-256-GCM, not AES-CBC without MAC)
+- [ ] Proper IV/nonce generation (crypto.getRandomValues, never predictable)
+- [ ] IV/nonce never reused with same key
+- [ ] Authenticated encryption used (GCM, not just encryption)
+- [ ] Key sizes appropriate (256-bit for AES, appropriate curves for EC)
+- [ ] No deprecated algorithms (MD5, SHA1 for security, DES, RC4)
+
+### 3.2 Key Management
+
+- [ ] Keys derived using proper KDF (not just hashing)
+- [ ] Keys never logged or exposed in errors
+- [ ] Keys cleared from memory after use
+- [ ] Key hierarchy follows spec (rootFolderKey → folderKey → fileKey)
+- [ ] Key wrapping uses ECIES as specified
+- [ ] No hardcoded keys or secrets
+
+### 3.3 Trust Boundaries
+
+- [ ] Client-side encryption before any server transmission
+- [ ] Server never receives plaintext keys
+- [ ] TEE boundaries respected (encrypted IPNS keys only)
+- [ ] No trust assumptions on server for key material
+
+### 3.4 Implementation Safety
+
+- [ ] Using Web Crypto API (not crypto-js or similar)
+- [ ] Uint8Array for all binary data
+- [ ] Constant-time comparison for authentication tokens
+- [ ] No sensitive data in error messages
+- [ ] No sensitive data in logs
+- [ ] Proper error handling (no silent failures in crypto)
+
+### 3.5 Data Flow Security
+
+- [ ] Sensitive data encrypted at rest
+- [ ] Sensitive data encrypted in transit
+- [ ] No sensitive data in URLs or query params
+- [ ] No sensitive data in localStorage/sessionStorage (except encrypted)
+- [ ] Metadata leakage minimized
+
+## Phase 4: Generate Test Cases
+
+For each crypto operation found, generate test cases:
+
+### Positive Test Cases
+- Normal operation with valid inputs
+- Boundary conditions (empty data, max size data)
+- Different key types/sizes
+
+### Negative Test Cases
+- Invalid key format
+- Corrupted ciphertext
+- Wrong key for decryption
+- Tampered authenticated data (GCM tag modification)
+- Truncated ciphertext
+
+### Edge Cases
+- Empty plaintext encryption
+- Very large data encryption (chunking behavior)
+- Unicode/binary data handling
+- Concurrent encryption operations
+- Key rotation scenarios
+- Re-encryption with new keys
+
+### Attack Scenarios
+- Replay attacks (nonce reuse detection)
+- Padding oracle (if applicable)
+- Timing attacks (constant-time operations)
+- Key confusion attacks
+- Downgrade attacks
+
+## Phase 5: Generate Report
+
+Create `.planning/security/` directory if needed:
+
+```bash
+mkdir -p .planning/security
+```
+
+Write review report to `.planning/security/REVIEW-[timestamp].md`:
+
+```markdown
+# Security Review Report
+
+**Date:** [timestamp]
+**Scope:** [what was reviewed]
+**Reviewer:** Claude (security:review command)
+
+## Executive Summary
+
+[2-3 sentences on overall security posture]
+
+**Risk Level:** [LOW/MEDIUM/HIGH/CRITICAL]
+
+## Files Reviewed
+
+| File | Crypto Operations | Risk Level |
+|------|-------------------|------------|
+| [file] | [operations] | [level] |
+
+## Findings
+
+### Critical Issues
+
+[Issues that must be fixed before deployment]
+
+### High Priority
+
+[Issues that should be fixed soon]
+
+### Medium Priority
+
+[Issues that represent technical debt]
+
+### Low Priority / Recommendations
+
+[Nice-to-haves and best practices]
+
+## Detailed Analysis
+
+### [File/Component Name]
+
+**What it does:**
+[Brief description]
+
+**Crypto operations:**
+- [operation 1]
+- [operation 2]
+
+**Issues found:**
+
+1. **[Issue Title]**
+   - **Severity:** [CRITICAL/HIGH/MEDIUM/LOW]
+   - **Location:** [file:line]
+   - **Description:** [what's wrong]
+   - **Impact:** [what could happen]
+   - **Recommendation:** [how to fix]
+   - **Reference:** [standard/best practice]
+
+**Positive observations:**
+- [what's done well]
+
+---
+
+[Continue for each file/component]
+
+## Test Cases
+
+### [Feature/Component]
+
+#### Unit Tests
+
+```typescript
+describe('[component] security', () => {
+  // Positive cases
+  it('should [expected behavior]', () => {
+    // Test suggestion
+  });
+
+  // Negative cases
+  it('should reject [invalid input]', () => {
+    // Test suggestion
+  });
+
+  // Edge cases
+  it('should handle [edge case]', () => {
+    // Test suggestion
+  });
+});
+```
+
+#### Integration Tests
+
+- [ ] [Test scenario 1]
+- [ ] [Test scenario 2]
+
+#### Attack Scenarios to Test
+
+- [ ] [Attack scenario 1] — [how to test]
+- [ ] [Attack scenario 2] — [how to test]
+
+## Compliance Checklist
+
+Based on project security rules:
+
+- [ ] No privateKey in localStorage/sessionStorage
+- [ ] No sensitive keys logged
+- [ ] No unencrypted keys sent to server
+- [ ] ECIES used for key wrapping
+- [ ] AES-256-GCM used for content encryption
+- [ ] Server has zero knowledge of plaintext
+- [ ] IPNS keys encrypted with TEE public key
+
+## Recommendations Summary
+
+| Priority | Recommendation | Effort |
+|----------|----------------|--------|
+| [P0/P1/P2] | [recommendation] | [LOW/MEDIUM/HIGH] |
+
+## Next Steps
+
+1. [Immediate action]
+2. [Short-term action]
+3. [Long-term consideration]
+
+---
+*Generated by security:review command*
+*This review is automated guidance, not a substitute for professional security audit*
+```
+
+## Phase 6: Present Results
+
+Display summary inline:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ SECURITY REVIEW COMPLETE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Scope:** [what was reviewed]
+**Risk Level:** [overall risk]
+
+## Summary
+
+| Severity | Count |
+|----------|-------|
+| Critical | [n] |
+| High | [n] |
+| Medium | [n] |
+| Low | [n] |
+
+## Top Issues
+
+1. [Most critical issue]
+2. [Second issue]
+3. [Third issue]
+
+## Test Cases Generated
+
+[n] test case suggestions across [m] categories
+
+**Full report:** `.planning/security/REVIEW-[timestamp].md`
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+Use AskUserQuestion:
+- header: "Next"
+- question: "What would you like to do?"
+- options:
+  - "View full report" — Display the complete review
+  - "Generate test file" — Create a test file with suggested cases
+  - "Fix critical issues" — Start addressing critical findings
+  - "Done" — End review
+
+</process>
+
+<vulnerability_patterns>
+
+## Common Crypto Vulnerabilities to Check
+
+### Nonce/IV Reuse
+```typescript
+// BAD: Reusing IV
+const iv = new Uint8Array(12); // zeros!
+// GOOD: Random IV each time
+const iv = crypto.getRandomValues(new Uint8Array(12));
+```
+
+### Missing Authentication
+```typescript
+// BAD: AES-CBC without MAC
+// GOOD: AES-GCM (authenticated)
+```
+
+### Weak Key Derivation
+```typescript
+// BAD: Simple hash
+const key = await crypto.subtle.digest('SHA-256', password);
+// GOOD: PBKDF2/Argon2 with iterations
+```
+
+### Timing Attacks
+```typescript
+// BAD: Early return on mismatch
+if (a[i] !== b[i]) return false;
+// GOOD: Constant-time comparison
+```
+
+### Key in Logs/Errors
+```typescript
+// BAD
+console.log('Key:', key);
+throw new Error(`Failed with key ${key}`);
+// GOOD
+console.log('Key operation failed');
+throw new Error('Decryption failed');
+```
+
+### Predictable Randomness
+```typescript
+// BAD
+Math.random()
+// GOOD
+crypto.getRandomValues()
+```
+
+</vulnerability_patterns>
+
+<success_criteria>
+
+- [ ] Scope defined and files identified
+- [ ] All crypto operations catalogued
+- [ ] Each operation checked against security criteria
+- [ ] Issues categorized by severity
+- [ ] Test cases generated for each crypto operation
+- [ ] Report written to `.planning/security/`
+- [ ] Summary presented to user
+- [ ] Next steps offered
+
+**Quality indicators:**
+- Findings are specific (file:line, not vague)
+- Test cases are implementable (actual code suggestions)
+- Recommendations include HOW to fix, not just WHAT's wrong
+- False positives acknowledged where uncertain
+
+</success_criteria>
+
+
+ARGUMENTS: the implementation, given the recent @.planning/security/REVIEW-2026-03-20-phase19.1-sdk-extraction-plans.md and obviously all the other implementation artifacts.
+
+---
+
+[Request interrupted by user for tool use]
+
+---
+
+<objective>
+Execute all plans in a phase using wave-based parallel execution.
+
+Orchestrator stays lean: discover plans, analyze dependencies, group into waves, spawn subagents, collect results. Each subagent loads the full execute-plan context and handles its own plan.
+
+Context budget: ~15% orchestrator, 100% fresh per subagent.
+</objective>
+
+<execution_context>
+@/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/execute-phase.md
+@/Users/michael/Code/cipher-box/.claude/get-shit-done/references/ui-brand.md
+</execution_context>
+
+<context>
+Phase: 19.1
+
+**Flags:**
+
+- `--gaps-only` — Execute only gap closure plans (plans with `gap_closure: true` in frontmatter). Use after verify-work creates fix plans.
+- `--interactive` — Execute plans sequentially inline (no subagents) with user checkpoints between tasks. Lower token usage, pair-programming style. Best for small phases, bug fixes, and verification gaps.
+
+Context files are resolved inside the workflow via `gsd-tools init execute-phase` and per-subagent `<files_to_read>` blocks.
+</context>
+
+<process>
+Execute the execute-phase workflow from @/Users/michael/Code/cipher-box/.claude/get-shit-done/workflows/execute-phase.md end-to-end.
+Preserve all workflow gates (wave execution, checkpoint handling, verification, state updates, routing).
+</process>
+
+---
+
+Approved, though you should also verify everything in playwright mcp to be certain.
+
+---
+
+Ahhh I'm AFK and can't unlock 1pass right now
+
+---
+
+<objective>
+
+Review produced code through the lens of a cryptography and security testing expert. This command evaluates cryptographic implementations, validates security assumptions, and generates comprehensive test cases and edge cases.
+
+**This command is NOT overwritten by GSD updates.**
+
+**Use when:**
+- After implementing cryptographic features
+- Before merging security-critical code
+- When you want test case ideas for crypto operations
+- To validate security assumptions in the design
+
+**Creates:**
+- `.planning/security/REVIEW-[timestamp].md` — Security review report
+- Test case suggestions (inline or as file)
+
+</objective>
+
+<execution_context>
+
+## Project Security Rules
+
+Reference the project's CLAUDE.md security rules:
+- Never store privateKey in localStorage/sessionStorage
+- Never log sensitive keys
+- Never send unencrypted keys to server
+- Always use ECIES for key wrapping
+- Always use AES-256-GCM for content encryption
+- Server NEVER has access to plaintext or unencrypted keys
+- Always encrypt ipnsPrivateKey with TEE public key before sending
+- TEE decrypts IPNS keys in hardware only, signs, and immediately discards
+
+## Cryptographic Standards
+
+| Algorithm | Use Case | Notes |
+|-----------|----------|-------|
+| AES-256-GCM | Content encryption | Authenticated encryption required |
+| ECIES | Key wrapping | For asymmetric key transport |
+| Web Crypto API | Browser crypto | No polyfills or JS implementations |
+| Uint8Array | Binary data | Never strings for crypto data |
+
+</execution_context>
+
+<process>
+
+## Phase 1: Scope Definition
+
+Use AskUserQuestion:
+- header: "Review Scope"
+- question: "What should I review?"
+- multiSelect: false
+- options:
+  - "Specific files" — I'll provide file paths or patterns
+  - "Recent changes" — Review uncommitted or recent commits
+  - "Phase code" — Review code from a specific GSD phase
+  - "Full crypto audit" — Comprehensive review of all crypto-related code
+
+**If "Specific files":** Ask for file paths/patterns
+**If "Recent changes":** Run `git diff` and `git diff --cached` to identify changed files
+**If "Phase code":** Ask which phase, then read the phase's PLAN.md to identify relevant files
+**If "Full crypto audit":** Search for crypto-related patterns across codebase
+
+## Phase 2: Code Discovery
+
+Based on scope, identify files to review:
+
+```bash
+# Find crypto-related files
+grep -r -l "encrypt\|decrypt\|crypto\|Crypto\|cipher\|AES\|ECIES\|privateKey\|publicKey" --include="*.ts" --include="*.js" . | grep -v node_modules | grep -v ".test."
+```
+
+Also search for:
+- Key management code
+- Authentication/authorization
+- Data serialization of sensitive data
+- API endpoints handling secrets
+- Storage operations for keys
+
+## Phase 3: Security Analysis
+
+For each file/section, analyze through these lenses:
+
+### 3.1 Cryptographic Correctness
+
+- [ ] Correct algorithm usage (AES-256-GCM, not AES-CBC without MAC)
+- [ ] Proper IV/nonce generation (crypto.getRandomValues, never predictable)
+- [ ] IV/nonce never reused with same key
+- [ ] Authenticated encryption used (GCM, not just encryption)
+- [ ] Key sizes appropriate (256-bit for AES, appropriate curves for EC)
+- [ ] No deprecated algorithms (MD5, SHA1 for security, DES, RC4)
+
+### 3.2 Key Management
+
+- [ ] Keys derived using proper KDF (not just hashing)
+- [ ] Keys never logged or exposed in errors
+- [ ] Keys cleared from memory after use
+- [ ] Key hierarchy follows spec (rootFolderKey → folderKey → fileKey)
+- [ ] Key wrapping uses ECIES as specified
+- [ ] No hardcoded keys or secrets
+
+### 3.3 Trust Boundaries
+
+- [ ] Client-side encryption before any server transmission
+- [ ] Server never receives plaintext keys
+- [ ] TEE boundaries respected (encrypted IPNS keys only)
+- [ ] No trust assumptions on server for key material
+
+### 3.4 Implementation Safety
+
+- [ ] Using Web Crypto API (not crypto-js or similar)
+- [ ] Uint8Array for all binary data
+- [ ] Constant-time comparison for authentication tokens
+- [ ] No sensitive data in error messages
+- [ ] No sensitive data in logs
+- [ ] Proper error handling (no silent failures in crypto)
+
+### 3.5 Data Flow Security
+
+- [ ] Sensitive data encrypted at rest
+- [ ] Sensitive data encrypted in transit
+- [ ] No sensitive data in URLs or query params
+- [ ] No sensitive data in localStorage/sessionStorage (except encrypted)
+- [ ] Metadata leakage minimized
+
+## Phase 4: Generate Test Cases
+
+For each crypto operation found, generate test cases:
+
+### Positive Test Cases
+- Normal operation with valid inputs
+- Boundary conditions (empty data, max size data)
+- Different key types/sizes
+
+### Negative Test Cases
+- Invalid key format
+- Corrupted ciphertext
+- Wrong key for decryption
+- Tampered authenticated data (GCM tag modification)
+- Truncated ciphertext
+
+### Edge Cases
+- Empty plaintext encryption
+- Very large data encryption (chunking behavior)
+- Unicode/binary data handling
+- Concurrent encryption operations
+- Key rotation scenarios
+- Re-encryption with new keys
+
+### Attack Scenarios
+- Replay attacks (nonce reuse detection)
+- Padding oracle (if applicable)
+- Timing attacks (constant-time operations)
+- Key confusion attacks
+- Downgrade attacks
+
+## Phase 5: Generate Report
+
+Create `.planning/security/` directory if needed:
+
+```bash
+mkdir -p .planning/security
+```
+
+Write review report to `.planning/security/REVIEW-[timestamp].md`:
+
+```markdown
+# Security Review Report
+
+**Date:** [timestamp]
+**Scope:** [what was reviewed]
+**Reviewer:** Claude (security:review command)
+
+## Executive Summary
+
+[2-3 sentences on overall security posture]
+
+**Risk Level:** [LOW/MEDIUM/HIGH/CRITICAL]
+
+## Files Reviewed
+
+| File | Crypto Operations | Risk Level |
+|------|-------------------|------------|
+| [file] | [operations] | [level] |
+
+## Findings
+
+### Critical Issues
+
+[Issues that must be fixed before deployment]
+
+### High Priority
+
+[Issues that should be fixed soon]
+
+### Medium Priority
+
+[Issues that represent technical debt]
+
+### Low Priority / Recommendations
+
+[Nice-to-haves and best practices]
+
+## Detailed Analysis
+
+### [File/Component Name]
+
+**What it does:**
+[Brief description]
+
+**Crypto operations:**
+- [operation 1]
+- [operation 2]
+
+**Issues found:**
+
+1. **[Issue Title]**
+   - **Severity:** [CRITICAL/HIGH/MEDIUM/LOW]
+   - **Location:** [file:line]
+   - **Description:** [what's wrong]
+   - **Impact:** [what could happen]
+   - **Recommendation:** [how to fix]
+   - **Reference:** [standard/best practice]
+
+**Positive observations:**
+- [what's done well]
+
+---
+
+[Continue for each file/component]
+
+## Test Cases
+
+### [Feature/Component]
+
+#### Unit Tests
+
+```typescript
+describe('[component] security', () => {
+  // Positive cases
+  it('should [expected behavior]', () => {
+    // Test suggestion
+  });
+
+  // Negative cases
+  it('should reject [invalid input]', () => {
+    // Test suggestion
+  });
+
+  // Edge cases
+  it('should handle [edge case]', () => {
+    // Test suggestion
+  });
+});
+```
+
+#### Integration Tests
+
+- [ ] [Test scenario 1]
+- [ ] [Test scenario 2]
+
+#### Attack Scenarios to Test
+
+- [ ] [Attack scenario 1] — [how to test]
+- [ ] [Attack scenario 2] — [how to test]
+
+## Compliance Checklist
+
+Based on project security rules:
+
+- [ ] No privateKey in localStorage/sessionStorage
+- [ ] No sensitive keys logged
+- [ ] No unencrypted keys sent to server
+- [ ] ECIES used for key wrapping
+- [ ] AES-256-GCM used for content encryption
+- [ ] Server has zero knowledge of plaintext
+- [ ] IPNS keys encrypted with TEE public key
+
+## Recommendations Summary
+
+| Priority | Recommendation | Effort |
+|----------|----------------|--------|
+| [P0/P1/P2] | [recommendation] | [LOW/MEDIUM/HIGH] |
+
+## Next Steps
+
+1. [Immediate action]
+2. [Short-term action]
+3. [Long-term consideration]
+
+---
+*Generated by security:review command*
+*This review is automated guidance, not a substitute for professional security audit*
+```
+
+## Phase 6: Present Results
+
+Display summary inline:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ SECURITY REVIEW COMPLETE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Scope:** [what was reviewed]
+**Risk Level:** [overall risk]
+
+## Summary
+
+| Severity | Count |
+|----------|-------|
+| Critical | [n] |
+| High | [n] |
+| Medium | [n] |
+| Low | [n] |
+
+## Top Issues
+
+1. [Most critical issue]
+2. [Second issue]
+3. [Third issue]
+
+## Test Cases Generated
+
+[n] test case suggestions across [m] categories
+
+**Full report:** `.planning/security/REVIEW-[timestamp].md`
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+Use AskUserQuestion:
+- header: "Next"
+- question: "What would you like to do?"
+- options:
+  - "View full report" — Display the complete review
+  - "Generate test file" — Create a test file with suggested cases
+  - "Fix critical issues" — Start addressing critical findings
+  - "Done" — End review
+
+</process>
+
+<vulnerability_patterns>
+
+## Common Crypto Vulnerabilities to Check
+
+### Nonce/IV Reuse
+```typescript
+// BAD: Reusing IV
+const iv = new Uint8Array(12); // zeros!
+// GOOD: Random IV each time
+const iv = crypto.getRandomValues(new Uint8Array(12));
+```
+
+### Missing Authentication
+```typescript
+// BAD: AES-CBC without MAC
+// GOOD: AES-GCM (authenticated)
+```
+
+### Weak Key Derivation
+```typescript
+// BAD: Simple hash
+const key = await crypto.subtle.digest('SHA-256', password);
+// GOOD: PBKDF2/Argon2 with iterations
+```
+
+### Timing Attacks
+```typescript
+// BAD: Early return on mismatch
+if (a[i] !== b[i]) return false;
+// GOOD: Constant-time comparison
+```
+
+### Key in Logs/Errors
+```typescript
+// BAD
+console.log('Key:', key);
+throw new Error(`Failed with key ${key}`);
+// GOOD
+console.log('Key operation failed');
+throw new Error('Decryption failed');
+```
+
+### Predictable Randomness
+```typescript
+// BAD
+Math.random()
+// GOOD
+crypto.getRandomValues()
+```
+
+</vulnerability_patterns>
+
+<success_criteria>
+
+- [ ] Scope defined and files identified
+- [ ] All crypto operations catalogued
+- [ ] Each operation checked against security criteria
+- [ ] Issues categorized by severity
+- [ ] Test cases generated for each crypto operation
+- [ ] Report written to `.planning/security/`
+- [ ] Summary presented to user
+- [ ] Next steps offered
+
+**Quality indicators:**
+- Findings are specific (file:line, not vague)
+- Test cases are implementable (actual code suggestions)
+- Recommendations include HOW to fix, not just WHAT's wrong
+- False positives acknowledged where uncertain
+
+</success_criteria>
+
+
+ARGUMENTS: all code on this branch and make sure that all important points raised in the pre implementation planning review either have been or are addressed.
+
+---
+
+ok try committing again. i am now at the keyboard to unlock

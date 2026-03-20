@@ -1,0 +1,133 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "2aa3e8926776",
+  "session_id": "8ae64815-e645-461a-ae6b-d66403649a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T11:38:17.240964Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/phases/19.1-extract-core-crypto-sdk-as-shared-package/19.1-VERIFICATION.md",
+    ".planning/security/REVIEW-2026-03-20-phase19.1-post-implementation.md",
+    "packages/sdk/src/client.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "2d738b9fc7de",
+  "token_usage": {
+    "input_tokens": 1224,
+    "cache_creation_tokens": 1108127,
+    "cache_read_tokens": 125801379,
+    "output_tokens": 188869,
+    "api_call_count": 594
+  },
+  "summary": {
+    "intent": "Execute Phase 19.1 (Extract Core Crypto SDK as Shared Package) end-to-end, including debugging a complex checkpoint verification for Plan 05 that uncovered deep integration issues between the new SDK and the legacy web app service layer.",
+    "outcome": "All 6 plans completed, 11/11 requirements verified, 9/9 Playwright E2E operations passing, security review conducted with all pre-review findings resolved or accepted. Phase 19.1 marked complete with 193 unit tests + 2 integration tests green.",
+    "learnings": {
+      "repo": [
+        "The @cipherbox/api-client generated functions require setApiClientConfig() to be called before use — this was never wired up in the web app, causing all SDK IPNS operations to silently fail",
+        "FolderEntry.id is a UUID used for UI navigation/store lookup, while ipnsName (k51...) is used for IPNS operations — these are distinct and must not be conflated",
+        "The web app's old services and the new SDK both write to the same IPNS records — any dual-path architecture causes 409 conflicts from stale sequence numbers",
+        "SDK's loadBin() must return an empty BinState (not null) on fresh accounts so deleteToBin() works before the first bin IPNS record is published",
+        "ensureFolderRegistered should skip if SDK already has the folder — re-registering overwrites the SDK's correct sequence number and IPNS private key with stale store values",
+        "The bin IPNS name is deterministically derived from the user's private key via deriveBinIpnsKeypair — both old service and SDK can independently derive the same name",
+        "OTPs for local dev login come from the backgrounded pnpm dev task output file (grep for 'DEV OTP for'), not from the database or Web3Auth test credentials",
+        "The e2e/page-objects/file-browser/upload-zone.page.ts uses setInputFiles() on the hidden file input — this is the correct approach for Playwright uploads, not clicking the visible upload zone",
+        "createFolder() must return the folder entry UUID (id) alongside ipnsName — the store uses UUID for lookups, not ipnsName",
+        "Destroying a CipherBoxClient must zero all key material (privateKey, publicKey, rootFolderKey) to prevent key material lingering in GC'd memory"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 54,
+          "end_line": 54,
+          "finding": "btoa(String.fromCharCode(...recordBytes)) will stack overflow for large byte arrays — use a loop-based uint8ToBase64 helper instead"
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 55,
+          "end_line": 55,
+          "finding": "customInstance created a new axios.create() instance on every API call — instance should be cached after setApiClientConfig() and reused"
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 70,
+          "end_line": 95,
+          "finding": "saveBinMetadata was called with 4-field manual destructure from BinOperationContext at every call site — simplified to accept BinOperationContext directly"
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 152,
+          "end_line": 163,
+          "finding": "Dynamic imports (encryptFile, addToIpfs) inside a per-file for loop cause unnecessary async round-trips — hoist before the loop"
+        },
+        {
+          "path": "apps/web/src/stores/bin.store.ts",
+          "line": 36,
+          "end_line": 36,
+          "finding": "_sdkUnsubscribe stored as Zustand state triggers re-renders on every subscription change — should be a module-level variable"
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "line": 1685,
+          "end_line": 1686,
+          "finding": "String-matching on (binErr as Error).message?.includes('Bin not loaded') is fragile — replaced with BinNotLoadedError class and instanceof check"
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "line": 159,
+          "end_line": 159,
+          "finding": ".buffer cast on Uint8Array risks using the underlying ArrayBuffer's full length — use .slice().buffer per project coding guidelines"
+        },
+        {
+          "path": "apps/web/src/stores/folder.store.ts",
+          "line": 214,
+          "end_line": 214,
+          "finding": "Object.values(folders).find(f =\u003e f.ipnsName === event.ipnsName) is an O(N) scan on every folder:loaded/updated event — a reverse lookup map would be O(1)"
+        }
+      ],
+      "workflow": [
+        "When the SDK integration test requires a running API, start pnpm dev before running tests — don't skip integration tests just because the API isn't up",
+        "Playwright MCP headed sessions are preferable to asking the user to drive — use mcp__playwright__browser_evaluate to click hidden file inputs, read OTPs from the backgrounded server log file",
+        "Use fresh random emails per Playwright test run to avoid accumulated IPNS records causing slow vault sync and auth constraint violations",
+        "Atomic commits per fix make bisect and review much easier — resist the urge to batch unrelated fixes",
+        "When two independent writers modify the same IPNS record, any state-sync bridge will create edge cases — the correct fix is eliminating the dual-path, not patching the sync",
+        "Three parallel code review agents (reuse, quality, efficiency) efficiently cover the full diff with clear separation of concerns",
+        "Security review should cross-reference the pre-implementation review findings explicitly — tracking which were fixed vs accepted vs still open"
+      ]
+    },
+    "friction": [
+      "1Password SSH signing agent is inaccessible from Claude subprocesses — commits blocked until user unlocked manually, leaving staged changes in limbo",
+      "OTP rate limit (5 sends per 15 minutes, Redis-backed) blocked re-login attempts during Playwright testing — required Redis key deletion to recover",
+      "pnpm dev being killed/restarted mid-session invalidated OTPs and broke in-progress Playwright tests",
+      "auth_methods duplicate key constraint failures when reusing the same test email across multiple sessions",
+      "classifyHandoffIfNeeded Claude Code runtime bug caused agents to report failure despite completing successfully — required spot-check workaround",
+      "Playwright file upload required browser_evaluate to find and click the hidden input because the upload zone overlay intercepted pointer events",
+      "Vault sync on login takes 30+ seconds due to IPNS delegated routing retries, making E2E test iteration slow",
+      "Integration tests initially skipped because the agent couldn't start pnpm dev — the user had to explicitly instruct that the agent should start the dev environment itself"
+    ],
+    "open_items": [
+      "Batch SDK operations: moveItems, deleteItems, restoreFromBinBatch — currently N sequential IPNS publishes instead of O(1) batch publish per affected folder",
+      "Duplicate bin loading on login: initializeBin (old service) + loadBin (SDK) both resolve the same IPNS record and decrypt the same metadata — Plan 06 deprecated old service but didn't remove it",
+      "@internal methods on CipherBoxClient (getConfig, getFolderTree, getContext, emitEvent) are public TypeScript — getConfig exposes vault private key to any consumer",
+      "O(N) linear scan in folder.store.ts on every SDK folder:loaded/updated event — needs reverse lookup map (ipnsName → folderId)",
+      "uint8ToBase64 exists in 3 places (sdk-core/file, web/folder.service, web/file-metadata.service) — should be consolidated in @cipherbox/crypto",
+      "TEE key wrapping pattern (hexToBytes → wrapKey → bytesToHex) duplicated across sdk-core/folder, sdk-core/file, sdk/bin — needs shared helper",
+      "Constants IPNS_LIFETIME_MS, MAX_VERSIONS_PER_FILE, BIN_METADATA_VERSION duplicated between SDK packages and web services — should be exported from @cipherbox/core",
+      "revokeShare and reWrapForRecipients in SDK take injected API function callbacks instead of calling @cipherbox/api-client directly — leaks wiring responsibility to consumers",
+      "useFolderMutations still imports from deprecated web share service instead of SDK share module",
+      "resyncFolder in folder-helpers.ts imports from deprecated folder.service.ts fetchAndDecryptMetadata instead of sdk-core equivalent",
+      "MAX_FOLDER_DEPTH still defined in 3 places (folder.service.ts, folder-helpers.ts, MoveDialog.tsx)"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T11:36:58.314226Z",
+    "agent_lines": 471,
+    "human_added": 624,
+    "human_modified": 222,
+    "human_removed": 0,
+    "total_committed": 1233,
+    "agent_percentage": 38.19951338199513
+  }
+}
