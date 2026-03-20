@@ -8,6 +8,7 @@
  * Order matters: clear stores holding crypto keys BEFORE clearing auth state,
  * so sensitive key material is zeroed from memory first. [SECURITY: HIGH-02]
  */
+import { destroySdkClient } from './sdk-provider';
 import { useFolderStore } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import { useSyncStore } from '../stores/sync.store';
@@ -21,6 +22,9 @@ import { useAuthStore } from '../stores/auth.store';
 import { clearFileSizeCache } from '../hooks/useFileSize';
 
 export function clearAllUserStores(): void {
+  // 0. Destroy SDK client first (clears key caches, event subscriptions)
+  destroySdkClient();
+
   // 1. Clear stores with crypto key material first
   useFolderStore.getState().clearFolders();
   useVaultStore.getState().clearVaultKeys();

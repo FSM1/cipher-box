@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { BinEntry } from '@cipherbox/crypto';
+import type { CipherBoxClient } from '@cipherbox/sdk';
 
 type BinState = {
   /** Current bin entries */
@@ -24,6 +25,10 @@ type BinState = {
   setBinIpnsName: (name: string) => void;
   setRetentionDays: (days: number) => void;
   clearBin: () => void;
+
+  // SDK event subscription
+  subscribeToSdk: (client: CipherBoxClient) => void;
+  _sdkUnsubscribe: (() => void) | null;
 };
 
 /**
@@ -68,7 +73,13 @@ export const useBinStore = create<BinState>((set) => ({
       retentionDays: Number.isFinite(days) ? Math.max(0, Math.floor(days)) : 30,
     }),
 
-  clearBin: () =>
+  clearBin: () => {
+    const state = useBinStore.getState();
+    // Unsubscribe from SDK events before clearing
+    if (state._sdkUnsubscribe) {
+      state._sdkUnsubscribe();
+    }
+
     set({
       entries: [],
       isLoading: false,
@@ -77,5 +88,37 @@ export const useBinStore = create<BinState>((set) => ({
       sequenceNumber: 0,
       binIpnsName: null,
       retentionDays: 30,
-    }),
+      _sdkUnsubscribe: null,
+    });
+  },
+
+  // SDK event subscription
+  _sdkUnsubscribe: null,
+
+  /**
+   * Subscribe to SDK bin events. Called after SDK client is initialized.
+   * Updates bin entries when the SDK emits bin:updated events.
+   */
+  subscribeToSdk: (client: CipherBoxClient) => {
+    // Unsubscribe any existing subscription
+    const currentUnsub = useBinStore.getState()._sdkUnsubscribe;
+    if (currentUnsub) {
+      currentUnsub();
+    }
+
+    const unsubscribe = client.on((event) => {
+      if (event.type === 'bin:updated') {
+        const currentSeq = useBinStore.getState().sequenceNumber;
+        set({
+          entries: event.entries,
+          sequenceNumber: currentSeq + 1,
+          isLoaded: true,
+          isLoading: false,
+          error: null,
+        });
+      }
+    });
+
+    set({ _sdkUnsubscribe: unsubscribe });
+  },
 }));

@@ -5,9 +5,11 @@ import { useCoreKit } from '../lib/web3auth/core-kit-provider';
 import { authApi } from '../lib/api/auth';
 import { vaultApi } from '../lib/api/vault';
 import { useAuthStore } from '../stores/auth.store';
+import { useFolderStore } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import { useDeviceRegistryStore } from '../stores/device-registry.store';
 import { clearAllUserStores } from '../lib/clear-user-stores';
+import { initSdkClient } from '../lib/sdk-provider';
 import {
   initializeVault,
   encryptVaultKeys,
@@ -144,6 +146,32 @@ export function useAuth() {
         console.error('[useAuth] Failed to load vault:', error);
         throw error;
       }
+    }
+
+    // Initialize SDK client with decrypted vault keys
+    const vaultState = useVaultStore.getState();
+    const authState = useAuthStore.getState();
+    if (vaultState.rootFolderKey && vaultState.rootIpnsKeypair && vaultState.rootIpnsName) {
+      const sdkClient = initSdkClient({
+        apiUrl: import.meta.env.VITE_API_URL || window.location.origin + '/api',
+        getAccessToken: async () => {
+          const state = useAuthStore.getState();
+          return state.accessToken || '';
+        },
+        vaultKeypair: {
+          publicKey: userKeypair.publicKey,
+          privateKey: userKeypair.privateKey,
+        },
+        rootIpnsName: vaultState.rootIpnsName,
+        rootFolderKey: vaultState.rootFolderKey,
+        teeKeys: authState.teeKeys ?? undefined,
+      });
+
+      // Subscribe folder store to SDK events
+      useFolderStore.getState().subscribeToSdk(sdkClient);
+
+      // Subscribe bin store to SDK events
+      useBinStore.getState().subscribeToSdk(sdkClient);
     }
 
     // Non-blocking device registry initialization (fire-and-forget)

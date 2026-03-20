@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { FolderChild } from '@cipherbox/crypto';
+import type { CipherBoxClient } from '@cipherbox/sdk';
 
 /**
  * A folder node in the in-memory folder tree.
@@ -58,6 +59,10 @@ type FolderState = {
   removeFolder: (folderId: string) => void;
   updateFolderName: (folderId: string, newName: string) => void;
   clearFolders: () => void;
+
+  // SDK event subscription
+  subscribeToSdk: (client: CipherBoxClient) => void;
+  _sdkUnsubscribe: (() => void) | null;
 };
 
 /**
@@ -160,6 +165,11 @@ export const useFolderStore = create<FolderState>((set, get) => ({
   clearFolders: () => {
     const state = get();
 
+    // Unsubscribe from SDK events before clearing
+    if (state._sdkUnsubscribe) {
+      state._sdkUnsubscribe();
+    }
+
     // Best-effort memory clearing - overwrite all folder keys with zeros
     for (const folder of Object.values(state.folders)) {
       if (folder.folderKey) {
@@ -175,7 +185,51 @@ export const useFolderStore = create<FolderState>((set, get) => ({
       currentFolderId: null,
       breadcrumbs: [],
       pendingPublishes: new Set<string>(),
+      _sdkUnsubscribe: null,
     });
+  },
+
+  // SDK event subscription
+  _sdkUnsubscribe: null,
+
+  /**
+   * Subscribe to SDK folder events. Called after SDK client is initialized.
+   *
+   * Maps SDK events (keyed by ipnsName) to store updates (keyed by folder id).
+   * The SDK emits folderId = ipnsName, so we reverse-lookup to find the store's folder id.
+   */
+  subscribeToSdk: (client: CipherBoxClient) => {
+    // Unsubscribe any existing subscription
+    const currentUnsub = get()._sdkUnsubscribe;
+    if (currentUnsub) {
+      currentUnsub();
+    }
+
+    const unsubscribe = client.on((event) => {
+      switch (event.type) {
+        case 'folder:loaded':
+        case 'folder:updated': {
+          // SDK uses ipnsName as folderId; find the matching store entry
+          const folders = get().folders;
+          const matchingFolder = Object.values(folders).find((f) => f.ipnsName === event.ipnsName);
+          if (matchingFolder) {
+            get().updateFolderChildren(matchingFolder.id, event.children);
+          }
+          break;
+        }
+        case 'folder:deleted': {
+          // SDK uses ipnsName as folderId
+          const folders = get().folders;
+          const matchingFolder = Object.values(folders).find((f) => f.ipnsName === event.folderId);
+          if (matchingFolder) {
+            get().removeFolder(matchingFolder.id);
+          }
+          break;
+        }
+      }
+    });
+
+    set({ _sdkUnsubscribe: unsubscribe });
   },
 }));
 
