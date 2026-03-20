@@ -14,6 +14,7 @@ vi.mock('../../../stores/auth.store', () => ({
     getState: vi.fn(() => ({
       accessToken: 'expired-token',
       setAccessToken: vi.fn(),
+      setAuthenticated: vi.fn(),
       logout: vi.fn(),
     })),
   },
@@ -57,6 +58,7 @@ describe('Auth Token Refresh - Race Condition Fix', () => {
     (useAuthStore.getState as Mock).mockReturnValue({
       accessToken: 'expired-token',
       setAccessToken: mockSetAccessToken,
+      setAuthenticated: vi.fn(),
       logout: mockLogout,
     });
 

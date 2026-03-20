@@ -40,6 +40,7 @@ export function useAuth() {
     lastAuthMethod,
     userEmail,
     setAccessToken,
+    setAuthenticated,
     setLastAuthMethod,
     setUserEmail,
     setVaultKeypair,
@@ -256,15 +257,22 @@ export function useAuth() {
       });
 
       // 3. Store access token (refresh token in HTTP-only cookie)
+      // Note: this does NOT set isAuthenticated — we wait until vault + SDK
+      // are fully initialized to prevent Login.tsx from redirecting to /files
+      // before the SDK client is ready for file operations.
       setAccessToken(response.accessToken);
 
       // 4. Remember auth method for UX
       setLastAuthMethod(authMethod);
 
-      // 5. Initialize or load vault
+      // 5. Initialize or load vault + SDK client
       await initializeOrLoadVault();
+
+      // 6. Now that vault keys are loaded and SDK is initialized,
+      // mark the user as authenticated. This triggers Login.tsx → /files redirect.
+      setAuthenticated();
     },
-    [getPublicKeyHex, setAccessToken, setLastAuthMethod, initializeOrLoadVault]
+    [getPublicKeyHex, setAccessToken, setAuthenticated, setLastAuthMethod, initializeOrLoadVault]
   );
 
   /**
@@ -290,7 +298,7 @@ export function useAuth() {
     // NOW sync Core Kit React state to LOGGED_IN.
     // We deliberately delayed this from inputFactorKey() to prevent the session
     // restoration effect from firing before backend auth completed.
-    // At this point isAuthenticated is true (from completeBackendAuth -> setAccessToken),
+    // At this point isAuthenticated is true (from completeBackendAuth -> setAuthenticated),
     // so the session restore guard (coreKitLoggedIn && !isAuthenticated) won't trigger.
     syncStatus();
 
@@ -520,8 +528,11 @@ export function useAuth() {
             setUserEmail(response.email);
           }
 
-          // Load vault keys from Core Kit keypair
+          // Load vault keys from Core Kit keypair + initialize SDK
           await initializeOrLoadVaultRef.current?.();
+
+          // Mark as authenticated only after vault + SDK are ready
+          setAuthenticated();
         } catch {
           // No valid backend session -- user needs to re-login
           // Core Kit session exists but backend cookie expired
@@ -538,7 +549,14 @@ export function useAuth() {
       }
     };
     restoreSession();
-  }, [coreKitLoggedIn, isAuthenticated, isLoggingIn, setAccessToken, setUserEmail]);
+  }, [
+    coreKitLoggedIn,
+    isAuthenticated,
+    isLoggingIn,
+    setAccessToken,
+    setAuthenticated,
+    setUserEmail,
+  ]);
 
   return {
     isLoading,
