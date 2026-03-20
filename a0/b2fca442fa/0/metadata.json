@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "a0b2fca442fa",
+  "session_id": "8ae64815-e645-461a-ae6b-d66403649a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T05:30:57.644485Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ab0d20d8b024",
+  "checkpoint_transcript_start": 5176,
+  "transcript_lines_at_start": 5176,
+  "token_usage": {
+    "input_tokens": 25,
+    "cache_creation_tokens": 36493,
+    "cache_read_tokens": 4179325,
+    "output_tokens": 5862,
+    "api_call_count": 18
+  },
+  "summary": {
+    "intent": "Complete phase 19.1 execution by running the remaining plans (05-06) of the SDK extraction, after a security review was interrupted in favor of continuing execution.",
+    "outcome": "Plan 05 (Rewire Web App Hooks to SDK) was marked complete by creating its SUMMARY.md — the implementation was already done across 14 commits in a prior session. Phase execution resumed from wave 4 with plan 06 still pending.",
+    "learnings": {
+      "repo": [
+        "Phase 19.1 is 'Extract Core Crypto SDK as Shared Package' — rewiring React hooks/Zustand stores to use CipherBoxClient instead of direct service calls",
+        "The project uses a GSD (Get Shit Done) workflow system with wave-based parallel plan execution, STATE.md tracking, and SUMMARY.md completion markers",
+        "Plan 05 involved 14 commits: SDK provider, folder mutations, upload/download rewiring, bin hooks, and multiple bug fixes including dual-path IPNS and bin loadBin empty state",
+        "Integration tests cover full lifecycle (folder CRUD, upload, download, rename, delete) and bin lifecycle (loadBin on fresh account, deleteToBin, verify entries, reload from IPNS)",
+        "Code review fixes addressed: btoa stack overflow, axios instance caching, saveBinMetadata parameter sprawl, BinNotLoadedError class, Uint8Array.buffer fix, dynamic imports hoisting, orphaned CID cleanup, no-op ensureFolderRegistered removal, _sdkUnsubscribe moved to module-level"
+      ],
+      "code": [],
+      "workflow": [
+        "GSD plans with has_summary:true are skipped on resume — SUMMARY.md is the completion marker, not commit presence",
+        "When a plan is fully implemented but lacks a SUMMARY.md, the executor should verify artifacts exist then create the summary rather than re-executing",
+        "Integration tests should be run against the actual dev server, not mocked — the user explicitly called this out as required behavior",
+        "Security review (/security:review) can be scoped to 'the implementation given a prior review doc' — useful for post-implementation validation against pre-implementation findings"
+      ]
+    },
+    "friction": [
+      "Plan 05 was partially executed in a previous session without a SUMMARY.md being created, causing the orchestrator to re-enter the plan rather than skip it cleanly",
+      "Security review agent was interrupted mid-spawn when the user switched to execute-phase instead",
+      "Integration tests were initially skipped — required explicit user correction to run them against the dev server"
+    ],
+    "open_items": [
+      "Plan 06 (final plan in phase 19.1) still pending execution",
+      "Security review of the phase 19.1 implementation was initiated but not completed",
+      "Batch SDK operations (N sequential IPNS publishes) — needs SDK batch API design",
+      "Duplicate bin loading on login — Plan 06 removes old service",
+      "uint8ToBase64 / TEE wrapping / constants consolidation — Plan 06 cleanup",
+      "@internal methods publicly accessible — SDK API hardening pass",
+      "O(N) folder lookup on SDK events — optimization deferred for later"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T05:30:31.245151Z",
+    "agent_lines": 0,
+    "human_added": 344,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 344,
+    "agent_percentage": 0
+  }
+}
