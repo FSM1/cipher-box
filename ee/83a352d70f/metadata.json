@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "ee83a352d70f",
+  "strategy": "manual-commit",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "apps/web/src/hooks/useDropUpload.ts",
+    "apps/web/src/hooks/useFolderMutations.ts",
+    "packages/sdk-core/src/file/index.ts",
+    "packages/sdk-core/src/folder/index.ts",
+    "packages/sdk/src/__tests__/client-extended.test.ts",
+    "packages/sdk/src/__tests__/share.test.ts",
+    "packages/sdk/src/client.ts",
+    "packages/sdk/src/state/key-cache.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ee/83a352d70f/0/metadata.json",
+      "transcript": "/ee/83a352d70f/0/full.jsonl",
+      "context": "/ee/83a352d70f/0/context.md",
+      "content_hash": "/ee/83a352d70f/0/content_hash.txt",
+      "prompt": "/ee/83a352d70f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 20267,
+    "cache_read_tokens": 2481056,
+    "output_tokens": 5097,
+    "api_call_count": 14
+  }
+}

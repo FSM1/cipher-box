@@ -1,0 +1,97 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "ee83a352d70f",
+  "session_id": "6838d6a8-ad86-4233-8edf-81daae3f1aef",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T14:23:16.414366Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "packages/sdk/src/__tests__/client-extended.test.ts",
+    "packages/sdk/src/__tests__/share.test.ts",
+    "packages/sdk/src/client.ts",
+    "packages/sdk/src/state/key-cache.ts",
+    "apps/web/src/hooks/useDropUpload.ts",
+    "apps/web/src/hooks/useFolderMutations.ts",
+    "packages/sdk-core/src/file/index.ts",
+    "packages/sdk-core/src/folder/index.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "3b1bd778a8db",
+  "checkpoint_transcript_start": 1026,
+  "transcript_lines_at_start": 1026,
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 20267,
+    "cache_read_tokens": 2481056,
+    "output_tokens": 5097,
+    "api_call_count": 14
+  },
+  "summary": {
+    "intent": "Monitor PR #296 for CodeRabbit review comments and iteratively resolve them until no serious issues remain.",
+    "outcome": "CodeRabbit posted 19 review threads after a significant wait (136 files to process); all 19 threads were addressed via automated fixes across 8 files.",
+    "learnings": {
+      "repo": [
+        "The repo uses .planning/ and .learning/ directories to provide context to CodeRabbit for PR reviews, enabled by PR #296.",
+        "PRs in this repo can be large (136 files), causing CodeRabbit processing delays of 10+ minutes before reviews appear.",
+        "Both CodeRabbit and GitHub Copilot are configured as PR review bots; Copilot reviews appear faster than CodeRabbit."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/__tests__/client-extended.test.ts",
+          "finding": "Required fixes from CodeRabbit review — likely test coverage or assertion quality issues."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/share.test.ts",
+          "finding": "Required fixes from CodeRabbit review — likely test coverage or assertion quality issues."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "Required fixes from CodeRabbit review — implementation-level issues flagged."
+        },
+        {
+          "path": "packages/sdk/src/state/key-cache.ts",
+          "finding": "Required fixes from CodeRabbit review — likely caching logic or state management issues."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "finding": "Required fixes from CodeRabbit review — likely hook correctness or error handling."
+        },
+        {
+          "path": "apps/web/src/hooks/useFolderMutations.ts",
+          "finding": "Required fixes from CodeRabbit review — likely mutation handling or side-effect issues."
+        },
+        {
+          "path": "packages/sdk-core/src/file/index.ts",
+          "finding": "Required fixes from CodeRabbit review — core file operations flagged."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "finding": "Required fixes from CodeRabbit review — core folder operations flagged."
+        }
+      ],
+      "workflow": [
+        "CodeRabbit requires explicit re-triggering (e.g., a comment) and can take 5-10+ minutes to review large PRs.",
+        "Polling for unresolved threads is an effective way to detect when CodeRabbit has finished its review.",
+        "The /resolve-pr-reviews workflow (poll → triage → fix → repeat) is viable for automated review resolution loops."
+      ]
+    },
+    "friction": [
+      "CodeRabbit took an unusually long time to post its review due to the large PR size (136 files), requiring multiple wait-and-retry cycles.",
+      "No visibility into CodeRabbit's processing progress — only a timestamp acknowledgment at 13:54 with no ETA."
+    ],
+    "open_items": [
+      "Verify that all 19 CodeRabbit threads were fully resolved and no follow-up review comments were generated after the fixes.",
+      "The loop was set to continue 'until no relevant/serious comments are being made' — unclear if additional rounds were needed after the 19-thread fix pass."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T14:22:58.607757Z",
+    "agent_lines": 126,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 126,
+    "agent_percentage": 100
+  }
+}
