@@ -51,8 +51,8 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 - [x] **SDK-03**: @cipherbox/api-client generates typed HTTP functions from openapi.json without React dependencies, with configurable instance factory
 - [x] **SDK-04**: @cipherbox/sdk-core provides stateless folder-aware operations with explicit parameter passing (no Zustand/browser deps)
 - [x] **SDK-05**: sdk-core IPFS/IPNS functions accept SdkContext (apiUrl + getAccessToken) instead of reading browser globals
-- [ ] **SDK-06**: @cipherbox/sdk provides stateful CipherBoxClient class with internal folder tree, key cache, and event emission
-- [ ] **SDK-07**: SDK bin operations (add, restore, permanent delete, empty) and share operations (create, revoke) work through stateful client
+- [x] **SDK-06**: @cipherbox/sdk provides stateful CipherBoxClient class with internal folder tree, key cache, and event emission
+- [x] **SDK-07**: SDK bin operations (add, restore, permanent delete, empty) and share operations (create, revoke) work through stateful client
 - [ ] **SDK-08**: Web app creates CipherBoxClient on vault load and destroys on logout; Zustand stores subscribe to SDK events
 - [ ] **SDK-09**: React hooks refactored to thin wrappers calling SDK client methods instead of service functions directly
 - [ ] **SDK-10**: All transitional re-exports removed from @cipherbox/crypto; domain type imports enforced at compile time
@@ -126,8 +126,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SDK-03      | Phase 19.1 | Complete |
 | SDK-04      | Phase 19.1 | Complete |
 | SDK-05      | Phase 19.1 | Complete |
-| SDK-06      | Phase 19.1 | Pending  |
-| SDK-07      | Phase 19.1 | Pending  |
+| SDK-06      | Phase 19.1 | Complete |
+| SDK-07      | Phase 19.1 | Complete |
 | SDK-08      | Phase 19.1 | Pending  |
 | SDK-09      | Phase 19.1 | Pending  |
 | SDK-10      | Phase 19.1 | Pending  |
