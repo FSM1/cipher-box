@@ -212,6 +212,7 @@ export const useFolderStore = create<FolderState>((set, get) => ({
           const matchingFolder = Object.values(folders).find((f) => f.ipnsName === event.ipnsName);
           if (matchingFolder) {
             get().updateFolderChildren(matchingFolder.id, event.children);
+            get().updateFolderSequence(matchingFolder.id, event.sequenceNumber);
           }
           break;
         }

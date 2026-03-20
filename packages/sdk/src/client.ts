@@ -226,6 +226,7 @@ export class CipherBoxClient {
         folderId: ipnsName,
         ipnsName,
         children: result.metadata.children,
+        sequenceNumber: result.sequenceNumber,
       });
 
       return state;
@@ -298,6 +299,7 @@ export class CipherBoxClient {
         folderId: parentIpnsName,
         ipnsName: parentIpnsName,
         children: updatedChildren,
+        sequenceNumber: newSequenceNumber,
       });
 
       return { id: folder.id, ipnsName: folder.ipnsName, folderKey, ipnsPrivateKey };
@@ -347,6 +349,7 @@ export class CipherBoxClient {
         folderId: folderIpnsName,
         ipnsName: folderIpnsName,
         children: updatedChildren,
+        sequenceNumber: newSequenceNumber,
       });
     });
   }
@@ -409,12 +412,14 @@ export class CipherBoxClient {
         folderId: sourceIpnsName,
         ipnsName: sourceIpnsName,
         children: updatedSourceChildren,
+        sequenceNumber: sourceResult.newSequenceNumber,
       });
       this.emitter.emit({
         type: 'folder:updated',
         folderId: destIpnsName,
         ipnsName: destIpnsName,
         children: updatedDestChildren,
+        sequenceNumber: destResult.newSequenceNumber,
       });
     });
   }
@@ -462,6 +467,7 @@ export class CipherBoxClient {
         folderId: folderIpnsName,
         ipnsName: folderIpnsName,
         children: updatedChildren,
+        sequenceNumber: newSequenceNumber,
       });
 
       return { removedItem };
@@ -547,6 +553,7 @@ export class CipherBoxClient {
         folderId: folderIpnsName,
         ipnsName: folderIpnsName,
         children: updatedChildren,
+        sequenceNumber: newSequenceNumber,
       });
 
       return { cid: uploadResult.cid };
@@ -674,11 +681,13 @@ export class CipherBoxClient {
       this.binState = updatedBinState;
 
       // Emit events
+      const folderState = this.folderTree.get(folderIpnsName);
       this.emitter.emit({
         type: 'folder:updated',
         folderId: folderIpnsName,
         ipnsName: folderIpnsName,
-        children: this.folderTree.get(folderIpnsName)?.children ?? [],
+        children: folderState?.children ?? [],
+        sequenceNumber: folderState?.sequenceNumber ?? 0n,
       });
       this.emitter.emit({ type: 'bin:updated', entries: updatedBinState.entries });
     });
@@ -705,11 +714,13 @@ export class CipherBoxClient {
       this.binState = updatedBinState;
 
       // Emit events
+      const targetState = this.folderTree.get(targetFolderIpnsName);
       this.emitter.emit({
         type: 'folder:updated',
         folderId: targetFolderIpnsName,
         ipnsName: targetFolderIpnsName,
-        children: this.folderTree.get(targetFolderIpnsName)?.children ?? [],
+        children: targetState?.children ?? [],
+        sequenceNumber: targetState?.sequenceNumber ?? 0n,
       });
       this.emitter.emit({ type: 'bin:updated', entries: updatedBinState.entries });
     });

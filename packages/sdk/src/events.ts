@@ -19,8 +19,20 @@ import type { BinEntry } from '@cipherbox/core';
  * by consumers who only care about specific domains.
  */
 export type SdkEvent =
-  | { type: 'folder:loaded'; folderId: string; ipnsName: string; children: FolderChild[] }
-  | { type: 'folder:updated'; folderId: string; ipnsName: string; children: FolderChild[] }
+  | {
+      type: 'folder:loaded';
+      folderId: string;
+      ipnsName: string;
+      children: FolderChild[];
+      sequenceNumber: bigint;
+    }
+  | {
+      type: 'folder:updated';
+      folderId: string;
+      ipnsName: string;
+      children: FolderChild[];
+      sequenceNumber: bigint;
+    }
   | { type: 'folder:deleted'; folderId: string }
   | { type: 'file:uploaded'; folderId: string; fileName: string; cid: string }
   | { type: 'file:downloaded'; cid: string }
