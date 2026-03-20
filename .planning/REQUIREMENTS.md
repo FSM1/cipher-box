@@ -48,7 +48,7 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 
 - [ ] **SDK-01**: @cipherbox/core package contains all CipherBox domain types, metadata schemas, validators, metadata encrypt/decrypt, vault init, IPNS record utilities (extracted from crypto)
 - [ ] **SDK-02**: @cipherbox/crypto package contains only pure crypto primitives and key derivation (no domain-aware functions after cleanup)
-- [ ] **SDK-03**: @cipherbox/api-client generates typed HTTP functions from openapi.json without React dependencies, with configurable instance factory
+- [x] **SDK-03**: @cipherbox/api-client generates typed HTTP functions from openapi.json without React dependencies, with configurable instance factory
 - [ ] **SDK-04**: @cipherbox/sdk-core provides stateless folder-aware operations with explicit parameter passing (no Zustand/browser deps)
 - [ ] **SDK-05**: sdk-core IPFS/IPNS functions accept SdkContext (apiUrl + getAccessToken) instead of reading browser globals
 - [ ] **SDK-06**: @cipherbox/sdk provides stateful CipherBoxClient class with internal folder tree, key cache, and event emission
@@ -123,7 +123,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PERF-08     | Phase 22   | Pending  |
 | SDK-01      | Phase 19.1 | Pending  |
 | SDK-02      | Phase 19.1 | Pending  |
-| SDK-03      | Phase 19.1 | Pending  |
+| SDK-03      | Phase 19.1 | Complete |
 | SDK-04      | Phase 19.1 | Pending  |
 | SDK-05      | Phase 19.1 | Pending  |
 | SDK-06      | Phase 19.1 | Pending  |

@@ -2,15 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: completed
-last_updated: '2026-03-07T07:07:38.898Z'
-last_activity: 2026-03-07 -- Completed 19-02 (IPNS latency metrics)
+status: unknown
+last_updated: '2026-03-20T01:08:53.090Z'
 progress:
-  total_phases: 5
+  total_phases: 6
   completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
-  percent: 100
+  total_plans: 10
+  completed_plans: 5
 ---
 
 # Project State
@@ -20,16 +18,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 19 - IPNS Resolution Improvement (v1.1 IPFS Infrastructure) -- COMPLETE
+**Current focus:** Phase 19.1 — extract-core-crypto-sdk-as-shared-package
 
 ## Current Position
 
-Phase: 19 (IPNS Resolution Improvement) -- ALL PLANS COMPLETE
-Plan: 2 of 2 (done)
-Status: Phase complete
-Last activity: 2026-03-07 -- Completed 19-02 (IPNS latency metrics)
-
-Progress: [██████████] 100%
+Phase: 19.1 (extract-core-crypto-sdk-as-shared-package) — EXECUTING
+Plan: 2 of 6
 
 ## Performance Metrics
 
@@ -43,6 +37,7 @@ Progress: [██████████] 100%
 | ----- | ---- | -------- | ----- | ----- |
 | 19    | 01   | 2min     | 2     | 3     |
 | 19    | 02   | 5min     | 2     | 5     |
+| 19.1  | 02   | 4min     | 2     | 133   |
 
 ## Accumulated Context
 
@@ -62,6 +57,7 @@ Recent for v1.1:
 - Kubo Health dashboard panels use fallback Go runtime metrics alongside libp2p metrics pending post-deploy verification
 - IPNS-specific histograms: resolve 50ms-30s, publish 100ms-60s with source/outcome labels
 - Null resolve results (not found) excluded from IPNS histogram observations
+- Used axios-functions orval client for @cipherbox/api-client (plain functions, no React deps)
 
 ### Roadmap Evolution
 
@@ -81,4 +77,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-07 after completing 19-02 (IPNS latency metrics) -- Phase 19 complete
+Last updated: 2026-03-20 after completing 19.1-02 (API client package with orval generation)
