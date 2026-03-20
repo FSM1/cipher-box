@@ -1,0 +1,77 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "72bdac90743e",
+  "session_id": "6838d6a8-ad86-4233-8edf-81daae3f1aef",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T12:25:01.801966Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "dfd160979ef7",
+  "checkpoint_transcript_start": 311,
+  "transcript_lines_at_start": 311,
+  "token_usage": {
+    "input_tokens": 13,
+    "cache_creation_tokens": 22598,
+    "cache_read_tokens": 977300,
+    "output_tokens": 3844,
+    "api_call_count": 11
+  },
+  "summary": {
+    "intent": "Resolve all 11 PR review threads on PR #296 and push the fixes to remote.",
+    "outcome": "All 11 threads were replied to and resolved, tests passed 53/53, but a subsequent CI build job failure was discovered and fixed by adding missing SDK package builds to the build step.",
+    "learnings": {
+      "repo": [
+        "The Build job in ci.yml only built crypto, api, and web — it did not build the newer SDK packages (sdk, sdk-core, api-client) that @cipherbox/web depends on, causing build failures.",
+        "Release-please manifest version must be kept in sync manually; it was misaligned at a version other than 0.24.2.",
+        "Codecov base workflow was missing the api-client flag and file, requiring explicit addition.",
+        "NestJS DTO classes need explicit `type` decorators (e.g. `type: String`, `type: Number`, `type: String, format: 'date-time'`) to generate correct OpenAPI/generated types for fields like previousPublicKey, initializedAt, and previousEpoch."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "destroy() was zeroing caller-provided buffers; fixed by making a defensive copy in the constructor so the original buffer is not mutated."
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "finding": "initSdkClient was corrupting key material — resolved as a downstream consequence of the defensive copy fix in client.ts."
+        },
+        {
+          "path": "apps/api/src/tee/dto/tee-keys.dto.ts",
+          "finding": "previousPublicKey and previousEpoch had wrong generated types; required explicit `type: String` and `type: Number` decorators respectively."
+        },
+        {
+          "path": "apps/api/src/vault/dto/init-vault.dto.ts",
+          "finding": "initializedAt had wrong generated type; required explicit `type: String, format: 'date-time'` decorator."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "finding": "Build job was missing build steps for sdk, sdk-core, and api-client packages, and was also missing the api-client test step and coverage upload."
+        }
+      ],
+      "workflow": [
+        "GraphQL API used to bulk-resolve PR review threads after replying to them individually.",
+        "CI build jobs and test jobs can have divergent build matrices — a package built in the test job may not be built in the build job, causing silent dependency failures."
+      ]
+    },
+    "friction": [
+      "After all 11 PR threads were resolved and tests passed, a separate CI build job failure surfaced that was not caught by the test job — requiring an additional investigation and fix cycle.",
+      "The build job and test job in ci.yml had drifted out of sync with the actual package structure, suggesting the CI config is not being updated alongside new package additions."
+    ],
+    "open_items": [
+      "Verify that the ci.yml build and test jobs remain in sync as new packages are added to the monorepo — consider extracting the package list into a shared matrix to avoid future drift."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T12:24:42.282787Z",
+    "agent_lines": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "agent_percentage": 100
+  }
+}
