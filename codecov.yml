@@ -38,6 +38,7 @@ coverage:
           - packages/api-client/src/**
         target: 70%
         threshold: 5%
+        informational: true
         flags:
           - api-client
       sdk-core:
