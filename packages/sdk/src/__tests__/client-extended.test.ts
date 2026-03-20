@@ -478,14 +478,18 @@ describe('CipherBoxClient - extended', () => {
       expect(client.hasFolder('new-ipns')).toBe(true);
     });
 
-    it('destroy zeros vault keypair and root folder key', () => {
+    it('destroy zeros internal key copies without mutating caller buffers', () => {
       const config = createTestConfig();
+      const originalPrivKey = new Uint8Array(config.vaultKeypair.privateKey);
+      const originalPubKey = new Uint8Array(config.vaultKeypair.publicKey);
+      const originalRootKey = new Uint8Array(config.rootFolderKey);
       const c = new CipherBoxClient(config);
       c.destroy();
 
-      expect(config.vaultKeypair.privateKey.every((b) => b === 0)).toBe(true);
-      expect(config.vaultKeypair.publicKey.every((b) => b === 0)).toBe(true);
-      expect(config.rootFolderKey.every((b) => b === 0)).toBe(true);
+      // Caller-provided buffers should NOT be zeroed
+      expect(config.vaultKeypair.privateKey).toEqual(originalPrivKey);
+      expect(config.vaultKeypair.publicKey).toEqual(originalPubKey);
+      expect(config.rootFolderKey).toEqual(originalRootKey);
     });
   });
 

@@ -15,14 +15,16 @@ import { CipherBoxClient } from '@cipherbox/sdk';
 
 const client = new CipherBoxClient({
   apiUrl: 'https://api.cipherbox.cc',
-  getAccessToken: () => token,
-  vaultKeypair,
+  getAccessToken: async () => token,
+  vaultKeypair: { publicKey, privateKey },
+  rootIpnsName: 'k51qzi5uqu5dg...',
+  rootFolderKey,
   onOperationStart: (op) => console.log('Starting', op),
   onOperationEnd: (op) => console.log('Done', op),
 });
 
-await client.uploadFile(folderId, file);
-await client.deleteFile(folderId, fileId);
+await client.uploadFile(folderIpnsName, data, fileName, mimeType);
+await client.deleteItem(folderIpnsName, childId);
 ```
 
 ## API

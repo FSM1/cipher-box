@@ -330,12 +330,15 @@ jobs:
       - name: Run SDK tests with coverage
         run: pnpm --filter @cipherbox/sdk test:coverage
 
+      - name: Run API Client tests with coverage
+        run: pnpm --filter @cipherbox/api-client test:coverage
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./apps/api/coverage/lcov.info,./packages/crypto/coverage/lcov.info,./packages/core/coverage/lcov.info,./packages/sdk-core/coverage/lcov.info,./packages/sdk/coverage/lcov.info
-          flags: api,crypto,core,sdk-core,sdk
+          files: ./apps/api/coverage/lcov.info,./packages/crypto/coverage/lcov.info,./packages/core/coverage/lcov.info,./packages/sdk-core/coverage/lcov.info,./packages/sdk/coverage/lcov.info,./packages/api-client/coverage/lcov.info
+          flags: api,crypto,core,sdk-core,sdk,api-client
           fail_ci_if_error: false
 
       - name: Cache coverage for base branch upload
@@ -348,6 +351,7 @@ jobs:
             packages/core/coverage/lcov.info
             packages/sdk-core/coverage/lcov.info
             packages/sdk/coverage/lcov.info
+            packages/api-client/coverage/lcov.info
           retention-days: 7
 
   build:

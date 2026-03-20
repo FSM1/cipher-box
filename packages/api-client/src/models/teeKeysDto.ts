@@ -5,8 +5,6 @@
  * Zero-knowledge encrypted cloud storage API
  * OpenAPI spec version: 0.1.0
  */
-import type { TeeKeysDtoPreviousEpoch } from './teeKeysDtoPreviousEpoch';
-import type { TeeKeysDtoPreviousPublicKey } from './teeKeysDtoPreviousPublicKey';
 
 export interface TeeKeysDto {
   /** Current TEE key epoch number */
@@ -17,10 +15,10 @@ export interface TeeKeysDto {
    * Previous TEE key epoch number (null if no rotation has occurred)
    * @nullable
    */
-  previousEpoch: TeeKeysDtoPreviousEpoch;
+  previousEpoch: number | null;
   /**
    * Previous epoch TEE secp256k1 public key (hex-encoded, null if no rotation has occurred)
    * @nullable
    */
-  previousPublicKey: TeeKeysDtoPreviousPublicKey;
+  previousPublicKey: string | null;
 }

@@ -5,7 +5,6 @@
  * Zero-knowledge encrypted cloud storage API
  * OpenAPI spec version: 0.1.0
  */
-import type { VaultResponseDtoInitializedAt } from './vaultResponseDtoInitializedAt';
 import type { VaultResponseDtoTeeKeys } from './vaultResponseDtoTeeKeys';
 
 export interface VaultResponseDto {
@@ -25,7 +24,7 @@ export interface VaultResponseDto {
    * When vault was first used (first file uploaded), null if unused
    * @nullable
    */
-  initializedAt: VaultResponseDtoInitializedAt;
+  initializedAt: string | null;
   /**
    * TEE public keys for IPNS key encryption (null if TEE not initialized)
    * @nullable

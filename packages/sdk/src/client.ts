@@ -40,9 +40,22 @@ export class CipherBoxClient {
   private folderTree: FolderTree;
   private keyCache: KeyCache;
   private binState: BinState | null = null;
+  /** Internal copies of key material — zeroed on destroy() without affecting caller buffers */
+  private internalVaultKeypair: { publicKey: Uint8Array; privateKey: Uint8Array };
+  private internalRootFolderKey: Uint8Array;
 
   constructor(config: CipherBoxClientConfig) {
-    this.config = config;
+    // Defensive copy of key material so destroy() only zeroes our copies
+    this.internalVaultKeypair = {
+      publicKey: new Uint8Array(config.vaultKeypair.publicKey),
+      privateKey: new Uint8Array(config.vaultKeypair.privateKey),
+    };
+    this.internalRootFolderKey = new Uint8Array(config.rootFolderKey);
+    this.config = {
+      ...config,
+      vaultKeypair: this.internalVaultKeypair,
+      rootFolderKey: this.internalRootFolderKey,
+    };
     this.ctx = {
       apiUrl: config.apiUrl,
       getAccessToken: config.getAccessToken,
@@ -74,10 +87,11 @@ export class CipherBoxClient {
     this.folderTree.clear();
     this.keyCache.clear();
     this.emitter.removeAll();
-    // Zero vault key material (defense-in-depth; JS GC may retain copies)
-    this.config.vaultKeypair.privateKey.fill(0);
-    this.config.vaultKeypair.publicKey.fill(0);
-    this.config.rootFolderKey.fill(0);
+    // Zero internal key copies (defense-in-depth; JS GC may retain copies)
+    // Only zeroes our copies, not the caller-provided buffers
+    this.internalVaultKeypair.privateKey.fill(0);
+    this.internalVaultKeypair.publicKey.fill(0);
+    this.internalRootFolderKey.fill(0);
     this.binState = null;
   }
 

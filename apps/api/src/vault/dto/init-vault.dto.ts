@@ -90,6 +90,8 @@ export class VaultResponseDto {
   @ApiProperty({
     description: 'When vault was first used (first file uploaded), null if unused',
     example: '2026-01-20T13:00:00.000Z',
+    type: String,
+    format: 'date-time',
     nullable: true,
   })
   initializedAt!: Date | null;

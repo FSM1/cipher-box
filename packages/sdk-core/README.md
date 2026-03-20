@@ -11,16 +11,16 @@ pnpm add @cipherbox/sdk-core
 ## Usage
 
 ```typescript
-import { uploadFileToFolder, downloadAndDecrypt, createSubfolder } from '@cipherbox/sdk-core';
+import { uploadFile, downloadAndDecrypt, createSubfolder } from '@cipherbox/sdk-core';
 
-const result = await uploadFileToFolder(file, metadata, folderKey, ipnsKeypair, publicKey, ctx);
+const result = await uploadFile({ data, fileId, mimeType, folderKey, userPublicKey, ctx });
 ```
 
 ## API
 
 ### File Operations
 
-- `uploadFileToFolder`, `downloadAndDecrypt`
+- `uploadFile`, `downloadAndDecrypt`
 
 ### Folder Operations
 
