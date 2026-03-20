@@ -1,0 +1,100 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "10f905cdc769",
+  "session_id": "8ae64815-e645-461a-ae6b-d66403649a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T05:04:46.020387Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "packages/sdk/src/client.ts",
+    "packages/sdk/src/__tests__/integration.test.ts",
+    "packages/sdk/src/bin/index.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "cefd2ad69313",
+  "token_usage": {
+    "input_tokens": 1030,
+    "cache_creation_tokens": 523045,
+    "cache_read_tokens": 92391737,
+    "output_tokens": 153210,
+    "api_call_count": 445
+  },
+  "summary": {
+    "intent": "Execute Phase 19.1 (Extract Core Crypto SDK as Shared Package) end-to-end, including debugging and fixing integration issues discovered during the Plan 19.1-05 checkpoint verification of the web app's SDK rewiring.",
+    "outcome": "Plans 19.1-01 through 19.1-05 completed with 10 atomic fix commits. 9/10 verified operations passing (create/rename folder, upload/download/edit/rename/move/delete file); delete-to-bin fixed and confirmed working via Playwright. Plan 19.1-06 (final cleanup/release) not yet started.",
+    "learnings": {
+      "repo": [
+        "@cipherbox/api-client generated functions require setApiClientConfig() to be called at runtime before use — this must happen during SDK initialization in useAuth.ts, not at module load time",
+        "FolderEntry.id is a UUID used for UI navigation/store lookup; folder.ipnsName (k51...) is the IPNS identifier — these must not be conflated when writing to the Zustand store",
+        "SDK's CipherBoxClient.loadBin() previously returned null on fresh accounts (no IPNS record yet), causing deleteToBin() to fall back to hard deleteItem() silently",
+        "IPNS sequence number 409 conflicts occur when two independent code paths (SDK + old service) both write to the same IPNS records — only one writer per IPNS name is safe",
+        "The ensureFolderRegistered bridge in sdk-provider.ts is fragile: syncing children/seqNum/ipnsPrivateKey from Zustand store overwrites SDK's more up-to-date internal state after SDK mutations",
+        "Per-file IPNS metadata (v2 format) requires the parent folder's folderKey for decryption — download paths that bypass this (old ipns.service.ts) cannot decrypt v2 files",
+        "Web3Auth OTP rate limit is enforced in Redis at 5 sends per 15 minutes — can be cleared with redis-cli DEL on the rate limit key for dev testing",
+        "The test-login endpoint uses secret 'e2e-test-secret-do-not-use-in-production' and is available in the local dev environment for SDK integration tests"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "finding": "loadBin() now returns an empty BinState (not null) when no IPNS record exists yet, mirroring the old service's initializeBin() behavior. This is required for deleteToBin() to work on fresh accounts."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "finding": "updateFolderMetadataAndPublish retries once on 409 by re-resolving the IPNS sequence number via resolveIpnsRecord. This handles stale seq numbers from concurrent writers or IPNS cache lag."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "finding": "Two critical init calls: (1) setApiClientConfig() with baseUrl + getAccessToken must be called before any SDK IPNS operations; (2) client.loadBin() must be called AFTER initializeBin() completes (old service creates the bin IPNS record first)."
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "finding": "ensureFolderRegistered should skip entirely if client.hasFolder(ipnsName) — overwriting SDK state after SDK mutations causes sequence number and private key corruption."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "finding": "Upload must go through client.uploadFile() (SDK path), not the old two-step service. The old service increments IPNS seq numbers outside SDK awareness, making subsequent SDK mutations fail with 409 or 'Item not found'."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "finding": "SDK integration test uses test-login endpoint for auth, validates full lifecycle (folder create/upload/download/rename/delete/bin) against live local API. IPNS delegated routing retries cause ~30s runtime — expected and acceptable."
+        }
+      ],
+      "workflow": [
+        "Validate SDK-level fixes with integration tests against the live API before attempting UI verification — much faster feedback loop and eliminates UI/auth noise",
+        "When two code paths write to the same IPNS record, the only stable fix is eliminating one path — syncing state between them always creates new edge cases",
+        "Playwright MCP headed session is the right tool for UI verification; driving via scripts (playwright CLI) introduces its own selector/timing bugs that obscure the real failures",
+        "Random email per E2E test run ensures clean filesystem state and avoids cross-test pollution from IPNS records",
+        "Atomic commits per logical fix (not per file) make bisecting and review tractable when multiple interrelated bugs are fixed in one session",
+        "When the web app uses SDK packages via workspace, 'pnpm build' on the package + Vite HMR picks up changes without a full server restart — but page reload is needed for init-time code (useAuth hooks)"
+      ]
+    },
+    "friction": [
+      "Web3Auth OTP rate limiting (5/15min) blocked Playwright login attempts during rapid iteration — required Redis cache clearing",
+      "Vite dev server HMR doesn't reload init-time hooks (useAuth) — required full page navigations to test SDK init fixes",
+      "mcp__playwright__browser_file_upload failed silently when the file path wasn't in an allowed directory; required creating test files in the project directory",
+      "IPNS delegated routing retries cause 25-30s latency in integration tests, making iterative test runs slow",
+      "duplicate key constraint in auth table for the test email blocked login mid-session — required switching to a fresh random email",
+      "The 'classifyHandoffIfNeeded' Claude Code runtime bug caused spurious agent failure reports, requiring spot-check verification to distinguish real failures from false negatives",
+      "pnpm dev was killed between context windows, requiring server restart and new OTP flow before Playwright verification could continue"
+    ],
+    "open_items": [
+      "Plan 19.1-06 (final cleanup, import rationalization, release config) not yet executed — Wave 5 pending Plan 05 checkpoint approval",
+      "Phase 19.1 checkpoint for Plan 05 not formally closed — verification passed but workflow state not updated",
+      "TextEditorDialog share path still uses old downloadFileFromIpns service (needs re-wrapped file keys from share_keys) — not rewired to SDK",
+      "useFileUpload/useFileDelete (split-step upload pattern) not fully migrated to SDK — only useDropUpload was rewired; direct file replacement flow uses old encrypt+upload path",
+      "ensureFolderRegistered may still be needed for folders created before SDK migration (loaded from store on app boot) — long-term plan to remove it requires SDK to own folder state from first load",
+      "The SDK integration test has ~30s runtime due to IPNS delegated routing retries — worth investigating whether test environment can use a faster resolution path",
+      "Phase verification (gsd-verifier) not yet run for Phase 19.1 — pending Plan 06 execution"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T05:03:42.532896Z",
+    "agent_lines": 109,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 109,
+    "agent_percentage": 100
+  }
+}
