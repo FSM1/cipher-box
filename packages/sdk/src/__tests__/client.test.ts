@@ -60,7 +60,7 @@ describe('CipherBoxClient', () => {
   });
 
   describe('destroy', () => {
-    it('clears folder tree keys (fills with 0)', () => {
+    it('clears internal folder tree key copies without zeroing caller buffers', () => {
       const folderKey = new Uint8Array(32).fill(0xaa);
       const ipnsPrivateKey = new Uint8Array(64).fill(0xbb);
 
@@ -80,9 +80,12 @@ describe('CipherBoxClient', () => {
 
       client.destroy();
 
-      // Keys should be zeroed
-      expect(folderKey.every((b) => b === 0)).toBe(true);
-      expect(ipnsPrivateKey.every((b) => b === 0)).toBe(true);
+      // Caller-provided buffers should NOT be zeroed (FolderTree clones them)
+      expect(folderKey.every((b) => b === 0xaa)).toBe(true);
+      expect(ipnsPrivateKey.every((b) => b === 0xbb)).toBe(true);
+
+      // Internal state should be cleared
+      expect(client.getFolderTree().getAll().size).toBe(0);
     });
 
     it('removes all event handlers', () => {

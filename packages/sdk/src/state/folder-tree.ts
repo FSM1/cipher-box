@@ -25,9 +25,16 @@ export class FolderTree {
     return this.folders.get(ipnsName);
   }
 
-  /** Set or update a folder's state */
+  /** Set or update a folder's state, cloning key material to avoid zeroing caller buffers */
   set(ipnsName: string, state: FolderState): void {
-    this.folders.set(ipnsName, state);
+    this.folders.set(ipnsName, {
+      ...state,
+      folderKey: new Uint8Array(state.folderKey),
+      ipnsKeypair: {
+        publicKey: new Uint8Array(state.ipnsKeypair.publicKey),
+        privateKey: new Uint8Array(state.ipnsKeypair.privateKey),
+      },
+    });
   }
 
   /** Remove a folder from the tree */
