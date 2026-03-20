@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "b48f670a8624",
+  "strategy": "manual-commit",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/core/vitest.config.ts",
+    "packages/sdk/vitest.config.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b4/8f670a8624/0/metadata.json",
+      "transcript": "/b4/8f670a8624/0/full.jsonl",
+      "context": "/b4/8f670a8624/0/context.md",
+      "content_hash": "/b4/8f670a8624/0/content_hash.txt",
+      "prompt": "/b4/8f670a8624/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1275,
+    "cache_creation_tokens": 1156676,
+    "cache_read_tokens": 138507330,
+    "output_tokens": 198485,
+    "api_call_count": 633
+  }
+}
