@@ -1,0 +1,105 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "f229601c6145",
+  "session_id": "34bbe85d-e855-459b-8466-d8f88151f839",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T23:31:09.306324Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "packages/sdk/src/client.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "0200d262ffb1",
+  "token_usage": {
+    "input_tokens": 355,
+    "cache_creation_tokens": 836425,
+    "cache_read_tokens": 56817529,
+    "output_tokens": 75675,
+    "api_call_count": 323
+  },
+  "summary": {
+    "intent": "Run the full E2E test suite against branch changes, diagnose failures, and fix any regressions before the PR can be merged.",
+    "outcome": "Fixed 3 distinct issues (SDK import regressions, E2E auth migration from brittle Web3Auth injection to wallet-based auth, and a web app race condition), implemented share-aware key re-wrapping in the SDK, and reduced E2E failures from 7+ to 0 with 96+ passing tests.",
+    "learnings": {
+      "repo": [
+        "The SDK extraction refactor (phase 19) moved vault functions (initializeVault, encryptVaultKeys, decryptVaultKeys) from @cipherbox/crypto to @cipherbox/core, but E2E test imports were not updated.",
+        "E2E tests have two auth strategies: brittle Zustand injection via loginViaTestEndpoint (requires TEST_LOGIN_SECRET, reinjectTestAuthAfterReload) and robust wallet-based SIWE via @johanneskares/wallet-mock. Wallet auth is strictly better.",
+        "load-test.spec.ts added in PR #288 (March 8) was not excluded from the default Playwright config, causing all CI E2E runs to timeout at 15 minutes since March 8. This was the root cause, not the someguy sidecar.",
+        "The API throttler is configured at 10 req/s and 100/min. Conflict-detection tests call bumpServerSequence (2 API calls each) in rapid succession across 3 tests, hitting the rate limit.",
+        "CipherBoxClient.uploadFile() and createFolder() did not automatically re-wrap file keys for existing share recipients, causing 'No re-wrapped file key available' errors for recipients after the sharer adds new files.",
+        "The sharing workflow re-wrapping bug: when Alice uploads to an already-shared folder, the new file key is only wrapped with Alice's key. The SDK now handles this via ShareCallbacks (getCoveringShares + addShareKeys).",
+        "Web3Auth Core Kit session restoration calls exportTssKey twice, adding 4-10s of Sapphire Devnet latency after page reload, making reload-dependent tests intermittently flaky."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 259,
+          "end_line": 265,
+          "finding": "Race condition: setAccessToken() at line 259 immediately set isAuthenticated: true, triggering Login.tsx redirect before initializeOrLoadVault() at line 265 completed. Fixed by splitting into setAccessToken (stores token only) and new setAuthenticated() called after vault+SDK init."
+        },
+        {
+          "path": "apps/web/src/stores/auth.store.ts",
+          "finding": "setAccessToken action was setting both the token AND isAuthenticated:true. Split into separate setAccessToken (token only) and new setAuthenticated() action to decouple token storage from auth gate."
+        },
+        {
+          "path": "apps/web/src/lib/api/client.ts",
+          "line": 52,
+          "end_line": 52,
+          "finding": "Token refresh interceptor also calls setAccessToken — needs to additionally call setAuthenticated() since user is already authenticated when refresh fires."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "uploadFile() and createFolder() now call private reWrapNewItems() after the operation. Re-wrapping errors are caught and emitted as 'share:reWrapFailed' events rather than propagating to callers, so upload/create still succeed."
+        },
+        {
+          "path": "packages/sdk-core/src/upload/index.ts",
+          "finding": "uploadFile() now returns the plaintext fileKey alongside the result so the stateful SDK client can re-wrap for share recipients before clearing the key bytes."
+        },
+        {
+          "path": "tests/e2e/utils/wallet-login-helpers.ts",
+          "finding": "After wallet login, a waitForFunction check for vault keys in Zustand store is needed before proceeding to file operations. Without this, the SDK client isn't initialized when tests start uploading."
+        },
+        {
+          "path": "tests/e2e/tests/conflict-detection.spec.ts",
+          "finding": "Added 2s delay before bumpServerSequence calls to avoid hitting the API rate limiter (10 req/s). Also increased afterAll hook timeout to handle cleanup of multiple items."
+        },
+        {
+          "path": "tests/e2e/playwright.config.ts",
+          "finding": "load-test.spec.ts must be excluded from the default testMatch glob. It should only run in a dedicated load-test project/CI step with staging access."
+        }
+      ],
+      "workflow": [
+        "When investigating CI failures, check GitHub Actions run history to find the first failing run and correlate with PRs merged around that date — avoids assuming the most recent change is the culprit.",
+        "Serial Playwright test suites (test.describe.serial) cause all downstream tests to be marked 'skipped' when an early test fails, massively inflating the skipped count. Fixing flaky early tests recovers all downstream coverage.",
+        "The reWrapForRecipients mock in vitest needs an explicit mockReturnValue({ failedRecipients: [] }) default or destructuring will fail with undefined. Missing mock defaults are a common source of CI-only failures.",
+        "When a commit fixes a bug but the changed file is not staged (only the test file is staged), the CI will catch the regression even if local tests pass due to the locally-modified but uncommitted file."
+      ]
+    },
+    "friction": [
+      "load-test.spec.ts silently broke all CI E2E runs for 13+ days before being caught — no alerting on total test count drop or suite timeout pattern.",
+      "The reWrapForRecipients mock default was missing, causing a CI failure after push even though local tests passed (client.ts fix was unstaged).",
+      "replace_all edit caused 'TestAccount' → 'WalletTestAccount' to also transform import alias names, creating 'createWalletWalletTestAccount' — required multiple correction edits.",
+      "The sharing test 7.3 textarea content assertion failed because the text editor dialog loads asynchronously and the test wasn't waiting for content to populate.",
+      "Web3Auth Sapphire Devnet latency makes reload-after-login tests inherently flaky when running in parallel with other suites — hard to give a reliably passing timeout.",
+      "Local vs staging API URL mismatch in .env caused confusing test behavior where some tests passed against staging but failed locally (and vice versa) depending on vault data age."
+    ],
+    "open_items": [
+      "Full-workflow test 3.8 (subfolder navigation after reload) remains intermittently flaky due to Core Kit Sapphire Devnet latency during session restoration — timeout increased as workaround but root cause is external service latency.",
+      "The web app should be fixed more holistically: isAuthenticated should not be set until both vault init AND SDK client init are fully complete, not just worked around in E2E with waitForFunction.",
+      "load-test.spec.ts needs a dedicated CI pipeline step with staging infrastructure access, not just exclusion from the default config.",
+      "The 'share:reWrapFailed' event emitted by the SDK client has no handler in the web app — users won't be notified if re-wrapping fails silently after upload.",
+      "The old loginViaTestEndpoint, reinjectTestAuthAfterReload, and TEST_LOGIN_SECRET infrastructure in the E2E utils can now be deleted as dead code.",
+      "The pre-existing TypeScript error in load-test.spec.ts was noted but not fixed (out of scope for this PR)."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T23:30:14.895956Z",
+    "agent_lines": 6,
+    "human_added": 200,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 206,
+    "agent_percentage": 2.912621359223301
+  }
+}
