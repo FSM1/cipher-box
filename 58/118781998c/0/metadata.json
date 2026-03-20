@@ -1,0 +1,71 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "58118781998c",
+  "session_id": "6838d6a8-ad86-4233-8edf-81daae3f1aef",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T13:43:46.60313Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".coderabbit.yaml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e398fddd9e8e",
+  "checkpoint_transcript_start": 827,
+  "transcript_lines_at_start": 827,
+  "token_usage": {
+    "input_tokens": 9,
+    "cache_creation_tokens": 8008,
+    "cache_read_tokens": 1076769,
+    "output_tokens": 2622,
+    "api_call_count": 7
+  },
+  "summary": {
+    "intent": "Fix PR review issues in cipher-box: resolve two code review threads about sequence number handling, and ensure CodeRabbit actually reviews all relevant files in PR #296.",
+    "outcome": "Both code review threads were fixed and resolved (sequence number update in folder store, sequenceNumber field added to SDK events). CodeRabbit config was updated to increase file limit so the review would process all files.",
+    "learnings": {
+      "repo": [
+        "CodeRabbit reads .coderabbit.yaml from the base branch (main), not the PR branch — new path filters added in a PR won't take effect until after merge",
+        "The cipher-box repo has a folder store with sequence number tracking and an SDK event system that requires sequenceNumber fields"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/stores/folder.store.ts",
+          "line": 215,
+          "end_line": 215,
+          "finding": "subscribeToSdk handler was missing an updateFolderSequence() call, causing sequence numbers to go stale on SDK events"
+        },
+        {
+          "path": "packages/sdk/src/events.ts",
+          "line": 22,
+          "end_line": 34,
+          "finding": "SDK event type definitions were missing the sequenceNumber field"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "9 emit sites in the SDK client were not including sequenceNumber in emitted events"
+        }
+      ],
+      "workflow": [
+        "CodeRabbit's file review limit can be a blocker when PRs touch many files — increasing the limit in .coderabbit.yaml is the workaround when path filters alone aren't sufficient",
+        "Adding path ignore filters to .coderabbit.yaml in a PR will not take effect for that same PR's review"
+      ]
+    },
+    "friction": [
+      "CodeRabbit skipped files in PR #296 due to hitting its default file limit, requiring a config change",
+      "The CodeRabbit config change itself had to be committed and pushed to main before it could affect the current PR review"
+    ],
+    "open_items": [
+      "Verify CodeRabbit re-runs the review after the file limit config is merged and picks up all previously skipped files"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T13:43:32.972053Z",
+    "agent_lines": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 100
+  }
+}
