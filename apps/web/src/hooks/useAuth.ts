@@ -207,12 +207,18 @@ export function useAuth() {
     })();
 
     // Non-blocking bin initialization (fire-and-forget)
+    // After old service creates/loads bin, also load into SDK for deleteToBin support
     void (async () => {
       try {
         await initializeBin({
           userPrivateKey: userKeypair.privateKey,
           userPublicKey: userKeypair.publicKey,
         });
+        // Now load bin into SDK (old service ensures bin IPNS record exists)
+        const { getSdkClient, hasSdkClient } = await import('../lib/sdk-provider');
+        if (hasSdkClient()) {
+          await getSdkClient().loadBin();
+        }
       } catch (error) {
         console.error('[Auth] Bin initialization failed (non-blocking):', error);
       }
