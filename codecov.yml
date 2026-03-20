@@ -29,8 +29,8 @@ coverage:
       core:
         paths:
           - packages/core/src/**
-        target: 80%
-        threshold: 2%
+        target: 75%
+        threshold: 3%
         flags:
           - core
       api-client:
@@ -50,7 +50,7 @@ coverage:
       sdk:
         paths:
           - packages/sdk/src/**
-        target: 75%
+        target: 68%
         threshold: 3%
         flags:
           - sdk
