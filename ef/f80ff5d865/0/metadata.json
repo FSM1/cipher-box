@@ -1,0 +1,105 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "eff80ff5d865",
+  "session_id": "8ae64815-e645-461a-ae6b-d66403649a99",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-20T04:24:10.386918Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/lib/sdk-provider.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f8208b9f97f3",
+  "token_usage": {
+    "input_tokens": 846,
+    "cache_creation_tokens": 368800,
+    "cache_read_tokens": 71194142,
+    "output_tokens": 117225,
+    "api_call_count": 287
+  },
+  "summary": {
+    "intent": "Execute phase 19.1 (Extract Core Crypto SDK as Shared Package) — 6 plans across 5 waves — including human checkpoint verification of the SDK rewiring of web app hooks.",
+    "outcome": "Waves 1-3 completed via subagents. Wave 4 (plan 19.1-05) hit a checkpoint requiring live verification; multiple bugs in the SDK-web integration were discovered and fixed (9/10 operations passing). Atomic commits for each fix were in progress at session end.",
+    "learnings": {
+      "repo": [
+        "The monorepo has a dual-path IPNS write problem: folder CRUD goes through the SDK, file upload went through the old service — both write to the same IPNS records, causing 409 sequence number conflicts.",
+        "`setApiClientConfig()` from `@cipherbox/api-client` must be called during SDK initialization; without it, all IPNS publish/resolve operations silently fail.",
+        "The old `initializeBin` service must complete before `client.loadBin()` is called — SDK bin loading depends on an IPNS record created by the old service at login time.",
+        "The SDK's `createFolder` was returning `ipnsName` as the folder ID in the Zustand store, but the file browser looks up folders by UUID (`FolderEntry.id`); new folders were unfindable for navigation.",
+        "`ensureFolderRegistered` in sdk-provider was overwriting the SDK's valid IPNS private key and sequence number with stale/empty values from the Zustand store, corrupting subsequent mutations.",
+        "The API has conflict-retry middleware in the old service (`withConflictRetry` + `resyncFolder`) that was not replicated in the SDK's `updateFolderMetadataAndPublish`.",
+        "A `TEST_LOGIN_SECRET` env var exists for E2E integration tests, enabling direct token-based login without OTP flow.",
+        "The old web app API client (`apps/web/src/api/custom-instance.ts`) is separate from the new `@cipherbox/api-client` package's `setApiClientConfig` — both exist in parallel."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "finding": "Must call setApiClientConfig() here during SDK init so @cipherbox/api-client generated functions (IPNS publish/resolve) have a configured axios instance."
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "finding": "ensureFolderRegistered should be simplified to skip if SDK already has the folder — attempting to merge Zustand store state with SDK internal state causes key and sequence number corruption."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "createFolder must return the FolderEntry's UUID (id field), not ipnsName — the Zustand store and file browser use UUIDs for folder identity, not IPNS names."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "finding": "updateFolderMetadataAndPublish needs a single 409 retry that re-resolves the current IPNS sequence number — the API delegates routing can return stale cached sequence numbers."
+        },
+        {
+          "path": "apps/web/src/hooks/useDropUpload.ts",
+          "finding": "Rewired to call client.uploadFile() instead of old two-step service — eliminates dual-path IPNS writes that caused irreconcilable sequence number conflicts."
+        },
+        {
+          "path": "apps/web/src/hooks/useFileDownload.ts",
+          "finding": "Rewired to call client.downloadFromIpns() — the old service chain used a different IPNS resolution path that failed to decrypt files uploaded via the new SDK."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "finding": "Rewired to use SDK download path — was using old service directly, causing decryption failure on SDK-uploaded files."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "finding": "Full lifecycle integration test created: login → create folder → upload → download → rename file → rename folder → delete → verify empty. All 8 operations pass at the SDK level."
+        }
+      ],
+      "workflow": [
+        "Playwright MCP (headed browser control) is more reliable than Playwright scripts for interactive debugging — avoids selector brittleness and provides real-time visual feedback.",
+        "When an agent reports 'failed' with classifyHandoffIfNeeded error, spot-check SUMMARY.md and git commits — this is a Claude Code runtime bug, not a real failure.",
+        "Using random emails per E2E test run avoids filesystem state pollution from previous runs — clean vault each time.",
+        "SDK-level vitest integration tests catch encrypt/decrypt issues much faster than full E2E tests; worth writing before Playwright verification.",
+        "Dual-path architectures (SDK for some ops, old service for others) create compounding state conflicts — the fix must be complete migration, not a bridge."
+      ]
+    },
+    "friction": [
+      "Wave 1 had to be fully re-run after user rejected plan 19.1-02 implementation decisions — branch reset to main and both agents re-spawned.",
+      "The dual-path IPNS write problem (SDK + old upload service) caused cascading state conflicts that required multiple attempted fixes before the root cause was identified.",
+      "ensureFolderRegistered attempts to bridge SDK/store state created new bugs with each fix iteration (key overwrite, sequence overwrite, children sync) — the bridge pattern was fundamentally flawed.",
+      "Playwright script tests were unreliable for this verification due to selector brittleness (+folder button text vs 'New Folder') and timing issues; switching to MCP headed session was necessary.",
+      "Background task notification IDs arrived out of order and referred to stale runs, causing confusion about which results were current.",
+      "The user had to explicitly instruct the assistant to stop asking for manual verification and drive Playwright autonomously — the assistant defaulted to deferring to the user unnecessarily.",
+      "Rebuilding the full package chain (sdk-core → sdk → web) was required after each fix iteration, adding significant latency to the debug loop."
+    ],
+    "open_items": [
+      "Bin delete falls back to hard delete — client.loadBin() cannot load the bin IPNS record created by the old initializeBin service; bin integration between SDK and old service unresolved.",
+      "Wave 5 (plan 19.1-06: final cleanup, imports, release config) not yet executed — session ended during Wave 4 checkpoint atomic commit phase.",
+      "Pre-existing DTS circular dependency between @cipherbox/core and @cipherbox/crypto causes pnpm -r run build to fail (though per-package builds succeed).",
+      "useFileUpload (multi-step upload with progress tracking) and useFileDelete not rewired to SDK — noted in plan 19.1-05 as architecturally different flows, but may need revisiting.",
+      "Integration test file at packages/sdk/src/__tests__/integration.test.ts should be moved or cleaned up — it was written as a debugging aid and may not belong in the permanent test suite.",
+      "Debug test file at tests/e2e/tests/sdk-debug.spec.ts needs cleanup or permanent adoption as a regression test.",
+      "Atomic commits were in progress at session end — commits 1-3 were being staged; remaining fixes (folder UUID, upload/download rewiring, 409 retry) not yet committed."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-20T04:23:13.775447Z",
+    "agent_lines": 8,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 8,
+    "agent_percentage": 100
+  }
+}
