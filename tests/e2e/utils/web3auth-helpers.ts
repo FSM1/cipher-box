@@ -1,12 +1,6 @@
 import { Page } from '@playwright/test';
-import {
-  initializeVault,
-  encryptVaultKeys,
-  decryptVaultKeys,
-  deriveIpnsName,
-  hexToBytes,
-  bytesToHex,
-} from '@cipherbox/crypto';
+import { initializeVault, encryptVaultKeys, decryptVaultKeys } from '@cipherbox/core';
+import { deriveIpnsName, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import * as ed from '@noble/ed25519';
 
 /**
