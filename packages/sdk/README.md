@@ -29,23 +29,23 @@ await client.deleteFile(folderId, fileId);
 
 ### Client Lifecycle
 
-- `new CipherBoxClient(config)`, `client.initialize()`, `client.destroy()`
-
-### File Operations
-
-- `client.uploadFile()`, `client.downloadFile()`, `client.deleteFile()`, `client.moveFile()`
+- `new CipherBoxClient(config)`, `client.destroy()`
 
 ### Folder Operations
 
-- `client.createFolder()`, `client.renameFolder()`, `client.deleteFolder()`
+- `client.loadFolder()`, `client.createFolder()`, `client.renameItem()`, `client.moveItem()`, `client.deleteItem()`
+
+### File Operations
+
+- `client.uploadFile()`, `client.downloadFile()`, `client.downloadFromIpns()`
 
 ### Recycle Bin
 
-- `client.listBin()`, `client.restoreFromBin()`, `client.emptyBin()`
+- `client.loadBin()`, `client.deleteToBin()`, `client.restoreFromBin()`, `client.permanentDelete()`, `client.emptyBin()`
 
 ### Events
 
-- `client.on('change', callback)`, `client.on('error', callback)`
+- `const unsub = client.on((event) => { ... })` — single handler receives all typed `SdkEvent` objects (`folder:loaded`, `folder:updated`, `bin:updated`, `error`, etc.)
 
 ## Architecture
 

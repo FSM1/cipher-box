@@ -28,7 +28,7 @@ const result = await uploadFileToFolder(file, metadata, folderKey, ipnsKeypair, 
 
 ### IPFS/IPNS
 
-- `addToIpfs`, `getFromIpfs`, `publishIpnsRecord`, `resolveIpnsName`
+- `addToIpfs`, `fetchFromIpfs`, `unpinFromIpfs`, `createAndPublishIpnsRecord`, `batchPublishIpnsRecords`, `resolveIpnsRecord`
 
 ## Architecture
 

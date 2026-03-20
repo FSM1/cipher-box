@@ -11,8 +11,13 @@ pnpm add @cipherbox/api-client
 ## Usage
 
 ```typescript
-import { createApiInstance } from '@cipherbox/api-client';
-const api = createApiInstance({ baseURL: 'https://api.cipherbox.cc', getAccessToken: () => token });
+import { setApiClientConfig, ipnsControllerResolveRecord } from '@cipherbox/api-client';
+
+// Configure once at startup
+setApiClientConfig({ baseUrl: 'https://api.cipherbox.cc', getAccessToken: async () => token });
+
+// Then call generated functions directly
+const result = await ipnsControllerResolveRecord({ ipnsName: 'k51...' });
 ```
 
 ## Architecture
