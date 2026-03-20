@@ -1,12 +1,12 @@
 import { useCallback } from 'react';
-import { useFileUpload } from './useFileUpload';
-import { useFolder } from './useFolder';
-import { unpinFromIpfs } from '../lib/api/ipfs';
 import { useUploadStore } from '../stores/upload.store';
-import type { PendingReplacement } from '../stores/upload.store';
 import { useQuotaStore } from '../stores/quota.store';
 import { useFolderStore } from '../stores/folder.store';
-import type { UploadedFile } from '../services/upload.service';
+import { useVaultStore } from '../stores/vault.store';
+import { useAuthStore } from '../stores/auth.store';
+import { getSdkClient, hasSdkClient, ensureFolderRegistered } from '../lib/sdk-provider';
+import { getRootFolderState } from './folder-helpers';
+import type { PendingReplacement } from '../stores/upload.store';
 
 export const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per FILE-01
 
@@ -21,148 +21,186 @@ export function isExternalFileDrag(dataTransfer: DataTransfer): boolean {
 /**
  * Hook for handling external file drops (from Finder/Explorer) anywhere in the app.
  *
- * Provides a `handleFileDrop(files, folderId)` callback that validates,
- * encrypts, uploads, and registers files in the target folder.
+ * Uses the SDK's uploadFile() for atomic encrypt → upload → register flow.
+ * All IPNS state is managed by the SDK — no dual-path conflicts.
  */
 export function useDropUpload() {
-  const { upload, canUpload, isUploading } = useFileUpload();
-  const { addFiles } = useFolder();
+  const uploadStatus = useUploadStore((s) => s.status);
+  const isUploading =
+    uploadStatus === 'encrypting' || uploadStatus === 'uploading' || uploadStatus === 'registering';
 
-  const handleFileDrop = useCallback(
-    async (files: File[], folderId: string): Promise<boolean> => {
-      // Filter out oversized files
-      const oversized = files.filter((f) => f.size > MAX_FILE_SIZE);
-      if (oversized.length > 0) {
-        useUploadStore
-          .getState()
-          .setError(`Files exceed 100MB limit: ${oversized.map((f) => f.name).join(', ')}`);
+  const handleFileDrop = useCallback(async (files: File[], folderId: string): Promise<boolean> => {
+    // Filter out oversized files
+    const oversized = files.filter((f) => f.size > MAX_FILE_SIZE);
+    if (oversized.length > 0) {
+      useUploadStore
+        .getState()
+        .setError(`Files exceed 100MB limit: ${oversized.map((f) => f.name).join(', ')}`);
+      return false;
+    }
+
+    if (files.length === 0) return false;
+
+    // Check quota
+    const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+    const quotaStore = useQuotaStore.getState();
+    if (!quotaStore.canUpload(totalSize)) {
+      useUploadStore.getState().setError('Not enough storage space for these files');
+      return false;
+    }
+
+    // Check for duplicates within batch
+    const batchNames = new Set<string>();
+    for (const f of files) {
+      if (batchNames.has(f.name)) {
+        useUploadStore.getState().setError(`Duplicate file name in selection: ${f.name}`);
         return false;
       }
+      batchNames.add(f.name);
+    }
 
-      if (files.length === 0) return false;
-
-      // Check quota
-      const totalSize = files.reduce((sum, f) => sum + f.size, 0);
-      if (!canUpload(totalSize)) {
-        useUploadStore.getState().setError('Not enough storage space for these files');
-        return false;
-      }
-
-      // Check for duplicates within batch (independent of folder cache)
-      const batchNames = new Set<string>();
-      for (const f of files) {
-        if (batchNames.has(f.name)) {
-          useUploadStore.getState().setError(`Duplicate file name in selection: ${f.name}`);
-          return false;
+    // Identify which files already exist in the target folder
+    const folder = useFolderStore.getState().folders[folderId];
+    const existingByName = new Map<string, string>(); // name → fileId
+    const existingFolderNames = new Set<string>();
+    if (folder) {
+      for (const child of folder.children) {
+        if (child.type === 'file') {
+          existingByName.set(child.name, child.id);
+        } else if (child.type === 'folder') {
+          existingFolderNames.add(child.name);
         }
-        batchNames.add(f.name);
+      }
+    }
+
+    // Fail fast on file–folder name collisions
+    const folderNameConflicts = files.filter((f) => existingFolderNames.has(f.name));
+    if (folderNameConflicts.length > 0) {
+      useUploadStore
+        .getState()
+        .setError(
+          `Cannot upload file(s) with the same name as an existing folder: ${folderNameConflicts.map((f) => f.name).join(', ')}`
+        );
+      return false;
+    }
+
+    const newFiles = files.filter((f) => !existingByName.has(f.name));
+    const duplicateFiles = files.filter((f) => existingByName.has(f.name));
+
+    if (!hasSdkClient()) {
+      useUploadStore.getState().setError('SDK not initialized — please log in again');
+      return false;
+    }
+
+    const client = getSdkClient();
+
+    // Resolve parent folder and ensure it's registered in the SDK
+    const folders = useFolderStore.getState().folders;
+    const vault = useVaultStore.getState();
+    const parentFolder =
+      folderId === 'root' ? getRootFolderState(vault, folders) : folders[folderId];
+    if (!parentFolder) {
+      useUploadStore.getState().setError('Parent folder not found');
+      return false;
+    }
+    ensureFolderRegistered(parentFolder);
+
+    const uploadStore = useUploadStore.getState();
+    // Start with all files (new + duplicates) since we encrypt all upfront
+    uploadStore.startUpload(files.length);
+
+    const uploadedCids: string[] = []; // Track for cleanup on failure
+
+    try {
+      // Upload new files via SDK (atomic: encrypt → IPFS → FilePointer → IPNS publish)
+      for (const file of newFiles) {
+        if (useUploadStore.getState().status === 'cancelled') {
+          throw new Error('Upload cancelled by user');
+        }
+
+        useUploadStore.getState().setUploading(file.name, 0);
+
+        // Read File to Uint8Array
+        const data = new Uint8Array(await file.arrayBuffer());
+
+        const result = await client.uploadFile(
+          parentFolder.ipnsName,
+          data,
+          file.name,
+          file.type || 'application/octet-stream',
+          (percent) => useUploadStore.getState().setUploading(file.name, percent)
+        );
+
+        uploadedCids.push(result.cid);
+        useUploadStore.getState().fileComplete();
       }
 
-      // Identify which files already exist in the target folder
-      const folder = useFolderStore.getState().folders[folderId];
-      const existingByName = new Map<string, string>(); // name → fileId
-      const existingFolderNames = new Set<string>();
-      if (folder) {
-        for (const child of folder.children) {
-          if (child.type === 'file') {
-            existingByName.set(child.name, child.id);
-          } else if (child.type === 'folder') {
-            existingFolderNames.add(child.name);
+      // Handle duplicate files: encrypt + upload to IPFS, then surface as pending replacements
+      // (These don't get registered in the folder — the user decides via the Replace dialog)
+      if (duplicateFiles.length > 0) {
+        const replacements: PendingReplacement[] = [];
+
+        for (const file of duplicateFiles) {
+          if (useUploadStore.getState().status === 'cancelled') {
+            throw new Error('Upload cancelled by user');
+          }
+
+          useUploadStore.getState().setUploading(file.name, 0);
+
+          // For duplicates, we only encrypt + upload to IPFS (don't register in folder)
+          // Use the old upload service for this since SDK's uploadFile registers in folder
+          const { encryptFile } = await import('../services/file-crypto.service');
+          const { addToIpfs } = await import('../lib/api/ipfs');
+
+          const userPublicKey = useAuthStore.getState().vaultKeypair?.publicKey;
+          if (!userPublicKey) throw new Error('No keypair available');
+          const encrypted = await encryptFile(file, userPublicKey);
+          // Cast for TypeScript 5.9 compat
+          const blob = new Blob([encrypted.ciphertext.buffer as ArrayBuffer], {
+            type: 'application/octet-stream',
+          });
+          const ipfsResult = await addToIpfs(blob, (percent) =>
+            useUploadStore.getState().setUploading(file.name, percent)
+          );
+
+          uploadedCids.push(ipfsResult.cid);
+          useUploadStore.getState().fileComplete();
+
+          const existingFileId = existingByName.get(file.name);
+          if (existingFileId) {
+            replacements.push({
+              fileName: file.name,
+              fileId: existingFileId,
+              parentId: folderId,
+              encryptedData: {
+                cid: ipfsResult.cid,
+                wrappedKey: encrypted.wrappedKey,
+                iv: encrypted.iv,
+                size: file.size,
+                encryptionMode: encrypted.encryptionMode,
+              },
+            });
           }
         }
-      }
 
-      // Fail fast on file–folder name collisions (no Replace/Skip for folders)
-      const folderNameConflicts = files.filter((f) => existingFolderNames.has(f.name));
-      if (folderNameConflicts.length > 0) {
-        useUploadStore
-          .getState()
-          .setError(
-            `Cannot upload file(s) with the same name as an existing folder: ${folderNameConflicts.map((f) => f.name).join(', ')}`
-          );
-        return false;
-      }
-
-      const newFiles = files.filter((f) => !existingByName.has(f.name));
-      const duplicateFiles = files.filter((f) => existingByName.has(f.name));
-
-      let uploadedFiles: UploadedFile[] | undefined;
-      try {
-        uploadedFiles = await upload(files);
-
-        useUploadStore.getState().setRegistering();
-
-        // Build file index for mimeType lookup
-        const filesByName = new Map(files.map((f) => [f.name, f]));
-
-        // Build uploaded file index by name for quick lookup
-        const uploadedByName = new Map(uploadedFiles.map((u) => [u.originalName, u]));
-
-        // Register only genuinely new files in the folder
-        if (newFiles.length > 0) {
-          const newUploaded = newFiles
-            .map((f) => uploadedByName.get(f.name))
-            .filter((u): u is UploadedFile => !!u);
-
-          await addFiles(
-            folderId,
-            newUploaded.map((uploaded) => ({
-              cid: uploaded.cid,
-              wrappedKey: uploaded.wrappedKey,
-              iv: uploaded.iv,
-              originalName: uploaded.originalName,
-              originalSize: uploaded.originalSize,
-              mimeType: filesByName.get(uploaded.originalName)?.type || 'application/octet-stream',
-              encryptionMode: uploaded.encryptionMode,
-            }))
-          );
-        }
-
-        // Surface duplicates as pending replacements for the UI to handle
-        if (duplicateFiles.length > 0) {
-          const replacements: PendingReplacement[] = duplicateFiles
-            .map((f) => {
-              const uploaded = uploadedByName.get(f.name);
-              const existingFileId = existingByName.get(f.name);
-              if (!uploaded || !existingFileId) return null;
-              return {
-                fileName: f.name,
-                fileId: existingFileId,
-                parentId: folderId,
-                encryptedData: {
-                  cid: uploaded.cid,
-                  wrappedKey: uploaded.wrappedKey,
-                  iv: uploaded.iv,
-                  size: uploaded.originalSize,
-                  encryptionMode: uploaded.encryptionMode,
-                },
-              };
-            })
-            .filter((r): r is PendingReplacement => r !== null);
-
+        if (replacements.length > 0) {
           useUploadStore.getState().setPendingReplacements(replacements);
         }
-
-        useUploadStore.getState().setSuccess();
-        return true;
-      } catch (err) {
-        const message = (err as Error).message;
-        if (message !== 'Upload cancelled by user') {
-          useUploadStore.getState().setError(message);
-
-          // Clean up orphaned IPFS pins if upload succeeded but registration failed
-          if (uploadedFiles?.length) {
-            for (const f of uploadedFiles) {
-              void unpinFromIpfs(f.cid).catch(() => {});
-            }
-            useQuotaStore.getState().fetchQuota();
-          }
-        }
-        return false;
       }
-    },
-    [upload, canUpload, addFiles]
-  );
+
+      useUploadStore.getState().setSuccess();
+      return true;
+    } catch (err) {
+      const message = (err as Error).message;
+      if (message !== 'Upload cancelled by user') {
+        useUploadStore.getState().setError(message);
+      }
+      return false;
+    } finally {
+      // Refresh quota from server
+      await useQuotaStore.getState().fetchQuota();
+    }
+  }, []);
 
   return { handleFileDrop, isUploading };
 }
