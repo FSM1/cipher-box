@@ -25,9 +25,9 @@ import type {
   CreateInviteDto,
   InviteResponseDto,
   ShareInvitesControllerListInvitesParams,
-} from '.././models';
+} from '../models';
 
-import { customInstance } from '.././custom-instance';
+import { customInstance } from '../custom-instance';
 
 /**
  * Create a new invite link with the item key wrapped by an ephemeral public key. Returns the invite token for URL construction. Default expiry: 7 days.

@@ -297,6 +297,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build packages (needed for cross-package imports in tests)
+        run: |
+          pnpm --filter @cipherbox/crypto build
+          pnpm --filter @cipherbox/core build
+          pnpm --filter @cipherbox/api-client build
+          pnpm --filter @cipherbox/sdk-core build
+          pnpm --filter @cipherbox/sdk build
+
       - name: Run API tests with coverage
         run: pnpm --filter @cipherbox/api test:cov
         env:

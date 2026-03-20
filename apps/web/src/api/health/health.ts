@@ -18,9 +18,9 @@ import type {
   UseQueryResult,
 } from '@tanstack/react-query';
 
-import type { HealthControllerCheck200 } from '.././models';
+import type { HealthControllerCheck200 } from '../models';
 
-import { customInstance } from '.././custom-instance';
+import { customInstance } from '../custom-instance';
 
 /**
  * @summary Check API and database health

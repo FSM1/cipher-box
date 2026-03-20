@@ -34,9 +34,9 @@ import type {
   SharesControllerGetSentSharesParams,
   SharesControllerLookupUserParams,
   UpdateEncryptedKeyDto,
-} from '.././models';
+} from '../models';
 
-import { customInstance } from '.././custom-instance';
+import { customInstance } from '../custom-instance';
 
 /**
  * Share an encrypted folder or file with another user. The encryptedKey is the item key re-wrapped for the recipient via ECIES.
