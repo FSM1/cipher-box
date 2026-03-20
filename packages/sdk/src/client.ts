@@ -260,7 +260,12 @@ export class CipherBoxClient {
           teeKeys: this.config.teeKeys,
         });
 
-      // 2. Add folder entry to parent's children
+      // 2. Check for duplicate name
+      if (parent.children.some((child) => child.name === name)) {
+        throw new Error('An item with this name already exists');
+      }
+
+      // 3. Add folder entry to parent's children
       const updatedChildren: FolderChild[] = [...parent.children, folder];
 
       // 3. Update parent metadata and publish
@@ -499,6 +504,10 @@ export class CipherBoxClient {
     return this.withOperation('uploadFile', async () => {
       const folder = this.folderTree.get(folderIpnsName);
       if (!folder) throw new Error('Folder not loaded');
+
+      if (folder.children.some((child) => child.name === fileName)) {
+        throw new Error('An item with this name already exists');
+      }
 
       const fileId = crypto.randomUUID();
 

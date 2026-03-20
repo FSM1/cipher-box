@@ -156,8 +156,8 @@ export function useDropUpload() {
           const userPublicKey = useAuthStore.getState().vaultKeypair?.publicKey;
           if (!userPublicKey) throw new Error('No keypair available');
           const encrypted = await encryptFile(file, userPublicKey);
-          // Use .slice() for a clean ArrayBuffer copy — never use .buffer directly (may include extra bytes)
-          const blob = new Blob([encrypted.ciphertext.slice().buffer as ArrayBuffer], {
+          // Pass a clean Uint8Array copy — never use .buffer (may include extra bytes)
+          const blob = new Blob([new Uint8Array(encrypted.ciphertext)], {
             type: 'application/octet-stream',
           });
           const ipfsResult = await addToIpfs(blob, (percent) =>

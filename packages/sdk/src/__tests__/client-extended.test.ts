@@ -235,12 +235,18 @@ describe('CipherBoxClient - extended', () => {
 
       vi.mocked(sdkCore.resolveFileMetadata).mockResolvedValue({
         metadata: {
+          version: 'v1',
           cid: 'bafycontent',
           fileKeyEncrypted: 'abc',
           fileIv: 'def',
+          size: 1024,
+          mimeType: 'application/octet-stream',
           encryptionMode: 'GCM',
+          createdAt: 1700000000000,
+          modifiedAt: 1700000000000,
         },
-      } as any);
+        metadataCid: 'bafymetacid',
+      });
       vi.mocked(sdkCore.downloadAndDecrypt).mockResolvedValue(
         new Uint8Array([72, 101, 108, 108, 111])
       );

@@ -77,65 +77,73 @@ export async function createFileMetadata(params: {
   const wrappedIpnsKey = await wrapKey(ipnsKeypair.privateKey, params.userPublicKey);
   const ipnsPrivateKeyEncrypted = bytesToHex(wrappedIpnsKey);
 
-  // 3. Create FileMetadata object
-  const now = Date.now();
-  const metadata: FileMetadata = {
-    version: 'v1',
-    cid: params.cid,
-    fileKeyEncrypted: params.fileKeyEncrypted,
-    fileIv: params.fileIv,
-    size: params.size,
-    mimeType: params.mimeType,
-    encryptionMode: params.encryptionMode ?? 'GCM',
-    createdAt: now,
-    modifiedAt: now,
-  };
+  // 3. Create FileMetadata object, upload, sign, and TEE-enroll.
+  //    Wrap in try/catch to zero IPNS private key on error paths.
+  //    On success the caller receives the key (via ipnsPrivateKeyEncrypted),
+  //    so we only zero on failure.
+  try {
+    const now = Date.now();
+    const metadata: FileMetadata = {
+      version: 'v1',
+      cid: params.cid,
+      fileKeyEncrypted: params.fileKeyEncrypted,
+      fileIv: params.fileIv,
+      size: params.size,
+      mimeType: params.mimeType,
+      encryptionMode: params.encryptionMode ?? 'GCM',
+      createdAt: now,
+      modifiedAt: now,
+    };
 
-  // 4. Encrypt with parent folderKey
-  const encrypted: EncryptedFileMetadata = await encryptFileMetadata(metadata, params.folderKey);
+    // 4. Encrypt with parent folderKey
+    const encrypted: EncryptedFileMetadata = await encryptFileMetadata(metadata, params.folderKey);
 
-  // 5. Upload encrypted metadata to IPFS
-  const jsonStr = JSON.stringify(encrypted);
-  const encryptedBytes = new TextEncoder().encode(jsonStr);
-  const { cid: metadataCid } = await addToIpfs(params.ctx, encryptedBytes);
+    // 5. Upload encrypted metadata to IPFS
+    const jsonStr = JSON.stringify(encrypted);
+    const encryptedBytes = new TextEncoder().encode(jsonStr);
+    const { cid: metadataCid } = await addToIpfs(params.ctx, encryptedBytes);
 
-  // 6. Create IPNS record (sequence number 1 for new records)
-  const record = await createIpnsRecord(
-    ipnsKeypair.privateKey,
-    `/ipfs/${metadataCid}`,
-    1n,
-    IPNS_LIFETIME_MS
-  );
+    // 6. Create IPNS record (sequence number 1 for new records)
+    const record = await createIpnsRecord(
+      ipnsKeypair.privateKey,
+      `/ipfs/${metadataCid}`,
+      1n,
+      IPNS_LIFETIME_MS
+    );
 
-  // 7. Marshal and base64 encode the record
-  const recordBytes = marshalIpnsRecord(record);
-  const recordBase64 = uint8ToBase64(recordBytes);
+    // 7. Marshal and base64 encode the record
+    const recordBytes = marshalIpnsRecord(record);
+    const recordBase64 = uint8ToBase64(recordBytes);
 
-  // 8. TEE enrollment: encrypt IPNS private key with TEE public key
-  let teeEncryptedIpnsPrivateKey: string | undefined;
-  let keyEpoch: number | undefined;
+    // 8. TEE enrollment: encrypt IPNS private key with TEE public key
+    let teeEncryptedIpnsPrivateKey: string | undefined;
+    let keyEpoch: number | undefined;
 
-  if (params.teeKeys?.currentPublicKey) {
-    const teePublicKey = hexToBytes(params.teeKeys.currentPublicKey);
-    const encryptedKey = await wrapKey(ipnsKeypair.privateKey, teePublicKey);
-    teeEncryptedIpnsPrivateKey = bytesToHex(encryptedKey);
-    keyEpoch = params.teeKeys.currentEpoch;
+    if (params.teeKeys?.currentPublicKey) {
+      const teePublicKey = hexToBytes(params.teeKeys.currentPublicKey);
+      const encryptedKey = await wrapKey(ipnsKeypair.privateKey, teePublicKey);
+      teeEncryptedIpnsPrivateKey = bytesToHex(encryptedKey);
+      keyEpoch = params.teeKeys.currentEpoch;
+    }
+
+    // Zero the private key now that wrapping, signing, and TEE enrollment are done
+    ipnsKeypair.privateKey.fill(0);
+
+    return {
+      fileMetaIpnsName: ipnsKeypair.ipnsName,
+      ipnsRecord: {
+        ipnsName: ipnsKeypair.ipnsName,
+        recordBase64,
+        metadataCid,
+        encryptedIpnsPrivateKey: teeEncryptedIpnsPrivateKey,
+        keyEpoch,
+      },
+      ipnsPrivateKeyEncrypted,
+    };
+  } catch (error) {
+    ipnsKeypair.privateKey.fill(0);
+    throw error;
   }
-
-  // Zero the private key now that wrapping, signing, and TEE enrollment are done
-  ipnsKeypair.privateKey.fill(0);
-
-  return {
-    fileMetaIpnsName: ipnsKeypair.ipnsName,
-    ipnsRecord: {
-      ipnsName: ipnsKeypair.ipnsName,
-      recordBase64,
-      metadataCid,
-      encryptedIpnsPrivateKey: teeEncryptedIpnsPrivateKey,
-      keyEpoch,
-    },
-    ipnsPrivateKeyEncrypted,
-  };
 }
 
 /**

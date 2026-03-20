@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createShareKey, revokeShare, reWrapForRecipients } from '../share';
 
 // Mock crypto
@@ -15,6 +15,10 @@ const shareCtx = {
 };
 
 describe('share operations', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   describe('createShareKey', () => {
     it('wraps folder key with recipient public key', async () => {
       const result = await createShareKey({

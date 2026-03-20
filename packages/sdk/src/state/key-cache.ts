@@ -14,8 +14,12 @@ export class KeyCache {
     return this.cache.get(key);
   }
 
-  /** Cache a derived key */
+  /** Cache a derived key, zeroing any previous value */
   set(key: string, value: Uint8Array): void {
+    const existing = this.cache.get(key);
+    if (existing && existing !== value) {
+      existing.fill(0);
+    }
     this.cache.set(key, value);
   }
 

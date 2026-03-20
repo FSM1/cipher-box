@@ -107,37 +107,45 @@ export async function createSubfolder(params: {
   );
   const folderKeyEncrypted = bytesToHex(await wrapKey(folderKey, params.userPublicKey));
 
-  // 4. TEE-02: Encrypt IPNS private key with TEE public key for republishing
-  let encryptedIpnsPrivateKey: string | undefined;
-  let keyEpoch: number | undefined;
+  // 4. TEE-02: Encrypt IPNS private key with TEE public key for republishing.
+  //    Wrap remaining steps in try/catch to zero key material on error.
+  //    On success the caller receives the keys, so we only zero on failure.
+  try {
+    let encryptedIpnsPrivateKey: string | undefined;
+    let keyEpoch: number | undefined;
 
-  if (params.teeKeys?.currentPublicKey) {
-    const teePublicKey = hexToBytes(params.teeKeys.currentPublicKey);
-    const encryptedKey = await wrapKey(ipnsKeypair.privateKey, teePublicKey);
-    encryptedIpnsPrivateKey = bytesToHex(encryptedKey);
-    keyEpoch = params.teeKeys.currentEpoch;
+    if (params.teeKeys?.currentPublicKey) {
+      const teePublicKey = hexToBytes(params.teeKeys.currentPublicKey);
+      const encryptedKey = await wrapKey(ipnsKeypair.privateKey, teePublicKey);
+      encryptedIpnsPrivateKey = bytesToHex(encryptedKey);
+      keyEpoch = params.teeKeys.currentEpoch;
+    }
+
+    // 5. Create folder entry for parent's metadata
+    const now = Date.now();
+    const folder: FolderEntry = {
+      type: 'folder',
+      id: crypto.randomUUID(),
+      name: params.name,
+      ipnsName,
+      ipnsPrivateKeyEncrypted,
+      folderKeyEncrypted,
+      createdAt: now,
+      modifiedAt: now,
+    };
+
+    return {
+      folder,
+      ipnsPrivateKey: ipnsKeypair.privateKey,
+      folderKey,
+      encryptedIpnsPrivateKey,
+      keyEpoch,
+    };
+  } catch (error) {
+    ipnsKeypair.privateKey.fill(0);
+    folderKey.fill(0);
+    throw error;
   }
-
-  // 5. Create folder entry for parent's metadata
-  const now = Date.now();
-  const folder: FolderEntry = {
-    type: 'folder',
-    id: crypto.randomUUID(),
-    name: params.name,
-    ipnsName,
-    ipnsPrivateKeyEncrypted,
-    folderKeyEncrypted,
-    createdAt: now,
-    modifiedAt: now,
-  };
-
-  return {
-    folder,
-    ipnsPrivateKey: ipnsKeypair.privateKey,
-    folderKey,
-    encryptedIpnsPrivateKey,
-    keyEpoch,
-  };
 }
 
 /**

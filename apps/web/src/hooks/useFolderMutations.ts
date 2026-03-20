@@ -100,7 +100,7 @@ export function useFolderMutations() {
           children: [],
           isLoaded: true,
           isLoading: false,
-          sequenceNumber: 0n,
+          sequenceNumber: 1n,
           folderKey: result.folderKey,
           ipnsPrivateKey: result.ipnsPrivateKey,
         };
@@ -111,9 +111,7 @@ export function useFolderMutations() {
           folderIpnsName: parentFolder.ipnsName,
           folders: useFolderStore.getState().folders,
           currentFolderId: actualParentId,
-          newItems: [
-            { keyType: 'folder', itemId: result.ipnsName, plaintextKey: result.folderKey },
-          ],
+          newItems: [{ keyType: 'folder', itemId: result.id, plaintextKey: result.folderKey }],
         })
           .then(({ failedRecipients }) => {
             if (failedRecipients.length > 0) {
