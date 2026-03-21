@@ -1,0 +1,80 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "2c05abce85b4",
+  "session_id": "f0dd29f9-8a13-44de-877f-1bc80807410d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-21T17:17:24.156579Z",
+  "branch": "fix/ipns-publish-performance",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/ipns/ipns.service.spec.ts",
+    "apps/api/src/ipns/ipns.service.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e4bf53ad3c13",
+  "checkpoint_transcript_start": 275,
+  "transcript_lines_at_start": 275,
+  "token_usage": {
+    "input_tokens": 34,
+    "cache_creation_tokens": 80318,
+    "cache_read_tokens": 1453884,
+    "output_tokens": 4659,
+    "api_call_count": 23
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Deploy v0.25.1 to staging and investigate two performance/reliability issues found during smoke testing: slow IPNS publish (30s+) and broken token refresh causing 401s.",
+    "outcome": "v0.25.1 tagged and released, staging deployment triggered. Both root causes identified and fixed; IPNS fix committed to a branch with PR pending creation, token refresh fix deferred for deeper review.",
+    "learnings": {
+      "repo": [
+        "The app has two parallel API client systems: orval-generated fetch client (custom-instance.ts) and an axios client (lib/api/client.ts). Only the axios client had 401/refresh interceptors, leaving the fetch client unprotected.",
+        "IpnsService.publishRecord() was awaiting DHT propagation via someguy sidecar, but resolveRecord() always prefers the DB cache — making DHT await unnecessary for correctness.",
+        "Access tokens expire in 15 minutes; long-running sessions (e.g., batch operations) expose the missing refresh logic.",
+        "Grafana Cloud free-tier instances hibernate after inactivity and return HTTP 503 'instance is loading' on wake — provisioning failures in CI are likely transient."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 52,
+          "end_line": 52,
+          "finding": "result variable stays 'success' after fire-and-forget change since delegated routing errors no longer mutate it — correct because DB write is the authoritative publish step."
+        },
+        {
+          "path": "apps/web/src/api/custom-instance.ts",
+          "finding": "Orval-generated fetch client had zero 401 handling; fix adds refresh-and-retry logic using a new shared token-refresh module."
+        },
+        {
+          "path": "apps/web/src/lib/api/client.ts",
+          "finding": "Axios client used only during login/vault init; token refresh interceptor was only here, not in the primary orval fetch client."
+        }
+      ],
+      "workflow": [
+        "Parallel subagent spawning is used for independent bug investigations to preserve main context and get concurrent results.",
+        "release-please title pattern needed a fix (PR #307) — manual tag/release creation was required for v0.25.1 as a workaround.",
+        "Tag Staging Release GitHub Actions workflow gates deployment behind staging-approval after E2E tests."
+      ]
+    },
+    "friction": [
+      "release-please title pattern was misconfigured, requiring manual tag and GitHub release creation for v0.25.1.",
+      "Grafana Cloud staging provisioning step fails transiently on CI due to free-tier hibernation, creating noise in deploy pipelines.",
+      "Stale background task notification from a previous session surfaced mid-conversation (benign but distracting)."
+    ],
+    "open_items": [
+      "Token refresh fix (Issue 2) deferred for deeper investigation — root cause identified but user wants to review before committing.",
+      "PR for IPNS publish fix was being created at transcript end — not yet merged or deployed to staging.",
+      "Grafana provisioning transient failure was not resolved — options were re-run or ignore; no permanent fix applied.",
+      "Batch delete performance should be re-tested on staging after IPNS fire-and-forget fix is deployed to confirm improvement."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-21T17:17:01.307821Z",
+    "agent_lines": 30,
+    "human_added": 1,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 31,
+    "agent_percentage": 96.7741935483871
+  }
+}
