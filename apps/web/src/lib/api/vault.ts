@@ -11,6 +11,11 @@ import {
 } from '@cipherbox/api-client';
 import type { QuotaResponseDto, VaultResponseDto, InitVaultDto } from '@cipherbox/api-client';
 
+// Backward-compatible type aliases for existing consumers
+export type QuotaResponse = QuotaResponseDto;
+export type VaultResponse = VaultResponseDto;
+export type { InitVaultDto };
+
 export const vaultApi = {
   /** Get storage quota for the current user. */
   getQuota: (): Promise<QuotaResponseDto> => vaultControllerGetQuota(),

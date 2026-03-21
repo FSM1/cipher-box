@@ -67,11 +67,11 @@ When working on `apps/api` code:
    pnpm api:generate
    ```
 
-   This command generates the OpenAPI spec from the API, creates the typed client for the web app, and runs lint fixes.
+   This command generates the OpenAPI spec from the API, regenerates the typed client in `@cipherbox/api-client`, builds the package, and runs lint fixes.
 
 2. **Always run `pnpm api:generate` before completing a feature** that touches the API to ensure type safety across the monorepo.
 
-3. **Commit the regenerated client files** (`apps/web/src/api/`) along with your API changes.
+3. **Commit the regenerated client files** (`packages/api-client/src/generated/` and `packages/api-client/src/models/`) along with your API changes.
 
 ## Code Generation Guidelines
 
