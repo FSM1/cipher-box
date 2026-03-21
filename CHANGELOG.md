@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.25.0](https://github.com/FSM1/cipher-box/compare/v0.24.2...v0.25.0) (2026-03-21)
+
+
+### Features
+
+* extract core crypto SDK as shared packages ([#296](https://github.com/FSM1/cipher-box/issues/296)) ([2cdc3fb](https://github.com/FSM1/cipher-box/commit/2cdc3fb3675d9c092e8ec9e5493982cc67f21822))
+* IPNS resolution improvement with Someguy sidecar and latency metrics ([#284](https://github.com/FSM1/cipher-box/issues/284)) ([c1c96de](https://github.com/FSM1/cipher-box/commit/c1c96de3048471a88b30be42669a532f41d56eb3))
+
+
+### Bug Fixes
+
+* **ci:** build new shared packages before web/desktop in all workflows ([95a511e](https://github.com/FSM1/cipher-box/commit/95a511eadb0216c89b68a9b5441fd374afc76d42))
+* **ci:** build shared packages before web/desktop in all workflows ([#299](https://github.com/FSM1/cipher-box/issues/299)) ([95a511e](https://github.com/FSM1/cipher-box/commit/95a511eadb0216c89b68a9b5441fd374afc76d42))
+* **docker:** use bytes for someguy LIBP2P_MAX_MEMORY flag ([#290](https://github.com/FSM1/cipher-box/issues/290)) ([51c22c7](https://github.com/FSM1/cipher-box/commit/51c22c783142306efa13f247da4a58224685aab2))
+* **e2e:** eliminate all Zustand store access from E2E tests ([#304](https://github.com/FSM1/cipher-box/issues/304)) ([43d7848](https://github.com/FSM1/cipher-box/commit/43d784839458fbed06bd19935cdbfd4c30dce8b5))
+* **web:** remove isLoaded check from ensureFolderRegistered guard ([#301](https://github.com/FSM1/cipher-box/issues/301)) ([e6fe6ee](https://github.com/FSM1/cipher-box/commit/e6fe6eeab96ce42e2bdcada5d85c0e0f2720bd22))
+* **web:** use static import for vault store in __E2E helpers ([#303](https://github.com/FSM1/cipher-box/issues/303)) ([a09b502](https://github.com/FSM1/cipher-box/commit/a09b5024823ca93b5fdd34b013f3a477499f8b1f))
+
 ## [0.24.2](https://github.com/FSM1/cipher-box/compare/v0.24.1...v0.24.2) (2026-03-07)
 
 
