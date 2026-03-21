@@ -7,7 +7,7 @@ import {
   autoUpdate,
   type VirtualElement,
 } from '@floating-ui/react';
-import type { FolderChild } from '@cipherbox/crypto';
+import type { FolderChild } from '@cipherbox/core';
 import { Portal } from '../ui/Portal';
 import '../../styles/context-menu.css';
 

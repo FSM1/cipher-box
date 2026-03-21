@@ -1,5 +1,8 @@
 import { useCallback, useState } from 'react';
 import { deleteFile, deleteFiles } from '../services/delete.service';
+// Note: delete.service.ts handles IPFS unpin + quota update.
+// SDK's permanentDelete handles bin-level deletion (different concern).
+// Both services are needed: delete.service for CID cleanup, SDK for bin operations.
 
 export function useFileDelete() {
   const [isDeleting, setIsDeleting] = useState(false);

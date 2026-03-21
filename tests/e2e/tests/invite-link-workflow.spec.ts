@@ -1,11 +1,11 @@
 import { test, expect, Browser } from '@playwright/test';
 import {
-  createTestAccount,
-  closeTestAccounts,
+  createWalletTestAccount,
+  closeWalletTestAccounts,
   navigateToShared,
   navigateToFiles,
-  type TestAccount,
-} from '../utils/multi-account';
+  type WalletTestAccount,
+} from '../utils/multi-account-wallet';
 import { createTestTextFile, cleanupTestFiles } from '../utils/test-files';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
 import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';
@@ -48,9 +48,9 @@ function parseInviteUrl(url: string): { token: string; ephemeralKey: string } {
 
 test.describe.serial('Invite Link Sharing Workflow', () => {
   let browser: Browser;
-  let alice: TestAccount;
-  let dave: TestAccount;
-  let eve: TestAccount;
+  let alice: WalletTestAccount;
+  let dave: WalletTestAccount;
+  let eve: WalletTestAccount;
 
   // Page objects for Alice
   let aliceFileList: FileListPage;
@@ -146,7 +146,7 @@ test.describe.serial('Invite Link Sharing Workflow', () => {
   test.afterAll(async () => {
     cleanupTestFiles();
     if (alice || dave || eve) {
-      await closeTestAccounts([alice, dave, eve].filter(Boolean));
+      await closeWalletTestAccounts([alice, dave, eve].filter(Boolean));
     }
   });
 
@@ -155,9 +155,10 @@ test.describe.serial('Invite Link Sharing Workflow', () => {
   // ============================================
 
   test('1.1 Create test accounts (Alice, Dave, Eve)', async () => {
-    alice = await createTestAccount(browser, 'alice', runId);
-    dave = await createTestAccount(browser, 'dave', runId);
-    eve = await createTestAccount(browser, 'eve', runId);
+    test.setTimeout(180_000); // 3 wallet logins with Core Kit init
+    alice = await createWalletTestAccount(browser, 'alice');
+    dave = await createWalletTestAccount(browser, 'dave');
+    eve = await createWalletTestAccount(browser, 'eve');
 
     // Initialize page objects for Alice
     aliceFileList = new FileListPage(alice.page);
@@ -361,7 +362,7 @@ test.describe.serial('Invite Link Sharing Workflow', () => {
   });
 
   test('4.2 Dave authenticates and claim auto-triggers', async () => {
-    // Dave already has auth from createTestAccount
+    // Dave already has auth from createWalletTestAccount
     // Navigate Dave to the invite URL -- InvitePage should detect isAuthenticated and auto-claim
     const daveInvitePage = new InvitePageObject(dave.page);
     await daveInvitePage.goto(fileInviteToken, fileInviteKey);
@@ -616,10 +617,10 @@ test.describe.serial('Invite Link Sharing Workflow', () => {
 
   test('8.1 Cleanup', async () => {
     cleanupTestFiles();
-    await closeTestAccounts([alice, dave, eve].filter(Boolean));
+    await closeWalletTestAccounts([alice, dave, eve].filter(Boolean));
     // Null out to prevent afterAll from double-closing
-    alice = null as unknown as TestAccount;
-    dave = null as unknown as TestAccount;
-    eve = null as unknown as TestAccount;
+    alice = null as unknown as WalletTestAccount;
+    dave = null as unknown as WalletTestAccount;
+    eve = null as unknown as WalletTestAccount;
   });
 });

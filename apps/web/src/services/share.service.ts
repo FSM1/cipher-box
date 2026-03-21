@@ -1,3 +1,6 @@
+// DEPRECATED: Use @cipherbox/sdk instead. Will be removed in 19.1-06.
+// Hooks now delegate to CipherBoxClient SDK methods for share operations.
+// Remaining usages: reWrapForRecipients (useFolderMutations, useFileOperations).
 /**
  * Share Service - API integration for user-to-user sharing
  *

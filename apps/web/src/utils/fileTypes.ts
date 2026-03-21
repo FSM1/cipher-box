@@ -1,4 +1,4 @@
-import type { FolderChild, FilePointer } from '@cipherbox/crypto';
+import type { FolderChild, FilePointer } from '@cipherbox/core';
 
 /** Extensions recognized as editable text files. */
 const TEXT_EXTENSIONS = new Set([

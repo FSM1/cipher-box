@@ -12,7 +12,7 @@ import {
   getFileIpnsPrivateKey,
 } from '../services/file-metadata.service';
 import type { FileIpnsRecordPayload } from '../services/file-metadata.service';
-import type { FilePointer } from '@cipherbox/crypto';
+import type { FilePointer } from '@cipherbox/core';
 import { getRootFolderState } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
 

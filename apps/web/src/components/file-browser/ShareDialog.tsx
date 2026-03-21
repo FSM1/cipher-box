@@ -1,12 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import type { FolderChild, FolderEntry, FilePointer } from '@cipherbox/crypto';
-import {
-  wrapKey,
-  unwrapKey,
-  hexToBytes,
-  bytesToHex,
-  decryptFolderMetadata,
-} from '@cipherbox/crypto';
+import type { FolderChild, FolderEntry, FilePointer } from '@cipherbox/core';
+import { decryptFolderMetadata } from '@cipherbox/core';
+import { wrapKey, unwrapKey, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import { Modal } from '../ui/Modal';
 import { useAuthStore } from '../../stores/auth.store';
 import { useFolderStore } from '../../stores/folder.store';

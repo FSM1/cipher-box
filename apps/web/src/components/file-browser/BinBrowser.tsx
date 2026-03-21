@@ -7,7 +7,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef, useMemo, type MouseEvent } from 'react';
-import type { BinEntry } from '@cipherbox/crypto';
+import type { BinEntry } from '@cipherbox/core';
 import { useBin } from '../../hooks/useBin';
 import { BinListItem } from './BinListItem';
 import { BinEmptyState } from './BinEmptyState';

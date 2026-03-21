@@ -6,7 +6,7 @@ import {
   type MouseEvent,
   type TouchEvent,
 } from 'react';
-import type { FolderChild, FilePointer, FolderEntry } from '@cipherbox/crypto';
+import type { FolderChild, FilePointer, FolderEntry } from '@cipherbox/core';
 import { formatBytes, formatDate, getItemIcon } from '../../utils/format';
 import { useFileSize } from '../../hooks/useFileSize';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';

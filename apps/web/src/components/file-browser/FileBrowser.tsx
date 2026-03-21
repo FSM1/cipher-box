@@ -7,7 +7,7 @@ import {
   type DragEvent,
   type MouseEvent,
 } from 'react';
-import type { FolderChild, FilePointer, FolderEntry } from '@cipherbox/crypto';
+import type { FolderChild, FilePointer, FolderEntry } from '@cipherbox/core';
 import { useFolderNavigation } from '../../hooks/useFolderNavigation';
 import { useFolder } from '../../hooks/useFolder';
 import { useFileDownload } from '../../hooks/useFileDownload';

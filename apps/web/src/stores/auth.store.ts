@@ -31,6 +31,7 @@ type AuthState = {
   pendingAuthMethod: string | null;
 
   setAccessToken: (token: string) => void;
+  setAuthenticated: () => void;
   setLastAuthMethod: (method: string) => void;
   setUserEmail: (email: string) => void;
   setTeeKeys: (keys: TeeKeys) => void;
@@ -55,7 +56,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   pendingAuthMethod: null,
 
   // Actions
-  setAccessToken: (token) => set({ accessToken: token, isAuthenticated: true }),
+  setAccessToken: (token) => set({ accessToken: token }),
+  setAuthenticated: () => set({ isAuthenticated: true }),
   setLastAuthMethod: (method) => set({ lastAuthMethod: method }),
   setUserEmail: (email) => set({ userEmail: email }),
   setTeeKeys: (keys) => set({ teeKeys: keys }),

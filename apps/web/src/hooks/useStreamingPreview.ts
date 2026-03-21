@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { FilePointer } from '@cipherbox/crypto';
+import type { FilePointer } from '@cipherbox/core';
 import { unwrapKey, hexToBytes, bytesToHex, clearBytes } from '@cipherbox/crypto';
 import { registerStream, unregisterStream, isSwActive } from '../lib/sw-registration';
 import { resolveFileMetadata } from '../services/file-metadata.service';

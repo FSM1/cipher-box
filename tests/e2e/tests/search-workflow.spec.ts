@@ -1,5 +1,6 @@
 import { test, expect, Page, Browser, BrowserContext } from '@playwright/test';
-import { loginViaEmail, TEST_CREDENTIALS } from '../utils/web3auth-helpers';
+import type { PrivateKeyAccount } from 'viem/accounts';
+import { createTestAccount, setupMockWallet, loginViaWallet } from '../utils/wallet-login-helpers';
 import { createTestTextFile, cleanupTestFiles } from '../utils/test-files';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
 import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';
@@ -38,10 +39,16 @@ test.describe.serial('Search Workflow', () => {
   // Platform-appropriate shortcut: Cmd+K on macOS, Ctrl+K on Linux/Windows
   const searchShortcut = 'ControlOrMeta+k';
 
+  let account: PrivateKeyAccount;
+
   test.beforeAll(async ({ browser: testBrowser }) => {
     browser = testBrowser;
     context = await browser.newContext();
     page = await context.newPage();
+
+    // Generate a random wallet identity and install mock wallet
+    account = createTestAccount();
+    await setupMockWallet(page, account);
 
     // Capture browser console for diagnostics
     page.on('console', (msg) => {
@@ -69,8 +76,9 @@ test.describe.serial('Search Workflow', () => {
   // ============================================
 
   test('0.1 Login and create test content', async () => {
-    // Login
-    await loginViaEmail(page, TEST_CREDENTIALS.email);
+    test.setTimeout(90_000); // Core Kit init + SIWE can be slow
+    // Login via wallet (mock wallet auto-approves connect + SIWE)
+    await loginViaWallet(page, { timeout: 60_000 });
     await page.waitForURL('**/files', { timeout: 60000 });
 
     // Create and upload a uniquely named text file

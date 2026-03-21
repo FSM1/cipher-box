@@ -1,5 +1,6 @@
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
-import { loginViaEmail, loginViaTestEndpoint, TEST_CREDENTIALS } from '../utils/web3auth-helpers';
+import type { PrivateKeyAccount } from 'viem/accounts';
+import { createTestAccount, setupMockWallet, loginViaWallet } from '../utils/wallet-login-helpers';
 import { createTestTextFile, cleanupTestFiles } from '../utils/test-files';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
 import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';
@@ -52,10 +53,17 @@ test.describe.serial('Recycle Bin', () => {
       }
     });
 
+  let account: PrivateKeyAccount;
+
   test.beforeAll(async ({ browser: testBrowser }) => {
+    test.setTimeout(90_000); // Core Kit init + SIWE can be slow
     browser = testBrowser;
     context = await browser.newContext();
     page = await context.newPage();
+
+    // Generate a random wallet identity and install mock wallet
+    account = createTestAccount();
+    await setupMockWallet(page, account);
 
     // Initialize page objects
     fileList = new FileListPage(page);
@@ -64,12 +72,8 @@ test.describe.serial('Recycle Bin', () => {
     confirmDialog = new ConfirmDialogPage(page);
     binPage = new BinPage(page);
 
-    // Login using test-login endpoint (bypasses Core Kit, decouples from Web3Auth)
-    if (process.env.TEST_LOGIN_SECRET) {
-      await loginViaTestEndpoint(page, TEST_CREDENTIALS.email);
-    } else {
-      await loginViaEmail(page, TEST_CREDENTIALS.email);
-    }
+    // Login via wallet (mock wallet auto-approves connect + SIWE)
+    await loginViaWallet(page, { timeout: 60_000 });
 
     // Verify we're on the files page
     await page.waitForURL('**/files', { timeout: 60000 });

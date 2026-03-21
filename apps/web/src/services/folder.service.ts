@@ -1,3 +1,7 @@
+// DEPRECATED: Use @cipherbox/sdk instead. Will be removed in 19.1-06.
+// Hooks now delegate to CipherBoxClient SDK methods.
+// Remaining usages: validation helpers (getDepth, isDescendantOf, calculateSubtreeDepth),
+// folder loading (loadFolder, fetchAndDecryptMetadata), and file registration (addFileToFolder).
 /**
  * Folder Service - Folder CRUD operations with encryption
  *
@@ -8,12 +12,6 @@
  */
 
 import {
-  generateEd25519Keypair,
-  deriveIpnsName,
-  generateRandomBytes,
-  wrapKey,
-  bytesToHex,
-  hexToBytes,
   encryptFolderMetadata,
   decryptFolderMetadata,
   createIpnsRecord,
@@ -23,6 +21,14 @@ import {
   type FolderEntry,
   type FolderChild,
   type FilePointer,
+} from '@cipherbox/core';
+import {
+  generateEd25519Keypair,
+  deriveIpnsName,
+  generateRandomBytes,
+  wrapKey,
+  bytesToHex,
+  hexToBytes,
 } from '@cipherbox/crypto';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from './ipns.service';

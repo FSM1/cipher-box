@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { unwrapKey, hexToBytes, type FolderEntry } from '@cipherbox/crypto';
+import type { FolderEntry } from '@cipherbox/core';
+import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import { useFolderStore, type FolderNode } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import { useAuthStore } from '../stores/auth.store';

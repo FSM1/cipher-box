@@ -9,7 +9,7 @@
  */
 
 import { useState, useCallback, type MouseEvent } from 'react';
-import type { FolderChild } from '@cipherbox/crypto';
+import type { FolderChild } from '@cipherbox/core';
 import { useSharedNavigation, type SharedListItem } from '../../hooks/useSharedNavigation';
 import { useContextMenu } from '../../hooks/useContextMenu';
 import {

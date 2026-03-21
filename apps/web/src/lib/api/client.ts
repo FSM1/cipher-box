@@ -49,7 +49,9 @@ apiClient.interceptors.response.use(
         .post<{ accessToken: string }>('/auth/refresh')
         .then((response) => {
           const { accessToken } = response.data;
-          useAuthStore.getState().setAccessToken(accessToken);
+          const store = useAuthStore.getState();
+          store.setAccessToken(accessToken);
+          store.setAuthenticated();
           return accessToken;
         })
         .catch((refreshError) => {

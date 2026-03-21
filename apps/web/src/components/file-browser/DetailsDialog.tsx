@@ -5,7 +5,7 @@ import type {
   FolderEntry,
   FileMetadata,
   VersionEntry,
-} from '@cipherbox/crypto';
+} from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
 import { useFolderStore } from '../../stores/folder.store';
 import { useAuthStore } from '../../stores/auth.store';

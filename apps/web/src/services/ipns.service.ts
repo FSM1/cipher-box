@@ -1,17 +1,12 @@
 /**
  * IPNS Service - Record creation, publishing, and resolution
  *
- * Creates IPNS records locally using @cipherbox/crypto and publishes
+ * Creates IPNS records locally using @cipherbox/core and publishes
  * via the backend API relay to the delegated routing service.
  */
 
-import {
-  createIpnsRecord,
-  marshalIpnsRecord,
-  verifyEd25519,
-  IPNS_SIGNATURE_PREFIX,
-  concatBytes,
-} from '@cipherbox/crypto';
+import { createIpnsRecord, marshalIpnsRecord, IPNS_SIGNATURE_PREFIX } from '@cipherbox/core';
+import { verifyEd25519, concatBytes } from '@cipherbox/crypto';
 import {
   ipnsControllerPublishRecord,
   ipnsControllerPublishBatch,

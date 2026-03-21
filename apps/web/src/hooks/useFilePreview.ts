@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { FilePointer } from '@cipherbox/crypto';
+import type { FilePointer } from '@cipherbox/core';
 import { useAuthStore } from '../stores/auth.store';
 import {
   downloadFile,
