@@ -36,17 +36,7 @@ export function Login() {
   const [mfaView, setMfaView] = useState<MfaView>('waiting');
 
   // Health check for disabling connect button when API is down
-  const {
-    data: healthData,
-    isLoading: isHealthLoading,
-    isError: isHealthError,
-  } = useHealthCheck({
-    query: {
-      refetchInterval: 30000,
-      retry: 2,
-      refetchOnWindowFocus: true,
-    },
-  });
+  const { data: healthData, isLoading: isHealthLoading, isError: isHealthError } = useHealthCheck();
 
   const isApiDown = !isHealthLoading && (isHealthError || healthData?.status !== 'ok');
 

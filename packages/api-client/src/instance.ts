@@ -87,28 +87,22 @@ function getCachedInstance(): AxiosInstance {
           if (error.response?.status === 401 && !originalRequest._retry && !isRefreshRequest) {
             originalRequest._retry = true;
 
-            // If a refresh is already in flight, all concurrent 401 handlers
-            // await the same promise instead of firing duplicate refresh requests.
-            if (_refreshPromise) {
-              const token = await _refreshPromise;
-              originalRequest.headers = originalRequest.headers ?? {};
-              originalRequest.headers['Authorization'] = `Bearer ${token}`;
-              return getCachedInstance().request(originalRequest);
+            if (!_refreshPromise) {
+              // First 401 handler: create the refresh promise synchronously
+              _refreshPromise = refreshFn()
+                .catch((refreshError) => {
+                  onFailure?.();
+                  throw refreshError;
+                })
+                .finally(() => {
+                  _refreshPromise = null;
+                });
             }
 
-            // First 401 handler: create the refresh promise synchronously
-            _refreshPromise = refreshFn()
-              .catch((refreshError) => {
-                onFailure?.();
-                throw refreshError;
-              })
-              .finally(() => {
-                _refreshPromise = null;
-              });
-
+            // All concurrent 401 handlers await the same promise.
             const token = await _refreshPromise;
             originalRequest.headers = originalRequest.headers ?? {};
-            originalRequest.headers.Authorization = `Bearer ${token}`;
+            originalRequest.headers['Authorization'] = `Bearer ${token}`;
             return getCachedInstance().request(originalRequest);
           }
 

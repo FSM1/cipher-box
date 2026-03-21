@@ -28,11 +28,13 @@ export async function addToIpfs(
   const result = await ipfsControllerUpload(
     { file: encryptedFile },
     {
-      onUploadProgress: (event: AxiosProgressEvent) => {
-        if (event.total && onProgress) {
-          onProgress(Math.round((event.loaded * 100) / event.total));
-        }
-      },
+      ...(onProgress && {
+        onUploadProgress: (event: AxiosProgressEvent) => {
+          if (event.total) {
+            onProgress(Math.round((event.loaded * 100) / event.total));
+          }
+        },
+      }),
       cancelToken,
     }
   );

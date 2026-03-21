@@ -21,12 +21,9 @@ setApiClientConfig({
   getAccessToken: async () => useAuthStore.getState().accessToken || '',
   withCredentials: true,
   refreshAccessToken: async () => {
-    // DesktopRefreshDto.refreshToken is optional -- web uses HTTP-only cookie instead
     const response = await authControllerRefresh({});
     const newToken = response.accessToken;
-    const store = useAuthStore.getState();
-    store.setAccessToken(newToken);
-    store.setAuthenticated();
+    useAuthStore.getState().setAccessToken(newToken);
     return newToken;
   },
   onRefreshFailure: () => {
