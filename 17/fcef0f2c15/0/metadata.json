@@ -1,0 +1,113 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "17fcef0f2c15",
+  "session_id": "3f8e1927-1b97-4c98-97c7-a19b3c057640",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-21T02:12:50.076912Z",
+  "branch": "fix/e2e-reload-zustand-guard",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/e2e/tests/full-workflow.spec.ts",
+    "tests/e2e/utils/multi-account-wallet.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ccc2ef2f710a",
+  "token_usage": {
+    "input_tokens": 422,
+    "cache_creation_tokens": 272053,
+    "cache_read_tokens": 35353993,
+    "output_tokens": 60008,
+    "api_call_count": 243
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments on cipher-box PR #296, then fix a series of CI failures and E2E test reliability issues that emerged after the PR was merged.",
+    "outcome": "All review threads resolved across multiple review passes; CI build fixed by adding missing package build steps to workflows; E2E test root cause identified (__ZUSTAND_STORES not exposed in production builds) and fixed with a VITE_E2E flag; vault readiness polls replaced with UI waits; public key extraction moved from Zustand store to Settings page UI.",
+    "learnings": {
+      "repo": [
+        "The project uses release-please with independent per-package versioning; first release bumps all packages together but they diverge naturally after that.",
+        "release-please uses 'main' as the PR title suffix when multiple components are present because there's no single version — setting pull-request-title-pattern at the top level (not inside packages) fixes this.",
+        "__ZUSTAND_STORES is only exposed in import.meta.env.DEV, so E2E tests that poll Zustand state silently fail in CI production builds.",
+        "E2E workflows (e2e.yml, deploy-staging.yml, e2e-desktop.yml) only built @cipherbox/crypto before web/desktop builds, missing the new packages: core, api-client, sdk-core, sdk.",
+        "The isLoaded flag on FolderNode is not set in all code paths — SDK-created folders and root folder after vault init have valid keys but isLoaded may be false, making it unsafe as a registration guard.",
+        "FolderTree.clear() zeros all stored key buffers, meaning registerFolder must copy incoming buffers or callers' keys get zeroed on vault destroy.",
+        "The public key for sharing is displayed on the Settings page at .settings-pubkey-value, making Zustand store access unnecessary for sharing tests.",
+        "Conflict detection tests legitimately need accessToken and rootIpnsName which are not surfaced in the UI, so they require store access via VITE_E2E flag."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/main.tsx",
+          "finding": "Changed from import.meta.env.DEV guard to (import.meta.env.DEV || import.meta.env.VITE_E2E) for __ZUSTAND_STORES exposure, keeping it out of production deploys."
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "line": 85,
+          "finding": "ensureFolderRegistered guard should only check for empty key material, not isLoaded — isLoaded isn't set in all code paths (SDK-created folders, root folder)."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 628,
+          "finding": "fileKey not cleared if exception occurs before the re-wrap try/catch — needs try/finally wrapping the entire post-upload section."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 338,
+          "finding": "createFolder leaks plaintext folderKey/ipnsPrivateKey on failure — duplicate name check should be moved before key generation, with try/catch clearBytes on failure."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 165,
+          "finding": "registerFolder stores caller-owned key buffers directly; destroy() calls FolderTree.clear() which zeros them, so defensive copies are required."
+        },
+        {
+          "path": "tests/e2e/tests/full-workflow.spec.ts",
+          "line": 533,
+          "finding": "Test 3.7 had 240s timeout that was raised to 360s, but the real fix was removing the waitForFunction __ZUSTAND_STORES vault poll and replacing with UI wait."
+        },
+        {
+          "path": "tests/e2e/utils/wallet-login-helpers.ts",
+          "finding": "Vault readiness poll used __ZUSTAND_STORES which doesn't exist in production builds — replaced with waiting for the file list UI element instead."
+        },
+        {
+          "path": "tests/e2e/utils/multi-account-wallet.ts",
+          "finding": "Public key extracted from Zustand store replaced with navigation to /settings and reading .settings-pubkey-value text content."
+        },
+        {
+          "path": ".github/workflows/e2e.yml",
+          "finding": "Added VITE_E2E: 'true' env var to web build step so __ZUSTAND_STORES is exposed in CI E2E builds but not production."
+        }
+      ],
+      "workflow": [
+        "When a PR is already merged, always create a new fix branch from main and make a new PR — do not push to the merged branch.",
+        "release-please PR titles showing 'chore: release main' indicate the pull-request-title-pattern uses ${version} at package level but needs to be set at root level without ${version} for multi-component repos.",
+        "VITE_* env vars are baked into Vite builds at compile time and tree-shaken when not set — safe way to enable test-only features in CI without exposing them in production.",
+        "In serial E2E test suites, early test failures cause all subsequent tests to be skipped, masking downstream failures that share the same root cause.",
+        "Outside-diff-range review comments in GitHub are not surfaced as review threads — must fetch the review body directly to see them."
+      ]
+    },
+    "friction": [
+      "CI fix was committed and pushed to an already-merged branch, requiring the work to be redone on a fresh branch.",
+      "Test 3.7 failures required multiple retries before the root cause (__ZUSTAND_STORES in production builds) was identified — the symptom (360s timeout) obscured the real issue.",
+      "The isLoaded guard added for a Copilot review comment immediately caused E2E failures (upload failing with 'Folder not loaded'), requiring a follow-up PR to revert the guard.",
+      "orval codegen produced the same incorrect type for VaultResponseDtoInitializedAt even after regeneration, making that review comment unresolvable.",
+      "Fetching 'outside diff range' comments from GitHub requires fetching the full review body rather than review threads, which is a non-obvious API difference.",
+      "Background task notifications arrived mid-session requiring output file reads that were already resolved by the time they were read."
+    ],
+    "open_items": [
+      "Conflict detection tests still rely on __ZUSTAND_STORES (via VITE_E2E) for accessToken and rootIpnsName — rootIpnsName is not surfaced in the UI so eliminating this dependency requires either adding a UI element or using page.evaluate with cookies.",
+      "web3auth-helpers.ts still uses __ZUSTAND_STORES for state injection — old test-login infrastructure not yet migrated.",
+      "recycle-bin.spec.ts uses __ZUSTAND_STORES__ (double underscore suffix) — not addressed in this session.",
+      "The VaultResponseDtoInitializedAt generated type is incorrect (orval codegen quirk with nullable Date types) — needs upstream orval fix or manual override.",
+      "Concurrent mutation safety for folder operations (Thread 2, PR #296) was marked not applicable — acknowledged as an architectural concern for a follow-up PR.",
+      "E2E test 3.7 (session restore after reload) remains sensitive to Sapphire Devnet latency on CI — the ZUSTAND_STORES fix should help but the underlying Core Kit session restore timing is not fully controlled."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-21T02:12:06.690971Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 34,
+    "human_removed": 27,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}

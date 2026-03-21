@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "17fcef0f2c15",
+  "strategy": "manual-commit",
+  "branch": "fix/e2e-reload-zustand-guard",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/e2e/tests/full-workflow.spec.ts",
+    "tests/e2e/utils/multi-account-wallet.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/17/fcef0f2c15/0/metadata.json",
+      "transcript": "/17/fcef0f2c15/0/full.jsonl",
+      "context": "/17/fcef0f2c15/0/context.md",
+      "content_hash": "/17/fcef0f2c15/0/content_hash.txt",
+      "prompt": "/17/fcef0f2c15/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 422,
+    "cache_creation_tokens": 272053,
+    "cache_read_tokens": 35353993,
+    "output_tokens": 60008,
+    "api_call_count": 243
+  }
+}
