@@ -48,7 +48,7 @@ test.describe.serial('Conflict Detection', () => {
   let account: PrivateKeyAccount;
 
   // Second browser session — same user, simulates another device
-  let deviceB: ConflictDevice;
+  let deviceB: ConflictDevice | undefined;
 
   // Unique suffix per test run to avoid naming collisions
   const runId = Date.now().toString();
@@ -129,6 +129,11 @@ test.describe.serial('Conflict Detection', () => {
     }
   });
 
+  function requireDeviceB(): ConflictDevice {
+    if (!deviceB) throw new Error('deviceB not initialized — beforeAll failed');
+    return deviceB;
+  }
+
   // ============================================================
   // Test 1: Upload file with stale sequence -> conflict -> retry
   // ============================================================
@@ -140,7 +145,7 @@ test.describe.serial('Conflict Detection', () => {
 
     // Step 1: Bump the server-side sequence by uploading from device B.
     // This makes device A's local sequence stale.
-    const bumpFile = await bumpSequenceViaSecondDevice(deviceB, runId);
+    const bumpFile = await bumpSequenceViaSecondDevice(requireDeviceB(), runId);
     createdItems.push({ name: bumpFile, type: 'file' });
 
     // Step 2: Upload a test file from device A (primary session).
@@ -178,7 +183,7 @@ test.describe.serial('Conflict Detection', () => {
     const folderName = `conflict-folder-${runId}`;
 
     // Step 1: Bump the server-side sequence again from device B.
-    const bumpFile = await bumpSequenceViaSecondDevice(deviceB, runId);
+    const bumpFile = await bumpSequenceViaSecondDevice(requireDeviceB(), runId);
     createdItems.push({ name: bumpFile, type: 'file' });
 
     // Step 2: Create a folder from device A.
@@ -218,7 +223,7 @@ test.describe.serial('Conflict Detection', () => {
     // Step 2: Bump the folder's server-side sequence from device B.
     // Brief pause to avoid API rate limiting from rapid test transitions.
     await page.waitForTimeout(2000);
-    const bumpFile = await bumpSequenceViaSecondDevice(deviceB, runId);
+    const bumpFile = await bumpSequenceViaSecondDevice(requireDeviceB(), runId);
     createdItems.push({ name: bumpFile, type: 'file' });
 
     // Step 3: Open the text editor for the file and save new content.
