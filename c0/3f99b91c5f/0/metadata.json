@@ -1,0 +1,118 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "c03f99b91c5f",
+  "session_id": "3f8e1927-1b97-4c98-97c7-a19b3c057640",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-21T02:27:39.629767Z",
+  "branch": "fix/e2e-reload-zustand-guard",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/main.tsx",
+    "tests/e2e/utils/multi-account-wallet.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "4e9858b0e0e4",
+  "token_usage": {
+    "input_tokens": 450,
+    "cache_creation_tokens": 286546,
+    "cache_read_tokens": 41210071,
+    "output_tokens": 66111,
+    "api_call_count": 268
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments on PR #296 (SDK extraction), fix a CI E2E test failure caused by Zustand stores not being exposed in production builds, and refactor E2E tests to reduce reliance on internal store access.",
+    "outcome": "All review threads across multiple review passes were resolved with code fixes. CI was unblocked by gating `__ZUSTAND_STORES` exposure behind a `VITE_E2E` build flag, then further refined to expose only a minimal `window.__E2E` helper with two getters. Vault readiness polling was replaced with UI-based waits and public key extraction was moved to read from the Settings page UI.",
+    "learnings": {
+      "repo": [
+        "The `__ZUSTAND_STORES` window object is only exposed under `import.meta.env.DEV`, so E2E tests that poll it silently hang forever in production CI builds.",
+        "CI E2E workflow builds the web app with `pnpm --filter @cipherbox/web build` (production mode), not dev mode — `import.meta.env.DEV` is always false.",
+        "The full-workflow spec uses `test.describe.serial`, so a single failure at test 3.7 skips all 36 subsequent tests, masking downstream failures.",
+        "Release Please with multiple components uses the target branch name ('main') in the PR title instead of a version number when `pull-request-title-pattern` uses `${version}`.",
+        "The `FolderTree.clear()` method zeros all stored key buffers — callers who pass buffers into `registerFolder` without defensive copies will have their own buffers zeroed on vault destroy.",
+        "The `ensureFolderRegistered` guard added from a review comment broke uploads because SDK-created folders and root folder after vault init have valid keys but `isLoaded` may not be set in all code paths.",
+        "New packages (`core`, `api-client`, `sdk-core`, `sdk`) were missing from all three CI workflows (`e2e.yml`, `deploy-staging.yml`, `e2e-desktop.yml`) which only built `crypto` before web/desktop targets.",
+        "The crypto package correctly lists `@cipherbox/core` as a devDependency — it is only used in `vault-ipns.test.ts` for cross-package test verification, not at runtime."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/main.tsx",
+          "finding": "Zustand store exposure now gated behind `import.meta.env.DEV || import.meta.env.VITE_E2E === 'true'`, exposing only `window.__E2E` with `getAccessToken()` and `getRootIpnsName()` getters instead of full store hooks."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 628,
+          "finding": "`fileKey` was not cleared if an exception occurred before the re-wrap try/catch — fixed by wrapping the entire post-upload section in try/finally with `clearBytes()`."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 338,
+          "finding": "`createFolder` leaked plaintext `folderKey` and `ipnsPrivateKey` on failure — fixed by moving duplicate-name check before key generation and adding try/catch with `clearBytes` on failure."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 165,
+          "finding": "`registerFolder` stored caller-owned key buffers directly; `destroy()` → `folderTree.clear()` would zero the caller's buffers. Fixed with defensive copies and returning a copy from `getFolderIpnsPrivateKey`."
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "line": 85,
+          "finding": "The `isLoaded` guard added to `ensureFolderRegistered` was too strict — SDK-created folders never go through the store's loaded path. Guard should only check for empty key material."
+        },
+        {
+          "path": "tests/e2e/tests/full-workflow.spec.ts",
+          "line": 533,
+          "finding": "Test 3.7 timeout needed to be 360s (not 240s or 180s) due to cumulative auth restore + vault + root sync + file waits totalling ~330s worst case."
+        },
+        {
+          "path": "tests/e2e/utils/multi-account-wallet.ts",
+          "finding": "Public key extraction now navigates to `/settings`, reads `.settings-pubkey-value`, validates non-empty, then navigates back — replacing Zustand store access."
+        },
+        {
+          "path": "tests/e2e/utils/wallet-login-helpers.ts",
+          "finding": "Vault readiness detection replaced: no longer polls `window.__ZUSTAND_STORES?.vault?.rootFolderKey`, instead waits for file list or empty-state UI element to appear."
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 117,
+          "finding": "`requestAnimationFrame` handle needed to be hoisted out of the async IIFE to be accessible in the effect cleanup for `cancelAnimationFrame`."
+        },
+        {
+          "path": ".github/workflows/e2e.yml",
+          "finding": "Needs `VITE_E2E: 'true'` in the web build env vars to enable `window.__E2E` exposure in the E2E build."
+        }
+      ],
+      "workflow": [
+        "When a PR has `test.describe.serial` tests, the first failure hides all subsequent failures — always check the full failure list from the last green run, not just the reported failure.",
+        "Vite bakes `VITE_*` env vars at compile time, enabling tree-shaking of test-only code from production bundles when the var is absent.",
+        "Release Please multi-component manifests: `pull-request-title-pattern` must be set at the top level (outside `packages`) to affect the combined PR title; `${version}` is meaningless when multiple packages have different versions.",
+        "When a PR is already merged, CI workflow fixes must be cherry-picked or re-applied on a new branch from main — they won't be included via the original branch.",
+        "Resolving GitHub review threads requires two separate API calls: a REST call to post the reply comment, then a GraphQL mutation to mark the thread resolved."
+      ]
+    },
+    "friction": [
+      "The `isLoaded` guard added from a legitimate Copilot review comment immediately broke uploads in CI — the review comment's suggested fix was architecturally incorrect for the actual code paths.",
+      "CI E2E build failure was caused by `__ZUSTAND_STORES` being silently undefined in production builds — no runtime error, just an infinite wait, making root cause non-obvious.",
+      "CI workflow fixes were committed to the already-merged PR branch and never reached main, requiring a second branch and PR to re-apply the same changes.",
+      "The `recycle-bin.spec.ts` uses `__ZUSTAND_STORES__` (double underscore suffix) — a different variable name from `__ZUSTAND_STORES`, creating a subtle inconsistency.",
+      "The orval-generated `VaultResponseDtoInitializedAt` type is wrong but regenerating produces the same incorrect output — an upstream orval bug with nullable Date types.",
+      "TypeScript's strict `Uint8Array\u003cArrayBufferLike\u003e` vs `BlobPart` type incompatibility required a `as BlobPart` cast after the `.buffer` removal fix.",
+      "Background test runs via `run_in_background` required polling `TaskOutput` to check completion status, adding workflow friction."
+    ],
+    "open_items": [
+      "Concurrent mutations to the same folder (Thread 2 from first review pass) — acknowledged as out of scope; UI-level serialization handles it for now, but a proper architectural fix is deferred.",
+      "The `web3auth-helpers.ts` file still uses `__ZUSTAND_STORES` for the legacy email-based test login flow — it's dead code for current wallet-based tests but hasn't been removed.",
+      "The `recycle-bin.spec.ts` uses a different variable `__ZUSTAND_STORES__` (double underscore suffix) — unclear if this is intentional or a bug; not addressed.",
+      "Test 3.7 (session restore after reload) remains sensitive to Sapphire Devnet latency on CI — the root cause (Core Kit TSS key export slowness) is not fixed, only the timeout and store-polling issues were addressed.",
+      "The conflict-detection tests still use `window.__E2E` (requiring `VITE_E2E` flag) — could potentially be replaced with in-browser `page.evaluate(() =\u003e fetch(...))` calls using session cookies, eliminating the need for the flag entirely."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-21T02:26:47.660024Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 8,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}
