@@ -25,3 +25,9 @@ https://github.com/FSM1/cipher-box/actions/runs/23382537774/job/68024966397 the 
 2 - I have suspected that this was broken for a while, but had never really spent the time waiting for access token failure. the long batch operation just exposed it.
 
 You can definitely try and access the staging logs/metrics via prometheus/loki/grafana cloud/logging platform. You can also interact with the live staging application in a playwright controlled browser with a wallet used for authentication.
+
+---
+
+ok, please commit the IPNS publish fix to a branch and create a PR.
+
+For issue 2, I would like to dive a bit deeper in to this, once you're done with #1
