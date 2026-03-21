@@ -152,6 +152,10 @@ jobs:
       - name: Build desktop frontend
         run: |
           pnpm --filter @cipherbox/crypto build
+          pnpm --filter @cipherbox/core build
+          pnpm --filter @cipherbox/api-client build
+          pnpm --filter @cipherbox/sdk-core build
+          pnpm --filter @cipherbox/sdk build
           cd apps/desktop
           pnpm vite build
         env:
