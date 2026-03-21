@@ -14,11 +14,14 @@ import {
   deviceApprovalControllerGetPending,
   deviceApprovalControllerRespond,
   deviceApprovalControllerCancel,
-} from '../api/device-approval/device-approval';
+} from '@cipherbox/api-client';
 
-import type { CreateApprovalDto, RespondApprovalDto } from '../api/models';
-import type { DeviceApprovalControllerGetStatus200 } from '../api/models/deviceApprovalControllerGetStatus200';
-import type { DeviceApprovalControllerGetPending200Item } from '../api/models/deviceApprovalControllerGetPending200Item';
+import type {
+  CreateApprovalDto,
+  RespondApprovalDto,
+  DeviceApprovalControllerGetStatus200,
+  DeviceApprovalControllerGetPending200Item,
+} from '@cipherbox/api-client';
 
 // Re-export types with original names for backward compatibility
 export type CreateApprovalRequest = CreateApprovalDto;

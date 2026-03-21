@@ -1,44 +1,33 @@
-import { apiClient } from './client';
+/**
+ * Auth API adapter -- thin wrapper over @cipherbox/api-client generated functions.
+ *
+ * Keeps the `authApi.foo()` call style used by useAuth.ts and web3auth/hooks.ts
+ * while delegating all HTTP transport to the shared api-client package.
+ */
+import {
+  authControllerLogin,
+  authControllerRefresh,
+  authControllerLogout,
+  authControllerGetMethods,
+  authControllerLinkMethod,
+  authControllerUnlinkMethod,
+  authControllerDeleteAccount,
+  identityControllerGoogleLogin,
+  identityControllerSendOtp,
+  identityControllerVerifyOtp,
+  identityControllerGetWalletNonce,
+  identityControllerWalletLogin,
+} from '@cipherbox/api-client';
+import type {
+  AuthMethodResponseDto,
+  LoginResponseDto,
+  TokenResponseDto,
+  IdentityTokenResponseDto,
+  LinkMethodDtoLoginType,
+} from '@cipherbox/api-client';
 
-type LoginRequest = {
-  idToken: string;
-  publicKey: string;
-  loginType: 'corekit';
-};
-
-type LoginResponse = {
-  accessToken: string;
-  isNewUser: boolean;
-};
-
-type TokenResponse = {
-  accessToken: string;
-  email?: string;
-};
-
-/** Response from CipherBox identity provider endpoints */
-type IdentityTokenResponse = {
-  idToken: string;
-  userId: string;
-  isNewUser: boolean;
-  email?: string;
-};
-
-export type AuthMethod = {
-  id: string;
-  type: 'google' | 'apple' | 'github' | 'email' | 'wallet';
-  identifier: string;
-  lastUsedAt: string | null;
-  createdAt: string;
-};
-
-type LinkMethodRequest = {
-  idToken: string;
-  loginType: 'google' | 'email' | 'wallet';
-  walletAddress?: string;
-  siweMessage?: string;
-  siweSignature?: string;
-};
+// Re-export model type under original alias for backward compatibility
+export type AuthMethod = AuthMethodResponseDto;
 
 export const authApi = {
   /**
@@ -46,114 +35,87 @@ export const authApi = {
    * Backend verifies the idToken with appropriate JWKS endpoint based on loginType.
    * Refresh token is stored in HTTP-only cookie automatically.
    */
-  login: async (data: LoginRequest): Promise<LoginResponse> => {
-    const response = await apiClient.post<LoginResponse>('/auth/login', data);
-    return response.data;
-  },
+  login: (data: {
+    idToken: string;
+    publicKey: string;
+    loginType: 'corekit';
+  }): Promise<LoginResponseDto> => authControllerLogin(data),
 
   /**
    * Refresh access token using HTTP-only refresh token cookie.
    * The refresh token is automatically sent via withCredentials: true.
    * New refresh token is set in HTTP-only cookie by the backend.
    */
-  refresh: async (): Promise<TokenResponse> => {
-    const response = await apiClient.post<TokenResponse>('/auth/refresh');
-    return response.data;
-  },
+  refresh: (): Promise<TokenResponseDto> =>
+    // DesktopRefreshDto.refreshToken is optional -- web uses HTTP-only cookie
+    authControllerRefresh({}),
 
   /**
    * Logout and invalidate refresh token.
    * Clears HTTP-only cookie on backend.
    */
-  logout: async (): Promise<void> => {
-    await apiClient.post('/auth/logout');
-  },
+  logout: (): Promise<unknown> => authControllerLogout(),
 
   /**
    * Get all linked auth methods for the current user.
    */
-  getMethods: async (): Promise<AuthMethod[]> => {
-    const response = await apiClient.get<AuthMethod[]>('/auth/methods');
-    return response.data;
-  },
+  getMethods: (): Promise<AuthMethodResponseDto[]> => authControllerGetMethods(),
 
   /**
    * Link a new auth method to the current user account.
-   * The new auth method's publicKey must match the user's publicKey
-   * (via Web3Auth group connections).
    */
-  linkMethod: async (data: LinkMethodRequest): Promise<AuthMethod[]> => {
-    const response = await apiClient.post<AuthMethod[]>('/auth/link', data);
-    return response.data;
-  },
+  linkMethod: (data: {
+    idToken: string;
+    loginType: 'google' | 'email' | 'wallet';
+    walletAddress?: string;
+    siweMessage?: string;
+    siweSignature?: string;
+  }): Promise<AuthMethodResponseDto[]> =>
+    authControllerLinkMethod({
+      ...data,
+      loginType: data.loginType as LinkMethodDtoLoginType,
+    }),
 
   /**
    * Unlink an auth method from the current user account.
    * Cannot unlink the last remaining auth method.
    */
-  unlinkMethod: async (methodId: string): Promise<void> => {
-    await apiClient.post('/auth/unlink', { methodId });
-  },
+  unlinkMethod: (methodId: string): Promise<unknown> => authControllerUnlinkMethod({ methodId }),
 
   /**
    * Permanently delete the authenticated user's account.
    * Requires confirmation string "DELETE".
    */
-  deleteAccount: async (): Promise<void> => {
-    await apiClient.delete('/auth/account', { data: { confirmation: 'DELETE' } });
-  },
+  deleteAccount: (): Promise<unknown> => authControllerDeleteAccount({ confirmation: 'DELETE' }),
 
-  // --- CipherBox Identity Provider endpoints (Plan 12-01) ---
+  // --- CipherBox Identity Provider endpoints ---
 
   /** Get CipherBox identity JWT via Google OAuth token */
-  identityGoogle: async (
+  identityGoogle: (
     googleIdToken: string,
     intent?: 'login' | 'link'
-  ): Promise<IdentityTokenResponse> => {
-    const response = await apiClient.post<IdentityTokenResponse>('/auth/identity/google', {
-      idToken: googleIdToken,
-      ...(intent && { intent }),
-    });
-    return response.data;
-  },
+  ): Promise<IdentityTokenResponseDto> =>
+    identityControllerGoogleLogin({ idToken: googleIdToken, ...(intent && { intent }) }),
 
   /** Send email OTP */
-  identityEmailSendOtp: async (email: string): Promise<{ success: boolean }> => {
-    const response = await apiClient.post<{ success: boolean }>('/auth/identity/email/send-otp', {
-      email,
-    });
-    return response.data;
-  },
+  identityEmailSendOtp: (email: string): Promise<{ success: boolean }> =>
+    identityControllerSendOtp({ email }) as Promise<{ success: boolean }>,
 
   /** Verify email OTP and get CipherBox identity JWT */
-  identityEmailVerify: async (
+  identityEmailVerify: (
     email: string,
     otp: string,
     intent?: 'login' | 'link'
-  ): Promise<IdentityTokenResponse> => {
-    const response = await apiClient.post<IdentityTokenResponse>(
-      '/auth/identity/email/verify-otp',
-      {
-        email,
-        otp,
-        ...(intent && { intent }),
-      }
-    );
-    return response.data;
-  },
+  ): Promise<IdentityTokenResponseDto> =>
+    identityControllerVerifyOtp({ email, otp, ...(intent && { intent }) }),
 
   /** Get a SIWE nonce for wallet login */
-  identityWalletNonce: async (): Promise<{ nonce: string }> => {
-    const response = await apiClient.get<{ nonce: string }>('/auth/identity/wallet/nonce');
-    return response.data;
-  },
+  identityWalletNonce: (): Promise<{ nonce: string }> =>
+    identityControllerGetWalletNonce() as Promise<{ nonce: string }>,
 
   /** Verify SIWE wallet signature and get CipherBox identity JWT */
-  identityWalletVerify: async (data: {
+  identityWalletVerify: (data: {
     message: string;
     signature: string;
-  }): Promise<IdentityTokenResponse> => {
-    const response = await apiClient.post<IdentityTokenResponse>('/auth/identity/wallet', data);
-    return response.data;
-  },
+  }): Promise<IdentityTokenResponseDto> => identityControllerWalletLogin(data),
 };

@@ -23,7 +23,7 @@ import {
   sharesControllerGetPendingRotations,
   sharesControllerUpdateShareEncryptedKey,
   sharesControllerCompleteRotation,
-} from '../api/shares/shares';
+} from '@cipherbox/api-client';
 
 import { wrapKey, bytesToHex, hexToBytes, generateRandomBytes } from '@cipherbox/crypto';
 import type { ReceivedShare, SentShare } from '../stores/share.store';

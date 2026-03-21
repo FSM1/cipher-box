@@ -1,11 +1,11 @@
-import { useHealthControllerCheck } from '../../api/health/health';
+import { useHealthCheck } from '../../hooks/useHealthCheck';
 
 /**
  * Status indicator component.
  * Shows API connection status in the footer with a glowing dot and terminal-style text.
  */
 export function StatusIndicator() {
-  const { data, isLoading, isError } = useHealthControllerCheck({
+  const { data, isLoading, isError } = useHealthCheck({
     query: {
       refetchInterval: 30000,
       retry: 2,

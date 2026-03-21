@@ -1,7 +1,19 @@
-import axios, { AxiosProgressEvent, CancelToken } from 'axios';
-import { useAuthStore } from '../../stores/auth.store';
-
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+/**
+ * IPFS API adapter -- wraps @cipherbox/api-client generated functions
+ * with upload progress tracking, cancel support, and download-as-Uint8Array.
+ *
+ * Upload progress and cancel tokens are passed via the options parameter
+ * (AxiosRequestConfig) to the generated function. Download progress uses
+ * the fetch ReadableStream API for streaming byte counts, falling back
+ * to a simple arrayBuffer() call when no callback is provided.
+ */
+import {
+  ipfsControllerUpload,
+  ipfsControllerUnpin,
+  ipfsControllerGet,
+  getApiClientConfig,
+} from '@cipherbox/api-client';
+import type { AxiosProgressEvent, CancelToken } from '@cipherbox/api-client';
 
 export type AddResponse = { cid: string; size: number; recorded: boolean };
 
@@ -9,47 +21,38 @@ export type DownloadProgressCallback = (loaded: number, total: number) => void;
 
 /**
  * Upload encrypted file to IPFS via backend relay.
- * Uses axios directly for upload progress tracking (CancelToken not available in apiClient).
+ * Uses axios for upload progress tracking and cancellation.
  */
 export async function addToIpfs(
   encryptedFile: Blob,
   onProgress?: (percent: number) => void,
   cancelToken?: CancelToken
 ): Promise<AddResponse> {
-  const { accessToken } = useAuthStore.getState();
+  const result = await ipfsControllerUpload(
+    { file: encryptedFile },
+    {
+      onUploadProgress: (event: AxiosProgressEvent) => {
+        if (event.total && onProgress) {
+          onProgress(Math.round((event.loaded * 100) / event.total));
+        }
+      },
+      cancelToken,
+    }
+  );
 
-  const formData = new FormData();
-  formData.append('file', encryptedFile);
-
-  const response = await axios.post<AddResponse>(`${BASE_URL}/ipfs/upload`, formData, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-    onUploadProgress: (event: AxiosProgressEvent) => {
-      if (event.total && onProgress) {
-        const percent = Math.round((event.loaded * 100) / event.total);
-        onProgress(percent);
-      }
-    },
-    cancelToken,
-  });
-
-  return response.data;
+  return { cid: result.cid, size: result.size, recorded: result.recorded };
 }
 
 /**
  * Unpin file from IPFS via backend relay.
  */
 export async function unpinFromIpfs(cid: string): Promise<void> {
-  const { accessToken } = useAuthStore.getState();
-  await axios.post(
-    `${BASE_URL}/ipfs/unpin`,
-    { cid },
-    { headers: { Authorization: `Bearer ${accessToken}` } }
-  );
+  await ipfsControllerUnpin({ cid });
 }
 
 /**
  * Fetch encrypted file from IPFS via the API proxy.
- * Supports progress tracking for larger files.
+ * Supports progress tracking for larger files using streaming ReadableStream.
  *
  * @param cid - IPFS CID of the file
  * @param onProgress - Optional callback for download progress
@@ -59,20 +62,30 @@ export async function fetchFromIpfs(
   cid: string,
   onProgress?: DownloadProgressCallback
 ): Promise<Uint8Array> {
-  const { accessToken } = useAuthStore.getState();
-  const response = await fetch(`${BASE_URL}/ipfs/${cid}`, {
+  // Simple path: no progress tracking -- use the generated function directly
+  if (!onProgress) {
+    const blob = await ipfsControllerGet(cid);
+    const buffer = await blob.arrayBuffer();
+    return new Uint8Array(buffer);
+  }
+
+  // With progress tracking: use fetch with ReadableStream
+  // (axios onDownloadProgress doesn't give reliable byte counts in the browser)
+  const config = getApiClientConfig();
+  const token = await config.getAccessToken();
+  const response = await fetch(`${config.baseUrl}/ipfs/${cid}`, {
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
+    credentials: config.withCredentials ? 'include' : 'same-origin',
   });
 
   if (!response.ok) {
     throw new Error(`Failed to fetch from IPFS: ${response.status}`);
   }
 
-  // If no progress callback or no content-length, just return arrayBuffer
   const contentLength = response.headers.get('Content-Length');
-  if (!onProgress || !contentLength) {
+  if (!contentLength) {
     const buffer = await response.arrayBuffer();
     return new Uint8Array(buffer);
   }

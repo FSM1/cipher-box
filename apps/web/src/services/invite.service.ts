@@ -17,12 +17,10 @@ import {
   invitesControllerGetInviteStatus,
   invitesControllerGetInviteData,
   invitesControllerClaimInvite,
-} from '../api/invites/invites';
-import {
   shareInvitesControllerCreateInvite,
   shareInvitesControllerListInvites,
   shareInvitesControllerRevokeInvite,
-} from '../api/share-invites/share-invites';
+} from '@cipherbox/api-client';
 import { collectChildKeys } from '../lib/crypto/key-wrapping';
 import { resolveFileMetadata } from './file-metadata.service';
 import { resolveIpnsRecord } from './ipns.service';

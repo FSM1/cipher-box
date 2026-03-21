@@ -15,7 +15,7 @@ import { wrapKey, unwrapKey, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import { resolveFileMetadata } from '../../services/file-metadata.service';
 import { resolveIpnsRecord } from '../../services/ipns.service';
 import { fetchFromIpfs } from '../api/ipfs';
-import type { ChildKeyDto } from '../../api/models/childKeyDto';
+import type { ChildKeyDto } from '@cipherbox/api-client';
 
 /**
  * Collect all descendant keys from a folder for sharing.

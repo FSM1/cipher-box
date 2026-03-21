@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { vaultControllerExportVault } from '../../api/vault/vault';
+import { vaultControllerExportVault } from '@cipherbox/api-client';
 import { ConfirmDialog } from '../file-browser/ConfirmDialog';
 import './vault-export.css';
 

@@ -10,7 +10,7 @@ import { useVaultStore } from '../stores/vault.store';
 import { useDeviceRegistryStore } from '../stores/device-registry.store';
 import { clearAllUserStores } from '../lib/clear-user-stores';
 import { initSdkClient } from '../lib/sdk-provider';
-import { setApiClientConfig } from '@cipherbox/api-client';
+// api-config.ts handles setApiClientConfig at module load time
 import { initializeVault, encryptVaultKeys, decryptVaultKeys } from '@cipherbox/core';
 import { deriveIpnsName, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import { getOrCreateDeviceIdentity } from '../lib/device/identity';
@@ -18,7 +18,7 @@ import { detectDeviceInfo } from '../lib/device/info';
 import { initializeOrSyncRegistry } from '../services/device-registry.service';
 import { initializeBin } from '../services/bin.service';
 import { useBinStore } from '../stores/bin.store';
-import { vaultControllerGetConfig } from '../api/vault/vault';
+import { vaultControllerGetConfig } from '@cipherbox/api-client';
 
 export function useAuth() {
   const navigate = useNavigate();
@@ -154,8 +154,7 @@ export function useAuth() {
         return state.accessToken || '';
       };
 
-      // Configure @cipherbox/api-client for SDK-core IPNS operations
-      setApiClientConfig({ baseUrl: apiUrl, getAccessToken });
+      // @cipherbox/api-client is configured in lib/api-config.ts at module load time.
 
       const sdkClient = initSdkClient({
         apiUrl,
