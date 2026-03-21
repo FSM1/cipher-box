@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "721639822c83",
+  "session_id": "f0dd29f9-8a13-44de-877f-1bc80807410d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-21T18:46:01.994705Z",
+  "branch": "refactor/consolidate-api-client",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "5780a9323a73",
+  "token_usage": {
+    "input_tokens": 204,
+    "cache_creation_tokens": 228262,
+    "cache_read_tokens": 15021658,
+    "output_tokens": 42322,
+    "api_call_count": 156
+  },
+  "session_metrics": {
+    "turn_count": 24
+  },
+  "summary": {
+    "intent": "Deploy v0.25.0 to staging after merging the release PR, then investigate and fix performance and authentication issues discovered during smoke testing.",
+    "outcome": "Successfully unblocked staging deployment via manual v0.25.1 tag after fixing a Dockerfile build error and a release-please config bug. Three PRs created: #308 (IPNS fire-and-forget fix), #309 (web app API client consolidation), and #307 (release-please title pattern fix).",
+    "learnings": {
+      "repo": [
+        "The staging deployment workflow (deploy-staging.yml) triggers on tags matching `v*-staging*`, not release tags — staging deployment is always a manual step via the 'Tag Staging Release' action.",
+        "release-please aborts with 'untagged merged release PRs' when `pull-request-title-pattern` lacks `${component}` in a multi-package config — it cannot match merged PRs back to their components.",
+        "The web app had three separate HTTP client paths: orval react-query hooks (fetch), a hand-written axios client for login/vault init, and bare axios/fetch for IPFS — none shared token refresh logic.",
+        "The web app's orval react-query generation produced ~8800 lines of generated code but almost none of the hooks were actually used; raw generated functions were imported instead.",
+        "The API is a zero-knowledge server that intentionally has no dependency on @cipherbox/core or @cipherbox/crypto — it stores/retrieves opaque blobs and proxies IPFS without handling plaintext.",
+        "IPNS publish was slow (30s+) because the service awaited delegated routing DHT propagation, which is best-effort — the DB record is the source of truth and resolveRecord always prefers the DB cache.",
+        "The api-client package uses axios-functions mode for framework-agnostic consumers; the web app had its own separate orval config generating react-query hooks — now consolidated.",
+        "The CI verify step was checking apps/web/src/api/ for generated code freshness, which no longer exists after the api-client consolidation refactor."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 52,
+          "end_line": 52,
+          "finding": "The `result` variable stays 'success' after fire-and-forget change — correct because from the API's perspective publish succeeded once DB record is saved; DHT propagation is best-effort."
+        },
+        {
+          "path": "apps/web/src/api/custom-instance.ts",
+          "finding": "Orval-generated fetch mutator had zero 401 handling — token refresh only existed on the axios client used during login/vault init, causing 401s after access token expiry in long sessions."
+        },
+        {
+          "path": "apps/web/orval.config.ts",
+          "finding": "Web app had its own separate orval config generating react-query client (fetch-based) independently from packages/api-client which generates axios-functions mode."
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "finding": "api-client axios instance needed withCredentials: true for HTTP-only refresh token cookies, and a 401 interceptor with refreshAccessToken callback with shared-promise deduplication."
+        },
+        {
+          "path": "apps/web/src/lib/api/auth.ts",
+          "finding": "Had unsafe `as` casts on API responses; fixed by using proper generated types (LinkMethodDtoLoginType, SendOtpResponseDto, IdentityControllerGetWalletNonce200) directly."
+        },
+        {
+          "path": ".github/workflows/release-please.yml",
+          "finding": "release-please config had pull-request-title-pattern without ${component}, breaking multi-package release matching."
+        }
+      ],
+      "workflow": [
+        "When release-please is stuck on 'untagged merged release PRs', manually create the tag and GitHub release from the correct commit to unblock, then fix the config for future releases.",
+        "Free-tier Grafana Cloud instances hibernate and return HTTP 503 on first deploy hit — transient, re-run the failed job.",
+        "chore commits do not trigger release-please version bumps; use fix or feat to get patch/minor releases.",
+        "The Tag Staging Release action checks out the release tag's commit, so a fix merged to main after the release tag requires a new patch release tag before staging can pick it up.",
+        "CodeRabbit and GitHub Copilot both flagged the same missing terminal .catch() on fire-and-forget promise chain — worth checking for duplicate automated review comments before fixing."
+      ]
+    },
+    "friction": [
+      "release-please silently aborted tag creation after v0.25.1 release PR merge due to undiagnosed title pattern config bug — required manual tag creation to unblock staging.",
+      "The Dockerfile had a stale `packages/crypto` COPY that wasn't related to the API's actual dependencies, causing a build failure when the lockfile was re-evaluated with the expanded package list.",
+      "Three HTTP client paths in the web app with inconsistent auth handling made token refresh a systemic gap rather than a single bug.",
+      "CI verify step was still checking the deleted apps/web/src/api/ directory after the api-client consolidation, causing a false CI failure.",
+      "Grafana provisioning transient 503 on staging deploy added noise to an already complex debug session."
+    ],
+    "open_items": [
+      "PR #308 (IPNS fire-and-forget fix) and PR #309 (api-client consolidation) still need to be merged and a new release cut before staging reflects these fixes.",
+      "Token refresh fix for the web app was initially prototyped by the debugger agent but superseded by the full api-client consolidation refactor — verify the consolidated client's 401 interceptor covers all fetch paths including the download endpoint in ipfs.ts.",
+      "The Tag Staging Release workflow still needs to be re-run with v0.25.1 (or later) once PRs #307, #308, #309 are merged and a new release tag exists.",
+      "E2E tests and staging approval gate in Tag Staging Release workflow were not yet passed — deployment to staging is still pending.",
+      "Investigate whether @cipherbox/api-client consumers outside the web app (SDK, desktop) need the same withCredentials/refresh interceptor wiring or handle auth differently."
+    ]
+  }
+}
