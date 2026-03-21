@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.1](https://github.com/FSM1/cipher-box/compare/v0.25.0...v0.25.1) (2026-03-21)
+
+
+### Bug Fixes
+
+* **ci:** remove stale workspace package from API Dockerfile ([#305](https://github.com/FSM1/cipher-box/issues/305)) ([1634028](https://github.com/FSM1/cipher-box/commit/1634028a36fbc44cfc080b450e1ac4bf62a9a678))
+
 ## [0.25.0](https://github.com/FSM1/cipher-box/compare/v0.24.2...v0.25.0) (2026-03-21)
 
 
