@@ -16,6 +16,30 @@
         "apps/desktop/src-tauri/Cargo.toml",
         "apps/desktop/src-tauri/tauri.conf.json"
       ]
+    },
+    "packages/core": {
+      "release-type": "node",
+      "component": "@cipherbox/core",
+      "include-component-in-tag": true,
+      "bump-minor-pre-major": true
+    },
+    "packages/api-client": {
+      "release-type": "node",
+      "component": "@cipherbox/api-client",
+      "include-component-in-tag": true,
+      "bump-minor-pre-major": true
+    },
+    "packages/sdk-core": {
+      "release-type": "node",
+      "component": "@cipherbox/sdk-core",
+      "include-component-in-tag": true,
+      "bump-minor-pre-major": true
+    },
+    "packages/sdk": {
+      "release-type": "node",
+      "component": "@cipherbox/sdk",
+      "include-component-in-tag": true,
+      "bump-minor-pre-major": true
     }
   }
 }

@@ -12,6 +12,7 @@ config({ path: resolve(__dirname, '.env') });
 
 export default defineConfig({
   testDir: './tests',
+  testIgnore: ['**/load-test.spec.ts'],
 
   // No global setup needed - tests handle their own authentication
   // (Removed globalSetup: './global-setup.ts')

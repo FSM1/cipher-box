@@ -1,5 +1,5 @@
 import { useCallback, type MouseEvent } from 'react';
-import type { BinEntry } from '@cipherbox/crypto';
+import type { BinEntry } from '@cipherbox/core';
 import { formatBytes, formatRelativeTime, getItemIcon } from '../../utils/format';
 
 type BinListItemProps = {

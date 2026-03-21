@@ -13,7 +13,11 @@
     "api:generate": "orval && node scripts/fix-orval-imports.mjs"
   },
   "dependencies": {
+    "@cipherbox/api-client": "workspace:*",
+    "@cipherbox/core": "workspace:*",
     "@cipherbox/crypto": "workspace:*",
+    "@cipherbox/sdk": "workspace:*",
+    "@cipherbox/sdk-core": "workspace:*",
     "@floating-ui/react": "^0.27.16",
     "@noble/secp256k1": "^3.0.0",
     "@tanstack/react-query": "^5.62.0",

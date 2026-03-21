@@ -5,17 +5,14 @@ import { useCoreKit } from '../lib/web3auth/core-kit-provider';
 import { authApi } from '../lib/api/auth';
 import { vaultApi } from '../lib/api/vault';
 import { useAuthStore } from '../stores/auth.store';
+import { useFolderStore } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
 import { useDeviceRegistryStore } from '../stores/device-registry.store';
 import { clearAllUserStores } from '../lib/clear-user-stores';
-import {
-  initializeVault,
-  encryptVaultKeys,
-  decryptVaultKeys,
-  deriveIpnsName,
-  hexToBytes,
-  bytesToHex,
-} from '@cipherbox/crypto';
+import { initSdkClient } from '../lib/sdk-provider';
+import { setApiClientConfig } from '@cipherbox/api-client';
+import { initializeVault, encryptVaultKeys, decryptVaultKeys } from '@cipherbox/core';
+import { deriveIpnsName, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import { getOrCreateDeviceIdentity } from '../lib/device/identity';
 import { detectDeviceInfo } from '../lib/device/info';
 import { initializeOrSyncRegistry } from '../services/device-registry.service';
@@ -43,6 +40,7 @@ export function useAuth() {
     lastAuthMethod,
     userEmail,
     setAccessToken,
+    setAuthenticated,
     setLastAuthMethod,
     setUserEmail,
     setVaultKeypair,
@@ -146,6 +144,52 @@ export function useAuth() {
       }
     }
 
+    // Initialize SDK client with decrypted vault keys
+    const vaultState = useVaultStore.getState();
+    const authState = useAuthStore.getState();
+    if (vaultState.rootFolderKey && vaultState.rootIpnsKeypair && vaultState.rootIpnsName) {
+      const apiUrl = import.meta.env.VITE_API_URL || window.location.origin + '/api';
+      const getAccessToken = async () => {
+        const state = useAuthStore.getState();
+        return state.accessToken || '';
+      };
+
+      // Configure @cipherbox/api-client for SDK-core IPNS operations
+      setApiClientConfig({ baseUrl: apiUrl, getAccessToken });
+
+      const sdkClient = initSdkClient({
+        apiUrl,
+        getAccessToken,
+        vaultKeypair: {
+          publicKey: userKeypair.publicKey,
+          privateKey: userKeypair.privateKey,
+        },
+        rootIpnsName: vaultState.rootIpnsName,
+        rootFolderKey: vaultState.rootFolderKey,
+        teeKeys: authState.teeKeys ?? undefined,
+        shareCallbacks: {
+          getCoveringShares: async (folderIpnsName: string) => {
+            const { findCoveringShares } = await import('../services/share.service');
+            const folders = useFolderStore.getState().folders;
+            // Find the folder ID from IPNS name for ancestor traversal
+            const folderId =
+              Object.keys(folders).find((id) => folders[id].ipnsName === folderIpnsName) ?? null;
+            return findCoveringShares(folderIpnsName, folders, folderId);
+          },
+          addShareKeys: async (shareId, keys) => {
+            const { addShareKeys } = await import('../services/share.service');
+            await addShareKeys(shareId, keys);
+          },
+        },
+      });
+
+      // Subscribe folder store to SDK events
+      useFolderStore.getState().subscribeToSdk(sdkClient);
+
+      // Subscribe bin store to SDK events
+      useBinStore.getState().subscribeToSdk(sdkClient);
+    }
+
     // Non-blocking device registry initialization (fire-and-forget)
     // Placed after vault load so registry failures never block login
     void (async () => {
@@ -172,12 +216,18 @@ export function useAuth() {
     })();
 
     // Non-blocking bin initialization (fire-and-forget)
+    // After old service creates/loads bin, also load into SDK for deleteToBin support
     void (async () => {
       try {
         await initializeBin({
           userPrivateKey: userKeypair.privateKey,
           userPublicKey: userKeypair.publicKey,
         });
+        // Now load bin into SDK (old service ensures bin IPNS record exists)
+        const { getSdkClient, hasSdkClient } = await import('../lib/sdk-provider');
+        if (hasSdkClient()) {
+          await getSdkClient().loadBin();
+        }
       } catch (error) {
         console.error('[Auth] Bin initialization failed (non-blocking):', error);
       }
@@ -221,15 +271,22 @@ export function useAuth() {
       });
 
       // 3. Store access token (refresh token in HTTP-only cookie)
+      // Note: this does NOT set isAuthenticated — we wait until vault + SDK
+      // are fully initialized to prevent Login.tsx from redirecting to /files
+      // before the SDK client is ready for file operations.
       setAccessToken(response.accessToken);
 
       // 4. Remember auth method for UX
       setLastAuthMethod(authMethod);
 
-      // 5. Initialize or load vault
+      // 5. Initialize or load vault + SDK client
       await initializeOrLoadVault();
+
+      // 6. Now that vault keys are loaded and SDK is initialized,
+      // mark the user as authenticated. This triggers Login.tsx → /files redirect.
+      setAuthenticated();
     },
-    [getPublicKeyHex, setAccessToken, setLastAuthMethod, initializeOrLoadVault]
+    [getPublicKeyHex, setAccessToken, setAuthenticated, setLastAuthMethod, initializeOrLoadVault]
   );
 
   /**
@@ -255,7 +312,7 @@ export function useAuth() {
     // NOW sync Core Kit React state to LOGGED_IN.
     // We deliberately delayed this from inputFactorKey() to prevent the session
     // restoration effect from firing before backend auth completed.
-    // At this point isAuthenticated is true (from completeBackendAuth -> setAccessToken),
+    // At this point isAuthenticated is true (from completeBackendAuth -> setAuthenticated),
     // so the session restore guard (coreKitLoggedIn && !isAuthenticated) won't trigger.
     syncStatus();
 
@@ -485,8 +542,11 @@ export function useAuth() {
             setUserEmail(response.email);
           }
 
-          // Load vault keys from Core Kit keypair
+          // Load vault keys from Core Kit keypair + initialize SDK
           await initializeOrLoadVaultRef.current?.();
+
+          // Mark as authenticated only after vault + SDK are ready
+          setAuthenticated();
         } catch {
           // No valid backend session -- user needs to re-login
           // Core Kit session exists but backend cookie expired
@@ -503,7 +563,14 @@ export function useAuth() {
       }
     };
     restoreSession();
-  }, [coreKitLoggedIn, isAuthenticated, isLoggingIn, setAccessToken, setUserEmail]);
+  }, [
+    coreKitLoggedIn,
+    isAuthenticated,
+    isLoggingIn,
+    setAccessToken,
+    setAuthenticated,
+    setUserEmail,
+  ]);
 
   return {
     isLoading,

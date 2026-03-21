@@ -1,10 +1,6 @@
 import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
-import {
-  loginViaEmail,
-  loginViaTestEndpoint,
-  TEST_CREDENTIALS,
-  type TestAuthState,
-} from '../utils/web3auth-helpers';
+import type { PrivateKeyAccount } from 'viem/accounts';
+import { createTestAccount, setupMockWallet, loginViaWallet } from '../utils/wallet-login-helpers';
 import { createTestTextFile, cleanupTestFiles } from '../utils/test-files';
 import { bumpServerSequence } from '../utils/conflict-helpers';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
@@ -46,8 +42,11 @@ test.describe.serial('Conflict Detection', () => {
   let confirmDialog: ConfirmDialogPage;
   let textEditorDialog: TextEditorDialogPage;
 
-  // Auth state -- used for direct API calls in bumpServerSequence
-  let authState: TestAuthState | null = null;
+  let account: PrivateKeyAccount;
+
+  // Auth state -- extracted from browser after wallet login
+  let accessToken = '';
+  let rootIpnsName = '';
 
   const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:3000';
 
@@ -58,9 +57,14 @@ test.describe.serial('Conflict Detection', () => {
   const createdItems: Array<{ name: string; type: 'file' | 'folder' }> = [];
 
   test.beforeAll(async ({ browser: testBrowser }) => {
+    test.setTimeout(90_000); // Core Kit init + SIWE can be slow
     browser = testBrowser;
     context = await browser.newContext();
     page = await context.newPage();
+
+    // Generate a random wallet identity and install mock wallet
+    account = createTestAccount();
+    await setupMockWallet(page, account);
 
     // Initialize page objects
     fileList = new FileListPage(page);
@@ -70,41 +74,22 @@ test.describe.serial('Conflict Detection', () => {
     confirmDialog = new ConfirmDialogPage(page);
     textEditorDialog = new TextEditorDialogPage(page);
 
-    // Login using test-login endpoint (bypasses Core Kit, decouples from Web3Auth)
-    if (process.env.TEST_LOGIN_SECRET) {
-      authState = await loginViaTestEndpoint(page, TEST_CREDENTIALS.email);
-    } else {
-      await loginViaEmail(page, TEST_CREDENTIALS.email);
-      // When using real Core Kit login, extract auth state from Zustand stores
-      // for use in bumpServerSequence API calls
-      authState = await page.evaluate(() => {
-        const stores = (window as unknown as Record<string, unknown>).__ZUSTAND_STORES as
-          | {
-              auth: { getState: () => { accessToken: string } };
-              vault: { getState: () => { rootIpnsName: string } };
-            }
-          | undefined;
+    // Login via wallet (mock wallet auto-approves connect + SIWE)
+    await loginViaWallet(page, { timeout: 60_000 });
 
-        if (!stores) return null;
-
-        const authStoreState = stores.auth.getState();
-        const vaultStoreState = stores.vault.getState();
-
-        return {
-          accessToken: authStoreState.accessToken,
-          rootIpnsName: vaultStoreState.rootIpnsName,
-          // Non-sensitive fields only -- private keys stay in browser memory
-          email: '',
-          publicKeyHex: '',
-          publicKeyArr: [],
-          privateKeyArr: [],
-          rootFolderKeyArr: [],
-          rootIpnsPublicKeyArr: [],
-          rootIpnsPrivateKeyArr: [],
-          vaultId: '',
-        } as TestAuthState;
-      });
-    }
+    // Extract auth state from Zustand stores for bumpServerSequence API calls
+    const authData = await page.evaluate(() => {
+      const stores = (window as unknown as Record<string, unknown>).__ZUSTAND_STORES as {
+        auth: { getState: () => { accessToken: string } };
+        vault: { getState: () => { rootIpnsName: string } };
+      };
+      return {
+        accessToken: stores.auth.getState().accessToken,
+        rootIpnsName: stores.vault.getState().rootIpnsName,
+      };
+    });
+    accessToken = authData.accessToken;
+    rootIpnsName = authData.rootIpnsName;
 
     // Verify we're on the files page and the vault is accessible.
     // Wait for either the file list grid (non-empty folder) or empty state (fresh vault).
@@ -125,6 +110,7 @@ test.describe.serial('Conflict Detection', () => {
   });
 
   test.afterAll(async () => {
+    test.setTimeout(60_000); // Cleanup can be slow with rate-limited API
     // Clean up remote items created during tests (runs even if earlier serial tests fail)
     try {
       const itemsToDelete = [...createdItems].reverse();
@@ -168,8 +154,8 @@ test.describe.serial('Conflict Detection', () => {
       return stores?.auth?.getState()?.accessToken ?? '';
     });
     if (liveToken) return liveToken;
-    // Fallback: use authState captured during beforeAll
-    return authState?.accessToken ?? '';
+    // Fallback: use token captured during beforeAll
+    return accessToken;
   }
 
   /**
@@ -183,7 +169,7 @@ test.describe.serial('Conflict Detection', () => {
       return stores?.vault?.getState()?.rootIpnsName ?? '';
     });
     if (liveName) return liveName;
-    return authState?.rootIpnsName ?? '';
+    return rootIpnsName;
   }
 
   // ============================================================
@@ -283,6 +269,8 @@ test.describe.serial('Conflict Detection', () => {
 
     // Step 2: Bump the folder's server-side sequence number.
     // This makes the client's local folder sequence stale.
+    // Brief pause to avoid API rate limiting (10 req/s) from rapid test transitions.
+    await page.waitForTimeout(2000);
     const accessToken = await getAccessToken();
     const rootIpnsName = await getRootIpnsName();
 

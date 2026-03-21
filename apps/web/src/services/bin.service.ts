@@ -1,3 +1,6 @@
+// DEPRECATED: Use @cipherbox/sdk instead. Will be removed in 19.1-06.
+// Hooks now delegate to CipherBoxClient SDK methods for bin operations.
+// Remaining usages: initializeBin (useAuth login flow), purgeExpired (useBin).
 /**
  * Bin Service - Recycle bin metadata IPNS lifecycle
  *
@@ -16,10 +19,6 @@ import {
   deriveBinIpnsKeypair,
   encryptBinMetadata,
   decryptBinMetadata,
-  bytesToHex,
-  hexToBytes,
-  wrapKey,
-  unwrapKey,
   decryptFileMetadata,
   decryptFolderMetadata,
   type RecycleBinMetadata,
@@ -29,7 +28,8 @@ import {
   type FolderEntry,
   type EncryptedFileMetadata,
   type EncryptedFolderMetadata,
-} from '@cipherbox/crypto';
+} from '@cipherbox/core';
+import { bytesToHex, hexToBytes, wrapKey, unwrapKey } from '@cipherbox/crypto';
 import { addToIpfs, fetchFromIpfs, unpinFromIpfs } from '../lib/api/ipfs';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from './ipns.service';
 import { resolveFileMetadata } from './file-metadata.service';

@@ -21,6 +21,7 @@ export class TeeKeysDto {
   @ApiProperty({
     description: 'Previous TEE key epoch number (null if no rotation has occurred)',
     example: 0,
+    type: Number,
     nullable: true,
   })
   previousEpoch!: number | null;
@@ -29,6 +30,7 @@ export class TeeKeysDto {
     description:
       'Previous epoch TEE secp256k1 public key (hex-encoded, null if no rotation has occurred)',
     example: null,
+    type: String,
     nullable: true,
   })
   previousPublicKey!: string | null;

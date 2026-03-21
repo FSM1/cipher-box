@@ -12,8 +12,6 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import {
-  unwrapKey,
-  hexToBytes,
   decryptFolderMetadata,
   decryptFileMetadata,
   type FolderChild,
@@ -21,7 +19,8 @@ import {
   type FilePointer,
   type EncryptedFolderMetadata,
   type EncryptedFileMetadata,
-} from '@cipherbox/crypto';
+} from '@cipherbox/core';
+import { unwrapKey, hexToBytes } from '@cipherbox/crypto';
 import { useAuthStore } from '../stores/auth.store';
 import { useShareStore, type ReceivedShare } from '../stores/share.store';
 import { fetchReceivedShares, fetchShareKeys, hideShare } from '../services/share.service';

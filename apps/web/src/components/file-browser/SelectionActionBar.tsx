@@ -1,4 +1,4 @@
-import type { FolderChild } from '@cipherbox/crypto';
+import type { FolderChild } from '@cipherbox/core';
 
 type SelectionActionBarProps = {
   /** Selected items */

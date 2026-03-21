@@ -1,22 +1,16 @@
 import { useState, useCallback } from 'react';
 import { useBinStore } from '../stores/bin.store';
 import { useAuthStore } from '../stores/auth.store';
-import {
-  initializeBin,
-  restoreFromBin,
-  restoreFromBinBatch,
-  permanentlyDelete,
-  permanentlyDeleteBatch,
-  emptyBin,
-  purgeExpired,
-} from '../services/bin.service';
-import type { BinEntry } from '@cipherbox/crypto';
+import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
+import { initializeBin, purgeExpired } from '../services/bin.service';
+import type { BinEntry } from '@cipherbox/core';
 
 /**
  * React hook for recycle bin operations.
  *
- * Wraps bin service functions with loading/error state management.
- * Provides single-item and batch operations for restore and permanent delete.
+ * Delegates to CipherBoxClient SDK methods for bin CRUD operations.
+ * The SDK handles bin metadata, IPNS publishing, and event emission.
+ * Loading/error state and purge logic remain in the hook.
  */
 export function useBin() {
   const [state, setState] = useState<{ isLoading: boolean; error: string | null }>({
@@ -30,6 +24,9 @@ export function useBin() {
 
   /**
    * Load bin metadata from IPNS and trigger auto-purge of expired entries.
+   *
+   * Uses initializeBin from bin.service for initial load (populates SDK bin state
+   * via useBinStore), then triggers purge as fire-and-forget.
    */
   const loadBin = useCallback(async () => {
     const auth = useAuthStore.getState();
@@ -37,10 +34,20 @@ export function useBin() {
 
     setState({ isLoading: true, error: null });
     try {
+      // Initialize bin via service (sets up bin IPNS, populates store)
       await initializeBin({
         userPrivateKey: auth.vaultKeypair.privateKey,
         userPublicKey: auth.vaultKeypair.publicKey,
       });
+
+      // Also load bin into SDK client for subsequent operations
+      if (hasSdkClient()) {
+        try {
+          await getSdkClient().loadBin();
+        } catch {
+          // SDK bin load is non-blocking -- bin service already populated the store
+        }
+      }
 
       // Non-blocking: purge expired entries after loading
       const currentRetention = useBinStore.getState().retentionDays;
@@ -60,19 +67,19 @@ export function useBin() {
   }, []);
 
   /**
-   * Restore a single bin entry to its original folder.
+   * Restore a single bin entry to its original folder via SDK.
    */
   const restore = useCallback(async (entryId: string) => {
-    const auth = useAuthStore.getState();
-    if (!auth.vaultKeypair) throw new Error('Not authenticated');
-
     setState({ isLoading: true, error: null });
     try {
-      await restoreFromBin({
-        entryId,
-        userPublicKey: auth.vaultKeypair.publicKey,
-        userPrivateKey: auth.vaultKeypair.privateKey,
-      });
+      // Look up the target folder from the bin entry's metadata
+      const binEntries = useBinStore.getState().entries;
+      const entry = binEntries.find((e) => e.id === entryId);
+      if (!entry) throw new Error('Bin entry not found');
+
+      const client = getSdkClient();
+      await client.restoreFromBin(entryId, entry.originalParentIpnsName);
+      // SDK emits bin:updated -> store subscription updates entries
       setState({ isLoading: false, error: null });
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Failed to restore item';
@@ -82,19 +89,14 @@ export function useBin() {
   }, []);
 
   /**
-   * Permanently delete a single bin entry (unpin CIDs, update quota).
+   * Permanently delete a single bin entry via SDK.
    */
   const permanentDelete = useCallback(async (entryId: string) => {
-    const auth = useAuthStore.getState();
-    if (!auth.vaultKeypair) throw new Error('Not authenticated');
-
     setState({ isLoading: true, error: null });
     try {
-      await permanentlyDelete({
-        entryId,
-        userPublicKey: auth.vaultKeypair.publicKey,
-        userPrivateKey: auth.vaultKeypair.privateKey,
-      });
+      const client = getSdkClient();
+      await client.permanentDelete(entryId);
+      // SDK emits bin:updated -> store subscription updates entries
       setState({ isLoading: false, error: null });
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Failed to permanently delete';
@@ -104,18 +106,14 @@ export function useBin() {
   }, []);
 
   /**
-   * Empty all bin entries permanently.
+   * Empty all bin entries permanently via SDK.
    */
   const emptyAll = useCallback(async () => {
-    const auth = useAuthStore.getState();
-    if (!auth.vaultKeypair) throw new Error('Not authenticated');
-
     setState({ isLoading: true, error: null });
     try {
-      await emptyBin({
-        userPublicKey: auth.vaultKeypair.publicKey,
-        userPrivateKey: auth.vaultKeypair.privateKey,
-      });
+      const client = getSdkClient();
+      await client.emptyBin();
+      // SDK emits bin:updated with empty entries -> store subscription updates
       setState({ isLoading: false, error: null });
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Failed to empty bin';
@@ -125,19 +123,18 @@ export function useBin() {
   }, []);
 
   /**
-   * Restore multiple bin entries.
+   * Restore multiple bin entries via SDK.
    */
   const restoreMultiple = useCallback(async (entryIds: string[]) => {
-    const auth = useAuthStore.getState();
-    if (!auth.vaultKeypair) throw new Error('Not authenticated');
-
     setState({ isLoading: true, error: null });
     try {
-      await restoreFromBinBatch({
-        entryIds,
-        userPublicKey: auth.vaultKeypair.publicKey,
-        userPrivateKey: auth.vaultKeypair.privateKey,
-      });
+      const binEntries = useBinStore.getState().entries;
+      const client = getSdkClient();
+      for (const entryId of entryIds) {
+        const entry = binEntries.find((e) => e.id === entryId);
+        if (!entry) continue;
+        await client.restoreFromBin(entryId, entry.originalParentIpnsName);
+      }
       setState({ isLoading: false, error: null });
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Failed to restore items';
@@ -147,19 +144,15 @@ export function useBin() {
   }, []);
 
   /**
-   * Permanently delete multiple bin entries (single IPNS publish).
+   * Permanently delete multiple bin entries via SDK.
    */
   const permanentDeleteMultiple = useCallback(async (entryIds: string[]) => {
-    const auth = useAuthStore.getState();
-    if (!auth.vaultKeypair) throw new Error('Not authenticated');
-
     setState({ isLoading: true, error: null });
     try {
-      await permanentlyDeleteBatch({
-        entryIds,
-        userPublicKey: auth.vaultKeypair.publicKey,
-        userPrivateKey: auth.vaultKeypair.privateKey,
-      });
+      const client = getSdkClient();
+      for (const entryId of entryIds) {
+        await client.permanentDelete(entryId);
+      }
       setState({ isLoading: false, error: null });
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Failed to permanently delete items';

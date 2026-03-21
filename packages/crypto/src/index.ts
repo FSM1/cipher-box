@@ -1,9 +1,9 @@
 /**
  * @cipherbox/crypto
  *
- * Shared cryptographic utilities for CipherBox.
- * Provides AES-256-GCM encryption, ECIES key wrapping, Ed25519 signing,
- * vault initialization, and key hierarchy management.
+ * Pure cryptographic primitives and key derivation for CipherBox.
+ * Provides AES-256-GCM/CTR encryption, ECIES key wrapping, Ed25519 signing,
+ * and key hierarchy management.
  *
  * Security principles:
  * - All operations use Web Crypto API or audited libraries (@noble/*, eciesjs)
@@ -14,9 +14,6 @@
  * @example
  * ```typescript
  * import {
- *   initializeVault,
- *   encryptVaultKeys,
- *   decryptVaultKeys,
  *   generateFileKey,
  *   generateIv,
  *   encryptAesGcm,
@@ -24,10 +21,6 @@
  *   wrapKey,
  *   unwrapKey
  * } from '@cipherbox/crypto';
- *
- * // Initialize vault on first sign-in
- * const vault = await initializeVault();
- * const encrypted = await encryptVaultKeys(vault, userPublicKey);
  *
  * // Encrypt file content
  * const fileKey = generateFileKey();
@@ -45,15 +38,8 @@
 
 export const CRYPTO_VERSION = '0.2.0';
 
-// Vault initialization and key management
-export {
-  initializeVault,
-  encryptVaultKeys,
-  decryptVaultKeys,
-  deriveVaultIpnsKeypair,
-  type VaultInit,
-  type EncryptedVaultKeys,
-} from './vault';
+// Vault IPNS key derivation (only derive-ipns remains in crypto)
+export { deriveVaultIpnsKeypair } from './vault';
 
 // Key hierarchy and derivation
 export { deriveKey, deriveContextKey, generateFolderKey, type DeriveKeyParams } from './keys';
@@ -71,62 +57,8 @@ export { wrapKey, unwrapKey, reWrapKey } from './ecies';
 export { generateEd25519Keypair, type Ed25519Keypair } from './ed25519';
 export { signEd25519, verifyEd25519 } from './ed25519/sign';
 
-// IPNS record creation and signing utilities
-export {
-  createIpnsRecord,
-  deriveIpnsName,
-  marshalIpnsRecord,
-  unmarshalIpnsRecord,
-  signIpnsData,
-  IPNS_SIGNATURE_PREFIX,
-  type IPNSRecord,
-} from './ipns';
-
-// Folder metadata types and encryption
-export {
-  encryptFolderMetadata,
-  decryptFolderMetadata,
-  validateFolderMetadata,
-  type FolderMetadata,
-  type FolderChild,
-  type FolderEntry,
-  type EncryptedFolderMetadata,
-} from './folder';
-
-// Per-file IPNS metadata types and encryption
-export {
-  deriveFileIpnsKeypair,
-  generateFileIpnsKeypair,
-  encryptFileMetadata,
-  decryptFileMetadata,
-  validateFileMetadata,
-  type FileMetadata,
-  type FilePointer,
-  type EncryptedFileMetadata,
-  type VersionEntry,
-} from './file';
-
-// Device registry types and encryption
-export {
-  encryptRegistry,
-  decryptRegistry,
-  deriveRegistryIpnsKeypair,
-  validateDeviceRegistry,
-  type DeviceEntry,
-  type DeviceRegistry,
-  type DeviceAuthStatus,
-  type DevicePlatform,
-} from './registry';
-
-// Recycle bin metadata types and encryption
-export {
-  encryptBinMetadata,
-  decryptBinMetadata,
-  deriveBinIpnsKeypair,
-  validateBinMetadata,
-  type BinEntry,
-  type RecycleBinMetadata,
-} from './bin';
+// IPNS name derivation (kept in crypto as a pure crypto utility)
+export { deriveIpnsName } from './ipns/derive-name';
 
 // Device identity (per-device Ed25519 keypair)
 export { generateDeviceKeypair, deriveDeviceId, type DeviceKeypair } from './device';

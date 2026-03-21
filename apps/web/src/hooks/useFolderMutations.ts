@@ -1,20 +1,12 @@
 import { useState, useCallback } from 'react';
 import { useFolderStore } from '../stores/folder.store';
 import { useVaultStore } from '../stores/vault.store';
-import { useAuthStore } from '../stores/auth.store';
 import * as folderService from '../services/folder.service';
-import { reWrapForRecipients } from '../services/share.service';
-import { addManyToBin } from '../services/bin.service';
 import type { FolderNode } from '../stores/folder.store';
-import type { FolderEntry, FolderChild } from '@cipherbox/crypto';
-import {
-  MAX_FOLDER_DEPTH,
-  getRootFolderState,
-  resyncFolder,
-  withConflictRetry,
-} from './folder-helpers';
+import { getSdkClient, ensureFolderRegistered } from '../lib/sdk-provider';
+import { BinNotLoadedError } from '@cipherbox/sdk';
+import { MAX_FOLDER_DEPTH, getRootFolderState } from './folder-helpers';
 import type { FolderOperationState } from './folder-helpers';
-import { useNotificationStore } from '../stores/notification.store';
 
 /**
  * Build a breadcrumb-style path string for a folder by walking up the tree.
@@ -38,9 +30,24 @@ function buildFolderPath(folderId: string): string {
 }
 
 /**
+ * Get the parent folder node from the store, resolving 'root' via vault state.
+ */
+function getParentFolder(parentId: string): FolderNode | null {
+  const freshState = useFolderStore.getState();
+  return parentId === 'root'
+    ? getRootFolderState(useVaultStore.getState(), freshState.folders)
+    : freshState.folders[parentId];
+}
+
+/**
  * React hook for folder CRUD operations (create, rename, move, delete).
  *
- * Returns loading/error state and operation callbacks.
+ * Operations delegate to CipherBoxClient SDK methods. The SDK handles
+ * crypto, metadata construction, and IPNS publishing internally. SDK
+ * events update the folder store via event subscriptions.
+ *
+ * The hook manages UI concerns: loading state, error handling, toasts,
+ * and store-level coordination (folder node management, share re-wrapping).
  */
 export function useFolderMutations() {
   const [state, setState] = useState<FolderOperationState>({
@@ -49,20 +56,17 @@ export function useFolderMutations() {
   });
 
   /**
-   * Create a new folder.
+   * Create a new folder via SDK.
    *
    * @param name - Folder name
    * @param parentId - Parent folder ID (null for root, or folder UUID)
-   * @returns Created folder entry
-   * @throws Error if depth limit exceeded or creation fails
+   * @returns Created folder IPNS name and key
    */
   const handleCreate = useCallback(
-    async (name: string, parentId: string | null): Promise<FolderEntry> => {
+    async (name: string, parentId: string | null): Promise<{ ipnsName: string }> => {
       setState({ isLoading: true, error: null });
       try {
         const folders = useFolderStore.getState().folders;
-        const vault = useVaultStore.getState();
-        const auth = useAuthStore.getState();
 
         // Validate depth limit before creating (FOLD-03)
         const parentDepth = folderService.getDepth(parentId, folders);
@@ -70,111 +74,41 @@ export function useFolderMutations() {
           throw new Error(`Cannot create folder: maximum depth of ${MAX_FOLDER_DEPTH} exceeded`);
         }
 
-        // Get user's ECIES keypair for vault cryptographic operations (public + private keys stored in memory after login)
-        // The public key is used here for key wrapping; the private key remains client-side for decryption operations.
-        if (!auth.vaultKeypair) {
-          throw new Error('No ECIES keypair available - please log in again');
-        }
-        const userPublicKey = auth.vaultKeypair.publicKey;
-
-        // Create the folder (generates keys, wraps with user public key, TEE-encrypts IPNS key)
-        const { folder, ipnsPrivateKey, folderKey, encryptedIpnsPrivateKey, keyEpoch } =
-          await folderService.createFolder({
-            parentFolderId: parentId,
-            name,
-            userPublicKey,
-            folders,
-          });
-
-        // Get parent folder state
-        const parentFolder =
-          parentId && folders[parentId] ? folders[parentId] : getRootFolderState(vault, folders);
-
+        // Resolve parent folder
+        const actualParentId = parentId ?? 'root';
+        const parentFolder = getParentFolder(actualParentId);
         if (!parentFolder) {
           throw new Error('Parent folder not found or vault not initialized');
         }
 
-        // Update parent folder metadata and publish IPNS (with conflict retry)
-        const performParentUpdate = async () => {
-          const freshState = useFolderStore.getState();
-          const freshParent =
-            parentId && freshState.folders[parentId]
-              ? freshState.folders[parentId]
-              : getRootFolderState(useVaultStore.getState(), freshState.folders);
-          if (!freshParent) throw new Error('Parent folder not found');
-          const freshChildren = [...freshParent.children, folder];
-          const { newSequenceNumber } = await folderService.updateFolderMetadata({
-            folderId: freshParent.id,
-            children: freshChildren,
-            folderKey: freshParent.folderKey,
-            ipnsPrivateKey: freshParent.ipnsPrivateKey,
-            ipnsName: freshParent.ipnsName,
-            sequenceNumber: freshParent.sequenceNumber,
-          });
-          return { children: freshChildren, newSequenceNumber };
-        };
+        // Ensure parent is registered in SDK's FolderTree
+        ensureFolderRegistered(parentFolder);
 
-        const parentResult = await withConflictRetry(performParentUpdate, () =>
-          resyncFolder(parentFolder.ipnsName, parentFolder.id)
-        );
+        // Create folder via SDK (handles key gen, metadata update, IPNS publish)
+        const client = getSdkClient();
+        const result = await client.createFolder(parentFolder.ipnsName, name);
 
-        // First publish for the new folder's own IPNS record with TEE-encrypted key
-        // This sends encryptedIpnsPrivateKey to backend for TEE republish enrollment
-        const { newSequenceNumber: newFolderSequence } = await folderService.updateFolderMetadata({
-          folderId: folder.id,
-          children: [],
-          folderKey,
-          ipnsPrivateKey,
-          ipnsName: folder.ipnsName,
-          sequenceNumber: 0n,
-          encryptedIpnsPrivateKey,
-          keyEpoch,
-        });
-
-        // Update local state - add new folder to tree and persist sequence
-        useFolderStore.getState().updateFolderChildren(parentFolder.id, parentResult.children);
-        useFolderStore
-          .getState()
-          .updateFolderSequence(parentFolder.id, parentResult.newSequenceNumber);
-
-        // Also add the new folder node to the store (with its decrypted keys)
+        // SDK emits folder:updated -> store subscription updates parent's children
+        // But we also need to add the new folder as a store node so navigation works
         const newFolderNode: FolderNode = {
-          id: folder.id,
-          name: folder.name,
-          ipnsName: folder.ipnsName,
-          parentId: parentFolder.id,
+          id: result.id, // UUID from the FolderEntry in parent's children
+          name,
+          ipnsName: result.ipnsName,
+          parentId: actualParentId,
           children: [],
           isLoaded: true,
           isLoading: false,
-          sequenceNumber: newFolderSequence,
-          folderKey,
-          ipnsPrivateKey,
+          sequenceNumber: 1n,
+          folderKey: result.folderKey,
+          ipnsPrivateKey: result.ipnsPrivateKey,
         };
         useFolderStore.getState().setFolder(newFolderNode);
 
-        // Post-create: re-wrap new subfolder key for share recipients (fire-and-forget)
-        reWrapForRecipients({
-          folderIpnsName: parentFolder.ipnsName,
-          folders: useFolderStore.getState().folders,
-          currentFolderId: parentFolder.id,
-          newItems: [{ keyType: 'folder', itemId: folder.id, plaintextKey: folderKey }],
-        })
-          .then(({ failedRecipients }) => {
-            if (failedRecipients.length > 0) {
-              useNotificationStore
-                .getState()
-                .addNotification(
-                  'warning',
-                  `Failed to update share keys for ${failedRecipients.length} recipient(s). They may not be able to access the new folder until you re-share.`
-                );
-            }
-          })
-          .catch((err) => {
-            console.warn('[share] Post-create subfolder re-wrapping failed:', err);
-          });
+        // Post-create re-wrapping is handled by the SDK's shareCallbacks.
+        // The CipherBoxClient.createFolder() calls reWrapNewItems() internally.
 
         setState({ isLoading: false, error: null });
-        return folder;
+        return { ipnsName: result.ipnsName };
       } catch (err) {
         const error = err instanceof Error ? err.message : 'Failed to create folder';
         setState({ isLoading: false, error });
@@ -185,7 +119,7 @@ export function useFolderMutations() {
   );
 
   /**
-   * Rename a file or folder.
+   * Rename a file or folder via SDK.
    *
    * @param itemId - ID of item to rename
    * @param itemType - 'file' or 'folder'
@@ -201,57 +135,21 @@ export function useFolderMutations() {
     ): Promise<void> => {
       setState({ isLoading: true, error: null });
       try {
-        const getParentFolder = () => {
-          const freshState = useFolderStore.getState();
-          return parentId === 'root'
-            ? getRootFolderState(useVaultStore.getState(), freshState.folders)
-            : freshState.folders[parentId];
-        };
-
-        const parentFolder = getParentFolder();
+        const parentFolder = getParentFolder(parentId);
         if (!parentFolder) throw new Error('Parent folder not found');
 
-        const performRename = async (): Promise<{ newSequenceNumber: bigint }> => {
-          const freshParent = getParentFolder();
-          if (!freshParent) throw new Error('Parent folder not found');
-          if (itemType === 'folder') {
-            return await folderService.renameFolder({
-              folderId: itemId,
-              newName,
-              parentFolderState: freshParent,
-            });
-          } else {
-            return await folderService.renameFile({
-              fileId: itemId,
-              newName,
-              parentFolderState: freshParent,
-            });
-          }
-        };
+        // Ensure parent is registered in SDK
+        ensureFolderRegistered(parentFolder);
 
-        const renameResult = await withConflictRetry(performRename, () =>
-          resyncFolder(parentFolder.ipnsName, parentFolder.id)
-        );
+        // Rename via SDK (handles metadata update, IPNS publish)
+        const client = getSdkClient();
+        await client.renameItem(parentFolder.ipnsName, itemId, newName);
 
+        // SDK emits folder:updated -> store subscription updates children
+        // Also update the folder name in the store if renaming a folder
         if (itemType === 'folder') {
-          // Update local folder state name
           useFolderStore.getState().updateFolderName(itemId, newName);
         }
-
-        // Update parent's children with new name using fresh state
-        const freshParent = getParentFolder();
-        if (freshParent) {
-          const updatedChildren = freshParent.children.map((child) => {
-            if (child.id === itemId) {
-              return { ...child, name: newName, modifiedAt: Date.now() };
-            }
-            return child;
-          });
-          useFolderStore.getState().updateFolderChildren(parentId, updatedChildren);
-        }
-
-        // Persist the new sequence number so subsequent operations use the correct value
-        useFolderStore.getState().updateFolderSequence(parentId, renameResult.newSequenceNumber);
 
         setState({ isLoading: false, error: null });
       } catch (err) {
@@ -264,7 +162,7 @@ export function useFolderMutations() {
   );
 
   /**
-   * Move a file or folder to a different parent.
+   * Move a file or folder via SDK.
    *
    * @param itemId - ID of item to move
    * @param itemType - 'file' or 'folder'
@@ -280,67 +178,24 @@ export function useFolderMutations() {
     ): Promise<void> => {
       setState({ isLoading: true, error: null });
       try {
-        const getSourceFolder = () => {
-          const freshState = useFolderStore.getState();
-          return sourceParentId === 'root'
-            ? getRootFolderState(useVaultStore.getState(), freshState.folders)
-            : freshState.folders[sourceParentId];
-        };
-
-        const getDestFolder = () => {
-          const freshState = useFolderStore.getState();
-          return destParentId === 'root'
-            ? getRootFolderState(useVaultStore.getState(), freshState.folders)
-            : freshState.folders[destParentId];
-        };
-
-        const sourceFolder = getSourceFolder();
-        const destFolder = getDestFolder();
+        const sourceFolder = getParentFolder(sourceParentId);
+        const destFolder = getParentFolder(destParentId);
         if (!sourceFolder || !destFolder) {
           throw new Error('Source or destination folder not found');
         }
 
-        const performMove = async (): Promise<{
-          destSequenceNumber: bigint;
-          sourceSequenceNumber: bigint;
-        }> => {
-          const freshSource = getSourceFolder();
-          const freshDest = getDestFolder();
-          if (!freshSource || !freshDest) throw new Error('Source or destination folder not found');
-          const folders = useFolderStore.getState().folders;
-          if (itemType === 'folder') {
-            return await folderService.moveFolder({
-              folderId: itemId,
-              sourceFolderState: freshSource,
-              destFolderState: freshDest,
-              folders,
-            });
-          } else {
-            return await folderService.moveFile({
-              fileId: itemId,
-              sourceFolderState: freshSource,
-              destFolderState: freshDest,
-            });
-          }
-        };
+        // Ensure both folders are registered in SDK
+        ensureFolderRegistered(sourceFolder);
+        ensureFolderRegistered(destFolder);
 
-        const moveResult = await withConflictRetry(performMove, async () => {
-          await Promise.all([
-            resyncFolder(sourceFolder.ipnsName, sourceFolder.id),
-            sourceFolder.id !== destFolder.id
-              ? resyncFolder(destFolder.ipnsName, destFolder.id)
-              : Promise.resolve(),
-          ]);
-        });
+        // Move via SDK (handles add-before-remove, both IPNS publishes)
+        const client = getSdkClient();
+        await client.moveItem(sourceFolder.ipnsName, destFolder.ipnsName, itemId);
 
-        // Save the moved item BEFORE updating source children (otherwise it's already gone)
-        const freshSourceBeforeUpdate = getSourceFolder();
-        const movedItem = freshSourceBeforeUpdate?.children.find((c) => c.id === itemId);
-
+        // SDK emits folder:updated for both folders -> store subscription updates children
+        // Also update parentId for moved folders
         if (itemType === 'folder') {
-          // Update the moved folder's parentId in local state
-          const freshFolders = useFolderStore.getState().folders;
-          const movedFolder = freshFolders[itemId];
+          const movedFolder = useFolderStore.getState().folders[itemId];
           if (movedFolder) {
             useFolderStore.getState().setFolder({
               ...movedFolder,
@@ -348,30 +203,6 @@ export function useFolderMutations() {
             });
           }
         }
-
-        // Update source folder's children (remove item)
-        if (freshSourceBeforeUpdate) {
-          const updatedSourceChildren = freshSourceBeforeUpdate.children.filter(
-            (c) => c.id !== itemId
-          );
-          useFolderStore.getState().updateFolderChildren(sourceParentId, updatedSourceChildren);
-        }
-
-        // Update dest folder's children (add item)
-        const freshDest = getDestFolder();
-        if (movedItem && freshDest) {
-          const updatedDestChildren = [
-            ...freshDest.children,
-            { ...movedItem, modifiedAt: Date.now() },
-          ];
-          useFolderStore.getState().updateFolderChildren(destParentId, updatedDestChildren);
-        }
-
-        // Persist the new sequence numbers so subsequent operations use the correct values
-        useFolderStore.getState().updateFolderSequence(destParentId, moveResult.destSequenceNumber);
-        useFolderStore
-          .getState()
-          .updateFolderSequence(sourceParentId, moveResult.sourceSequenceNumber);
 
         setState({ isLoading: false, error: null });
       } catch (err) {
@@ -384,13 +215,12 @@ export function useFolderMutations() {
   );
 
   /**
-   * Move multiple files/folders to a destination in a single batch.
+   * Move multiple files/folders to a destination.
    *
-   * Uses add-before-remove pattern. Publishes IPNS once for the destination
-   * and once for the source (2 total), regardless of how many items are moved.
+   * Uses SDK moveItem for each item sequentially to preserve event ordering.
    *
    * @param items - Array of { id, type } to move
-   * @param sourceParentId - Current parent folder ID (all items must share the same parent)
+   * @param sourceParentId - Current parent folder ID
    * @param destParentId - Destination parent folder ID
    */
   const handleMoveItems = useCallback(
@@ -401,154 +231,56 @@ export function useFolderMutations() {
     ): Promise<void> => {
       setState({ isLoading: true, error: null });
       try {
-        const getSourceFolder = () => {
-          const freshState = useFolderStore.getState();
-          return sourceParentId === 'root'
-            ? getRootFolderState(useVaultStore.getState(), freshState.folders)
-            : freshState.folders[sourceParentId];
-        };
-        const getDestFolder = () => {
-          const freshState = useFolderStore.getState();
-          return destParentId === 'root'
-            ? getRootFolderState(useVaultStore.getState(), freshState.folders)
-            : freshState.folders[destParentId];
-        };
-
-        const sourceFolder = getSourceFolder();
-        const destFolder = getDestFolder();
-
+        const sourceFolder = getParentFolder(sourceParentId);
+        const destFolder = getParentFolder(destParentId);
         if (!sourceFolder || !destFolder) {
           throw new Error('Source or destination folder not found');
         }
 
+        // Validate batch move preconditions
+        const folders = useFolderStore.getState().folders;
         const itemIds = new Set(items.map((i) => i.id));
-        const now = Date.now();
-
-        // Validate batch move preconditions against current folder state.
-        // Must be called before each attempt (initial + retry after resync)
-        // because concurrent changes may introduce name collisions or depth violations.
-        const validateBatchMove = () => {
-          const currentSource = getSourceFolder();
-          const currentDest = getDestFolder();
-          if (!currentSource || !currentDest) {
-            throw new Error('Source or destination folder not found');
-          }
-
-          const currentMovedChildren = currentSource.children.filter((c) => itemIds.has(c.id));
-          if (currentMovedChildren.length !== itemIds.size) {
-            throw new Error(
-              'One or more selected items no longer exist. Please refresh and retry.'
-            );
-          }
-          const batchNames = new Set<string>();
-          for (const child of currentMovedChildren) {
-            // Intra-batch duplicate name check
-            if (batchNames.has(child.name)) {
-              throw new Error(`Multiple selected items share the name "${child.name}"`);
-            }
-            batchNames.add(child.name);
-
-            // Name collision check against destination
-            const nameExists = currentDest.children.some((c) => c.name === child.name);
-            if (nameExists) {
-              throw new Error(`An item named "${child.name}" already exists in the destination`);
-            }
-
-            if (child.type === 'folder') {
-              // Prevent moving folder into itself or descendant
-              const folders = useFolderStore.getState().folders;
-              if (folderService.isDescendantOf(currentDest.id, child.id, folders)) {
-                throw new Error(`Cannot move "${child.name}" into itself or its subfolder`);
-              }
-
-              // Depth limit check
-              const destDepth = folderService.getDepth(currentDest.id, folders);
-              const subtreeDepth = folderService.calculateSubtreeDepth(child.id, folders);
-              if (destDepth + 1 + subtreeDepth > MAX_FOLDER_DEPTH) {
-                throw new Error(
-                  `Cannot move "${child.name}": would exceed maximum folder depth of ${MAX_FOLDER_DEPTH}`
-                );
-              }
-            }
-          }
-        };
-
-        validateBatchMove();
-
-        const performBatchMove = async (): Promise<{
-          destSeq: bigint;
-          sourceSeq: bigint;
-          destChildren: FolderNode['children'];
-          sourceChildren: FolderNode['children'];
-        }> => {
-          const freshSource = getSourceFolder();
-          const freshDest = getDestFolder();
-          if (!freshSource || !freshDest) throw new Error('Source or destination folder not found');
-
-          // Rebuild moved children from fresh source state
-          const freshMoved = freshSource.children.filter((c) => itemIds.has(c.id));
-          if (freshMoved.length !== itemIds.size) {
-            throw new Error(
-              'One or more selected items no longer exist. Please refresh and retry.'
-            );
-          }
-
-          // ADD all to destination FIRST (add-before-remove pattern)
-          const destChildren = [
-            ...freshDest.children,
-            ...freshMoved.map((c) => ({ ...c, modifiedAt: now })),
-          ];
-
-          const { newSequenceNumber: destSeq } = await folderService.updateFolderMetadata({
-            folderId: freshDest.id,
-            children: destChildren,
-            folderKey: freshDest.folderKey,
-            ipnsPrivateKey: freshDest.ipnsPrivateKey,
-            ipnsName: freshDest.ipnsName,
-            sequenceNumber: freshDest.sequenceNumber,
-          });
-
-          // REMOVE all from source AFTER destination confirmed
-          const sourceChildren = freshSource.children.filter((c) => !itemIds.has(c.id));
-
-          const { newSequenceNumber: sourceSeq } = await folderService.updateFolderMetadata({
-            folderId: freshSource.id,
-            children: sourceChildren,
-            folderKey: freshSource.folderKey,
-            ipnsPrivateKey: freshSource.ipnsPrivateKey,
-            ipnsName: freshSource.ipnsName,
-            // Re-read sequence in case source === dest parent was updated above
-            sequenceNumber: freshSource.id === freshDest.id ? destSeq : freshSource.sequenceNumber,
-          });
-
-          return { destSeq, sourceSeq, destChildren, sourceChildren };
-        };
-
-        const result = await withConflictRetry(
-          performBatchMove,
-          async () => {
-            await Promise.all([
-              resyncFolder(sourceFolder.ipnsName, sourceFolder.id),
-              sourceFolder.id !== destFolder.id
-                ? resyncFolder(destFolder.ipnsName, destFolder.id)
-                : Promise.resolve(),
-            ]);
-          },
-          validateBatchMove
-        );
-
-        // Update local state
-        const store = useFolderStore.getState();
-        store.updateFolderChildren(sourceParentId, result.sourceChildren);
-        store.updateFolderChildren(destParentId, result.destChildren);
-        store.updateFolderSequence(destParentId, result.destSeq);
-        store.updateFolderSequence(sourceParentId, result.sourceSeq);
 
         for (const item of items) {
           if (item.type === 'folder') {
+            // Prevent moving folder into itself or descendant
+            if (folderService.isDescendantOf(destFolder.id, item.id, folders)) {
+              throw new Error(`Cannot move folder into itself or its subfolder`);
+            }
+
+            // Depth limit check
+            const destDepth = folderService.getDepth(destFolder.id, folders);
+            const subtreeDepth = folderService.calculateSubtreeDepth(item.id, folders);
+            if (destDepth + 1 + subtreeDepth > MAX_FOLDER_DEPTH) {
+              throw new Error(
+                `Cannot move: would exceed maximum folder depth of ${MAX_FOLDER_DEPTH}`
+              );
+            }
+          }
+        }
+
+        // Name collision check against destination
+        const movedChildren = sourceFolder.children.filter((c) => itemIds.has(c.id));
+        for (const child of movedChildren) {
+          const nameExists = destFolder.children.some((c) => c.name === child.name);
+          if (nameExists) {
+            throw new Error(`An item named "${child.name}" already exists in the destination`);
+          }
+        }
+
+        // Ensure both folders are registered in SDK
+        ensureFolderRegistered(sourceFolder);
+        ensureFolderRegistered(destFolder);
+
+        // Move each item via SDK
+        const client = getSdkClient();
+        for (const item of items) {
+          await client.moveItem(sourceFolder.ipnsName, destFolder.ipnsName, item.id);
+
+          if (item.type === 'folder') {
             const movedFolder = useFolderStore.getState().folders[item.id];
             if (movedFolder) {
-              store.setFolder({ ...movedFolder, parentId: destParentId });
+              useFolderStore.getState().setFolder({ ...movedFolder, parentId: destParentId });
             }
           }
         }
@@ -564,7 +296,11 @@ export function useFolderMutations() {
   );
 
   /**
-   * Delete a file or folder.
+   * Delete a file or folder via SDK.
+   *
+   * Uses deleteToBin for soft-delete (moves to recycle bin) when the SDK's
+   * bin state is loaded, otherwise falls back to deleteItem (hard metadata delete)
+   * with a fire-and-forget bin service call.
    *
    * @param itemId - ID of item to delete
    * @param itemType - 'file' or 'folder'
@@ -574,45 +310,30 @@ export function useFolderMutations() {
     async (itemId: string, itemType: 'file' | 'folder', parentId: string): Promise<void> => {
       setState({ isLoading: true, error: null });
       try {
-        const getParentFolder = () => {
-          const freshState = useFolderStore.getState();
-          return parentId === 'root'
-            ? getRootFolderState(useVaultStore.getState(), freshState.folders)
-            : freshState.folders[parentId];
-        };
-
-        const parentFolder = getParentFolder();
+        const parentFolder = getParentFolder(parentId);
         if (!parentFolder) throw new Error('Parent folder not found');
 
-        const performDelete = async (): Promise<{
-          newSequenceNumber: bigint;
-          removedChild: FolderChild;
-        }> => {
-          const freshParent = getParentFolder();
-          if (!freshParent) throw new Error('Parent folder not found');
-          if (itemType === 'folder') {
-            const folders = useFolderStore.getState().folders;
-            const { newSequenceNumber, removedChild } = await folderService.deleteFolder({
-              folderId: itemId,
-              parentFolderState: freshParent,
-              getFolderState: (id) => folders[id],
-            });
-            return { newSequenceNumber, removedChild };
+        // Ensure parent is registered in SDK
+        ensureFolderRegistered(parentFolder);
+
+        const client = getSdkClient();
+        const parentPath = buildFolderPath(parentId);
+
+        // Try soft-delete (move to bin) first; fall back to hard delete if bin not loaded
+        try {
+          await client.deleteToBin(parentFolder.ipnsName, itemId, parentPath);
+        } catch (binErr) {
+          // Bin not loaded -- fall back to hard metadata delete
+          if (binErr instanceof BinNotLoadedError) {
+            await client.deleteItem(parentFolder.ipnsName, itemId);
           } else {
-            const { newSequenceNumber, removedChild } = await folderService.deleteFileFromFolder({
-              fileId: itemId,
-              parentFolderState: freshParent,
-            });
-            return { newSequenceNumber, removedChild };
+            throw binErr;
           }
-        };
+        }
 
-        const deleteResult = await withConflictRetry(performDelete, () =>
-          resyncFolder(parentFolder.ipnsName, parentFolder.id)
-        );
-
+        // SDK emits folder:updated -> store subscription updates children
+        // Remove folder subtree from store if deleting a folder
         if (itemType === 'folder') {
-          // Remove folder and all loaded descendants from local state
           const store = useFolderStore.getState();
           const removeRecursive = (folderId: string) => {
             const node = store.folders[folderId];
@@ -626,31 +347,6 @@ export function useFolderMutations() {
           removeRecursive(itemId);
         }
 
-        // Update parent's children (remove item) using fresh state
-        const freshParent = getParentFolder();
-        if (freshParent) {
-          const updatedChildren = freshParent.children.filter((c) => c.id !== itemId);
-          useFolderStore.getState().updateFolderChildren(parentId, updatedChildren);
-        }
-
-        // Persist the new sequence number so subsequent operations use the correct value
-        useFolderStore.getState().updateFolderSequence(parentId, deleteResult.newSequenceNumber);
-
-        // Fire-and-forget: add deleted item to recycle bin (CIDs stay pinned for recovery)
-        const auth = useAuthStore.getState();
-        if (auth.vaultKeypair) {
-          void addManyToBin({
-            items: [deleteResult.removedChild],
-            parentIpnsName: parentFolder.ipnsName,
-            parentPath: buildFolderPath(parentId),
-            userPublicKey: auth.vaultKeypair.publicKey,
-            userPrivateKey: auth.vaultKeypair.privateKey,
-            folderKey: parentFolder.folderKey,
-          }).catch(() => {
-            console.error('[Delete] Failed to add to bin (non-blocking)');
-          });
-        }
-
         setState({ isLoading: false, error: null });
       } catch (err) {
         const error = err instanceof Error ? err.message : 'Failed to delete';
@@ -662,13 +358,10 @@ export function useFolderMutations() {
   );
 
   /**
-   * Delete multiple files/folders in a single IPNS publish.
-   *
-   * Removes all items from parent's children array, collects CIDs to unpin,
-   * then publishes metadata and IPNS once for the entire batch.
+   * Delete multiple files/folders.
    *
    * @param items - Array of { id, type } to delete
-   * @param parentId - Parent folder ID (all items must share the same parent)
+   * @param parentId - Parent folder ID
    */
   const handleDeleteItems = useCallback(
     async (
@@ -677,23 +370,14 @@ export function useFolderMutations() {
     ): Promise<void> => {
       setState({ isLoading: true, error: null });
       try {
-        const getParentFolder = () => {
-          const freshState = useFolderStore.getState();
-          return parentId === 'root'
-            ? getRootFolderState(useVaultStore.getState(), freshState.folders)
-            : freshState.folders[parentId];
-        };
-
-        const parentFolder = getParentFolder();
+        const parentFolder = getParentFolder(parentId);
         if (!parentFolder) throw new Error('Parent folder not found');
 
-        const itemIds = new Set(items.map((i) => i.id));
+        // Ensure parent is registered in SDK
+        ensureFolderRegistered(parentFolder);
 
         // Collect nested folder IDs to remove from store
-        // In v2, file children are FilePointers (no inline CID). File IPNS/TEE
-        // enrollments will expire naturally (24h IPNS lifetime). Phase 14 adds cleanup.
         const folderIdsToRemove: string[] = [];
-
         const collectFolderIds = (folderId: string) => {
           folderIdsToRemove.push(folderId);
           const folders = useFolderStore.getState().folders;
@@ -712,63 +396,31 @@ export function useFolderMutations() {
           }
         }
 
-        // Snapshot the items to be removed before batch delete
-        // (needed for addToBin after successful deletion)
-        let removedChildren: FolderChild[] = [];
+        // Delete each item via SDK (sequentially to maintain consistency)
+        const client = getSdkClient();
+        const parentPath = buildFolderPath(parentId);
 
-        const performBatchDelete = async (): Promise<{
-          updatedChildren: typeof parentFolder.children;
-          newSequenceNumber: bigint;
-        }> => {
-          const freshParent = getParentFolder();
-          if (!freshParent) throw new Error('Parent folder not found');
+        for (const item of items) {
+          // Re-register parent between deletes since SDK updates its internal state
+          const freshParent = getParentFolder(parentId);
+          if (freshParent) ensureFolderRegistered(freshParent);
 
-          // Capture removed children before filtering
-          removedChildren = freshParent.children.filter((c) => itemIds.has(c.id));
-
-          // Remove all items from parent's children in one pass
-          const updatedChildren = freshParent.children.filter((c) => !itemIds.has(c.id));
-
-          // Single IPNS publish for the entire batch
-          const { newSequenceNumber } = await folderService.updateFolderMetadata({
-            folderId: freshParent.id,
-            children: updatedChildren,
-            folderKey: freshParent.folderKey,
-            ipnsPrivateKey: freshParent.ipnsPrivateKey,
-            ipnsName: freshParent.ipnsName,
-            sequenceNumber: freshParent.sequenceNumber,
-          });
-
-          return { updatedChildren, newSequenceNumber };
-        };
-
-        const { updatedChildren, newSequenceNumber } = await withConflictRetry(
-          performBatchDelete,
-          () => resyncFolder(parentFolder.ipnsName, parentFolder.id)
-        );
-
-        // Update local state -- remove all nested folders from store
-        const store = useFolderStore.getState();
-        store.updateFolderChildren(parentId, updatedChildren);
-        store.updateFolderSequence(parentId, newSequenceNumber);
-        for (const folderId of folderIdsToRemove) {
-          store.removeFolder(folderId);
+          // Try soft-delete (bin) first; fall back to hard delete
+          try {
+            await client.deleteToBin(parentFolder.ipnsName, item.id, parentPath);
+          } catch (binErr) {
+            if (binErr instanceof BinNotLoadedError) {
+              await client.deleteItem(parentFolder.ipnsName, item.id);
+            } else {
+              throw binErr;
+            }
+          }
         }
 
-        // Fire-and-forget: add all deleted items to recycle bin (single IPNS publish)
-        const auth = useAuthStore.getState();
-        if (auth.vaultKeypair && removedChildren.length > 0) {
-          const parentPath = buildFolderPath(parentId);
-          void addManyToBin({
-            items: removedChildren,
-            parentIpnsName: parentFolder.ipnsName,
-            parentPath,
-            userPublicKey: auth.vaultKeypair.publicKey,
-            userPrivateKey: auth.vaultKeypair.privateKey,
-            folderKey: parentFolder.folderKey,
-          }).catch(() => {
-            console.error('[Delete] Failed to add batch to bin (non-blocking)');
-          });
+        // Remove nested folders from store
+        const store = useFolderStore.getState();
+        for (const folderId of folderIdsToRemove) {
+          store.removeFolder(folderId);
         }
 
         setState({ isLoading: false, error: null });

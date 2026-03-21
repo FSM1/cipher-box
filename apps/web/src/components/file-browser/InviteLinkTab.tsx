@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import type { FolderChild } from '@cipherbox/crypto';
+import type { FolderChild } from '@cipherbox/core';
 import { createInviteLink, fetchInvitesForItem, revokeInvite } from '../../services/invite.service';
 import type { InviteInfo } from '../../services/invite.service';
 

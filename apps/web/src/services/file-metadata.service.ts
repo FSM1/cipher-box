@@ -13,15 +13,12 @@ import {
   decryptFileMetadata,
   createIpnsRecord,
   marshalIpnsRecord,
-  wrapKey,
-  unwrapKey,
-  bytesToHex,
-  hexToBytes,
   type FileMetadata,
   type FilePointer,
   type EncryptedFileMetadata,
   type VersionEntry,
-} from '@cipherbox/crypto';
+} from '@cipherbox/core';
+import { wrapKey, unwrapKey, bytesToHex, hexToBytes } from '@cipherbox/crypto';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
 import { resolveIpnsRecord } from './ipns.service';
 import { useAuthStore } from '../stores/auth.store';

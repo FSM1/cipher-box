@@ -15,14 +15,11 @@ import {
   deriveRegistryIpnsKeypair,
   encryptRegistry,
   decryptRegistry,
-  bytesToHex,
-  hexToBytes,
-  wrapKey,
   type DeviceRegistry,
   type DeviceEntry,
-  type DeviceKeypair,
   type DevicePlatform,
-} from '@cipherbox/crypto';
+} from '@cipherbox/core';
+import { bytesToHex, hexToBytes, wrapKey, type DeviceKeypair } from '@cipherbox/crypto';
 import { addToIpfs, fetchFromIpfs } from '../lib/api/ipfs';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from './ipns.service';
 import { useAuthStore } from '../stores/auth.store';

@@ -149,5 +149,28 @@ export async function loginViaWallet(
       .then(() => ({ outcome: 'requiredShare' as const })),
   ]);
 
+  // 6. If login succeeded, wait for vault + SDK initialization to complete.
+  // There's a race condition in the web app: Login.tsx redirects to /files
+  // when isAuthenticated becomes true (access token set), but vault init
+  // and SDK client init may still be in progress. Wait for vault keys to
+  // appear in the Zustand store, which indicates initializeOrLoadVault()
+  // has completed and the SDK client is ready for file operations.
+  if (result.outcome === 'success') {
+    await page.waitForFunction(
+      () => {
+        const stores = (
+          window as unknown as Record<
+            string,
+            Record<string, { getState: () => Record<string, unknown> }>
+          >
+        ).__ZUSTAND_STORES;
+        if (!stores?.vault) return false;
+        const vault = stores.vault.getState();
+        return !!vault.rootFolderKey && !!vault.rootIpnsKeypair && !!vault.rootIpnsName;
+      },
+      { timeout: 30_000 }
+    );
+  }
+
   return result;
 }

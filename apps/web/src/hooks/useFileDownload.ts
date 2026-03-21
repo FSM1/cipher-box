@@ -1,12 +1,7 @@
 import { useCallback } from 'react';
-import {
-  downloadAndSaveFile,
-  downloadFileFromIpns,
-  triggerBrowserDownload,
-  FileMetadata,
-} from '../services/download.service';
+import { triggerBrowserDownload } from '../services/download.service';
 import { useDownloadStore } from '../stores/download.store';
-import { useAuthStore } from '../stores/auth.store';
+import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
 
 export function useFileDownload() {
   const {
@@ -24,43 +19,11 @@ export function useFileDownload() {
     reset,
   } = useDownloadStore();
 
-  const { vaultKeypair } = useAuthStore();
-
-  const download = useCallback(
-    async (metadata: FileMetadata): Promise<void> => {
-      if (!vaultKeypair) {
-        throw new Error('No keypair available - please log in again');
-      }
-
-      try {
-        startDownload(metadata.originalName);
-
-        // Download with progress tracking
-        await downloadAndSaveFile(metadata, vaultKeypair.privateKey, (loaded, total) => {
-          setProgress(loaded, total);
-        });
-
-        setDecrypting();
-
-        // Small delay for UX - show decrypting state
-        await new Promise((resolve) => setTimeout(resolve, 100));
-
-        setSuccess();
-      } catch (err) {
-        const message = (err as Error).message || 'Download failed';
-        setError(message);
-        console.error('Download failed:', err);
-        throw err;
-      }
-    },
-    [vaultKeypair, startDownload, setProgress, setDecrypting, setSuccess, setError]
-  );
-
   /**
-   * Download a file using per-file IPNS metadata (v2 flow).
+   * Download a file using per-file IPNS metadata (v2 flow) via SDK.
    *
-   * Resolves file IPNS, decrypts metadata with folderKey, fetches+decrypts content,
-   * and triggers browser download dialog.
+   * The SDK resolves file IPNS, decrypts metadata with folderKey,
+   * fetches + decrypts content. Browser download dialog triggered after.
    */
   const downloadFromIpns = useCallback(
     async (params: {
@@ -68,25 +31,24 @@ export function useFileDownload() {
       folderKey: Uint8Array;
       fileName: string;
     }): Promise<void> => {
-      const auth = useAuthStore.getState();
-      if (!auth.vaultKeypair) {
-        throw new Error('No keypair available - please log in again');
-      }
-
       try {
         startDownload(params.fileName);
 
-        const plaintext = await downloadFileFromIpns({
-          fileMetaIpnsName: params.fileMetaIpnsName,
-          folderKey: params.folderKey,
-          privateKey: auth.vaultKeypair.privateKey,
-          fileName: params.fileName,
-        });
+        if (!hasSdkClient()) {
+          throw new Error('SDK not initialized — please log in again');
+        }
+
+        const client = getSdkClient();
+        const decryptedBytes = await client.downloadFromIpns(
+          params.fileMetaIpnsName,
+          params.folderKey,
+          (loaded, total) => setProgress(loaded, total)
+        );
 
         setDecrypting();
         await new Promise((resolve) => setTimeout(resolve, 100));
 
-        triggerBrowserDownload(plaintext, params.fileName);
+        triggerBrowserDownload(decryptedBytes, params.fileName);
         setSuccess();
       } catch (err) {
         const message = (err as Error).message || 'Download failed';
@@ -95,11 +57,10 @@ export function useFileDownload() {
         throw err;
       }
     },
-    [startDownload, setDecrypting, setSuccess, setError]
+    [startDownload, setProgress, setDecrypting, setSuccess, setError]
   );
 
   return {
-    // State
     status,
     progress,
     loadedBytes,
@@ -107,9 +68,6 @@ export function useFileDownload() {
     currentFile,
     error,
     isDownloading: status === 'downloading' || status === 'decrypting',
-
-    // Actions
-    download,
     downloadFromIpns,
     reset,
   };

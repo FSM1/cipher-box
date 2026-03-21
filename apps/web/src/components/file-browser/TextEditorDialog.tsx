@@ -1,15 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type { FilePointer } from '@cipherbox/crypto';
+import type { FilePointer } from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
 import { useAuthStore } from '../../stores/auth.store';
 import { useFolder } from '../../hooks/useFolder';
-import {
-  downloadFile,
-  downloadFileFromIpns,
-  triggerBrowserDownload,
-} from '../../services/download.service';
+import { downloadFile, triggerBrowserDownload } from '../../services/download.service';
 import { resolveFileMetadata } from '../../services/file-metadata.service';
 import { fetchShareKeys } from '../../services/share.service';
+import { getSdkClient, hasSdkClient } from '../../lib/sdk-provider';
 import { encryptFile } from '../../services/file-crypto.service';
 import { addToIpfs } from '../../lib/api/ipfs';
 import '../../styles/text-editor-dialog.css';
@@ -78,6 +75,7 @@ export function TextEditorDialog({
     }
 
     let cancelled = false;
+    let focusRaf: number | undefined;
     setLoading(true);
     setError(null);
 
@@ -112,14 +110,12 @@ export function TextEditorDialog({
             },
             auth.vaultKeypair.privateKey
           );
+        } else if (hasSdkClient()) {
+          // Owner path via SDK: resolves IPNS, decrypts metadata, downloads + decrypts content
+          const client = getSdkClient();
+          plaintext = await client.downloadFromIpns(item.fileMetaIpnsName, folderKey!);
         } else {
-          // Owner path: use file key from metadata directly
-          plaintext = await downloadFileFromIpns({
-            fileMetaIpnsName: item.fileMetaIpnsName,
-            folderKey: folderKey!,
-            privateKey: auth.vaultKeypair.privateKey,
-            fileName: item.name,
-          });
+          throw new Error('SDK not initialized — please log in again');
         }
 
         if (cancelled) return;
@@ -131,7 +127,7 @@ export function TextEditorDialog({
 
         // Focus textarea after content loads (only in edit mode)
         if (!readOnly) {
-          requestAnimationFrame(() => {
+          focusRaf = requestAnimationFrame(() => {
             textareaRef.current?.focus();
           });
         }
@@ -144,6 +140,7 @@ export function TextEditorDialog({
 
     return () => {
       cancelled = true;
+      if (focusRaf !== undefined) cancelAnimationFrame(focusRaf);
     };
   }, [open, item, folderKey, shareId, readOnly]);
 
@@ -167,10 +164,7 @@ export function TextEditorDialog({
       const encrypted = await encryptFile(file, auth.vaultKeypair.publicKey);
 
       // 3. Upload to IPFS
-      // Use .slice() to get a clean copy with its own ArrayBuffer,
-      // avoiding sub-view issues if ciphertext is an offset view.
-      const ciphertextBytes = encrypted.ciphertext.slice();
-      const blob = new Blob([ciphertextBytes.buffer as ArrayBuffer]);
+      const blob = new Blob([encrypted.ciphertext as BlobPart]);
       const { cid } = await addToIpfs(blob);
 
       // 4. Update folder metadata

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import type { BinEntry } from '@cipherbox/crypto';
+import type { BinEntry } from '@cipherbox/core';
+import type { CipherBoxClient } from '@cipherbox/sdk';
 
 type BinState = {
   /** Current bin entries */
@@ -24,7 +25,13 @@ type BinState = {
   setBinIpnsName: (name: string) => void;
   setRetentionDays: (days: number) => void;
   clearBin: () => void;
+
+  // SDK event subscription
+  subscribeToSdk: (client: CipherBoxClient) => void;
 };
+
+// Module-level unsubscribe callback — not part of Zustand state to avoid spurious re-renders
+let _binSdkUnsubscribe: (() => void) | null = null;
 
 /**
  * Bin store for managing recycle bin state.
@@ -68,7 +75,13 @@ export const useBinStore = create<BinState>((set) => ({
       retentionDays: Number.isFinite(days) ? Math.max(0, Math.floor(days)) : 30,
     }),
 
-  clearBin: () =>
+  clearBin: () => {
+    // Unsubscribe from SDK events before clearing
+    if (_binSdkUnsubscribe) {
+      _binSdkUnsubscribe();
+      _binSdkUnsubscribe = null;
+    }
+
     set({
       entries: [],
       isLoading: false,
@@ -77,5 +90,30 @@ export const useBinStore = create<BinState>((set) => ({
       sequenceNumber: 0,
       binIpnsName: null,
       retentionDays: 30,
-    }),
+    });
+  },
+
+  /**
+   * Subscribe to SDK bin events. Called after SDK client is initialized.
+   * Updates bin entries when the SDK emits bin:updated events.
+   */
+  subscribeToSdk: (client: CipherBoxClient) => {
+    // Unsubscribe any existing subscription
+    if (_binSdkUnsubscribe) {
+      _binSdkUnsubscribe();
+    }
+
+    _binSdkUnsubscribe = client.on((event) => {
+      if (event.type === 'bin:updated') {
+        const currentSeq = useBinStore.getState().sequenceNumber;
+        set({
+          entries: event.entries,
+          sequenceNumber: currentSeq + 1,
+          isLoaded: true,
+          isLoading: false,
+          error: null,
+        });
+      }
+    });
+  },
 }));

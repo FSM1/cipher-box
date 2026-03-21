@@ -6,7 +6,8 @@
  * encrypted device registry.
  */
 
-import { bytesToHex, CRYPTO_VERSION, type DevicePlatform } from '@cipherbox/crypto';
+import type { DevicePlatform } from '@cipherbox/core';
+import { bytesToHex, CRYPTO_VERSION } from '@cipherbox/crypto';
 
 /**
  * Auto-detect device information from the browser environment.

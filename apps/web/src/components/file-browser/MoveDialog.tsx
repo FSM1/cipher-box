@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, type KeyboardEvent } from 'react';
-import type { FolderChild } from '@cipherbox/crypto';
+import type { FolderChild } from '@cipherbox/core';
 import { Modal } from '../ui/Modal';
 import { useFolderStore, type FolderNode } from '../../stores/folder.store';
 import { getDepth, isDescendantOf } from '../../services/folder.service';
