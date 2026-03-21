@@ -24,12 +24,14 @@ export type ApiClientConfig = {
  * No Zustand, no import.meta.env -- all config injected by consumer.
  */
 export function createAxiosInstance(config: ApiClientConfig): AxiosInstance {
-  const instance = axios.create({ baseURL: config.baseUrl });
+  const instance = axios.create({
+    baseURL: config.baseUrl,
+    withCredentials: config.withCredentials ?? false,
+  });
   instance.interceptors.request.use(async (reqConfig) => {
     const token = await config.getAccessToken();
     if (token) {
-      reqConfig.headers = reqConfig.headers ?? {};
-      reqConfig.headers.Authorization = `Bearer ${token}`;
+      reqConfig.headers.set('Authorization', `Bearer ${token}`);
     }
     return reqConfig;
   });
@@ -90,7 +92,7 @@ function getCachedInstance(): AxiosInstance {
             if (_refreshPromise) {
               const token = await _refreshPromise;
               originalRequest.headers = originalRequest.headers ?? {};
-              originalRequest.headers.Authorization = `Bearer ${token}`;
+              originalRequest.headers['Authorization'] = `Bearer ${token}`;
               return getCachedInstance().request(originalRequest);
             }
 

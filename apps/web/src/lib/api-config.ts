@@ -31,9 +31,14 @@ setApiClientConfig({
   },
   onRefreshFailure: () => {
     // Dynamic import to avoid circular dependency at module load time
-    import('../lib/clear-user-stores').then(({ clearAllUserStores }) => {
-      clearAllUserStores();
-    });
+    import('../lib/clear-user-stores')
+      .then(({ clearAllUserStores }) => {
+        clearAllUserStores();
+      })
+      .catch(() => {
+        // Chunk load failed — force reload to clear stale session state
+        window.location.reload();
+      });
   },
 });
 

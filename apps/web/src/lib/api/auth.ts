@@ -25,6 +25,9 @@ import type {
   IdentityTokenResponseDto,
   SendOtpResponseDto,
   IdentityControllerGetWalletNonce200,
+  LogoutResponseDto,
+  UnlinkMethodResponseDto,
+  DeleteAccountResponseDto,
 } from '@cipherbox/api-client';
 
 // Re-export model type under original alias for backward compatibility
@@ -55,7 +58,7 @@ export const authApi = {
    * Logout and invalidate refresh token.
    * Clears HTTP-only cookie on backend.
    */
-  logout: (): Promise<unknown> => authControllerLogout(),
+  logout: (): Promise<LogoutResponseDto> => authControllerLogout(),
 
   /**
    * Get all linked auth methods for the current user.
@@ -77,13 +80,15 @@ export const authApi = {
    * Unlink an auth method from the current user account.
    * Cannot unlink the last remaining auth method.
    */
-  unlinkMethod: (methodId: string): Promise<unknown> => authControllerUnlinkMethod({ methodId }),
+  unlinkMethod: (methodId: string): Promise<UnlinkMethodResponseDto> =>
+    authControllerUnlinkMethod({ methodId }),
 
   /**
    * Permanently delete the authenticated user's account.
    * Requires confirmation string "DELETE".
    */
-  deleteAccount: (): Promise<unknown> => authControllerDeleteAccount({ confirmation: 'DELETE' }),
+  deleteAccount: (): Promise<DeleteAccountResponseDto> =>
+    authControllerDeleteAccount({ confirmation: 'DELETE' }),
 
   // --- CipherBox Identity Provider endpoints ---
 

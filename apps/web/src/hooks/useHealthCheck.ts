@@ -12,11 +12,11 @@ import type { HealthControllerCheck200 } from '@cipherbox/api-client';
 type HealthData = Awaited<ReturnType<typeof healthControllerCheck>>;
 
 export function useHealthCheck(options?: {
-  query?: Partial<UseQueryOptions<HealthData, void, HealthControllerCheck200>>;
+  query?: Partial<UseQueryOptions<HealthData, Error, HealthControllerCheck200>>;
 }) {
   const { query: queryOptions } = options ?? {};
 
-  return useQuery<HealthData, void, HealthControllerCheck200>({
+  return useQuery<HealthData, Error, HealthControllerCheck200>({
     queryKey: ['health'],
     queryFn: () => healthControllerCheck(),
     ...queryOptions,
