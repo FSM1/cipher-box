@@ -39,19 +39,12 @@ test.describe.serial('Recycle Bin', () => {
   // Unique suffix per test run to avoid naming collisions
   const runId = Date.now().toString();
 
-  /** Best-effort Zustand quota store accessor (returns null if store not exposed). */
-  type QuotaStore = { getState: () => { usedBytes: number } };
-  const getQuotaUsedBytes = (p: Page) =>
-    p.evaluate(() => {
-      try {
-        const store = (window as unknown as Record<string, Record<string, QuotaStore> | undefined>)
-          .__ZUSTAND_STORES__?.quota;
-        if (!store) return null;
-        return store.getState().usedBytes as number;
-      } catch {
-        return null;
-      }
-    });
+  /** Best-effort quota check via the storage quota UI element. */
+  const getQuotaText = (p: Page) =>
+    p
+      .locator('[data-testid="storage-quota"] .storage-quota-text')
+      .textContent({ timeout: 5000 })
+      .catch(() => null);
 
   let account: PrivateKeyAccount;
 
@@ -365,13 +358,11 @@ test.describe.serial('Recycle Bin', () => {
     // JSON.parse AES-256-GCM encrypted file metadata
     await binPage.waitForBinItemToDisappear(fileName, { timeout: 30000 });
 
-    // SECONDARY ASSERTION (best-effort): check quota via Zustand store if accessible
-    // This is fragile because window.__ZUSTAND_STORES__ may not be exposed.
+    // SECONDARY ASSERTION (best-effort): check quota is displayed
     // The primary value of this test is proving permanent delete doesn't crash.
-    const quotaUsed = await getQuotaUsedBytes(page);
-    // Only assert if store was accessible -- null means we couldn't check
-    if (quotaUsed !== null) {
-      expect(typeof quotaUsed === 'number').toBe(true);
+    const quotaText = await getQuotaText(page);
+    if (quotaText !== null) {
+      expect(quotaText.length).toBeGreaterThan(0);
     }
   });
 
@@ -408,8 +399,8 @@ test.describe.serial('Recycle Bin', () => {
     await replaceButton.waitFor({ state: 'hidden', timeout: 30000 });
     await page.waitForTimeout(3000); // Wait for IPNS publish
 
-    // 5. Snapshot quota usage (best-effort)
-    const quotaBefore = await getQuotaUsedBytes(page);
+    // 5. Snapshot quota text (best-effort)
+    const quotaBefore = await getQuotaText(page);
 
     // 6. Soft-delete the file
     await fileList.rightClickItem(fileName);
@@ -427,18 +418,16 @@ test.describe.serial('Recycle Bin', () => {
     // PRIMARY ASSERTION: permanent delete completes without crash
     await binPage.waitForBinItemToDisappear(fileName, { timeout: 30000 });
 
-    // SECONDARY ASSERTION (best-effort): quota reclaim covers more than just the
-    // current content CID — proves versionCids cleanup also ran.
-    // v2 content is 2048 bytes; if version CIDs (v1 = 1024 bytes) were also
-    // reclaimed, the delta will exceed v2Content alone.
+    // SECONDARY ASSERTION (best-effort): quota changed after permanent delete.
+    // We can't compute exact byte delta from the UI text, but we can verify
+    // the displayed quota changed (proving unpin ran).
     if (quotaBefore !== null) {
       // Wait for quota to settle after unpinning
       await page.waitForTimeout(3000);
-      const quotaAfter = await getQuotaUsedBytes(page);
+      const quotaAfter = await getQuotaText(page);
       if (quotaAfter !== null) {
-        const reclaimed = quotaBefore - quotaAfter;
-        // Must reclaim more than just v2 content size — proves version CIDs were also freed
-        expect(reclaimed).toBeGreaterThan(v2Content.length);
+        // Quota text should differ (bytes were reclaimed)
+        expect(quotaAfter).not.toBe(quotaBefore);
       }
     }
   });

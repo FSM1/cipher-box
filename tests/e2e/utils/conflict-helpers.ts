@@ -1,100 +1,95 @@
-import { Page } from '@playwright/test';
+import { Browser, BrowserContext, Page } from '@playwright/test';
+import type { PrivateKeyAccount } from 'viem/accounts';
+import { setupMockWallet, loginViaWallet } from './wallet-login-helpers';
+import { createTestTextFile } from './test-files';
+import { FileListPage } from '../page-objects/file-browser/file-list.page';
+import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';
 
 /**
  * Conflict detection test helpers.
  *
- * Simulates concurrent device publishes by calling the API publish endpoint
- * directly to increment a folder's server-side sequence number, making the
- * web client's local sequence stale.
+ * Simulates concurrent device publishes by using a second browser session
+ * logged in as the same user. When the second session uploads a file,
+ * the server-side sequence number increments, making the first session's
+ * local sequence stale.
  */
 
 /**
- * Bump the server-side sequence number for a folder IPNS record.
- *
- * This simulates another device publishing to the same folder by calling the
- * API publish endpoint without an expectedSequenceNumber (backward-compatible
- * unconditional publish). The server increments the sequence number, making
- * the web client's local sequence stale. The web client's next folder mutation
- * (which sends its now-stale expectedSequenceNumber) will receive a 409.
- *
- * NOTE: Uses a dummy base64 record string which generates a delegated routing
- * warning in API logs because the IPNS record is not cryptographically valid.
- * This is expected -- we only need the DB sequence bump, not a valid IPNS
- * record for DHT propagation. The API still increments the sequence number
- * and returns 200.
- *
- * @param params.page - Playwright page instance (for page.request API calls)
- * @param params.apiBaseUrl - API base URL (e.g., "http://localhost:3000")
- * @param params.accessToken - Bearer token for authenticated API calls
- * @param params.rootIpnsName - IPNS name of the root folder to bump
- * @returns The new server-side sequence number after the bump
+ * A second browser session logged in as the same user.
+ * Used to simulate another device publishing to the same vault.
  */
-export async function bumpServerSequence(params: {
+export interface ConflictDevice {
+  context: BrowserContext;
   page: Page;
-  apiBaseUrl: string;
-  accessToken: string;
-  rootIpnsName: string;
-}): Promise<{ newSequenceNumber: string }> {
-  const { page, apiBaseUrl, accessToken, rootIpnsName } = params;
+  fileList: FileListPage;
+  uploadZone: UploadZonePage;
+}
 
-  // Step 1: Resolve the current CID from the root folder's IPNS record.
-  // The API's DB-cached resolve is reliable and fast (no delegated routing).
-  const resolveResponse = await page.request.get(
-    `${apiBaseUrl}/ipns/resolve?ipnsName=${encodeURIComponent(rootIpnsName)}`,
-    {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    }
-  );
+/**
+ * Create a second browser session logged in as the same wallet identity.
+ *
+ * This simulates a second device accessing the same vault. When this
+ * session performs mutations (upload, create folder), it bumps the
+ * server-side sequence number, making the primary session's local
+ * sequence stale.
+ *
+ * @param browser - Playwright browser instance
+ * @param account - Same wallet account as the primary session
+ */
+export async function createConflictDevice(
+  browser: Browser,
+  account: PrivateKeyAccount
+): Promise<ConflictDevice> {
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    await setupMockWallet(page, account);
+    await loginViaWallet(page, { timeout: 90_000 });
 
-  if (!resolveResponse.ok()) {
-    const body = await resolveResponse.text();
-    throw new Error(
-      `Failed to resolve IPNS for sequence bump (${resolveResponse.status()}): ${body}`
-    );
+    // Wait for vault to load
+    await Promise.race([
+      page.locator('.file-list[role="grid"]').waitFor({ state: 'visible', timeout: 30_000 }),
+      page.locator('[data-testid="empty-state"]').waitFor({ state: 'visible', timeout: 30_000 }),
+    ]);
+
+    return {
+      context,
+      page,
+      fileList: new FileListPage(page),
+      uploadZone: new UploadZonePage(page),
+    };
+  } catch (err) {
+    await context.close().catch(() => undefined);
+    throw err;
   }
+}
 
-  const resolved = (await resolveResponse.json()) as {
-    success: boolean;
-    cid: string;
-    sequenceNumber: string;
-  };
+/**
+ * Bump the server-side sequence by uploading a file from the second device.
+ *
+ * This is a real mutation through the UI — no direct API calls or store
+ * access needed. The upload publishes new folder metadata with an
+ * incremented sequence number, making any other session's local sequence
+ * stale.
+ *
+ * @param device - Second browser session (conflict device)
+ * @param runId - Unique test run identifier for file naming
+ * @returns Name of the uploaded bump file
+ */
+export async function bumpSequenceViaSecondDevice(
+  device: ConflictDevice,
+  runId: string
+): Promise<string> {
+  const bumpFileName = `seq-bump-${runId}-${Date.now()}.txt`;
+  const bumpFile = createTestTextFile(bumpFileName, 'sequence bump from second device');
+  await device.uploadZone.uploadFile(bumpFile.path);
+  await device.fileList.waitForItemToAppear(bumpFileName, { timeout: 60_000 });
+  return bumpFileName;
+}
 
-  if (!resolved.success || !resolved.cid) {
-    throw new Error(
-      `IPNS resolve returned success=false or missing CID. Is the vault initialized? Response: ${JSON.stringify(resolved)}`
-    );
-  }
-
-  // Step 2: Publish with the same CID but NO expectedSequenceNumber.
-  // Omitting expectedSequenceNumber uses the backward-compatible unconditional
-  // publish path which always succeeds and increments the sequence by 1.
-  //
-  // The dummy base64 record string is intentionally invalid as an IPNS record.
-  // The API will log a warning when trying to relay it to the delegated routing service,
-  // but the DB sequence bump succeeds regardless.
-  const dummyRecord = Buffer.from('conflict-test-dummy-record-not-a-valid-ipns-record').toString(
-    'base64'
-  );
-
-  const publishResponse = await page.request.post(`${apiBaseUrl}/ipns/publish`, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    data: {
-      ipnsName: rootIpnsName,
-      record: dummyRecord,
-      metadataCid: resolved.cid,
-      // No expectedSequenceNumber -- unconditional publish to simulate another device
-    },
-  });
-
-  if (!publishResponse.ok()) {
-    const body = await publishResponse.text();
-    throw new Error(`Failed to bump server sequence (${publishResponse.status()}): ${body}`);
-  }
-
-  const published = (await publishResponse.json()) as { sequenceNumber: string };
-
-  return { newSequenceNumber: published.sequenceNumber };
+/**
+ * Close the conflict device session.
+ */
+export async function closeConflictDevice(device: ConflictDevice): Promise<void> {
+  await device.context.close().catch(() => undefined);
 }

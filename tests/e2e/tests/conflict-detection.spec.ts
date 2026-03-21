@@ -2,7 +2,12 @@ import { test, expect, Browser, BrowserContext, Page } from '@playwright/test';
 import type { PrivateKeyAccount } from 'viem/accounts';
 import { createTestAccount, setupMockWallet, loginViaWallet } from '../utils/wallet-login-helpers';
 import { createTestTextFile, cleanupTestFiles } from '../utils/test-files';
-import { bumpServerSequence } from '../utils/conflict-helpers';
+import {
+  createConflictDevice,
+  bumpSequenceViaSecondDevice,
+  closeConflictDevice,
+  type ConflictDevice,
+} from '../utils/conflict-helpers';
 import { FileListPage } from '../page-objects/file-browser/file-list.page';
 import { UploadZonePage } from '../page-objects/file-browser/upload-zone.page';
 import { CreateFolderDialogPage } from '../page-objects/dialogs/create-folder-dialog.page';
@@ -13,21 +18,19 @@ import { TextEditorDialogPage } from '../page-objects/dialogs/text-editor-dialog
 /**
  * Conflict Detection E2E Test Suite
  *
- * Verifies the full conflict detection flow end-to-end:
- * 1. Server-side sequence is bumped (simulating another device publishing)
- * 2. Web client detects 409 on its next folder publish
- * 3. Client re-syncs (fetches latest remote state)
- * 4. Client retries the operation with the fresh sequence
- * 5. User's operation succeeds and the item appears in the file list
+ * Verifies the full conflict detection flow end-to-end using two browser
+ * sessions logged in as the same user (simulating two devices):
+ *
+ * 1. Session B uploads a file (bumps server-side sequence)
+ * 2. Session A's local sequence is now stale
+ * 3. Session A performs a mutation → gets 409 from server
+ * 4. Session A auto-resyncs (fetches latest remote state)
+ * 5. Session A retries with fresh sequence → operation succeeds
  *
  * Tests cover:
  * - Upload file with stale folder sequence -> auto re-sync -> file visible
  * - Create folder with stale parent sequence -> auto re-sync -> folder visible
  * - Per-file IPNS publish (content update) does NOT trigger conflict detection
- *
- * Depends on:
- * - Plan 16-01: API accepts expectedSequenceNumber, returns 409 on mismatch
- * - Plan 16-02: Web client sends expectedSequenceNumber and handles 409 with re-sync + retry
  */
 test.describe.serial('Conflict Detection', () => {
   let browser: Browser;
@@ -44,11 +47,8 @@ test.describe.serial('Conflict Detection', () => {
 
   let account: PrivateKeyAccount;
 
-  // Auth state -- extracted from browser after wallet login
-  let accessToken = '';
-  let rootIpnsName = '';
-
-  const apiBaseUrl = process.env.API_BASE_URL || 'http://localhost:3000';
+  // Second browser session — same user, simulates another device
+  let deviceB: ConflictDevice;
 
   // Unique suffix per test run to avoid naming collisions
   const runId = Date.now().toString();
@@ -57,7 +57,7 @@ test.describe.serial('Conflict Detection', () => {
   const createdItems: Array<{ name: string; type: 'file' | 'folder' }> = [];
 
   test.beforeAll(async ({ browser: testBrowser }) => {
-    test.setTimeout(90_000); // Core Kit init + SIWE can be slow
+    test.setTimeout(180_000); // Two Core Kit logins (same identity) + seed upload
     browser = testBrowser;
     context = await browser.newContext();
     page = await context.newPage();
@@ -77,22 +77,7 @@ test.describe.serial('Conflict Detection', () => {
     // Login via wallet (mock wallet auto-approves connect + SIWE)
     await loginViaWallet(page, { timeout: 60_000 });
 
-    // Extract auth state via __E2E helpers for bumpServerSequence API calls
-    const authData = await page.evaluate(() => {
-      const e2e = (window as unknown as Record<string, unknown>).__E2E as {
-        getAccessToken: () => string;
-        getRootIpnsName: () => string;
-      };
-      return {
-        accessToken: e2e.getAccessToken(),
-        rootIpnsName: e2e.getRootIpnsName(),
-      };
-    });
-    accessToken = authData.accessToken;
-    rootIpnsName = authData.rootIpnsName;
-
-    // Verify we're on the files page and the vault is accessible.
-    // Wait for either the file list grid (non-empty folder) or empty state (fresh vault).
+    // Verify we're on the files page and the vault is accessible
     await page.waitForURL('**/files', { timeout: 60000 });
     await Promise.race([
       fileList.fileListContainer().waitFor({ state: 'visible', timeout: 30000 }),
@@ -101,16 +86,24 @@ test.describe.serial('Conflict Detection', () => {
 
     // Seed: upload a file to ensure the root folder IPNS record exists.
     // For a fresh vault, no IPNS record is published until the first mutation.
-    // bumpServerSequence needs an existing record to resolve, so we bootstrap here.
     const seedFileName = `seed-${runId}.txt`;
     const seedFile = createTestTextFile(seedFileName, 'seed file for conflict tests');
     await uploadZone.uploadFile(seedFile.path);
     await fileList.waitForItemToAppear(seedFileName, { timeout: 60000 });
     createdItems.push({ name: seedFileName, type: 'file' });
+
+    // Create second session with the same wallet identity (simulates another device)
+    deviceB = await createConflictDevice(browser, account);
   });
 
   test.afterAll(async () => {
     test.setTimeout(60_000); // Cleanup can be slow with rate-limited API
+
+    // Close second device first
+    if (deviceB) {
+      await closeConflictDevice(deviceB);
+    }
+
     // Clean up remote items created during tests (runs even if earlier serial tests fail)
     try {
       const itemsToDelete = [...createdItems].reverse();
@@ -137,46 +130,6 @@ test.describe.serial('Conflict Detection', () => {
   });
 
   // ============================================================
-  // Helper: Get current access token from Zustand auth store
-  // ============================================================
-
-  /**
-   * Get a fresh access token from the browser's Zustand auth store.
-   * The token may be refreshed between tests.
-   */
-  async function getAccessToken(): Promise<string> {
-    // Read from __E2E helpers to get the freshest token
-    // (tokens may be refreshed between tests)
-    const liveToken = await page.evaluate(() => {
-      const e2e = (window as unknown as Record<string, unknown>).__E2E as
-        | {
-            getAccessToken: () => string;
-          }
-        | undefined;
-      return e2e?.getAccessToken() ?? '';
-    });
-    if (liveToken) return liveToken;
-    // Fallback: use token captured during beforeAll
-    return accessToken;
-  }
-
-  /**
-   * Get the root IPNS name via __E2E helpers.
-   */
-  async function getRootIpnsName(): Promise<string> {
-    const liveName = await page.evaluate(() => {
-      const e2e = (window as unknown as Record<string, unknown>).__E2E as
-        | {
-            getRootIpnsName: () => string;
-          }
-        | undefined;
-      return e2e?.getRootIpnsName() ?? '';
-    });
-    if (liveName) return liveName;
-    return rootIpnsName;
-  }
-
-  // ============================================================
   // Test 1: Upload file with stale sequence -> conflict -> retry
   // ============================================================
 
@@ -185,17 +138,12 @@ test.describe.serial('Conflict Detection', () => {
 
     const fileName = `conflict-upload-${runId}.txt`;
 
-    // Step 1: Bump the server-side sequence number so the client's local
-    // sequence becomes stale. This simulates another device publishing.
-    const accessToken = await getAccessToken();
-    const rootIpnsName = await getRootIpnsName();
+    // Step 1: Bump the server-side sequence by uploading from device B.
+    // This makes device A's local sequence stale.
+    const bumpFile = await bumpSequenceViaSecondDevice(deviceB, runId);
+    createdItems.push({ name: bumpFile, type: 'file' });
 
-    expect(accessToken).toBeTruthy();
-    expect(rootIpnsName).toBeTruthy();
-
-    await bumpServerSequence({ page, apiBaseUrl, accessToken, rootIpnsName });
-
-    // Step 2: Upload a test file via the upload zone.
+    // Step 2: Upload a test file from device A (primary session).
     // The client will:
     // - Encrypt the file content and upload to IPFS
     // - Build the new folder metadata (with the new file added)
@@ -229,13 +177,11 @@ test.describe.serial('Conflict Detection', () => {
 
     const folderName = `conflict-folder-${runId}`;
 
-    // Step 1: Bump the server-side sequence number again.
-    const accessToken = await getAccessToken();
-    const rootIpnsName = await getRootIpnsName();
+    // Step 1: Bump the server-side sequence again from device B.
+    const bumpFile = await bumpSequenceViaSecondDevice(deviceB, runId);
+    createdItems.push({ name: bumpFile, type: 'file' });
 
-    await bumpServerSequence({ page, apiBaseUrl, accessToken, rootIpnsName });
-
-    // Step 2: Create a folder via the new-folder button.
+    // Step 2: Create a folder from device A.
     // The client will hit the same 409 -> re-sync -> retry flow.
     const newFolderButton = page.locator('.file-browser-new-folder-button');
     await newFolderButton.click();
@@ -261,8 +207,6 @@ test.describe.serial('Conflict Detection', () => {
     test.slow(); // Allow for file edit + save cycle
 
     // Step 1: Upload a text file to edit later.
-    // This resets/syncs the root folder sequence as a side effect of the
-    // successful publish from Test 2.
     const editFileName = `conflict-edit-target-${runId}.txt`;
     const originalContent = `Original content for conflict edit test - ${runId}`;
     const updatedContent = `Updated content via text editor - ${runId} - modified`;
@@ -271,20 +215,17 @@ test.describe.serial('Conflict Detection', () => {
     await uploadZone.uploadFile(testFile.path);
     await fileList.waitForItemToAppear(editFileName, { timeout: 30000 });
 
-    // Step 2: Bump the folder's server-side sequence number.
-    // This makes the client's local folder sequence stale.
-    // Brief pause to avoid API rate limiting (10 req/s) from rapid test transitions.
+    // Step 2: Bump the folder's server-side sequence from device B.
+    // Brief pause to avoid API rate limiting from rapid test transitions.
     await page.waitForTimeout(2000);
-    const accessToken = await getAccessToken();
-    const rootIpnsName = await getRootIpnsName();
-
-    await bumpServerSequence({ page, apiBaseUrl, accessToken, rootIpnsName });
+    const bumpFile = await bumpSequenceViaSecondDevice(deviceB, runId);
+    createdItems.push({ name: bumpFile, type: 'file' });
 
     // Step 3: Open the text editor for the file and save new content.
-    // The text editor save flow calls handleUpdateFile, which publishes only
-    // the per-file IPNS record (NOT the folder IPNS record). Per the Phase 16
-    // design, per-file IPNS publishes use last-write-wins with no
-    // expectedSequenceNumber, so they never trigger conflict detection.
+    // The text editor save flow publishes only the per-file IPNS record
+    // (NOT the folder IPNS record). Per the Phase 16 design, per-file IPNS
+    // publishes use last-write-wins with no expectedSequenceNumber, so they
+    // never trigger conflict detection.
     await fileList.rightClickItem(editFileName);
     await contextMenu.waitForOpen();
     await contextMenu.clickEdit();
@@ -296,7 +237,6 @@ test.describe.serial('Conflict Detection', () => {
     await textEditorDialog.waitForClose({ timeout: 30000 });
 
     // Step 4: Assert the file update completed without a persistent error.
-    // The file should still be visible in the list (not removed by an error).
     await fileList.waitForItemToAppear(editFileName, { timeout: 15000 });
     const fileVisible = await fileList.isItemVisible(editFileName);
     expect(fileVisible).toBe(true);
