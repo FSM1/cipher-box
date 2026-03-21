@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "a1b1e020ce59",
+  "strategy": "manual-commit",
+  "branch": "fix/e2e-static-import-race",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/main.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/a1/b1e020ce59/0/metadata.json",
+      "transcript": "/a1/b1e020ce59/0/full.jsonl",
+      "context": "/a1/b1e020ce59/0/context.md",
+      "content_hash": "/a1/b1e020ce59/0/content_hash.txt",
+      "prompt": "/a1/b1e020ce59/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 470,
+    "cache_creation_tokens": 297147,
+    "cache_read_tokens": 45213345,
+    "output_tokens": 69624,
+    "api_call_count": 284
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "a1b1e020ce59",
+  "session_id": "3f8e1927-1b97-4c98-97c7-a19b3c057640",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-21T02:54:26.199696Z",
+  "branch": "fix/e2e-static-import-race",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/main.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b2ff3401266b",
+  "token_usage": {
+    "input_tokens": 470,
+    "cache_creation_tokens": 297147,
+    "cache_read_tokens": 45213345,
+    "output_tokens": 69624,
+    "api_call_count": 284
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments on PR #296 (SDK extraction) and fix a recurring E2E test failure caused by Zustand store access not being available in production CI builds.",
+    "outcome": "All review threads across multiple review rounds were resolved with code fixes. The E2E infrastructure was refactored to use UI-based state detection and a minimal `window.__E2E` helper gated behind `VITE_E2E=true`, replacing direct Zustand store exposure. A separate PR (#303) was needed after the fix was accidentally committed to an already-merged branch.",
+    "learnings": {
+      "repo": [
+        "cipher-box uses pnpm workspaces with packages: crypto, core, api-client, sdk-core, sdk, and apps: web, api, desktop",
+        "CI workflows (e2e.yml, deploy-staging.yml, e2e-desktop.yml) only built @cipherbox/crypto before @cipherbox/web — missing core, api-client, sdk-core, sdk after PR #296 added them",
+        "__ZUSTAND_STORES was only exposed under import.meta.env.DEV, making all Zustand-dependent E2E tests silently fail in CI production builds",
+        "release-please with multi-component manifest uses the target branch name ('main') in PR titles when pull-request-title-pattern contains ${version} — there's no single version to show",
+        "The first release-please PR bumps all packages together since one PR (#296) touched all packages; versions diverge naturally in subsequent PRs",
+        "FolderTree.clear() zeroes all stored key buffers — registerFolder storing caller-owned buffers means destroy() can zero the caller's keys",
+        "The ensureFolderRegistered isLoaded guard caused uploads to fail because SDK-created folders and root folder may have valid keys but isLoaded=false in some code paths",
+        "addInitScript and exposeFunction survive page.reload() in Playwright — the mock wallet is re-injected automatically",
+        "Core Kit session restore after reload relies on localStorage DKG shares + wallet connection to call exportTssKey against Sapphire Devnet — slow on CI",
+        "Public keys are visible in the UI at SettingsPage under .settings-pubkey-value, making Zustand store access unnecessary for sharing tests"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/main.tsx",
+          "finding": "Dynamic import().then() for vault store caused race condition — __E2E was not set by the time conflict-detection beforeAll ran page.evaluate(). Must use static import."
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "line": 85,
+          "finding": "ensureFolderRegistered guard using isLoaded was too strict — should only check for empty key material, not isLoaded flag"
+        },
+        {
+          "path": "tests/e2e/tests/full-workflow.spec.ts",
+          "line": 557,
+          "finding": "waitForFunction polling window.__ZUSTAND_STORES.vault for rootFolderKey is redundant — the file list appearing on the next wait already proves vault loaded"
+        },
+        {
+          "path": "tests/e2e/tests/full-workflow.spec.ts",
+          "line": 533,
+          "finding": "Test 3.7 timeout 240s was insufficient — cumulative waits (auth restore 120s + vault 60s + root sync 120s + file 30s) total ~330s worst case; bumped to 360s"
+        },
+        {
+          "path": "tests/e2e/tests/full-workflow.spec.ts",
+          "line": 601,
+          "finding": "Test 3.8 timeout 120s too tight for two navigateIntoFolder retries plus two 60s content waits; bumped to 240s"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 628,
+          "finding": "fileKey not cleared if exception occurs before re-wrap try/catch — needed try/finally with clearBytes()"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 338,
+          "finding": "createFolder leaked plaintext folderKey and ipnsPrivateKey on failure — needed try/catch with clearBytes before throwing"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 165,
+          "finding": "registerFolder stored caller-owned key buffers directly; destroy() calls FolderTree.clear() which zeroes them — needs defensive copies"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 117,
+          "finding": "requestAnimationFrame ID was inside async IIFE — needed to hoist focusRaf to effect scope for cancelAnimationFrame in cleanup"
+        },
+        {
+          "path": "tests/e2e/utils/multi-account-wallet.ts",
+          "line": 113,
+          "finding": "context.close() in catch block can mask original error — use .catch(() =\u003e undefined) on cleanup calls"
+        }
+      ],
+      "workflow": [
+        "Always check whether a PR has already been merged before committing fixes — happened twice in this session, requiring new branches each time",
+        "VITE_* env vars are baked into Vite builds at compile time and tree-shaken out when not set — safe pattern for E2E-only instrumentation without production exposure",
+        "Use VITE_E2E=true in CI workflow rather than exposing debug globals unconditionally in production builds",
+        "Minimize window.__E2E surface area — expose only specific getter functions for values tests need, not full store references",
+        "orval-generated API client types can be wrong (nullable Date → {[key: string]: unknown} | null) — regenerating produces the same output, it's an upstream codegen bug",
+        "GraphQL reviewThreads query is the correct way to fetch PR review threads with resolution status — REST API doesn't expose isResolved",
+        "Playwright page.evaluate() from the browser context includes cookies automatically — can make authenticated API calls without needing raw access tokens"
+      ]
+    },
+    "friction": [
+      "Fix for already-merged PR #296 was committed to the old branch twice — required creating new branches fix/ci-package-build-order and later fix/e2e-zustand-race each time",
+      "ZUSTAND_STORES was only exposed in DEV mode, causing silent E2E failures in CI that looked like flaky tests (3.7 reload, then conflict-detection) rather than a configuration error",
+      "Copilot review comment about ensureFolderRegistered isLoaded guard introduced a regression that caused uploads to fail with 'Folder not loaded' — the guard was too strict",
+      "Test 3.7 serial failure masked all subsequent E2E tests (36+ skipped) making it unclear which other tests were also broken",
+      "Dynamic import().then() race condition for vault store in main.tsx caused __E2E to be undefined when conflict-detection tests ran — required switching to static import",
+      "Outside-diff-range review comments (not attached to unresolved threads) required fetching review body separately via REST API"
+    ],
+    "open_items": [
+      "Concurrent mutations to same folder (Thread 2, first review round) acknowledged as architectural concern — UI-level serialization handles it for now but a proper fix is a follow-up",
+      "orval generated type VaultResponseDtoInitializedAt is incorrect (should be string | null, not {[key: string]: unknown} | null) — upstream orval bug, no fix available by regenerating",
+      "web3auth-helpers.ts still uses __ZUSTAND_STORES for legacy email-based test flow — only matters if TEST_LOGIN_SECRET is set, but the dead code remains",
+      "Sapphire Devnet latency causes intermittent Core Kit session restore failures in test 3.7 on CI — no root cause fix, currently treated as acceptable flakiness"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-21T02:53:33.370483Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}
