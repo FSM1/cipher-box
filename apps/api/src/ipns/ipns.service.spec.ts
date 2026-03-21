@@ -936,6 +936,10 @@ describe('IpnsService', () => {
         metadataCid: testMetadataCid,
       });
 
+      // Delegated routing publish is fire-and-forget; flush microtask queue
+      // so the detached .then() callback that records metrics can run.
+      await new Promise(process.nextTick);
+
       expect(mockStartTimer).toHaveBeenCalledWith({ operation: 'publish', source: '' });
       expect(mockEndTimer).toHaveBeenCalledWith({ result: 'success' });
       expect(mockMetricsService.ipnsPublishDuration.observe).toHaveBeenCalledWith(
@@ -974,6 +978,9 @@ describe('IpnsService', () => {
         metadataCid: testMetadataCid,
       });
 
+      // Delegated routing publish is fire-and-forget; flush microtask queue
+      await new Promise(process.nextTick);
+
       expect(mockMetricsService.ipnsPublishDuration.observe).toHaveBeenCalledWith(
         { outcome: 'error' },
         expect.any(Number)
@@ -995,10 +1002,40 @@ describe('IpnsService', () => {
         metadataCid: testMetadataCid,
       });
 
+      // Delegated routing publish is fire-and-forget; flush microtask queue
+      await new Promise(process.nextTick);
+
       expect(mockMetricsService.ipnsPublishDuration.observe).toHaveBeenCalledWith(
         { outcome: 'error' },
         expect.any(Number)
       );
+    });
+
+    it('should log error and not crash when metrics observe() throws', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockMetricsService.ipnsPublishDuration.observe.mockImplementation(() => {
+        throw new Error('metrics explosion');
+      });
+
+      const loggerSpy = jest.spyOn(service['logger'], 'error').mockImplementation();
+
+      const result = await service.publishRecord(testUserId, {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: testMetadataCid,
+      });
+
+      // Flush fire-and-forget promise chain
+      await new Promise(process.nextTick);
+
+      expect(result.success).toBe(true);
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to record IPNS publish metrics')
+      );
+
+      loggerSpy.mockRestore();
     });
   });
 

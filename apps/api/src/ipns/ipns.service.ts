@@ -72,24 +72,32 @@ export class IpnsService {
         dto.expectedSequenceNumber
       );
 
-      // Publish to delegated routing API (best-effort — DB is the reliable source)
+      // Publish to delegated routing API (fire-and-forget — DB is the reliable source).
+      // DHT propagation via someguy takes ~10-30s per record. Since the DB record
+      // is already saved and resolveRecord() always checks/prefers DB data, there is
+      // no need to block the API response on DHT propagation. Metrics are still
+      // collected via the detached promise chain (catch + then).
       const publishStart = process.hrtime.bigint();
-      let publishOutcome = 'success';
-      try {
-        await this.delegatedRouting.publish(dto.ipnsName, recordBytes);
-      } catch (error) {
-        result = 'delegated_error';
-        publishOutcome = 'error';
-        this.logger.warn(
-          `Delegated routing publish failed for ${dto.ipnsName}, DB record saved: ${error instanceof Error ? error.message : String(error)}`
-        );
-      } finally {
-        const publishElapsed = Number(process.hrtime.bigint() - publishStart) / 1e9;
-        this.metricsService.ipnsPublishDuration.observe(
-          { outcome: publishOutcome },
-          publishElapsed
-        );
-      }
+      this.delegatedRouting
+        .publish(dto.ipnsName, recordBytes)
+        .catch((error) => {
+          this.logger.warn(
+            `Delegated routing publish failed for ${dto.ipnsName}, DB record saved: ${error instanceof Error ? error.message : String(error)}`
+          );
+          return 'error' as const;
+        })
+        .then((outcome) => {
+          const publishElapsed = Number(process.hrtime.bigint() - publishStart) / 1e9;
+          this.metricsService.ipnsPublishDuration.observe(
+            { outcome: outcome === 'error' ? 'error' : 'success' },
+            publishElapsed
+          );
+        })
+        .catch((error) => {
+          this.logger.error(
+            `Failed to record IPNS publish metrics for ${dto.ipnsName}: ${error instanceof Error ? error.message : String(error)}`
+          );
+        });
 
       return {
         success: true,
