@@ -1,0 +1,104 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "621c2fcc644e",
+  "session_id": "3f8e1927-1b97-4c98-97c7-a19b3c057640",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-21T00:14:28.893904Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/web/src/services/ipns.service.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "1f9f504ab75a",
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 141429,
+    "cache_read_tokens": 3017631,
+    "output_tokens": 14740,
+    "api_call_count": 51
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments on cipher-box PR #296, including automated reviewer (CodeRabbit/Copilot) nitpicks and human reviewer threads, by implementing fixes, committing, and formally replying to and resolving each thread.",
+    "outcome": "All 8 review threads resolved across two sessions: 6 from the initial /resolve-pr-reviews run and 2 more from a follow-up with additional nitpick comments. 7 code fixes were implemented and pushed; 1 comment was marked not applicable.",
+    "learnings": {
+      "repo": [
+        "cipher-box is a monorepo with packages: crypto, sdk, and an apps/web React frontend, plus tests/e2e with Playwright",
+        "The SDK uses lifecycle hook callbacks (config callbacks) that can throw and break operations — a notifySafely() wrapper pattern was introduced",
+        "Crypto key material (fileKey, folderKey) must be explicitly cleared with clearBytes() in finally blocks — the codebase treats key leakage as a security concern, not just a memory issue",
+        "Background re-wrap operations in createFolder share the folderKey buffer with the caller, requiring a defensive copy before passing to async work",
+        "ensureFolderRegistered in sdk-provider.ts can be called with unloaded placeholder folders that have empty keys — requires an isLoaded guard",
+        "ipns.service.ts had a stale doc comment referencing @cipherbox/crypto instead of @cipherbox/core that was already fixed in a prior commit before this session"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 575,
+          "end_line": 628,
+          "finding": "Post-upload path after fileKey generation was not wrapped in try/finally — fileKey could leak if an exception occurred before the re-wrap block's own cleanup"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 947,
+          "end_line": 947,
+          "finding": "Lifecycle hook callbacks called without error isolation — a throwing hook could abort the entire operation; fixed with notifySafely() wrapper"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 359,
+          "end_line": 360,
+          "finding": "createFolder passes folderKey buffer reference to background re-wrap — concurrent mutations risk; fixed with defensive copy + clearBytes in finally"
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "line": 85,
+          "end_line": 85,
+          "finding": "ensureFolderRegistered lacked a guard for unloaded/placeholder folders with empty keys, risking registration with zero-length key material"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 168,
+          "end_line": 168,
+          "finding": "Blob construction used .buffer on Uint8Array unnecessarily; direct Uint8Array works but TypeScript strict mode requires 'as BlobPart' cast due to Uint8Array\u003cArrayBufferLike\u003e vs BlobPart incompatibility"
+        },
+        {
+          "path": "tests/e2e/tests/sharing-workflow.spec.ts",
+          "line": 157,
+          "end_line": 157,
+          "finding": "180s timeout was too tight for 3 sequential wallet logins; increased to 300s"
+        },
+        {
+          "path": "tests/e2e/utils/multi-account-wallet.ts",
+          "line": 105,
+          "end_line": 105,
+          "finding": "Context leak on failure during account creation — both createWalletTestAccount and createWalletTestAccounts needed cleanup in error paths"
+        }
+      ],
+      "workflow": [
+        "GitHub GraphQL API is required for fetching reviewThread isResolved status and for resolving threads (mutation); REST API is used for posting replies",
+        "Reply to PR threads uses gh api with --field for integer in_reply_to and --raw-field for string body",
+        "pnpm test / pnpm typecheck are the standard check commands; SDK-specific tests can be run in isolation",
+        "TypeScript strict mode can reject Uint8Array as BlobPart even though it works at runtime — requires explicit cast"
+      ]
+    },
+    "friction": [
+      "Unit tests were run as background tasks and results were not immediately available, requiring TaskOutput polling and a retry run to confirm passage",
+      "A stale lock file had to be removed before committing",
+      "The nitpick review (ID 3983247433) comments were outside-diff review-level comments, not thread comments, making them harder to fetch and reply to individually via the standard thread resolution flow",
+      "TypeScript rejected direct Uint8Array in Blob constructor due to strict generic typing (Uint8Array\u003cArrayBufferLike\u003e), requiring an 'as BlobPart' workaround"
+    ],
+    "open_items": [
+      "Thread 2 from first session (concurrent mutations to same folder losing updates) was marked not applicable — acknowledged as an architectural concern for a follow-up PR, not this extraction PR",
+      "The notifySafely() lifecycle hook wrapper was added reactively; a broader audit of all config callback call sites for similar issues may be warranted"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-21T00:13:56.88459Z",
+    "agent_lines": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "agent_percentage": 100
+  }
+}

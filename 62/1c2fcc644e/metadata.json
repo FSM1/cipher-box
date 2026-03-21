@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "621c2fcc644e",
+  "strategy": "manual-commit",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "apps/web/src/services/ipns.service.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/62/1c2fcc644e/0/metadata.json",
+      "transcript": "/62/1c2fcc644e/0/full.jsonl",
+      "context": "/62/1c2fcc644e/0/context.md",
+      "content_hash": "/62/1c2fcc644e/0/content_hash.txt",
+      "prompt": "/62/1c2fcc644e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 141429,
+    "cache_read_tokens": 3017631,
+    "output_tokens": 14740,
+    "api_call_count": 51
+  }
+}
