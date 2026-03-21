@@ -73,9 +73,9 @@ export function ensureFolderRegistered(folder: FolderNode): void {
   // is authoritative (correct sequence number, keys, children from mutations)
   if (client.hasFolder(folder.ipnsName)) return;
 
-  // Guard: don't register placeholder folders that haven't loaded yet —
-  // empty key material would cause crypto/IPNS errors on subsequent mutations
-  if (!folder.isLoaded || folder.folderKey.length === 0 || folder.ipnsPrivateKey.length === 0) {
+  // Guard: don't register placeholder folders with empty key material —
+  // would cause crypto/IPNS errors on subsequent mutations
+  if (folder.folderKey.length === 0 || folder.ipnsPrivateKey.length === 0) {
     return;
   }
 
