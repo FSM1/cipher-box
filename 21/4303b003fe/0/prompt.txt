@@ -1,0 +1,5 @@
+https://github.com/FSM1/cipher-box/pull/306 was merged (release-please pr) but i do not see a tag for v0.25.1 being created
+
+---
+
+ok, that makes sense. fix this on a fresh `chore(ci)` branch off `main` and then also manually tag v0.25.1

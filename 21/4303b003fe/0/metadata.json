@@ -1,0 +1,67 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "214303b003fe",
+  "session_id": "f0dd29f9-8a13-44de-877f-1bc80807410d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-21T15:13:58.793384Z",
+  "branch": "chore/fix-release-please-title-pattern",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "release-please-config.json"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b6e17d88ae69",
+  "checkpoint_transcript_start": 191,
+  "transcript_lines_at_start": 191,
+  "token_usage": {
+    "input_tokens": 18,
+    "cache_creation_tokens": 7055,
+    "cache_read_tokens": 784665,
+    "output_tokens": 3163,
+    "api_call_count": 14
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Fix a release-please misconfiguration that was blocking tag creation for v0.25.1 after a multi-package setup was introduced.",
+    "outcome": "The root cause was identified (missing `${component}` in `pull-request-title-pattern`), a fix was committed on a `chore(ci)` branch, and v0.25.1 was manually tagged to unblock staging.",
+    "learnings": {
+      "repo": [
+        "cipher-box uses release-please with a multi-package config; the root package is 'cipher-box' and there are component packages like '@cipherbox/core'.",
+        "The release-please-config.json had `pull-request-title-pattern: 'chore: release'` without `${component}`, which causes release-please to fail to match merged release PRs back to their components in a monorepo setup.",
+        "The .release-please-manifest.json already reflected version 0.25.1 after PR #306 merged, meaning release-please bumped versions but aborted before creating the tag/GitHub release.",
+        "release-please aborts with 'untagged, merged release PRs outstanding' when it cannot reconcile a previously merged release PR (PR #298) to a component due to the missing title pattern variable."
+      ],
+      "code": [
+        {
+          "path": "release-please-config.json",
+          "finding": "pull-request-title-pattern was missing `${component}`, causing component matching to fail for merged PRs in multi-package mode."
+        }
+      ],
+      "workflow": [
+        "When release-please is stuck due to an unrecognized merged release PR, manually tagging the release version allows unblocking staging while the config fix is landed.",
+        "After merging a release-please PR, verify that both component tags (e.g., @cipherbox/core-v0.25.0) AND a root GitHub Release/tag are created — their absence indicates an abort condition.",
+        "Checking workflow run logs for the release-please action is the fastest way to diagnose why a tag was not created after a release PR merge."
+      ]
+    },
+    "friction": [
+      "release-please silently aborted tag creation without a visible failure — the merged PR #306 appeared successful but produced no tag, requiring log investigation to find the abort message.",
+      "The misconfiguration in pull-request-title-pattern was introduced at some earlier point when multi-package support was added, and went undetected until a release cycle failed."
+    ],
+    "open_items": [
+      "The chore(ci) branch with the pull-request-title-pattern fix needs to be reviewed, merged, and CI validated.",
+      "PR #298's status with release-please should be monitored after the config fix lands to confirm it no longer triggers the 'untagged merged release PR' abort.",
+      "Staging deployment using the manually created v0.25.1 tag (via 'Tag Staging Release' workflow) still needs to be run."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-21T15:13:41.894162Z",
+    "agent_lines": 1,
+    "human_added": 16,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 17,
+    "agent_percentage": 5.88235294117647
+  }
+}
