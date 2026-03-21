@@ -58,14 +58,15 @@ useAuthStore.subscribe((state, prevState) => {
 // Only exposes accessToken and rootIpnsName — needed by conflict-detection
 // tests that make direct API calls to simulate concurrent device publishes.
 // Gated behind VITE_E2E so production deploys never include this code.
+// Static import — Vite eliminates the entire block (and unused import)
+// in production builds where VITE_E2E is not set.
+import { useVaultStore } from './stores/vault.store';
 if (import.meta.env.VITE_E2E === 'true') {
-  import('./stores/vault.store').then(({ useVaultStore }) => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).__E2E = {
-      getAccessToken: () => useAuthStore.getState().accessToken,
-      getRootIpnsName: () => useVaultStore.getState().rootIpnsName,
-    };
-  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).__E2E = {
+    getAccessToken: () => useAuthStore.getState().accessToken,
+    getRootIpnsName: () => useVaultStore.getState().rootIpnsName,
+  };
 }
 
 const queryClient = new QueryClient({
