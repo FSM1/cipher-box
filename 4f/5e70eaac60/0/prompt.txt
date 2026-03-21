@@ -43,3 +43,15 @@ is there really that much benefit in the wiring up of the react app to use the r
 ---
 
 yeah that seems like a great idea - don't forget to branch off main for this.
+
+---
+
+ok please push that up and create a PR
+
+---
+
+ok now back to pr 308
+
+---
+
+/resolve-pr-reviews pr 308
