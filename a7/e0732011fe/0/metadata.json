@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "a7e0732011fe",
+  "session_id": "3f8e1927-1b97-4c98-97c7-a19b3c057640",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-21T03:16:43.108424Z",
+  "branch": "fix/e2e-eliminate-zustand-access",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/e2e.yml",
+    "apps/web/src/main.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e1bfd88279f0",
+  "token_usage": {
+    "input_tokens": 514,
+    "cache_creation_tokens": 322544,
+    "cache_read_tokens": 55177894,
+    "output_tokens": 82745,
+    "api_call_count": 322
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments on cipher-box PR #296, then fix a cascading series of CI E2E test failures that emerged after the PR was merged.",
+    "outcome": "All PR review comments were resolved across multiple rounds; CI E2E failures were traced to missing package builds, wrong __ZUSTAND_STORES exposure in production builds, and an async race condition — culminating in a full rewrite of conflict-detection tests to use a second browser session instead of direct API calls, eliminating all Zustand store access from E2E tests.",
+    "learnings": {
+      "repo": [
+        "The E2E tests run against `pnpm --filter @cipherbox/web dev` (Vite dev server), NOT a production build — so VITE_* env vars must be set in the dev server environment, not in the build step",
+        "CI workflows (e2e.yml, deploy-staging.yml, e2e-desktop.yml) only built @cipherbox/crypto before web; the new packages (core, api-client, sdk-core, sdk) were never added and must be built in dependency order first",
+        "__ZUSTAND_STORES is gated behind import.meta.env.DEV in main.tsx, so it was never available in CI E2E runs",
+        "release-please uses the target branch name ('main') as the PR title suffix when multiple components are versioned together — pull-request-title-pattern with ${version} doesn't work for multi-component repos",
+        "The ensureFolderRegistered isLoaded guard added from a Copilot review comment broke uploads because SDK-created folders and root folders have valid keys but isLoaded is not set in all code paths",
+        "FolderTree.clear() zeros all stored key buffers, so registerFolder storing caller-owned buffers allows destroy() to zero the caller's memory — defensive copies are necessary",
+        "orval codegen generates wrong type for nullable Date fields (produces { [key: string]: unknown } | null instead of string | null) — regenerating produces the same incorrect output"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/main.tsx",
+          "finding": "Dynamic import().then() for vault store caused race condition — __E2E was not set by the time conflict-detection beforeAll ran page.evaluate(). Static import fixes this."
+        },
+        {
+          "path": "tests/e2e/playwright.config.ts",
+          "finding": "webServer uses 'pnpm --filter @cipherbox/web dev' — dev server, not production build"
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "line": 85,
+          "finding": "ensureFolderRegistered guard on isLoaded was too strict — caused silent no-op registrations, breaking all upload mutations with 'Folder not loaded'"
+        },
+        {
+          "path": "tests/e2e/tests/full-workflow.spec.ts",
+          "line": 533,
+          "finding": "Test 3.7 used waitForFunction checking window.__ZUSTAND_STORES?.vault which never resolves in CI; replaced with waiting for file list UI element"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 628,
+          "finding": "fileKey not cleared if exception occurs before re-wrap try/catch — security leak; fixed with try/finally wrapping entire post-upload path"
+        },
+        {
+          "path": "tests/e2e/tests/conflict-detection.spec.ts",
+          "finding": "Rewrote to use a second browser context with the same wallet identity to naturally bump server sequence via UI upload, instead of direct API calls requiring accessToken/rootIpnsName"
+        }
+      ],
+      "workflow": [
+        "When PR is already merged, always create a new branch from latest main before making fixes — pushing to merged branch doesn't reach main",
+        "Check PR merge status before committing/pushing fixes (gh pr view --json mergedAt)",
+        "Expose minimal test helpers (window.__E2E with just the needed getters) rather than full Zustand store objects — but prefer UI-based approaches entirely when possible",
+        "Using a second browser session with the same wallet identity is cleaner than direct API calls for simulating multi-device conflicts in E2E tests",
+        "VITE_* env vars baked into production builds are useless when E2E uses dev server — env must be in the dev server process"
+      ]
+    },
+    "friction": [
+      "Repeatedly committed fixes to already-merged branches before checking merge status — happened 3+ times across the session",
+      "The __ZUSTAND_STORES approach went through multiple failed iterations (expose unconditionally → VITE_E2E flag → async import race → static import) before the correct diagnosis (dev server vs build) emerged",
+      "The ensureFolderRegistered isLoaded guard added from a reviewer comment immediately broke uploads in CI, requiring a follow-up PR",
+      "PR #296 was the root cause of multiple cascading failures (missing CI package builds, broken E2E test assumptions, wrong store exposure) that required 6+ follow-up PRs to resolve",
+      "CI runs on already-merged code made it hard to validate fixes quickly — each iteration required a new branch and PR"
+    ],
+    "open_items": [
+      "web3auth-helpers.ts still contains __ZUSTAND_STORES references — it's legacy/unused by wallet-based tests but was not cleaned up",
+      "The recycle-bin quota check was rewritten to use UI but the full test coverage of quota assertions was not verified in CI",
+      "The orval codegen issue with nullable Date fields (VaultResponseDtoInitializedAt) generates wrong types and was marked not applicable — upstream orval bug, no fix in place",
+      "Concurrent folder mutations (PR review Thread 2) was marked not applicable as an architectural concern — UI-level serialization was noted as the existing mitigation, follow-up improvement deferred",
+      "Test 3.7 (reload/session restore) is sensitive to Sapphire Devnet latency on CI — pre-existing flakiness acknowledged but not fundamentally addressed"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-21T03:15:57.604911Z",
+    "agent_lines": 0,
+    "human_added": 125,
+    "human_modified": 16,
+    "human_removed": 0,
+    "total_committed": 125,
+    "agent_percentage": 0
+  }
+}
