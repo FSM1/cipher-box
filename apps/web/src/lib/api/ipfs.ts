@@ -73,12 +73,22 @@ export async function fetchFromIpfs(
   // (axios onDownloadProgress doesn't give reliable byte counts in the browser)
   const config = getApiClientConfig();
   const token = await config.getAccessToken();
-  const response = await fetch(`${config.baseUrl}/ipfs/${cid}`, {
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    credentials: config.withCredentials ? 'include' : 'same-origin',
-  });
+
+  const doFetch = (bearerToken: string) =>
+    fetch(`${config.baseUrl}/ipfs/${cid}`, {
+      headers: {
+        ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {}),
+      },
+      credentials: config.withCredentials ? 'include' : 'same-origin',
+    });
+
+  let response = await doFetch(token);
+
+  // Mirror the shared client's 401 refresh-and-retry behaviour
+  if (response.status === 401 && config.refreshAccessToken) {
+    const newToken = await config.refreshAccessToken();
+    response = await doFetch(newToken);
+  }
 
   if (!response.ok) {
     throw new Error(`Failed to fetch from IPFS: ${response.status}`);

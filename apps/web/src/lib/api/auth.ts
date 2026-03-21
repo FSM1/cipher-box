@@ -23,7 +23,8 @@ import type {
   LoginResponseDto,
   TokenResponseDto,
   IdentityTokenResponseDto,
-  LinkMethodDtoLoginType,
+  SendOtpResponseDto,
+  IdentityControllerGetWalletNonce200,
 } from '@cipherbox/api-client';
 
 // Re-export model type under original alias for backward compatibility
@@ -70,11 +71,7 @@ export const authApi = {
     walletAddress?: string;
     siweMessage?: string;
     siweSignature?: string;
-  }): Promise<AuthMethodResponseDto[]> =>
-    authControllerLinkMethod({
-      ...data,
-      loginType: data.loginType as LinkMethodDtoLoginType,
-    }),
+  }): Promise<AuthMethodResponseDto[]> => authControllerLinkMethod(data),
 
   /**
    * Unlink an auth method from the current user account.
@@ -98,8 +95,8 @@ export const authApi = {
     identityControllerGoogleLogin({ idToken: googleIdToken, ...(intent && { intent }) }),
 
   /** Send email OTP */
-  identityEmailSendOtp: (email: string): Promise<{ success: boolean }> =>
-    identityControllerSendOtp({ email }) as Promise<{ success: boolean }>,
+  identityEmailSendOtp: (email: string): Promise<SendOtpResponseDto> =>
+    identityControllerSendOtp({ email }),
 
   /** Verify email OTP and get CipherBox identity JWT */
   identityEmailVerify: (
@@ -110,8 +107,8 @@ export const authApi = {
     identityControllerVerifyOtp({ email, otp, ...(intent && { intent }) }),
 
   /** Get a SIWE nonce for wallet login */
-  identityWalletNonce: (): Promise<{ nonce: string }> =>
-    identityControllerGetWalletNonce() as Promise<{ nonce: string }>,
+  identityWalletNonce: (): Promise<IdentityControllerGetWalletNonce200> =>
+    identityControllerGetWalletNonce(),
 
   /** Verify SIWE wallet signature and get CipherBox identity JWT */
   identityWalletVerify: (data: {
