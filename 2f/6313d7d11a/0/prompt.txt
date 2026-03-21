@@ -1,0 +1,21 @@
+I jsut merged the release PR https://github.com/FSM1/cipher-box/pull/298 but the staging deployment job did not kick off. I am guessing this has something to do with the release tagging not happening with the new release please config.
+
+---
+
+The release tag should be created automatically when the release please PR is merged.
+
+---
+
+ahhh yeah I forgot about the `Tag Staging Release` action that is manual
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23381202070/job/68021930811 - seems like the docker image build is failing with the expanded package list.
+
+---
+
+i do find it a bit strange that the api layer does not depend on any of the core packages, but guess that the api-client is sort-of the mapping layer between the api and the rest of the system.
+
+---
+
+yeah lets get that docker fix up - think it can be a chore(ci) branch and PR? do we need release please to create a 0.25.1 tag here, or will pushing to main and kicking off tag-staging-release action work out?

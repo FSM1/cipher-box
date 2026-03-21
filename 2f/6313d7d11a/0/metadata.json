@@ -1,0 +1,67 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "2f6313d7d11a",
+  "session_id": "f0dd29f9-8a13-44de-877f-1bc80807410d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-21T14:48:58.038633Z",
+  "branch": "fix/docker-api-build",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "apps/api/Dockerfile"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "8e22112bef83",
+  "token_usage": {
+    "input_tokens": 41,
+    "cache_creation_tokens": 52278,
+    "cache_read_tokens": 1130566,
+    "output_tokens": 7874,
+    "api_call_count": 27
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Deploy v0.25.0 to staging after merging the release PR, and fix a broken Docker image build that was blocking the staging deployment pipeline.",
+    "outcome": "Identified that the Tag Staging Release action is the correct manual trigger for staging deploys. Fixed a stale `packages/crypto` COPY in the API Dockerfile that was causing build failures, committed as `fix(ci)` to trigger a v0.25.1 patch release via release-please.",
+    "learnings": {
+      "repo": [
+        "Staging deployment is intentionally manual: requires running the 'Tag Staging Release' GitHub Actions workflow with a version input, which runs E2E tests, waits for approval, creates a `v*-staging-rc-*` tag, and triggers deploy.",
+        "The deploy-staging.yml workflow triggers on tags matching `v*-staging*`, not on release tags directly.",
+        "release-please creates release tags (e.g. v0.25.0) automatically on release PR merge, but only `feat` and `fix` commit types trigger a new release PR/version bump — `chore` does not.",
+        "The API is a zero-knowledge server that never handles plaintext or encryption — it stores opaque blobs, manages auth, and proxies IPFS, so it has no workspace package dependencies.",
+        "The api-client is generated from the API's OpenAPI spec via `pnpm api:generate`, acting as the typed bridge between the API and client apps without shared code dependencies.",
+        "Tag Staging Release checks out the release tag's commit, so Dockerfile fixes must be in a new tagged release (v0.25.1) to take effect — patching main alone is insufficient."
+      ],
+      "code": [
+        {
+          "path": "apps/api/Dockerfile",
+          "finding": "Had a stale `COPY packages/crypto/package.json` that didn't correspond to any actual API dependency. With an expanded pnpm workspace package list, this caused `pnpm deploy` to fail trying to resolve `@cipherbox/core` (a dependency of `@cipherbox/crypto`) which wasn't in the build context. Fix: remove the stale COPY."
+        }
+      ],
+      "workflow": [
+        "When a Docker build uses `pnpm deploy --filter @cipherbox/app`, all workspace packages referenced in the lockfile (even transitively via devDependencies) need their package.json present in the build context.",
+        "Use `fix(ci)` instead of `chore(ci)` for broken build fixes when a new release tag is needed — chore commits are ignored by release-please."
+      ]
+    },
+    "friction": [
+      "User forgot about the manual 'Tag Staging Release' action, expecting staging to auto-deploy on release tag creation.",
+      "The stale `packages/crypto` COPY in the Dockerfile was a latent bug that only surfaced when the pnpm workspace package list was expanded, making it hard to trace back to root cause.",
+      "The Tag Staging Release action's dependency on the release tag commit means CI fixes require a full new patch release cycle rather than just merging to main."
+    ],
+    "open_items": [
+      "v0.25.1 patch release needs to complete via release-please after the fix(ci) commit merges, then Tag Staging Release must be re-run with v0.25.1 to complete the staging deployment.",
+      "Consider auditing other app Dockerfiles in the monorepo for similarly stale workspace package COPY statements.",
+      "Consider whether staging should auto-deploy on release tags (adding `v[0-9]+.[0-9]+.[0-9]+` pattern to deploy-staging.yml triggers) rather than requiring manual workflow dispatch."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-21T14:48:36.472497Z",
+    "agent_lines": 0,
+    "human_added": 91,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 91,
+    "agent_percentage": 0
+  }
+}
