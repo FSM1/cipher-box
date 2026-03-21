@@ -1,0 +1,88 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "09148ff766df",
+  "session_id": "f0dd29f9-8a13-44de-877f-1bc80807410d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-21T18:50:57.058686Z",
+  "branch": "refactor/consolidate-api-client",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "e21043b85050",
+  "token_usage": {
+    "input_tokens": 213,
+    "cache_creation_tokens": 236789,
+    "cache_read_tokens": 16203364,
+    "output_tokens": 44547,
+    "api_call_count": 163
+  },
+  "session_metrics": {
+    "turn_count": 25
+  },
+  "summary": {
+    "intent": "Deploy v0.25.0 to staging after a release PR merge, then investigate and fix slow IPNS publish times and broken token refresh discovered during smoke testing.",
+    "outcome": "Successfully unblocked staging deployment via manual v0.25.1 tag after fixing a release-please config bug; submitted PRs for fire-and-forget IPNS publish optimization (#308) and a major API client consolidation refactor (#309) that eliminated 8800 lines of generated code and unified token refresh into a single interceptor.",
+    "learnings": {
+      "repo": [
+        "The staging deployment workflow triggers on `v*-staging*` tags only — release tags do not auto-deploy to staging. A manual 'Tag Staging Release' GitHub Actions workflow exists to run E2E tests, get approval, create the staging tag, and trigger deploy.",
+        "release-please aborts tag creation if merged release PRs have a `pull-request-title-pattern` without `${component}` — it can't match the PR back to its components and considers releases 'untagged', blocking future releases.",
+        "The web app had three separate HTTP client paths: orval React Query hooks (fetch-based custom-instance.ts), a hand-written axios client (lib/api/client.ts), and bare IPFS functions. Token refresh only existed on the axios client.",
+        "The web app's orval React Query generation produced 8,812 lines of hooks but only 1 hook (useHealthControllerCheck) was actually used — all other callers imported the raw generated functions, identical to what @cipherbox/api-client already provides.",
+        "The API is a zero-knowledge server that never handles plaintext — it stores opaque blobs, manages auth, and proxies IPFS. This is why @cipherbox/api-client (shared types/crypto) is correctly absent from API dependencies.",
+        "The @cipherbox/api-client package uses axios-functions orval mode for framework-agnostic consumers; the web app previously had a separate react-query orval generation from the same OpenAPI spec.",
+        "CI had a verify step checking apps/web/src/api/ for generated code drift — this needed updating after the consolidation removed that directory.",
+        "The Grafana Cloud free-tier hibernates after inactivity and returns HTTP 503 'instance is loading' on first wake — transient, not a real deployment failure.",
+        "The apps/api Dockerfile had a stale COPY for packages/crypto/package.json even though @cipherbox/api never imports any workspace packages — this caused pnpm deploy to fail when @cipherbox/crypto added @cipherbox/core as a devDependency."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 52,
+          "end_line": 70,
+          "finding": "IPNS publishRecord() was awaiting delegated routing DHT publish via someguy sidecar, causing 10-30s delays. Changed to fire-and-forget since resolveRecord() always prefers DB cache. Added trailing .catch() to prevent unhandled rejection on metrics observe() failure."
+        },
+        {
+          "path": "apps/api/Dockerfile",
+          "finding": "Stale COPY for packages/crypto/package.json was present even though @cipherbox/api has no workspace dependencies. Removing it fixes pnpm deploy failures when transitive devDependencies of crypto pull in additional workspace packages."
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "finding": "Extended ApiClientConfig to support refreshAccessToken callback, onRefreshFailure callback, and withCredentials flag. Added 401 response interceptor with shared-promise deduplication to prevent concurrent refresh races."
+        },
+        {
+          "path": "apps/web/src/lib/api/auth.ts",
+          "line": 76,
+          "finding": "Had unsafe `as` type casts (e.g. `as { token: string }`) bypassing generated DTO types. Fixed by using generated DTOs directly from @cipherbox/api-client models."
+        },
+        {
+          "path": "apps/web/src/lib/api/ipfs.ts",
+          "finding": "Progress download path used raw fetch() bypassing the API client interceptor (no 401 refresh). Consolidated to use axios with onDownloadProgress — the comment claiming axios byte counts are unreliable was incorrect for blob responses."
+        },
+        {
+          "path": ".github/workflows/release-please-config.json",
+          "finding": "pull-request-title-pattern was set to 'chore: release' without ${component}. With multi-package config, release-please cannot match merged PRs back to components, causing it to abort with 'untagged, merged release PRs outstanding'."
+        }
+      ],
+      "workflow": [
+        "When release-please is stuck due to unmatched component PRs, the unblock path is: fix the config on a new branch AND manually create the tag+release via `git tag` + `gh release create` from the correct commit.",
+        "chore commits do not trigger release-please version bumps — only feat and fix do. Use fix(ci) for broken build fixes to get a patch release.",
+        "CodeRabbit and GitHub Copilot both flagged the same unhandled promise rejection issue independently — worth checking both review sources before resolving.",
+        "Codecov patch coverage checks will fail on fire-and-forget error paths (catch handlers) that aren't exercised by existing tests — need explicit tests for error branches even when they're defensive."
+      ]
+    },
+    "friction": [
+      "release-please silently aborted v0.25.1 tag creation with a non-obvious error about 'untagged merged release PRs' — required digging through workflow logs to find the root cause.",
+      "v0.25.0 staging deployment was blocked until v0.25.1 was manually tagged because the Tag Staging Release workflow checks out the release tag commit, so the Dockerfile fix had to be included in a new release.",
+      "The web app had accumulated three separate HTTP client paths with inconsistent auth handling — token refresh was only wired to one of them, which was only discovered via a long-running smoke test triggering a 401.",
+      "The Dockerfile build failure error message ('pnpm deploy can't find @cipherbox/core') required tracing through workspace dependencies to understand the stale COPY was the cause.",
+      "Grafana provisioning step caused a false alarm in the staging deployment workflow due to free-tier hibernation."
+    ],
+    "open_items": [
+      "PR #309 (API client consolidation) needs CI to pass after the verify step was updated to remove apps/web/src/api/ references.",
+      "PR #308 (IPNS fire-and-forget) and PR #309 (API consolidation) both need to be merged before Tag Staging Release can be run with a clean v0.25.1+ tag.",
+      "The token refresh fix from the initial debugger investigation (shared token-refresh.ts) was stashed/superseded by the full API client consolidation refactor — verify the consolidated approach fully covers all refresh scenarios the debugger identified.",
+      "PR #307 (release-please title pattern fix) needs to be merged to prevent the same 'untagged release PR' abort from happening on future releases.",
+      "IPNS publish performance should be validated on staging after v0.25.1+ deploys — the fire-and-forget fix should bring publish time from 30s+ down to near-instant."
+    ]
+  }
+}
