@@ -936,6 +936,10 @@ describe('IpnsService', () => {
         metadataCid: testMetadataCid,
       });
 
+      // Delegated routing publish is fire-and-forget; flush microtask queue
+      // so the detached .then() callback that records metrics can run.
+      await new Promise(process.nextTick);
+
       expect(mockStartTimer).toHaveBeenCalledWith({ operation: 'publish', source: '' });
       expect(mockEndTimer).toHaveBeenCalledWith({ result: 'success' });
       expect(mockMetricsService.ipnsPublishDuration.observe).toHaveBeenCalledWith(
@@ -974,6 +978,9 @@ describe('IpnsService', () => {
         metadataCid: testMetadataCid,
       });
 
+      // Delegated routing publish is fire-and-forget; flush microtask queue
+      await new Promise(process.nextTick);
+
       expect(mockMetricsService.ipnsPublishDuration.observe).toHaveBeenCalledWith(
         { outcome: 'error' },
         expect.any(Number)
@@ -994,6 +1001,9 @@ describe('IpnsService', () => {
         record: testRecord,
         metadataCid: testMetadataCid,
       });
+
+      // Delegated routing publish is fire-and-forget; flush microtask queue
+      await new Promise(process.nextTick);
 
       expect(mockMetricsService.ipnsPublishDuration.observe).toHaveBeenCalledWith(
         { outcome: 'error' },
