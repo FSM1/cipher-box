@@ -1010,6 +1010,33 @@ describe('IpnsService', () => {
         expect.any(Number)
       );
     });
+
+    it('should log error and not crash when metrics observe() throws', async () => {
+      mockFolderIpnsRepo.findOne.mockResolvedValue(null);
+      mockFolderIpnsRepo.create.mockReturnValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockFolderIpnsRepo.save.mockResolvedValue({ ...mockFolderEntity, sequenceNumber: '1' });
+      mockMetricsService.ipnsPublishDuration.observe.mockImplementation(() => {
+        throw new Error('metrics explosion');
+      });
+
+      const loggerSpy = jest.spyOn(service['logger'], 'error').mockImplementation();
+
+      const result = await service.publishRecord(testUserId, {
+        ipnsName: testIpnsName,
+        record: testRecord,
+        metadataCid: testMetadataCid,
+      });
+
+      // Flush fire-and-forget promise chain
+      await new Promise(process.nextTick);
+
+      expect(result.success).toBe(true);
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to record IPNS publish metrics')
+      );
+
+      loggerSpy.mockRestore();
+    });
   });
 
   describe('conflict detection', () => {
