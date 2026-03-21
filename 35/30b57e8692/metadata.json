@@ -1,0 +1,28 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "3530b57e8692",
+  "strategy": "manual-commit",
+  "branch": "refactor/consolidate-api-client",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/hooks/useHealthCheck.ts",
+    "apps/web/src/lib/api-config.ts",
+    "apps/web/src/lib/api/ipfs.ts",
+    "packages/api-client/src/instance.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/35/30b57e8692/0/metadata.json",
+      "transcript": "/35/30b57e8692/0/full.jsonl",
+      "content_hash": "/35/30b57e8692/0/content_hash.txt",
+      "prompt": "/35/30b57e8692/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 268,
+    "cache_creation_tokens": 298254,
+    "cache_read_tokens": 26295066,
+    "output_tokens": 63843,
+    "api_call_count": 214
+  }
+}
