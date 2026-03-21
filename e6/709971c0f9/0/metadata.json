@@ -1,0 +1,130 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "e6709971c0f9",
+  "session_id": "3f8e1927-1b97-4c98-97c7-a19b3c057640",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-21T00:33:26.990025Z",
+  "branch": "phase-19.1-extract-core-sdk",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk/src/client.ts",
+    "tests/e2e/utils/multi-account-wallet.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "44bced68b2d1",
+  "token_usage": {
+    "input_tokens": 84,
+    "cache_creation_tokens": 160579,
+    "cache_read_tokens": 5262684,
+    "output_tokens": 22806,
+    "api_call_count": 72
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments on cipher-box PR #296, including automated reviewer (GitHub Copilot) nitpicks and human reviewer comments across multiple review sessions.",
+    "outcome": "All unresolved review threads were triaged, 14+ fixes implemented across crypto/README.md, sdk/client.ts, TextEditorDialog.tsx, sdk-provider.ts, full-workflow.spec.ts, sharing-workflow.spec.ts, and multi-account-wallet.ts, with all threads replied to and resolved.",
+    "learnings": {
+      "repo": [
+        "cipher-box is a monorepo with packages: @cipherbox/crypto, @cipherbox/sdk, apps/web, and tests/e2e using pnpm workspaces",
+        "FolderTree.clear() zeros all stored folder keys — meaning registerFolder storing caller-owned buffers directly is a security concern since destroy() will zero those caller buffers",
+        "SDK uses a notifySafely() pattern for lifecycle hooks to prevent throwing hooks from breaking operations",
+        "clearBytes() from @cipherbox/crypto is used for zeroing sensitive key material (already imported in client.ts)",
+        "UI-level serialization handles concurrent folder mutations, making SDK-level locking not required for this extraction PR",
+        "ipns.service.ts stale comment referencing @cipherbox/crypto was already fixed in a prior commit before the session began"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 360,
+          "end_line": 360,
+          "finding": "Background re-wrap shares folderKey buffer with caller — defensive copy + clearBytes in .finally() required"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 628,
+          "end_line": 628,
+          "finding": "fileKey not cleared if exception occurs before the re-wrap try/catch — needs try/finally wrapping entire post-upload path"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 947,
+          "end_line": 947,
+          "finding": "Lifecycle hook callbacks can throw and break operations — requires notifySafely() wrapper"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "createFolder leaks folderKey/ipnsPrivateKey on exception — duplicate-name check should be moved before key generation, with try/finally cleanup"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "registerFolder stores caller-owned key buffers directly; getFolderIpnsPrivateKey should return a copy to avoid caller mutating internal state"
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "line": 85,
+          "end_line": 85,
+          "finding": "ensureFolderRegistered accepted unloaded placeholder folders with empty keys — needs guard on isLoaded and non-zero key lengths"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 168,
+          "end_line": 168,
+          "finding": "Passing Uint8Array directly to Blob requires 'as BlobPart' type assertion due to TypeScript's strict Uint8Array\u003cArrayBufferLike\u003e vs BlobPart incompatibility"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "finding": "requestAnimationFrame handle (focusRaf) was inside async IIFE — must be hoisted to effect scope to enable cancelAnimationFrame in cleanup"
+        },
+        {
+          "path": "tests/e2e/tests/sharing-workflow.spec.ts",
+          "line": 157,
+          "end_line": 157,
+          "finding": "180s timeout too tight for 3 sequential wallet logins — increased to 300s"
+        },
+        {
+          "path": "tests/e2e/tests/full-workflow.spec.ts",
+          "line": 533,
+          "end_line": 533,
+          "finding": "240s timeout insufficient — cumulative waits (auth restore + vault + root sync + file) total ~330s worst case, increased to 360s"
+        },
+        {
+          "path": "tests/e2e/tests/full-workflow.spec.ts",
+          "line": 601,
+          "end_line": 601,
+          "finding": "120s timeout insufficient — two navigateIntoFolder retries plus two 60s content waits exceeded budget, increased to 240s"
+        },
+        {
+          "path": "tests/e2e/utils/multi-account-wallet.ts",
+          "line": 105,
+          "end_line": 105,
+          "finding": "Context leak on failure during account creation — both createWalletTestAccount and createWalletTestAccounts need cleanup on partial failure; context.close() errors in cleanup should be swallowed to avoid masking root cause"
+        }
+      ],
+      "workflow": [
+        "gh api graphql reviewThreads query with isResolved filter is the reliable way to find unresolved PR threads; REST API misses some thread types",
+        "Reply to threads via REST with --field in_reply_to=COMMENT_ID (integer) and --raw-field body; resolve via GraphQL mutation resolveReviewThread",
+        "Outside-diff-range review comments appear in the review body, not as threads — requires fetching the full review body separately",
+        "pnpm typecheck across all packages before committing catches cross-package type incompatibilities early",
+        "Background test tasks with TaskOutput can be checked after the fact; no need to block on them if SDK-specific tests can be run directly"
+      ]
+    },
+    "friction": [
+      "Tests were run multiple times as background tasks and had to be checked via TaskOutput — added latency and required extra polling",
+      "A stale lock file had to be removed before committing (implied by 'Remove stale lock and commit' step)",
+      "Outside-diff-range comments are not surfaced by the standard reviewThreads GraphQL query — required separately fetching full review body by review ID",
+      "TypeScript strict Uint8Array typing caused an unexpected typecheck failure after the TextEditorDialog.tsx Blob fix, requiring a second edit with 'as BlobPart'"
+    ],
+    "open_items": [
+      "Concurrent mutations to same folder (sdk/client.ts:360) — architectural improvement deferred; current UI-level serialization is sufficient for this PR but not a permanent solution",
+      "Full E2E test suite not run after fixes — only unit tests were verified; E2E tests with the new timeout values were not locally validated"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-21T00:32:54.072905Z",
+    "agent_lines": 74,
+    "human_added": 5,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 79,
+    "agent_percentage": 93.67088607594937
+  }
+}
