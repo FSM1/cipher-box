@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f6790debadb5",
+  "session_id": "f0dd29f9-8a13-44de-877f-1bc80807410d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-21T17:51:03.074712Z",
+  "branch": "refactor/consolidate-api-client",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/lib/api/ipfs.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "505e08643847",
+  "token_usage": {
+    "input_tokens": 122,
+    "cache_creation_tokens": 173631,
+    "cache_read_tokens": 5341103,
+    "output_tokens": 29761,
+    "api_call_count": 87
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "summary": {
+    "intent": "Deploy v0.25.0 to staging after merging the release PR, then investigate and fix performance/auth issues discovered during smoke testing.",
+    "outcome": "v0.25.1 was released (including a Dockerfile fix) and deployed to staging. Root causes for slow IPNS publish and broken token refresh were identified, with IPNS fix merged (PR #308) and a broader API client consolidation refactor initiated.",
+    "learnings": {
+      "repo": [
+        "The staging deploy workflow triggers on `v*-staging*` tags, not release tags — staging deployment is intentionally manual via the 'Tag Staging Release' GitHub Actions workflow.",
+        "release-please `pull-request-title-pattern` must include `${component}` in multi-package repos, otherwise it cannot match merged PRs back to components and aborts with 'untagged, merged release PRs outstanding'.",
+        "The API is a zero-knowledge server that never handles plaintext — it stores opaque blobs and proxies IPFS, so it genuinely has no workspace package dependencies. The `api-client` package is generated from the OpenAPI spec and acts as the typed bridge.",
+        "The `packages/crypto` COPY in `apps/api/Dockerfile` was stale — the API does not depend on any `@cipherbox/*` workspace packages, and the stale COPY was pulling in `@cipherbox/core` transitively via the lockfile.",
+        "Grafana Cloud free-tier instances hibernate after inactivity and return HTTP 503 on wake — Grafana provisioning step failures are likely transient.",
+        "There are three separate HTTP client paths in the web app: (1) orval react-query fetch mutator `custom-instance.ts`, (2) hand-written axios client `lib/api/client.ts` for auth/vault init, (3) hand-written `lib/api/ipfs.ts`. Token refresh interceptor only existed on path 2.",
+        "The web app has its own orval config generating 8,812 lines of react-query hooks, but almost none of the hooks are used — the app imports raw generated functions everywhere. Only `useHealthControllerCheck` is used as a hook (2 locations).",
+        "The `@cipherbox/api-client` package uses `axios-functions` orval mode for framework-agnostic consumers (SDK, desktop). The web app's duplicate orval config uses `react-query` mode but the react-query hooks are largely unused.",
+        "IPNS `publishRecord()` was awaiting the delegated routing DHT publish via the `someguy` sidecar. DHT propagation takes 10-30s inherently, but `resolveRecord()` always prefers the DB cache, making the await unnecessary."
+      ],
+      "code": [
+        {
+          "path": "apps/api/Dockerfile",
+          "finding": "Stale COPY of `packages/crypto/package.json` caused `pnpm deploy` to fail when the lockfile required `@cipherbox/core` (a devDep of crypto). Removed since API has no workspace deps."
+        },
+        {
+          "path": "release-please-config.json",
+          "finding": "`pull-request-title-pattern` was `'chore: release'` without `${component}`, breaking release-please in multi-package mode — it could not match merged PRs to components."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 52,
+          "finding": "`result` variable stays `'success'` after fire-and-forget refactor — correct because the DB record save is the authoritative publish; DHT propagation is best-effort."
+        },
+        {
+          "path": "apps/web/src/api/custom-instance.ts",
+          "finding": "Orval-generated fetch mutator for react-query hooks — had zero 401 handling, causing unrecoverable auth failures on sessions longer than the 15-minute access token lifetime."
+        },
+        {
+          "path": "apps/web/orval.config.ts",
+          "finding": "Separate web-app orval config generating react-query wrappers from the same OpenAPI spec as `packages/api-client`. Identified as redundant — targeted for deletion in consolidation refactor."
+        },
+        {
+          "path": "packages/api-client/orval.config.ts",
+          "finding": "Uses `client: 'axios-functions'` mode — generates framework-agnostic functions. Auth injected via `setApiClientConfig({ getAccessToken })`. No built-in 401 refresh — delegates to consumer."
+        }
+      ],
+      "workflow": [
+        "When release-please is stuck on 'untagged, merged release PRs', manually creating the git tag and GitHub release from the correct commit unblocks it without needing to revert or re-run anything.",
+        "`chore` commits do not trigger release-please version bumps — use `fix` for broken CI/build issues to get a patch release.",
+        "The Tag Staging Release workflow runs E2E tests and waits for staging-approval before creating the staging tag, so the release tag must include all fixes before triggering it.",
+        "Spawning parallel debugger agents for independent issues (IPNS perf + token refresh) is effective — both investigations ran concurrently and returned root causes."
+      ]
+    },
+    "friction": [
+      "release-please silently aborted tag creation after PR #306 merged — the only indication was a cryptic 'untagged, merged release PRs outstanding' log buried in the Actions output.",
+      "The missing `${component}` in `pull-request-title-pattern` was a latent misconfiguration introduced when migrating to multi-package release-please — it only surfaced when a second release was attempted.",
+      "Three separate HTTP client paths in the web app made it unclear where to add token refresh logic, and the orval fetch mutator having no auth handling was a non-obvious gap.",
+      "Stale Dockerfile COPY (`packages/crypto`) caused a build failure that wasn't caught until the first staging deployment attempt post-release — no local Docker build validation in CI for the API image before tagging."
+    ],
+    "open_items": [
+      "Consolidation of web app HTTP clients: delete `apps/web/src/api/` (orval react-query generation), `apps/web/orval.config.ts`, and `apps/web/src/lib/api/client.ts`; migrate all imports to `@cipherbox/api-client` with 401/refresh interceptor added to the package. Refactor agent was spawned but work is in-progress.",
+      "Token refresh fix (PR from debugger agent) was stashed/superseded by the api-client consolidation refactor — needs to land as part of that refactor, not as a standalone fix.",
+      "Add `withCredentials: true` to `@cipherbox/api-client` axios instance (needed for HTTP-only refresh token cookies) as part of the consolidation.",
+      "Consider adding local Docker build validation to CI for `apps/api` to catch missing workspace package COPYs before they reach staging.",
+      "Grafana provisioning step in the staging deploy is fragile on free-tier (hibernation/503) — consider adding a retry or a pre-warm step."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-21T17:50:11.692635Z",
+    "agent_lines": 0,
+    "human_added": 186,
+    "human_modified": 33,
+    "human_removed": 0,
+    "total_committed": 186,
+    "agent_percentage": 0
+  }
+}
