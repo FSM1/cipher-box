@@ -130,7 +130,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 20 -> 21 -> 22
 | ---------------------------------- | --------- | -------------- | ----------- | ---------- |
 | 18. Performance Instrumentation    | v1.1      | 2/2            | Complete    | 2026-03-07 |
 | 19. IPNS Resolution Improvement    | v1.1      | 2/2            | Complete    | 2026-03-07 |
-| 19.1 Extract Core Crypto SDK       | 6/6       | Complete       | 2026-03-20  | -          |
+| 19.1 Extract Core Crypto SDK       | v1.1      | 6/6            | Complete    | 2026-03-20 |
 | 20. Vault Migration                | v1.1      | 0/?            | Not started | -          |
 | 21. BYO-IPFS Node Support          | v1.1      | 0/?            | Not started | -          |
 | 22. Performance Baselines Complete | v1.1      | 0/?            | Not started | -          |
