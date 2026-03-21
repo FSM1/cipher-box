@@ -162,10 +162,7 @@ export function TextEditorDialog({
       const encrypted = await encryptFile(file, auth.vaultKeypair.publicKey);
 
       // 3. Upload to IPFS
-      // Use .slice() to get a clean copy with its own ArrayBuffer,
-      // avoiding sub-view issues if ciphertext is an offset view.
-      const ciphertextBytes = encrypted.ciphertext.slice();
-      const blob = new Blob([ciphertextBytes.buffer as ArrayBuffer]);
+      const blob = new Blob([encrypted.ciphertext as BlobPart]);
       const { cid } = await addToIpfs(blob);
 
       // 4. Update folder metadata

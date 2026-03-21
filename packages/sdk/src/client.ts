@@ -348,12 +348,17 @@ export class CipherBoxClient {
 
       // 8. Re-wrap subfolder key for share recipients (non-blocking)
       if (this.config.shareCallbacks) {
-        // Don't await — re-wrapping shouldn't block folder creation return
+        // Copy folderKey for the detached task — caller may wipe the returned buffer
+        const folderKeyCopy = new Uint8Array(folderKey);
         this.reWrapNewItems(parentIpnsName, [
-          { keyType: 'folder', itemId: folder.id, plaintextKey: folderKey },
-        ]).catch((err) => {
-          console.warn('[SDK] Post-createFolder re-wrapping failed:', err);
-        });
+          { keyType: 'folder', itemId: folder.id, plaintextKey: folderKeyCopy },
+        ])
+          .catch((err) => {
+            console.warn('[SDK] Post-createFolder re-wrapping failed:', err);
+          })
+          .finally(() => {
+            clearBytes(folderKeyCopy);
+          });
       }
 
       return { id: folder.id, ipnsName: folder.ipnsName, folderKey, ipnsPrivateKey };
