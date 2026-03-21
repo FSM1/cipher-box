@@ -76,7 +76,7 @@ export class IpnsService {
       // DHT propagation via someguy takes ~10-30s per record. Since the DB record
       // is already saved and resolveRecord() always checks/prefers DB data, there is
       // no need to block the API response on DHT propagation. Metrics are still
-      // collected via the detached promise's finally block.
+      // collected via the detached promise chain (catch + then).
       const publishStart = process.hrtime.bigint();
       this.delegatedRouting
         .publish(dto.ipnsName, recordBytes)
@@ -91,6 +91,11 @@ export class IpnsService {
           this.metricsService.ipnsPublishDuration.observe(
             { outcome: outcome === 'error' ? 'error' : 'success' },
             publishElapsed
+          );
+        })
+        .catch((error) => {
+          this.logger.error(
+            `Failed to record IPNS publish metrics for ${dto.ipnsName}: ${error instanceof Error ? error.message : String(error)}`
           );
         });
 
