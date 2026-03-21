@@ -54,22 +54,17 @@ useAuthStore.subscribe((state, prevState) => {
   }
 });
 
-// Expose Zustand stores for E2E test state injection (dev mode only)
-if (import.meta.env.DEV) {
-  import('./stores/auth.store').then(({ useAuthStore }) => {
-    import('./stores/vault.store').then(({ useVaultStore }) => {
-      import('./stores/folder.store').then(({ useFolderStore }) => {
-        import('./stores/sync.store').then(({ useSyncStore }) => {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (window as any).__ZUSTAND_STORES = {
-            auth: useAuthStore,
-            vault: useVaultStore,
-            folder: useFolderStore,
-            sync: useSyncStore,
-          };
-        });
-      });
-    });
+// Expose minimal E2E test helpers (CI E2E builds only).
+// Only exposes accessToken and rootIpnsName — needed by conflict-detection
+// tests that make direct API calls to simulate concurrent device publishes.
+// Gated behind VITE_E2E so production deploys never include this code.
+if (import.meta.env.VITE_E2E === 'true') {
+  import('./stores/vault.store').then(({ useVaultStore }) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).__E2E = {
+      getAccessToken: () => useAuthStore.getState().accessToken,
+      getRootIpnsName: () => useVaultStore.getState().rootIpnsName,
+    };
   });
 }
 

@@ -77,15 +77,15 @@ test.describe.serial('Conflict Detection', () => {
     // Login via wallet (mock wallet auto-approves connect + SIWE)
     await loginViaWallet(page, { timeout: 60_000 });
 
-    // Extract auth state from Zustand stores for bumpServerSequence API calls
+    // Extract auth state via __E2E helpers for bumpServerSequence API calls
     const authData = await page.evaluate(() => {
-      const stores = (window as unknown as Record<string, unknown>).__ZUSTAND_STORES as {
-        auth: { getState: () => { accessToken: string } };
-        vault: { getState: () => { rootIpnsName: string } };
+      const e2e = (window as unknown as Record<string, unknown>).__E2E as {
+        getAccessToken: () => string;
+        getRootIpnsName: () => string;
       };
       return {
-        accessToken: stores.auth.getState().accessToken,
-        rootIpnsName: stores.vault.getState().rootIpnsName,
+        accessToken: e2e.getAccessToken(),
+        rootIpnsName: e2e.getRootIpnsName(),
       };
     });
     accessToken = authData.accessToken;
@@ -145,13 +145,15 @@ test.describe.serial('Conflict Detection', () => {
    * The token may be refreshed between tests.
    */
   async function getAccessToken(): Promise<string> {
-    // Always read from the live Zustand store to get the freshest token
+    // Read from __E2E helpers to get the freshest token
     // (tokens may be refreshed between tests)
     const liveToken = await page.evaluate(() => {
-      const stores = (window as unknown as Record<string, unknown>).__ZUSTAND_STORES as {
-        auth: { getState: () => { accessToken: string } };
-      };
-      return stores?.auth?.getState()?.accessToken ?? '';
+      const e2e = (window as unknown as Record<string, unknown>).__E2E as
+        | {
+            getAccessToken: () => string;
+          }
+        | undefined;
+      return e2e?.getAccessToken() ?? '';
     });
     if (liveToken) return liveToken;
     // Fallback: use token captured during beforeAll
@@ -159,14 +161,16 @@ test.describe.serial('Conflict Detection', () => {
   }
 
   /**
-   * Get the root IPNS name from the browser's Zustand vault store.
+   * Get the root IPNS name via __E2E helpers.
    */
   async function getRootIpnsName(): Promise<string> {
     const liveName = await page.evaluate(() => {
-      const stores = (window as unknown as Record<string, unknown>).__ZUSTAND_STORES as {
-        vault: { getState: () => { rootIpnsName: string } };
-      };
-      return stores?.vault?.getState()?.rootIpnsName ?? '';
+      const e2e = (window as unknown as Record<string, unknown>).__E2E as
+        | {
+            getRootIpnsName: () => string;
+          }
+        | undefined;
+      return e2e?.getRootIpnsName() ?? '';
     });
     if (liveName) return liveName;
     return rootIpnsName;

@@ -530,7 +530,7 @@ test.describe.serial('Full Workflow', () => {
   test('3.7 Page reload preserves session and reloads root folder', async () => {
     // On staging, IPNS resolution after a page reload can take >60s due to
     // cache propagation delays. Allow generous timeout with a retry cycle.
-    test.setTimeout(360_000); // 120s auth restore + 60s vault + 120s root sync + 30s file + buffer
+    test.setTimeout(300_000); // 120s auth restore + 120s root sync + 30s file + buffer
 
     // Navigate to root before reload so we start from a clean state
     await navigateToRoot();
@@ -551,27 +551,10 @@ test.describe.serial('Full Workflow', () => {
       timeout: 120000,
     });
 
-    // Wait for vault + SDK to be fully initialized after session restore.
-    // Without this, navigating into subfolders may fail because the SDK client
-    // isn't ready to decrypt subfolder IPNS records.
-    await page.waitForFunction(
-      () => {
-        const stores = (
-          window as unknown as Record<
-            string,
-            Record<string, { getState: () => Record<string, unknown> }>
-          >
-        ).__ZUSTAND_STORES;
-        if (!stores?.vault) return false;
-        const vault = stores.vault.getState();
-        return !!vault.rootFolderKey && !!vault.rootIpnsKeypair && !!vault.rootIpnsName;
-      },
-      { timeout: 60_000 }
-    );
-
     // Wait for initial sync to complete — all root items must appear.
-    // This proves IPNS root metadata was re-fetched and decrypted.
-    // Use 120s timeout — staging IPNS resolution can exceed 60s.
+    // This proves vault loaded, SDK initialized, and IPNS root metadata
+    // was re-fetched and decrypted. No Zustand store polling needed —
+    // the file list appearing is the definitive UI signal.
     await fileList.waitForItemToAppear(workspaceFolder, { timeout: 120000 });
 
     // Wait for files to appear too (sync may render folders before files)

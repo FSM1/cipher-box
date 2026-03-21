@@ -5,56 +5,47 @@ import { setupMockWallet, loginViaWallet } from './wallet-login-helpers';
 /**
  * A fully authenticated test account using wallet-based login.
  * Each account has an isolated browser context, a random EVM identity,
- * and its public key extracted from the Zustand auth store after login.
+ * and its public key extracted from the Settings page UI after login.
  */
 export interface WalletTestAccount {
   name: string;
   context: BrowserContext;
   page: Page;
   account: PrivateKeyAccount;
-  /** 0x04-prefixed secp256k1 public key (for sharing — extracted from auth store) */
+  /** 0x04-prefixed secp256k1 public key (for sharing — extracted from Settings page) */
   publicKey: string;
-  /** JWT access token (extracted from auth store — for direct API calls) */
-  accessToken: string;
-  /** Root IPNS name (extracted from vault store — for conflict detection API calls) */
-  rootIpnsName: string;
 }
 
 /**
- * Extract auth state from Zustand stores in the browser.
+ * Extract the user's public key from the Settings page UI.
  *
- * After wallet login, Core Kit manages the secp256k1 identity in-browser.
- * This function extracts the public key, access token, and vault metadata
- * needed by tests that make direct API calls (conflict detection, sharing).
+ * Navigates to /settings, reads the key from the visible element,
+ * then navigates back to /files. This avoids reading Zustand internals.
  */
-async function extractAuthState(
-  page: Page
-): Promise<{ publicKey: string; accessToken: string; rootIpnsName: string }> {
-  return page.evaluate(() => {
-    const stores = (window as unknown as Record<string, unknown>).__ZUSTAND_STORES as {
-      auth: { getState: () => { accessToken: string; vaultKeypair?: { publicKey: Uint8Array } } };
-      vault: { getState: () => { rootIpnsName: string } };
-    };
-
-    const authState = stores.auth.getState();
-    const vaultState = stores.vault.getState();
-
-    // Convert Uint8Array public key to 0x-prefixed hex
-    const pubKeyBytes = authState.vaultKeypair?.publicKey;
-    let publicKey = '';
-    if (pubKeyBytes) {
-      const hex = Array.from(pubKeyBytes)
-        .map((b: number) => b.toString(16).padStart(2, '0'))
-        .join('');
-      publicKey = '0x' + hex;
-    }
-
-    return {
-      publicKey,
-      accessToken: authState.accessToken,
-      rootIpnsName: vaultState.rootIpnsName,
-    };
+async function extractPublicKeyFromUI(page: Page): Promise<string> {
+  // Navigate to settings
+  await page.evaluate(() => {
+    window.location.hash = '#/settings';
   });
+  await page.waitForURL('**/settings', { timeout: 15_000 });
+
+  // Read public key from the Settings page
+  const pubKeyElement = page.locator('.settings-pubkey-value');
+  await pubKeyElement.waitFor({ state: 'visible', timeout: 10_000 });
+  const publicKey = ((await pubKeyElement.textContent()) ?? '').trim();
+  if (!publicKey || !publicKey.startsWith('0x')) {
+    throw new Error(
+      `Failed to extract public key from Settings page (got: "${publicKey.slice(0, 20)}")`
+    );
+  }
+
+  // Navigate back to files
+  await page.evaluate(() => {
+    window.location.hash = '#/files';
+  });
+  await page.waitForURL('**/files', { timeout: 15_000 });
+
+  return publicKey;
 }
 
 /**
@@ -89,23 +80,16 @@ export async function createWalletTestAccount(
       );
     }
 
-    // Wait for file list or empty state to confirm vault is accessible
-    await Promise.race([
-      page.locator('.file-list[role="grid"]').waitFor({ state: 'visible', timeout: 30_000 }),
-      page.locator('[data-testid="empty-state"]').waitFor({ state: 'visible', timeout: 30_000 }),
-    ]);
-
-    // Extract auth state from browser
-    const authState = await extractAuthState(page);
+    // loginViaWallet already waits for file list / empty state on success.
+    // Extract public key from the Settings page UI (no Zustand access needed)
+    const publicKey = await extractPublicKeyFromUI(page);
 
     return {
       name,
       context,
       page,
       account,
-      publicKey: authState.publicKey,
-      accessToken: authState.accessToken,
-      rootIpnsName: authState.rootIpnsName,
+      publicKey,
     };
   } catch (err) {
     await context.close().catch(() => undefined);
