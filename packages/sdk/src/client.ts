@@ -162,7 +162,8 @@ export class CipherBoxClient {
    */
   getFolderIpnsPrivateKey(ipnsName: string): Uint8Array | undefined {
     const key = this.folderTree.get(ipnsName)?.ipnsKeypair?.privateKey;
-    return key && key.length > 0 ? key : undefined;
+    // Return a copy so callers can't mutate internal state
+    return key && key.length > 0 ? new Uint8Array(key) : undefined;
   }
 
   /**
@@ -188,10 +189,14 @@ export class CipherBoxClient {
     children: FolderChild[],
     sequenceNumber: bigint
   ): void {
+    // Defensive copy so destroy() -> folderTree.clear() doesn't zero caller buffers
     this.folderTree.set(ipnsName, {
       ipnsName,
-      folderKey,
-      ipnsKeypair,
+      folderKey: new Uint8Array(folderKey),
+      ipnsKeypair: {
+        publicKey: new Uint8Array(ipnsKeypair.publicKey),
+        privateKey: new Uint8Array(ipnsKeypair.privateKey),
+      },
       sequenceNumber,
       children,
       metadata: null,
@@ -291,7 +296,12 @@ export class CipherBoxClient {
       const parent = this.folderTree.get(parentIpnsName);
       if (!parent) throw new Error('Parent folder not loaded');
 
-      // 1. Create subfolder (generates keys, wraps with user public key)
+      // 1. Check for duplicate name before allocating keys
+      if (parent.children.some((child) => child.name === name)) {
+        throw new Error('An item with this name already exists');
+      }
+
+      // 2. Create subfolder (generates keys, wraps with user public key)
       const { folder, ipnsPrivateKey, folderKey, encryptedIpnsPrivateKey, keyEpoch } =
         await sdkCore.createSubfolder({
           name,
@@ -299,69 +309,71 @@ export class CipherBoxClient {
           teeKeys: this.config.teeKeys,
         });
 
-      // 2. Check for duplicate name
-      if (parent.children.some((child) => child.name === name)) {
-        throw new Error('An item with this name already exists');
+      try {
+        // 3. Add folder entry to parent's children
+        const updatedChildren: FolderChild[] = [...parent.children, folder];
+
+        // 4. Update parent metadata and publish
+        const { newSequenceNumber } = await sdkCore.updateFolderMetadataAndPublish({
+          children: updatedChildren,
+          folderKey: parent.folderKey,
+          ipnsPrivateKey: parent.ipnsKeypair.privateKey,
+          ipnsName: parentIpnsName,
+          sequenceNumber: parent.sequenceNumber,
+          ctx: this.ctx,
+          encryptedIpnsPrivateKey: encryptedIpnsPrivateKey,
+          keyEpoch,
+        });
+
+        // 5. Update parent state
+        parent.children = updatedChildren;
+        parent.sequenceNumber = newSequenceNumber;
+        parent.lastLoadedAt = Date.now();
+        this.folderTree.set(parentIpnsName, parent);
+
+        // 6. Publish empty metadata for the new subfolder
+        await sdkCore.updateFolderMetadataAndPublish({
+          children: [],
+          folderKey,
+          ipnsPrivateKey,
+          ipnsName: folder.ipnsName,
+          sequenceNumber: 0n,
+          ctx: this.ctx,
+          encryptedIpnsPrivateKey,
+          keyEpoch,
+        });
+
+        // 7. Emit parent folder updated event
+        this.emitter.emit({
+          type: 'folder:updated',
+          folderId: parentIpnsName,
+          ipnsName: parentIpnsName,
+          children: updatedChildren,
+          sequenceNumber: newSequenceNumber,
+        });
+
+        // 8. Re-wrap subfolder key for share recipients (non-blocking)
+        if (this.config.shareCallbacks) {
+          // Copy folderKey for the detached task — caller may wipe the returned buffer
+          const folderKeyCopy = new Uint8Array(folderKey);
+          this.reWrapNewItems(parentIpnsName, [
+            { keyType: 'folder', itemId: folder.id, plaintextKey: folderKeyCopy },
+          ])
+            .catch((err) => {
+              console.warn('[SDK] Post-createFolder re-wrapping failed:', err);
+            })
+            .finally(() => {
+              clearBytes(folderKeyCopy);
+            });
+        }
+
+        return { id: folder.id, ipnsName: folder.ipnsName, folderKey, ipnsPrivateKey };
+      } catch (err) {
+        // Clear plaintext keys on failure — they won't reach the caller
+        clearBytes(folderKey);
+        clearBytes(ipnsPrivateKey);
+        throw err;
       }
-
-      // 3. Add folder entry to parent's children
-      const updatedChildren: FolderChild[] = [...parent.children, folder];
-
-      // 3. Update parent metadata and publish
-      const { newSequenceNumber } = await sdkCore.updateFolderMetadataAndPublish({
-        children: updatedChildren,
-        folderKey: parent.folderKey,
-        ipnsPrivateKey: parent.ipnsKeypair.privateKey,
-        ipnsName: parentIpnsName,
-        sequenceNumber: parent.sequenceNumber,
-        ctx: this.ctx,
-        encryptedIpnsPrivateKey: encryptedIpnsPrivateKey,
-        keyEpoch,
-      });
-
-      // 4. Update parent state
-      parent.children = updatedChildren;
-      parent.sequenceNumber = newSequenceNumber;
-      parent.lastLoadedAt = Date.now();
-      this.folderTree.set(parentIpnsName, parent);
-
-      // 5. Publish empty metadata for the new subfolder
-      await sdkCore.updateFolderMetadataAndPublish({
-        children: [],
-        folderKey,
-        ipnsPrivateKey,
-        ipnsName: folder.ipnsName,
-        sequenceNumber: 0n,
-        ctx: this.ctx,
-        encryptedIpnsPrivateKey,
-        keyEpoch,
-      });
-
-      // 7. Emit parent folder updated event
-      this.emitter.emit({
-        type: 'folder:updated',
-        folderId: parentIpnsName,
-        ipnsName: parentIpnsName,
-        children: updatedChildren,
-        sequenceNumber: newSequenceNumber,
-      });
-
-      // 8. Re-wrap subfolder key for share recipients (non-blocking)
-      if (this.config.shareCallbacks) {
-        // Copy folderKey for the detached task — caller may wipe the returned buffer
-        const folderKeyCopy = new Uint8Array(folderKey);
-        this.reWrapNewItems(parentIpnsName, [
-          { keyType: 'folder', itemId: folder.id, plaintextKey: folderKeyCopy },
-        ])
-          .catch((err) => {
-            console.warn('[SDK] Post-createFolder re-wrapping failed:', err);
-          })
-          .finally(() => {
-            clearBytes(folderKeyCopy);
-          });
-      }
-
-      return { id: folder.id, ipnsName: folder.ipnsName, folderKey, ipnsPrivateKey };
     });
   }
 

@@ -108,7 +108,7 @@ export async function createWalletTestAccount(
       rootIpnsName: authState.rootIpnsName,
     };
   } catch (err) {
-    await context.close();
+    await context.close().catch(() => undefined);
     throw err;
   }
 }
@@ -129,7 +129,7 @@ export async function createWalletTestAccounts(
     return accounts;
   } catch (err) {
     // Clean up already-created accounts before re-throwing
-    await closeWalletTestAccounts(accounts);
+    await closeWalletTestAccounts(accounts).catch(() => undefined);
     throw err;
   }
 }

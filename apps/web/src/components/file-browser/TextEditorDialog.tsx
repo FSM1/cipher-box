@@ -75,6 +75,7 @@ export function TextEditorDialog({
     }
 
     let cancelled = false;
+    let focusRaf: number | undefined;
     setLoading(true);
     setError(null);
 
@@ -126,7 +127,7 @@ export function TextEditorDialog({
 
         // Focus textarea after content loads (only in edit mode)
         if (!readOnly) {
-          requestAnimationFrame(() => {
+          focusRaf = requestAnimationFrame(() => {
             textareaRef.current?.focus();
           });
         }
@@ -139,6 +140,7 @@ export function TextEditorDialog({
 
     return () => {
       cancelled = true;
+      if (focusRaf !== undefined) cancelAnimationFrame(focusRaf);
     };
   }, [open, item, folderKey, shareId, readOnly]);
 
