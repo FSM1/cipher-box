@@ -73,7 +73,7 @@ tests/e2e/
 │       ├── logout.spec.ts  # Logout flow tests
 │       └── session.spec.ts # Session persistence tests
 ├── utils/             # Test utilities
-│   └── web3auth-helpers.ts # Web3Auth interaction helpers
+│   └── wallet-login-helpers.ts # Wallet login helpers
 └── playwright.config.ts    # Playwright configuration
 ```
 
