@@ -39,3 +39,7 @@ so I would specifically like to understand why the web app uses a separate api c
 ---
 
 is there really that much benefit in the wiring up of the react app to use the react-query generated mode rather than just wrapping a bunch of the api-client calls in thin react-query wrappers?
+
+---
+
+yeah that seems like a great idea - don't forget to branch off main for this.
