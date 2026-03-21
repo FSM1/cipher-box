@@ -95,8 +95,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build crypto package
-        run: pnpm --filter @cipherbox/crypto build
+      - name: Build shared packages
+        run: |
+          pnpm --filter @cipherbox/crypto build
+          pnpm --filter @cipherbox/core build
+          pnpm --filter @cipherbox/api-client build
+          pnpm --filter @cipherbox/sdk-core build
+          pnpm --filter @cipherbox/sdk build
 
       - name: Build web app with staging env vars
         run: pnpm --filter @cipherbox/web build
@@ -162,8 +167,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build crypto package
-        run: pnpm --filter @cipherbox/crypto build
+      - name: Build shared packages
+        run: |
+          pnpm --filter @cipherbox/crypto build
+          pnpm --filter @cipherbox/core build
+          pnpm --filter @cipherbox/api-client build
+          pnpm --filter @cipherbox/sdk-core build
+          pnpm --filter @cipherbox/sdk build
 
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -249,8 +259,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build crypto package
-        run: pnpm --filter @cipherbox/crypto build
+      - name: Build shared packages
+        run: |
+          pnpm --filter @cipherbox/crypto build
+          pnpm --filter @cipherbox/core build
+          pnpm --filter @cipherbox/api-client build
+          pnpm --filter @cipherbox/sdk-core build
+          pnpm --filter @cipherbox/sdk build
 
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -318,8 +333,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build crypto package
-        run: pnpm --filter @cipherbox/crypto build
+      - name: Build shared packages
+        run: |
+          pnpm --filter @cipherbox/crypto build
+          pnpm --filter @cipherbox/core build
+          pnpm --filter @cipherbox/api-client build
+          pnpm --filter @cipherbox/sdk-core build
+          pnpm --filter @cipherbox/sdk build
 
       - uses: tauri-apps/tauri-action@v0
         env:

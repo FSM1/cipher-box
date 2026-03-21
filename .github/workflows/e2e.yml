@@ -84,7 +84,14 @@ jobs:
           npm run build
 
       - name: Build packages (excluding desktop)
-        run: pnpm --filter @cipherbox/crypto --filter @cipherbox/api --filter @cipherbox/web build
+        run: |
+          pnpm --filter @cipherbox/crypto build
+          pnpm --filter @cipherbox/core build
+          pnpm --filter @cipherbox/api-client build
+          pnpm --filter @cipherbox/sdk-core build
+          pnpm --filter @cipherbox/sdk build
+          pnpm --filter @cipherbox/api build
+          pnpm --filter @cipherbox/web build
         env:
           VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
           VITE_API_URL: http://localhost:3000
