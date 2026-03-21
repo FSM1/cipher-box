@@ -1,0 +1,126 @@
+{
+  "cli_version": "0.4.7",
+  "checkpoint_id": "8b7cf8245b9e",
+  "session_id": "3f8e1927-1b97-4c98-97c7-a19b3c057640",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-21T02:24:57.617952Z",
+  "branch": "fix/e2e-reload-zustand-guard",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/main.tsx"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "06f53b17f40f",
+  "token_usage": {
+    "input_tokens": 439,
+    "cache_creation_tokens": 279969,
+    "cache_read_tokens": 38823144,
+    "output_tokens": 63910,
+    "api_call_count": 258
+  },
+  "summary": {
+    "intent": "Resolve all open PR review comments on PR #296 (cipher-box SDK extraction), fix a CI E2E test build failure, and improve the E2E test infrastructure to avoid exposing Zustand stores in production builds.",
+    "outcome": "All PR review threads resolved across multiple review passes; CI workflow fixed to build new packages before web; E2E infrastructure refactored to use VITE_E2E flag for minimal store exposure, UI-based vault readiness checks, and Settings page for public key extraction.",
+    "learnings": {
+      "repo": [
+        "The cipher-box monorepo has 5 independently versioned packages (crypto, core, api-client, sdk-core, sdk) — when all touched in one PR, Release Please bumps them all simultaneously on first release, then they diverge naturally",
+        "release-please multi-component PRs use the target branch name instead of ${version} in the title — root-level pull-request-title-pattern should omit ${version}",
+        "__ZUSTAND_STORES is only exposed when import.meta.env.DEV — production E2E CI builds never set this, causing silent test failures for any test relying on Zustand store access",
+        "The FolderTree.clear() method zeroes all stored key buffers, meaning registerFolder must make defensive copies or callers' buffers get zeroed on destroy()",
+        "The isLoaded flag on FolderNode is not set in all code paths — SDK-created folders and root folder after vault init have valid keys but isLoaded may be false, causing the ensureFolderRegistered guard to silently skip registration",
+        "E2E workflows (e2e.yml, deploy-staging.yml, e2e-desktop.yml) only built @cipherbox/crypto before web — the 4 new packages (core, api-client, sdk-core, sdk) were never being built, breaking all CI builds after PR #296 merged",
+        "Public key for sharing is displayed on the Settings page at .settings-pubkey-value — no need to extract from Zustand for sharing tests",
+        "conflict-detection tests are the only active tests that genuinely need store internals (accessToken and rootIpnsName) — sharing/invite tests only need publicKey which is in the UI"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/main.tsx",
+          "finding": "Zustand store exposure gated on import.meta.env.DEV — must also check import.meta.env.VITE_E2E for CI E2E builds"
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "line": 85,
+          "finding": "ensureFolderRegistered guard on isLoaded was too strict — isLoaded not set in all code paths, causing silent registration skips and 'Folder not loaded' errors at upload time"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 628,
+          "finding": "fileKey not cleared if exception occurs before the re-wrap try/catch — needs try/finally wrapping entire post-upload section"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 359,
+          "finding": "Background re-wrap shares folderKey buffer with caller — needs defensive copy before spawning background operation"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 338,
+          "finding": "createFolder leaks plaintext folderKey/ipnsPrivateKey on exception — duplicate-name check should happen before key generation, keys need clearBytes in catch"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 947,
+          "finding": "Throwing lifecycle hooks can break operations — needs notifySafely() wrapper for all config callbacks"
+        },
+        {
+          "path": "tests/e2e/tests/full-workflow.spec.ts",
+          "line": 533,
+          "finding": "Test 3.7 timeout 240s was insufficient for cumulative waits (~330s worst case); increased to 360s"
+        },
+        {
+          "path": "tests/e2e/tests/full-workflow.spec.ts",
+          "line": 557,
+          "finding": "waitForFunction polling __ZUSTAND_STORES for vault readiness never resolves in production builds — replaced with UI wait for file list empty state"
+        },
+        {
+          "path": "tests/e2e/utils/multi-account-wallet.ts",
+          "line": 105,
+          "finding": "Context leak on failure during account creation — cleanup calls need .catch(() =\u003e undefined) to avoid masking original error"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 168,
+          "finding": "Passing Uint8Array directly to Blob needs 'as BlobPart' type assertion for TypeScript strict mode compatibility"
+        },
+        {
+          "path": "apps/web/src/components/file-browser/TextEditorDialog.tsx",
+          "line": 117,
+          "finding": "requestAnimationFrame handle not cancelled in effect cleanup — focusRaf must be hoisted to effect scope"
+        }
+      ],
+      "workflow": [
+        "When fixing stale CI branches after a PR merges, always check whether the fix commit landed on main before creating a new branch — it may not have if the merge happened before the push",
+        "Vite VITE_* env vars are baked in at compile time and tree-shaken in production builds where they're not set — safe pattern for E2E-only instrumentation",
+        "Release Please independent versioning works correctly; apparent simultaneous bumps on first release are expected because the initial PR touched all packages",
+        "pnpm --filter builds are parallel — packages with dependency ordering need sequential build steps or topological awareness in CI",
+        "E2E test infrastructure should prefer UI selectors over internal state access; when internal state is genuinely needed (e.g. tokens for direct API calls), expose minimal window.__E2E helpers rather than full store objects"
+      ]
+    },
+    "friction": [
+      "isLoaded guard added based on reviewer suggestion caused a regression (upload failures) that required a follow-up PR #301 — reviewer suggestion was architecturally unsound given the actual code paths",
+      "CI E2E build failure was caused by missing package builds in workflow — not caught until after PR #296 merged because the workflow was never updated for the new packages",
+      "Tests were passing locally but failing in CI due to __ZUSTAND_STORES only being exposed in DEV builds — production CI builds silently had no store access for months without being caught",
+      "The fix for CI builds was committed to an already-merged branch, requiring a second new branch and PR",
+      "Background task output files had to be checked for test results due to async test runner; some runs completed before results were inspected",
+      "orval codegen produces incorrect type for nullable Date fields (VaultResponseDtoInitializedAt) — regenerating produces the same wrong output, upstream codegen bug",
+      "Stale lock file caused initial commit to fail, requiring manual removal"
+    ],
+    "open_items": [
+      "Concurrent mutations to the same folder can lose updates (Thread 2 from first review pass) — marked not applicable for this PR but flagged as architectural concern for follow-up",
+      "web3auth-helpers.ts (email-based login flow) still references __ZUSTAND_STORES but is legacy code — should be cleaned up or removed once wallet-based flow is fully validated",
+      "recycle-bin.spec.ts uses __ZUSTAND_STORES__ (double underscore suffix, different variable) with a fallback — should be audited for the same production build issue",
+      "VaultResponseDtoInitializedAt generated type is wrong (orval bug with nullable Date) — needs upstream fix or manual override in orval config",
+      "E2E test 3.7 (session restore after reload) has remaining flakiness on Sapphire Devnet in CI — root cause is slow/failed Core Kit session restore, not yet fully addressed",
+      "PR #298 (Release Please) titled 'chore: release main' — fix merged via PR #300 but next release PR will be the first to validate the new title format"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-21T02:24:09.951233Z",
+    "agent_lines": 0,
+    "human_added": 16,
+    "human_modified": 12,
+    "human_removed": 0,
+    "total_committed": 16,
+    "agent_percentage": 0
+  }
+}
