@@ -32,7 +32,12 @@ async function extractPublicKeyFromUI(page: Page): Promise<string> {
   // Read public key from the Settings page
   const pubKeyElement = page.locator('.settings-pubkey-value');
   await pubKeyElement.waitFor({ state: 'visible', timeout: 10_000 });
-  const publicKey = (await pubKeyElement.textContent()) ?? '';
+  const publicKey = ((await pubKeyElement.textContent()) ?? '').trim();
+  if (!publicKey || !publicKey.startsWith('0x')) {
+    throw new Error(
+      `Failed to extract public key from Settings page (got: "${publicKey.slice(0, 20)}")`
+    );
+  }
 
   // Navigate back to files
   await page.evaluate(() => {
@@ -75,12 +80,7 @@ export async function createWalletTestAccount(
       );
     }
 
-    // Wait for file list or empty state to confirm vault is accessible
-    await Promise.race([
-      page.locator('.file-list[role="grid"]').waitFor({ state: 'visible', timeout: 30_000 }),
-      page.locator('[data-testid="empty-state"]').waitFor({ state: 'visible', timeout: 30_000 }),
-    ]);
-
+    // loginViaWallet already waits for file list / empty state on success.
     // Extract public key from the Settings page UI (no Zustand access needed)
     const publicKey = await extractPublicKeyFromUI(page);
 

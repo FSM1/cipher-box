@@ -58,7 +58,7 @@ useAuthStore.subscribe((state, prevState) => {
 // Only exposes accessToken and rootIpnsName — needed by conflict-detection
 // tests that make direct API calls to simulate concurrent device publishes.
 // Gated behind VITE_E2E so production deploys never include this code.
-if (import.meta.env.VITE_E2E) {
+if (import.meta.env.VITE_E2E === 'true') {
   import('./stores/vault.store').then(({ useVaultStore }) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (window as any).__E2E = {
