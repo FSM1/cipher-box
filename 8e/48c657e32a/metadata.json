@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "8e48c657e32a",
+  "strategy": "manual-commit",
+  "branch": "refactor/consolidate-api-client",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/8e/48c657e32a/0/metadata.json",
+      "transcript": "/8e/48c657e32a/0/full.jsonl",
+      "content_hash": "/8e/48c657e32a/0/content_hash.txt",
+      "prompt": "/8e/48c657e32a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 189,
+    "cache_creation_tokens": 217741,
+    "cache_read_tokens": 12787663,
+    "output_tokens": 39261,
+    "api_call_count": 142
+  }
+}
