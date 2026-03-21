@@ -530,7 +530,7 @@ test.describe.serial('Full Workflow', () => {
   test('3.7 Page reload preserves session and reloads root folder', async () => {
     // On staging, IPNS resolution after a page reload can take >60s due to
     // cache propagation delays. Allow generous timeout with a retry cycle.
-    test.setTimeout(240000);
+    test.setTimeout(360_000); // 120s auth restore + 60s vault + 120s root sync + 30s file + buffer
 
     // Navigate to root before reload so we start from a clean state
     await navigateToRoot();
@@ -598,7 +598,7 @@ test.describe.serial('Full Workflow', () => {
   });
 
   test('3.8 Navigate into subfolder after reload and verify contents', async () => {
-    test.setTimeout(120_000); // Nested IPNS resolves after reload can be slow
+    test.setTimeout(240_000); // Two navigateIntoFolder retries + two 60s content waits
 
     // Double-click workspace folder → exercises navigateTo cold-load
     await navigateIntoFolder(workspaceFolder);
