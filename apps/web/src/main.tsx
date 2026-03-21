@@ -54,24 +54,20 @@ useAuthStore.subscribe((state, prevState) => {
   }
 });
 
-// Expose Zustand stores for E2E test state injection (dev mode only)
-if (import.meta.env.DEV) {
-  import('./stores/auth.store').then(({ useAuthStore }) => {
-    import('./stores/vault.store').then(({ useVaultStore }) => {
-      import('./stores/folder.store').then(({ useFolderStore }) => {
-        import('./stores/sync.store').then(({ useSyncStore }) => {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (window as any).__ZUSTAND_STORES = {
-            auth: useAuthStore,
-            vault: useVaultStore,
-            folder: useFolderStore,
-            sync: useSyncStore,
-          };
-        });
-      });
-    });
-  });
-}
+// Expose Zustand stores for E2E test state extraction.
+// Stores are read-only hooks — no secrets are exposed beyond what the
+// browser already has in memory. Needed by Playwright tests that check
+// vault readiness, auth state, or extract public keys after login.
+import { useVaultStore } from './stores/vault.store';
+import { useFolderStore } from './stores/folder.store';
+import { useSyncStore } from './stores/sync.store';
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+(window as any).__ZUSTAND_STORES = {
+  auth: useAuthStore,
+  vault: useVaultStore,
+  folder: useFolderStore,
+  sync: useSyncStore,
+};
 
 const queryClient = new QueryClient({
   defaultOptions: {
