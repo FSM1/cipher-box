@@ -1,0 +1,76 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "4f5e70eaac60",
+  "session_id": "f0dd29f9-8a13-44de-877f-1bc80807410d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-21T18:16:49.671004Z",
+  "branch": "fix/ipns-publish-performance",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "1a2abe28ade5",
+  "token_usage": {
+    "input_tokens": 152,
+    "cache_creation_tokens": 195749,
+    "cache_read_tokens": 8341683,
+    "output_tokens": 34289,
+    "api_call_count": 111
+  },
+  "session_metrics": {
+    "turn_count": 20
+  },
+  "summary": {
+    "intent": "Deploy v0.25.0 to staging after a release PR merge, then investigate and fix two staging issues (slow IPNS publish and broken token refresh), and consolidate the web app's fragmented HTTP client architecture.",
+    "outcome": "v0.25.1 was tagged and deployed to staging after fixing a Dockerfile regression and a release-please title pattern misconfiguration; a fire-and-forget fix for IPNS DHT publish latency was merged via PR #308; and a large refactor consolidating three HTTP client paths into one via @cipherbox/api-client was opened in PR #309.",
+    "learnings": {
+      "repo": [
+        "The staging deployment workflow (deploy-staging.yml) triggers on tags matching 'v*-staging*', not release tags — staging deployment is intentionally a manual step via the 'Tag Staging Release' action.",
+        "release-please's pull-request-title-pattern was missing '${component}', causing it to fail to match merged release PRs to components in a multi-package monorepo config, blocking all subsequent releases.",
+        "The API is a zero-knowledge server that never handles plaintext or encryption — it stores opaque blobs, manages auth, and proxies IPFS, so it intentionally has no workspace package dependencies.",
+        "The web app had three separate HTTP client paths: orval react-query generated client (fetch), a hand-written axios client for login/vault init, and bare axios/fetch for IPFS — none with consistent 401/refresh handling.",
+        "The orval react-query generation produced ~8,800 lines of hooks that were almost entirely unused — only useHealthControllerCheck was actually consumed as a hook; everything else called the raw generated functions directly.",
+        "@cipherbox/api-client uses orval with 'axios-functions' client mode for framework-agnostic use by SDK/desktop; the web app had a duplicate orval config with 'react-query' mode that was largely redundant.",
+        "IPNS DHT publish via someguy sidecar takes 10-30s but is unnecessary to await — the DB record is the authoritative source and resolveRecord() always prefers DB cache, making DHT propagation purely best-effort."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 52,
+          "end_line": 52,
+          "finding": "The 'result' variable stayed 'success' after making DHT publish fire-and-forget — correct behavior since from the API's perspective the publish succeeded once the DB record was saved."
+        },
+        {
+          "path": "apps/api/Dockerfile",
+          "finding": "Had a stale COPY of packages/crypto/package.json that was no longer needed (API has no workspace deps) but caused pnpm deploy to fail when @cipherbox/crypto's transitive devDep @cipherbox/core couldn't be found in the build context."
+        },
+        {
+          "path": "apps/web/src/api/custom-instance.ts",
+          "finding": "Orval-generated fetch mutator for react-query had zero 401 handling, while token refresh interceptor only existed on the separate axios client — causing silent auth failures after 15-minute access token expiry."
+        },
+        {
+          "path": "release-please-config.json",
+          "finding": "pull-request-title-pattern set to 'chore: release' without '${component}', causing release-please to abort with 'untagged, merged release PRs outstanding' in multi-package mode because it couldn't match PR back to components."
+        }
+      ],
+      "workflow": [
+        "release-please 'chore' commit type does not trigger a version bump — use 'fix' or 'feat' to get release-please to open a new release PR.",
+        "When release-please is stuck due to untagged PRs, manually creating the git tag and GitHub release from the correct commit unblocks it without corrupting its state.",
+        "Grafana Cloud free-tier instances hibernate and return HTTP 503 'instance is loading' on first request after inactivity — transient, re-run the failed job.",
+        "The Tag Staging Release action checks out the release tag's commit, so a fix merged after the tag requires a new patch release tag rather than just re-running the action against the old tag."
+      ]
+    },
+    "friction": [
+      "release-please's 'untagged merged PRs' abort blocked v0.25.1 tag creation even though all component tags existed — required manual tag + release creation to unblock staging.",
+      "Three separate HTTP client paths in the web app with inconsistent auth handling meant token refresh was silently broken for the majority of API calls — only exposed by a long-running batch operation.",
+      "The stale packages/crypto COPY in the API Dockerfile was a latent bug that only surfaced when the expanded package list caused pnpm to resolve transitive devDependencies it couldn't find.",
+      "Copilot review comments on PR #308 required a branch switch mid-session to address before merge."
+    ],
+    "open_items": [
+      "PR #309 (refactor/consolidate-api-client) is open and needs review/merge — removes ~8,800 lines of generated react-query code and unifies auth/token-refresh into @cipherbox/api-client.",
+      "PR #307 (fix release-please title pattern) needs merge to prevent future release-please aborts in the multi-package setup.",
+      "Token refresh fix from the debugger investigation was stashed/superseded by the api-client consolidation refactor — needs to be verified that PR #309 correctly handles the 401 refresh scenario end-to-end.",
+      "The Tag Staging Release workflow for v0.25.1 was triggered but had a transient Grafana provisioning failure — may need a re-run of just the provisioning step after the workflow completes.",
+      "IPNS publish latency fix (PR #308) addresses the await issue but the underlying someguy sidecar configuration may still warrant investigation if DHT propagation reliability matters."
+    ]
+  }
+}
