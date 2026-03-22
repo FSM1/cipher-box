@@ -1,0 +1,109 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "1441655f35a9",
+  "session_id": "8dbad658-aeb6-4bde-a1a1-7a83e2010385",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T18:55:11.994224Z",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/load/src/harness/client-pool.ts",
+    "tests/load/src/workloads/file-workload.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "2cd94e72834d",
+  "token_usage": {
+    "input_tokens": 1040,
+    "cache_creation_tokens": 1070222,
+    "cache_read_tokens": 103404450,
+    "output_tokens": 134320,
+    "api_call_count": 355
+  },
+  "session_metrics": {
+    "turn_count": 25
+  },
+  "summary": {
+    "intent": "Implement SDK-based E2E and load test suites for CipherBox as two new workspace packages (tests/sdk-e2e and tests/load), replacing browser-automation Playwright tests with direct SDK calls for reliability and speed.",
+    "outcome": "Both packages fully implemented with 83 passing E2E tests across 10 suites, 5 load test scenarios with metrics infrastructure, throttle bypass mechanism, CI workflows, and all 26 PR review comments resolved across two review rounds.",
+    "learnings": {
+      "repo": [
+        "setApiClientConfig in packages/api-client/src/instance.ts is a module-level singleton used by orval-generated functions — all SDK operations share one global axios config, causing cross-contamination in multi-account tests",
+        "ThrottlerGuard is applied per-controller (not globally via APP_GUARD), imported from @nestjs/throttler — replacing with a custom guard requires updating all controller imports and all spec files that use .overrideGuard(ThrottlerGuard)",
+        "The IPNS publish endpoint has a strict per-endpoint @Throttle({ default: { limit: 10, ttl: 60000 } }) decorator (10 publishes/min) that is the primary bottleneck for SDK-heavy load tests",
+        "The API .env file takes precedence over shell environment variables for NestJS ConfigModule — setting NODE_ENV=test in the shell does not override .env when running via pnpm dev",
+        "POST /auth/test-login returns { accessToken, refreshToken, isNewUser, publicKeyHex, privateKeyHex } — the test login bypass already exists and uses TEST_LOGIN_SECRET",
+        "crypto.getRandomValues() has a 65,536 byte limit per call — generating load test files larger than 64KB requires chunked generation",
+        "The existing integration test at packages/sdk/src/__tests__/integration.test.ts lines 24-59 is the authoritative pattern for SDK test setup: test-login → initializeVault → encryptVaultKeys → setApiClientConfig → CipherBoxClient → registerFolder",
+        "CipherBoxClient exposes getFolderTree() as a public method — (client as any).folderTree casts in tests were unnecessary"
+      ],
+      "code": [
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 1,
+          "end_line": 60,
+          "finding": "Added optional defaultHeaders to ApiClientConfig and wired it into the axios instance — allows test harnesses to inject bypass headers without per-call manual injection"
+        },
+        {
+          "path": "apps/api/src/common/guards/throttler-bypass.guard.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "New BypassableThrottlerGuard extends ThrottlerGuard, checks X-Throttle-Bypass header against THROTTLE_BYPASS_SECRET using Node.js crypto.timingSafeEqual, and includes NODE_ENV !== 'production' guard"
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "ThrottlerModule configured with 10 req/s (ttl 1000ms) and 100 req/min (ttl 60000ms) limits — no global APP_GUARD, throttling is per-controller"
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/error-cases.test.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "setApiClientConfig must be re-called before tests that depend on it when running after multi-account test suites that overwrite the singleton"
+        },
+        {
+          "path": "tests/load/src/workloads/file-workload.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "Generates random Uint8Array in 65536-byte chunks to work around crypto.getRandomValues limit"
+        },
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "Exports testFetch() helper that injects X-Throttle-Bypass and Authorization headers for raw fetch calls in test suites that cannot use the generated API client"
+        }
+      ],
+      "workflow": [
+        "When replacing a guard class with a custom subclass, all spec files using .overrideGuard(OriginalClass) must be updated to target the new class — NestJS DI fails with dependency resolution errors otherwise",
+        "For load tests targeting environments with rate limiting, a secret-header bypass is preferable to loosening limits — but per-endpoint @Throttle decorators require the same guard class swap and staging secrets injected into CI",
+        "pnpm --filter \u003cpkg\u003e dev (NestJS watch mode) hot-reloads TypeScript changes but reads .env on startup — changes to .env require a full restart",
+        "orval-generated API client functions are standalone imports that call the singleton axios instance — instance-scoping would require orval config changes to pass an axios instance parameter through all generated functions",
+        "Running vitest with fileParallelism: false (sequential suites) does not prevent setApiClientConfig singleton contamination between suites — later suites see whatever token the previous multi-account suite left behind"
+      ]
+    },
+    "friction": [
+      "1Password SSH agent times out in agent subprocesses — commits from Bash tool calls frequently hang on signing, requiring manual retry or user intervention from terminal",
+      "sed replace_all via Edit tool left dangling closing parentheses when replacing 'headers: {' with 'headers: fetchHeaders({' — caused TypeScript parse errors requiring full file rewrites",
+      "The throttle bypass only covers controllers using @UseGuards(BypassableThrottlerGuard) — per-endpoint @Throttle decorators on the IPNS publish endpoint still caused 429s in load tests even after implementing the bypass",
+      "NODE_ENV=test set in shell is silently overridden by NODE_ENV=development in .env — not obvious from NestJS docs which source wins",
+      "API unit test failures (Nest can't resolve THROTTLER:MODULE_OPTIONS) only surfaced in CI, not during local development — required a second review round to discover"
+    ],
+    "open_items": [
+      "Refactor api-client from module-level singleton to instance-scoped axios (tracked in .planning/todos/pending/2026-03-22-refactor-api-client-from-singleton-to-instance-scoped-axios.md) — this would eliminate testFetch, fetchHeaders, the setApiClientConfig re-set in error-cases, defaultHeaders, and multi-account switchTo hacks",
+      "Investigate @Throttle decorator bypass gap for IPNS publish endpoint (tracked in .planning/todos/pending/2026-03-22-investigate-throttle-bypass-gap-for-per-endpoint-throttle-decorators.md) — determine if 429s come from the throttler or upstream IPFS, verify bypass header propagation to IPNS requests",
+      "Load test scenarios for sustained-load and spike-test were written but not validated against the local stack — only upload-throughput, ipns-publish-storm, and mixed-workload were run",
+      "Test suites that use raw fetch (vault-lifecycle, share-operations, invite-link) should be migrated to use the generated API client once the singleton refactor lands — currently require testFetch() workaround",
+      "Load test workflow (load-test.yml) targets staging via workflow_dispatch but STAGING_THROTTLE_BYPASS_SECRET GitHub secret needs to be created before the workflow can be used against staging"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-22T18:54:21.379627Z",
+    "agent_lines": 0,
+    "human_added": 4,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 4,
+    "agent_percentage": 0
+  }
+}
