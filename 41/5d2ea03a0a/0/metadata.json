@@ -1,0 +1,124 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "415d2ea03a0a",
+  "session_id": "8dbad658-aeb6-4bde-a1a1-7a83e2010385",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T18:38:43.350657Z",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/load-test.yml",
+    ".github/workflows/sdk-e2e.yml",
+    "apps/api/src/common/guards/throttler-bypass.guard.ts",
+    "tests/load/src/harness/client-pool.ts",
+    "tests/load/src/harness/metrics.ts",
+    "tests/load/src/scenarios/ipns-publish-storm.test.ts",
+    "tests/load/src/scenarios/mixed-workload.test.ts",
+    "tests/load/src/scenarios/spike-test.test.ts",
+    "tests/load/src/scenarios/sustained-load.test.ts",
+    "tests/load/src/scenarios/upload-throughput.test.ts",
+    "tests/load/src/workloads/file-workload.ts",
+    "tests/sdk-e2e/src/fixtures/multi-account.ts",
+    "tests/sdk-e2e/src/suites/concurrent-operations.test.ts",
+    "tests/sdk-e2e/src/suites/error-cases.test.ts",
+    "tests/sdk-e2e/src/suites/folder-crud.test.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "fd4e9ebfb9f8",
+  "token_usage": {
+    "input_tokens": 998,
+    "cache_creation_tokens": 1038583,
+    "cache_read_tokens": 88615493,
+    "output_tokens": 124216,
+    "api_call_count": 322
+  },
+  "session_metrics": {
+    "turn_count": 21
+  },
+  "summary": {
+    "intent": "Implement SDK-based E2E and load tests for CipherBox as two new workspace packages, replacing browser-automation Playwright tests with direct SDK calls for faster, more reliable testing.",
+    "outcome": "Created tests/sdk-e2e (83 tests across 10 suites, all passing) and tests/load (5 scenarios with metrics infrastructure), plus a throttle bypass mechanism, CI workflows, and resolved a batch of PR review comments.",
+    "learnings": {
+      "repo": [
+        "ThrottlerGuard is applied per-controller via @UseGuards(), not globally — requires touching ~7 controllers to swap the guard implementation",
+        "Individual @Throttle() decorators on specific endpoints (e.g., IPNS publish: 10/min) are separate from the controller-level ThrottlerGuard and need independent bypass handling",
+        "setApiClientConfig is a module-level singleton because orval generates standalone functions (not class methods) that import customInstance directly — there is no object to hold instance state",
+        "NODE_ENV in apps/api/.env overrides shell environment variables passed to nest start --watch, because ConfigModule.forRoot() loads .env and wins",
+        "The /auth/test-login endpoint has its own strict @Throttle (5 per 15 min) separate from the general controller throttle",
+        "pnpm workspace lockfile is updated automatically when running pnpm install from the root — new packages don't require a separate lockfile update step",
+        "release-please-config.json has an extra-files list for package.json files to keep versions in sync across non-standard packages",
+        "Playwright's webServer config in playwright.config.ts handles starting the API for E2E tests — the API is not started separately in e2e.yml"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "line": 24,
+          "end_line": 59,
+          "finding": "Gold standard pattern for SDK test setup: test-login → initializeVault → encryptVaultKeys → setApiClientConfig → new CipherBoxClient → registerFolder. All SDK E2E tests derive from this pattern."
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Module-level _config singleton with getCachedInstance() — extended to support optional defaultHeaders for injecting bypass/auth headers into all axios requests without per-call changes"
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "ThrottlerModule configured with limit:10/ttl:1000 (10 req/s) and limit:100/ttl:60000 (100 req/min) — these are per-IP by default, not per-user"
+        },
+        {
+          "path": "apps/api/src/common/guards/throttler-bypass.guard.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "Custom BypassableThrottlerGuard uses process.env directly (not ConfigService) and timingSafeEqual for constant-time comparison — skips throttle when X-Throttle-Bypass header matches THROTTLE_BYPASS_SECRET"
+        },
+        {
+          "path": "tests/load/src/workloads/file-workload.ts",
+          "line": 1,
+          "end_line": 60,
+          "finding": "crypto.getRandomValues() has a hard 65536 byte limit per call — files \u003e64KB require chunked generation in a loop"
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/error-cases.test.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "The setApiClientConfig singleton gets overwritten by multi-account test fixtures (share/invite suites) — requires re-setting the config at the start of any test suite that runs after multi-account tests"
+        }
+      ],
+      "workflow": [
+        "1Password SSH agent for commit signing is not accessible from Claude agent subprocesses — commits must be retried or run from the user's terminal",
+        "sed-based bulk replacements on TypeScript files are unreliable for nested delimiters (parentheses) — prefer targeted Edit tool calls or full file rewrites",
+        "Running tsc --noEmit for type checking requires dependencies to be built first (e.g., api-client must be rebuilt before sdk-e2e can typecheck against it)",
+        "When using Promise.allSettled in load test scenarios, errors inside workload functions are silently swallowed unless rejection reasons are explicitly logged",
+        "pnpm --filter \u003cpackage\u003e dev for NestJS does hot-reload — changes to app.module.ts take effect without restart, but only after the process detects file changes"
+      ]
+    },
+    "friction": [
+      "1Password SSH agent timed out mid-session, causing multiple commit failures that required retries or user intervention",
+      "MODULE-LEVEL SINGLETON: setApiClientConfig being global caused cross-suite test contamination — required a re-set workaround in error-cases.test.ts and a switchTo() hack in multi-account fixture",
+      "NODE_ENV=test passed via shell was silently overridden by NODE_ENV=development in apps/api/.env — wasted time before discovering ConfigModule loads .env with higher precedence",
+      "crypto.getRandomValues() 65536 byte limit caused silent crashes in the upload workload (error swallowed by Promise.allSettled) — hard to diagnose without explicit rejection logging",
+      "sed bulk-replace of header patterns corrupted vault-lifecycle.test.ts by adding unmatched parentheses — required a full file rewrite to recover",
+      "The rate limiter blocked all tests before the bypass was implemented, making it impossible to run more than ~1 test suite before hitting 429",
+      "The per-endpoint @Throttle decorators (especially IPNS publish at 10/min) are still causing 429s in load tests even with the bypass guard — root cause not yet confirmed"
+    ],
+    "open_items": [
+      "Refactor api-client from module-level singleton to instance-scoped axios: configure orval to generate functions accepting an axios instance, thread through sdk-core's SdkContext, have CipherBoxClient own its axios instance — tracked in .planning/todos/pending/2026-03-22-refactor-api-client-from-singleton-to-instance-scoped-axios.md",
+      "Investigate @Throttle decorator bypass gap: verify whether BypassableThrottlerGuard's canActivate override is reached for per-endpoint @Throttle decorators, or whether 429s come from upstream IPFS — tracked in .planning/todos/pending/2026-03-22-investigate-throttle-bypass-gap-for-per-endpoint-throttle-decorators.md",
+      "Migrate raw fetch() calls in vault-lifecycle, share-operations, and invite-link test suites to use the orval-generated API client functions — would eliminate testFetch() helper and automatically propagate defaultHeaders",
+      "PR review comments batch (24 threads) — fixes were implemented and committed but replies/resolutions to threads were in progress when the transcript ended",
+      "Load test 429 errors mean reported throughput numbers are unreliable until the IPNS publish throttle bypass is confirmed working — baseline metrics from the local stack run are provisional"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-22T18:37:49.292428Z",
+    "agent_lines": 65,
+    "human_added": 5,
+    "human_modified": 5,
+    "human_removed": 0,
+    "total_committed": 75,
+    "agent_percentage": 86.66666666666667
+  }
+}
