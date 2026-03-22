@@ -1,0 +1,95 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ff776297d125",
+  "session_id": "8dbad658-aeb6-4bde-a1a1-7a83e2010385",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T15:22:11.260741Z",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "tests/load/src/harness/client-pool.ts",
+    "tests/load/src/harness/metrics.ts",
+    "tests/load/src/scenarios/ipns-publish-storm.test.ts",
+    "tests/load/src/scenarios/mixed-workload.test.ts",
+    "tests/load/src/scenarios/spike-test.test.ts",
+    "tests/load/src/scenarios/sustained-load.test.ts",
+    "tests/load/src/scenarios/upload-throughput.test.ts",
+    "tests/load/src/workloads/file-workload.ts",
+    "tests/load/src/workloads/mixed-workload.ts",
+    "tests/load/tsconfig.json",
+    "tests/sdk-e2e/src/fixtures/test-harness.ts",
+    "tests/sdk-e2e/src/helpers/assertions.ts",
+    "tests/sdk-e2e/src/suites/error-cases.test.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e7d95a2d1ef3",
+  "checkpoint_transcript_start": 812,
+  "transcript_lines_at_start": 812,
+  "token_usage": {
+    "input_tokens": 31,
+    "cache_creation_tokens": 105955,
+    "cache_read_tokens": 5999742,
+    "output_tokens": 15424,
+    "api_call_count": 28
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Run a code review and cleanup pass on the cipher-box PR #318, fixing reuse, quality, and efficiency issues identified by three parallel review agents.",
+    "outcome": "Fixed 6 categories of issues across 13 files, reducing net lines by ~140. Both load and sdk-e2e packages compile clean after the refactor.",
+    "learnings": {
+      "repo": [
+        "Account creation logic was duplicated between tests/sdk-e2e/src/fixtures/test-harness.ts and tests/load/src/harness/client-pool.ts — extracted to a shared TestAccount interface and createTestAccount/deleteTestAccount helpers.",
+        "Load test scenarios each had ~60 lines of duplicated aggregation logic — consolidated into an aggregateAndReport helper.",
+        "binState has no public getter on the client; (ctx.client as any).binState casts are acceptable in test code and not worth adding a public API for.",
+        "folderTree was previously accessed via (client as any).folderTree — a public client.getFolderTree() method exists and should be used instead.",
+        "tests/load/tsconfig.json had a rootDir restriction that prevented importing from sdk-e2e — needed adjustment to allow cross-package test utility sharing.",
+        "FolderChild is a union of FilePointer | FolderEntry; fileMetaIpnsName only exists on FilePointer and requires a type cast or type guard."
+      ],
+      "code": [
+        {
+          "path": "tests/sdk-e2e/src/helpers/assertions.ts",
+          "finding": "Replaced (client as any).folderTree with client.getFolderTree() throughout."
+        },
+        {
+          "path": "tests/load/src/harness/metrics.ts",
+          "finding": "Added getReadonlySamples() method to MetricsCollector to avoid unnecessary array copies in aggregation."
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/error-cases.test.ts",
+          "finding": "4 bin error tests each created their own context — refactored to share 1 context. Also removed a redundant double-call in BinNotLoadedError test."
+        },
+        {
+          "path": "tests/load/tsconfig.json",
+          "finding": "rootDir was too restrictive and blocked cross-package imports from sdk-e2e test utilities."
+        }
+      ],
+      "workflow": [
+        "Three-agent parallel review (reuse / quality / efficiency) is an effective pattern for comprehensive code review of large diffs.",
+        "Skipping false positives explicitly with rationale (e.g., O(n) getter is dead code, Math.max spread on small pools) keeps the fix list actionable without losing context.",
+        "TypeScript compilation check after all fixes is a reliable gate before committing — caught tsconfig rootDir issue and unused imports that would have failed CI."
+      ]
+    },
+    "friction": [
+      "tsconfig rootDir restriction in tests/load blocked cross-package imports and required a config fix before compilation would succeed.",
+      "The diff was large enough to require chunked reading before passing to review agents.",
+      "fileMetaIpnsName type narrowing on the FolderChild union required an explicit cast in file-workload.ts."
+    ],
+    "open_items": [
+      "CI workflow deduplication (reusable workflows) was intentionally skipped — infrastructure churn for 3 rarely-changing workflows.",
+      "Raw fetch vs generated API client in vault-lifecycle and share/invite E2E tests was intentionally left — these tests benefit from explicit HTTP visibility.",
+      "totalErrors getter is O(n) but is dead code — left as-is since it's never called.",
+      "binState has no public getter; if test coverage of internal bin state grows, consider adding a test-only accessor or making it public."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-22T15:21:44.848909Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 172,
+    "human_removed": 143,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}
