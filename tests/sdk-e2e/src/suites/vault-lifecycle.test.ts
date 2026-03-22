@@ -34,7 +34,7 @@ describe('Vault Lifecycle', () => {
     expect(ctx.accessToken).toBeTruthy();
     expect(ctx.publicKey.length).toBeGreaterThan(0);
     expect(ctx.privateKey.length).toBeGreaterThan(0);
-    expect(ctx.rootIpnsName).toMatch(/^k51|^bafz/);
+    expect(ctx.rootIpnsName).toMatch(/^(k51|bafz)/);
     expect(ctx.rootFolderKey.length).toBe(32);
   });
 

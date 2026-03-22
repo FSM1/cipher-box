@@ -29,6 +29,7 @@ export function createAxiosInstance(config: ApiClientConfig): AxiosInstance {
   const instance = axios.create({
     baseURL: config.baseUrl,
     withCredentials: config.withCredentials ?? false,
+    headers: config.defaultHeaders,
   });
   instance.interceptors.request.use(async (reqConfig) => {
     const token = await config.getAccessToken();

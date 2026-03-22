@@ -32,7 +32,7 @@ describe('Folder CRUD', () => {
     const result = await ctx.client.createFolder(ctx.rootIpnsName, 'Documents');
 
     expect(result.id).toBeTruthy();
-    expect(result.ipnsName).toMatch(/^k51|^bafz/);
+    expect(result.ipnsName).toMatch(/^(k51|bafz)/);
     expect(result.folderKey.length).toBe(32);
     expect(result.ipnsPrivateKey.length).toBeGreaterThan(0);
 

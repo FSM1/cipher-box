@@ -25,7 +25,8 @@ export function printSummary(
   console.log(`Clients:     ${clientCount}`);
   console.log(`Duration:    ${(totalDurationMs / 1000).toFixed(1)}s`);
   console.log(`Total ops:   ${totalOps} (${totalErrors} errors)`);
-  console.log(`Throughput:  ${(totalOps / (totalDurationMs / 1000)).toFixed(2)} ops/sec`);
+  const durationSec = Math.max(totalDurationMs, 1) / 1000;
+  console.log(`Throughput:  ${(totalOps / durationSec).toFixed(2)} ops/sec`);
   if (totalBytes > 0) {
     console.log(`Data:        ${formatBytes(totalBytes)}`);
   }
