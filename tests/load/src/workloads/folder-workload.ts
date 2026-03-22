@@ -13,6 +13,7 @@ export interface FolderWorkloadOptions {
 
 /**
  * Run a folder CRUD workload on a single client.
+ * Individual operation failures are recorded as errors but don't abort the workload.
  */
 export async function runFolderWorkload(
   pc: PoolClient,
@@ -23,17 +24,29 @@ export async function runFolderWorkload(
   for (let i = 0; i < opts.cycles; i++) {
     const name = `load-folder-${pc.id}-${i}`;
 
-    // Create
-    const folder = await metrics.measure('createFolder', () =>
-      client.createFolder(rootIpnsName, name)
-    );
+    try {
+      // Create
+      const folder = await metrics.measure('createFolder', () =>
+        client.createFolder(rootIpnsName, name)
+      );
 
-    // Rename
-    await metrics.measure('renameItem', () =>
-      client.renameItem(rootIpnsName, folder.id, `${name}-renamed`)
-    );
+      // Rename
+      try {
+        await metrics.measure('renameItem', () =>
+          client.renameItem(rootIpnsName, folder.id, `${name}-renamed`)
+        );
+      } catch {
+        /* non-fatal — continue to delete */
+      }
 
-    // Delete
-    await metrics.measure('deleteItem', () => client.deleteItem(rootIpnsName, folder.id));
+      // Delete
+      try {
+        await metrics.measure('deleteItem', () => client.deleteItem(rootIpnsName, folder.id));
+      } catch {
+        /* non-fatal */
+      }
+    } catch {
+      /* create failed — skip rename and delete for this cycle */
+    }
   }
 }
