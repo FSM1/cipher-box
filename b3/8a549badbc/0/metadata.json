@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "b38a549badbc",
+  "session_id": "f0dd29f9-8a13-44de-877f-1bc80807410d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T02:38:13.049692Z",
+  "branch": "fix/ci-api-client-diff-scope",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "712352d81cb9",
+  "token_usage": {
+    "input_tokens": 311,
+    "cache_creation_tokens": 560287,
+    "cache_read_tokens": 35077339,
+    "output_tokens": 70229,
+    "api_call_count": 250
+  },
+  "session_metrics": {
+    "turn_count": 31
+  },
+  "summary": {
+    "intent": "Deploy v0.25.0 to staging after merging the release PR, then investigate and fix multiple issues discovered during smoke testing (slow IPNS publish, broken token refresh), and consolidate the web app's fragmented API client architecture.",
+    "outcome": "Successfully unblocked staging deployment via manual v0.25.1 tag after fixing a Dockerfile build failure and release-please title pattern misconfiguration. Completed a major API client consolidation (3 HTTP paths → 1), fixed IPNS DHT publish latency, and resolved token refresh for long-running sessions across PRs #308 and #309.",
+    "learnings": {
+      "repo": [
+        "The staging deployment workflow (deploy-staging.yml) triggers on tags matching 'v*-staging*', NOT release tags. A separate manual 'Tag Staging Release' workflow must be run after each release to create the staging-specific tag.",
+        "release-please's pull-request-title-pattern must include '${component}' for multi-package monorepo configs. Without it, release-please cannot match merged release PRs back to their components, causing it to abort with 'untagged, merged release PRs outstanding'.",
+        "The web app previously had two separate orval code generation configs: packages/api-client (axios, for SDK/desktop consumers) and apps/web/src/api/ (react-query, for the web app). The web app's hooks were almost entirely unused — only useHealthControllerCheck was actually consumed as a hook.",
+        "The API (apps/api) is a zero-knowledge server that genuinely has no dependency on @cipherbox/core or @cipherbox/crypto — it stores opaque blobs and proxies IPFS. The api-client package bridges the contract via OpenAPI spec.",
+        "The @cipherbox/crypto package lists @cipherbox/core as a devDependency, which caused pnpm lockfile resolution to fail in the Dockerfile when it was incorrectly included in the build context.",
+        "The CI verify step checks that generated API client files are committed and up-to-date by diffing the output paths after running the generate command.",
+        "Deleting the release-please--branches--main branch resets release-please state, allowing it to reconstruct from existing tags on the next push to main."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 52,
+          "end_line": 70,
+          "finding": "DHT delegated routing publish via someguy sidecar was being awaited, causing 10-30s delays. Changed to fire-and-forget since resolveRecord() always prefers the DB cache. The 'result' variable correctly stays 'success' as the DHT propagation is best-effort."
+        },
+        {
+          "path": "apps/api/Dockerfile",
+          "finding": "Had a stale COPY of packages/crypto/package.json that wasn't needed (api doesn't depend on @cipherbox/crypto) but caused pnpm lockfile resolution to fail when @cipherbox/core wasn't also present in the build context."
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "finding": "Added 401 response interceptor with shared-promise deduplication for token refresh. Uses withCredentials: true for HTTP-only refresh token cookies. createAxiosInstance() and getCachedInstance() are intentionally separate — only the former has the request interceptor for SDK consumers."
+        },
+        {
+          "path": "apps/web/src/lib/api/ipfs.ts",
+          "finding": "Originally used raw fetch() for progress-tracked downloads (citing unreliable axios onDownloadProgress), bypassing the 401 refresh interceptor. Replaced with axios onDownloadProgress which works correctly for blob responses. File reduced from 131 to 70 lines."
+        },
+        {
+          "path": "apps/web/src/lib/api-config.ts",
+          "finding": "Single configuration point for the api-client: sets withCredentials, getAccessToken from Zustand store, onRefreshFailure (clears stores + navigates to login). Dynamic import of router uses .catch() to handle module load failures."
+        },
+        {
+          "path": "release-please-config.json",
+          "finding": "pull-request-title-pattern was 'chore: release' without '${component}', causing release-please to fail to match merged multi-package release PRs. Fixed to include component interpolation."
+        }
+      ],
+      "workflow": [
+        "When release-please aborts due to 'untagged, merged release PRs', the fix is to delete the release-please--branches--main branch so it can reconstruct state from existing tags on the next push to main.",
+        "Manually creating a GitHub release tag (git tag + gh release create) is a valid unblocking strategy when release-please is stuck, but the Tag Staging Release action requires the tag to exist at the correct commit.",
+        "fire-and-forget promises in production code need a trailing .catch() to avoid unhandled promise rejections — both Copilot and CodeRabbit flagged this independently.",
+        "CodeRabbit's 'nitpick' comments and Copilot inline review comments often flag the same issue independently; resolving one resolves both conceptually.",
+        "The simplify workflow (3 parallel review agents for reuse/quality/efficiency) caught: duplicate retry blocks that could be collapsed, unconditional onUploadProgress registration, redundant setAuthenticated() call in refresh callback, and overly nested useHealthCheck options."
+      ]
+    },
+    "friction": [
+      "release-please aborted twice due to the missing '${component}' in pull-request-title-pattern — first preventing v0.25.1 tag creation after PR #306, then preventing a release PR after PR #308. Required manual tag creation and branch deletion to unblock.",
+      "The Grafana provisioning step failed with HTTP 503 during the Tag Staging Release workflow due to free-tier Grafana Cloud instance hibernation — transient, not actionable.",
+      "The stale packages/crypto COPY in the API Dockerfile caused a pnpm workspace resolution failure that only surfaced with the expanded package list in the new release-please config.",
+      "The web app had 8,812 lines of generated react-query code from a second orval config, but only 1 endpoint (health check) was actually consumed as a hook — the duplication had gone unnoticed.",
+      "Token refresh was silently broken for long-running sessions: the orval-generated fetch-based client had no 401 handling, while the refresh interceptor only existed on the legacy axios client used during login."
+    ],
+    "open_items": [
+      "React Query cache is not cleared on logout or token refresh failure — clearAllUserStores() handles Zustand cleanup but QueryClient.clear() is never called. Noted as follow-up by CodeRabbit on PR #309.",
+      "The IPNS SDK batch publish behavior (whether it truly batches or serializes) was flagged as a potential secondary cause of slow batch deletes but was not investigated — the DHT await fix may be sufficient.",
+      "The CI diff check for packages/api-client/ was narrowed to only check generated paths (openapi.json, src/generated/, src/models/) — this is the final commit on main from this session and a release-please PR should be created on next merge.",
+      "Component package versions in .release-please-manifest.json are still at 0.25.0 while root is at 0.25.1 — this is correct since no component code changed, but should be monitored to ensure release-please correctly handles future component bumps with the new title pattern."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-22T02:37:27.673312Z",
+    "agent_lines": 0,
+    "human_added": 65,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 65,
+    "agent_percentage": 0
+  }
+}

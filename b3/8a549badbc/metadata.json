@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "b38a549badbc",
+  "strategy": "manual-commit",
+  "branch": "fix/ci-api-client-diff-scope",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b3/8a549badbc/0/metadata.json",
+      "transcript": "/b3/8a549badbc/0/full.jsonl",
+      "content_hash": "/b3/8a549badbc/0/content_hash.txt",
+      "prompt": "/b3/8a549badbc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 311,
+    "cache_creation_tokens": 560287,
+    "cache_read_tokens": 35077339,
+    "output_tokens": 70229,
+    "api_call_count": 250
+  }
+}
