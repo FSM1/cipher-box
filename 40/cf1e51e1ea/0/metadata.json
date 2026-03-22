@@ -1,0 +1,104 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "40cf1e51e1ea",
+  "session_id": "0617b2f2-dabc-413c-b9f2-7450610a315f",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T20:39:49.935518Z",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "35e768cfa082",
+  "token_usage": {
+    "input_tokens": 181,
+    "cache_creation_tokens": 189830,
+    "cache_read_tokens": 20226412,
+    "output_tokens": 58238,
+    "api_call_count": 160
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Resolve PR review comments on load testing workflows, then refactor the api-client package from a module-level singleton to instance-scoped axios per CipherBoxClient, and investigate a throttle bypass gap discovered during load testing.",
+    "outcome": "All PR review threads resolved and pushed. The singleton/dual-path architecture was fully eliminated: api-config.ts now creates one shared axios instance used by both direct generated-function calls (web app) and CipherBoxClient operations. The throttle bypass gap investigation concluded the issue was already fixed by the refactor, with a bonus fix migrating bare axios.post() calls in ipfs/index.ts to use the instance-scoped axios.",
+    "learnings": {
+      "repo": [
+        "Two layers of rate limiting exist in the API: controller-level @UseGuards(ThrottlerGuard) and per-endpoint @Throttle() decorators — BypassableThrottlerGuard.canActivate() returns true before super.canActivate(), so @Throttle metadata is never consulted when bypass header is present.",
+        "The IPFS controller uses only JwtAuthGuard with no throttle guard, so IPFS operations are never throttled by the API layer.",
+        "Phase 19.1 was listed as complete in ROADMAP.md (6/6 plans) but the web app still had 13 files importing directly from @cipherbox/api-client, meaning the rewiring was partial — scoped to folder/file/bin CRUD but not auth, vault setup, shares, invites, device approval, or health checks.",
+        "The web app's dual-path architecture (direct api-client imports + CipherBoxClient) had persisted through at least one prior refactor before this session fully eliminated it.",
+        "CipherBoxClient did not have axios as a direct dependency — AxiosInstance type must be imported through @cipherbox/api-client, not directly from axios.",
+        "429 errors during pnpm test runs are caused by parallel test suites hitting the live API simultaneously, not code issues — a brief cooldown between runs resolves them."
+      ],
+      "code": [
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "Rewrote to support both singleton and instance-scoped paths: createAxiosInstance now handles 401 refresh, setApiClientConfig accepts optional pre-built instance, getCachedInstance uses createAxiosInstance instead of duplicating interceptor logic."
+        },
+        {
+          "path": "packages/sdk-core/src/ipfs/index.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "addToIpfs and unpinFromIpfs used bare axios.post() instead of ctx.axiosInstance, bypassing auth interceptors and 401 refresh even though IPFS controller has no throttle guard."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 1,
+          "end_line": 100,
+          "finding": "createAndPublishIpnsRecord, batchPublishIpnsRecords, and resolveIpnsRecord all needed ctx parameter threaded through to forward the axios instance to customInstance options."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 71,
+          "end_line": 116,
+          "finding": "loadBinMetadataInternal and saveBinMetadata called resolveIpnsRecord and createAndPublishIpnsRecord without passing ctx — missed in initial pass, caught by grepping all IPNS callers."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/ipns.test.ts",
+          "line": 55,
+          "end_line": 83,
+          "finding": "Mock assertions expected ipnsControllerPublishRecord called with one argument; after ctx threading it's called with two (data + undefined options) — assertions needed updating."
+        },
+        {
+          "path": "apps/web/src/lib/api-config.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Rewrote to create the shared axios instance with all interceptors (auth injection, 401 refresh) and register it via setApiClientConfig, eliminating duplicate instance creation."
+        },
+        {
+          "path": "apps/api/src/common/guards/throttler-bypass.guard.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "BypassableThrottlerGuard returns true before calling super.canActivate(), meaning per-endpoint @Throttle() limits are never applied when bypass header is present — the guard is correct."
+        },
+        {
+          "path": ".github/workflows/load-test.yml",
+          "line": 177,
+          "end_line": 177,
+          "finding": "curl -s silently succeeds on HTTP 5xx — must use curl -fsS so server errors correctly fail the readiness health check loop."
+        }
+      ],
+      "workflow": [
+        "When grepping for callers of a refactored function, also check internal package callers (e.g. sdk/src/bin) separately from the primary package — easy to miss in a monorepo.",
+        "Rate-limited live API integration tests require isolation (run package alone with cooldown) to distinguish transient 429s from code issues.",
+        "The check-todos workflow uses a GSD toolchain (gsd-tools.cjs) to load todo state and integrates with ROADMAP.md for phase correlation before offering actions."
+      ]
+    },
+    "friction": [
+      "sdk/src/types.ts initially used import('axios') for AxiosInstance type — failed because axios is not a direct SDK dependency; had to use the re-export from @cipherbox/api-client instead.",
+      "sdk-core/types.ts had same dynamic import issue with axios.",
+      "Parallel pnpm test runs consistently produced 429 errors from the live API, requiring manual cooldown and isolated reruns to confirm tests actually pass.",
+      "IPNS callers in sdk/src/bin/index.ts were missed in the initial ctx-threading pass, requiring a follow-up grep sweep to find them.",
+      "ipns.test.ts mock assertions broke after ctx threading because undefined options argument changed call signature — required a test fix pass."
+    ],
+    "open_items": [
+      "setApiClientConfig and the singleton export still exist in api-client for backward compatibility — could be removed entirely once confident no external consumers rely on it.",
+      "The web app still has 13 files importing directly from @cipherbox/api-client (auth, vault setup, shares, invites, device approval, health checks) — these share the singleton but are not routed through CipherBoxClient, which may be revisited as Phase 19.1 follow-up.",
+      "Parallel test suite 429s suggest the integration tests may benefit from a shared rate-limit-aware test runner or per-suite cooldowns rather than relying on sequential execution.",
+      "The ROADMAP.md shows Phase 19.1 as '6/6 plans complete' (planned) with unchecked boxes — the roadmap state may need reconciliation to reflect what was actually completed vs. planned."
+    ]
+  }
+}

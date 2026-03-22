@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "40cf1e51e1ea",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/40/cf1e51e1ea/0/metadata.json",
+      "transcript": "/40/cf1e51e1ea/0/full.jsonl",
+      "content_hash": "/40/cf1e51e1ea/0/content_hash.txt",
+      "prompt": "/40/cf1e51e1ea/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 181,
+    "cache_creation_tokens": 189830,
+    "cache_read_tokens": 20226412,
+    "output_tokens": 58238,
+    "api_call_count": 160
+  }
+}
