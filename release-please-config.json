@@ -9,7 +9,6 @@
         "apps/api/package.json",
         "apps/web/package.json",
         "apps/desktop/package.json",
-        "packages/crypto/package.json",
         "tests/e2e/package.json",
         "tee-worker/package.json",
         "apps/desktop/src-tauri/Cargo.toml",
