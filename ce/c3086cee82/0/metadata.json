@@ -1,0 +1,93 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "cec3086cee82",
+  "session_id": "8dbad658-aeb6-4bde-a1a1-7a83e2010385",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T18:10:37.953516Z",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/load/src/workloads/folder-workload.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b10a2b0846f6",
+  "token_usage": {
+    "input_tokens": 966,
+    "cache_creation_tokens": 1009486,
+    "cache_read_tokens": 79222438,
+    "output_tokens": 115552,
+    "api_call_count": 299
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "summary": {
+    "intent": "Implement SDK-based E2E and load test infrastructure for CipherBox, replacing browser-dependent Playwright tests with direct SDK calls for both correctness testing and high-volume load testing.",
+    "outcome": "Created two new workspace packages (tests/sdk-e2e with 83 passing tests across 10 suites, tests/load with 5 load scenarios), a throttle bypass mechanism for test environments, two CI workflows, and a testing strategy document. All 83 SDK E2E tests pass locally against real API/IPFS/Postgres stack.",
+    "learnings": {
+      "repo": [
+        "setApiClientConfig is a module-level singleton used by orval-generated functions in sdk-core — all multi-account tests must call setApiClientConfig before each operation that uses the API, causing cross-suite contamination if not reset",
+        "The API throttler (10 req/s, 100 req/min) applies per-controller via @UseGuards(ThrottlerGuard), not globally — each controller import must be swapped individually",
+        "NODE_ENV in .env file takes precedence over shell env vars because NestJS ConfigModule loads .env first, overriding process.env values passed to the child process",
+        "The /auth/test-login endpoint returns { accessToken, refreshToken, isNewUser, publicKeyHex, privateKeyHex } and has its own stricter throttle (5 per 15 min)",
+        "ClaimInviteDto has @MinLength(258) on encryptedKey — requires at least 258 hex chars (129 bytes), meaning dummy byte arrays of 64 bytes fail validation",
+        "pnpm workspace new packages need pnpm install run at the root to wire up symlinks before TypeScript can resolve workspace: protocol dependencies",
+        "The pre-commit hook regenerates the API client when api-client source files change — modifying instance.ts requires running pnpm api:generate before committing",
+        "crypto.getRandomValues() has a 65,536 byte hard limit per call — generating files larger than 64KB requires chunked calls"
+      ],
+      "code": [
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Module-level _config singleton shared by all orval-generated functions — no instance scoping possible without refactoring orval codegen config and threading axios instance through sdk-core's SdkContext"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "line": 24,
+          "end_line": 59,
+          "finding": "Gold standard test-login → initializeVault → encryptVaultKeys → setApiClientConfig → CipherBoxClient pattern for SDK test setup"
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "ThrottlerModule configured with ttl:60000/limit:100 and ttl:1000/limit:10 — must be conditionally relaxed or bypassed for test environments"
+        }
+      ],
+      "workflow": [
+        "For NestJS dev server, env vars injected in shell don't override .env file values — must edit the .env file directly or use a separate .env.test file",
+        "sed replace-all for adding function wrappers around object literals (e.g., headers: { to headers: fn({) requires paired closing paren fixes — easier to rewrite the file directly",
+        "Vitest with fileParallelism:false still shares the Node.js module cache between test files, so module-level singletons like setApiClientConfig bleed across suites — later suites must re-set them",
+        "Promise.allSettled swallows rejection reasons silently — load test scenarios need explicit logging of result.reason to surface workload errors",
+        "noUnusedLocals in tsconfig causes TS errors on unused imports from test setup — prefix with _ or remove imports rather than leaving them"
+      ]
+    },
+    "friction": [
+      "1Password SSH agent unavailable in agent subprocesses — git commits requiring SSH signing hung indefinitely, required user to commit from terminal or retry",
+      "sed-based bulk replacements of headers: { → headers: fetchHeaders({ left mismatched closing parens, corrupting vault-lifecycle.test.ts and requiring a full rewrite",
+      "The 'simplify' review phase discovered and fixed issues (getRawSamples copy, setApiClientConfig re-use, folderTree as any) that should have been caught during initial implementation",
+      "Throttle 429s appeared even with NODE_ENV=test conditional because IPNS publish endpoints have their own @Throttle decorators that ignore the module-level limit change",
+      "noUnusedLocals TS errors required multiple rounds of fixes after initial Write calls — should have checked tsconfig strictness settings before writing test files",
+      "Background bash tasks with long git signing waits needed explicit TaskOutput polling to determine status, adding latency to the commit workflow"
+    ],
+    "open_items": [
+      "Refactor api-client from module-level singleton to instance-scoped axios: configure orval to generate functions accepting an axios instance parameter, thread through sdk-core SdkContext, have CipherBoxClient own its axios instance — tracked in .planning/todos/pending/2026-03-22-refactor-api-client-from-singleton-to-instance-scoped-axios.md",
+      "Migrate raw fetch() calls in vault-lifecycle.test.ts, share-operations.test.ts, invite-link.test.ts to use orval-generated API client functions — currently uses testFetch() workaround that can be deleted after singleton refactor",
+      "Load test error resilience: concurrent IPNS publishes from multiple clients hit sequence number conflicts (expected behavior) but the error categorization doesn't distinguish throttle 429s from sequence conflicts — add error type breakdown to metrics reporter",
+      "Load test scenarios need a 'throttle validation' scenario that runs WITHOUT bypass header to verify the throttler fires correctly under expected load — important for staging health checks",
+      "The testFetch() helper, fetchHeaders export, and setApiClientConfig re-set in error-cases.test.ts are all temporary workarounds that become dead code after the singleton refactor",
+      "CI sdk-e2e.yml workflow needs THROTTLE_BYPASS_SECRET added to the GitHub repository secrets before the workflow can run successfully in CI",
+      "Load test 429s on IPNS publish endpoint during upload-throughput (37/60 succeed with 3 clients) — investigate whether per-endpoint @Throttle decorators are bypassed by BypassableThrottlerGuard or if they use a separate guard instance"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-22T18:09:49.591885Z",
+    "agent_lines": 0,
+    "human_added": 46,
+    "human_modified": 10,
+    "human_removed": 0,
+    "total_committed": 46,
+    "agent_percentage": 0
+  }
+}
