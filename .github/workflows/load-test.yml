@@ -136,13 +136,13 @@ jobs:
         run: |
           pnpm --filter @cipherbox/api start:prod &
           for i in $(seq 1 30); do
-            if curl -s http://localhost:3000/health > /dev/null 2>&1; then
+            if curl -fsS http://localhost:3000/health > /dev/null 2>&1; then
               echo "API is ready"
               break
             fi
             sleep 1
           done
-          if ! curl -s http://localhost:3000/health > /dev/null 2>&1; then
+          if ! curl -fsS http://localhost:3000/health > /dev/null 2>&1; then
             echo "API failed to start within 30s"
             exit 1
           fi
