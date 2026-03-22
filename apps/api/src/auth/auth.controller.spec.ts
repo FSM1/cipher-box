@@ -6,8 +6,8 @@ import { AuthService } from './auth.service';
 import { AuthMethodService } from './services/auth-method.service';
 import { TestAuthService } from './services/test-auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
-import { ThrottlerGuard } from '@nestjs/throttler';
 import { LoginDto } from './dto/login.dto';
+import { BypassableThrottlerGuard } from '../common/guards/throttler-bypass.guard';
 import { LinkMethodDto } from './dto/link-method.dto';
 import { MetricsService } from '../metrics/metrics.service';
 
@@ -82,7 +82,7 @@ describe('AuthController', () => {
     })
       .overrideGuard(JwtAuthGuard)
       .useValue({ canActivate: () => true })
-      .overrideGuard(ThrottlerGuard)
+      .overrideGuard(BypassableThrottlerGuard)
       .useValue({ canActivate: () => true })
       .compile();
 

@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { ThrottlerGuard } from '@nestjs/throttler';
 import { InvitesController } from './invites.controller';
+import { BypassableThrottlerGuard } from '../common/guards/throttler-bypass.guard';
 import { ShareInviteService } from './share-invite.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ShareInvite } from './entities/share-invite.entity';
@@ -54,7 +54,7 @@ describe('InvitesController', () => {
     })
       .overrideGuard(JwtAuthGuard)
       .useValue({ canActivate: () => true })
-      .overrideGuard(ThrottlerGuard)
+      .overrideGuard(BypassableThrottlerGuard)
       .useValue({ canActivate: () => true })
       .compile();
 
