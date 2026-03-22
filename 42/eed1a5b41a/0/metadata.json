@@ -1,0 +1,104 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "42eed1a5b41a",
+  "session_id": "f0dd29f9-8a13-44de-877f-1bc80807410d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T02:49:29.938328Z",
+  "branch": "fix/release-please-bootstrap",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "release-please-config.json"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "3b817aadde8c",
+  "token_usage": {
+    "input_tokens": 323,
+    "cache_creation_tokens": 564807,
+    "cache_read_tokens": 37706794,
+    "output_tokens": 72372,
+    "api_call_count": 260
+  },
+  "session_metrics": {
+    "turn_count": 32
+  },
+  "summary": {
+    "intent": "Debug and fix a broken staging deployment pipeline after merging release PR #298, then investigate and fix IPNS publish latency and token refresh issues discovered during staging smoke tests.",
+    "outcome": "Fixed Docker API build (PR #308), release-please title pattern (PR #307), CI drift check scope (PR #310), IPNS fire-and-forget publish (PR #308), and consolidated the web app from three HTTP client paths down to one by removing the duplicate orval react-query generation in favor of @cipherbox/api-client (PR #309). Release-please remains stuck due to historic PRs with unparseable titles; bootstrap-sha fix was in progress at session end.",
+    "learnings": {
+      "repo": [
+        "Staging deployment triggers on tags matching 'v*-staging*', not release tags — there is a manual 'Tag Staging Release' GitHub Actions workflow that runs E2E tests, waits for approval, then creates the staging tag.",
+        "release-please uses a pull-request-title-pattern to match merged PRs back to components. The old pattern 'chore: release' lacked '${component}', causing it to abort with 'untagged, merged release PRs' whenever any component config is present.",
+        "The web app had two separate orval code-generation configs: packages/api-client (axios-functions mode, for SDK/desktop consumers) and apps/web (react-query mode). The react-query hooks were almost entirely unused — only useHealthControllerCheck was actually called as a hook.",
+        "CipherBox API is a zero-knowledge server that never handles plaintext — it stores opaque blobs and proxies IPFS. This is why apps/api has no dependency on @cipherbox/core or @cipherbox/crypto.",
+        "The @cipherbox/api-client package is generated from the API's OpenAPI spec via pnpm api:generate and is the typed bridge for non-React consumers.",
+        "The someguy sidecar is used for delegated DHT routing for IPNS publishes.",
+        "release-please--branches--main branch holds pending release state; deleting it forces a fresh reconstruction from existing tags."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 52,
+          "end_line": 70,
+          "finding": "IPNS publish awaited delegated routing DHT propagation (10-30s) unnecessarily. DB record is saved first and resolveRecord always prefers DB cache, so DHT publish can be fire-and-forget. Changed to detached promise with trailing .catch() logging."
+        },
+        {
+          "path": "apps/api/Dockerfile",
+          "finding": "Dockerfile had a stale COPY for packages/crypto/package.json that apps/api does not depend on. With expanded pnpm workspace package list, this pulled in @cipherbox/core as a transitive dependency that wasn't in the build context, breaking pnpm deploy."
+        },
+        {
+          "path": "apps/web/src/api/custom-instance.ts",
+          "finding": "Web app's orval-generated react-query client used raw fetch() with zero 401 handling. Token refresh interceptor only existed on the axios client used during login/vault init, causing unrecoverable 401s after access token expiry (~15min)."
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "finding": "Added refreshAccessToken callback, withCredentials, onRefreshFailure, and 401 response interceptor with shared-promise deduplication to ApiClientConfig. createAxiosInstance now applies withCredentials and uses headers.set() for safe AxiosHeaders manipulation."
+        },
+        {
+          "path": "apps/web/src/lib/api/ipfs.ts",
+          "finding": "Download-with-progress path used raw fetch() bypassing the 401 interceptor. Simplified to use ipfsControllerGet from api-client for both paths, removing manual auth headers and refresh logic. File reduced from 131 to 70 lines."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "finding": "CI drift check was diffing all of packages/api-client/ including instance.ts, tests, and package.json — any non-generated change would incorrectly fail 'Generated API client is out of date'. Should only diff openapi.json, src/generated/, and src/models/."
+        },
+        {
+          "path": "release-please-config.json",
+          "finding": "pull-request-title-pattern was 'chore: release' without '${component}'. With multi-package config, release-please cannot match merged PRs back to components and aborts. Fix: add '${component}' to pattern. Also needs bootstrap-sha to skip unparseable historic PRs."
+        }
+      ],
+      "workflow": [
+        "release-please bootstrap-sha tells release-please to ignore all history before a specific commit, preventing it from scanning old merged PRs with unparseable titles.",
+        "Conventional commit type matters for release-please: 'chore' commits do not trigger a version bump, 'fix' commits trigger a patch bump, 'feat' triggers minor.",
+        "When release-please creates component tags but cannot parse the PR title, it enters a stuck state where it perpetually aborts — deleting the release-please--branches--main branch alone is insufficient if old PRs remain unparseable.",
+        "Manually created GitHub releases/tags bypass release-please's PR-matching logic for immediate unblocking, but release-please still needs bootstrap-sha to stop scanning old PRs.",
+        "axios-mock-adapter is the right tool for testing axios interceptors in vitest; vi.spyOn on axios.create requires beforeEach reset of the cached instance singleton."
+      ]
+    },
+    "friction": [
+      "release-please title pattern missing '${component}' caused repeated abort loops across multiple release cycles before root cause was identified.",
+      "Deleting release-please--branches--main branch did not fix the abort — release-please still scanned historic merged PRs with unparseable titles, requiring bootstrap-sha.",
+      "Manual tag creation for v0.25.1 was necessary to unblock staging, adding operational overhead.",
+      "The Grafana Cloud free-tier instance hibernation caused a transient 503 during staging deploy, requiring a re-run.",
+      "Web app had three separate HTTP client paths (orval fetch mutator, axios login client, hand-written IPFS client) with inconsistent auth handling — auth gap existed undetected until a long batch operation exposed it.",
+      "Codecov patch coverage check required an additional test iteration after the fire-and-forget .catch() was added.",
+      "Two orval configurations generating from the same OpenAPI spec created maintenance burden and the auth gap."
+    ],
+    "open_items": [
+      "React Query cache is not cleared on logout or token refresh failure (clearAllUserStores does not invalidate query cache) — noted as pre-existing gap, not addressed in this session.",
+      "release-please bootstrap-sha PR was in progress at session end — needs merge and verification that release-please successfully creates a new release PR.",
+      "Tag Staging Release workflow with v0.25.1 was triggered but session ended before confirming successful staging deployment of the IPNS fix.",
+      "IPNS batch publishing performance may still have SDK-level inefficiency (noted as possible cause: 'sdk package not handling batches in true batching fashion') — only the server-side fire-and-forget was fixed.",
+      "PR #307 (release-please config fix) historic PR parsing issue — bootstrap-sha should resolve, but needs verification after merge.",
+      "desktop app and other non-React consumers of @cipherbox/api-client have no token refresh configured — onRefreshFailure callback behavior for SDK consumers is undefined."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-22T02:48:37.989479Z",
+    "agent_lines": 0,
+    "human_added": 1,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "agent_percentage": 0
+  }
+}
