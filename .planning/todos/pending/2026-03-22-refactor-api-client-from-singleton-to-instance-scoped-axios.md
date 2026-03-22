@@ -71,3 +71,13 @@ Keep `setApiClientConfig()` and the module-level singleton working for the web a
 - `apps/web` — api-config.ts (no change needed if backward-compatible)
 - `tests/sdk-e2e` — test-harness.ts, multi-account.ts (simplify)
 - `tests/load` — client-pool.ts (simplify)
+
+## Additional cleanup enabled by this refactor
+
+Once the singleton is eliminated, the following workarounds added in PR #318 can be removed:
+
+- **`testFetch()` helper** (`tests/sdk-e2e/src/fixtures/test-harness.ts`) — raw fetch calls in test suites (vault-lifecycle, share-operations, invite-link) should be replaced with the generated API client functions. The generated client would use the instance-scoped axios automatically, removing the need for manual header injection. The raw fetch calls exist because the original tests were written before the bypass header was added; the generated client is the proper approach.
+- **`fetchHeaders()` helper** — same file, only needed because raw fetch doesn't go through the axios instance. Goes away when raw fetch is replaced with generated client.
+- **`setApiClientConfig` re-set in error-cases.test.ts** (line 106) — the event emission test re-sets the singleton because multi-account suites overwrite it. With instance-scoped axios, each client owns its config and this workaround is unnecessary.
+- **`defaultHeaders` on `ApiClientConfig`** (`packages/api-client/src/instance.ts`) — added to inject the throttle bypass header into the singleton axios instance. Still useful for backward compatibility, but instance-scoped clients would receive it via constructor config instead.
+- **`BypassableThrottlerGuard`** (`apps/api/src/common/guards/throttler-bypass.guard.ts`) — this stays regardless of the refactor; it's the proper server-side mechanism for throttle bypass.
