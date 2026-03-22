@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.26.0](https://github.com/FSM1/cipher-box/compare/v0.25.2...v0.26.0) (2026-03-22)
+
+
+### Features
+
+* **test:** add SDK-driven E2E and load test suites ([#318](https://github.com/FSM1/cipher-box/issues/318)) ([02ef044](https://github.com/FSM1/cipher-box/commit/02ef044ac1266064983c1122f6acefc601ec9865))
+
+
+### Bug Fixes
+
+* **ci:** set release-please title pattern to 'chore: release v${version}' ([9cdea31](https://github.com/FSM1/cipher-box/commit/9cdea31da5e6cd7f2f26ac0311aeebf6b980a080))
+* **ci:** set release-please title pattern to use version instead of component ([#317](https://github.com/FSM1/cipher-box/issues/317)) ([9cdea31](https://github.com/FSM1/cipher-box/commit/9cdea31da5e6cd7f2f26ac0311aeebf6b980a080))
+
 ## [0.25.2](https://github.com/FSM1/cipher-box/compare/v0.25.1...v0.25.2) (2026-03-22)
 
 

@@ -1,7 +1,7 @@
 {
-  ".": "0.25.2",
+  ".": "0.26.0",
   "packages/core": "0.25.0",
-  "packages/api-client": "0.25.0",
-  "packages/sdk-core": "0.25.0",
-  "packages/sdk": "0.25.0"
+  "packages/api-client": "0.26.0",
+  "packages/sdk-core": "0.26.0",
+  "packages/sdk": "0.26.0"
 }
