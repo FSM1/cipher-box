@@ -13,9 +13,9 @@ export function expectChildNamed(
   folderIpnsName: string,
   name: string
 ): void {
-  const folder = (client as any).folderTree.get(folderIpnsName);
+  const folder = client.getFolderTree().get(folderIpnsName);
   expect(folder, `Folder ${folderIpnsName} not found in tree`).toBeTruthy();
-  const match = folder.children.find((c: any) => c.name === name);
+  const match = folder!.children.find((c) => c.name === name);
   expect(match, `Expected child named "${name}" in folder`).toBeTruthy();
 }
 
@@ -27,9 +27,9 @@ export function expectNoChildNamed(
   folderIpnsName: string,
   name: string
 ): void {
-  const folder = (client as any).folderTree.get(folderIpnsName);
+  const folder = client.getFolderTree().get(folderIpnsName);
   expect(folder, `Folder ${folderIpnsName} not found in tree`).toBeTruthy();
-  const match = folder.children.find((c: any) => c.name === name);
+  const match = folder!.children.find((c) => c.name === name);
   expect(match, `Expected no child named "${name}" in folder`).toBeUndefined();
 }
 
@@ -41,9 +41,9 @@ export function expectChildCount(
   folderIpnsName: string,
   count: number
 ): void {
-  const folder = (client as any).folderTree.get(folderIpnsName);
+  const folder = client.getFolderTree().get(folderIpnsName);
   expect(folder, `Folder ${folderIpnsName} not found in tree`).toBeTruthy();
-  expect(folder.children.length).toBe(count);
+  expect(folder!.children.length).toBe(count);
 }
 
 /**
@@ -51,9 +51,9 @@ export function expectChildCount(
  * Throws if not found.
  */
 export function getChild(client: CipherBoxClient, folderIpnsName: string, name: string): any {
-  const folder = (client as any).folderTree.get(folderIpnsName);
+  const folder = client.getFolderTree().get(folderIpnsName);
   if (!folder) throw new Error(`Folder ${folderIpnsName} not in tree`);
-  const match = folder.children.find((c: any) => c.name === name);
+  const match = folder.children.find((c) => c.name === name);
   if (!match) throw new Error(`Child "${name}" not found in folder`);
   return match;
 }
@@ -62,7 +62,7 @@ export function getChild(client: CipherBoxClient, folderIpnsName: string, name: 
  * Get all children from the folder tree.
  */
 export function getChildren(client: CipherBoxClient, folderIpnsName: string): any[] {
-  const folder = (client as any).folderTree.get(folderIpnsName);
+  const folder = client.getFolderTree().get(folderIpnsName);
   if (!folder) throw new Error(`Folder ${folderIpnsName} not in tree`);
   return folder.children;
 }

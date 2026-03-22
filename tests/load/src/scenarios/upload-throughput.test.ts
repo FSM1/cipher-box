@@ -6,9 +6,12 @@
  */
 
 import { describe, it, afterAll } from 'vitest';
-import { createClientPool, destroyClientPool, type PoolClient } from '../harness/client-pool';
-import { MetricsCollector } from '../harness/metrics';
-import { printSummary, toJsonReport } from '../harness/reporter';
+import {
+  createClientPool,
+  destroyClientPool,
+  aggregateAndReport,
+  type PoolClient,
+} from '../harness/client-pool';
 import { runFileWorkload } from '../workloads/file-workload';
 
 const NUM_CLIENTS = parseInt(process.env.LOAD_TEST_CLIENTS ?? '10', 10);
@@ -27,10 +30,6 @@ describe('Upload Throughput', () => {
       label: 'upload-throughput',
     });
 
-    const globalMetrics = new MetricsCollector();
-    globalMetrics.start();
-
-    // Run all client workloads concurrently
     const results = await Promise.allSettled(
       pool.map((pc) => {
         pc.metrics.start();
@@ -43,31 +42,10 @@ describe('Upload Throughput', () => {
       })
     );
 
-    globalMetrics.stop();
-
-    // Aggregate metrics from all clients
-    const allMetrics = new MetricsCollector();
-    allMetrics.start();
-    for (const pc of pool) {
-      for (const sample of pc.metrics.getRawSamples()) {
-        allMetrics.record(sample);
-      }
-    }
-    allMetrics.stop();
-
     const succeeded = results.filter((r) => r.status === 'fulfilled').length;
     const failed = results.filter((r) => r.status === 'rejected').length;
     console.log(`\nClients completed: ${succeeded} succeeded, ${failed} failed`);
 
-    const metrics = allMetrics.getMetrics();
-    const totalDuration =
-      Math.max(...pool.map((pc) => pc.metrics.getRawSamples().at(-1)?.timestamp ?? 0)) -
-      Math.min(...pool.map((pc) => pc.metrics.getRawSamples()[0]?.timestamp ?? Date.now()));
-
-    printSummary('Upload Throughput', metrics, totalDuration, pool.length);
-
-    // Write JSON report
-    const json = toJsonReport('upload-throughput', metrics, totalDuration, pool.length);
-    console.log('\nJSON Report:\n' + json);
+    aggregateAndReport('Upload Throughput', pool);
   });
 });

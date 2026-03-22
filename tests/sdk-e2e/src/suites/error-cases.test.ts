@@ -64,55 +64,37 @@ describe('Error Cases', () => {
   });
 
   describe('Bin operations without loadBin', () => {
-    it('should throw BinNotLoadedError on deleteToBin', async () => {
-      const freshCtx = await createTestContext('bin-err-1');
-      try {
-        await expect(
-          freshCtx.client.deleteToBin(freshCtx.rootIpnsName, 'id', 'path')
-        ).rejects.toThrow('Bin not loaded');
+    let freshCtx: TestContext;
 
-        // Verify it's the right error type
-        try {
-          await freshCtx.client.deleteToBin(freshCtx.rootIpnsName, 'id', 'path');
-        } catch (err) {
-          expect(err).toBeInstanceOf(BinNotLoadedError);
-        }
-      } finally {
-        freshCtx.cleanup();
-        await deleteTestAccount(freshCtx);
-      }
+    beforeAll(async () => {
+      freshCtx = await createTestContext('bin-err');
+    });
+
+    afterAll(async () => {
+      freshCtx.cleanup();
+      await deleteTestAccount(freshCtx);
+    });
+
+    it('should throw BinNotLoadedError on deleteToBin', async () => {
+      const err = await freshCtx.client
+        .deleteToBin(freshCtx.rootIpnsName, 'id', 'path')
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BinNotLoadedError);
+      expect((err as Error).message).toBe('Bin not loaded');
     });
 
     it('should throw BinNotLoadedError on restoreFromBin', async () => {
-      const freshCtx = await createTestContext('bin-err-2');
-      try {
-        await expect(
-          freshCtx.client.restoreFromBin('entry-id', freshCtx.rootIpnsName)
-        ).rejects.toThrow('Bin not loaded');
-      } finally {
-        freshCtx.cleanup();
-        await deleteTestAccount(freshCtx);
-      }
+      await expect(
+        freshCtx.client.restoreFromBin('entry-id', freshCtx.rootIpnsName)
+      ).rejects.toThrow('Bin not loaded');
     });
 
     it('should throw BinNotLoadedError on permanentDelete', async () => {
-      const freshCtx = await createTestContext('bin-err-3');
-      try {
-        await expect(freshCtx.client.permanentDelete('entry-id')).rejects.toThrow('Bin not loaded');
-      } finally {
-        freshCtx.cleanup();
-        await deleteTestAccount(freshCtx);
-      }
+      await expect(freshCtx.client.permanentDelete('entry-id')).rejects.toThrow('Bin not loaded');
     });
 
     it('should throw BinNotLoadedError on emptyBin', async () => {
-      const freshCtx = await createTestContext('bin-err-4');
-      try {
-        await expect(freshCtx.client.emptyBin()).rejects.toThrow('Bin not loaded');
-      } finally {
-        freshCtx.cleanup();
-        await deleteTestAccount(freshCtx);
-      }
+      await expect(freshCtx.client.emptyBin()).rejects.toThrow('Bin not loaded');
     });
   });
 

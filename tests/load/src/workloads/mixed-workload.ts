@@ -75,7 +75,7 @@ export async function runMixedWorkload(pc: PoolClient, opts: MixedWorkloadOption
           size
         );
 
-        const folder = (client as any).folderTree.get(rootIpnsName);
+        const folder = client.getFolderTree().get(rootIpnsName);
         const child = folder?.children.find((c: any) => c.name === fileName);
         if (child) fileIds.push({ id: child.id, name: fileName });
       } catch {

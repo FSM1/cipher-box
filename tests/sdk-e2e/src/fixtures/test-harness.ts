@@ -16,43 +16,51 @@ import { deriveIpnsName, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 const API_URL = process.env.SDK_E2E_API_URL ?? 'http://localhost:3000';
 const SECRET = process.env.SDK_E2E_SECRET ?? 'e2e-test-secret-do-not-use-in-production';
 
-export interface TestContext {
+/** Core account data returned by createTestAccount (shared between sdk-e2e and load tests). */
+export interface TestAccount {
   client: CipherBoxClient;
   accessToken: string;
-  refreshToken: string;
   publicKey: Uint8Array;
   privateKey: Uint8Array;
   rootIpnsName: string;
   rootFolderKey: Uint8Array;
   rootIpnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array };
   email: string;
+}
+
+export interface TestContext extends TestAccount {
   /** Destroy the client and zero key material */
   cleanup: () => void;
 }
 
+export interface CreateAccountOptions {
+  apiUrl?: string;
+  secret?: string;
+  label: string;
+  emailPrefix?: string;
+}
+
 /**
- * Create a fully-initialized test context with a new user account.
- *
- * Steps:
- * 1. POST /auth/test-login → accessToken + keypair
- * 2. initializeVault(privateKey) → rootFolderKey, rootIpnsKeypair
- * 3. encryptVaultKeys + POST /vault/init
- * 4. setApiClientConfig (singleton — see multi-account caveat)
- * 5. new CipherBoxClient + registerFolder
+ * Create a test account with an initialized vault and CipherBoxClient.
+ * This is the shared core used by both sdk-e2e (createTestContext) and
+ * load tests (createPoolClient).
  */
-export async function createTestContext(label: string): Promise<TestContext> {
-  const email = `sdk-e2e-${label}-${Date.now()}@example.com`;
+export async function createTestAccount(opts: CreateAccountOptions): Promise<TestAccount> {
+  const apiUrl = opts.apiUrl ?? API_URL;
+  const secret = opts.secret ?? SECRET;
+  const prefix = opts.emailPrefix ?? 'sdk-e2e';
+  const email = `${prefix}-${opts.label}-${Date.now()}@example.com`;
 
   // 1. Authenticate
-  const loginRes = await fetch(`${API_URL}/auth/test-login`, {
+  const loginRes = await fetch(`${apiUrl}/auth/test-login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, secret: SECRET }),
+    body: JSON.stringify({ email, secret }),
   });
   if (!loginRes.ok) {
     throw new Error(`test-login failed (${loginRes.status}): ${await loginRes.text()}`);
   }
-  const { accessToken, refreshToken, publicKeyHex, privateKeyHex } = await loginRes.json();
+  const { accessToken, publicKeyHex, privateKeyHex } = await loginRes.json();
   const publicKey = hexToBytes(publicKeyHex);
   const privateKey = hexToBytes(privateKeyHex);
 
@@ -62,7 +70,7 @@ export async function createTestContext(label: string): Promise<TestContext> {
   const rootIpnsName = await deriveIpnsName(vault.rootIpnsKeypair.publicKey);
 
   // 3. Register vault on server
-  const initRes = await fetch(`${API_URL}/vault/init`, {
+  const initRes = await fetch(`${apiUrl}/vault/init`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -81,13 +89,13 @@ export async function createTestContext(label: string): Promise<TestContext> {
 
   // 4. Configure API client singleton
   setApiClientConfig({
-    baseUrl: API_URL,
+    baseUrl: apiUrl,
     getAccessToken: async () => accessToken,
   });
 
   // 5. Create and configure CipherBoxClient
   const client = new CipherBoxClient({
-    apiUrl: API_URL,
+    apiUrl,
     getAccessToken: async () => accessToken,
     vaultKeypair: { publicKey, privateKey },
     rootIpnsName,
@@ -98,24 +106,32 @@ export async function createTestContext(label: string): Promise<TestContext> {
   return {
     client,
     accessToken,
-    refreshToken,
     publicKey,
     privateKey,
     rootIpnsName,
     rootFolderKey: vault.rootFolderKey,
     rootIpnsKeypair: vault.rootIpnsKeypair,
     email,
-    cleanup: () => client.destroy(),
   };
 }
 
 /**
- * Delete a test account (cleanup after tests).
- * Uses the access token from the test context.
+ * Create a fully-initialized test context (convenience wrapper over createTestAccount).
  */
-export async function deleteTestAccount(ctx: TestContext): Promise<void> {
+export async function createTestContext(label: string): Promise<TestContext> {
+  const account = await createTestAccount({ label });
+  return { ...account, cleanup: () => account.client.destroy() };
+}
+
+/**
+ * Delete a test account (cleanup after tests).
+ */
+export async function deleteTestAccount(
+  ctx: { accessToken: string },
+  apiUrl = API_URL
+): Promise<void> {
   try {
-    const res = await fetch(`${API_URL}/auth/account`, {
+    const res = await fetch(`${apiUrl}/auth/account`, {
       method: 'DELETE',
       headers: {
         Authorization: `Bearer ${ctx.accessToken}`,

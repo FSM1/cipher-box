@@ -3,26 +3,25 @@
  *
  * Manages N CipherBoxClient instances, each with its own test account.
  * Creates accounts in parallel, distributes workloads, and collects metrics.
+ *
+ * Reuses the shared createTestAccount/deleteTestAccount from sdk-e2e
+ * to avoid duplicating the 5-step account provisioning sequence.
  */
 
-import { CipherBoxClient } from '@cipherbox/sdk';
 import { setApiClientConfig } from '@cipherbox/api-client';
-import { initializeVault, encryptVaultKeys } from '@cipherbox/core';
-import { deriveIpnsName, hexToBytes, bytesToHex } from '@cipherbox/crypto';
-import { MetricsCollector } from './metrics';
+import {
+  createTestAccount,
+  deleteTestAccount,
+  type TestAccount,
+} from '../../../sdk-e2e/src/fixtures/test-harness';
+import { MetricsCollector, type OperationMetrics } from './metrics';
+import { printSummary, toJsonReport } from './reporter';
 
 const API_URL = process.env.LOAD_TEST_API_URL ?? 'http://localhost:3000';
 const SECRET = process.env.LOAD_TEST_SECRET ?? 'e2e-test-secret-do-not-use-in-production';
 
-export interface PoolClient {
+export interface PoolClient extends TestAccount {
   id: number;
-  client: CipherBoxClient;
-  accessToken: string;
-  publicKey: Uint8Array;
-  privateKey: Uint8Array;
-  rootIpnsName: string;
-  rootFolderKey: Uint8Array;
-  rootIpnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array };
   metrics: MetricsCollector;
 }
 
@@ -52,7 +51,14 @@ export async function createClientPool(opts: ClientPoolOptions): Promise<PoolCli
     const promises = [];
 
     for (let i = batch; i < batchEnd; i++) {
-      promises.push(createPoolClient(i, label));
+      promises.push(
+        createTestAccount({
+          apiUrl: API_URL,
+          secret: SECRET,
+          label: `${label}-${i}`,
+          emailPrefix: 'load',
+        }).then((account): PoolClient => ({ ...account, id: i, metrics: new MetricsCollector() }))
+      );
     }
 
     const results = await Promise.allSettled(promises);
@@ -82,68 +88,6 @@ export async function createClientPool(opts: ClientPoolOptions): Promise<PoolCli
   return clients;
 }
 
-async function createPoolClient(id: number, label: string): Promise<PoolClient> {
-  const email = `load-${label}-${id}-${Date.now()}@example.com`;
-
-  // 1. Authenticate
-  const loginRes = await fetch(`${API_URL}/auth/test-login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, secret: SECRET }),
-  });
-  if (!loginRes.ok) {
-    throw new Error(`test-login failed for client ${id}: ${loginRes.status}`);
-  }
-  const { accessToken, publicKeyHex, privateKeyHex } = await loginRes.json();
-  const publicKey = hexToBytes(publicKeyHex);
-  const privateKey = hexToBytes(privateKeyHex);
-
-  // 2. Initialize vault
-  const vault = await initializeVault(privateKey);
-  const encrypted = await encryptVaultKeys(vault, publicKey);
-  const rootIpnsName = await deriveIpnsName(vault.rootIpnsKeypair.publicKey);
-
-  // 3. Register vault
-  const initRes = await fetch(`${API_URL}/vault/init`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      ownerPublicKey: bytesToHex(publicKey),
-      encryptedRootFolderKey: bytesToHex(encrypted.encryptedRootFolderKey),
-      encryptedRootIpnsPrivateKey: bytesToHex(encrypted.encryptedIpnsPrivateKey),
-      rootIpnsName,
-    }),
-  });
-  if (!initRes.ok) {
-    throw new Error(`vault/init failed for client ${id}: ${initRes.status}`);
-  }
-
-  // 4. Create CipherBoxClient
-  const client = new CipherBoxClient({
-    apiUrl: API_URL,
-    getAccessToken: async () => accessToken,
-    vaultKeypair: { publicKey, privateKey },
-    rootIpnsName,
-    rootFolderKey: vault.rootFolderKey,
-  });
-  client.registerFolder(rootIpnsName, vault.rootFolderKey, vault.rootIpnsKeypair, [], 0n);
-
-  return {
-    id,
-    client,
-    accessToken,
-    publicKey,
-    privateKey,
-    rootIpnsName,
-    rootFolderKey: vault.rootFolderKey,
-    rootIpnsKeypair: vault.rootIpnsKeypair,
-    metrics: new MetricsCollector(),
-  };
-}
-
 /**
  * Destroy all clients in the pool and delete test accounts.
  */
@@ -151,17 +95,35 @@ export async function destroyClientPool(pool: PoolClient[]): Promise<void> {
   console.log(`Cleaning up ${pool.length} test accounts...`);
   for (const pc of pool) {
     pc.client.destroy();
-    try {
-      await fetch(`${API_URL}/auth/account`, {
-        method: 'DELETE',
-        headers: {
-          Authorization: `Bearer ${pc.accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ confirmation: 'DELETE' }),
-      });
-    } catch {
-      // Best-effort cleanup
+    await deleteTestAccount(pc, API_URL);
+  }
+}
+
+/**
+ * Aggregate metrics from all pool clients, print summary, and return metrics.
+ * Extracts the repeated boilerplate from every load test scenario.
+ */
+export function aggregateAndReport(scenarioName: string, pool: PoolClient[]): OperationMetrics[] {
+  const allMetrics = new MetricsCollector();
+  allMetrics.start();
+
+  let minTimestamp = Infinity;
+  let maxTimestamp = 0;
+
+  for (const pc of pool) {
+    for (const sample of pc.metrics.getReadonlySamples()) {
+      allMetrics.record(sample);
+      if (sample.timestamp < minTimestamp) minTimestamp = sample.timestamp;
+      if (sample.timestamp > maxTimestamp) maxTimestamp = sample.timestamp;
     }
   }
+  allMetrics.stop();
+
+  const totalDuration = maxTimestamp > minTimestamp ? maxTimestamp - minTimestamp : 0;
+  const metrics = allMetrics.getMetrics();
+
+  printSummary(scenarioName, metrics, totalDuration, pool.length);
+  console.log('\nJSON Report:\n' + toJsonReport(scenarioName, metrics, totalDuration, pool.length));
+
+  return metrics;
 }

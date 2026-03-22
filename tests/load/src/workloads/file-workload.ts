@@ -39,12 +39,14 @@ export async function runFileWorkload(pc: PoolClient, opts: FileWorkloadOptions)
 
     // Optionally download and verify
     if (verifyDownloads) {
-      const folder = (client as any).folderTree.get(rootIpnsName);
-      const child = folder?.children.find((c: any) => c.name === fileName);
-      if (child?.fileMetaIpnsName) {
+      const folder = client.getFolderTree().get(rootIpnsName);
+      const child = folder?.children.find((c) => c.name === fileName);
+      const fileIpnsName =
+        child && 'fileMetaIpnsName' in child ? child.fileMetaIpnsName : undefined;
+      if (fileIpnsName) {
         const downloaded = await metrics.measure(
           'downloadFile',
-          () => client.downloadFromIpns(child.fileMetaIpnsName, rootFolderKey),
+          () => client.downloadFromIpns(fileIpnsName, rootFolderKey),
           size
         );
         if (downloaded.length !== data.length) {

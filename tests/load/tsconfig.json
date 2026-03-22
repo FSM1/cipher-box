@@ -2,9 +2,9 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": "../",
     "noEmit": true
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "../sdk-e2e/src/fixtures/test-harness.ts"],
   "exclude": ["node_modules", "dist"]
 }

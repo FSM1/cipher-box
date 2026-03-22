@@ -116,9 +116,14 @@ export class MetricsCollector {
     return this.samples.filter((s) => !s.success).length;
   }
 
-  /** Raw samples (for JSON export) */
+  /** Raw samples (defensive copy, for JSON export) */
   getRawSamples(): OperationSample[] {
     return [...this.samples];
+  }
+
+  /** Read-only access to samples (no copy, for aggregation loops) */
+  getReadonlySamples(): readonly OperationSample[] {
+    return this.samples;
   }
 }
 

@@ -7,9 +7,12 @@
  */
 
 import { describe, it, afterAll } from 'vitest';
-import { createClientPool, destroyClientPool, type PoolClient } from '../harness/client-pool';
-import { MetricsCollector } from '../harness/metrics';
-import { printSummary, toJsonReport } from '../harness/reporter';
+import {
+  createClientPool,
+  destroyClientPool,
+  aggregateAndReport,
+  type PoolClient,
+} from '../harness/client-pool';
 
 const NUM_CLIENTS = parseInt(process.env.LOAD_TEST_CLIENTS ?? '5', 10);
 const DURATION_SEC = parseInt(process.env.LOAD_TEST_DURATION ?? '300', 10);
@@ -34,31 +37,10 @@ describe('Sustained Load', () => {
       pool.map((pc) => runSustainedClient(pc, endTime, OPS_PER_SEC_PER_CLIENT))
     );
 
-    // Aggregate
-    const allMetrics = new MetricsCollector();
-    allMetrics.start();
-    for (const pc of pool) {
-      for (const sample of pc.metrics.getRawSamples()) {
-        allMetrics.record(sample);
-      }
-    }
-    allMetrics.stop();
-
     const succeeded = results.filter((r) => r.status === 'fulfilled').length;
     console.log(`\nClients completed: ${succeeded}/${pool.length}`);
 
-    const metrics = allMetrics.getMetrics();
-    const samples = pool.flatMap((pc) => pc.metrics.getRawSamples());
-    const totalDuration =
-      samples.length > 0
-        ? Math.max(...samples.map((s) => s.timestamp)) -
-          Math.min(...samples.map((s) => s.timestamp))
-        : 0;
-
-    printSummary('Sustained Load', metrics, totalDuration, pool.length);
-    console.log(
-      '\nJSON Report:\n' + toJsonReport('sustained-load', metrics, totalDuration, pool.length)
-    );
+    aggregateAndReport('Sustained Load', pool);
   });
 });
 
@@ -94,8 +76,8 @@ async function runSustainedClient(
       );
 
       // Cleanup to prevent state bloat
-      const folderState = (client as any).folderTree.get(rootIpnsName);
-      const fileChild = folderState?.children.find((c: any) => c.name === `${name}.bin`);
+      const folderState = client.getFolderTree().get(rootIpnsName);
+      const fileChild = folderState?.children.find((c) => c.name === `${name}.bin`);
       if (fileChild) {
         await metrics.measure('deleteItem', () => client.deleteItem(rootIpnsName, fileChild.id));
       }

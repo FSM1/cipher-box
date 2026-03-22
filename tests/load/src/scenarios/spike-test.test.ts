@@ -6,9 +6,12 @@
  */
 
 import { describe, it, afterAll } from 'vitest';
-import { createClientPool, destroyClientPool, type PoolClient } from '../harness/client-pool';
-import { MetricsCollector } from '../harness/metrics';
-import { printSummary, toJsonReport } from '../harness/reporter';
+import {
+  createClientPool,
+  destroyClientPool,
+  aggregateAndReport,
+  type PoolClient,
+} from '../harness/client-pool';
 import { runFolderWorkload } from '../workloads/folder-workload';
 
 const BASELINE_CLIENTS = 2;
@@ -33,30 +36,14 @@ describe('Spike Test', () => {
       label: 'spike-baseline',
     });
 
-    const baselineStart = Date.now();
     await Promise.allSettled(
       baselinePool.map((pc) => {
         pc.metrics.start();
         return runFolderWorkload(pc, { cycles: BASELINE_CYCLES }).finally(() => pc.metrics.stop());
       })
     );
-    const baselineDuration = Date.now() - baselineStart;
 
-    const baselineMetrics = new MetricsCollector();
-    baselineMetrics.start();
-    for (const pc of baselinePool) {
-      for (const sample of pc.metrics.getRawSamples()) {
-        baselineMetrics.record(sample);
-      }
-    }
-    baselineMetrics.stop();
-
-    printSummary(
-      'Spike Test - Baseline',
-      baselineMetrics.getMetrics(),
-      baselineDuration,
-      BASELINE_CLIENTS
-    );
+    const baselineMetrics = aggregateAndReport('Spike Test - Baseline', baselinePool);
 
     // Phase 2: Burst
     console.log('\n--- Phase 2: Burst ---');
@@ -65,33 +52,19 @@ describe('Spike Test', () => {
       label: 'spike-burst',
     });
 
-    const burstStart = Date.now();
     await Promise.allSettled(
       burstPool.map((pc) => {
         pc.metrics.start();
         return runFolderWorkload(pc, { cycles: BURST_CYCLES }).finally(() => pc.metrics.stop());
       })
     );
-    const burstDuration = Date.now() - burstStart;
 
-    const burstMetrics = new MetricsCollector();
-    burstMetrics.start();
-    for (const pc of burstPool) {
-      for (const sample of pc.metrics.getRawSamples()) {
-        burstMetrics.record(sample);
-      }
-    }
-    burstMetrics.stop();
-
-    printSummary('Spike Test - Burst', burstMetrics.getMetrics(), burstDuration, BURST_CLIENTS);
+    const burstMetrics = aggregateAndReport('Spike Test - Burst', burstPool);
 
     // Compare baseline vs burst latencies
-    const baselineOps = baselineMetrics.getMetrics();
-    const burstOps = burstMetrics.getMetrics();
-
     console.log('\n--- Latency Comparison (p95) ---');
-    for (const baseOp of baselineOps) {
-      const burstOp = burstOps.find((b) => b.operation === baseOp.operation);
+    for (const baseOp of baselineMetrics) {
+      const burstOp = burstMetrics.find((b) => b.operation === baseOp.operation);
       if (burstOp) {
         const degradation = (
           ((burstOp.latency.p95 - baseOp.latency.p95) / baseOp.latency.p95) *
@@ -102,11 +75,5 @@ describe('Spike Test', () => {
         );
       }
     }
-
-    // JSON for both phases
-    console.log(
-      '\nJSON Report (Burst):\n' +
-        toJsonReport('spike-test-burst', burstOps, burstDuration, BURST_CLIENTS)
-    );
   });
 });
