@@ -63,7 +63,7 @@ export async function loadFolderMetadata(params: {
   sequenceNumber: bigint;
   cid: string;
 } | null> {
-  const resolved = await resolveIpnsRecord(params.ipnsName);
+  const resolved = await resolveIpnsRecord(params.ipnsName, params.ctx);
   if (!resolved) return null;
 
   const metadata = await fetchAndDecryptMetadata(resolved.cid, params.folderKey, params.ctx);
@@ -195,6 +195,7 @@ export async function updateFolderMetadataAndPublish(params: {
         encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
         keyEpoch: params.keyEpoch,
         expectedSequenceNumber: currentSeq.toString(),
+        ctx: params.ctx,
       });
       return { cid, newSequenceNumber: newSeq };
     } catch (err) {
@@ -204,7 +205,7 @@ export async function updateFolderMetadataAndPublish(params: {
       if (!is409 || attempt > 0) throw err;
 
       // Re-sync: resolve current seq from IPNS
-      const resolved = await resolveIpnsRecord(params.ipnsName);
+      const resolved = await resolveIpnsRecord(params.ipnsName, params.ctx);
       if (resolved) {
         currentSeq = resolved.sequenceNumber;
       } else {

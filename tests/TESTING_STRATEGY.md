@@ -103,13 +103,15 @@ When production scales horizontally:
 - Per-user throttle keying may replace per-IP to allow higher aggregate throughput
 - The `sustained-load` and `spike-test` scenarios are designed to measure per-node behavior and will remain relevant for single-node staging
 
-## `setApiClientConfig` Singleton Caveat
+## Instance-Scoped Axios (Singleton Eliminated)
 
-`@cipherbox/api-client` has a module-level singleton for the axios instance. This creates a constraint for multi-account tests:
+Each `CipherBoxClient` creates its own axios instance via `createAxiosInstance()` and threads it through `SdkContext.axiosInstance` to all API calls (including orval-generated IPNS functions). This eliminates the previous module-level singleton constraint:
 
-- **Single-account tests**: Unaffected — each `CipherBoxClient` uses its own `getAccessToken` closure
-- **Multi-account tests** (sharing, invites): Must call `fixture.switchTo(label)` before operations that flow through `sdk-core` (IPNS publish/resolve uses the singleton)
-- **Cross-suite contamination**: If a multi-account suite runs before a single-account suite, the singleton may point to the wrong account. Re-set it with `setApiClientConfig()` when needed.
+- **Multi-account tests**: Each client uses its own token automatically — no `switchTo()` needed
+- **Load tests**: True parallel operation — each pool client has isolated auth
+- **Cross-suite contamination**: Eliminated — no shared global state
+
+The `setApiClientConfig()` singleton still exists for backward compatibility (web app single-user context) but is no longer required for SDK consumers.
 
 ## Why Node.js for load tests (not k6)
 

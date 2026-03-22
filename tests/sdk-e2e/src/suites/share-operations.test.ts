@@ -28,7 +28,6 @@ describe('Share Operations', () => {
   it('should create a share from Alice to Bob', async () => {
     const alice = fixture.accounts.get('alice')!;
     const bob = fixture.accounts.get('bob')!;
-    fixture.switchTo('alice');
 
     // Alice creates a folder to share
     const folder = await alice.client.createFolder(alice.rootIpnsName, 'SharedFolder');
@@ -76,7 +75,6 @@ describe('Share Operations', () => {
 
   it('should appear in Bob received shares', async () => {
     const bob = fixture.accounts.get('bob')!;
-    fixture.switchTo('bob');
 
     const res = await testFetch(`${API_URL}/shares/received`, {
       headers: { Authorization: `Bearer ${bob.accessToken}` },
@@ -93,7 +91,6 @@ describe('Share Operations', () => {
 
   it('should appear in Alice sent shares', async () => {
     const alice = fixture.accounts.get('alice')!;
-    fixture.switchTo('alice');
 
     const res = await testFetch(`${API_URL}/shares/sent`, {
       headers: { Authorization: `Bearer ${alice.accessToken}` },
@@ -107,7 +104,6 @@ describe('Share Operations', () => {
 
   it('should allow Bob to unwrap the shared key', async () => {
     const bob = fixture.accounts.get('bob')!;
-    fixture.switchTo('bob');
 
     const res = await testFetch(`${API_URL}/shares/received`, {
       headers: { Authorization: `Bearer ${bob.accessToken}` },
@@ -122,7 +118,6 @@ describe('Share Operations', () => {
 
   it('should reject self-sharing', async () => {
     const alice = fixture.accounts.get('alice')!;
-    fixture.switchTo('alice');
 
     const res = await testFetch(`${API_URL}/shares`, {
       method: 'POST',
@@ -144,7 +139,6 @@ describe('Share Operations', () => {
 
   it('should revoke the share', async () => {
     const alice = fixture.accounts.get('alice')!;
-    fixture.switchTo('alice');
 
     const res = await testFetch(`${API_URL}/shares/${shareId}`, {
       method: 'DELETE',
@@ -156,7 +150,6 @@ describe('Share Operations', () => {
 
   it('should not appear in Bob received shares after revocation', async () => {
     const bob = fixture.accounts.get('bob')!;
-    fixture.switchTo('bob');
 
     const res = await testFetch(`${API_URL}/shares/received`, {
       headers: { Authorization: `Bearer ${bob.accessToken}` },

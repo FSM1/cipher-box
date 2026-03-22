@@ -120,18 +120,34 @@ function getCachedInstance(): AxiosInstance {
 
 export const customInstance = async <T>(
   config: AxiosRequestConfig,
-  options?: AxiosRequestConfig
+  options?: AxiosRequestConfig & { _axiosInstance?: AxiosInstance }
 ): Promise<T> => {
+  const { _axiosInstance, ...restOptions } = options ?? {};
+
+  if (_axiosInstance) {
+    // Instance-scoped path: the provided instance has its own interceptors for auth
+    const response = await _axiosInstance.request<T>({
+      ...config,
+      ...restOptions,
+      headers: {
+        ...config.headers,
+        ...restOptions.headers,
+      },
+    });
+    return response.data;
+  }
+
+  // Singleton path: existing behavior
   const clientConfig = getApiClientConfig();
   const token = await clientConfig.getAccessToken();
   const instance = getCachedInstance();
 
   const response = await instance.request<T>({
     ...config,
-    ...options,
+    ...restOptions,
     headers: {
       ...config.headers,
-      ...options?.headers,
+      ...restOptions.headers,
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
   });

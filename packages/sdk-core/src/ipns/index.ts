@@ -14,6 +14,7 @@ import {
   ipnsControllerResolveRecord,
 } from '@cipherbox/api-client';
 import type { PublishIpnsEntryDtoRecordType } from '@cipherbox/api-client';
+import type { SdkContext } from '../types';
 
 /**
  * Create an IPNS record locally and publish via backend.
@@ -37,6 +38,7 @@ export async function createAndPublishIpnsRecord(params: {
   encryptedIpnsPrivateKey?: string;
   keyEpoch?: number;
   expectedSequenceNumber?: string;
+  ctx?: SdkContext;
 }): Promise<{ success: boolean; sequenceNumber: bigint }> {
   // 1. Create IPNS record pointing to /ipfs/{metadataCid}
   // 24 hour lifetime (will be republished by TEE every 3 hours)
@@ -58,14 +60,20 @@ export async function createAndPublishIpnsRecord(params: {
   const recordBase64 = btoa(binary);
 
   // 4. Call backend API to relay to IPFS network
-  const response = await ipnsControllerPublishRecord({
-    ipnsName: params.ipnsName,
-    record: recordBase64,
-    metadataCid: params.metadataCid,
-    encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
-    keyEpoch: params.keyEpoch,
-    expectedSequenceNumber: params.expectedSequenceNumber,
-  });
+  const apiOptions = params.ctx?.axiosInstance
+    ? { _axiosInstance: params.ctx.axiosInstance }
+    : undefined;
+  const response = await ipnsControllerPublishRecord(
+    {
+      ipnsName: params.ipnsName,
+      record: recordBase64,
+      metadataCid: params.metadataCid,
+      encryptedIpnsPrivateKey: params.encryptedIpnsPrivateKey,
+      keyEpoch: params.keyEpoch,
+      expectedSequenceNumber: params.expectedSequenceNumber,
+    },
+    apiOptions
+  );
 
   return {
     success: response.success,
@@ -93,19 +101,24 @@ export async function batchPublishIpnsRecords(
     recordType?: 'folder' | 'file';
     /** Pre-increment sequence number for conflict detection (folder records only) */
     expectedSequenceNumber?: string;
-  }>
+  }>,
+  ctx?: SdkContext
 ): Promise<{ totalSucceeded: number; totalFailed: number }> {
-  const response = await ipnsControllerPublishBatch({
-    records: records.map((r) => ({
-      ipnsName: r.ipnsName,
-      record: r.recordBase64,
-      metadataCid: r.metadataCid,
-      encryptedIpnsPrivateKey: r.encryptedIpnsPrivateKey,
-      keyEpoch: r.keyEpoch,
-      recordType: r.recordType as PublishIpnsEntryDtoRecordType | undefined,
-      expectedSequenceNumber: r.expectedSequenceNumber,
-    })),
-  });
+  const apiOptions = ctx?.axiosInstance ? { _axiosInstance: ctx.axiosInstance } : undefined;
+  const response = await ipnsControllerPublishBatch(
+    {
+      records: records.map((r) => ({
+        ipnsName: r.ipnsName,
+        record: r.recordBase64,
+        metadataCid: r.metadataCid,
+        encryptedIpnsPrivateKey: r.encryptedIpnsPrivateKey,
+        keyEpoch: r.keyEpoch,
+        recordType: r.recordType as PublishIpnsEntryDtoRecordType | undefined,
+        expectedSequenceNumber: r.expectedSequenceNumber,
+      })),
+    },
+    apiOptions
+  );
 
   return {
     totalSucceeded: response.totalSucceeded,
@@ -147,10 +160,12 @@ export async function verifyIpnsSignature(
  * @returns Current CID, sequence number, and signature verification status, or null if not found
  */
 export async function resolveIpnsRecord(
-  ipnsName: string
+  ipnsName: string,
+  ctx?: SdkContext
 ): Promise<{ cid: string; sequenceNumber: bigint; signatureVerified: boolean } | null> {
   try {
-    const response = await ipnsControllerResolveRecord({ ipnsName });
+    const apiOptions = ctx?.axiosInstance ? { _axiosInstance: ctx.axiosInstance } : undefined;
+    const response = await ipnsControllerResolveRecord({ ipnsName }, apiOptions);
 
     if (!response.success) {
       return null;

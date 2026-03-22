@@ -61,6 +61,8 @@ export type CipherBoxClientConfig = {
   onOperationEnd?: (operation: string) => void;
   /** Callback when an error occurs */
   onError?: (error: Error) => void;
+  /** Extra headers sent with every request (e.g., throttle bypass for testing). */
+  defaultHeaders?: Record<string, string>;
 };
 
 /**

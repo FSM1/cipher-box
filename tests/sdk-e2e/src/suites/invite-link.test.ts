@@ -33,7 +33,6 @@ describe('Invite Link', () => {
 
   it('should create an invite link', async () => {
     const alice = fixture.accounts.get('alice')!;
-    fixture.switchTo('alice');
 
     // Create a folder to share via invite
     const folder = await alice.client.createFolder(alice.rootIpnsName, 'InviteFolder');
@@ -90,7 +89,6 @@ describe('Invite Link', () => {
 
   it('should allow Bob to claim the invite', async () => {
     const bob = fixture.accounts.get('bob')!;
-    fixture.switchTo('bob');
 
     // Wrap a key for Bob (API validates format, not cryptographic correctness)
     const encryptedKey = await makeWrappedKey(bob.publicKey);
@@ -146,7 +144,6 @@ describe('Invite Link', () => {
 
   it('should allow Alice to create and revoke a new invite', async () => {
     const alice = fixture.accounts.get('alice')!;
-    fixture.switchTo('alice');
 
     const encryptedKey = await makeWrappedKey(alice.publicKey);
 

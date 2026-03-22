@@ -9,7 +9,6 @@
  */
 
 import { CipherBoxClient } from '@cipherbox/sdk';
-import { setApiClientConfig } from '@cipherbox/api-client';
 import { initializeVault, encryptVaultKeys } from '@cipherbox/core';
 import { deriveIpnsName, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 
@@ -105,20 +104,14 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
     throw new Error(`vault/init failed (${initRes.status}): ${await initRes.text()}`);
   }
 
-  // 4. Configure API client singleton (includes throttle bypass header)
-  setApiClientConfig({
-    baseUrl: apiUrl,
-    getAccessToken: async () => accessToken,
-    defaultHeaders: axiosDefaultHeaders(),
-  });
-
-  // 5. Create and configure CipherBoxClient
+  // 4. Create CipherBoxClient with instance-scoped axios (no singleton needed)
   const client = new CipherBoxClient({
     apiUrl,
     getAccessToken: async () => accessToken,
     vaultKeypair: { publicKey, privateKey },
     rootIpnsName,
     rootFolderKey: vault.rootFolderKey,
+    defaultHeaders: axiosDefaultHeaders(),
   });
   client.registerFolder(rootIpnsName, vault.rootFolderKey, vault.rootIpnsKeypair, [], 0n);
 
