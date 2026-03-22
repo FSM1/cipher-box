@@ -1,0 +1,62 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "265dabcc31a7",
+  "session_id": "0617b2f2-dabc-413c-b9f2-7450610a315f",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T19:51:26.397613Z",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/done/2026-03-22-refactor-api-client-from-singleton-to-instance-scoped-axios.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "28bf58f4372e",
+  "checkpoint_transcript_start": 122,
+  "transcript_lines_at_start": 122,
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 13320,
+    "cache_read_tokens": 433881,
+    "output_tokens": 1639,
+    "api_call_count": 9
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Review pending todos and select one to work on, with full context loading and roadmap correlation.",
+    "outcome": "Selected todo 'Refactor api-client from singleton to instance-scoped axios' was loaded, matched to Phase 19.1 plan 19.1-02, moved to done, and committed — signaling the start of active work on the refactor.",
+    "learnings": {
+      "repo": [
+        "The @cipherbox/api-client uses a module-level singleton (setApiClientConfig / customInstance) shared across all consumers, preventing multiple CipherBoxClient instances from holding different tokens simultaneously.",
+        "Tests work around the singleton via switchTo() hacks; parallel load testing is currently blocked by this architecture.",
+        "Phase 19.1 (Extract core crypto SDK) already includes plan 19.1-02 which covers expanding api-client with orval generation and a configurable instance — this refactor is pre-scoped in the roadmap.",
+        "A prior fix in 5f9b7b7 changed health check curl calls from -s to -fsS so HTTP 5xx responses correctly fail readiness checks."
+      ],
+      "code": [
+        {
+          "path": ".planning/todos/done/2026-03-22-refactor-api-client-from-singleton-to-instance-scoped-axios.md",
+          "finding": "5-phase refactor plan: (1) configure orval for instance-accepting functions, (2) thread axios instance through SdkContext, (3) have CipherBoxClient own its instance, (4) keep backward compat for web app, (5) simplify test infra by removing workarounds. Touches 11 files across api-client, sdk-core, sdk, web, sdk-e2e, and load packages."
+        }
+      ],
+      "workflow": [
+        "The gsd check-todos workflow correlates todos against roadmap phases automatically via init todos and targeted reads.",
+        "Todos are moved to .planning/todos/done/ and committed when work begins, providing a clear signal of intent in git history."
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Refactor api-client from singleton to instance-scoped axios — work started but not yet implemented (5-phase refactor across 11 files).",
+      "8 other pending todos remain: Web Worker encryption offload, ERC-1271 contract wallet auth, desktop auto-update, desktop TEE enrollment, CRDT-based IPNS inbox research, async/incremental search index, alternative MFA factor types, and throttle bypass gap investigation."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-22T19:51:10.188523Z",
+    "agent_lines": 83,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 83,
+    "agent_percentage": 100
+  }
+}

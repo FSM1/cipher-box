@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "265dabcc31a7",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/done/2026-03-22-refactor-api-client-from-singleton-to-instance-scoped-axios.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/26/5dabcc31a7/0/metadata.json",
+      "transcript": "/26/5dabcc31a7/0/full.jsonl",
+      "content_hash": "/26/5dabcc31a7/0/content_hash.txt",
+      "prompt": "/26/5dabcc31a7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 13320,
+    "cache_read_tokens": 433881,
+    "output_tokens": 1639,
+    "api_call_count": 9
+  }
+}
