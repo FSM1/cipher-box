@@ -1,10 +1,17 @@
 /**
- * Concurrent Operations Tests
+ * Rapid Sequential Operations Tests
  *
- * Tests multiple operations happening simultaneously:
- * - Two clients on the same folder
- * - Upload during folder mutation
- * - Rapid sequential mutations
+ * Tests back-to-back SDK operations on a single client to verify
+ * state consistency under rapid serial mutations:
+ * - Rapid folder creation (10 back-to-back)
+ * - Interleaved file uploads
+ * - Upload followed by immediate rename
+ * - Create-folder then upload-into-folder sequence
+ * - Rapid create-and-move cycle
+ *
+ * Note: True concurrent (parallel) operations on the same folder are
+ * intentionally not supported by the SDK — mutations are serialized
+ * via IPNS sequence numbers. These tests verify rapid serial behavior.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';

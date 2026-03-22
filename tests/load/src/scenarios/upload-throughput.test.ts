@@ -46,6 +46,6 @@ describe('Upload Throughput', () => {
     const failed = results.filter((r) => r.status === 'rejected').length;
     console.log(`\nClients completed: ${succeeded} succeeded, ${failed} failed`);
 
-    aggregateAndReport('Upload Throughput', pool);
+    await aggregateAndReport('Upload Throughput', pool);
   });
 });

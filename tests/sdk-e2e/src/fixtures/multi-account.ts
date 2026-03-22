@@ -42,9 +42,13 @@ export async function createMultiAccountFixture(labels: string[]): Promise<Multi
   const switchTo = (label: string): void => {
     const ctx = accounts.get(label);
     if (!ctx) throw new Error(`No account with label "${label}"`);
+    const defaultHeaders = process.env.THROTTLE_BYPASS_SECRET
+      ? { 'X-Throttle-Bypass': process.env.THROTTLE_BYPASS_SECRET }
+      : undefined;
     setApiClientConfig({
       baseUrl: API_URL,
       getAccessToken: async () => ctx.accessToken,
+      defaultHeaders,
     });
   };
 

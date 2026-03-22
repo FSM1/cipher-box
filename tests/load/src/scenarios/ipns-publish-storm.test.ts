@@ -42,6 +42,6 @@ describe('IPNS Publish Storm', () => {
     const succeeded = results.filter((r) => r.status === 'fulfilled').length;
     console.log(`\nClients completed: ${succeeded}/${pool.length}`);
 
-    aggregateAndReport('IPNS Publish Storm', pool);
+    await aggregateAndReport('IPNS Publish Storm', pool);
   });
 });

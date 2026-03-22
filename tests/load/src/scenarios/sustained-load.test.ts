@@ -40,7 +40,7 @@ describe('Sustained Load', () => {
     const succeeded = results.filter((r) => r.status === 'fulfilled').length;
     console.log(`\nClients completed: ${succeeded}/${pool.length}`);
 
-    aggregateAndReport('Sustained Load', pool);
+    await aggregateAndReport('Sustained Load', pool);
   });
 });
 

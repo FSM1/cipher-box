@@ -60,6 +60,10 @@ export async function runFileWorkload(pc: PoolClient, opts: FileWorkloadOptions)
               `[Client ${pc.id}] Size mismatch: uploaded ${data.length}, downloaded ${downloaded.length}`
             );
           }
+        } else if (verifyDownloads) {
+          throw new Error(
+            `[Client ${pc.id}] File "${fileName}" not found in folder state after upload`
+          );
         }
       }
     } catch (err) {

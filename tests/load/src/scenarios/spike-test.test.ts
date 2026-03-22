@@ -43,7 +43,7 @@ describe('Spike Test', () => {
       })
     );
 
-    const baselineMetrics = aggregateAndReport('Spike Test - Baseline', baselinePool);
+    const baselineMetrics = await aggregateAndReport('Spike Test - Baseline', baselinePool);
 
     // Phase 2: Burst
     console.log('\n--- Phase 2: Burst ---');
@@ -59,7 +59,7 @@ describe('Spike Test', () => {
       })
     );
 
-    const burstMetrics = aggregateAndReport('Spike Test - Burst', burstPool);
+    const burstMetrics = await aggregateAndReport('Spike Test - Burst', burstPool);
 
     // Compare baseline vs burst latencies
     console.log('\n--- Latency Comparison (p95) ---');

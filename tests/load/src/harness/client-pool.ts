@@ -103,9 +103,11 @@ export async function destroyClientPool(pool: PoolClient[]): Promise<void> {
  * Aggregate metrics from all pool clients, print summary, and return metrics.
  * Extracts the repeated boilerplate from every load test scenario.
  */
-export function aggregateAndReport(scenarioName: string, pool: PoolClient[]): OperationMetrics[] {
+export async function aggregateAndReport(
+  scenarioName: string,
+  pool: PoolClient[]
+): Promise<OperationMetrics[]> {
   const allMetrics = new MetricsCollector();
-  allMetrics.start();
 
   let minTimestamp = Infinity;
   let maxTimestamp = 0;
@@ -117,13 +119,26 @@ export function aggregateAndReport(scenarioName: string, pool: PoolClient[]): Op
       if (sample.timestamp > maxTimestamp) maxTimestamp = sample.timestamp;
     }
   }
-  allMetrics.stop();
+
+  // Set collector timing from sample timestamps for accurate throughput calculation
+  allMetrics.setElapsedMs(maxTimestamp > minTimestamp ? maxTimestamp - minTimestamp : 1);
 
   const totalDuration = maxTimestamp > minTimestamp ? maxTimestamp - minTimestamp : 0;
   const metrics = allMetrics.getMetrics();
 
   printSummary(scenarioName, metrics, totalDuration, pool.length);
-  console.log('\nJSON Report:\n' + toJsonReport(scenarioName, metrics, totalDuration, pool.length));
+
+  // Write JSON report to file for CI artifact upload
+  const reportJson = toJsonReport(scenarioName, metrics, totalDuration, pool.length);
+  console.log('\nJSON Report:\n' + reportJson);
+
+  try {
+    const fs = await import('node:fs/promises');
+    const slug = scenarioName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    await fs.writeFile(`metrics-${slug}.json`, reportJson);
+  } catch {
+    // Non-fatal — CI artifact upload will just find no files
+  }
 
   return metrics;
 }

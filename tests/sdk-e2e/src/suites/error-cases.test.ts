@@ -63,9 +63,9 @@ describe('Error Cases', () => {
     });
 
     it('should throw on moveItem with unloaded destination', async () => {
-      await expect(
-        ctx.client.moveItem(ctx.rootIpnsName, fakeIpnsName, 'child-id')
-      ).rejects.toThrow();
+      await expect(ctx.client.moveItem(ctx.rootIpnsName, fakeIpnsName, 'child-id')).rejects.toThrow(
+        'Destination folder not loaded'
+      );
     });
   });
 

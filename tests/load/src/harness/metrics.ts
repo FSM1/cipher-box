@@ -35,6 +35,12 @@ export class MetricsCollector {
     this.endTime = performance.now();
   }
 
+  /** Override elapsed time for aggregated collectors (set from sample timestamps). */
+  setElapsedMs(ms: number): void {
+    this.startTime = 0;
+    this.endTime = ms;
+  }
+
   record(sample: OperationSample): void {
     this.samples.push(sample);
   }

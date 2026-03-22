@@ -39,22 +39,7 @@ describe('Folder CRUD', () => {
     expectChildNamed(ctx.client, ctx.rootIpnsName, 'Documents');
   });
 
-  it('should create a nested folder', async () => {
-    const parent = getChild(ctx.client, ctx.rootIpnsName, 'Documents');
-
-    // Register the parent folder so we can create children
-    ctx.client.registerFolder(
-      parent.ipnsName,
-      parent.folderKey ?? new Uint8Array(32), // folderKey might not be on the child
-      { publicKey: new Uint8Array(0), privateKey: new Uint8Array(0) },
-      [],
-      0n
-    );
-
-    // For nested creation we need the actual folder key.
-    // The createFolder result contains the actual key.
-    // Re-create with proper keys from the original createFolder return.
-    // Actually, let's create a fresh subfolder in root and then nest inside it.
+  it('should create a subfolder inside a newly created folder', async () => {
     const subResult = await ctx.client.createFolder(ctx.rootIpnsName, 'Projects');
     expect(subResult.id).toBeTruthy();
 

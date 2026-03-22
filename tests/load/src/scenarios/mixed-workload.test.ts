@@ -49,6 +49,6 @@ describe('Mixed Workload', () => {
     const succeeded = results.filter((r) => r.status === 'fulfilled').length;
     console.log(`\nClients completed: ${succeeded}/${pool.length}`);
 
-    aggregateAndReport('Mixed Workload', pool);
+    await aggregateAndReport('Mixed Workload', pool);
   });
 });
