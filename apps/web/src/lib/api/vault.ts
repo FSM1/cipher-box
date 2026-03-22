@@ -1,54 +1,28 @@
-import { apiClient } from './client';
+/**
+ * Vault API adapter -- thin wrapper over @cipherbox/api-client generated functions.
+ *
+ * Keeps the `vaultApi.foo()` call style used by useAuth.ts while delegating
+ * all HTTP transport to the shared api-client package.
+ */
+import {
+  vaultControllerGetQuota,
+  vaultControllerGetVault,
+  vaultControllerInitializeVault,
+} from '@cipherbox/api-client';
+import type { QuotaResponseDto, VaultResponseDto, InitVaultDto } from '@cipherbox/api-client';
 
-export type QuotaResponse = {
-  usedBytes: number;
-  limitBytes: number;
-  remainingBytes: number;
-};
-
-export type VaultResponse = {
-  id: string;
-  ownerPublicKey: string;
-  encryptedRootFolderKey: string;
-  encryptedRootIpnsPrivateKey: string;
-  rootIpnsName: string;
-  teeKeys: {
-    currentEpoch: number;
-    currentPublicKey: string;
-    previousEpoch: number | null;
-    previousPublicKey: string | null;
-  } | null;
-};
-
-export type InitVaultDto = {
-  ownerPublicKey: string;
-  encryptedRootFolderKey: string;
-  encryptedRootIpnsPrivateKey: string;
-  rootIpnsName: string;
-};
+// Backward-compatible type aliases for existing consumers
+export type QuotaResponse = QuotaResponseDto;
+export type VaultResponse = VaultResponseDto;
+export type { InitVaultDto };
 
 export const vaultApi = {
-  /**
-   * Get storage quota for the current user.
-   */
-  getQuota: async (): Promise<QuotaResponse> => {
-    const response = await apiClient.get<QuotaResponse>('/vault/quota');
-    return response.data;
-  },
+  /** Get storage quota for the current user. */
+  getQuota: (): Promise<QuotaResponseDto> => vaultControllerGetQuota(),
 
-  /**
-   * Get vault data for the current user.
-   */
-  getVault: async (): Promise<VaultResponse> => {
-    const response = await apiClient.get<VaultResponse>('/vault');
-    return response.data;
-  },
+  /** Get vault data for the current user. */
+  getVault: (): Promise<VaultResponseDto> => vaultControllerGetVault(),
 
-  /**
-   * Initialize vault with encrypted keys.
-   */
-  initVault: async (dto: InitVaultDto): Promise<VaultResponse> => {
-    const response = await apiClient.post<VaultResponse>('/vault/init', dto);
-    return response.data;
-  },
+  /** Initialize vault with encrypted keys. */
+  initVault: (dto: InitVaultDto): Promise<VaultResponseDto> => vaultControllerInitializeVault(dto),
 };

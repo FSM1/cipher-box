@@ -151,14 +151,10 @@ jobs:
           IPFS_LOCAL_GATEWAY_URL: http://localhost:8080
 
       - name: Format generated files
-        run: |
-          pnpm eslint --fix apps/web/src/api/ || true
-          pnpm prettier --write packages/api-client/openapi.json apps/web/src/api/
+        run: pnpm prettier --write packages/api-client/openapi.json
 
       - name: Verify no uncommitted changes to generated files
-        run: |
-          git diff --exit-code packages/api-client/openapi.json || (echo "OpenAPI spec is out of date. Run 'pnpm api:generate' and commit changes." && exit 1)
-          git diff --exit-code apps/web/src/api/ || (echo "Generated API client is out of date. Run 'pnpm api:generate' and commit changes." && exit 1)
+        run: git diff --exit-code packages/api-client/ || (echo "Generated API client is out of date. Run 'pnpm api:generate' and commit changes." && exit 1)
 
   migration-check:
     name: Migration Drift Check

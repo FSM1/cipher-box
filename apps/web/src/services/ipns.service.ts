@@ -11,8 +11,8 @@ import {
   ipnsControllerPublishRecord,
   ipnsControllerPublishBatch,
   ipnsControllerResolveRecord,
-} from '../api/ipns/ipns';
-import type { PublishIpnsEntryDtoRecordType } from '../api/models/publishIpnsEntryDtoRecordType';
+} from '@cipherbox/api-client';
+import type { PublishIpnsEntryDtoRecordType } from '@cipherbox/api-client';
 
 /**
  * Create an IPNS record locally and publish via backend.

@@ -10,12 +10,11 @@ import {
   sharesControllerLookupUser,
   sharesControllerGetSentShares,
   sharesControllerRevokeShare,
-} from '../../api/shares/shares';
+} from '@cipherbox/api-client';
+import type { CreateShareDtoItemType, ChildKeyDto } from '@cipherbox/api-client';
 import { resolveFileMetadata } from '../../services/file-metadata.service';
 import { resolveIpnsRecord } from '../../services/ipns.service';
 import { fetchFromIpfs } from '../../lib/api/ipfs';
-import type { CreateShareDtoItemType } from '../../api/models/createShareDtoItemType';
-import type { ChildKeyDto } from '../../api/models/childKeyDto';
 import { useShareStore } from '../../stores/share.store';
 import { collectChildKeys, reWrapEncryptedKey } from '../../lib/crypto/key-wrapping';
 import { InviteLinkTab } from './InviteLinkTab';

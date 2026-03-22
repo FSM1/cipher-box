@@ -8,7 +8,7 @@ import { DeviceWaitingScreen } from '../components/mfa/DeviceWaitingScreen';
 import { RecoveryInput } from '../components/mfa/RecoveryInput';
 import { MatrixBackground } from '../components/MatrixBackground';
 import { StagingBanner } from '../components/StagingBanner';
-import { useHealthControllerCheck } from '../api/health/health';
+import { useHealthCheck } from '../hooks/useHealthCheck';
 import { useAuth } from '../hooks/useAuth';
 
 type MfaView = 'waiting' | 'recovery';
@@ -36,17 +36,7 @@ export function Login() {
   const [mfaView, setMfaView] = useState<MfaView>('waiting');
 
   // Health check for disabling connect button when API is down
-  const {
-    data: healthData,
-    isLoading: isHealthLoading,
-    isError: isHealthError,
-  } = useHealthControllerCheck({
-    query: {
-      refetchInterval: 30000,
-      retry: 2,
-      refetchOnWindowFocus: true,
-    },
-  });
+  const { data: healthData, isLoading: isHealthLoading, isError: isHealthError } = useHealthCheck();
 
   const isApiDown = !isHealthLoading && (isHealthError || healthData?.status !== 'ok');
 

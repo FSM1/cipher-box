@@ -1,5 +1,9 @@
 import './polyfills';
 
+// Initialize @cipherbox/api-client config at module load time.
+// MUST come before any code that calls authApi.* or generated API functions.
+import './lib/api-config';
+
 // DEBUG: Error capture for UAT - captures first 20 errors to window.__errorLog
 if (import.meta.env.DEV) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
