@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { wrapKey, unwrapKey, bytesToHex } from '@cipherbox/crypto';
+import { wrapKey, unwrapKey, bytesToHex, hexToBytes } from '@cipherbox/crypto';
 import { createMultiAccountFixture, type MultiAccountFixture } from '../fixtures/multi-account';
 import { API_URL } from '../fixtures/test-harness';
 import { generateTextContent } from '../helpers/data-generators';
@@ -115,8 +115,8 @@ describe('Share Operations', () => {
     const data = await res.json();
     const share = data.shares.find((s: any) => s.shareId === shareId);
 
-    // Bob unwraps the key with his private key
-    const folderKey = await unwrapKey(share.encryptedKey, bob.privateKey);
+    // Bob unwraps the key with his private key (API returns hex-encoded ciphertext)
+    const folderKey = await unwrapKey(hexToBytes(share.encryptedKey), bob.privateKey);
     expect(folderKey.length).toBe(32); // AES-256 key
   });
 

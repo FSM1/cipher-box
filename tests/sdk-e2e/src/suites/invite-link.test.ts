@@ -10,6 +10,13 @@ import { wrapKey, bytesToHex } from '@cipherbox/crypto';
 import { createMultiAccountFixture, type MultiAccountFixture } from '../fixtures/multi-account';
 import { API_URL } from '../fixtures/test-harness';
 
+/** Generate a valid ECIES-wrapped key (passes DTO MinLength(258) validation) */
+async function makeWrappedKey(publicKey: Uint8Array): Promise<string> {
+  const fakeKey = new Uint8Array(32);
+  crypto.getRandomValues(fakeKey);
+  return bytesToHex(await wrapKey(fakeKey, publicKey));
+}
+
 describe('Invite Link', () => {
   let fixture: MultiAccountFixture;
 
@@ -32,8 +39,8 @@ describe('Invite Link', () => {
     const folder = await alice.client.createFolder(alice.rootIpnsName, 'InviteFolder');
     folderIpnsName = folder.ipnsName;
 
-    // Wrap with a dummy key (in real flow, this would be an ephemeral keypair)
-    const encryptedKey = await wrapKey(folder.folderKey, alice.publicKey);
+    // Wrap with Alice's key (in real flow, this would be an ephemeral keypair)
+    const encryptedKey = await makeWrappedKey(alice.publicKey);
 
     const res = await fetch(`${API_URL}/shares/invites`, {
       method: 'POST',
@@ -45,7 +52,7 @@ describe('Invite Link', () => {
         itemType: 'folder',
         ipnsName: folder.ipnsName,
         itemName: 'InviteFolder',
-        encryptedKey: bytesToHex(encryptedKey),
+        encryptedKey,
       }),
     });
 
@@ -85,8 +92,8 @@ describe('Invite Link', () => {
     const bob = fixture.accounts.get('bob')!;
     fixture.switchTo('bob');
 
-    // Re-wrap the key for Bob (simplified — in real flow, decrypt ephemeral then re-encrypt)
-    const dummyReWrappedKey = bytesToHex(new Uint8Array(64).fill(0xab));
+    // Wrap a key for Bob (API validates format, not cryptographic correctness)
+    const encryptedKey = await makeWrappedKey(bob.publicKey);
 
     const res = await fetch(`${API_URL}/invites/${inviteToken}/claim`, {
       method: 'POST',
@@ -94,9 +101,7 @@ describe('Invite Link', () => {
         Authorization: `Bearer ${bob.accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        encryptedKey: dummyReWrappedKey,
-      }),
+      body: JSON.stringify({ encryptedKey }),
     });
 
     expect(res.status).toBe(201);
@@ -107,15 +112,15 @@ describe('Invite Link', () => {
   it('should reject double-claim by another user', async () => {
     const charlie = fixture.accounts.get('charlie')!;
 
+    const encryptedKey = await makeWrappedKey(charlie.publicKey);
+
     const res = await fetch(`${API_URL}/invites/${inviteToken}/claim`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${charlie.accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        encryptedKey: bytesToHex(new Uint8Array(64).fill(0xcd)),
-      }),
+      body: JSON.stringify({ encryptedKey }),
     });
 
     // Should be 409 (already claimed) or 404 (no longer active)
@@ -125,15 +130,15 @@ describe('Invite Link', () => {
   it('should reject double-claim by same user', async () => {
     const bob = fixture.accounts.get('bob')!;
 
+    const encryptedKey = await makeWrappedKey(bob.publicKey);
+
     const res = await fetch(`${API_URL}/invites/${inviteToken}/claim`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${bob.accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        encryptedKey: bytesToHex(new Uint8Array(64).fill(0xef)),
-      }),
+      body: JSON.stringify({ encryptedKey }),
     });
 
     expect([404, 409]).toContain(res.status);
@@ -143,7 +148,7 @@ describe('Invite Link', () => {
     const alice = fixture.accounts.get('alice')!;
     fixture.switchTo('alice');
 
-    const encryptedKey = bytesToHex(new Uint8Array(64).fill(0x11));
+    const encryptedKey = await makeWrappedKey(alice.publicKey);
 
     const createRes = await fetch(`${API_URL}/shares/invites`, {
       method: 'POST',

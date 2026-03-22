@@ -47,18 +47,18 @@ import { Share, ShareKey, ShareInvite } from './shares/entities';
       inject: [ConfigService],
     }),
     // [SECURITY: HIGH-04] Global rate limiting to prevent abuse
-    ThrottlerModule.forRoot([
-      {
-        name: 'short',
-        ttl: 1000, // 1 second
-        limit: 10, // 10 requests per second
-      },
-      {
-        name: 'medium',
-        ttl: 60000, // 1 minute
-        limit: 100, // 100 requests per minute
-      },
-    ]),
+    // Limits are relaxed in test mode to avoid 429s during SDK E2E / load tests
+    ThrottlerModule.forRoot(
+      process.env.NODE_ENV === 'test'
+        ? [
+            { name: 'short', ttl: 1000, limit: 200 },
+            { name: 'medium', ttl: 60000, limit: 10000 },
+          ]
+        : [
+            { name: 'short', ttl: 1000, limit: 10 },
+            { name: 'medium', ttl: 60000, limit: 100 },
+          ]
+    ),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({

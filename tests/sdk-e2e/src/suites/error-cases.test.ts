@@ -7,7 +7,13 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { BinNotLoadedError } from '@cipherbox/sdk';
-import { createTestContext, deleteTestAccount, type TestContext } from '../fixtures/test-harness';
+import { setApiClientConfig } from '@cipherbox/api-client';
+import {
+  createTestContext,
+  deleteTestAccount,
+  type TestContext,
+  API_URL,
+} from '../fixtures/test-harness';
 
 describe('Error Cases', () => {
   let ctx: TestContext;
@@ -100,6 +106,8 @@ describe('Error Cases', () => {
 
   describe('Event emission', () => {
     it('should emit operation:start and operation:end events', async () => {
+      // Re-set singleton in case another suite overwrote it
+      setApiClientConfig({ baseUrl: API_URL, getAccessToken: async () => ctx.accessToken });
       const events: any[] = [];
       const unsub = ctx.client.on((event) => events.push(event));
 
