@@ -1,0 +1,33 @@
+If I am understanding this correctly the backward compatibility is necessary so that a component in the web app always gets the singleton instance that is available throughtout the webapp?
+
+---
+
+but i thought all phase 19.1 work was compelte already
+
+---
+
+normally I would agree, but this dual path architecture has already been the subject of one refactor, so I am trying to actually wrap it up once and for all. honestly I think that the scope creep in relation to the rest of the branch objectives is acceptable
+
+---
+
+/gsd:check-todos
+
+---
+
+8
+
+---
+
+/resolve-pr-reviews
+
+---
+
+/resolve-pr-reviews
+
+---
+
+/resolve-pr-reviews
+
+---
+
+https://github.com/FSM1/cipher-box/pull/318#issuecomment-4106808734 could we improve patch test coverage in the throttler-bypass.guard ?
