@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.25.2](https://github.com/FSM1/cipher-box/compare/v0.25.1...v0.25.2) (2026-03-22)
+
+
+### Bug Fixes
+
+* **api:** make delegated routing publish fire-and-forget ([#308](https://github.com/FSM1/cipher-box/issues/308)) ([e49973a](https://github.com/FSM1/cipher-box/commit/e49973a9666162b93567ea7f60b16678d4398c25))
+* **ci:** add bootstrap-sha to skip old unparseable release PRs ([#311](https://github.com/FSM1/cipher-box/issues/311)) ([23fecee](https://github.com/FSM1/cipher-box/commit/23feceed4ac2005f7f1d3b092c1532bb8f442774))
+* **ci:** remove custom title pattern, use release-please default ([#312](https://github.com/FSM1/cipher-box/issues/312)) ([b865863](https://github.com/FSM1/cipher-box/commit/b865863d3808e6d7036733249a9365e79bd38caa))
+* **ci:** remove packages/crypto from release-please extra-files ([#316](https://github.com/FSM1/cipher-box/issues/316)) ([8f42601](https://github.com/FSM1/cipher-box/commit/8f42601576391ad02a3d50b627456b301ccdf792))
+* **ci:** scope API client drift check to generated paths only ([#310](https://github.com/FSM1/cipher-box/issues/310)) ([f78a87d](https://github.com/FSM1/cipher-box/commit/f78a87d3449533c971e43598946e064fd41dbf18))
+
 ## [0.25.1](https://github.com/FSM1/cipher-box/compare/v0.25.0...v0.25.1) (2026-03-21)
 
 
