@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "81b6e7901ef1",
+  "session_id": "f0dd29f9-8a13-44de-877f-1bc80807410d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T02:53:36.308552Z",
+  "branch": "fix/release-please-bootstrap",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "25a59e95542e",
+  "token_usage": {
+    "input_tokens": 335,
+    "cache_creation_tokens": 569842,
+    "cache_read_tokens": 40381659,
+    "output_tokens": 74739,
+    "api_call_count": 270
+  },
+  "session_metrics": {
+    "turn_count": 33
+  },
+  "summary": {
+    "intent": "Deploy v0.25.0 to staging after merging the release PR, then investigate and fix multiple issues discovered during smoke testing (Docker build failure, IPNS publish slowness, token refresh broken), and consolidate the web app's duplicated API client.",
+    "outcome": "v0.25.1 was manually tagged and deployed to staging after fixing a Dockerfile issue and a release-please config bug. Three PRs were merged (308: IPNS fire-and-forget, 309: API client consolidation, 310: CI drift check fix) and two more opened (307: release-please title pattern, 311: bootstrap-sha). Release-please is still not auto-creating release PRs at session end despite multiple config interventions.",
+    "learnings": {
+      "repo": [
+        "Staging deployment uses a manual 'Tag Staging Release' GitHub Actions workflow triggered with a version input — it is not auto-triggered by release tags. Tags must match v*-staging* pattern to trigger deploy-staging.yml.",
+        "The API is a zero-knowledge server that never handles plaintext or performs encryption, explaining why apps/api has no @cipherbox/core or @cipherbox/crypto dependencies. The api-client is generated from the OpenAPI spec and serves as the typed bridge.",
+        "The web app had two separate orval code generations from the same OpenAPI spec: packages/api-client (axios-functions mode, for SDK/desktop consumers) and apps/web/src/api/ (react-query mode, ~8800 lines). The react-query hooks were almost entirely unused — raw functions were imported directly everywhere except one health check endpoint.",
+        "Three separate HTTP client paths existed in the web app before consolidation: apps/web/src/api/custom-instance.ts (fetch, orval mutator), apps/web/src/lib/api/client.ts (axios, login/vault init), and apps/web/src/lib/api/ipfs.ts (bare fetch). None of the three shared token refresh logic.",
+        "release-please's pull-request-title-pattern 'chore: release' (without ${component}) causes it to extract component: undefined from old merged release PRs, treating them as untagged and aborting. This persists even after the config is fixed because it re-scans all historical merged PRs.",
+        "Grafana Cloud free-tier instances hibernate after inactivity and return HTTP 503 'Your instance is loading' on first request — transient, not a real deployment failure.",
+        "IPNS DHT publish via the someguy sidecar takes 10–30s but is not needed synchronously — the DB record is authoritative and resolveRecord() always prefers the DB cache. Awaiting it was blocking every publish unnecessarily.",
+        "release-please bootstrap-sha does not prevent scanning old merged PRs — it still processes all merged PRs matching its title pattern regardless of the sha cutoff."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 52,
+          "end_line": 65,
+          "finding": "DHT delegated routing publish was awaited synchronously, causing 30s+ latency. Changed to fire-and-forget with a trailing .catch() that logs via this.logger.error. The result variable stays 'success' since DB write is the authoritative outcome."
+        },
+        {
+          "path": "apps/api/Dockerfile",
+          "finding": "Had a stale COPY of packages/crypto/package.json that was never needed (the API has no workspace package dependencies). This caused pnpm deploy to fail when @cipherbox/crypto pulled in @cipherbox/core via the lockfile."
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "finding": "Added withCredentials: true (for HTTP-only refresh token cookies), a 401 response interceptor with shared-promise deduplication for concurrent requests, onRefreshFailure callback, and safe header setting via headers.set()."
+        },
+        {
+          "path": "apps/web/src/lib/api/ipfs.ts",
+          "finding": "Previously used raw fetch() for the progress download path, bypassing the 401 interceptor. Simplified to use ipfsControllerGet from api-client throughout. File went from 131 lines to 70."
+        },
+        {
+          "path": "release-please-config.json",
+          "finding": "pull-request-title-pattern was set to 'chore: release' without ${component}. In monorepo mode this causes release-please to extract component: undefined from old PR titles and treat them as untagged, aborting every subsequent run."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "finding": "The API client drift check was diffing all of packages/api-client/, which incorrectly flagged changes to instance.ts, tests, or package.json as 'generated API client out of date'. Should only diff openapi.json, src/generated/, and src/models/."
+        }
+      ],
+      "workflow": [
+        "When release-please cannot parse old merged PR titles (due to a title pattern change), bootstrap-sha alone does not unblock it — it still scans all merged PRs. The actual fix is removing the custom title pattern or manually creating tags for every component so release-please considers old PRs as tagged.",
+        "Manually creating a GitHub release tag (gh release create) lets you unblock staging deployments when release-please is stuck, but release-please won't know about it unless the tag matches what it would have created.",
+        "For fire-and-forget promises in NestJS services, always add a trailing .catch() to prevent unhandled rejections — and add a test where the fire-and-forget throws to get patch coverage.",
+        "When consolidating HTTP clients, the orval react-query generated mode only makes sense if useQuery/useMutation hooks are actually used widely. If consumers import raw functions, the react-query wrapper is just overhead.",
+        "CodeRabbit and GitHub Copilot often flag the same issues independently (e.g., missing terminal .catch() on fire-and-forget promises). Resolving one reviewer's comments often clears the other's."
+      ]
+    },
+    "friction": [
+      "release-please config bug (missing ${component} in title pattern) cascaded into multiple failed runs, required manual tag creation for v0.25.1, branch deletion, bootstrap-sha addition, and ultimately removing the custom title pattern — still not fully resolved at session end.",
+      "The web app's three-way HTTP client split (fetch mutator, axios client, bare IPFS fetch) meant token refresh had to be wired into three places rather than one.",
+      "Grafana Cloud 503 transient error caused a CI job failure that required manual investigation to confirm it was not a real deployment issue.",
+      "The stale packages/crypto COPY in the Dockerfile was a latent bug that only manifested when the expanded package list changed lockfile resolution.",
+      "release-please PR #306 appeared to succeed (version bumped in manifest) but didn't create tags, causing silent breakage that required investigation of action logs."
+    ],
+    "open_items": [
+      "Release-please still not auto-creating release PRs — PR #311 (removing custom pull-request-title-pattern) is open but not yet merged/verified.",
+      "React Query cache is not cleared on logout or token refresh failure — noted as a pre-existing gap by CodeRabbit, deferred as a follow-up.",
+      "The token refresh issue was known/suspected before this session but was only properly surfaced by the long batch delete operation exposing session timeout. No regression test was added for real token expiry in E2E.",
+      "Tag Staging Release workflow needs to be run with v0.25.1 to complete the staging deployment — session ended before confirming staging is healthy.",
+      "PR #307 (release-please title pattern fix with ${component}) was merged but the problem was later found to require removing the custom pattern entirely (PR #311) — PR #307's change may now be redundant or need reverting."
+    ]
+  }
+}
