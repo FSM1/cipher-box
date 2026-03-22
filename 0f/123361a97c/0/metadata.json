@@ -1,0 +1,83 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "0f123361a97c",
+  "session_id": "f0dd29f9-8a13-44de-877f-1bc80807410d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T02:59:08.926769Z",
+  "branch": "chore/remove-bootstrap-sha",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "d4a1e4f45377",
+  "token_usage": {
+    "input_tokens": 355,
+    "cache_creation_tokens": 577772,
+    "cache_read_tokens": 44764227,
+    "output_tokens": 77261,
+    "api_call_count": 286
+  },
+  "session_metrics": {
+    "turn_count": 35
+  },
+  "summary": {
+    "intent": "Unblock staging deployment after merging release PR v0.25.0 by diagnosing why the staging workflow didn't trigger, then resolve a cascade of related issues: a Docker build failure, slow IPNS publishes, broken token refresh, and a stuck release-please pipeline.",
+    "outcome": "Staging was unblocked via manual tag creation (v0.25.1). Four PRs were merged: a Docker fix (#308), a release-please title pattern fix (#307), a full API client consolidation refactor (#309), and CI drift-check correction (#310). Release-please was ultimately unblocked by renaming the old merged release PR titles so they no longer matched the release pattern.",
+    "learnings": {
+      "repo": [
+        "CipherBox API is zero-knowledge — it never handles plaintext or performs encryption, so it genuinely has no workspace package dependencies on @cipherbox/core or @cipherbox/crypto. The api-client package (generated from OpenAPI spec) is the typed bridge between server and clients.",
+        "The web app had two separate orval code-generation pipelines from the same OpenAPI spec: packages/api-client (axios-functions mode, for SDK/desktop consumers) and apps/web/src/api (react-query mode, for the web app). The react-query hooks were almost entirely unused — only useHealthControllerCheck was used; everything else called the raw functions.",
+        "deploy-staging.yml only triggers on tags matching v*-staging*, not on release tags. Staging deployment is intentionally manual via the 'Tag Staging Release' workflow, which runs E2E tests and requires staging-approval before creating the v{version}-staging-rc-1 tag.",
+        "release-please scans ALL merged PRs in the repo regardless of bootstrap-sha to find release PRs. bootstrap-sha only affects commit scanning. When switching from single-package to multi-package config, old release PRs with unparseable titles permanently block future runs until the old PR titles are renamed.",
+        "release-please pull-request-title-pattern must include ${component} for monorepo configs. Without it, release-please generates valid titles but cannot parse its own merged PRs back to their components, causing an 'untagged merged release PRs outstanding' abort loop.",
+        "chore commits do not trigger release-please version bumps — only feat and fix do. fix(ci) is the correct type for a broken build fix and will trigger a patch bump."
+      ],
+      "code": [
+        {
+          "path": "apps/api/Dockerfile",
+          "finding": "Had a stale COPY of packages/crypto/package.json that was never needed (api has no workspace dependencies). When the crypto package gained a dependency on @cipherbox/core, pnpm's lockfile resolution started failing because @cipherbox/core wasn't in the Docker build context."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "finding": "Was awaiting the delegated routing DHT publish (via someguy sidecar), which inherently takes 10-30s. Since resolveRecord() always prefers the DB cache over DHT, waiting for DHT propagation was unnecessary. Fixed by making the DHT publish fire-and-forget with a trailing .catch() for error logging."
+        },
+        {
+          "path": "apps/web/src/api/custom-instance.ts",
+          "finding": "The orval-generated fetch mutator for the web app had zero 401 handling. Token refresh interceptor only existed on the separate axios client used for login/vault init. Sessions longer than the access token TTL (15min) would get unrecoverable 401s with no refresh attempt."
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "finding": "After refactor: added refreshAccessToken callback, withCredentials (for HTTP-only refresh token cookies), onRefreshFailure hook, and a 401 response interceptor with shared-promise deduplication to prevent concurrent refresh races."
+        },
+        {
+          "path": "release-please-config.json",
+          "finding": "pull-request-title-pattern was set to 'chore: release' without ${component}. This silently worked for the first release PR but caused all subsequent runs to abort with 'untagged merged release PRs outstanding' because release-please couldn't parse its own generated PR title back to a component."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "finding": "After the api-client consolidation, the CI generated-code drift check was comparing all of packages/api-client/ including instance.ts, tests, and package.json — not just the generated output. Any manual edit to the package would falsely fail 'Generated API client is out of date'. Fixed to diff only src/generated/, src/models/, and openapi.json."
+        }
+      ],
+      "workflow": [
+        "When release-please gets stuck in an abort loop due to old unparseable PR titles, the fix is to rename the old merged PRs via the GitHub API (gh api PATCH) so their titles no longer match the release PR pattern. bootstrap-sha does not help because PR scanning is independent of commit scanning.",
+        "Manually creating a GitHub release and tag (gh release create) is the correct way to unblock release-please when it cannot create the tag itself — just ensure the tag points to the correct release commit (the version bump merge commit, not main HEAD).",
+        "Codecov reports patch coverage separately from overall coverage. Adding new lines without covering them in tests will fail the patch coverage check even if overall coverage is high. The fire-and-forget .catch() handler needed an explicit test for the error path.",
+        "When a PR contains both a fix commit and review-response commits, all review threads should be resolved before merging to keep the PR history clean.",
+        "The simplify/code-review skill catches real issues: duplicate retry blocks in interceptors, unconditionally registered progress handlers, and redundant store.setAuthenticated() calls during token refresh."
+      ]
+    },
+    "friction": [
+      "Release-please required four separate PRs and multiple debugging rounds to fix: (1) adding ${component} to title pattern, (2) adding bootstrap-sha, (3) removing custom title pattern entirely, (4) ultimately renaming the two old merged release PR titles. None of the config changes alone fixed it.",
+      "Grafana Cloud free-tier instance hibernation caused a transient 503 during staging deploy's dashboard provisioning step, requiring a re-run of just that job.",
+      "The orval-generated react-query client in apps/web had ~8800 lines of generated code but only 1 hook was ever used, making the maintenance surface much larger than necessary for years.",
+      "Three independent HTTP client paths existed in the web app (orval fetch mutator, axios login client, IPFS-specific axios instance), each with different auth handling — the token refresh gap was invisible until a long-running operation exposed it.",
+      "Codecov patch coverage check blocked PR #308 after the review-comment fix added a .catch() handler without a corresponding test.",
+      "The CI generated-client drift check was overly broad, flagging valid non-generated changes to the api-client package."
+    ],
+    "open_items": [
+      "React Query cache is not cleared on logout or token refresh failure — onRefreshFailure calls clearAllUserStores() but does not call queryClient.clear(). Noted as pre-existing gap, deferred as follow-up.",
+      "release-please-config.json still contains the bootstrap-sha pointing to the v0.25.1 commit. This is now benign but could be cleaned up once a successful release PR is generated with the new title pattern.",
+      "The 'someguy' IPNS sidecar delegated routing configuration may still have performance implications beyond the fixed awaiting behavior — the original slow publish investigation noted this as a possible root cause but the fire-and-forget fix sidestepped rather than resolved any underlying sidecar latency.",
+      "A chore(ci) branch with a trivial release-please-config.json edit was pushed at the end of the session to trigger another release-please run — this PR had not been created/merged at transcript end."
+    ]
+  }
+}
