@@ -55,3 +55,7 @@ Read the output file to retrieve the result: /private/tmp/claude-501/-Users-mich
 <summary>Background command "Commit todo file" failed with exit code 128</summary>
 </task-notification>
 Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/btil3v3j2.output
+
+---
+
+please try commit again
