@@ -512,6 +512,8 @@ jobs:
           GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
         run: |
           set -euo pipefail
+          : "${GRAFANA_URL:?GRAFANA_URL is required for Grafana readiness check}"
+          : "${GRAFANA_API_KEY:?GRAFANA_API_KEY is required for Grafana readiness check}"
           GRAFANA_URL="${GRAFANA_URL%/}"
           MAX_ATTEMPTS=30
           INTERVAL=10
@@ -523,6 +525,9 @@ jobs:
             if [[ "$HTTP_CODE" == "200" ]]; then
               echo "Grafana Cloud is ready (attempt $i/$MAX_ATTEMPTS)"
               exit 0
+            elif [[ "$HTTP_CODE" =~ ^(401|403|404)$ ]]; then
+              echo "::error::Grafana returned HTTP $HTTP_CODE — check GRAFANA_URL and GRAFANA_API_KEY"
+              exit 1
             fi
             echo "Grafana not ready (HTTP $HTTP_CODE), waiting ${INTERVAL}s... ($i/$MAX_ATTEMPTS)"
             sleep "$INTERVAL"
