@@ -60,7 +60,7 @@ services:
       retries: 5
 
   ipfs:
-    image: ipfs/kubo:v0.34.0
+    image: ipfs/kubo:v0.40.0
     restart: unless-stopped
     environment:
       IPFS_PROFILE: server
