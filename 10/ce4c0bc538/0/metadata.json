@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "10ce4c0bc538",
+  "session_id": "f0dd29f9-8a13-44de-877f-1bc80807410d",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T03:06:47.751716Z",
+  "branch": "chore/trigger-release-please",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "45740a8c8119",
+  "token_usage": {
+    "input_tokens": 385,
+    "cache_creation_tokens": 589000,
+    "cache_read_tokens": 52735311,
+    "output_tokens": 81542,
+    "api_call_count": 314
+  },
+  "session_metrics": {
+    "turn_count": 36
+  },
+  "summary": {
+    "intent": "Deploy v0.25.0 to staging, debug and fix a broken Docker API build, investigate staging performance issues (slow IPNS publish, broken token refresh), and refactor the web app's duplicated API client infrastructure.",
+    "outcome": "Successfully fixed the Docker API build (PR #308), consolidated the web app from 3 HTTP client paths to 1 by removing the orval-generated React Query client in favor of @cipherbox/api-client (PR #309), fixed IPNS publish latency by making DHT propagation fire-and-forget, and unblocked release-please after it got stuck on unparseable old PR titles.",
+    "learnings": {
+      "repo": [
+        "The API is a zero-knowledge server — it never handles plaintext or performs crypto, so it genuinely has no workspace package dependencies. The api-client package is the typed bridge generated from OpenAPI spec.",
+        "The web app had 3 separate HTTP client paths: orval-generated fetch (React Query hooks), a legacy axios client (login/vault init), and bare IPFS functions. Only ~1 endpoint actually used the React Query hooks; everything else called raw generated functions.",
+        "release-please scans ALL merged PRs in the repo regardless of bootstrap-sha. Renaming old PRs that match the release title pattern (but can't be parsed for component) is the only way to unblock it after a monorepo config migration.",
+        "The Tag Staging Release workflow is intentionally manual — it runs E2E tests and requires staging-approval before creating the staging RC tag and triggering deployment.",
+        "The staging deployment workflow triggers on tags matching v*-staging*, not on release tags — staging deploys are always initiated manually via the Tag Staging Release action.",
+        "Grafana Cloud free-tier instances hibernate and return 503 on first request after inactivity — transient and can be ignored if the dashboard was already provisioned.",
+        "The pull-request-title-pattern in release-please-config.json must include ${component} for multi-package monorepos, otherwise release-please can't match merged release PRs back to their packages and aborts with 'untagged merged release PRs outstanding'."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 52,
+          "end_line": 70,
+          "finding": "DHT publish via someguy was awaited, causing 10-30s latency. DB record is saved synchronously first; delegated routing publish is now fire-and-forget with a trailing .catch() for logging. The result variable stays 'success' since DHT propagation is best-effort."
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 1,
+          "end_line": 100,
+          "finding": "Added 401 response interceptor with shared-promise deduplication (single in-flight refresh), withCredentials for HTTP-only refresh token cookies, and onRefreshFailure callback. Uses AxiosHeaders.set() for safe header mutation."
+        },
+        {
+          "path": "apps/web/src/lib/api/ipfs.ts",
+          "line": 1,
+          "end_line": 70,
+          "finding": "Reduced from 131 to 70 lines by removing raw fetch path (which bypassed 401 interceptor). Both upload (with onUploadProgress) and download (with onDownloadProgress) now use the api-client axios instance consistently."
+        },
+        {
+          "path": "apps/web/src/lib/api-config.ts",
+          "line": 1,
+          "end_line": 42,
+          "finding": "Single initialization point for setApiClientConfig — wires getAccessToken from Zustand store, withCredentials: true, and onRefreshFailure that calls clearAllUserStores and redirects to login."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 1,
+          "end_line": 1,
+          "finding": "The generated API client drift check was comparing all of packages/api-client/ — including instance.ts, tests, package.json — which would false-positive on any manual edits. Fixed to only diff openapi.json, src/generated/, and src/models/."
+        },
+        {
+          "path": "release-please-config.json",
+          "line": 1,
+          "end_line": 1,
+          "finding": "bootstrap-sha only affects commit scanning, not merged PR scanning. It does not prevent release-please from finding and failing on old unparseable release PRs. Removing custom pull-request-title-pattern lets release-please use its default monorepo format."
+        }
+      ],
+      "workflow": [
+        "When release-please gets stuck on 'untagged merged release PRs', renaming the old PR titles via GitHub API (so they no longer match the release title pattern) is the fix — bootstrap-sha alone is insufficient.",
+        "For fire-and-forget promises in NestJS services, always add a trailing .catch() to prevent unhandled rejection warnings, and test it with a spy on the private Logger instance.",
+        "chore commits don't trigger release-please version bumps — use fix(ci) for broken build fixes to get a patch release.",
+        "After manually creating a tag/release to unblock staging, release-please may still need the branch deleted and PR titles cleaned up before it can create new release PRs.",
+        "When migrating from single-package to multi-package release-please config, all previously merged release PRs will have titles that the new pattern can't parse — rename them in bulk before the new config takes effect."
+      ]
+    },
+    "friction": [
+      "release-please blocked on old merged PR titles across multiple fix attempts — bootstrap-sha, branch deletion, and config changes all failed before the root cause (PR title scanning ignores bootstrap-sha) was identified.",
+      "Needed multiple PRs (#307, #311, #312, #313) just to fix the release-please config, each requiring a merge to main to trigger a test run.",
+      "The Dockerfile had a stale packages/crypto COPY that introduced a transient build failure when the crypto package gained a new workspace dependency (@cipherbox/core).",
+      "The CI verify step was incorrectly scoped to all of packages/api-client/ instead of just the generated output directories, causing false failures.",
+      "Token refresh was silently broken for an unknown period — only exposed by a long-running batch operation that lasted longer than the 15-minute access token TTL."
+    ],
+    "open_items": [
+      "React Query cache is not cleared on logout or token refresh failure — clearAllUserStores() clears Zustand but stale query data persists. Noted as a pre-existing gap, deferred as follow-up.",
+      "The slow IPNS publish fix (fire-and-forget DHT) is deployed but staging verification of the actual latency improvement hasn't been confirmed — the Tag Staging Release workflow was triggered but the session ended before results.",
+      "Token refresh fix (PR #309) was merged but not yet verified on staging via smoke tests — the original 401 issue that exposed the bug hasn't been re-tested.",
+      "SDK consumers of @cipherbox/api-client now get withCredentials: true globally, which may be undesirable for non-browser environments (desktop app, SDK). The onRefreshFailure callback needs to be wired appropriately for each consumer.",
+      "The IPNS SDK batch handling was noted as a potential separate issue contributing to slow batch deletes — the fire-and-forget fix addresses per-publish latency but true batching behavior in the SDK package was not investigated."
+    ]
+  }
+}
