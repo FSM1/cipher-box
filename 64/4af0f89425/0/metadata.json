@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "644af0f89425",
+  "session_id": "8dbad658-aeb6-4bde-a1a1-7a83e2010385",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T18:47:50.133445Z",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/auth/auth.controller.spec.ts",
+    "apps/api/src/auth/controllers/identity.controller.spec.ts",
+    "apps/api/src/device-approval/device-approval.controller.spec.ts",
+    "apps/api/src/ipns/__tests__/ipns.integration.spec.ts",
+    "apps/api/src/ipns/__tests__/ipns.security.spec.ts",
+    "apps/api/src/shares/invites.controller.spec.ts",
+    "apps/api/src/shares/share-invites.controller.spec.ts",
+    "apps/api/src/shares/shares.controller.spec.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "68d9f11bf119",
+  "token_usage": {
+    "input_tokens": 1026,
+    "cache_creation_tokens": 1065623,
+    "cache_read_tokens": 98375914,
+    "output_tokens": 132417,
+    "api_call_count": 344
+  },
+  "session_metrics": {
+    "turn_count": 23
+  },
+  "summary": {
+    "intent": "Implement SDK-based E2E and load test suites as new workspace packages, replacing browser-dependent Playwright tests with direct SDK calls for faster, more reliable CI coverage.",
+    "outcome": "Created two new packages (`tests/sdk-e2e` with 83 passing tests across 10 suites, and `tests/load` with 5 load scenarios), implemented a throttle bypass mechanism for test environments, added two CI workflows, and resolved all 24 PR review comments.",
+    "learnings": {
+      "repo": [
+        "The `setApiClientConfig` in `packages/api-client/src/instance.ts` is a module-level singleton used by all orval-generated API functions — multi-account tests must call it serially with `switchTo()` to avoid cross-contamination",
+        "ThrottlerGuard is applied per-controller via `@UseGuards()`, not globally — individual endpoints also have `@Throttle()` decorators with stricter limits (IPNS publish: 10/min, test-login: 5/15min)",
+        "NestJS ConfigModule loads `.env` files which override `process.env` — setting `NODE_ENV=test` externally is ineffective if `.env` contains `NODE_ENV=development`",
+        "The `POST /auth/test-login` endpoint returns `{ accessToken, refreshToken, isNewUser, publicKeyHex, privateKeyHex }` and is the CI auth bypass pattern for SDK tests",
+        "Unit test specs use `.overrideGuard(ThrottlerGuard)` from `@nestjs/throttler` — when controllers import a custom guard aliased as `ThrottlerGuard`, the override targets the wrong class and causes DI failures",
+        "The pnpm workspace has three groups: `apps/*`, `packages/*`, `tests/*` — new test packages must be added to `pnpm-workspace.yaml`",
+        "Orval generates standalone functions that import `customInstance` from a module-level singleton rather than accepting an axios instance — this is a design gap, not a technical requirement",
+        "The IPFS `crypto.getRandomValues()` has a 65,536 byte hard limit per call — generating files larger than 64KB requires chunked generation"
+      ],
+      "code": [
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 1,
+          "end_line": 60,
+          "finding": "Module-level singleton `_config` with `setApiClientConfig`/`getApiClientConfig` — all orval-generated functions read from this, making parallel multi-account SDK operations impossible without serialization"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "line": 24,
+          "end_line": 59,
+          "finding": "Reference pattern for test-login → vault init → CipherBoxClient — the gold standard extracted into the new test harness"
+        },
+        {
+          "path": "apps/api/src/common/guards/throttler-bypass.guard.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "New BypassableThrottlerGuard extends ThrottlerGuard, checks X-Throttle-Bypass header against THROTTLE_BYPASS_SECRET with constant-time comparison, guards with NODE_ENV !== 'production'"
+        }
+      ],
+      "workflow": [
+        "When replacing an NestJS guard class with a custom subclass in controllers, all test specs using `.overrideGuard(OldClass)` must be updated to `.overrideGuard(NewClass)` — the DI error message `can't resolve dependencies... THROTTLER:MODULE_OPTIONS` is the symptom",
+        "Load test workloads need try/catch around every `metrics.measure()` call — it re-throws after recording, so uncaught errors kill the entire workload function silently",
+        "1Password SSH agent is not accessible to background bash tasks spawned by Claude — commits from background tasks time out on signing; foreground commits work fine",
+        "Running `pnpm --filter \u003cpackage\u003e dev` for NestJS respects env vars only from `.env` files, not from the shell environment used to launch it"
+      ]
+    },
+    "friction": [
+      "The `NODE_ENV=test` approach to relax throttle limits was dead on arrival because NestJS ConfigModule's `.env` loading overrides the shell env — wasted a cycle before discovering the bypass header was the right approach",
+      "Multiple rounds of sed/Edit corruption on vault-lifecycle.test.ts from chained `fetchHeaders` → revert edits — required a full file rewrite to recover",
+      "1Password SSH agent unavailable to background tasks caused repeated commit hangs requiring manual intervention",
+      "The `crypto.getRandomValues()` 65536-byte limit caused silent load test failures — all clients rejected with 0 ops before the first measurement, with errors swallowed by `Promise.allSettled`",
+      "Orval's `customInstance` singleton pattern caused `setApiClientConfig` to be overwritten during multi-account tests, causing 401s in later suites — required per-suite re-set workaround"
+    ],
+    "open_items": [
+      "Refactor api-client from module-level singleton to instance-scoped axios — tracked in `.planning/todos/pending/2026-03-22-refactor-api-client-from-singleton-to-instance-scoped-axios.md`; eliminates `testFetch`, `switchTo()`, `setApiClientConfig` re-sets, and `defaultHeaders` workarounds",
+      "Investigate throttle bypass gap for per-endpoint `@Throttle()` decorators — tracked in `.planning/todos/pending/2026-03-22-investigate-throttle-bypass-gap-for-per-endpoint-throttle-decorators.md`; IPNS publish has 10/min limit causing load test 429s",
+      "Raw `fetch` calls in vault-lifecycle, share-operations, and invite-link test suites should be migrated to the generated orval API client functions — natural follow-on to the singleton refactor",
+      "Load test scenarios currently don't fail CI on high error rates — intentional design but a threshold-based failure mode (e.g., \u003e50% errors fails the run) would make them more useful as regression guards",
+      "The `tests/TESTING_STRATEGY.md` documents the tiered throttle strategy and horizontal scaling implications — should be reviewed when production multi-node setup is being planned"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-22T18:47:10.690928Z",
+    "agent_lines": 19,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 19,
+    "agent_percentage": 100
+  }
+}

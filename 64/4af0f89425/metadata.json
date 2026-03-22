@@ -1,0 +1,32 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "644af0f89425",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/auth/auth.controller.spec.ts",
+    "apps/api/src/auth/controllers/identity.controller.spec.ts",
+    "apps/api/src/device-approval/device-approval.controller.spec.ts",
+    "apps/api/src/ipns/__tests__/ipns.integration.spec.ts",
+    "apps/api/src/ipns/__tests__/ipns.security.spec.ts",
+    "apps/api/src/shares/invites.controller.spec.ts",
+    "apps/api/src/shares/share-invites.controller.spec.ts",
+    "apps/api/src/shares/shares.controller.spec.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/64/4af0f89425/0/metadata.json",
+      "transcript": "/64/4af0f89425/0/full.jsonl",
+      "content_hash": "/64/4af0f89425/0/content_hash.txt",
+      "prompt": "/64/4af0f89425/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1026,
+    "cache_creation_tokens": 1065623,
+    "cache_read_tokens": 98375914,
+    "output_tokens": 132417,
+    "api_call_count": 344
+  }
+}
