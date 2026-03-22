@@ -7,3 +7,7 @@ is this the latest version of someguy? maybe a simple version bump would resolve
 ---
 
 ok before we go updating anything in staging, lets first check that everything works reliably locally - create a branch for this, update the docker-compose, and I will spin it up on your docker host.
+
+---
+
+did the docker-compose changes get pushed up to the branch?
