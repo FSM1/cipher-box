@@ -49,22 +49,24 @@ export async function runFileWorkload(pc: PoolClient, opts: FileWorkloadOptions)
         const child = folder?.children.find((c) => c.name === fileName);
         const fileIpnsName =
           child && 'fileMetaIpnsName' in child ? child.fileMetaIpnsName : undefined;
-        if (fileIpnsName) {
-          const downloaded = await metrics.measure(
-            'downloadFile',
-            () => client.downloadFromIpns(fileIpnsName, rootFolderKey),
-            size
-          );
-          if (downloaded.length !== data.length) {
-            throw new Error(
-              `[Client ${pc.id}] Size mismatch: uploaded ${data.length}, downloaded ${downloaded.length}`
-            );
-          }
-        } else if (verifyDownloads) {
-          throw new Error(
-            `[Client ${pc.id}] File "${fileName}" not found in folder state after upload`
-          );
-        }
+        await metrics.measure(
+          'downloadFile',
+          async () => {
+            if (!fileIpnsName) {
+              throw new Error(
+                `[Client ${pc.id}] File "${fileName}" not found in folder state after upload`
+              );
+            }
+            const downloaded = await client.downloadFromIpns(fileIpnsName, rootFolderKey);
+            if (downloaded.length !== data.length) {
+              throw new Error(
+                `[Client ${pc.id}] Size mismatch: uploaded ${data.length}, downloaded ${downloaded.length}`
+              );
+            }
+            return downloaded;
+          },
+          size
+        );
       }
     } catch (err) {
       console.warn(

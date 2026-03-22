@@ -174,7 +174,12 @@ jobs:
             echo "LOAD_TEST_SECRET=e2e-test-secret-ci-only" >> $GITHUB_ENV
             echo "THROTTLE_BYPASS_SECRET=ci-throttle-bypass-secret" >> $GITHUB_ENV
           fi
-          echo "LOAD_TEST_CLIENTS=${{ inputs.client_count }}" >> $GITHUB_ENV
+          CLIENT_COUNT="${{ inputs.client_count }}"
+          if ! [[ "$CLIENT_COUNT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Invalid client_count: '$CLIENT_COUNT' (must be a positive integer)" >&2
+            exit 1
+          fi
+          echo "LOAD_TEST_CLIENTS=$CLIENT_COUNT" >> $GITHUB_ENV
 
       - name: Run load test
         run: |
