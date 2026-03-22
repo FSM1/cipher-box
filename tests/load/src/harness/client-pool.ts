@@ -74,9 +74,13 @@ export async function createClientPool(opts: ClientPoolOptions): Promise<PoolCli
   // Configure the singleton once — all clients share the same baseUrl
   // Individual tokens are injected via the getAccessToken closure on each client
   if (clients.length > 0) {
+    const defaultHeaders = process.env.THROTTLE_BYPASS_SECRET
+      ? { 'X-Throttle-Bypass': process.env.THROTTLE_BYPASS_SECRET }
+      : undefined;
     setApiClientConfig({
       baseUrl: API_URL,
       getAccessToken: async () => clients[0].accessToken,
+      defaultHeaders,
     });
   }
 

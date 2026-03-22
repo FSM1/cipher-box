@@ -56,7 +56,7 @@ export async function runFileWorkload(pc: PoolClient, opts: FileWorkloadOptions)
             size
           );
           if (downloaded.length !== data.length) {
-            console.warn(
+            throw new Error(
               `[Client ${pc.id}] Size mismatch: uploaded ${data.length}, downloaded ${downloaded.length}`
             );
           }
