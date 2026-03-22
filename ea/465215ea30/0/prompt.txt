@@ -1,0 +1,92 @@
+I would like to figure out what the state of the someguy sidecar is at the moment in the staging environment
+
+---
+
+It was originally deployed but performance seemed a whole lot worse than what was recorded in phase 18 metrics gathering (using delegated ipfs), and I had you disable the sidecar.
+
+---
+
+<task-notification>
+<task-id>af867264189e971ec</task-id>
+<tool-use-id>toolu_01VNtAEVRnMmNKdf4tVY6hyc</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/af867264189e971ec.output</output-file>
+<status>completed</status>
+<summary>Agent "Find someguy staging config" completed</summary>
+<result>Perfect! Now I have comprehensive information. Let me compile the final report.
+
+## Summary
+
+I've completed a thorough search of the CipherBox codebase for all references to "someguy". Here's what I found:
+
+### Someguy Configuration in Staging Environment
+
+**Docker Compose Configuration** (`/Users/michael/Code/cipher-box/docker/docker-compose.staging.yml`, lines 87-110):
+
+- **Image:** `ghcr.io/ipfs/someguy:v0.11.1`
+- **Port:** 8190 (via `SOMEGUY_LISTEN_ADDRESS: 0.0.0.0:8190`)
+- **DHT Configuration:** standard mode (`SOMEGUY_DHT: standard`)
+- **Connection Manager:**
+  - Low watermark: 50 connections (`SOMEGUY_LIBP2P_CONNMGR_LOW: 50`)
+  - High watermark: 300 connections (`SOMEGUY_LIBP2P_CONNMGR_HIGH: 300`)
+- **Memory Limit:** 512MB (`SOMEGUY_LIBP2P_MAX_MEMORY: 536870912`)
+- **Logging:** JSON format at info level
+- **Resource Limits:** 768MB memory, 0.5 CPU
+- **Health Check:** HTTP GET to `http://localhost:8190/version` (10s interval, 5s timeout, 10 retries with 30s start period)
+- **Restart Policy:** unless-stopped
+- **Depends On:** Implicitly depends on IPFS (Kubo) service for routing operations
+
+### API Configuration
+
+**Deployment Workflow** (`/Users/michael/Code/cipher-box/.github/workflows/deploy-staging.yml`, line 397):
+```
+DELEGATED_ROUTING_URL=http://someguy:8190
+```
+
+**Environment Configuration** (`/Users/michael/Code/cipher-box/apps/api/.env.example`, lines 31-34):
+```
+# For production/staging: http://someguy:8190 (self-hosted Someguy sidecar)
+# For local/E2E testing: http://localhost:3001 (mock service)
+# Legacy: https://delegated-ipfs.dev (public, unreliable -- replaced by self-hosted Someguy)
+```
+
+### Purpose and Architecture
+
+**Role:** Someguy is a self-hosted IPNS delegated routing sidecar that replaces the unreliable public `delegated-ipfs.dev` service for the staging environment. It handles both IPNS publish and resolve operations.
+
+**Integration Points:**
+1. **IPFS Resolution:** Someguy connects to the local Kubo IPFS node for delegated routing
+2. **API Communication:** The CipherBox API connects via internal Docker network (`http://someguy:8190`)
+3. **TEE Worker:** Remains on delegated-ipfs.dev (not routing through Someguy)
+
+### Research Context
+
+This configuration is part of **Phase 19: IPNS Resolution Improvement** as documented in:
+- `/Users/michael/Code/cipher-box/.planning/phases/19-ipns-resolution-improvement/19-CONTEXT.md`
+- `/Users/michael/Code/cipher-box/.planning/codebase/CONCERNS.md`
+- `/Users/michael/Code/cipher-box/.planning/research/SUMMARY.md`
+
+The implementation replaces the delegated-ipfs.dev dependency with a reliable, self-hosted Someguy instance to improve IPNS resolution reliability and performance on staging while maintaining the local Kubo node as the primary routing backend.
+
+### File Locations with References
+
+1. `/Users/michael/Code/cipher-box/docker/docker-compose.staging.yml` - Full service definition
+2. `/Users/michael/Code/cipher-box/.github/workflows/deploy-staging.yml` - DELEGATED_ROUTING_URL env var (line 397)
+3. `/Users/michael/Code/cipher-box/apps/api/.env.example` - Documentation of DELEGATED_ROUTING_URL default
+4. `/Users/michael/Code/cipher-box/apps/api/src/ipns/ipns.service.ts` - Code comment referencing DHT propagation via Someguy (line 76)
+5. `/Users/michael/Code/cipher-box/CHANGELOG.md` - Fix for LIBP2P_MAX_MEMORY flag (PR #290)
+6. Multiple planning documents in `.planning/phases/19-*` and `.planning/research/`</result>
+<usage><total_tokens>70548</total_tokens><tool_uses>27</tool_uses><duration_ms>39296</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/af867264189e971ec.output
+
+---
+
+yeah I am waiting for the latest changes to be deployed to staging, and will then ask that you run some load tests to collect some more data now that things have been refactored.
+
+---
+
+The grafana dashboard provisioning seems to be failing every time https://github.com/FSM1/cipher-box/actions/runs/23414386777/job/68107926277
+
+I think the trick here is to wait for the instance to finish loading after the deployment job has completed.
+
+please implement this on a `chore(ci):` branch and PR
