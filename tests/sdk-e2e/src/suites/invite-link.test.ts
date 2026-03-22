@@ -1,0 +1,175 @@
+/**
+ * Invite Link Tests
+ *
+ * Tests invite link creation, public status check, claim flow,
+ * double-claim prevention, and revocation.
+ */
+
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { wrapKey, bytesToHex } from '@cipherbox/crypto';
+import { createMultiAccountFixture, type MultiAccountFixture } from '../fixtures/multi-account';
+import { API_URL } from '../fixtures/test-harness';
+
+describe('Invite Link', () => {
+  let fixture: MultiAccountFixture;
+
+  beforeAll(async () => {
+    fixture = await createMultiAccountFixture(['alice', 'bob', 'charlie']);
+  });
+
+  afterAll(async () => {
+    if (fixture) await fixture.cleanupAll();
+  });
+
+  let inviteToken: string;
+  let folderIpnsName: string;
+
+  it('should create an invite link', async () => {
+    const alice = fixture.accounts.get('alice')!;
+    fixture.switchTo('alice');
+
+    // Create a folder to share via invite
+    const folder = await alice.client.createFolder(alice.rootIpnsName, 'InviteFolder');
+    folderIpnsName = folder.ipnsName;
+
+    // Wrap with a dummy key (in real flow, this would be an ephemeral keypair)
+    const encryptedKey = await wrapKey(folder.folderKey, alice.publicKey);
+
+    const res = await fetch(`${API_URL}/shares/invites`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${alice.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        itemType: 'folder',
+        ipnsName: folder.ipnsName,
+        itemName: 'InviteFolder',
+        encryptedKey: bytesToHex(encryptedKey),
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const data = await res.json();
+    expect(data.id).toBeTruthy();
+    expect(data.token).toBeTruthy();
+    expect(data.status).toBe('active');
+    inviteToken = data.token;
+  });
+
+  it('should show active status publicly (no auth)', async () => {
+    const res = await fetch(`${API_URL}/invites/${inviteToken}`);
+    expect(res.ok).toBe(true);
+
+    const data = await res.json();
+    expect(data.status).toBe('active');
+  });
+
+  it('should return invite data for authenticated user', async () => {
+    const bob = fixture.accounts.get('bob')!;
+
+    const res = await fetch(`${API_URL}/invites/${inviteToken}/data`, {
+      headers: { Authorization: `Bearer ${bob.accessToken}` },
+    });
+    expect(res.ok).toBe(true);
+
+    const data = await res.json();
+    expect(data.status).toBe('active');
+    expect(data.itemType).toBe('folder');
+    expect(data.ipnsName).toBe(folderIpnsName);
+    expect(data.itemName).toBe('InviteFolder');
+    expect(data.encryptedKey).toBeTruthy();
+  });
+
+  it('should allow Bob to claim the invite', async () => {
+    const bob = fixture.accounts.get('bob')!;
+    fixture.switchTo('bob');
+
+    // Re-wrap the key for Bob (simplified — in real flow, decrypt ephemeral then re-encrypt)
+    const dummyReWrappedKey = bytesToHex(new Uint8Array(64).fill(0xab));
+
+    const res = await fetch(`${API_URL}/invites/${inviteToken}/claim`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${bob.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        encryptedKey: dummyReWrappedKey,
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const data = await res.json();
+    expect(data.shareId).toBeTruthy();
+  });
+
+  it('should reject double-claim by another user', async () => {
+    const charlie = fixture.accounts.get('charlie')!;
+
+    const res = await fetch(`${API_URL}/invites/${inviteToken}/claim`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${charlie.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        encryptedKey: bytesToHex(new Uint8Array(64).fill(0xcd)),
+      }),
+    });
+
+    // Should be 409 (already claimed) or 404 (no longer active)
+    expect([404, 409]).toContain(res.status);
+  });
+
+  it('should reject double-claim by same user', async () => {
+    const bob = fixture.accounts.get('bob')!;
+
+    const res = await fetch(`${API_URL}/invites/${inviteToken}/claim`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${bob.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        encryptedKey: bytesToHex(new Uint8Array(64).fill(0xef)),
+      }),
+    });
+
+    expect([404, 409]).toContain(res.status);
+  });
+
+  it('should allow Alice to create and revoke a new invite', async () => {
+    const alice = fixture.accounts.get('alice')!;
+    fixture.switchTo('alice');
+
+    const encryptedKey = bytesToHex(new Uint8Array(64).fill(0x11));
+
+    const createRes = await fetch(`${API_URL}/shares/invites`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${alice.accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        itemType: 'folder',
+        ipnsName: folderIpnsName,
+        itemName: 'InviteFolder',
+        encryptedKey,
+      }),
+    });
+    expect(createRes.status).toBe(201);
+    const newInvite = await createRes.json();
+
+    // Revoke it
+    const revokeRes = await fetch(`${API_URL}/shares/invites/${newInvite.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${alice.accessToken}` },
+    });
+    expect(revokeRes.status).toBe(204);
+
+    // Public status should now be 404
+    const statusRes = await fetch(`${API_URL}/invites/${newInvite.token}`);
+    expect(statusRes.status).toBe(404);
+  });
+});

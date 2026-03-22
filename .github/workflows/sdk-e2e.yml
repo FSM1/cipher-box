@@ -1,0 +1,151 @@
+name: SDK E2E Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/**'
+      - 'apps/api/**'
+      - 'tests/sdk-e2e/**'
+      - '.github/workflows/sdk-e2e.yml'
+  pull_request:
+    paths:
+      - 'packages/**'
+      - 'apps/api/**'
+      - 'tests/sdk-e2e/**'
+      - '.github/workflows/sdk-e2e.yml'
+
+jobs:
+  sdk-e2e:
+    name: SDK E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cipherbox_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      ipfs:
+        image: ipfs/kubo:v0.34.0
+        ports:
+          - 5001:5001
+          - 8080:8080
+        options: >-
+          --health-cmd "ipfs id"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 30s
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install mock-ipns-routing dependencies
+        run: |
+          cd tools/mock-ipns-routing
+          npm install
+          npm run build
+
+      - name: Build packages (no web app, no Playwright)
+        run: |
+          pnpm --filter @cipherbox/crypto build
+          pnpm --filter @cipherbox/core build
+          pnpm --filter @cipherbox/api-client build
+          pnpm --filter @cipherbox/sdk-core build
+          pnpm --filter @cipherbox/sdk build
+          pnpm --filter @cipherbox/api build
+
+      - name: Create API .env
+        run: |
+          echo "NODE_ENV=test" > apps/api/.env
+          echo "DB_HOST=localhost" >> apps/api/.env
+          echo "DB_PORT=5432" >> apps/api/.env
+          echo "DB_USERNAME=postgres" >> apps/api/.env
+          echo "DB_PASSWORD=postgres" >> apps/api/.env
+          echo "DB_DATABASE=cipherbox_test" >> apps/api/.env
+          echo "JWT_SECRET=e2e-test-jwt-secret-key-for-ci" >> apps/api/.env
+          echo "CORS_ALLOWED_ORIGINS=http://localhost:5173" >> apps/api/.env
+          echo "IPFS_PROVIDER=local" >> apps/api/.env
+          echo "IPFS_LOCAL_API_URL=http://localhost:5001" >> apps/api/.env
+          echo "IPFS_LOCAL_GATEWAY_URL=http://localhost:8080" >> apps/api/.env
+          echo "DELEGATED_ROUTING_URL=http://localhost:3001" >> apps/api/.env
+          echo "REDIS_HOST=localhost" >> apps/api/.env
+          echo "REDIS_PORT=6379" >> apps/api/.env
+          echo "TEST_LOGIN_SECRET=e2e-test-secret-ci-only" >> apps/api/.env
+          echo "IDENTITY_JWT_PRIVATE_KEY=${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}" >> apps/api/.env
+
+      - name: Start mock IPNS routing
+        run: |
+          cd tools/mock-ipns-routing
+          node dist/server.js &
+          sleep 2
+
+      - name: Start API server
+        run: |
+          pnpm --filter @cipherbox/api start:prod &
+          # Wait for API to be ready
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:3000/health > /dev/null 2>&1; then
+              echo "API is ready"
+              break
+            fi
+            sleep 1
+          done
+        env:
+          NODE_ENV: test
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USERNAME: postgres
+          DB_PASSWORD: postgres
+          DB_DATABASE: cipherbox_test
+          JWT_SECRET: e2e-test-jwt-secret-key-for-ci
+          CORS_ALLOWED_ORIGINS: http://localhost:5173
+          IPFS_PROVIDER: local
+          IPFS_LOCAL_API_URL: http://localhost:5001
+          IPFS_LOCAL_GATEWAY_URL: http://localhost:8080
+          DELEGATED_ROUTING_URL: http://localhost:3001
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
+          TEST_LOGIN_SECRET: e2e-test-secret-ci-only
+
+      - name: Run SDK E2E tests
+        run: pnpm --filter @cipherbox/sdk-e2e test
+        env:
+          SDK_E2E_API_URL: http://localhost:3000
+          SDK_E2E_SECRET: e2e-test-secret-ci-only
