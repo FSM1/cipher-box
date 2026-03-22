@@ -1,0 +1,115 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f413a30234b4",
+  "session_id": "8dbad658-aeb6-4bde-a1a1-7a83e2010385",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T19:13:18.006752Z",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/common/guards/throttler-bypass.guard.ts",
+    "packages/api-client/src/instance.ts",
+    "tests/load/src/harness/reporter.ts",
+    "tests/sdk-e2e/src/suites/folder-crud.test.ts",
+    "tests/sdk-e2e/src/suites/vault-lifecycle.test.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f63b6446e562",
+  "token_usage": {
+    "input_tokens": 1063,
+    "cache_creation_tokens": 1077659,
+    "cache_read_tokens": 112673532,
+    "output_tokens": 138162,
+    "api_call_count": 375
+  },
+  "session_metrics": {
+    "turn_count": 27
+  },
+  "summary": {
+    "intent": "Implement SDK-driven E2E and load test suites as two new workspace packages (tests/sdk-e2e and tests/load) to replace flaky Playwright browser automation with direct CipherBoxClient calls, then run them against a local stack and get PR #318 merged.",
+    "outcome": "Both packages were created and all 83 SDK E2E tests pass locally. A throttle bypass mechanism (BypassableThrottlerGuard + X-Throttle-Bypass header) was implemented to allow tests to run against production-throttled staging. Load tests run successfully with useful baseline metrics. PR #318 went through multiple rounds of automated review comments, all resolved.",
+    "learnings": {
+      "repo": [
+        "The orval-generated API client functions (e.g. ipnsControllerPublishRecord) use a module-level singleton config via setApiClientConfig in packages/api-client/src/instance.ts — all sdk-core functions that call generated API functions depend on this singleton being set correctly before each call",
+        "ThrottlerGuard is applied per-controller via @UseGuards, not globally — 7 controllers plus 11 individual endpoints with @Throttle() decorators; IPNS publish endpoint has a strict 10 publishes/min limit",
+        "test-login endpoint has its own strict throttle (5 per 15 min) separate from the general controller throttle",
+        "NODE_ENV in apps/api/.env takes precedence over the shell env var when running nest start --watch, so setting NODE_ENV=test in the shell doesn't override a .env file with NODE_ENV=development",
+        "pnpm install from workspace root updates the lockfile correctly for new packages added to tests/*; the workspace.yaml already covers tests/*",
+        "API unit test specs use .overrideGuard(ThrottlerGuard) targeting the @nestjs/throttler class — when swapping to a custom guard subclass, all specs must be updated to override the new guard class or NestJS DI resolution fails",
+        "crypto.getRandomValues() has a 65,536 byte limit per call — generating random Uint8Arrays larger than 64KB requires chunked generation",
+        "The CipherBoxClient exposes getFolderTree() as a public method, making (client as any).folderTree casts unnecessary",
+        "setApiClientConfig accepts a defaultHeaders option (added in this session) which propagates to all axios requests via the cached axios instance"
+      ],
+      "code": [
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Module-level singleton _config and _axiosInstance; getCachedInstance() returns a shared axios instance keyed by baseUrl — adding defaultHeaders required invalidating the cache when headers change"
+        },
+        {
+          "path": "apps/api/src/common/guards/throttler-bypass.guard.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "New BypassableThrottlerGuard extends ThrottlerGuard; uses Buffer.from + crypto.timingSafeEqual for constant-time comparison; guards against non-ASCII secrets via byteLength check; skips bypass in NODE_ENV=production"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "line": 24,
+          "end_line": 59,
+          "finding": "Gold standard test-harness pattern: test-login → initializeVault → encryptVaultKeys → POST /vault/init → setApiClientConfig → new CipherBoxClient → registerFolder"
+        },
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "line": 1,
+          "end_line": 100,
+          "finding": "createTestContext() and createTestAccount() extracted from integration.test.ts pattern; testFetch() wraps global fetch with Authorization + X-Throttle-Bypass headers for raw HTTP calls in test suites"
+        },
+        {
+          "path": "tests/sdk-e2e/src/fixtures/multi-account.ts",
+          "line": 1,
+          "end_line": 60,
+          "finding": "switchTo() must call setApiClientConfig for each account before sdk-core IPNS operations; must also update defaultHeaders to preserve bypass header across account switches"
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "createClientPool creates N accounts in parallel batches reusing createTestAccount from test-harness; setApiClientConfig is called once with shared baseUrl and first client's token — works because all clients share baseUrl and tokens are per-request via closure"
+        }
+      ],
+      "workflow": [
+        "Running nest start --watch (dev mode) handles .env loading correctly; running node dist/main.js directly does not load .env — always use pnpm --filter api dev for test runs against the compiled API",
+        "When a pre-commit hook runs markdownlint, inline code in markdown files needs blank lines before/after fenced code blocks and no bare URLs without angle brackets",
+        "1Password SSH agent for commit signing is not available to background Bash tool processes — commits from background tasks may time out waiting for the agent; foreground commits work fine",
+        "CodeRabbit generates review comments referencing vitest CLI flags incorrectly (e.g. confusing Jest --testPathPattern with vitest equivalents) — these are safe to dismiss as not applicable",
+        "Resolving GitHub PR review threads requires two steps: REST API reply (in_reply_to with integer comment ID) then GraphQL resolveReviewThread mutation (with string thread node ID); the two IDs are different"
+      ]
+    },
+    "friction": [
+      "The module-level singleton in setApiClientConfig forced a switchTo() hack in multi-account test fixtures and required adding defaultHeaders to propagate the bypass header — this is a known design gap tracked as a todo",
+      "crypto.getRandomValues() silently fails for arrays \u003e65536 bytes; the error was swallowed by Promise.allSettled in the load test harness, making it very hard to diagnose — appeared as '0 ops, 3 clients failed'",
+      "Multiple rounds of sed-based bulk edits to test files got corrupted (mismatched parentheses from fetchHeaders wrapping) — required rewriting files from scratch",
+      "The 1Password SSH agent timed out for background bash commands during commit signing, requiring retries and user intervention",
+      "NestJS DI fails with a cryptic 'THROTTLER:MODULE_OPTIONS' error when test specs override ThrottlerGuard but controllers import BypassableThrottlerGuard — the error message doesn't indicate a guard class mismatch",
+      "Per-endpoint @Throttle() decorators on IPNS publish (10/min) still caused 429s during load tests even after adding the bypass guard — the bypass guard covers controller-level throttling but the per-endpoint decorator behavior needed separate investigation"
+    ],
+    "open_items": [
+      "Refactor api-client from module-level singleton to instance-scoped axios: configure orval to generate functions accepting an axios instance parameter, thread it through sdk-core SdkContext, have CipherBoxClient own its instance — tracked in .planning/todos/pending/2026-03-22-refactor-api-client-from-singleton-to-instance-scoped-axios.md",
+      "Investigate throttle bypass gap for per-endpoint @Throttle decorators: verify X-Throttle-Bypass header reaches IPNS publish endpoint, determine if 429s come from API throttler or upstream IPFS, extend bypass to cover all 11 @Throttle-decorated endpoints — tracked in .planning/todos/pending/2026-03-22-investigate-throttle-bypass-gap-for-per-endpoint-throttle-decorators.md",
+      "Load test scenarios fail silently — all clients rejected shows as '0 ops' with no error output; need better error surfacing when the entire workload crashes before any metrics are recorded",
+      "Raw fetch() calls in vault-lifecycle, share-operations, and invite-link test suites should migrate to the generated API client functions once the singleton refactor lands — currently wrapped in testFetch() as an intermediate workaround",
+      "Load tests measure single-node throughput on staging but cannot test horizontal scaling effectiveness — a separate load test strategy targeting the production cluster with real throttle limits and distributed source IPs is needed for cluster validation",
+      "The TESTING_STRATEGY.md document in tests/ captures the tiered throttle bypass decision and scaling implications — should be kept updated as the architecture evolves"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-22T19:12:05.502953Z",
+    "agent_lines": 0,
+    "human_added": 4,
+    "human_modified": 5,
+    "human_removed": 0,
+    "total_committed": 4,
+    "agent_percentage": 0
+  }
+}

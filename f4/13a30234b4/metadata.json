@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f413a30234b4",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/common/guards/throttler-bypass.guard.ts",
+    "packages/api-client/src/instance.ts",
+    "tests/load/src/harness/reporter.ts",
+    "tests/sdk-e2e/src/suites/folder-crud.test.ts",
+    "tests/sdk-e2e/src/suites/vault-lifecycle.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f4/13a30234b4/0/metadata.json",
+      "transcript": "/f4/13a30234b4/0/full.jsonl",
+      "content_hash": "/f4/13a30234b4/0/content_hash.txt",
+      "prompt": "/f4/13a30234b4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1063,
+    "cache_creation_tokens": 1077659,
+    "cache_read_tokens": 112673532,
+    "output_tokens": 138162,
+    "api_call_count": 375
+  }
+}
