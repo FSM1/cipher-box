@@ -1,0 +1,123 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "8842514ec58b",
+  "session_id": "0617b2f2-dabc-413c-b9f2-7450610a315f",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T22:20:20.072575Z",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "453283cb78be",
+  "token_usage": {
+    "input_tokens": 326,
+    "cache_creation_tokens": 311168,
+    "cache_read_tokens": 54709237,
+    "output_tokens": 91778,
+    "api_call_count": 290
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "summary": {
+    "intent": "Resolve PR review comments on cipher-box PR #318, refactor the api-client from singleton to instance-scoped axios, investigate a throttle bypass gap in load tests, and clean up test suite naming conventions across the codebase.",
+    "outcome": "All PR review threads resolved across multiple review rounds; api-client fully refactored to instance-scoped axios eliminating the dual-path singleton architecture; test suites renamed to web-e2e/sdk-e2e/desktop-e2e for consistency; SDK E2E tests merged into main ci.yml workflow; throttle bypass gap confirmed resolved as a side effect of the axios refactor.",
+    "learnings": {
+      "repo": [
+        "The web app uses direct generated API function imports (not CipherBoxClient) for auth, vault init, shares, device approval — these were the last consumers of the singleton pattern.",
+        "Phase 19.1 was marked complete in ROADMAP.md but Plan 19.1-05 (rewire web app hooks/stores to SDK) was only partially done — folder/file/bin ops were migrated but auth, shares, IPFS/IPNS direct calls remained.",
+        "The BypassableThrottlerGuard.canActivate() returns true before calling super.canActivate(), meaning per-endpoint @Throttle() decorators are always bypassed when the bypass header is present — no gap exists at the NestJS level.",
+        "The IPFS controller only uses JwtAuthGuard (no throttle guard), so IPFS operations are not rate-limited by the API layer.",
+        "sdk-core's ipfs/index.ts used bare axios.post() with manual token injection instead of the instance-scoped axios, missing 401 refresh capability.",
+        "The branch protection rule references job names as 'Release Gate / Verify E2E Passed' — renaming the job in release-gate.yml broke the required check and blocked all PRs from merging.",
+        "The sdk-e2e standalone workflow duplicated all CI infrastructure (Postgres, IPFS, Redis services, pnpm install, builds) unnecessarily.",
+        "The .planning/ historical docs intentionally preserve old paths/names as point-in-time records and should not be updated during renames."
+      ],
+      "code": [
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "customInstance now accepts optional _axiosInstance in options object, bypassing singleton when provided. createAxiosInstance includes 401 refresh logic. setApiClientConfig accepts a pre-built instance."
+        },
+        {
+          "path": "packages/sdk-core/src/types.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "SdkContext gains optional axiosInstance field; AxiosInstance type imported from @cipherbox/api-client re-export to avoid direct axios dependency in sdk-core."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 1,
+          "end_line": 100,
+          "finding": "createAndPublishIpnsRecord, batchPublishIpnsRecords, resolveIpnsRecord all accept optional ctx parameter to forward the axios instance."
+        },
+        {
+          "path": "packages/sdk/src/types.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "CipherBoxClientConfig gains optional defaultHeaders and axiosInstance fields."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1,
+          "end_line": 60,
+          "finding": "Constructor uses provided axiosInstance or creates its own via createAxiosInstance(); registers it as singleton via setApiClientConfig so direct API calls share the same instance."
+        },
+        {
+          "path": "apps/web/src/lib/api-config.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "Creates the ONE shared axios instance with auth token injection and 401 refresh; passes it to setApiClientConfig; exports it for CipherBoxClient consumption."
+        },
+        {
+          "path": "apps/api/src/common/guards/throttler-bypass.guard.spec.ts",
+          "line": 1,
+          "end_line": 100,
+          "finding": "New unit test file covering all 7 code paths of BypassableThrottlerGuard; achieved 100% statement/branch/function/line coverage."
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "line": 88,
+          "end_line": 100,
+          "finding": "Added zeroing of privateKey, rootFolderKey, rootIpnsKeypair.privateKey in destroyClientPool teardown for security. Also added console.warn for write errors instead of silent swallow."
+        },
+        {
+          "path": "tests/sdk-e2e/src/fixtures/test-harness.ts",
+          "line": 127,
+          "end_line": 150,
+          "finding": "Added try/catch around steps 2-4 of setup with account cleanup rollback on failure."
+        },
+        {
+          "path": ".github/workflows/release-gate.yml",
+          "line": 90,
+          "end_line": 105,
+          "finding": "Job name must remain 'Verify E2E Passed' exactly — branch protection references this string. Internal step names can differ."
+        }
+      ],
+      "workflow": [
+        "When renaming GitHub Actions job names, always check branch protection required status checks first — the check name is 'WorkflowName / JobName' and must match exactly.",
+        "Merging a standalone workflow into ci.yml as a dependent job (needs: test) provides fail-fast behavior and shared pnpm cache without duplicating service container definitions at the job level.",
+        "Rate limiting (429) during pnpm test is a transient artifact of parallel test suites hitting the live API simultaneously, not a code bug — a brief cooldown between runs confirms this.",
+        "jest.spyOn() mocking prevents coverage instrumentation of the original code; coverage must be verified via jest --coverage with proper collectCoverageFrom config, not by inferring from test pass/fail.",
+        "Historical planning docs (.planning/) should be preserved as point-in-time records during renames — only update live code, configs, docs, and workflows."
+      ]
+    },
+    "friction": [
+      "Renaming the GitHub Actions job name in release-gate.yml broke branch protection and blocked all PRs — discovered only after push, required immediate fix.",
+      "Rate limiting (429) from the live API during parallel test runs caused false test failures that required investigation to confirm as transient.",
+      "The AxiosInstance type could not be imported directly from 'axios' in sdk/src/types.ts because axios is not a direct dependency — had to use the re-export from @cipherbox/api-client.",
+      "jest --coverage CLI invocation with ad-hoc paths did not collect from the right rootDir; required using the package-level jest config to get accurate coverage numbers.",
+      "The sdk-core ipns.test.ts mock assertions expected the old single-argument call signature and had to be updated after adding the optional ctx parameter.",
+      "The sdk bin/index.ts IPNS calls were missed in the initial threading pass and only caught by a subsequent grep scan."
+    ],
+    "open_items": [
+      "The web app still has 13 files importing directly from @cipherbox/api-client for auth, vault setup, shares, device approval, health checks, and IPFS/IPNS — these could eventually be migrated to go through CipherBoxClient to fully eliminate all direct singleton usage.",
+      "The setApiClientConfig singleton and getCachedInstance remain in api-client for backward compatibility — can be removed once the web app migration is complete.",
+      "The release-please-manifest.json still references tests/web-e2e — should be verified against the actual package path after the rename.",
+      "Per-endpoint @Throttle() decorators on IPNS controller (10 publishes/min) may still affect non-bypassed clients in production — the bypass only helps test/SDK clients with the bypass header.",
+      "The sdk-e2e and load tests hit a live API (not mocked) — parallel execution causes 429s that require cooldown; consider rate-limit coordination or test isolation improvements.",
+      "fetchFromIpfs in sdk-core uses native fetch() for streaming (not the instance-scoped axios) — this path still lacks 401 refresh capability."
+    ]
+  }
+}
