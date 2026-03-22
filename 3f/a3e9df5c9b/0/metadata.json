@@ -1,0 +1,107 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "3fa3e9df5c9b",
+  "session_id": "8dbad658-aeb6-4bde-a1a1-7a83e2010385",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T17:40:18.155868Z",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 5,
+  "files_touched": [
+    ".planning/STATE.md",
+    ".planning/todos/pending/2026-03-22-refactor-api-client-from-singleton-to-instance-scoped-axios.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "6192612e3ca2",
+  "token_usage": {
+    "input_tokens": 845,
+    "cache_creation_tokens": 939442,
+    "cache_read_tokens": 39605626,
+    "output_tokens": 87493,
+    "api_call_count": 190
+  },
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "summary": {
+    "intent": "Implement a comprehensive SDK-based E2E and load testing strategy for CipherBox, replacing browser-automation Playwright tests with direct SDK calls for faster, more reliable test coverage.",
+    "outcome": "Created two new workspace packages (tests/sdk-e2e with 83 passing tests across 10 suites, and tests/load with 5 scenarios), two CI workflows, a TESTING_STRATEGY.md doc, and a todo for the api-client singleton refactor. All 83 SDK E2E tests pass against a local stack.",
+    "learnings": {
+      "repo": [
+        "The API ThrottlerGuard uses 10 req/s and 100 req/min limits which block rapid SDK test suites; rate limiter must be relaxed for test environments via NODE_ENV check",
+        "NODE_ENV in .env file takes precedence over shell env vars when NestJS ConfigModule loads it — must edit .env directly, not just pass NODE_ENV=test to the shell",
+        "setApiClientConfig is a module-level singleton in packages/api-client/src/instance.ts because orval generates standalone functions that import customInstance — it's a code-gen pattern, not a technical requirement",
+        "Multi-account SDK tests must call setApiClientConfig before each operation to switch accounts, and later tests can be contaminated if they don't re-set the singleton",
+        "The invite claim DTO has @MinLength(258) on encryptedKey (ECIES ciphertext is at least 129 bytes = 258 hex chars) — dummy test keys must use real wrapKey() output",
+        "The API returns wrapped share keys as hex strings but unwrapKey() expects Uint8Array — needs hexToBytes() conversion before passing to crypto functions",
+        "CipherBoxClient.getFolderTree() is the public API for accessing folder state — (client as any).folderTree casts should not be used in tests",
+        "The Playwright load test (tests/e2e/tests/load-test.spec.ts) runs ~70 operations per client across 5 browser contexts against staging — useful workload reference",
+        "POST /auth/test-login has its own stricter throttle separate from the global ThrottlerModule config",
+        "pnpm-workspace.yaml has three groups: apps/*, packages/*, tests/* — new test packages go under tests/ and must be added to pnpm-workspace.yaml"
+      ],
+      "code": [
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Module-level singleton for API config; no deep technical reason for this design — orval can be configured to accept per-instance axios instances instead"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "line": 24,
+          "end_line": 59,
+          "finding": "Gold standard pattern: test-login → initializeVault → encryptVaultKeys → setApiClientConfig → new CipherBoxClient → registerFolder"
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "ThrottlerModule config — added NODE_ENV=test conditional to set ttl=60000/limit=10000 for test environments"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1,
+          "end_line": 977,
+          "finding": "CipherBoxClient has no browser/React/Zustand dependencies — pure TypeScript/ESM, suitable for Node.js test environments"
+        },
+        {
+          "path": "tests/sdk-e2e/src/fixtures/multi-account.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "switchTo() pattern required before each IPNS operation in multi-account tests due to api-client singleton; operations must run serially"
+        }
+      ],
+      "workflow": [
+        "Running TypeScript type-check (tsc --noEmit) after writing test files catches issues like unused imports (noUnusedLocals), wrong types, and rootDir violations before running tests",
+        "When extracting shared code between two packages, check if tsconfig rootDir restrictions prevent cross-package imports — may need to adjust or use a shared package instead",
+        "For large implementation sessions, parallel Write tool calls for independent files significantly speeds up file creation",
+        "1Password SSH agent for commit signing times out in background agent subprocesses — commits from agent may hang; user must run from terminal or retry",
+        "Load test metrics aggregation should use getReadonlySamples() to avoid unnecessary array copies when computing statistics",
+        "The 'simplify' skill effectively catches: cross-package code duplication, repeated aggregation blocks, unnecessary type casts when public APIs exist, and shared fixture inefficiencies"
+      ]
+    },
+    "friction": [
+      "1Password SSH agent unavailable in background Bash subprocesses causing commit signing to hang indefinitely — required manual user intervention or retries",
+      "NODE_ENV=test passed to shell was silently overridden by .env file contents, making the ThrottlerModule change appear to have no effect until .env was edited directly",
+      "API ThrottlerGuard (10 req/s, 100 req/min) blocked single test suites even when running one at a time — required API code change before tests could run",
+      "Invite claim DTO @MinLength(258) validation rejected dummy test keys — error message (400) didn't clearly indicate the key was too short",
+      "The explore subagent completed after the main implementation was already done — background agent timing meant its findings arrived too late to be useful",
+      "TypeScript rootDir restriction in tests/load/tsconfig.json prevented importing from tests/sdk-e2e — required tsconfig adjustment"
+    ],
+    "open_items": [
+      "Refactor api-client to instance-scoped axios instead of module-level singleton (todo filed: .planning/todos/pending/2026-03-22-refactor-api-client-from-singleton-to-instance-scoped-axios.md) — eliminates switchTo() hack, cross-suite contamination, and enables true parallel clients",
+      "Implement throttle bypass header (option 2) for load tests against staging — a secret-verified X-Throttle-Bypass header so load tests can run without throttle interference while production limits remain intact",
+      "Load tests against production cluster not yet designed — staging load tests answer single-node capacity questions only; a separate strategy needed for testing horizontal scaling effectiveness",
+      "Add 'throttle validation' scenario to load tests that deliberately does NOT bypass, to verify the throttler itself works correctly under load",
+      "TESTING_STRATEGY.md committed to PR but not yet reviewed by team — documents rate limiting tiers, horizontal scaling implications, k6 rationale, and singleton caveats"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-22T17:39:31.173292Z",
+    "agent_lines": 77,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 77,
+    "agent_percentage": 100
+  }
+}
