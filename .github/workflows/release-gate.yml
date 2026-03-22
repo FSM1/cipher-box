@@ -87,7 +87,7 @@ jobs:
           echo "Desktop changes detected: ${DESKTOP_CHANGED}"
 
   verify-e2e:
-    name: Verify Web E2E Passed
+    name: Verify E2E Passed
     needs: detect-changes
     if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
