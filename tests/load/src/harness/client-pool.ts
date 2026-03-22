@@ -84,6 +84,10 @@ export async function destroyClientPool(pool: PoolClient[]): Promise<void> {
   console.log(`Cleaning up ${pool.length} test accounts...`);
   for (const pc of pool) {
     pc.client.destroy();
+    // Zero harness-owned key material (client.destroy() only clears its internal copies)
+    pc.privateKey.fill(0);
+    pc.rootFolderKey.fill(0);
+    pc.rootIpnsKeypair.privateKey.fill(0);
     await deleteTestAccount(pc, API_URL);
   }
 }
@@ -125,8 +129,8 @@ export async function aggregateAndReport(
     const fs = await import('node:fs/promises');
     const slug = scenarioName.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     await fs.writeFile(`metrics-${slug}.json`, reportJson);
-  } catch {
-    // Non-fatal — CI artifact upload will just find no files
+  } catch (err) {
+    console.warn(`Failed to write metrics report: ${(err as Error).message}`);
   }
 
   return metrics;
