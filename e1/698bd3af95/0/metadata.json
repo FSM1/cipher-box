@@ -1,0 +1,122 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e1698bd3af95",
+  "session_id": "8dbad658-aeb6-4bde-a1a1-7a83e2010385",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T15:13:51.070385Z",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".github/workflows/load-test.yml",
+    ".github/workflows/sdk-e2e.yml",
+    "pnpm-lock.yaml",
+    "release-please-config.json",
+    "tests/load/.env.example",
+    "tests/load/package.json",
+    "tests/load/src/harness/client-pool.ts",
+    "tests/load/src/harness/metrics.ts",
+    "tests/load/src/harness/reporter.ts",
+    "tests/load/src/scenarios/ipns-publish-storm.test.ts",
+    "tests/load/src/scenarios/mixed-workload.test.ts",
+    "tests/load/src/scenarios/spike-test.test.ts",
+    "tests/load/src/scenarios/sustained-load.test.ts",
+    "tests/load/src/scenarios/upload-throughput.test.ts",
+    "tests/load/src/workloads/file-workload.ts",
+    "tests/load/src/workloads/folder-workload.ts",
+    "tests/load/src/workloads/mixed-workload.ts",
+    "tests/load/tsconfig.json",
+    "tests/load/vitest.config.ts",
+    "tests/sdk-e2e/.env.example",
+    "tests/sdk-e2e/package.json",
+    "tests/sdk-e2e/src/fixtures/multi-account.ts",
+    "tests/sdk-e2e/src/fixtures/test-harness.ts",
+    "tests/sdk-e2e/src/helpers/assertions.ts",
+    "tests/sdk-e2e/src/helpers/data-generators.ts",
+    "tests/sdk-e2e/src/suites/bin-operations.test.ts",
+    "tests/sdk-e2e/src/suites/concurrent-operations.test.ts",
+    "tests/sdk-e2e/src/suites/data-integrity.test.ts",
+    "tests/sdk-e2e/src/suites/error-cases.test.ts",
+    "tests/sdk-e2e/src/suites/file-operations.test.ts",
+    "tests/sdk-e2e/src/suites/folder-crud.test.ts",
+    "tests/sdk-e2e/src/suites/invite-link.test.ts",
+    "tests/sdk-e2e/src/suites/ipns-consistency.test.ts",
+    "tests/sdk-e2e/src/suites/share-operations.test.ts",
+    "tests/sdk-e2e/src/suites/vault-lifecycle.test.ts",
+    "tests/sdk-e2e/tsconfig.json",
+    "tests/sdk-e2e/vitest.config.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "f00d117f7e3e",
+  "token_usage": {
+    "input_tokens": 692,
+    "cache_creation_tokens": 141174,
+    "cache_read_tokens": 6069027,
+    "output_tokens": 47482,
+    "api_call_count": 64
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Implement two new test packages — SDK-driven E2E tests (`tests/sdk-e2e/`) and SDK-driven load tests (`tests/load/`) — as described in a pre-approved implementation plan, then open a PR.",
+    "outcome": "All 5 implementation phases completed: 10 E2E test suites, 5 load scenarios, 3 workload definitions, full harness infrastructure, and 2 CI workflows created. Both packages compile cleanly with zero TypeScript errors.",
+    "learnings": {
+      "repo": [
+        "`setApiClientConfig` in `packages/api-client/src/instance.ts` is a module-level singleton — multi-account tests must run serially, switching the config between accounts before each operation.",
+        "The `POST /auth/test-login` endpoint is the CI auth bypass pattern used across all test types — returns `{ accessToken, refreshToken, isNewUser, publicKeyHex, privateKeyHex }`.",
+        "Internal SDK state (`folderTree`, `binState`) is accessible via `(client as any).folderTree.get(ipnsName)` for in-memory verification without a full IPNS round-trip.",
+        "The existing Playwright load test drives ~70 ops/client across 10 concurrent browser contexts; translating this to SDK removes browser overhead and enables much higher concurrency.",
+        "Release Please config uses `extra-files` to track version bumps in non-standard package locations — new test packages must be added there.",
+        "CipherBoxClient emits typed `SdkEvent` lifecycle events (`operation:start`, `operation:end`, `error`, `folder:loaded`, `folder:updated`, etc.) via `client.on()` — usable for load test metrics collection.",
+        "The workspace has three groups in `pnpm-workspace.yaml`: `apps/*`, `packages/*`, `tests/*` — new test packages go under `tests/`.",
+        "k6 was ruled out for load testing because its Go-based JS runtime lacks Node.js crypto support needed by `@noble/*` and `eciesjs`."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "line": 24,
+          "end_line": 59,
+          "finding": "Gold-standard test setup pattern: test-login → initializeVault → encryptVaultKeys → setApiClientConfig → new CipherBoxClient → registerFolder. Extracted verbatim into test-harness.ts."
+        },
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "Singleton config with shared `_refreshPromise` to prevent concurrent 401 refresh races — all sdk-core IPNS functions use this implicitly, making it the key constraint for multi-account test design."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1,
+          "end_line": 977,
+          "finding": "Full operation surface: folder CRUD, upload/download with progress, bin lifecycle, share/revoke, internal `withOperation()` wrapper that emits typed events with start/end/error lifecycle."
+        }
+      ],
+      "workflow": [
+        "TypeScript `noUnusedLocals` strict mode caused several post-write edit cycles to remove unused imports — better to check this incrementally rather than after all files are written.",
+        "Running `pnpm install` at root after adding new workspace packages updates the lockfile and wires workspace protocol dependencies in a single step.",
+        "The exploration sub-agent was launched before implementation files were written, but its results arrived after the implementation was already complete — for well-scoped tasks with sufficient prior context, the agent added latency without contributing new information."
+      ]
+    },
+    "friction": [
+      "Multiple edit cycles needed after initial file writes due to `noUnusedLocals` TypeScript errors — unused imports introduced during copy-paste-and-adapt from reference files.",
+      "Some Edit tool calls failed silently (string already matched what was in the file from the Write call) requiring re-reads to confirm state.",
+      "The background exploration sub-agent completed after the implementation was already done, providing no value and consuming context."
+    ],
+    "open_items": [
+      "SDK E2E and load tests have not been run against a live environment — full validation requires local API + IPFS stack.",
+      "The `sdk-e2e.yml` CI workflow starts the API with `pnpm --filter @cipherbox/api start:prod` — this script reference was not verified to exist in the API package.",
+      "Share/invite test suites use raw API calls rather than SDK methods where SDK equivalents may not yet exist — these may need updating as SDK coverage expands.",
+      "Load test scenarios use configurable env vars (`LOAD_TEST_CLIENTS`, `LOAD_TEST_DURATION`) but no baseline performance thresholds are encoded — p95/p99 assertions could be added once baseline numbers are established.",
+      "The `tests/load/` package is not added to the root `pnpm test` script or any automatic CI trigger — it's manual-dispatch only by design, but should be documented in the project README."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-22T15:13:15.870915Z",
+    "agent_lines": 3203,
+    "human_added": 4731,
+    "human_modified": 2737,
+    "human_removed": 0,
+    "total_committed": 10671,
+    "agent_percentage": 30.015931028019864
+  }
+}

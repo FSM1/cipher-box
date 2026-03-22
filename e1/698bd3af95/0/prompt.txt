@@ -1,0 +1,234 @@
+<task-notification>
+<task-id>a739c948a5605b515</task-id>
+<tool-use-id>toolu_01J6akQYEEJNErb6mQHd5ZqM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/a739c948a5605b515.output</output-file>
+<status>completed</status>
+<summary>Agent "Explore test infrastructure" completed</summary>
+<result>Excellent. Now I have all the critical information. Let me compile a comprehensive report:
+
+## Summary
+
+I've thoroughly explored the CipherBox codebase and gathered all the information needed for implementing SDK-based E2E and load tests. Here's the complete resource inventory:
+
+### 1. **Integration Test Prototype** (Detailed Walkthrough)
+**File:** `/Users/michael/Code/cipher-box/packages/sdk/src/__tests__/integration.test.ts`
+
+This is the gold standard for SDK testing. Key patterns:
+- **Test setup flow:** `test-login` endpoint → vault initialization → API client config → CipherBoxClient instantiation
+- **Two complete test suites:**
+  - Full lifecycle (folder CRUD, upload, download, rename, delete)
+  - Bin operations (loadBin, deleteToBin, verify persistence)
+- **Critical methods exercised:**
+  - `client.createFolder(rootIpnsName, folderName)`
+  - `client.uploadFile(rootIpnsName, fileData, fileName, mimeType)`
+  - `client.downloadFromIpns(fileMetaIpnsName, folderKey)`
+  - `client.renameItem(folderIpnsName, childId, newName)`
+  - `client.deleteItem(folderIpnsName, childId)`
+  - `client.deleteToBin(folderIpnsName, childId, parentPath)`
+  - `client.loadBin()`
+  - `client.destroy()`
+- **Pattern:** Access internal state via `(client as any).folderTree.get()` and `(client as any).binState` for verification
+- **Timeout:** 120 seconds per test (suitable for slow CI environments)
+
+### 2. **CipherBoxClient Class** (Full API Surface)
+**File:** `/Users/michael/Code/cipher-box/packages/sdk/src/client.ts`
+
+Complete client API (977 lines):
+- **Lifecycle:** Constructor with defensive key copying, `destroy()` with zeroing
+- **Event subscription:** `on(handler)` → unsubscribe function, `off(handler)`
+- **Folder operations:** `loadFolder()`, `createFolder()`, `renameItem()`, `moveItem()`, `deleteItem()`
+- **File operations:** `uploadFile()` with progress callback, `downloadFile()`, `downloadFromIpns()` with progress
+- **Bin operations:** `loadBin()`, `deleteToBin()`, `restoreFromBin()`, `permanentDelete()`, `emptyBin()`
+- **Share operations:** `shareFolder()`, `revokeShare()`, `reWrapForRecipients()`
+- **State query:** `hasFolder()`, `getFolderSequenceNumber()`, `getFolderIpnsPrivateKey()`
+- **Internal helpers:** `registerFolder()`, `getFolderTree()`, `getContext()`, `getConfig()`, `emitEvent()`
+- **Operation wrapper:** `withOperation()` emits typed SdkEvent with start/end/error lifecycle
+
+Key design principle: Zero dependencies on React/Zustand/browser APIs.
+
+### 3. **API Client Configuration Singleton**
+**File:** `/Users/michael/Code/cipher-box/packages/api-client/src/instance.ts`
+
+Critical for test setup:
+- **setApiClientConfig()** — configures baseUrl + getAccessToken globally
+- **getApiClientConfig()** — validates configuration is set before use
+- **customInstance()** — axios interceptor pattern (used by orval-generated code)
+- **Token refresh logic:** Shared `_refreshPromise` to prevent concurrent 401 race conditions
+- **Pattern for tests:** Call `setApiClientConfig({ baseUrl: API, getAccessToken: async () => token })`
+
+### 4. **Workspace Organization**
+**File:** `/Users/michael/Code/cipher-box/pnpm-workspace.yaml`
+
+Three package groups:
+- `apps/*` — API and Web
+- `packages/*` — SDK, Core, Crypto, API-Client, SDK-Core
+- `tests/*` — E2E tests
+
+**File:** `/Users/michael/Code/cipher-box/package.json` (root)
+
+Key scripts:
+- `pnpm dev` — starts API + Web concurrently
+- `pnpm api:generate` — regenerates API client after API changes
+- `pnpm test:e2e` — runs Playwright E2E tests
+- `pnpm test:e2e:headed` — runs with browser visible
+
+### 5. **Playwright Load Test Reference**
+**File:** `/Users/michael/Code/cipher-box/tests/e2e/tests/load-test.spec.ts` (689 lines)
+
+Sophisticated multi-client concurrent test:
+- **Concurrency model:** Multiple browser contexts (default 5), each with unique wallet
+- **Workload per client:** ~70 operations (folder creation, uploads, renames, moves, batch operations, deletes)
+- **Phase breakdown:**
+  1. Create 5 folders + 2 subfolders (7 publishes)
+  2. Upload 15 small text files (15 publishes)
+  3. Upload 10 medium binary files 10-50KB (10 publishes)
+  4. Upload 5 large binary files 100-500KB (5 publishes)
+  5. Re-upload files/overwrite (5 publishes)
+  6. Rename 8 items (8 publishes)
+  7. Move 6 items individually (6 publishes)
+  8. Batch move 2×3 files (2 publishes)
+  9. Batch delete 2 batches (2 publishes)
+  10. Individual cleanup (10 publishes)
+- **Helpers provided:**
+  - `createFolder()`, `uploadFile()`, `renameItem()`, `moveItem()`, `deleteItem()`, `batchMove()`, `batchDelete()`
+  - `resetState()` — modal/menu dismissal + breadcrumb navigation for recovery
+  - `op()` — safe operation wrapper with error logging
+- **Account cleanup:** Uses fetch from page context with `credentials: 'include'` to call `DELETE /auth/account`
+- **Environment variables:** `LOAD_TEST_CLIENTS` (default 5)
+- **Timeouts:** 600s global, 30s per operation, generous for concurrent staging traffic
+- **Metrics output:** IPNS publish count, ops/sec, failure tracking
+
+### 6. **CI/CD Service Definitions**
+**File:** `/Users/michael/Code/cipher-box/.github/workflows/e2e.yml`
+
+E2E test infrastructure:
+- **Services:** PostgreSQL 16, IPFS Kubo v0.34.0, Redis 7
+- **Build steps:** Install dependencies, install Playwright browsers, build all packages
+- **Test environment setup:** Creates `.env` files for both API (NestJS) and Web (Vite)
+- **Key credentials:**
+  - API: `JWT_SECRET`, `TEST_LOGIN_SECRET`, `IDENTITY_JWT_PRIVATE_KEY`
+  - Web: `VITE_WEB3AUTH_CLIENT_ID`, `VITE_API_URL`
+- **IPFS delegated routing:** Points to mock service at `http://localhost:3001`
+- **Command:** `pnpm --filter @cipherbox/e2e test`
+- **Artifact upload:** On failure, uploads Playwright report + test results
+
+### 7. **Package Dependencies and Exports**
+
+**@cipherbox/sdk** (`/Users/michael/Code/cipher-box/packages/sdk/package.json`):
+- Exports: Default export is CipherBoxClient (main entry point)
+- Dependencies: `@cipherbox/crypto`, `@cipherbox/core`, `@cipherbox/api-client`, `@cipherbox/sdk-core`
+- Scripts: `dev`, `build`, `lint`, `test`, `test:watch`, `test:coverage`
+
+**@cipherbox/sdk-core** (`/Users/michael/Code/cipher-box/packages/sdk-core/package.json`):
+- Stateless SDK functions for folder/file/IPNS operations
+- Dependencies: `@cipherbox/crypto`, `@cipherbox/core`, `@cipherbox/api-client`, `axios`
+
+**@cipherbox/core** exports (`/Users/michael/Code/cipher-box/packages/core/src/index.ts`):
+- **Vault:** `initializeVault`, `encryptVaultKeys`, `decryptVaultKeys`
+- **Folder metadata:** `encryptFolderMetadata`, `decryptFolderMetadata`
+- **File metadata:** `deriveFileIpnsKeypair`, `encryptFileMetadata`, `decryptFileMetadata`
+- **Bin:** `encryptBinMetadata`, `decryptBinMetadata`, `deriveBinIpnsKeypair`
+- **IPNS records:** `createIpnsRecord`, `deriveIpnsName`, `marshalIpnsRecord`, `signIpnsData`
+
+**@cipherbox/crypto** exports (`/Users/michael/Code/cipher-box/packages/crypto/src/index.ts`):
+- **Key derivation:** `deriveVaultIpnsKeypair`, `deriveKey`, `generateFolderKey`
+- **Encryption:** `encryptAesGcm`, `decryptAesGcm`, `encryptAesCtr`, `decryptAesCtr`
+- **Key wrapping:** `wrapKey`, `unwrapKey`, `reWrapKey`
+- **Ed25519:** `generateEd25519Keypair`, `signEd25519`, `verifyEd25519`
+- **IPNS:** `deriveIpnsName`
+- **Utilities:** `hexToBytes`, `bytesToHex`, `concatBytes`, `clearBytes`, `generateFileKey`, `generateIv`
+
+**@cipherbox/sdk-core** types and exports (`/Users/michael/Code/cipher-box/packages/sdk-core/src/index.ts`):
+- **Types:** `SdkContext`, `TeeKeys`, `IpfsAddResult`, `ProgressCallback`, `DownloadProgressCallback`
+- **IPFS:** `addToIpfs`, `fetchFromIpfs`, `unpinFromIpfs`
+- **IPNS:** `createAndPublishIpnsRecord`, `batchPublishIpnsRecords`, `resolveIpnsRecord`, `verifyIpnsSignature`
+- **Folder:** `loadFolderMetadata`, `createSubfolder`, `updateFolderMetadataAndPublish`, `renameInFolder`, `deleteFromFolder`, `addFilePointerToFolder`, `moveItem`
+- **File:** `createFileMetadata`, `resolveFileMetadata`, `updateFileMetadata`
+- **Upload/Download:** `uploadFile`, `downloadAndDecrypt`
+
+### 8. **E2E Test Configuration and Environment**
+
+**Playwright standard config** (`/Users/michael/Code/cipher-box/tests/e2e/playwright.config.ts`):
+- Single worker, sequential execution
+- baseURL: `http://localhost:5173` (local development)
+- Auto-starts services: mock-ipns-routing (3001), API (3000), Web (5173)
+- Service reuse: Always reuse if already running (except CI which starts fresh)
+- Artifacts: Screenshots/videos/traces on failure only
+
+**Playwright load test config** (`/Users/michael/Code/cipher-box/tests/e2e/playwright.load.config.ts`):
+- Points at deployed staging: `https://app-staging.cipherbox.cc`
+- No webServer (uses deployed app directly)
+- Single worker (concurrency within test via browser contexts)
+- 10-minute global timeout
+- No artifacts (load tests are verbose)
+
+**Environment variables** (`/Users/michael/Code/cipher-box/tests/e2e/.env.example`):
+- `WEB3AUTH_TEST_EMAIL` — test account for email login
+- `WEB3AUTH_TEST_OTP` — static OTP code
+- `BASE_URL` — web app URL (default localhost:5173)
+- `API_BASE_URL` — API URL (default localhost:3000)
+- `TEST_LOGIN_SECRET` — bypass Web3Auth, use deterministic keypair
+
+### 9. **SDK Client Types and Configuration**
+
+**CipherBoxClientConfig** (`/Users/michael/Code/cipher-box/packages/sdk/src/types.ts`):
+```typescript
+{
+  apiUrl: string;
+  getAccessToken: () => Promise<string>;
+  vaultKeypair: { publicKey: Uint8Array; privateKey: Uint8Array };
+  rootIpnsName: string;
+  rootFolderKey: Uint8Array;
+  teeKeys?: TeeKeys;
+  shareCallbacks?: ShareCallbacks;
+  onOperationStart?: (operation: string) => void;
+  onOperationEnd?: (operation: string) => void;
+  onError?: (error: Error) => void;
+}
+```
+
+**FolderState** (internal SDK state):
+```typescript
+{
+  ipnsName: string;
+  folderKey: Uint8Array;
+  ipnsKeypair: { publicKey: Uint8Array; privateKey: Uint8Array };
+  sequenceNumber: bigint;
+  children: FolderChild[];
+  metadata: FolderMetadata | null;
+  lastLoadedAt: number;
+}
+```
+
+### 10. **Event System**
+
+SDK emits typed SdkEvents:
+- `operation:start` — operation name
+- `operation:end` — operation name + durationMs
+- `error` — operation name + error object
+- `folder:loaded` — folder metadata loaded
+- `folder:updated` — folder children changed
+- `file:uploaded` — file uploaded with CID
+- `file:downloaded` — file downloaded
+- `bin:updated` — bin entries changed
+- `share:reWrapFailed` — key re-wrapping failed for recipients
+
+Subscribe: `const unsub = client.on(event => { ... }); unsub();`
+
+---
+
+## Ready for Implementation
+
+This exploration provides everything needed to build comprehensive SDK-based E2E and load tests:
+
+1. **Exact API surface** for all CipherBox operations
+2. **Test setup patterns** (authentication, client initialization, cleanup)
+3. **Real-world workload reference** (70 concurrent operations across multiple clients)
+4. **CI/CD infrastructure** (service definitions, environment variables)
+5. **Type definitions** for statically-typed test harnesses
+6. **Event-driven verification** for async operation completion
+
+All file paths are absolute and ready for reference in test implementation.</result>
+<usage><total_tokens>73950</total_tokens><tool_uses>53</tool_uses><duration_ms>102082</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/a739c948a5605b515.output

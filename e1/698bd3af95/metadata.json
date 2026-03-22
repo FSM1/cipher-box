@@ -1,0 +1,61 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e1698bd3af95",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".github/workflows/load-test.yml",
+    ".github/workflows/sdk-e2e.yml",
+    "pnpm-lock.yaml",
+    "release-please-config.json",
+    "tests/load/.env.example",
+    "tests/load/package.json",
+    "tests/load/src/harness/client-pool.ts",
+    "tests/load/src/harness/metrics.ts",
+    "tests/load/src/harness/reporter.ts",
+    "tests/load/src/scenarios/ipns-publish-storm.test.ts",
+    "tests/load/src/scenarios/mixed-workload.test.ts",
+    "tests/load/src/scenarios/spike-test.test.ts",
+    "tests/load/src/scenarios/sustained-load.test.ts",
+    "tests/load/src/scenarios/upload-throughput.test.ts",
+    "tests/load/src/workloads/file-workload.ts",
+    "tests/load/src/workloads/folder-workload.ts",
+    "tests/load/src/workloads/mixed-workload.ts",
+    "tests/load/tsconfig.json",
+    "tests/load/vitest.config.ts",
+    "tests/sdk-e2e/.env.example",
+    "tests/sdk-e2e/package.json",
+    "tests/sdk-e2e/src/fixtures/multi-account.ts",
+    "tests/sdk-e2e/src/fixtures/test-harness.ts",
+    "tests/sdk-e2e/src/helpers/assertions.ts",
+    "tests/sdk-e2e/src/helpers/data-generators.ts",
+    "tests/sdk-e2e/src/suites/bin-operations.test.ts",
+    "tests/sdk-e2e/src/suites/concurrent-operations.test.ts",
+    "tests/sdk-e2e/src/suites/data-integrity.test.ts",
+    "tests/sdk-e2e/src/suites/error-cases.test.ts",
+    "tests/sdk-e2e/src/suites/file-operations.test.ts",
+    "tests/sdk-e2e/src/suites/folder-crud.test.ts",
+    "tests/sdk-e2e/src/suites/invite-link.test.ts",
+    "tests/sdk-e2e/src/suites/ipns-consistency.test.ts",
+    "tests/sdk-e2e/src/suites/share-operations.test.ts",
+    "tests/sdk-e2e/src/suites/vault-lifecycle.test.ts",
+    "tests/sdk-e2e/tsconfig.json",
+    "tests/sdk-e2e/vitest.config.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e1/698bd3af95/0/metadata.json",
+      "transcript": "/e1/698bd3af95/0/full.jsonl",
+      "content_hash": "/e1/698bd3af95/0/content_hash.txt",
+      "prompt": "/e1/698bd3af95/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 692,
+    "cache_creation_tokens": 141174,
+    "cache_read_tokens": 6069027,
+    "output_tokens": 47482,
+    "api_call_count": 64
+  }
+}
