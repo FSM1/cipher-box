@@ -154,7 +154,9 @@ jobs:
         run: pnpm prettier --write packages/api-client/openapi.json
 
       - name: Verify no uncommitted changes to generated files
-        run: git diff --exit-code packages/api-client/ || (echo "Generated API client is out of date. Run 'pnpm api:generate' and commit changes." && exit 1)
+        run: |
+          git diff --exit-code packages/api-client/openapi.json packages/api-client/src/generated/ packages/api-client/src/models/ \
+            || (echo "Generated API client is out of date. Run 'pnpm api:generate' and commit changes." && exit 1)
 
   migration-check:
     name: Migration Drift Check
