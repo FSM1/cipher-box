@@ -506,6 +506,35 @@ jobs:
         with:
           ref: ${{ inputs.staging_tag || github.ref_name }}
 
+      - name: Wait for Grafana Cloud readiness
+        env:
+          GRAFANA_URL: ${{ vars.GRAFANA_URL }}
+          GRAFANA_API_KEY: ${{ secrets.GRAFANA_API_KEY }}
+        run: |
+          set -euo pipefail
+          : "${GRAFANA_URL:?GRAFANA_URL is required for Grafana readiness check}"
+          : "${GRAFANA_API_KEY:?GRAFANA_API_KEY is required for Grafana readiness check}"
+          GRAFANA_URL="${GRAFANA_URL%/}"
+          MAX_ATTEMPTS=30
+          INTERVAL=10
+          for ((i=1; i<=MAX_ATTEMPTS; i++)); do
+            HTTP_CODE=$(curl -sS --connect-timeout 10 --max-time 15 \
+              -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer ${GRAFANA_API_KEY}" \
+              "${GRAFANA_URL}/api/health") || HTTP_CODE=000
+            if [[ "$HTTP_CODE" == "200" ]]; then
+              echo "Grafana Cloud is ready (attempt $i/$MAX_ATTEMPTS)"
+              exit 0
+            elif [[ "$HTTP_CODE" =~ ^(401|403|404)$ ]]; then
+              echo "::error::Grafana returned HTTP $HTTP_CODE — check GRAFANA_URL and GRAFANA_API_KEY"
+              exit 1
+            fi
+            echo "Grafana not ready (HTTP $HTTP_CODE), waiting ${INTERVAL}s... ($i/$MAX_ATTEMPTS)"
+            sleep "$INTERVAL"
+          done
+          echo "::error::Grafana Cloud did not become ready after $((MAX_ATTEMPTS * INTERVAL))s"
+          exit 1
+
       - name: Push dashboard to Grafana Cloud
         env:
           GRAFANA_URL: ${{ vars.GRAFANA_URL }}
