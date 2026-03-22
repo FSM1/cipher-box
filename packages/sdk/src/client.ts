@@ -58,11 +58,13 @@ export class CipherBoxClient {
       vaultKeypair: this.internalVaultKeypair,
       rootFolderKey: this.internalRootFolderKey,
     };
-    const axiosInstance = createAxiosInstance({
-      baseUrl: config.apiUrl,
-      getAccessToken: config.getAccessToken,
-      defaultHeaders: config.defaultHeaders,
-    });
+    const axiosInstance =
+      config.axiosInstance ??
+      createAxiosInstance({
+        baseUrl: config.apiUrl,
+        getAccessToken: config.getAccessToken,
+        defaultHeaders: config.defaultHeaders,
+      });
     this.ctx = {
       apiUrl: config.apiUrl,
       getAccessToken: config.getAccessToken,
