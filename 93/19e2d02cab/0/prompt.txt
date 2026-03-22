@@ -1,0 +1,13 @@
+/simplify
+
+---
+
+ok, now can we run the e2e integration test against a local instance of the api/db/ipfs/ipns stck?
+
+---
+
+ipfs and postgres are running on the host machine: 192.168.133.114
+
+---
+
+sorry continue
