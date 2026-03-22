@@ -6,7 +6,7 @@
 | ---------------- | -------------------------- | ----------- | -------- | ----------------- |
 | `tests/sdk-e2e/` | SDK E2E (correctness)      | 83          | ~11s     | PR + push to main |
 | `tests/load/`    | Load testing (performance) | 5 scenarios | variable | Manual dispatch   |
-| `tests/e2e/`     | Playwright E2E (UI)        | 9 suites    | ~2-5min  | Push to main      |
+| `tests/web-e2e/` | Playwright Web E2E         | 9 suites    | ~2-5min  | Push to main      |
 
 ## SDK E2E Tests (`@cipherbox/sdk-e2e`)
 

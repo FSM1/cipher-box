@@ -64,7 +64,7 @@ pnpm test:ui
 ## Test Structure
 
 ```text
-tests/e2e/
+tests/web-e2e/
 ├── fixtures/          # Test fixtures
 │   └── auth.fixture.ts    # Authenticated session fixture
 ├── tests/             # Test specs

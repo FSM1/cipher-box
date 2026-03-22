@@ -38,7 +38,7 @@ jobs:
   desktop-e2e:
     name: Desktop E2E
     needs: validate-tag
-    uses: ./.github/workflows/e2e-desktop.yml
+    uses: ./.github/workflows/desktop-e2e.yml
     with:
       ref: ${{ inputs.release_tag }}
     secrets: inherit

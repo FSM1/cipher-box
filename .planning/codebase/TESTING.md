@@ -9,7 +9,7 @@
 - **Backend (API):** Jest (`apps/api/` — NestJS default)
 - **Frontend (Web):** Vitest (`apps/web/`)
 - **Crypto package:** Vitest (`packages/crypto/`)
-- **E2E:** Playwright (`tests/e2e/`, `tests/e2e-desktop/`)
+- **E2E:** Playwright (`tests/e2e/`, `tests/desktop-e2e/`)
 
 **Run Commands:**
 

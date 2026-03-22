@@ -8,7 +8,7 @@ const __dirname = dirname(__filename);
 
 /**
  * Utilities for creating and managing test files.
- * Files are created in tests/e2e/fixtures/files/ and tracked for cleanup.
+ * Files are created in tests/web-e2e/fixtures/files/ and tracked for cleanup.
  *
  * Static fixtures (test-image.png, test-document.pdf, test-file.txt)
  * are committed to the repo. Generated files use unique names and are

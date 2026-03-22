@@ -29,4 +29,4 @@ Followed by: "the drag and drop to upload is no longer working"
 - `apps/web/src/components/file-browser/UploadZone.tsx` — standalone upload zone with react-dropzone
 - `apps/web/src/components/file-browser/FileBrowser.tsx` — renders EmptyState with folderId prop
 - `apps/web/src/styles/file-browser.css` — `.empty-state` and `.empty-state-drag-active` styles
-- `tests/e2e/.env` — Web3Auth test credentials for Playwright login
+- `tests/web-e2e/.env` — Web3Auth test credentials for Playwright login

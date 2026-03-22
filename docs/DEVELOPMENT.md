@@ -131,7 +131,7 @@ pnpm test:e2e:headed
 ### Desktop E2E
 
 ```bash
-cd tests/e2e-desktop
+cd tests/desktop-e2e
 pnpm exec playwright test
 ```
 

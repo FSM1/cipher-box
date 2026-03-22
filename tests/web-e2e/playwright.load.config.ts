@@ -18,7 +18,7 @@ config({ path: resolve(__dirname, '.env') });
  * - No retries
  *
  * Usage:
- *   cd tests/e2e
+ *   cd tests/web-e2e
  *   pnpm exec playwright test tests/load-test.spec.ts --config=playwright.load.config.ts
  *
  * Env vars:
