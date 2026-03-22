@@ -5,8 +5,8 @@ import {
   ForbiddenException,
   ConflictException,
 } from '@nestjs/common';
-import { ThrottlerGuard } from '@nestjs/throttler';
 import { SharesController } from './shares.controller';
+import { BypassableThrottlerGuard } from '../common/guards/throttler-bypass.guard';
 import { SharesService } from './shares.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Share } from './entities/share.entity';
@@ -75,7 +75,7 @@ describe('SharesController', () => {
     })
       .overrideGuard(JwtAuthGuard)
       .useValue({ canActivate: () => true })
-      .overrideGuard(ThrottlerGuard)
+      .overrideGuard(BypassableThrottlerGuard)
       .useValue({ canActivate: () => true })
       .compile();
 

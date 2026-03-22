@@ -7,6 +7,12 @@ export type SdkContext = {
   apiUrl: string;
   /** Returns a valid access token. Consumer owns refresh logic. */
   getAccessToken: () => Promise<string>;
+  /**
+   * Instance-scoped axios for API calls.
+   * When provided, orval-generated functions use this instance instead of
+   * the module-level singleton, enabling per-client token isolation.
+   */
+  axiosInstance?: import('axios').AxiosInstance;
 };
 
 /**

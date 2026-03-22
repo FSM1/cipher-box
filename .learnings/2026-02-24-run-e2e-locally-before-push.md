@@ -10,16 +10,16 @@
 
 - **Always run the relevant E2E test suite locally before pushing** — CI feedback takes several minutes (build + deploy + test), while local runs give immediate results
 - Even if a local run fails for infrastructure reasons (missing API server, stale credentials), the attempt itself is valuable — it confirms whether the test file parses correctly, imports resolve, and the test structure is valid
-- The search workflow E2E test (`tests/e2e/tests/search-workflow.spec.ts`) can be run in isolation:
+- The search workflow E2E test (`tests/web-e2e/tests/search-workflow.spec.ts`) can be run in isolation:
 
   ```bash
-  cd tests/e2e && pnpm exec playwright test tests/search-workflow.spec.ts
+  cd tests/web-e2e && pnpm exec playwright test tests/search-workflow.spec.ts
   ```
 
 - For local E2E runs to fully pass, the dev environment must be running:
   - API server: `pnpm --filter api dev` (port 3000)
   - Frontend: `pnpm --filter web dev` (port 5173)
-  - Test credentials must be valid (see `tests/e2e/.env`)
+  - Test credentials must be valid (see `tests/web-e2e/.env`)
 
 ## What Would Have Helped
 
@@ -29,7 +29,7 @@
 
 ## Key Files
 
-- `tests/e2e/tests/search-workflow.spec.ts` — the search E2E test suite
-- `tests/e2e/page-objects/dialogs/search-palette.page.ts` — search palette page object
-- `tests/e2e/.env` — test credentials
-- `tests/e2e/playwright.config.ts` — test configuration
+- `tests/web-e2e/tests/search-workflow.spec.ts` — the search E2E test suite
+- `tests/web-e2e/page-objects/dialogs/search-palette.page.ts` — search palette page object
+- `tests/web-e2e/.env` — test credentials
+- `tests/web-e2e/playwright.config.ts` — test configuration

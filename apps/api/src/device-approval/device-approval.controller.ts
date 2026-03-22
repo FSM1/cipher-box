@@ -10,7 +10,8 @@ import {
   ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
-import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
+import { BypassableThrottlerGuard as ThrottlerGuard } from '../common/guards/throttler-bypass.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AllowScope } from '../auth/decorators/allow-scope.decorator';
 import { DeviceApprovalService } from './device-approval.service';

@@ -9,8 +9,9 @@
 
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import request from 'supertest';
+import { BypassableThrottlerGuard } from '../../common/guards/throttler-bypass.guard';
 import { IpnsController } from '../ipns.controller';
 import { IpnsService } from '../ipns.service';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
@@ -201,7 +202,7 @@ describe('IPNS Integration Tests', () => {
             return true;
           },
         })
-        .overrideGuard(ThrottlerGuard)
+        .overrideGuard(BypassableThrottlerGuard)
         .useValue({ canActivate: () => true })
         .compile();
 
@@ -365,7 +366,7 @@ describe('Attack Scenario Tests', () => {
             return true;
           },
         })
-        .overrideGuard(ThrottlerGuard)
+        .overrideGuard(BypassableThrottlerGuard)
         .useValue({ canActivate: () => true })
         .compile();
 

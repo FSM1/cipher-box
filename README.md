@@ -80,7 +80,7 @@ cipher-box/
 ├── tee-worker/           # Phala Cloud TEE worker
 ├── tests/
 │   ├── e2e/              # Playwright E2E tests
-│   └── e2e-desktop/      # Desktop E2E tests
+│   └── desktop-e2e/      # Desktop E2E tests
 └── docker/               # Docker Compose (PostgreSQL, IPFS, Redis)
 ```
 

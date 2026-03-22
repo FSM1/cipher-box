@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ThrottlerGuard } from '@nestjs/throttler';
 import { DeviceApprovalController } from './device-approval.controller';
+import { BypassableThrottlerGuard } from '../common/guards/throttler-bypass.guard';
 import { DeviceApprovalService } from './device-approval.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateApprovalDto } from './dto/create-approval.dto';
@@ -47,7 +47,7 @@ describe('DeviceApprovalController', () => {
     })
       .overrideGuard(JwtAuthGuard)
       .useValue({ canActivate: () => true })
-      .overrideGuard(ThrottlerGuard)
+      .overrideGuard(BypassableThrottlerGuard)
       .useValue({ canActivate: () => true })
       .compile();
 

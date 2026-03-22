@@ -1,4 +1,4 @@
-name: E2E Tests
+name: Web E2E Tests
 
 on:
   push:
@@ -12,8 +12,8 @@ on:
         type: string
 
 jobs:
-  e2e:
-    name: E2E Tests
+  web-e2e:
+    name: Web E2E Tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -75,7 +75,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install Playwright browsers
-        run: pnpm --filter @cipherbox/e2e exec playwright install chromium --with-deps
+        run: pnpm --filter @cipherbox/web-e2e exec playwright install chromium --with-deps
 
       - name: Install mock-ipns-routing dependencies
         run: |
@@ -96,7 +96,7 @@ jobs:
           VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
           VITE_API_URL: http://localhost:3000
 
-      - name: Create .env files for E2E
+      - name: Create .env files for Web E2E
         run: |
           # Web app .env (for Vite dev server)
           echo "VITE_WEB3AUTH_CLIENT_ID=${{ vars.VITE_WEB3AUTH_CLIENT_ID }}" > apps/web/.env
@@ -119,9 +119,8 @@ jobs:
           echo "TEST_LOGIN_SECRET=e2e-test-secret-ci-only" >> apps/api/.env
           echo "IDENTITY_JWT_PRIVATE_KEY=${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}" >> apps/api/.env
 
-      - name: Run E2E tests
-        # Run all tests in the tests/ directory (archived tests live in tests/archive/)
-        run: pnpm --filter @cipherbox/e2e test
+      - name: Run Web E2E tests
+        run: pnpm --filter @cipherbox/web-e2e test
         env:
           CI: true
           # Database configuration
@@ -138,7 +137,7 @@ jobs:
           # API configuration
           JWT_SECRET: e2e-test-jwt-secret-key-for-ci
           CORS_ALLOWED_ORIGINS: http://localhost:5173
-          # IPNS delegated routing (mock service for E2E tests)
+          # IPNS delegated routing (mock service)
           DELEGATED_ROUTING_URL: http://localhost:3001
           # Redis for BullMQ job scheduling
           REDIS_HOST: localhost
@@ -146,7 +145,7 @@ jobs:
           # Web app configuration (needed for Web3Auth initialization)
           VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
           VITE_API_URL: http://localhost:3000
-          # Test-login endpoint for E2E (bypasses Core Kit, uses deterministic keypair)
+          # Test-login endpoint (bypasses Core Kit, uses deterministic keypair)
           TEST_LOGIN_SECRET: e2e-test-secret-ci-only
           # Web3Auth test credentials (fallback if TEST_LOGIN_SECRET not set)
           WEB3AUTH_TEST_EMAIL: ${{ secrets.WEB3AUTH_TEST_EMAIL }}
@@ -158,6 +157,6 @@ jobs:
         with:
           name: playwright-report
           path: |
-            tests/e2e/playwright-report/
-            tests/e2e/test-results/
+            tests/web-e2e/playwright-report/
+            tests/web-e2e/test-results/
           retention-days: 7

@@ -22,7 +22,7 @@ set -euo pipefail
 #   1. Log in to the web app at https://app-staging.cipherbox.cc
 #   2. Open browser DevTools > Application > Local Storage
 #   3. Copy the value of the 'accessToken' key
-#   OR use E2E test credentials (see tests/e2e/.env)
+#   OR use E2E test credentials (see tests/web-e2e/.env)
 #
 # Output:
 #   Prints p50/p95/p99 timing results in a markdown table format suitable

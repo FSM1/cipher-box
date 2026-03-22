@@ -8,10 +8,8 @@ import type {
 
 /**
  * Upload encrypted data to IPFS via backend relay.
- * Uses axios for upload progress tracking.
- *
- * Replaces: apps/web/src/lib/api/ipfs.ts addToIpfs()
- * Change: Takes SdkContext instead of reading useAuthStore.getState()
+ * Uses ctx.axiosInstance when available (gets auth interceptors + default headers),
+ * falls back to bare axios with manual token injection.
  */
 export async function addToIpfs(
   ctx: SdkContext,
@@ -19,30 +17,46 @@ export async function addToIpfs(
   onProgress?: ProgressCallback,
   cancelToken?: CancelToken
 ): Promise<IpfsAddResult> {
-  const token = await ctx.getAccessToken();
   const blob = new Blob([encryptedData as BlobPart]);
   const formData = new FormData();
   formData.append('file', blob);
 
-  const response = await axios.post<IpfsAddResult>(`${ctx.apiUrl}/ipfs/upload`, formData, {
-    headers: { Authorization: `Bearer ${token}` },
+  const requestConfig = {
     onUploadProgress: (event: AxiosProgressEvent) => {
       if (event.total && onProgress) {
         onProgress(Math.round((event.loaded * 100) / event.total));
       }
     },
     cancelToken,
+  };
+
+  if (ctx.axiosInstance) {
+    const response = await ctx.axiosInstance.post<IpfsAddResult>(
+      '/ipfs/upload',
+      formData,
+      requestConfig
+    );
+    return response.data;
+  }
+
+  // Fallback: bare axios with manual token (no instance available)
+  const token = await ctx.getAccessToken();
+  const response = await axios.post<IpfsAddResult>(`${ctx.apiUrl}/ipfs/upload`, formData, {
+    headers: { Authorization: `Bearer ${token}` },
+    ...requestConfig,
   });
   return response.data;
 }
 
 /**
  * Unpin file from IPFS via backend relay.
- *
- * Replaces: apps/web/src/lib/api/ipfs.ts unpinFromIpfs()
- * Change: Takes SdkContext instead of reading useAuthStore.getState()
  */
 export async function unpinFromIpfs(ctx: SdkContext, cid: string): Promise<void> {
+  if (ctx.axiosInstance) {
+    await ctx.axiosInstance.post('/ipfs/unpin', { cid });
+    return;
+  }
+
   const token = await ctx.getAccessToken();
   await axios.post(
     `${ctx.apiUrl}/ipfs/unpin`,
@@ -53,10 +67,9 @@ export async function unpinFromIpfs(ctx: SdkContext, cid: string): Promise<void>
 
 /**
  * Fetch encrypted data from IPFS via backend relay.
- * Supports download progress tracking.
- *
- * Replaces: apps/web/src/lib/api/ipfs.ts fetchFromIpfs()
- * Change: Takes SdkContext instead of reading useAuthStore.getState()
+ * Uses native fetch for streaming download progress support.
+ * Auth token is obtained from ctx (axiosInstance interceptor isn't used
+ * here because fetch provides ReadableStream for progress tracking).
  */
 export async function fetchFromIpfs(
   ctx: SdkContext,

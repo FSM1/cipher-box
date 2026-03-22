@@ -10,7 +10,9 @@
         "apps/api/package.json",
         "apps/web/package.json",
         "apps/desktop/package.json",
-        "tests/e2e/package.json",
+        "tests/web-e2e/package.json",
+        "tests/sdk-e2e/package.json",
+        "tests/load/package.json",
         "tee-worker/package.json",
         "apps/desktop/src-tauri/Cargo.toml",
         "apps/desktop/src-tauri/tauri.conf.json"

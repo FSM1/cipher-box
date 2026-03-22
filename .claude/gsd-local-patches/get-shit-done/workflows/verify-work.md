@@ -23,7 +23,7 @@ When Playwright MCP tools are accessible, Claude should drive the application di
 **Automation workflow:**
 
 1. Navigate to the running app (typically http://localhost:5173)
-2. Authenticate if needed (use E2E credentials from tests/e2e/.env)
+2. Authenticate if needed (use E2E credentials from tests/web-e2e/.env)
 3. For each test: perform the actions via Playwright, take screenshots, evaluate results
 4. Record pass/issue based on observed behavior (screenshots, DOM state, network calls)
 5. Present results with screenshots to the user for final confirmation

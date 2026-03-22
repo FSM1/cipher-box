@@ -24,12 +24,12 @@
 
 ### File upload: use setInputFiles on the hidden input
 
-- Reference `tests/e2e/page-objects/file-browser/upload-zone.page.ts` for the pattern
+- Reference `tests/web-e2e/page-objects/file-browser/upload-zone.page.ts` for the pattern
 - Use `setInputFiles()` on the hidden input (`.upload-zone input[type="file"]`) — don't use the file chooser modal, it's unreliable with Playwright MCP
 - For Playwright MCP specifically, `browser_evaluate` with `document.querySelector('input[type="file"]').click()` + `browser_file_upload` also works but `setInputFiles` is simpler
 
 ## Key Files
 
-- `tests/e2e/page-objects/file-browser/upload-zone.page.ts` — reliable file upload via `setInputFiles()`
+- `tests/web-e2e/page-objects/file-browser/upload-zone.page.ts` — reliable file upload via `setInputFiles()`
 - `apps/api/src/auth/services/email-otp.service.ts` — OTP generation, rate limits, Redis keys
 - `apps/api/.env` — `REDIS_HOST`, `REDIS_PORT` for rate limit clearing

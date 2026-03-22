@@ -1,27 +1,36 @@
 /**
- * Early API client configuration.
+ * API client configuration — single shared axios instance.
  *
- * Imported at module scope (before any auth API calls) so that
- * @cipherbox/api-client's customInstance is ready when authApi.*
- * or any generated function is called.
+ * Creates one axios instance with auth interceptors (token injection + 401 refresh)
+ * and registers it as both the orval singleton and the exported `apiAxios` instance.
  *
- * getAccessToken reads from Zustand store (initially null, populated after login).
- * refreshAccessToken calls the refresh endpoint using HTTP-only cookie.
- * onRefreshFailure clears all user stores (same behaviour as the old client.ts interceptor).
+ * The same instance is used by:
+ * - Orval-generated functions (via singleton path in customInstance)
+ * - CipherBoxClient (via CipherBoxClientConfig.axiosInstance)
+ * - sdk-core IPFS operations (via SdkContext.axiosInstance)
+ *
+ * This eliminates the dual-path architecture where the singleton and SDK client
+ * had separate axios instances with potentially divergent configuration.
  */
-import { setApiClientConfig, authControllerRefresh } from '@cipherbox/api-client';
+import {
+  createAxiosInstance,
+  setApiClientConfig,
+  authControllerRefresh,
+} from '@cipherbox/api-client';
 import { useAuthStore } from '../stores/auth.store';
 
 const apiUrl =
   import.meta.env.VITE_API_URL ||
   (typeof window !== 'undefined' ? `${window.location.origin}/api` : '/api');
 
-setApiClientConfig({
+const apiConfig = {
   baseUrl: apiUrl,
   getAccessToken: async () => useAuthStore.getState().accessToken || '',
   withCredentials: true,
   refreshAccessToken: async () => {
-    const response = await authControllerRefresh({});
+    // Uses the same apiAxios instance (captured via closure).
+    // Safe because apiAxios is assigned synchronously before any 401 can occur.
+    const response = await authControllerRefresh({}, { _axiosInstance: apiAxios });
     const newToken = response.accessToken;
     useAuthStore.getState().setAccessToken(newToken);
     return newToken;
@@ -37,6 +46,13 @@ setApiClientConfig({
         window.location.reload();
       });
   },
-});
+};
+
+/** Shared axios instance used by the entire web app. */
+export const apiAxios = createAxiosInstance(apiConfig);
+
+// Register as the orval singleton so generated functions work without
+// explicit _axiosInstance. The same instance is reused (no duplicate creation).
+setApiClientConfig(apiConfig, apiAxios);
 
 export { apiUrl };

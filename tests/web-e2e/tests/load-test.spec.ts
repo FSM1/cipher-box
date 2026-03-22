@@ -20,7 +20,7 @@ import { createTestTextFile, createTestBinaryFile, cleanupTestFiles } from '../u
  * Then drives ~50+ file operations that each trigger IPNS publishes.
  *
  * Usage:
- *   cd tests/e2e
+ *   cd tests/web-e2e
  *   pnpm exec playwright test tests/load-test.spec.ts --config=playwright.load.config.ts
  *
  * Env vars:

@@ -15,6 +15,7 @@
 
 import type { SdkContext, ProgressCallback, DownloadProgressCallback } from '@cipherbox/sdk-core';
 import * as sdkCore from '@cipherbox/sdk-core';
+import { createAxiosInstance } from '@cipherbox/api-client';
 import { clearBytes } from '@cipherbox/crypto';
 import type { FolderChild } from '@cipherbox/core';
 import type { CipherBoxClientConfig, FolderState } from './types';
@@ -57,9 +58,17 @@ export class CipherBoxClient {
       vaultKeypair: this.internalVaultKeypair,
       rootFolderKey: this.internalRootFolderKey,
     };
+    const axiosInstance =
+      config.axiosInstance ??
+      createAxiosInstance({
+        baseUrl: config.apiUrl,
+        getAccessToken: config.getAccessToken,
+        defaultHeaders: config.defaultHeaders,
+      });
     this.ctx = {
       apiUrl: config.apiUrl,
       getAccessToken: config.getAccessToken,
+      axiosInstance,
     };
     this.emitter = new SdkEventEmitter();
     this.folderTree = new FolderTree();
@@ -600,7 +609,7 @@ export class CipherBoxClient {
         });
 
         // 3. Batch publish: file metadata IPNS + folder metadata IPNS
-        await sdkCore.batchPublishIpnsRecords([uploadResult.ipnsRecord]);
+        await sdkCore.batchPublishIpnsRecords([uploadResult.ipnsRecord], this.ctx);
 
         const { newSequenceNumber } = await sdkCore.updateFolderMetadataAndPublish({
           children: updatedChildren,

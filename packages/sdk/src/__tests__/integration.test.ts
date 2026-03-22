@@ -4,7 +4,6 @@
  */
 import { describe, it, expect } from 'vitest';
 import { CipherBoxClient } from '../client';
-import { setApiClientConfig } from '@cipherbox/api-client';
 import { initializeVault, encryptVaultKeys } from '@cipherbox/core';
 import { deriveIpnsName, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 
@@ -46,8 +45,6 @@ describeIf('SDK Integration (live API)', () => {
         }),
       });
       expect(initRes.ok).toBe(true);
-
-      setApiClientConfig({ baseUrl: API, getAccessToken: async () => accessToken });
 
       const client = new CipherBoxClient({
         apiUrl: API,
@@ -155,8 +152,6 @@ describeIf('SDK Integration (live API)', () => {
         }),
       });
       expect(initRes.ok).toBe(true);
-
-      setApiClientConfig({ baseUrl: API, getAccessToken: async () => accessToken });
 
       const client = new CipherBoxClient({
         apiUrl: API,

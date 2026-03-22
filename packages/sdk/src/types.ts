@@ -6,6 +6,7 @@
  */
 
 import type { TeeKeys } from '@cipherbox/sdk-core';
+import type { AxiosInstance } from '@cipherbox/api-client';
 import type { FolderChild, FolderMetadata } from '@cipherbox/core';
 import type { SentShareInfo } from './share';
 
@@ -61,6 +62,15 @@ export type CipherBoxClientConfig = {
   onOperationEnd?: (operation: string) => void;
   /** Callback when an error occurs */
   onError?: (error: Error) => void;
+  /** Extra headers sent with every request (e.g., throttle bypass for testing). */
+  defaultHeaders?: Record<string, string>;
+  /**
+   * Pre-built axios instance to use for all API calls.
+   * When provided, the client uses this instead of creating its own instance.
+   * Use this to share a single instance with the orval singleton (web app)
+   * or to inject a fully-configured instance with 401 refresh logic.
+   */
+  axiosInstance?: AxiosInstance;
 };
 
 /**

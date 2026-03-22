@@ -81,7 +81,7 @@ pnpm typecheck
 pnpm test
 
 # If E2E-relevant changes were made, run E2E tests too
-cd tests/e2e && pnpm exec playwright test
+cd tests/web-e2e && pnpm exec playwright test
 ```
 
 Do NOT proceed to commit until tests pass. If tests fail, fix the failures first.

@@ -28,8 +28,8 @@ import {
   UnlinkMethodResponseDto,
 } from './dto/link-method.dto';
 import { DeleteAccountDto, DeleteAccountResponseDto } from './dto/delete-account.dto';
-import { ThrottlerGuard } from '@nestjs/throttler';
 import { Throttle } from '@nestjs/throttler';
+import { BypassableThrottlerGuard as ThrottlerGuard } from '../common/guards/throttler-bypass.guard';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { User } from './entities/user.entity';
 import { MetricsService } from '../metrics/metrics.service';

@@ -1,5 +1,5 @@
 {
-  "name": "@cipherbox/e2e",
+  "name": "@cipherbox/web-e2e",
   "version": "0.25.2",
   "private": true,
   "type": "module",

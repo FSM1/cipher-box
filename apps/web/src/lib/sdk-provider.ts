@@ -8,6 +8,7 @@
  * Hooks call client methods, and stores subscribe to client events.
  */
 import { CipherBoxClient, type CipherBoxClientConfig } from '@cipherbox/sdk';
+import { apiAxios } from './api-config';
 import type { FolderNode } from '../stores/folder.store';
 
 let _client: CipherBoxClient | null = null;
@@ -23,7 +24,9 @@ export function initSdkClient(config: CipherBoxClientConfig): CipherBoxClient {
   if (_client) {
     _client.destroy();
   }
-  _client = new CipherBoxClient(config);
+  // Inject the shared axios instance so CipherBoxClient uses the same
+  // instance as orval-generated functions (single instance, no dual path).
+  _client = new CipherBoxClient({ ...config, axiosInstance: apiAxios });
   return _client;
 }
 

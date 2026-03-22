@@ -24,6 +24,6 @@
 
 - `apps/api/src/ipns/ipns.service.ts:355-395` — `resolveRecord()` two-tier resolution logic
 - `apps/api/src/ipns/ipns.service.spec.ts:512+` — unit tests for resolve behavior
-- `tests/e2e/.env` — `API_BASE_URL` must match the target environment
-- `tests/e2e/tests/full-workflow.spec.ts:530+` — test 3.7 (reload persistence)
-- `tests/e2e/tests/sharing-workflow.spec.ts:412+` — test 7.2 (post-share visibility)
+- `tests/web-e2e/.env` — `API_BASE_URL` must match the target environment
+- `tests/web-e2e/tests/full-workflow.spec.ts:530+` — test 3.7 (reload persistence)
+- `tests/web-e2e/tests/sharing-workflow.spec.ts:412+` — test 7.2 (post-share visibility)

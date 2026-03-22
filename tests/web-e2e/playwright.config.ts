@@ -52,7 +52,7 @@ export default defineConfig({
   ],
 
   // Web server configuration - start API, web app, and mock IPNS routing service
-  // Note: Commands run from the workspace root (two levels up from tests/e2e)
+  // Note: Commands run from the workspace root (two levels up from tests/web-e2e)
   webServer: [
     {
       // Mock IPNS routing service - must start first as API depends on it

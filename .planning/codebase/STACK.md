@@ -4,7 +4,7 @@
 
 ## Project Status
 
-CipherBox is a **technology demonstrator** with a working implementation. The web app (`apps/web/`), backend API (`apps/api/`), desktop app (`apps/desktop/`), shared crypto library (`packages/crypto/`), TEE worker (`tee-worker/`), and E2E test suites (`tests/e2e/`, `tests/e2e-desktop/`) are all implemented. The original PoC console harness remains in `00-Preliminary-R&D/poc/` for historical reference only.
+CipherBox is a **technology demonstrator** with a working implementation. The web app (`apps/web/`), backend API (`apps/api/`), desktop app (`apps/desktop/`), shared crypto library (`packages/crypto/`), TEE worker (`tee-worker/`), and E2E test suites (`tests/e2e/`, `tests/desktop-e2e/`) are all implemented. The original PoC console harness remains in `00-Preliminary-R&D/poc/` for historical reference only.
 
 ## Languages
 

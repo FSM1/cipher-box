@@ -34,7 +34,7 @@ This enables:
 ### Implementation Notes
 
 - Gate behind `#[cfg(debug_assertions)]` or a `dev` feature flag — never ship in release builds
-- The test account's private key can live in `tests/e2e/.env` alongside existing test credentials
+- The test account's private key can live in `tests/web-e2e/.env` alongside existing test credentials
 - Key derivation: `secp256k1::SecretKey::from_slice(&hex::decode(key))` -> compressed public key -> `/auth/login`
 - After auth, the flow joins the normal path: fetch vault metadata, mount FUSE, start sync
 
@@ -56,4 +56,4 @@ This enables:
 - `apps/desktop/src-tauri/src/main.rs` — CLI argument parsing (add `--dev-key` here)
 - `apps/desktop/src-tauri/src/commands.rs` — `handle_auth_complete` (the flow to join after bypass auth)
 - `apps/desktop/src-tauri/src/api/auth.rs` — API auth calls
-- `tests/e2e/.env` — Test credentials
+- `tests/web-e2e/.env` — Test credentials

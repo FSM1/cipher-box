@@ -154,7 +154,7 @@ export async function resolveFileMetadata(
   folderKey: Uint8Array,
   ctx: SdkContext
 ): Promise<{ metadata: FileMetadata; metadataCid: string }> {
-  const resolved = await resolveIpnsRecord(fileMetaIpnsName);
+  const resolved = await resolveIpnsRecord(fileMetaIpnsName, ctx);
 
   if (!resolved) {
     throw new Error('File metadata IPNS not found');
@@ -220,7 +220,7 @@ export async function updateFileMetadata(params: {
   };
 
   // 3. Resolve current IPNS to get sequence number
-  const resolved = await resolveIpnsRecord(params.fileMetaIpnsName);
+  const resolved = await resolveIpnsRecord(params.fileMetaIpnsName, params.ctx);
   if (!resolved) {
     throw new Error(
       `Cannot update file metadata: existing IPNS record not found for ${params.fileMetaIpnsName}`

@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { ThrottlerGuard } from '@nestjs/throttler';
 import { UnauthorizedException } from '@nestjs/common';
+import { BypassableThrottlerGuard } from '../../common/guards/throttler-bypass.guard';
 import { createHash } from 'crypto';
 import { IdentityController } from './identity.controller';
 import { JwtIssuerService } from '../services/jwt-issuer.service';
@@ -95,7 +95,7 @@ describe('IdentityController', () => {
         },
       ],
     })
-      .overrideGuard(ThrottlerGuard)
+      .overrideGuard(BypassableThrottlerGuard)
       .useValue({ canActivate: () => true })
       .compile();
 

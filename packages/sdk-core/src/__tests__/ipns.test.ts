@@ -56,7 +56,8 @@ describe('IPNS operations', () => {
         expect.objectContaining({
           ipnsName: 'k51testname',
           metadataCid: 'QmMetaCid',
-        })
+        }),
+        undefined
       );
       expect(result.success).toBe(true);
       expect(result.sequenceNumber).toBe(2n);
@@ -84,7 +85,8 @@ describe('IPNS operations', () => {
         expect.objectContaining({
           encryptedIpnsPrivateKey: 'aabbccdd',
           keyEpoch: 3,
-        })
+        }),
+        undefined
       );
     });
   });

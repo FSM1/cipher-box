@@ -68,7 +68,7 @@ async function loadBinMetadataInternal(params: {
   sequenceNumber: bigint;
 } | null> {
   const binIpns = await deriveBinIpnsKeypair(params.userPrivateKey);
-  const resolved = await sdkCore.resolveIpnsRecord(binIpns.ipnsName);
+  const resolved = await sdkCore.resolveIpnsRecord(binIpns.ipnsName, params.ctx);
 
   if (!resolved) return null;
 
@@ -120,6 +120,7 @@ async function saveBinMetadata(params: {
     sequenceNumber: BigInt(params.metadata.sequenceNumber),
     encryptedIpnsPrivateKey: encryptedIpnsKey,
     keyEpoch,
+    ctx: params.binCtx.ctx,
   });
 }
 

@@ -47,6 +47,9 @@ import { Share, ShareKey, ShareInvite } from './shares/entities';
       inject: [ConfigService],
     }),
     // [SECURITY: HIGH-04] Global rate limiting to prevent abuse
+    // BypassableThrottlerGuard allows SDK E2E / load tests to skip rate limits
+    // via X-Throttle-Bypass header when THROTTLE_BYPASS_SECRET is configured.
+    // Bypass is blocked in production (NODE_ENV === 'production').
     ThrottlerModule.forRoot([
       {
         name: 'short',

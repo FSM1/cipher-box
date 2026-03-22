@@ -532,7 +532,55 @@ importers:
         specifier: ^3.0.5
         version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.7)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
 
-  tests/e2e:
+  tests/load:
+    devDependencies:
+      '@cipherbox/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
+      '@cipherbox/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@cipherbox/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
+      '@cipherbox/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      '@cipherbox/sdk-core':
+        specifier: workspace:*
+        version: link:../../packages/sdk-core
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.7)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
+
+  tests/sdk-e2e:
+    devDependencies:
+      '@cipherbox/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
+      '@cipherbox/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@cipherbox/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
+      '@cipherbox/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+      '@cipherbox/sdk-core':
+        specifier: workspace:*
+        version: link:../../packages/sdk-core
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.5
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.7)(jiti@2.6.1)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
+
+  tests/web-e2e:
     devDependencies:
       '@cipherbox/core':
         specifier: workspace:*
