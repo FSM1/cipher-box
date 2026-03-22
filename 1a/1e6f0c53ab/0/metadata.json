@@ -1,0 +1,74 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "1a1e6f0c53ab",
+  "session_id": "0617b2f2-dabc-413c-b9f2-7450610a315f",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T20:07:05.171235Z",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "28bf58f4372e",
+  "checkpoint_transcript_start": 167,
+  "transcript_lines_at_start": 167,
+  "token_usage": {
+    "input_tokens": 82,
+    "cache_creation_tokens": 89779,
+    "cache_read_tokens": 9587588,
+    "output_tokens": 25849,
+    "api_call_count": 80
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Refactor the cipher-box SDK to eliminate a global singleton axios instance pattern, instead threading per-client axios instances through the call stack via SdkContext, enabling true multi-account support without shared mutable state.",
+    "outcome": "Successfully implemented the refactor: customInstance now accepts an optional axios instance, SdkContext carries axiosInstance, all IPNS/folder/file/bin operations thread ctx through, CipherBoxClient creates its own axios instance from config, and test infrastructure was simplified by removing switchTo hacks and setApiClientConfig calls. All typechecks and unit tests pass.",
+    "learnings": {
+      "repo": [
+        "The singleton pattern was in packages/api-client/src/instance.ts — customInstance used a module-level axios instance configured via setApiClientConfig, causing multi-account test fixtures to use a switchTo() hack that swapped global state.",
+        "SdkContext (packages/sdk-core/src/types.ts) is the primary dependency injection carrier threaded through all sdk-core operations.",
+        "IPNS functions (createAndPublishIpnsRecord, batchPublishIpnsRecords, resolveIpnsRecord) were called from sdk-core/ipns, sdk-core/folder, sdk-core/file, sdk/client, and sdk/bin — all needed ctx threading.",
+        "packages/sdk/src/bin/index.ts had IPNS calls (resolveIpnsRecord at ~line 71, createAndPublishIpnsRecord at ~line 116) that were initially missed in the refactor pass.",
+        "Integration tests in packages/sdk hit a live API and rate-limit (HTTP 429) when all test packages run in parallel — these are expected and not a code issue.",
+        "The multi-account fixture (tests/sdk-e2e/src/fixtures/multi-account.ts) was fully rewritten to remove the switchTo pattern.",
+        "tests/TESTING_STRATEGY.md documented the singleton caveat and was updated as part of the cleanup."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/__tests__/ipns.test.ts",
+          "line": 55,
+          "end_line": 83,
+          "finding": "Mock assertions expected ipnsControllerPublishRecord called with one argument; after refactor it receives two (data + undefined options from ctx), requiring assertion updates."
+        },
+        {
+          "path": "packages/sdk/src/bin/index.ts",
+          "line": 71,
+          "end_line": 116,
+          "finding": "loadBinMetadataInternal and saveBinMetadata called IPNS functions without ctx despite having SdkContext in scope — discovered in a second grep pass after initial refactor."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "line": 50,
+          "end_line": 50,
+          "finding": "Still used setApiClientConfig after the refactor; cleaned up to pass defaultHeaders via CipherBoxClientConfig constructor instead."
+        }
+      ],
+      "workflow": [
+        "Grep for all call sites of refactored functions after threading changes — a second grep pass (sdkCore.resolveIpnsRecord etc.) caught the missed bin/index.ts callers.",
+        "Run tests in isolation when parallel runs hit rate limits on live APIs to distinguish real failures from load-induced transient errors.",
+        "Typecheck after each major step rather than batching — caught issues incrementally.",
+        "When removing a method from a fixture type (switchTo), grep all test suites for calls before assuming they're unused."
+      ]
+    },
+    "friction": [
+      "HTTP 429 rate limiting from the live API when running all package tests in parallel obscured whether SDK integration tests were actually passing — required running in isolation to confirm.",
+      "The bin/index.ts IPNS callers were missed in the initial refactor pass and only caught by a follow-up grep, adding an extra fix cycle.",
+      "ipns.test.ts mock assertions broke silently on call-argument count — the test ran but assertions were wrong until explicitly checked."
+    ],
+    "open_items": [
+      "Parallel integration test runs still cause 429 rate limiting — no throttling or test isolation strategy was added for the live API test suite.",
+      "The backward-compatible singleton path (calling IPNS functions without ctx) still exists — the old setApiClientConfig global configuration is technically still callable, just no longer used by the main SDK."
+    ]
+  }
+}
