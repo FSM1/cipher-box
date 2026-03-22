@@ -23,6 +23,9 @@ export interface FileWorkloadOptions {
  */
 export async function runFileWorkload(pc: PoolClient, opts: FileWorkloadOptions): Promise<void> {
   const { fileCount, minSize, maxSize, verifyDownloads } = opts;
+  if (minSize < 0 || maxSize < minSize) {
+    throw new Error(`Invalid size bounds: minSize=${minSize}, maxSize=${maxSize}`);
+  }
   const { client, rootIpnsName, rootFolderKey, metrics } = pc;
 
   for (let i = 0; i < fileCount; i++) {
@@ -61,6 +64,12 @@ export async function runFileWorkload(pc: PoolClient, opts: FileWorkloadOptions)
             if (downloaded.length !== data.length) {
               throw new Error(
                 `[Client ${pc.id}] Size mismatch: uploaded ${data.length}, downloaded ${downloaded.length}`
+              );
+            }
+            // Byte-level content verification
+            if (Buffer.compare(Buffer.from(data), Buffer.from(downloaded)) !== 0) {
+              throw new Error(
+                `[Client ${pc.id}] Content mismatch for "${fileName}" (same size, different bytes)`
               );
             }
             return downloaded;

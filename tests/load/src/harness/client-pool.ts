@@ -32,9 +32,8 @@ export interface ClientPoolOptions {
 /**
  * Create a pool of N authenticated CipherBoxClient instances.
  *
- * Each client has its own test account, vault, and metrics collector.
- * The api-client singleton is configured once (all clients share baseUrl,
- * tokens are per-request via getAccessToken closure).
+ * Each client has its own test account, vault, metrics collector, and
+ * instance-scoped axios (no shared singleton).
  */
 export async function createClientPool(opts: ClientPoolOptions): Promise<PoolClient[]> {
   const { clientCount, label } = opts;

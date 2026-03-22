@@ -81,50 +81,57 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
   const publicKey = hexToBytes(publicKeyHex);
   const privateKey = hexToBytes(privateKeyHex);
 
-  // 2. Initialize vault
-  const vault = await initializeVault(privateKey);
-  const encrypted = await encryptVaultKeys(vault, publicKey);
-  const rootIpnsName = await deriveIpnsName(vault.rootIpnsKeypair.publicKey);
+  // Steps 2-4 wrapped in try/catch to clean up the test account on failure
+  try {
+    // 2. Initialize vault
+    const vault = await initializeVault(privateKey);
+    const encrypted = await encryptVaultKeys(vault, publicKey);
+    const rootIpnsName = await deriveIpnsName(vault.rootIpnsKeypair.publicKey);
 
-  // 3. Register vault on server
-  const initRes = await fetch(`${apiUrl}/vault/init`, {
-    method: 'POST',
-    headers: fetchHeaders({
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    }),
-    body: JSON.stringify({
-      ownerPublicKey: bytesToHex(publicKey),
-      encryptedRootFolderKey: bytesToHex(encrypted.encryptedRootFolderKey),
-      encryptedRootIpnsPrivateKey: bytesToHex(encrypted.encryptedIpnsPrivateKey),
+    // 3. Register vault on server
+    const initRes = await fetch(`${apiUrl}/vault/init`, {
+      method: 'POST',
+      headers: fetchHeaders({
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      }),
+      body: JSON.stringify({
+        ownerPublicKey: bytesToHex(publicKey),
+        encryptedRootFolderKey: bytesToHex(encrypted.encryptedRootFolderKey),
+        encryptedRootIpnsPrivateKey: bytesToHex(encrypted.encryptedIpnsPrivateKey),
+        rootIpnsName,
+      }),
+    });
+    if (!initRes.ok) {
+      throw new Error(`vault/init failed (${initRes.status}): ${await initRes.text()}`);
+    }
+
+    // 4. Create CipherBoxClient with instance-scoped axios (no singleton needed)
+    const client = new CipherBoxClient({
+      apiUrl,
+      getAccessToken: async () => accessToken,
+      vaultKeypair: { publicKey, privateKey },
       rootIpnsName,
-    }),
-  });
-  if (!initRes.ok) {
-    throw new Error(`vault/init failed (${initRes.status}): ${await initRes.text()}`);
+      rootFolderKey: vault.rootFolderKey,
+      defaultHeaders: axiosDefaultHeaders(),
+    });
+    client.registerFolder(rootIpnsName, vault.rootFolderKey, vault.rootIpnsKeypair, [], 0n);
+
+    return {
+      client,
+      accessToken,
+      publicKey,
+      privateKey,
+      rootIpnsName,
+      rootFolderKey: vault.rootFolderKey,
+      rootIpnsKeypair: vault.rootIpnsKeypair,
+      email,
+    };
+  } catch (err) {
+    // Clean up partially provisioned account to avoid leaks
+    await deleteTestAccount({ accessToken }, apiUrl);
+    throw err;
   }
-
-  // 4. Create CipherBoxClient with instance-scoped axios (no singleton needed)
-  const client = new CipherBoxClient({
-    apiUrl,
-    getAccessToken: async () => accessToken,
-    vaultKeypair: { publicKey, privateKey },
-    rootIpnsName,
-    rootFolderKey: vault.rootFolderKey,
-    defaultHeaders: axiosDefaultHeaders(),
-  });
-  client.registerFolder(rootIpnsName, vault.rootFolderKey, vault.rootIpnsKeypair, [], 0n);
-
-  return {
-    client,
-    accessToken,
-    publicKey,
-    privateKey,
-    rootIpnsName,
-    rootFolderKey: vault.rootFolderKey,
-    rootIpnsKeypair: vault.rootIpnsKeypair,
-    email,
-  };
 }
 
 /**

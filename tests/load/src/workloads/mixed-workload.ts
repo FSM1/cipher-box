@@ -34,7 +34,14 @@ const DEFAULT_WEIGHTS = {
 export async function runMixedWorkload(pc: PoolClient, opts: MixedWorkloadOptions): Promise<void> {
   const { client, rootIpnsName, metrics } = pc;
   const weights = { ...DEFAULT_WEIGHTS, ...opts.weights };
-  const totalWeight = Object.values(weights).reduce((a, b) => a + b, 0);
+  const values = Object.values(weights);
+  if (values.some((w) => typeof w !== 'number' || w < 0 || !Number.isFinite(w))) {
+    throw new Error(`Invalid weights: all values must be non-negative finite numbers`);
+  }
+  const totalWeight = values.reduce((a, b) => a + b, 0);
+  if (totalWeight <= 0) {
+    throw new Error(`Invalid weights: total weight must be > 0`);
+  }
 
   // Track created items for rename/move/delete targets
   const folderIds: Array<{
