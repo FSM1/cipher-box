@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "7195756b0244",
+  "strategy": "manual-commit",
+  "branch": "chore/ci-grafana-readiness-wait",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/deploy-staging.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/71/95756b0244/0/metadata.json",
+      "transcript": "/71/95756b0244/0/full.jsonl",
+      "content_hash": "/71/95756b0244/0/content_hash.txt",
+      "prompt": "/71/95756b0244/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 9,
+    "cache_creation_tokens": 7000,
+    "cache_read_tokens": 553853,
+    "output_tokens": 2023,
+    "api_call_count": 8
+  }
+}
