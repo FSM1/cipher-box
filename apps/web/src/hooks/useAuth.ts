@@ -468,21 +468,6 @@ export function useAuth() {
     [isLoggingIn, coreKitLoginWallet, completeBackendAuth, setAccessToken]
   );
 
-  /**
-   * Legacy login() for backward compatibility with AuthButton.
-   * With Core Kit, login requires specifying the auth method.
-   * This will be replaced by the new Login UI in Plan 04.
-   */
-  const login = useCallback(async () => {
-    // Plan 04 will build the new login UI with method selection.
-    // For now, this is a no-op placeholder that AuthButton calls.
-    console.warn(
-      '[useAuth] login() called without method -- ' +
-        'use loginWithGoogle() or loginWithEmail() instead. ' +
-        'Plan 04 will provide the new Login UI.'
-    );
-  }, []);
-
   // Complete logout: Backend -> Core Kit -> Clear state
   const logout = useCallback(async () => {
     if (isLoggingOut) return;
@@ -578,7 +563,6 @@ export function useAuth() {
     lastAuthMethod,
     userEmail,
     pendingAuthMethod,
-    login,
     loginWithGoogle,
     loginWithEmail,
     loginWithWallet,
