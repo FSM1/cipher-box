@@ -1,0 +1,83 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "aca23c240061",
+  "session_id": "0ab3334d-90bc-4ad6-994f-3b00db82d042",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T23:55:15.465448Z",
+  "branch": "chore/bump-kubo-v0.40",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "docker/docker-compose.staging.yml",
+    "docker/docker-compose.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ac60a14a6b4f",
+  "checkpoint_transcript_start": 232,
+  "transcript_lines_at_start": 232,
+  "token_usage": {
+    "input_tokens": 2544,
+    "cache_creation_tokens": 47671,
+    "cache_read_tokens": 5318475,
+    "output_tokens": 9598,
+    "api_call_count": 51
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Establish post-phase-19 performance baselines for the cipher-box API on staging after deployment, and investigate why load test error rates were so high.",
+    "outcome": "Discovered that someguy's IPNS routing endpoint is completely non-functional (hangs indefinitely on PUT/GET), causing near-100% error rates in load tests. Pivoted to bumping Kubo from v0.34.0 to v0.40.0 locally first; changes committed and pushed to a new branch for local validation before staging deployment.",
+    "learnings": {
+      "repo": [
+        "docker/docker-compose.yml and docker/docker-compose.staging.yml are committed to the repo root but the docker/ directory is also generated/copied during CI deploy — the source of truth for both local and staging compose configs lives in the repo.",
+        "The load test harness (vitest) treats SDK-thrown exceptions as metric data points with success:false, not as test failures — tests can 'pass' with 95%+ error rates.",
+        "IPNS publish was made fire-and-forget (fire-and-forget delegated routing) in 'fix(api): make delegated routing publish fire-and-forget' — API returns 200 even when someguy times out.",
+        "someguy v0.11.1 is actually ahead of the latest stable release (v0.11.0) — no version bump available.",
+        "Kubo is 6 minor versions behind: v0.34.0 in use vs v0.40.1 latest. Kubo v0.40 includes specific IPNS reliability fixes."
+      ],
+      "code": [
+        {
+          "path": "tests/load/src/harness/metrics.ts",
+          "line": 68,
+          "finding": "metrics.measure records success:false on thrown exceptions; errors are non-fatal and caught silently, masking high failure rates in test output"
+        },
+        {
+          "path": "tests/load/src/workloads/mixed-workload.ts",
+          "finding": "Mixed workload uses multiple SDK operations; errors propagate as metrics failures, not test failures"
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "finding": "Load test requires LOAD_TEST_API_URL and LOAD_TEST_SECRET env vars; default secret matches staging config"
+        }
+      ],
+      "workflow": [
+        "Running vitest without a precise --testPathPattern can match multiple scenario files (e.g. 'mixed-workload' also matches 'sustained-load'), causing all scenarios to run concurrently and interfere with each other.",
+        "Cloudflare 522 errors indicate origin unreachable — can appear when sustained-load tests overwhelm connections, masking whether other tests actually completed.",
+        "Verifying IPNS routing directly with curl (with explicit timeout) is a fast way to confirm whether a routing sidecar's IPNS endpoint is functional vs. just accepting connections and hanging."
+      ]
+    },
+    "friction": [
+      "vitest --testPathPattern='mixed-workload' inadvertently matched 'sustained-load', causing all 5 load test scenarios to run simultaneously and pollute results with 522 Cloudflare errors.",
+      "The load test harness reports 'pass' even with 95%+ error rates, making it non-obvious that something is fundamentally broken — required manual log inspection to diagnose.",
+      "docker/ directory not being in an obvious location (was in a subdirectory during initial search) caused multiple failed glob/find attempts before locating compose files.",
+      "someguy IPNS endpoint hangs indefinitely with no response — difficult to distinguish from slow vs. broken without an explicit timeout test.",
+      "Nearly 2000 abort errors accumulated in 10 minutes during load testing before root cause was identified."
+    ],
+    "open_items": [
+      "Validate Kubo v0.40.0 works correctly in local dev environment before deploying to staging.",
+      "Decide whether to keep someguy (if Kubo upgrade fixes IPNS) or revert DELEGATED_ROUTING_URL to https://delegated-ipfs.dev or remove delegated routing entirely.",
+      "Re-run post-phase-19 load test baselines (mixed-workload, ipns-publish-storm) once routing is functional to get comparable metrics vs. phase-18.",
+      "Consider fixing the load test harness to fail tests when error rates exceed a threshold, rather than silently recording failures as metrics.",
+      "Investigate whether someguy's IPNS routing issue is a known bug or configuration problem — v0.11.1 IPNS PUT/GET completely non-functional despite DHT having 169 peers."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-22T23:54:45.605197Z",
+    "agent_lines": 2,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 2,
+    "agent_percentage": 100
+  }
+}
