@@ -15,7 +15,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { BypassableThrottlerGuard as ThrottlerGuard } from '../common/guards/throttler-bypass.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { SharesService } from './shares.service';
 import { CreateShareDto } from './dto/create-share.dto';

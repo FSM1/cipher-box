@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { wrapKey, bytesToHex } from '@cipherbox/crypto';
 import { createMultiAccountFixture, type MultiAccountFixture } from '../fixtures/multi-account';
-import { API_URL } from '../fixtures/test-harness';
+import { API_URL, testFetch } from '../fixtures/test-harness';
 
 /** Generate a valid ECIES-wrapped key (passes DTO MinLength(258) validation) */
 async function makeWrappedKey(publicKey: Uint8Array): Promise<string> {
@@ -42,7 +42,7 @@ describe('Invite Link', () => {
     // Wrap with Alice's key (in real flow, this would be an ephemeral keypair)
     const encryptedKey = await makeWrappedKey(alice.publicKey);
 
-    const res = await fetch(`${API_URL}/shares/invites`, {
+    const res = await testFetch(`${API_URL}/shares/invites`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${alice.accessToken}`,
@@ -65,7 +65,7 @@ describe('Invite Link', () => {
   });
 
   it('should show active status publicly (no auth)', async () => {
-    const res = await fetch(`${API_URL}/invites/${inviteToken}`);
+    const res = await testFetch(`${API_URL}/invites/${inviteToken}`);
     expect(res.ok).toBe(true);
 
     const data = await res.json();
@@ -75,7 +75,7 @@ describe('Invite Link', () => {
   it('should return invite data for authenticated user', async () => {
     const bob = fixture.accounts.get('bob')!;
 
-    const res = await fetch(`${API_URL}/invites/${inviteToken}/data`, {
+    const res = await testFetch(`${API_URL}/invites/${inviteToken}/data`, {
       headers: { Authorization: `Bearer ${bob.accessToken}` },
     });
     expect(res.ok).toBe(true);
@@ -95,7 +95,7 @@ describe('Invite Link', () => {
     // Wrap a key for Bob (API validates format, not cryptographic correctness)
     const encryptedKey = await makeWrappedKey(bob.publicKey);
 
-    const res = await fetch(`${API_URL}/invites/${inviteToken}/claim`, {
+    const res = await testFetch(`${API_URL}/invites/${inviteToken}/claim`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${bob.accessToken}`,
@@ -114,7 +114,7 @@ describe('Invite Link', () => {
 
     const encryptedKey = await makeWrappedKey(charlie.publicKey);
 
-    const res = await fetch(`${API_URL}/invites/${inviteToken}/claim`, {
+    const res = await testFetch(`${API_URL}/invites/${inviteToken}/claim`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${charlie.accessToken}`,
@@ -132,7 +132,7 @@ describe('Invite Link', () => {
 
     const encryptedKey = await makeWrappedKey(bob.publicKey);
 
-    const res = await fetch(`${API_URL}/invites/${inviteToken}/claim`, {
+    const res = await testFetch(`${API_URL}/invites/${inviteToken}/claim`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${bob.accessToken}`,
@@ -150,7 +150,7 @@ describe('Invite Link', () => {
 
     const encryptedKey = await makeWrappedKey(alice.publicKey);
 
-    const createRes = await fetch(`${API_URL}/shares/invites`, {
+    const createRes = await testFetch(`${API_URL}/shares/invites`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${alice.accessToken}`,
@@ -167,14 +167,14 @@ describe('Invite Link', () => {
     const newInvite = await createRes.json();
 
     // Revoke it
-    const revokeRes = await fetch(`${API_URL}/shares/invites/${newInvite.id}`, {
+    const revokeRes = await testFetch(`${API_URL}/shares/invites/${newInvite.id}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${alice.accessToken}` },
     });
     expect(revokeRes.status).toBe(204);
 
     // Public status should now be 404
-    const statusRes = await fetch(`${API_URL}/invites/${newInvite.token}`);
+    const statusRes = await testFetch(`${API_URL}/invites/${newInvite.token}`);
     expect(statusRes.status).toBe(404);
   });
 });

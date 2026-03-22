@@ -14,6 +14,7 @@ import {
   deleteTestAccount,
   type TestContext,
   API_URL,
+  testFetch,
 } from '../fixtures/test-harness';
 
 describe('Vault Lifecycle', () => {
@@ -38,12 +39,11 @@ describe('Vault Lifecycle', () => {
   });
 
   it('should reject duplicate vault init (409)', async () => {
-    // Try to initialize vault again with same user — should get 409
     const vault = await initializeVault(ctx.privateKey);
     const encrypted = await encryptVaultKeys(vault, ctx.publicKey);
     const rootIpnsName = await deriveIpnsName(vault.rootIpnsKeypair.publicKey);
 
-    const res = await fetch(`${API_URL}/vault/init`, {
+    const res = await testFetch(`${API_URL}/vault/init`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${ctx.accessToken}`,
@@ -61,7 +61,7 @@ describe('Vault Lifecycle', () => {
   });
 
   it('should GET /vault and return vault data', async () => {
-    const res = await fetch(`${API_URL}/vault`, {
+    const res = await testFetch(`${API_URL}/vault`, {
       headers: { Authorization: `Bearer ${ctx.accessToken}` },
     });
     expect(res.ok).toBe(true);
@@ -74,7 +74,7 @@ describe('Vault Lifecycle', () => {
   });
 
   it('should GET /vault/export and return export data', async () => {
-    const res = await fetch(`${API_URL}/vault/export`, {
+    const res = await testFetch(`${API_URL}/vault/export`, {
       headers: { Authorization: `Bearer ${ctx.accessToken}` },
     });
     expect(res.ok).toBe(true);
@@ -85,7 +85,7 @@ describe('Vault Lifecycle', () => {
   });
 
   it('should GET /vault/config and return config', async () => {
-    const res = await fetch(`${API_URL}/vault/config`, {
+    const res = await testFetch(`${API_URL}/vault/config`, {
       headers: { Authorization: `Bearer ${ctx.accessToken}` },
     });
     expect(res.ok).toBe(true);
@@ -96,7 +96,7 @@ describe('Vault Lifecycle', () => {
   });
 
   it('should GET /vault/quota and return usage data', async () => {
-    const res = await fetch(`${API_URL}/vault/quota`, {
+    const res = await testFetch(`${API_URL}/vault/quota`, {
       headers: { Authorization: `Bearer ${ctx.accessToken}` },
     });
     expect(res.ok).toBe(true);
@@ -108,14 +108,14 @@ describe('Vault Lifecycle', () => {
   });
 
   it('should reject requests with invalid token', async () => {
-    const res = await fetch(`${API_URL}/vault`, {
+    const res = await testFetch(`${API_URL}/vault`, {
       headers: { Authorization: 'Bearer invalid-token-here' },
     });
     expect(res.status).toBe(401);
   });
 
   it('should reject test-login with wrong secret', async () => {
-    const res = await fetch(`${API_URL}/auth/test-login`, {
+    const res = await testFetch(`${API_URL}/auth/test-login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

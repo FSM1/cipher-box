@@ -9,7 +9,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { BypassableThrottlerGuard as ThrottlerGuard } from '../common/guards/throttler-bypass.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ShareInviteService } from './share-invite.service';
 import { ClaimInviteDto } from './dto/claim-invite.dto';

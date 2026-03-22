@@ -122,6 +122,7 @@ jobs:
           echo "REDIS_PORT=6379" >> apps/api/.env
           echo "TEST_LOGIN_SECRET=e2e-test-secret-ci-only" >> apps/api/.env
           echo "IDENTITY_JWT_PRIVATE_KEY=${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}" >> apps/api/.env
+          echo "THROTTLE_BYPASS_SECRET=ci-throttle-bypass-secret" >> apps/api/.env
 
       - name: Start mock IPNS routing
         if: inputs.environment == 'local'
@@ -163,9 +164,11 @@ jobs:
           if [ "${{ inputs.environment }}" = "staging" ]; then
             echo "LOAD_TEST_API_URL=${{ vars.STAGING_API_URL }}" >> $GITHUB_ENV
             echo "LOAD_TEST_SECRET=${{ secrets.STAGING_TEST_LOGIN_SECRET }}" >> $GITHUB_ENV
+            echo "THROTTLE_BYPASS_SECRET=${{ secrets.STAGING_THROTTLE_BYPASS_SECRET }}" >> $GITHUB_ENV
           else
             echo "LOAD_TEST_API_URL=http://localhost:3000" >> $GITHUB_ENV
             echo "LOAD_TEST_SECRET=e2e-test-secret-ci-only" >> $GITHUB_ENV
+            echo "THROTTLE_BYPASS_SECRET=ci-throttle-bypass-secret" >> $GITHUB_ENV
           fi
           echo "LOAD_TEST_CLIENTS=${{ inputs.client_count }}" >> $GITHUB_ENV
 

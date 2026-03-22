@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { wrapKey, unwrapKey, bytesToHex, hexToBytes } from '@cipherbox/crypto';
 import { createMultiAccountFixture, type MultiAccountFixture } from '../fixtures/multi-account';
-import { API_URL } from '../fixtures/test-harness';
+import { API_URL, testFetch } from '../fixtures/test-harness';
 import { generateTextContent } from '../helpers/data-generators';
 
 describe('Share Operations', () => {
@@ -53,7 +53,7 @@ describe('Share Operations', () => {
     const encryptedKey = await wrapKey(folder.folderKey, bob.publicKey);
 
     // Create share via API
-    const res = await fetch(`${API_URL}/shares`, {
+    const res = await testFetch(`${API_URL}/shares`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${alice.accessToken}`,
@@ -78,7 +78,7 @@ describe('Share Operations', () => {
     const bob = fixture.accounts.get('bob')!;
     fixture.switchTo('bob');
 
-    const res = await fetch(`${API_URL}/shares/received`, {
+    const res = await testFetch(`${API_URL}/shares/received`, {
       headers: { Authorization: `Bearer ${bob.accessToken}` },
     });
     expect(res.ok).toBe(true);
@@ -95,7 +95,7 @@ describe('Share Operations', () => {
     const alice = fixture.accounts.get('alice')!;
     fixture.switchTo('alice');
 
-    const res = await fetch(`${API_URL}/shares/sent`, {
+    const res = await testFetch(`${API_URL}/shares/sent`, {
       headers: { Authorization: `Bearer ${alice.accessToken}` },
     });
     expect(res.ok).toBe(true);
@@ -109,7 +109,7 @@ describe('Share Operations', () => {
     const bob = fixture.accounts.get('bob')!;
     fixture.switchTo('bob');
 
-    const res = await fetch(`${API_URL}/shares/received`, {
+    const res = await testFetch(`${API_URL}/shares/received`, {
       headers: { Authorization: `Bearer ${bob.accessToken}` },
     });
     const data = await res.json();
@@ -124,7 +124,7 @@ describe('Share Operations', () => {
     const alice = fixture.accounts.get('alice')!;
     fixture.switchTo('alice');
 
-    const res = await fetch(`${API_URL}/shares`, {
+    const res = await testFetch(`${API_URL}/shares`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${alice.accessToken}`,
@@ -146,7 +146,7 @@ describe('Share Operations', () => {
     const alice = fixture.accounts.get('alice')!;
     fixture.switchTo('alice');
 
-    const res = await fetch(`${API_URL}/shares/${shareId}`, {
+    const res = await testFetch(`${API_URL}/shares/${shareId}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${alice.accessToken}` },
     });
@@ -158,7 +158,7 @@ describe('Share Operations', () => {
     const bob = fixture.accounts.get('bob')!;
     fixture.switchTo('bob');
 
-    const res = await fetch(`${API_URL}/shares/received`, {
+    const res = await testFetch(`${API_URL}/shares/received`, {
       headers: { Authorization: `Bearer ${bob.accessToken}` },
     });
     const data = await res.json();

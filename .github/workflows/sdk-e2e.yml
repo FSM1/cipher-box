@@ -109,6 +109,7 @@ jobs:
           echo "REDIS_PORT=6379" >> apps/api/.env
           echo "TEST_LOGIN_SECRET=e2e-test-secret-ci-only" >> apps/api/.env
           echo "IDENTITY_JWT_PRIVATE_KEY=${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}" >> apps/api/.env
+          echo "THROTTLE_BYPASS_SECRET=ci-throttle-bypass-secret" >> apps/api/.env
 
       - name: Start mock IPNS routing
         run: |
@@ -149,3 +150,4 @@ jobs:
         env:
           SDK_E2E_API_URL: http://localhost:3000
           SDK_E2E_SECRET: e2e-test-secret-ci-only
+          THROTTLE_BYPASS_SECRET: ci-throttle-bypass-secret

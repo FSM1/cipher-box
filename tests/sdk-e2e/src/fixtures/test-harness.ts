@@ -15,6 +15,24 @@ import { deriveIpnsName, hexToBytes, bytesToHex } from '@cipherbox/crypto';
 
 const API_URL = process.env.SDK_E2E_API_URL ?? 'http://localhost:3000';
 const SECRET = process.env.SDK_E2E_SECRET ?? 'e2e-test-secret-do-not-use-in-production';
+const THROTTLE_BYPASS = process.env.THROTTLE_BYPASS_SECRET ?? '';
+
+/**
+ * Build default headers for fetch calls.
+ * Includes the throttle bypass header when THROTTLE_BYPASS_SECRET is set.
+ */
+function fetchHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = { ...extra };
+  if (THROTTLE_BYPASS) {
+    headers['X-Throttle-Bypass'] = THROTTLE_BYPASS;
+  }
+  return headers;
+}
+
+/** Default headers for the api-client axios instance (throttle bypass). */
+function axiosDefaultHeaders(): Record<string, string> | undefined {
+  return THROTTLE_BYPASS ? { 'X-Throttle-Bypass': THROTTLE_BYPASS } : undefined;
+}
 
 /** Core account data returned by createTestAccount (shared between sdk-e2e and load tests). */
 export interface TestAccount {
@@ -54,7 +72,7 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
   // 1. Authenticate
   const loginRes = await fetch(`${apiUrl}/auth/test-login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: fetchHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ email, secret }),
   });
   if (!loginRes.ok) {
@@ -72,10 +90,10 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
   // 3. Register vault on server
   const initRes = await fetch(`${apiUrl}/vault/init`, {
     method: 'POST',
-    headers: {
+    headers: fetchHeaders({
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
-    },
+    }),
     body: JSON.stringify({
       ownerPublicKey: bytesToHex(publicKey),
       encryptedRootFolderKey: bytesToHex(encrypted.encryptedRootFolderKey),
@@ -87,10 +105,11 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
     throw new Error(`vault/init failed (${initRes.status}): ${await initRes.text()}`);
   }
 
-  // 4. Configure API client singleton
+  // 4. Configure API client singleton (includes throttle bypass header)
   setApiClientConfig({
     baseUrl: apiUrl,
     getAccessToken: async () => accessToken,
+    defaultHeaders: axiosDefaultHeaders(),
   });
 
   // 5. Create and configure CipherBoxClient
@@ -133,10 +152,10 @@ export async function deleteTestAccount(
   try {
     const res = await fetch(`${apiUrl}/auth/account`, {
       method: 'DELETE',
-      headers: {
+      headers: fetchHeaders({
         Authorization: `Bearer ${ctx.accessToken}`,
         'Content-Type': 'application/json',
-      },
+      }),
       body: JSON.stringify({ confirmation: 'DELETE' }),
     });
     if (!res.ok) {
@@ -147,4 +166,16 @@ export async function deleteTestAccount(
   }
 }
 
-export { API_URL, SECRET };
+/**
+ * fetch() wrapper that automatically injects the throttle bypass header.
+ * Use instead of raw fetch() in test suites to avoid 429s.
+ */
+export function testFetch(url: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  if (THROTTLE_BYPASS) {
+    headers.set('X-Throttle-Bypass', THROTTLE_BYPASS);
+  }
+  return fetch(url, { ...init, headers });
+}
+
+export { API_URL, SECRET, fetchHeaders };

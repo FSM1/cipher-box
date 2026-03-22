@@ -17,6 +17,8 @@ export type ApiClientConfig = {
   withCredentials?: boolean;
   /** Called when token refresh fails (e.g., clear stores, redirect to login). */
   onRefreshFailure?: () => void;
+  /** Extra headers sent with every request (e.g., throttle bypass for testing). */
+  defaultHeaders?: Record<string, string>;
 };
 
 /**
@@ -66,6 +68,7 @@ function getCachedInstance(): AxiosInstance {
     _instance = axios.create({
       baseURL: clientConfig.baseUrl,
       withCredentials: clientConfig.withCredentials ?? false,
+      headers: clientConfig.defaultHeaders,
     });
 
     // 401 response interceptor: refresh token and retry once
