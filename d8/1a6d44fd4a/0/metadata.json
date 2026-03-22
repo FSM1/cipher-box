@@ -1,0 +1,81 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d81a6d44fd4a",
+  "session_id": "8dbad658-aeb6-4bde-a1a1-7a83e2010385",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T18:03:10.33236Z",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "e9512dc05e5d",
+  "token_usage": {
+    "input_tokens": 937,
+    "cache_creation_tokens": 991281,
+    "cache_read_tokens": 69511777,
+    "output_tokens": 109561,
+    "api_call_count": 274
+  },
+  "session_metrics": {
+    "turn_count": 15
+  },
+  "summary": {
+    "intent": "Implement SDK-based E2E and load test suites as two new workspace packages (tests/sdk-e2e and tests/load), replacing flaky Playwright browser automation with direct CipherBoxClient API calls, then debug and harden the implementation against rate limiting.",
+    "outcome": "All 83 SDK E2E tests pass against a local stack in ~11s. Both packages compile cleanly, a throttle bypass mechanism was implemented for staging/CI use, and a TESTING_STRATEGY.md document captures architectural decisions. PR #318 was created and updated.",
+    "learnings": {
+      "repo": [
+        "setApiClientConfig in packages/api-client/src/instance.ts is a module-level singleton because orval generates standalone functions that import customInstance globally — this causes cross-test contamination in multi-account scenarios and requires switchTo() hacks",
+        "The API uses per-controller @UseGuards(ThrottlerGuard) (not global APP_GUARD), with 10 req/s and 100 req/min limits — tight enough to block rapid SDK test suites",
+        "test-login endpoint has its own stricter throttle (5 per 15 min) separate from the general throttler",
+        "NestJS ConfigModule loads .env files which override process.env, so setting NODE_ENV=test in the shell doesn't work when .env has NODE_ENV=development",
+        "Pre-commit hooks enforce API client regeneration — modifying instance.ts requires running pnpm api:generate before committing",
+        "pnpm-workspace.yaml uses three groups: apps/*, packages/*, tests/* — new test packages must be added here and to release-please-config.json extra-files",
+        "The integration test at packages/sdk/src/__tests__/integration.test.ts lines 24-59 is the canonical prototype for the test-login → vault-init → CipherBoxClient pattern",
+        "CipherBoxClient exposes getFolderTree() as a public method — no need for (client as any).folderTree casts in test assertions",
+        "Invite claim DTO has @MinLength(258) on encryptedKey — dummy Uint8Array(64) only produces 128 hex chars, failing validation; real ECIES output via wrapKey() is required",
+        "The API's mock-ipns-routing service entry point is index.js (not server.js) and is pre-built at tests/e2e/mock-ipns-routing/"
+      ],
+      "code": [
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 1,
+          "end_line": 60,
+          "finding": "Module-level _config singleton with setApiClientConfig/getApiClientConfig — adding optional defaultHeaders field allows injecting bypass headers into all axios requests automatically"
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "ThrottlerModule.forRoot() uses ConfigService — NODE_ENV conditional here is the right place to widen limits for test environments, but the bypass guard approach is cleaner"
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/error-cases.test.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "Tests that run after multi-account suites need to re-call setApiClientConfig before any SDK operations, since multi-account fixtures overwrite the singleton"
+        }
+      ],
+      "workflow": [
+        "1Password SSH agent for commit signing times out in background agent subprocesses — commits from background tasks may hang; foreground commits work fine",
+        "Running tsc --noEmit against a package that depends on a recently modified sibling requires rebuilding the sibling first (pnpm --filter \u003cpkg\u003e build)",
+        "When using sed for bulk replacements in test files, unmatched parens from partial replacements cause cascading syntax errors — better to rewrite the whole file",
+        "Vitest with fileParallelism: false runs suites sequentially in one process, meaning module-level singletons persist across all test files in a run"
+      ]
+    },
+    "friction": [
+      "setApiClientConfig singleton caused cross-suite test contamination — multi-account test suites overwrote the singleton, causing subsequent single-account tests to get 401s",
+      "API rate limiting (10 req/s, 100 req/min) blocked rapid SDK test suites immediately — required a full bypass guard implementation before tests could pass",
+      "NODE_ENV=test env var override didn't work because .env file loaded by ConfigModule takes precedence over shell environment",
+      "Bulk sed replacement of `headers: {` to `headers: fetchHeaders({` left unmatched closing parens, corrupting vault-lifecycle.test.ts and requiring a full file rewrite",
+      "Pre-commit hook required api:generate after modifying instance.ts — not obvious that hand-written files in api-client trigger regeneration checks",
+      "Background bash tasks hung waiting for 1Password SSH agent for commit signing, requiring manual intervention or retry"
+    ],
+    "open_items": [
+      "Refactor api-client from module-level singleton to instance-scoped axios — configure orval to generate functions accepting an axios instance parameter, thread through sdk-core SdkContext, have CipherBoxClient own its axios instance (todo captured in .planning/todos/pending/2026-03-22-refactor-api-client-from-singleton-to-instance-scoped-axios.md)",
+      "Migrate raw fetch() calls in vault-lifecycle, share-operations, and invite-link test suites to use generated API client functions — currently uses testFetch() wrapper as a stopgap",
+      "Load tests not yet validated against staging — upload-throughput, ipns-publish-storm, mixed-workload, sustained-load, and spike-test scenarios need a staging run",
+      "Throttle validation scenario needed — a load test that runs WITHOUT the bypass header to verify the throttler itself behaves correctly under load",
+      "Production load test strategy undefined — staging tests single-node perf, but horizontal scaling validation requires multi-IP distributed load against the actual cluster"
+    ]
+  }
+}
