@@ -1,0 +1,121 @@
+/simplify
+
+---
+
+ok, now can we run the e2e integration test against a local instance of the api/db/ipfs/ipns stck?
+
+---
+
+ipfs and postgres are running on the host machine: 192.168.133.114
+
+---
+
+sorry continue
+
+---
+
+these rate limit configs are going to become a problem for the load test instances if I understand it correctly, especially given that the load tests are being executed against the staging api, where we can not simply loosen the throttler rules.
+
+how is this being handled?
+
+---
+
+option 2 seems nice, but want to discuss the downstream implications of this decision. Since at some point in future, once the production instance is released, we will reach scalability limits of a single node (both API and probably IPFS/IPNS). The scaling setup in staging will likely always remain a simple single node. In this setup, how will we test the effectiveness of the horizontal scaling strategy against prod env, if the throttle guards are enabled?
+
+---
+
+ok, before you go ahead and implement anything, I feel like documenting a large portion of the outcomes of these discussions is vital to ensure this context is retained for future.
+
+---
+
+Is there any technical reason for the module level singleton in setApiClientConfig? It seems like having this instance scoped would remove the need for a whole bunch of workarounds in e2e tests.
+
+---
+
+ok first create a /gsd:add-todo for the api-client refactor - I think that passing through an axios instance is the best long term approach.
+
+---
+
+<task-notification>
+<task-id>bj5ntc510</task-id>
+<tool-use-id>toolu_01AEN5PYWoh4wquSwb5q4mvN</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bj5ntc510.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit the todo" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bj5ntc510.output
+
+---
+
+<task-notification>
+<task-id>btil3v3j2</task-id>
+<tool-use-id>toolu_01StWzZqdKXySQQWwRoCJV1h</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/btil3v3j2.output</output-file>
+<status>failed</status>
+<summary>Background command "Commit todo file" failed with exit code 128</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/btil3v3j2.output
+
+---
+
+please try commit again
+
+---
+
+<task-notification>
+<task-id>bawvj5w19</task-id>
+<tool-use-id>toolu_018eGpFW8Pfk4oop6U5hCrkT</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bawvj5w19.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit todo file" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bawvj5w19.output
+
+---
+
+1
+
+---
+
+<task-notification>
+<task-id>beibfnp07</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/beibfnp07.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit with regenerated api-client" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/beibfnp07.output
+
+---
+
+ok please record the follow-up on the existing todo for the api-clilent singleton refactor.
+
+---
+
+<task-notification>
+<task-id>bgy2z8l5o</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bgy2z8l5o.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit todo update" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bgy2z8l5o.output
+
+---
+
+ok, now I want to run the load test script against the local api and docker stack.
+
+---
+
+<task-notification>
+<task-id>b3ku4rmvs</task-id>
+<tool-use-id>toolu_019oZzi7G6bnsz7gvZQbVsq5</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b3ku4rmvs.output</output-file>
+<status>completed</status>
+<summary>Background command "Commit load test fixes" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/b3ku4rmvs.output
+
+---
+
+ok, please create a /gsd:add-todo for the @Throttle decorator bypass investigation, as well as figuring out the root cause of the 429s on publish.

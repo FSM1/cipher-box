@@ -1,0 +1,87 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "0be7844f5d05",
+  "session_id": "8dbad658-aeb6-4bde-a1a1-7a83e2010385",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T18:15:06.991271Z",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "0b6bf433957d",
+  "token_usage": {
+    "input_tokens": 981,
+    "cache_creation_tokens": 1017573,
+    "cache_read_tokens": 83642458,
+    "output_tokens": 118376,
+    "api_call_count": 310
+  },
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "summary": {
+    "intent": "Implement SDK-driven E2E and load test suites for CipherBox that bypass browser automation overhead, using CipherBoxClient programmatically against a real API stack.",
+    "outcome": "Created two new workspace packages (tests/sdk-e2e with 83 passing tests across 10 suites, tests/load with 5 load scenarios), implemented a throttle bypass header mechanism, fixed three correctness bugs discovered during the test run, and validated load tests against the local stack.",
+    "learnings": {
+      "repo": [
+        "setApiClientConfig in packages/api-client/src/instance.ts is a module-level singleton used by all orval-generated API functions — multi-account tests must serially switch this singleton between accounts, contaminating later test suites if not re-set.",
+        "The ThrottlerGuard is applied per-controller via @UseGuards(), not globally via APP_GUARD — each controller must be individually updated to swap the guard class.",
+        "Per-endpoint @Throttle() decorators exist on the IPNS publish endpoint (10 publishes/min) in ipns.controller.ts, stricter than the controller-level limit (10 req/s, 100 req/min).",
+        "NestJS ConfigModule loads .env files which override shell environment variables — setting NODE_ENV=test in the shell does not override NODE_ENV=development in .env.",
+        "The ClaimInviteDto has @MinLength(258) on encryptedKey, requiring at least 129-byte ECIES ciphertext — dummy Uint8Array(64) payloads fail DTO validation with a 400.",
+        "The API's /shares endpoints return encryptedKey as a hex string, but @cipherbox/crypto's unwrapKey() expects Uint8Array — requires hexToBytes() conversion in callers.",
+        "pnpm --filter api dev uses NestJS watch mode which hot-reloads on file save, making env var changes take effect without a full restart.",
+        "The integration test at packages/sdk/src/__tests__/integration.test.ts lines 24-59 is the canonical pattern for test-login → vault init → CipherBoxClient construction."
+      ],
+      "code": [
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 1,
+          "end_line": 60,
+          "finding": "Module-level _config singleton and _cachedInstance — all orval-generated functions share one axios instance, making true multi-account parallel operation impossible without the singleton refactor todo."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.controller.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "@Throttle({ default: { limit: 10, ttl: 60000 } }) on publish endpoint is the direct cause of load test 429s — 10 IPNS publishes/min per IP is hit immediately under concurrent load."
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "ThrottlerModule configured with limit:10/ttl:1000 and limit:100/ttl:60000 — these are the controller-level defaults; per-endpoint @Throttle decorators can be stricter."
+        },
+        {
+          "path": "tests/sdk-e2e/src/suites/error-cases.test.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "Multi-account test fixtures overwrite setApiClientConfig singleton — suites running after share-operations or invite-link must re-call setApiClientConfig before operations that use sdk-core IPNS functions."
+        }
+      ],
+      "workflow": [
+        "Using replace_all or sed for multi-occurrence pattern replacement across files with nested brackets is fragile — mismatched parens corrupted vault-lifecycle.test.ts and required a full rewrite.",
+        "crypto.getRandomValues() has a hard 65536-byte limit per call — generating test data above 64KB requires chunked fills.",
+        "Background Bash tasks with git commit can hang waiting for 1Password SSH agent if the agent connection has timed out — running the commit directly (non-background) avoids the hang.",
+        "The pnpm-workspace.yaml tests/* glob picks up new test packages automatically — no explicit workspace registration needed, only pnpm install.",
+        "Promise.allSettled is the right concurrency primitive for load test client pools since the bottleneck is network I/O not CPU, and per-client test accounts mean each has its own auth token closure."
+      ]
+    },
+    "friction": [
+      "API rate limiting (10 req/s, 100 req/min) blocked the entire SDK E2E test run before the bypass header was implemented — required a temporary NODE_ENV=test workaround to unblock.",
+      "1Password SSH agent timed out during background commit tasks, causing multiple hung git commit processes that had to be killed and retried.",
+      "The fetchHeaders/testFetch helper was introduced mid-session due to raw fetch calls in 3 test suites not automatically inheriting the axios defaultHeaders — required iterating through multiple approaches before settling on testFetch.",
+      "TypeScript rootDir restriction in tests/load/tsconfig.json prevented importing from tests/sdk-e2e — required adding paths/rootDirs override.",
+      "The sed replace_all approach corrupted vault-lifecycle.test.ts (mismatched closing parens from fetchHeaders wrapping) requiring a full file rewrite.",
+      "Load test error swallowing (catch with no logging) made diagnosing the crypto.getRandomValues() failure opaque — had to add temporary console.error to find the root cause."
+    ],
+    "open_items": [
+      "Refactor @cipherbox/api-client to instance-scoped axios: configure orval to generate functions that accept an axios instance parameter, thread through sdk-core SdkContext — eliminates singleton, multi-account switchTo hack, cross-suite contamination, testFetch helper, and defaultHeaders workaround. Tracked in .planning/todos/pending/2026-03-22-refactor-api-client-from-singleton-to-instance-scoped-axios.md",
+      "Investigate @Throttle decorator bypass gap: the BypassableThrottlerGuard subclasses ThrottlerGuard so per-endpoint @Throttle decorators should use the same guard instance — verify whether IPNS publish 429s during load tests are from the throttler or from IPFS upstream. Tracked in .planning/todos/pending/2026-03-22-investigate-throttle-bypass-gap-for-per-endpoint-throttle-decorators.md",
+      "Raw fetch calls in vault-lifecycle, share-operations, and invite-link test suites should be migrated to use the generated API client functions — currently patched with testFetch wrapper, natural follow-on to the api-client singleton refactor.",
+      "Load test scenarios against staging need STAGING_THROTTLE_BYPASS_SECRET set as a GitHub Actions secret before the load-test.yml workflow can run end-to-end.",
+      "The load test client pool creates accounts serially in batches of 5 — with the api-client singleton limitation, all clients currently share one baseUrl/token config; true per-client isolation awaits the singleton refactor.",
+      "Staging load tests can only validate single-node throughput; production horizontal scaling validation requires a separate multi-source-IP strategy documented in tests/TESTING_STRATEGY.md."
+    ]
+  }
+}
