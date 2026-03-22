@@ -79,6 +79,10 @@ Recent for v1.1:
 - Kubo v0.34.0 -> v0.40.1 upgrade decision (recommended before Phase 19, not blocking)
 - Recovery tool independence must be verified after Phases 19+20 changes
 
+### Pending Todos
+
+8 items in `.planning/todos/pending/` — see `/gsd:check-todos` for full list.
+
 ### Resolved
 
 All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILESTONE-AUDIT.md`.
