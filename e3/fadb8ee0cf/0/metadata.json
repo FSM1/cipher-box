@@ -1,0 +1,110 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e3fadb8ee0cf",
+  "session_id": "0617b2f2-dabc-413c-b9f2-7450610a315f",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T21:51:39.005966Z",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "63c7c8bf6be8",
+  "token_usage": {
+    "input_tokens": 229,
+    "cache_creation_tokens": 244558,
+    "cache_read_tokens": 30020904,
+    "output_tokens": 71794,
+    "api_call_count": 203
+  },
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "summary": {
+    "intent": "Resolve PR review comments on PR #318, refactor api-client from singleton to instance-scoped axios, and investigate a throttle bypass gap identified in load testing.",
+    "outcome": "All PR review comments resolved across multiple rounds; api-client fully migrated from singleton to per-CipherBoxClient instance with shared instance threading through web app; throttle bypass gap confirmed closed; guard unit tests added; 20+ files changed across 6 packages.",
+    "learnings": {
+      "repo": [
+        "The web app uses two call paths into the API: direct generated function calls (auth, shares, device approval, vault init) and CipherBoxClient-mediated calls (folder/file/bin ops) — Phase 19.1 was only partially completed for the web app rewiring",
+        "BypassableThrottlerGuard.canActivate() returns true before calling super.canActivate(), meaning per-endpoint @Throttle decorators are never consulted when the bypass header is present",
+        "The IPFS controller uses only JwtAuthGuard with no throttle guard — IPFS operations are never rate-limited",
+        "sdk-core IPFS functions (addToIpfs, unpinFromIpfs) were using bare axios.post() with manual token injection instead of the instance-scoped axios, bypassing 401 refresh interceptors",
+        "The 429 errors in load tests during pnpm test (all packages) are caused by parallel test suites hitting the live API simultaneously, not a code bug — tests pass in isolation",
+        "Zero-knowledge architecture means rootIpnsName, rootFolderKey, and teeKeys must be provided explicitly at CipherBoxClient creation — the SDK cannot discover them, making those config fields intentional"
+      ],
+      "code": [
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "customInstance was refactored to accept optional _axiosInstance in options object, bypassing singleton when provided; createAxiosInstance now handles 401 refresh logic that was previously in getCachedInstance"
+        },
+        {
+          "path": "packages/sdk-core/src/types.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "SdkContext gained optional axiosInstance field for threading per-client axios instance through all SDK operations"
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 1,
+          "end_line": 100,
+          "finding": "createAndPublishIpnsRecord, batchPublishIpnsRecords, and resolveIpnsRecord all updated to accept optional ctx and forward axiosInstance to API calls"
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "CipherBoxClient constructor now creates its own axios instance via createAxiosInstance(); accepts optional external axiosInstance via config for shared-instance pattern with web app"
+        },
+        {
+          "path": "apps/web/src/lib/api-config.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Rewired to create ONE axios instance with auth + 401 refresh, register it as singleton via setApiClientConfig, and export it for CipherBoxClient to share"
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "line": 1,
+          "end_line": 40,
+          "finding": "initSdkClient now imports and passes the shared axiosInstance from api-config.ts to CipherBoxClient, unifying both call paths onto one instance"
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "line": 88,
+          "end_line": 95,
+          "finding": "destroyClientPool zeroes out privateKey, rootFolderKey, and rootIpnsKeypair.privateKey after client.destroy() to clear key material"
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/ipns.test.ts",
+          "line": 55,
+          "end_line": 83,
+          "finding": "After ctx threading, mock assertions needed updating — ipnsControllerPublishRecord now called with two args (data + undefined options)"
+        },
+        {
+          "path": "apps/api/src/common/guards/throttler-bypass.guard.spec.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "New unit test file created covering: bypass header present/absent, header value validation, super.canActivate delegation, and express-adapter context extraction"
+        }
+      ],
+      "workflow": [
+        "When resolving PR review threads, check if issues were already addressed by earlier commits in the same session before implementing new fixes",
+        "curl -s succeeds silently on HTTP 5xx; use curl -fsS to fail on server errors in health check loops",
+        "Running pnpm test across all packages in parallel against a live API triggers rate limiting; always run affected packages in isolation to verify test results",
+        "The gsd check-todos workflow correctly routes todos to roadmap phases and can identify when a todo was created before a fix was applied in the same session"
+      ]
+    },
+    "friction": [
+      "429 errors during full pnpm test run caused repeated false-positive test failures requiring isolation reruns with cooldown delays",
+      "TypeScript AxiosInstance type couldn't be resolved via dynamic import('axios') in sdk and sdk-core packages because axios wasn't a direct dependency — required using re-export from @cipherbox/api-client instead",
+      "Jest coverage collection didn't instrument the throttler-bypass guard when testing with jest.spyOn — coverage report showed incorrect numbers despite all code paths being exercised",
+      "Phase 19.1 roadmap showed 6/6 plans complete with unchecked checkboxes, creating ambiguity about actual completion status"
+    ],
+    "open_items": [
+      "Web app direct api-client imports (13 files: auth, vault init, health, shares, invites, device approval, IPFS, IPNS hooks) still bypass CipherBoxClient — full Phase 19.1-05 rewiring deferred",
+      "fetchFromIpfs still uses native fetch() for streaming instead of the instance-scoped axios — intentionally left as-is but noted as inconsistency",
+      "Jest coverage configuration for api guard tests may need adjustment to correctly report instrumented coverage from unit tests vs integration passthrough",
+      "The singleton setApiClientConfig() and getCachedInstance() remain in the api-client package for backward compatibility with any consumers not yet using the instance-scoped path"
+    ]
+  }
+}
