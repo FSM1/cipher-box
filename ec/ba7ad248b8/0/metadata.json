@@ -1,0 +1,114 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ecba7ad248b8",
+  "session_id": "0617b2f2-dabc-413c-b9f2-7450610a315f",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T20:32:27.229447Z",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "packages/api-client/src/instance.ts",
+    "packages/sdk/src/client.ts",
+    "packages/sdk/src/types.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "bb513a28cab0",
+  "token_usage": {
+    "input_tokens": 154,
+    "cache_creation_tokens": 171068,
+    "cache_read_tokens": 16068339,
+    "output_tokens": 50622,
+    "api_call_count": 138
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Refactor the api-client package from a module-level singleton to instance-scoped axios, so multiple CipherBoxClient instances can use different tokens simultaneously without cross-contamination.",
+    "outcome": "Full singleton elimination across the monorepo: CipherBoxClient creates/accepts its own axios instance, the web app's api-config.ts creates a shared instance passed to both the singleton path and CipherBoxClient, and all test infrastructure workarounds (switchTo, setApiClientConfig calls) were removed.",
+    "learnings": {
+      "repo": [
+        "The web app uses two call paths to the API: direct imports from @cipherbox/api-client (auth, vault, shares, invites, device approval, health) and CipherBoxClient (folder/file/bin ops) — Phase 19.1 only partially rewired the web app.",
+        "The singleton in api-client/instance.ts had a getCachedInstance function that duplicated 401 refresh interceptor logic — now consolidated into createAxiosInstance.",
+        "sdk-core does not directly depend on axios; AxiosInstance type must be imported from @cipherbox/api-client or via dynamic import('axios').",
+        "pnpm test runs all package test suites in parallel, which causes 429 rate-limit errors from the live API when multiple suites hit it simultaneously — tests pass in isolation.",
+        "The MultiAccountFixture's switchTo() hack existed solely to work around the singleton — e2e tests in share-operations and invite-link called it before every cross-account operation."
+      ],
+      "code": [
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 1,
+          "end_line": 80,
+          "finding": "customInstance now accepts optional _axiosInstance in its options parameter, bypassing the singleton when provided. createAxiosInstance centralizes all interceptor setup including 401 refresh."
+        },
+        {
+          "path": "packages/sdk-core/src/types.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "SdkContext gained optional axiosInstance field; threaded through to all IPNS function calls across ipns, folder, file, and bin modules."
+        },
+        {
+          "path": "packages/sdk-core/src/ipns/index.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "createAndPublishIpnsRecord, batchPublishIpnsRecords, and resolveIpnsRecord each accept optional ctx to forward the axios instance into the customInstance options."
+        },
+        {
+          "path": "apps/web/src/lib/api-config.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "Refactored to call createAxiosInstance() from api-client, then pass the pre-built instance to setApiClientConfig — making the singleton and CipherBoxClient share one instance."
+        },
+        {
+          "path": "apps/web/src/lib/sdk-provider.ts",
+          "line": 1,
+          "end_line": 30,
+          "finding": "initSdkClient now imports sharedAxiosInstance and passes it as axiosInstance in CipherBoxClientConfig, so the SDK client reuses the web app's instance."
+        },
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "Constructor uses config.axiosInstance if provided, otherwise falls back to createAxiosInstance() — allows external instance injection without breaking SDK standalone usage."
+        },
+        {
+          "path": "packages/sdk-core/src/__tests__/ipns.test.ts",
+          "line": 55,
+          "end_line": 83,
+          "finding": "Mock assertions for ipnsControllerPublishRecord needed updating after ctx parameter was added — toHaveBeenCalledWith needed second argument (undefined options)."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "line": 50,
+          "end_line": 50,
+          "finding": "Had a leftover setApiClientConfig call that was removed since the client now creates its own instance with headers from CipherBoxClientConfig.defaultHeaders."
+        }
+      ],
+      "workflow": [
+        "When threading a new parameter through multiple layers, grep for all callers of the affected functions before declaring done — bin/index.ts IPNS calls were initially missed.",
+        "Rate-limit 429 errors in test output during pnpm test are a false signal when tests pass in isolation — add a brief cooldown or run packages sequentially to confirm.",
+        "The resolve-pr-comments workflow (GraphQL for fetching/resolving threads, REST for replies) works well; curl -fsS vs -s is a meaningful security distinction for health check loops."
+      ]
+    },
+    "friction": [
+      "AxiosInstance type import: sdk package can't import directly from 'axios' (not a direct dep) — had to use import type from api-client re-export instead.",
+      "pnpm test parallelism causes 429 from live API, making it hard to confirm a clean test run without running packages serially or adding artificial cooldowns.",
+      "Phase 19.1 ROADMAP.md shows all plans 'complete' with unchecked checkboxes — misleading state that caused confusion about whether web app rewiring was actually done.",
+      "The bin/index.ts IPNS callers were missed in the first pass of ctx threading, requiring a second typecheck cycle to catch."
+    ],
+    "open_items": [
+      "The 13 web app files that still import directly from @cipherbox/api-client (auth, vault, shares, invites, device approval, health, IPFS, IPNS) now share the singleton instance with CipherBoxClient, but are not yet routed through CipherBoxClient itself — full migration deferred.",
+      "ROADMAP.md Phase 19.1 checkbox state is inconsistent (plans marked complete but boxes unchecked) — should be reconciled.",
+      "pnpm test parallel 429 issue: consider adding rate-limit bypass headers to all test clients or serializing API-hitting test suites to avoid flaky CI."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-22T20:31:53.385663Z",
+    "agent_lines": 0,
+    "human_added": 45,
+    "human_modified": 67,
+    "human_removed": 0,
+    "total_committed": 45,
+    "agent_percentage": 0
+  }
+}

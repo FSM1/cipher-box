@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ecba7ad248b8",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "packages/api-client/src/instance.ts",
+    "packages/sdk/src/client.ts",
+    "packages/sdk/src/types.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ec/ba7ad248b8/0/metadata.json",
+      "transcript": "/ec/ba7ad248b8/0/full.jsonl",
+      "content_hash": "/ec/ba7ad248b8/0/content_hash.txt",
+      "prompt": "/ec/ba7ad248b8/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 154,
+    "cache_creation_tokens": 171068,
+    "cache_read_tokens": 16068339,
+    "output_tokens": 50622,
+    "api_call_count": 138
+  }
+}

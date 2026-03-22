@@ -1,0 +1,5 @@
+If I am understanding this correctly the backward compatibility is necessary so that a component in the web app always gets the singleton instance that is available throughtout the webapp?
+
+---
+
+but i thought all phase 19.1 work was compelte already
