@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "45c413a90981",
+  "strategy": "manual-commit",
+  "branch": "fix/release-please-extra-files",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/45/c413a90981/0/metadata.json",
+      "transcript": "/45/c413a90981/0/full.jsonl",
+      "content_hash": "/45/c413a90981/0/content_hash.txt",
+      "prompt": "/45/c413a90981/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 415,
+    "cache_creation_tokens": 596184,
+    "cache_read_tokens": 59190022,
+    "output_tokens": 84534,
+    "api_call_count": 336
+  }
+}
