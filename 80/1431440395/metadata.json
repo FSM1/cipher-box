@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "801431440395",
+  "strategy": "manual-commit",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/load-test.yml",
+    ".github/workflows/sdk-e2e.yml",
+    "tests/TESTING_STRATEGY.md",
+    "tests/load/.env.example",
+    "tests/sdk-e2e/.env.example",
+    "tests/sdk-e2e/src/suites/vault-lifecycle.test.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/80/1431440395/0/metadata.json",
+      "transcript": "/80/1431440395/0/full.jsonl",
+      "content_hash": "/80/1431440395/0/content_hash.txt",
+      "prompt": "/80/1431440395/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 926,
+    "cache_creation_tokens": 985819,
+    "cache_read_tokens": 66866077,
+    "output_tokens": 108177,
+    "api_call_count": 267
+  }
+}

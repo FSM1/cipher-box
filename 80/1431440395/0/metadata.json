@@ -1,0 +1,102 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "801431440395",
+  "session_id": "8dbad658-aeb6-4bde-a1a1-7a83e2010385",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-22T17:51:03.992188Z",
+  "branch": "feat/sdk-e2e-and-load-tests",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/load-test.yml",
+    ".github/workflows/sdk-e2e.yml",
+    "tests/TESTING_STRATEGY.md",
+    "tests/load/.env.example",
+    "tests/sdk-e2e/.env.example",
+    "tests/sdk-e2e/src/suites/vault-lifecycle.test.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "a0874c261959",
+  "token_usage": {
+    "input_tokens": 926,
+    "cache_creation_tokens": 985819,
+    "cache_read_tokens": 66866077,
+    "output_tokens": 108177,
+    "api_call_count": 267
+  },
+  "session_metrics": {
+    "turn_count": 13
+  },
+  "summary": {
+    "intent": "Implement SDK-based E2E and load test suites as two new workspace packages (tests/sdk-e2e/ and tests/load/), replacing browser-dependent Playwright tests with direct CipherBoxClient SDK calls for faster, more reliable testing.",
+    "outcome": "All 83 SDK E2E tests pass across 10 suites in ~11s. Load test package with 5 scenarios and metrics harness created. CI workflows added. Throttle bypass header implemented to allow tests against rate-limited staging API without loosening production limits.",
+    "learnings": {
+      "repo": [
+        "setApiClientConfig in packages/api-client/src/instance.ts is a module-level singleton because orval generates standalone functions that import customInstance directly — not a deliberate design choice, but a consequence of orval's default code generation pattern",
+        "ThrottlerGuard is applied per-controller (not globally via APP_GUARD), requiring updates to ~7 controller files when swapping the guard implementation",
+        "NODE_ENV in the .env file takes precedence over shell env vars when NestJS ConfigModule loads it — setting NODE_ENV=test in the shell does not override .env values",
+        "The API pre-commit hook requires regenerating the API client (pnpm api:generate) whenever packages/api-client source files change",
+        "test-login endpoint has its own stricter throttle (5 per 15 min) separate from the main 10 req/s / 100 req/min limits",
+        "POST /auth/test-login returns { accessToken, refreshToken, isNewUser, publicKeyHex, privateKeyHex }",
+        "Invite claim DTO has @MinLength(258) on encryptedKey, requiring real ECIES-wrapped output (not dummy byte arrays) — ECIES ciphertext is at least 129 bytes / 258 hex chars",
+        "sdk-core IPNS functions use the api-client singleton implicitly, so multi-account tests must call setApiClientConfig between account switches or they contaminate each other"
+      ],
+      "code": [
+        {
+          "path": "packages/api-client/src/instance.ts",
+          "line": 1,
+          "end_line": 60,
+          "finding": "Module-level singleton _config shared by all generated API functions. Added optional defaultHeaders field to ApiClientConfig to support bypass header injection without changing function signatures."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/integration.test.ts",
+          "line": 24,
+          "end_line": 59,
+          "finding": "Gold standard test setup pattern: test-login → initializeVault → encryptVaultKeys → setApiClientConfig → new CipherBoxClient → registerFolder. Extracted into test-harness.ts createTestContext()."
+        },
+        {
+          "path": "apps/api/src/app.module.ts",
+          "line": 1,
+          "end_line": 50,
+          "finding": "ThrottlerModule configured with ttl:60000/limit:100 and ttl:1000/limit:10. NODE_ENV=test conditional to relax limits was added then removed in favor of bypass header approach."
+        },
+        {
+          "path": "apps/api/src/common/guards/throttler-bypass.guard.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "New BypassableThrottlerGuard extends ThrottlerGuard, reads X-Throttle-Bypass header and compares to THROTTLE_BYPASS_SECRET env var using process.env directly (no DI needed since secret is immutable at runtime)."
+        }
+      ],
+      "workflow": [
+        "1Password SSH agent for commit signing is not accessible from agent subprocesses — commits from background bash tasks may hang waiting for the signing agent",
+        "Running pnpm install after adding new workspace packages updates the lockfile and links workspace dependencies correctly",
+        "vitest with fileParallelism:false runs suites sequentially, which is required when tests share a module-level singleton (setApiClientConfig)",
+        "TypeScript noUnusedLocals catches unused imports aggressively in test files — prefix variables with _ or remove imports before committing"
+      ]
+    },
+    "friction": [
+      "Module-level singleton in setApiClientConfig caused cross-suite contamination and required workarounds (switchTo(), re-setting config before affected tests)",
+      "API throttle limits (10 req/s, 100 req/min) blocked tests immediately — required implementing bypass header infrastructure before any meaningful test runs could complete",
+      "sed-based bulk replacement of fetch headers left mismatched parentheses in vault-lifecycle.test.ts, requiring full file rewrite to fix",
+      "1Password SSH agent unavailable in agent subprocesses caused commit signing to hang — required retrying from user's terminal or waiting for agent reconnection",
+      "NODE_ENV=test in shell was silently overridden by NODE_ENV=development in .env file, making the ThrottlerModule conditional approach ineffective without direct .env editing",
+      "Invite claim test failed because dummy Uint8Array(64) produced 128 hex chars but DTO required \u003e=258 — not obvious from error message alone"
+    ],
+    "open_items": [
+      "Refactor api-client from module-level singleton to instance-scoped axios: configure orval to generate functions accepting an axios instance, thread through SdkContext, have CipherBoxClient own its instance. Tracked in .planning/todos/pending/2026-03-22-refactor-api-client-from-singleton-to-instance-scoped-axios.md",
+      "Raw fetch calls in vault-lifecycle, share-operations, and invite-link test suites should be migrated to use the generated typed API client functions instead of hand-rolled HTTP requests",
+      "Load tests have not been run against staging — needs THROTTLE_BYPASS_SECRET set in staging environment and manual workflow_dispatch trigger to validate metrics output",
+      "When horizontal scaling is needed, load tests targeting prod cluster will need multi-IP distribution strategy since per-user or per-IP throttle limits will kick in even with bypass disabled",
+      "CI sdk-e2e.yml workflow has not been validated end-to-end on a real PR — the IPFS kubo service version (v0.34.0) and mock-ipns-routing startup sequence need verification in CI environment",
+      "testFetch wrapper in test-harness.ts is a stopgap — once api-client singleton is refactored, direct fetch calls should be eliminated entirely from test suites"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-22T17:50:20.837298Z",
+    "agent_lines": 89,
+    "human_added": 137,
+    "human_modified": 25,
+    "human_removed": 0,
+    "total_committed": 251,
+    "agent_percentage": 35.45816733067729
+  }
+}
