@@ -239,3 +239,7 @@ ok can oyu monitor the pr getting merged and kick off the tag-staging-release wo
 ---
 
 Yeah sure thing
+
+---
+
+Yeah that will have to do I guess. Don't forget to switch to a fresh branch off main
