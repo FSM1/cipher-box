@@ -1,0 +1,91 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "78733a8d9174",
+  "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T03:08:01.562938Z",
+  "branch": "fix/staging-tag-format",
+  "checkpoints_count": 11,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "ad1517723cdb",
+  "token_usage": {
+    "input_tokens": 309,
+    "cache_creation_tokens": 256376,
+    "cache_read_tokens": 35773776,
+    "output_tokens": 64303,
+    "api_call_count": 252
+  },
+  "session_metrics": {
+    "turn_count": 23
+  },
+  "summary": {
+    "intent": "Investigate and fix someguy v0.11.1 IPNS routing failures on staging, then implement a fallback mechanism to delegated-ipfs.dev with Prometheus metrics, and fix the long-standing release-please tagging deadlock.",
+    "outcome": "Someguy IPNS endpoints now work with corrected Docker config (libp2p port exposed, accelerated DHT, higher resource limits). API-level fallback to delegated-ipfs.dev was implemented with Prometheus counters. The root cause of the release-please deadlock was identified (staging tags matching root package tag pattern) and a fix was committed changing staging tag format from `v{version}-staging-rc-{n}` to `staging-v{version}-rc-{n}`.",
+    "learnings": {
+      "repo": [
+        "Someguy v0.11.1 IPNS failures were caused by missing libp2p port 4004 exposure, standard DHT mode instead of accelerated, insufficient resources (0.5 CPU/768MB vs 1.0 CPU/2GB needed), and low connection limits (50/300 vs 100/3000).",
+        "The release-please tagging deadlock was caused by staging pre-release tags (`v0.26.x-staging-rc-N`) matching release-please's root package tag pattern (`v{version}`), causing it to find 4 of 5 expected releases and fail with 'Missing 1 paths: .'",
+        "release-please has never successfully auto-created tags since the major refactor — all prior `v*` releases were created manually, which is why it can't find a valid anchor for path '.'",
+        "`packages/crypto` existed at v0.25.1 but was missing from both release-please-config.json and .release-please-manifest.json, preventing independent versioning.",
+        "The someguy image ships `curl` but NOT `wget` — CodeRabbit's comment about wget healthchecks was correct. The wget healthcheck appeared to work locally because docker exec uses the host shell.",
+        "DelegatedRoutingClient resolve flow always queries DB even when network resolves successfully; DB wins on sequence number because publishing to someguy is fire-and-forget while DB write is synchronous.",
+        "vitest does not auto-load .env files into process.env — env vars must be passed explicitly (e.g., `THROTTLE_BYPASS_SECRET=x pnpm test`) or configured in vitest.config.ts.",
+        "The throttler bypass uses a secret header (`x-throttle-bypass`), not NODE_ENV=test — `THROTTLE_BYPASS_SECRET` must be set in both the API .env and test runner environment."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "line": 1,
+          "finding": "Added API-level fallback: primary (someguy) tried first with full retry logic; fallback URL used only after primary exhausts all retries. Added 'primary' | 'fallback' literal type for backend param."
+        },
+        {
+          "path": "apps/api/src/metrics/metrics.service.ts",
+          "finding": "Added two new Prometheus counters: cipherbox_delegated_routing_requests_total{operation, backend, outcome} and cipherbox_delegated_routing_fallbacks_total{operation}"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 294,
+          "end_line": 373,
+          "finding": "resolveRecord() queries both delegated routing and DB, but always prefers DB because DB write is synchronous while DHT publish is fire-and-forget — DB sequence number always wins"
+        },
+        {
+          "path": "docker/docker-compose.yml",
+          "line": 85,
+          "finding": "Someguy healthcheck changed from wget to curl -sf; libp2p port 4004 now exposed TCP+UDP; DHT mode accelerated; memory 2GB; CPU 1.0"
+        },
+        {
+          "path": ".github/workflows/tag-staging.yml",
+          "line": 66,
+          "end_line": 72,
+          "finding": "Staging tag format changed from v{version}-staging-rc-{n} to staging-v{version}-rc-{n} to prevent collision with release-please root package tag pattern"
+        }
+      ],
+      "workflow": [
+        "vitest does not auto-load .env files — pass env vars directly on the command line or configure via vitest.config.ts envFile option.",
+        "release-please deadlock pattern: if staging tags start with 'v', they get matched to the root package tag pattern during release discovery, causing 'Missing N paths' errors and the 'untagged merged release PRs outstanding - aborting' deadlock.",
+        "When release-please logs 'Expected N releases, only found N-1' and 'Missing 1 paths: .', the root package has no valid release anchor — it will walk the entire commit history and then abort.",
+        "Docker healthchecks with CMD-SHELL run inside the container, not on the host — always verify tool availability inside the specific image rather than assuming host tools are available.",
+        "Someguy p99 latency is better than delegated-ipfs.dev (1.27s vs 1.62s for createFolder) despite higher p50 — self-hosted provides more predictable tail latency at the cost of median throughput (~22% lower ops/s)."
+      ]
+    },
+    "friction": [
+      "SDK E2E tests returned 429s even after setting NODE_ENV=test because the throttler uses a bypass header secret, not an environment variable — required discovering ThrottlerBypassGuard and the THROTTLE_BYPASS_SECRET mechanism.",
+      "vitest didn't load the .env file automatically, requiring a second debugging round after the first test run still returned 429s.",
+      "CodeRabbit flagged curl vs wget twice (once correctly, once incorrectly as a follow-up) — required actually exec-ing into the container to verify which tools were available.",
+      "release-please has been broken since the major refactor with multiple failed fix attempts (#300, #307, #311, #312, #313, #317, #322) — the staging tag collision root cause was only discovered by reading full unfiltered CI logs.",
+      "Background tasks completing and firing notifications while unrelated work was in progress caused context confusion.",
+      "User had to interrupt several times when analysis was going in circles or repeating previously-tried fixes."
+    ],
+    "open_items": [
+      "Manually create v0.26.1 GitHub Release with proper release-please metadata to serve as anchor for path '.' and unblock future auto-tagging.",
+      "Fix PR #323's label from 'autorelease: pending' to 'autorelease: tagged' after creating the v0.26.1 tag.",
+      "Delete or re-tag old staging pre-releases (v0.26.0-staging-rc-1, v0.26.2-staging-rc-1) that still match the old pattern and may confuse release-please.",
+      "packages/crypto was added to release-please config but needs its bootstrap SHA or initial manifest entry verified to ensure it doesn't cause a 656-commit history walk.",
+      "DB-first IPNS resolution means 100% of resolves hit the database — if DB load becomes a concern, the fix is to return network result when sequence numbers match instead of always preferring DB.",
+      "The mock-ipns-routing service is now redundant for local dev (someguy handles it) but kept for CI — consider documenting this distinction more explicitly.",
+      "Someguy metrics scraping was restored in Alloy config but no Grafana dashboard panels were created for the new fallback counters — alert on rate(cipherbox_delegated_routing_fallbacks_total[5m]) \u003e 0 still needs to be configured.",
+      "Load test metrics JSON files were saved but not committed — staging deploy workflow now points at someguy but comparative performance data is untracked."
+    ]
+  }
+}
