@@ -1,0 +1,83 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "93e1ea74f465",
+  "session_id": "17256d92-fa81-4467-a074-6d66d7ec4e84",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T21:05:29.774671Z",
+  "branch": "feat/phase-19.2-ipfs-upload-perf",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/phases/19.2-ipfs-upload-performance-optimization/19.2-04-PLAN.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "675f5297abbf",
+  "token_usage": {
+    "input_tokens": 1203,
+    "cache_creation_tokens": 202351,
+    "cache_read_tokens": 5700732,
+    "output_tokens": 24493,
+    "api_call_count": 69
+  },
+  "session_metrics": {
+    "turn_count": 15
+  },
+  "summary": {
+    "intent": "Execute phase 19.2 (IPFS upload performance optimization) gap closure plans, then conduct three-point local baseline comparison to validate the performance improvements from concurrent SDK pinning and pebbleds datastore changes.",
+    "outcome": "Gap closure plans 19.2-03 and 19.2-04 were initiated; PERF-09 was registered in REQUIREMENTS.md, the plan was updated with an accurate four-run test methodology (concurrency probe + three matched-environment baselines), and the environment was configured with someguy delegated routing and inline secret passing. Load testing had not yet started by end of transcript.",
+    "learnings": {
+      "repo": [
+        "IPFS stack runs on 192.168.133.114; Docker Compose manages Kubo with configurable IPFS_PROFILE (flatfs vs pebbleds). Switching to pebbleds requires volume deletion and fresh repo init.",
+        "Rate limiting is bypassed via two mechanisms: LOAD_TEST_SECRET sent to POST /auth/test-login, and THROTTLE_BYPASS_SECRET sent as X-Throttle-Bypass header — both checked by BypassableThrottlerGuard, only active when NODE_ENV !== 'production'.",
+        "Vitest does not load dotenv automatically — load test secrets must be passed as inline shell env vars, not set in .env files.",
+        "DELEGATED_ROUTING_URL in apps/api/.env controls IPNS routing; was pointing to localhost:3001 (mock-ipns-routing), updated to http://192.168.133.114:8190 (someguy) for staging-closer behavior.",
+        "Pre-optimization baselines were captured in a different environment and client count than post-optimization baselines, making the comparison non-definitive — matched-environment three-point testing is the fix.",
+        "REQUIREMENTS.md coverage stopped at PERF-08; PERF-09 was referenced in plans but never registered, creating a traceability gap."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "Concurrent pin orchestration implemented via Promise.allSettled to parallelize IPNS publish and folder metadata update steps that previously ran sequentially."
+        },
+        {
+          "path": "tests/load/src/harness/metrics.ts",
+          "finding": "Collects per-operation p50/p95/p99/min/max/avg latencies plus throughput ops/s — sufficient for three-point comparison."
+        },
+        {
+          "path": "tests/load/src/scenarios/upload-throughput.test.ts",
+          "finding": "Runs N clients × 20 files each with file sizes 1KB-500KB; client count controlled via LOAD_TEST_CLIENTS env var."
+        },
+        {
+          "path": "apps/api/.env",
+          "finding": "DELEGATED_ROUTING_URL changed from http://localhost:3001 to http://192.168.133.114:8190 to use real someguy delegated routing instead of mock-ipns-routing."
+        }
+      ],
+      "workflow": [
+        "When staging and local baselines use different client counts and environments, the comparison is non-definitive — always lock environment and client count across all baseline runs.",
+        "Three-point isolation testing (baseline / optimization A / optimization A+B) reveals each layer's individual contribution, which a simple before/after cannot.",
+        "Secrets needed by test harnesses that bypass framework loading (like Vitest without dotenv) must be passed as inline shell env vars: SECRET=val pnpm exec vitest run ...",
+        "Destructive staging deployments (volume deletion for pebbleds migration) can be avoided by running matched local baselines — equivalent statistical validity without production risk."
+      ]
+    },
+    "friction": [
+      "Initial post-optimization baselines were captured under mismatched conditions (different environments, different client counts), requiring a full replan of 19.2-04.",
+      "Vitest does not load dotenv, so secrets cannot be set in .env — discovered mid-session, requiring test command pattern change.",
+      "PERF-09 was referenced in plans throughout but never formally registered in REQUIREMENTS.md, causing verification failure.",
+      "The pebbleds datastore switch requires IPFS volume deletion, making it destructive to staged data — adds operational friction to baseline collection."
+    ],
+    "open_items": [
+      "Four-run load test sequence not yet executed: Run 0 (concurrency probe), Run 1 (sequential SDK + flatfs baseline), Run 2 (concurrent SDK + flatfs), Run 3 (concurrent SDK + pebbleds).",
+      "Investigate removal of mock-ipns-routing layer now that someguy is properly integrated into the stack (captured as todo: .planning/todos/pending/2026-03-23-investigate-removal-of-mock-ipns-routing-layer.md).",
+      "Determine optimal client count from Run 0 concurrency probe before locking in the three baseline runs.",
+      "Phase 19.2 verification still showing gaps_found — needs re-verification after gap closure plans execute successfully."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T21:04:56.223729Z",
+    "agent_lines": 0,
+    "human_added": 67,
+    "human_modified": 35,
+    "human_removed": 0,
+    "total_committed": 67,
+    "agent_percentage": 0
+  }
+}

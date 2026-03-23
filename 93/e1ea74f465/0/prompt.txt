@@ -1,0 +1,58 @@
+ok can you push the updated docker-compose.yml up to remote?
+
+---
+
+ok the docker-compose is running on 192.168.133.114
+
+---
+
+/gsd:plan-phase 19.2 --gaps
+
+---
+
+I am not so sure I want to verify these baselines on staging when we can collect like-for-like baselines on local dev:
+1 - Before all optimizations
+2 - after SDK layer optimizations
+3 - after kubo optimizations
+
+this should give us enough clarity on what the general trend is based on these changes, without unnecessary destructive staging deployments.
+
+---
+
+yeah that is much better an approach
+
+---
+
+/gsd:execute-phase 19.2 --gaps-only
+
+---
+
+just give me a second to redeploy the right docker stack, and I will let you run the first and 2nd batch of tests. I also think that we will get much better data by first figuring out what the concurrency limits are like on the local dev backend and really seeing if the changes are worthwhile
+
+---
+
+rate limits really shouldnt be an issue here, since we should be using the bypass thresholds flag on the api
+
+---
+
+there is also a special flag and header passed by the load testing client, but the secret for this needs to be passed via env vars. there are a total of 2 separate flags that should get passed in.
+
+---
+
+setting them in .env does not work as vitest does not utilize dotenv in its code. the secrets need to be passed in via shell
+
+---
+
+so for passes 0, 1, 2 I will deploy the `main` docker compose stack, with flatfs.
+
+---
+
+Ahhh no i meant it more like: run 0 - figure out concurrency limits on the old stack, and then 3 actual baselines recorded as above.
+
+---
+
+also for the api .env config: please make sure that someguy running on 192.168.133.114 is utilized to make this comparison more close to staging setup. the mock-ipns-routing should not be utilized.
+
+---
+
+/gsd:add-todo now that someguy has been configured and is properly part of the stack, I think it might be time to investigate the removal of the mock-ipns-routing layer
