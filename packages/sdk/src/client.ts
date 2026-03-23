@@ -608,17 +608,37 @@ export class CipherBoxClient {
           ipnsPrivateKeyEncrypted: uploadResult.ipnsPrivateKeyEncrypted,
         });
 
-        // 3. Batch publish: file metadata IPNS + folder metadata IPNS
-        await sdkCore.batchPublishIpnsRecords([uploadResult.ipnsRecord], this.ctx);
+        // 3. Concurrent: file IPNS batch publish + folder metadata update
+        //    These two operations are independent -- no data dependency between them.
+        //    Using Promise.allSettled to handle partial failures gracefully.
+        const [batchResult, folderResult] = await Promise.allSettled([
+          sdkCore.batchPublishIpnsRecords([uploadResult.ipnsRecord], this.ctx),
+          sdkCore.updateFolderMetadataAndPublish({
+            children: updatedChildren,
+            folderKey: folder.folderKey,
+            ipnsPrivateKey: folder.ipnsKeypair.privateKey,
+            ipnsName: folderIpnsName,
+            sequenceNumber: folder.sequenceNumber,
+            ctx: this.ctx,
+          }),
+        ]);
 
-        const { newSequenceNumber } = await sdkCore.updateFolderMetadataAndPublish({
-          children: updatedChildren,
-          folderKey: folder.folderKey,
-          ipnsPrivateKey: folder.ipnsKeypair.privateKey,
-          ipnsName: folderIpnsName,
-          sequenceNumber: folder.sequenceNumber,
-          ctx: this.ctx,
-        });
+        // Folder metadata update is critical -- must succeed for upload to be valid
+        if (folderResult.status === 'rejected') {
+          throw folderResult.reason;
+        }
+
+        // File IPNS batch publish failure is non-critical -- the FilePointer in
+        // folder metadata is valid, and the file IPNS record will be created
+        // on next publish attempt or TEE republish cycle
+        if (batchResult.status === 'rejected') {
+          console.warn(
+            '[SDK] File IPNS batch publish failed (non-critical, will retry on next publish):',
+            batchResult.reason
+          );
+        }
+
+        const { newSequenceNumber } = folderResult.value;
 
         // 4. Update internal state
         folder.children = updatedChildren;
