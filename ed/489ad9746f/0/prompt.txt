@@ -14,3 +14,11 @@ will all these changes enable us to decrease reliance on the database as a prima
 ---
 
 I guess until we start running in to database issues, its not too serious a problem.
+
+---
+
+/resolve-pr-reviews
+
+---
+
+/resolve-pr-reviews
