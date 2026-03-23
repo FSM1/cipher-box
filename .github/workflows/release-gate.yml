@@ -37,10 +37,17 @@ jobs:
         if: steps.release-check.outputs.is_release == 'true'
         id: check
         run: |
-          # Find the latest non-staging release tag
-          PREV_TAG=$(git tag --list 'v*' --sort=-v:refname \
+          # Find the latest non-staging release tag (cipher-box-v* format)
+          PREV_TAG=$(git tag --list 'cipher-box-v*' --sort=-v:refname \
             | grep -v 'staging' \
             | head -1)
+          # Fallback to legacy v* tags if no cipher-box-v* tags exist
+          if [ -z "$PREV_TAG" ]; then
+            PREV_TAG=$(git tag --list 'v*' --sort=-v:refname \
+              | grep -v 'staging' \
+              | grep -v '@' \
+              | head -1)
+          fi
 
           if [ -z "$PREV_TAG" ]; then
             echo "No previous release tag found — assuming desktop changed"
