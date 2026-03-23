@@ -1,0 +1,100 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "ed489ad9746f",
+  "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T02:13:32.497769Z",
+  "branch": "fix/someguy-ipns-routing",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "docker/docker-compose.staging.yml",
+    "docker/docker-compose.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "b2c709b95881",
+  "token_usage": {
+    "input_tokens": 173,
+    "cache_creation_tokens": 168916,
+    "cache_read_tokens": 14513910,
+    "output_tokens": 42150,
+    "api_call_count": 151
+  },
+  "session_metrics": {
+    "turn_count": 9
+  },
+  "summary": {
+    "intent": "Investigate and fix the someguy v0.11.1 IPNS routing failure on staging where PUT and GET endpoints hung indefinitely, then validate the fix with E2E and load tests and implement an API-level fallback to delegated-ipfs.dev with Prometheus metrics.",
+    "outcome": "Root cause identified as misconfigured someguy (missing libp2p port 4004, wrong DHT mode, insufficient resources); fixed docker-compose config, validated all 83 SDK E2E tests pass, ran load tests comparing both backends, implemented API-level fallback with Prometheus counters, and merged PR #325.",
+    "learnings": {
+      "repo": [
+        "Someguy v0.11.1 requires libp2p port 4004 exposed (TCP+UDP), `accelerated` DHT mode, at least 2GB RAM / 1 CPU, and connection limits of 100/3000 to function correctly — the Phase 19 deployment used `standard` DHT mode, 0.5 CPU, 768MB RAM, and did not expose port 4004.",
+        "IPNS resolution in ipns.service.ts always prefers DB over network because publishRecord() fires someguy publishes as detached promises while the DB is written synchronously first — the DB always has a higher or equal sequence number, so 100% of resolves are DB-sourced by design.",
+        "The DelegatedRoutingClient retry logic uses 3 attempts with exponential backoff; adding a fallback URL required exhausting all primary retries before attempting the fallback.",
+        "Someguy's SOMEGUY_IPNS_ENDPOINTS does concurrent fanout (race), not sequential fallback — so API-level fallback is the correct place to implement primary/fallback semantics with visibility.",
+        "The .learnings/ directory exists in the repo for capturing non-obvious engineering discoveries as markdown files.",
+        "ThrottlerBypassGuard uses an x-throttle-bypass header checked against THROTTLE_BYPASS_SECRET — NODE_ENV=test does not relax rate limits."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 294,
+          "end_line": 373,
+          "finding": "resolveRecord() queries delegated routing first but always also queries DB and prefers whichever has higher sequence number — since DB is written synchronously before fire-and-forget DHT publish, DB always wins, making network resolution a cross-check rather than primary source."
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 75,
+          "end_line": 75,
+          "finding": "publishRecord() fires someguy publish as detached promise (fire-and-forget) with comment 'DB is the reliable source of truth' — this is intentional architecture, not a bug."
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "line": 1,
+          "end_line": 999,
+          "finding": "Rewritten to support DELEGATED_ROUTING_FALLBACK_URL: primary retries exhausted before fallback is attempted; every request emits cipherbox_delegated_routing_requests_total{operation,backend,outcome} and fallback triggers emit cipherbox_delegated_routing_fallbacks_total{operation}."
+        },
+        {
+          "path": "tests/sdk-e2e/vitest.config.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "Vitest does not auto-load .env files into process.env — env vars must be passed explicitly via CLI (THROTTLE_BYPASS_SECRET=x pnpm test) or loaded via a setup file."
+        },
+        {
+          "path": "docker/docker-compose.yml",
+          "line": 1,
+          "end_line": 999,
+          "finding": "Someguy healthcheck must use curl, not wget — the ipfs/someguy image only has curl installed."
+        }
+      ],
+      "workflow": [
+        "Vitest does not auto-load .env files; environment variables must be passed explicitly on the CLI or via a setup file — a .env.example in the test directory is insufficient.",
+        "Load test metrics comparison: someguy self-hosted has ~20-40% higher median latency than delegated-ipfs.dev due to single-node DHT vs fleet, but has better p99 tail latency (more predictable) and zero dependency on external uptime.",
+        "When a background docker service (someguy) needs DHT warm-up time, load test results taken immediately after start will underrepresent steady-state performance.",
+        "CodeRabbit catches container-internal healthcheck issues (wget vs curl availability) that are easy to miss when the host system has both tools installed."
+      ]
+    },
+    "friction": [
+      "SDK E2E tests returned 429s initially because NODE_ENV=test does not disable the throttler — required discovering the x-throttle-bypass header mechanism and the THROTTLE_BYPASS_SECRET env var.",
+      "Vitest's lack of .env auto-loading was a second layer of friction on top of the throttler issue — even after creating the .env file, the env var wasn't picked up until passed explicitly on the CLI.",
+      "Git push was blocked by remote changes requiring a rebase/stash cycle.",
+      "Background task notification for an already-completed commit arrived mid-session and required reading an output file to confirm it was stale.",
+      "Running jest tests required navigating to the correct monorepo package directory — root-level pnpm test didn't find the spec file without explicit path."
+    ],
+    "open_items": [
+      "DB-first IPNS resolution means 100% of resolves hit the database — if DB load becomes a concern, the fix is to return network result when sequence numbers match instead of always re-querying DB.",
+      "Someguy DHT routing table warms up over hours/days of operation — load test results taken against a freshly started sidecar underrepresent steady-state median latency improvement.",
+      "Grafana dashboard panels for the new cipherbox_delegated_routing_requests_total and cipherbox_delegated_routing_fallbacks_total metrics were described but not provisioned as dashboard JSON.",
+      "DELEGATED_ROUTING_FALLBACK_URL is not set in local dev .env or .env.example for the API — developers won't test fallback behavior locally unless they configure it manually.",
+      "Load test metrics JSON files (someguy vs delegated-ipfs.dev results) were saved locally but not committed or archived anywhere persistent."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T02:12:49.793514Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 2,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}
