@@ -1,0 +1,9 @@
+/gsd:discuss-phase 20
+
+---
+
+I am not sure whether we have baselines for client facing `first login -> fully loaded vault` but we did discuss gathering baselines for this earlier in the sesssion, so guess that will cover it. any deeper metrics can be collected from the running api /metrics endpoint.
+
+---
+
+you were also trying to commit to `main`
