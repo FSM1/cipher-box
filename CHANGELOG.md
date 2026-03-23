@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.26.1](https://github.com/FSM1/cipher-box/compare/v0.26.0...v0.26.1) (2026-03-23)
+
+
+### Bug Fixes
+
+* **docker:** restore someguy sidecar with corrected IPNS config ([#325](https://github.com/FSM1/cipher-box/issues/325)) ([0e9cb1e](https://github.com/FSM1/cipher-box/commit/0e9cb1e0e1315720bc0685d60b441d8fdf0ce4b5))
+
+
+### Build System
+
+* **ci,docker:** add release-please changelog-sections and remove broken someguy sidecar ([#322](https://github.com/FSM1/cipher-box/issues/322)) ([e806cb9](https://github.com/FSM1/cipher-box/commit/e806cb9b198c5db3c31a5498b1c2b3ccb75d49fd))
+* **docker:** upgrade Kubo from v0.34.0 to v0.40.0 ([#321](https://github.com/FSM1/cipher-box/issues/321)) ([c2590eb](https://github.com/FSM1/cipher-box/commit/c2590eb59f12e951f2f1b106c666f20b9359508d))
+
 ## [0.26.0](https://github.com/FSM1/cipher-box/compare/v0.25.2...v0.26.0) (2026-03-22)
 
 
