@@ -31,6 +31,7 @@ jobs:
   load-test:
     name: 'Load Test: ${{ inputs.scenario }} (${{ inputs.client_count }} clients)'
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment == 'staging' && 'staging' || '' }}
     timeout-minutes: 30
 
     services:
