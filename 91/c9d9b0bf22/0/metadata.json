@@ -1,0 +1,66 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "91c9d9b0bf22",
+  "session_id": "17256d92-fa81-4467-a074-6d66d7ec4e84",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T19:39:46.028167Z",
+  "branch": "feat/phase-19.2-ipfs-upload-perf",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "7410e426951e",
+  "token_usage": {
+    "input_tokens": 49,
+    "cache_creation_tokens": 83651,
+    "cache_read_tokens": 2356167,
+    "output_tokens": 14239,
+    "api_call_count": 37
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Execute phase 19.2 gap closure plans for IPFS upload performance optimization, then replan the baseline comparison approach to use local dev instead of staging.",
+    "outcome": "Phase 19.2 executed successfully (concurrent pin orchestration + pebbleds datastore), but verification found 2 gaps: missing PERF-09 requirement and non-definitive baselines. Gap closure plans were created, then 19.2-04 was replanned to use a local three-point comparison (pre-optimization, SDK-only, SDK+Kubo) instead of a staging deployment.",
+    "learnings": {
+      "repo": [
+        "Phase 19.2 is IPFS upload performance optimization; primary bottleneck was sequential IPNS publish + folder metadata update in SDK upload flow",
+        "Pre/post baselines were captured in different environments (staging vs localhost) with different client counts (10 vs 5), making them non-comparable — environment consistency is critical for load test validity",
+        "PERF-09 requirement was referenced in plans but missing from REQUIREMENTS.md (which stopped at PERF-08) — a documentation gap that needed a dedicated gap closure plan",
+        "Local dev environment has pebbleds configured via Docker Compose at 192.168.133.114; switching datastores requires volume deletion (destructive)",
+        "Load test harness collects p50/p95/p99/min/max/avg latencies plus throughput per operation via tests/load/src/harness/metrics.ts",
+        "Three git checkpoint commits identified for local three-point comparison: parent of 4087fa2b6 (pre-optimization), 565dccd5d (SDK-only), and HEAD (SDK+Kubo)"
+      ],
+      "code": [
+        {
+          "path": "tests/load/src/scenarios/upload-throughput.test.ts",
+          "finding": "Upload throughput load test scenario available for baseline capture"
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "finding": "Client pool harness used by load tests"
+        },
+        {
+          "path": "tests/load/src/harness/metrics.ts",
+          "finding": "Metrics harness collects p50/p95/p99/min/max/avg latency and throughput per operation"
+        }
+      ],
+      "workflow": [
+        "GSD gap closure flow: execute-phase → verifier finds gaps → plan-phase --gaps → execute-phase --gaps-only",
+        "When baselines compare different environments or conditions, verification correctly flags them as non-definitive — matched-condition testing is a must-have for performance claims",
+        "Replanning a single plan mid-gap-closure is viable: read existing plan, identify correct git checkpoints, rewrite with Write tool, commit",
+        "Staging IPFS volume deletion is destructive (requires re-pinning all content) — local dev is preferable for iterative baseline comparisons"
+      ]
+    },
+    "friction": [
+      "Post-optimization baselines were captured in a different environment with different client counts than pre-optimization baselines, requiring a gap closure plan just to get valid comparison data",
+      "PERF-09 was used in plan frontmatter but never registered in REQUIREMENTS.md, causing a verification failure that required a dedicated doc-fix plan",
+      "Staging deployment required pushing branch to remote and waiting for manual human action (docker compose down/up with volume deletion) before execution could continue"
+    ],
+    "open_items": [
+      "19.2-04 replanned to capture three-point local baselines (pre-optimization, SDK-only, SDK+Kubo) — not yet executed",
+      "19.2-03 (PERF-09 registration in REQUIREMENTS.md) not yet executed",
+      "Gap closure execution (/gsd:execute-phase 19.2 --gaps-only) deferred to next session"
+    ]
+  }
+}
