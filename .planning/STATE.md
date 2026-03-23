@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: completed
-last_updated: '2026-03-20T06:06:34.905Z'
+status: unknown
+last_updated: '2026-03-23T21:16:30.656Z'
 progress:
   total_phases: 6
-  completed_phases: 6
-  total_plans: 10
-  completed_plans: 10
+  completed_phases: 3
+  total_plans: 14
+  completed_plans: 11
 ---
 
 # Project State
@@ -18,12 +18,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 19.1 — extract-core-crypto-sdk-as-shared-package
+**Current focus:** Phase 20 — vault-migration
 
 ## Current Position
 
-Phase: 19.1 (extract-core-crypto-sdk-as-shared-package) — COMPLETE
-Plan: 6 of 6
+Phase: 20 (vault-migration) — EXECUTING
+Plan: 2 of 4
 
 ## Performance Metrics
 
@@ -42,6 +42,7 @@ Plan: 6 of 6
 | 19.1  | 03   | 12min    | 3     | 18    |
 | 19.1  | 04   | 10min    | 2     | 14    |
 | 19.1  | 06   | 13min    | 3     | 52    |
+| 20    | 01   | 4min     | 2     | 5     |
 
 ## Accumulated Context
 
@@ -89,4 +90,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-20 after completing 19.1-06 (final cleanup: removed re-exports, Release Please, Codecov, READMEs)
+Last updated: 2026-03-23 after completing 20-01 (vault blob v2 binary format with TDD: serialize/deserialize/detect in @cipherbox/core)
