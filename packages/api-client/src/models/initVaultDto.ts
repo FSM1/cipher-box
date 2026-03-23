@@ -11,8 +11,8 @@ export interface InitVaultDto {
   ownerPublicKey: string;
   /** ECIES-wrapped root folder AES-256 key (hex-encoded) */
   encryptedRootFolderKey: string;
-  /** ECIES-wrapped Ed25519 IPNS private key (hex-encoded) */
-  encryptedRootIpnsPrivateKey: string;
+  /** ECIES-wrapped Ed25519 IPNS private key (hex-encoded). Optional for v2 blob vaults where IPNS key is managed client-side. */
+  encryptedRootIpnsPrivateKey?: string;
   /** IPNS name (libp2p-key multihash, base58btc or base36) */
   rootIpnsName: string;
 }

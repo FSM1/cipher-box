@@ -37,6 +37,15 @@ export const vaultControllerInitializeVault = (
   );
 };
 /**
+ * Stamps migratedAt timestamp and NULLs both encryptedRootFolderKey and encryptedRootIpnsPrivateKey columns. Called by clients after successfully writing a vault blob v2 to IPFS. Idempotent.
+ * @summary Mark vault as migrated to v2 blob format
+ */
+export const vaultControllerMigrateVault = (
+  options?: SecondParameter<typeof customInstance<void>>
+) => {
+  return customInstance<void>({ url: `/vault/migrate`, method: 'POST' }, options);
+};
+/**
  * Returns application configuration including recycle bin retention period. The retention period is configurable via the RECYCLE_BIN_RETENTION_DAYS environment variable (default: 30).
  * @summary Get vault configuration
  */
@@ -74,6 +83,9 @@ export const vaultControllerGetQuota = (
 };
 export type VaultControllerInitializeVaultResult = NonNullable<
   Awaited<ReturnType<typeof vaultControllerInitializeVault>>
+>;
+export type VaultControllerMigrateVaultResult = NonNullable<
+  Awaited<ReturnType<typeof vaultControllerMigrateVault>>
 >;
 export type VaultControllerGetConfigResult = NonNullable<
   Awaited<ReturnType<typeof vaultControllerGetConfig>>

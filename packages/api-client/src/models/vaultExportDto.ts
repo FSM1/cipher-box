@@ -5,6 +5,8 @@
  * Zero-knowledge encrypted cloud storage API
  * OpenAPI spec version: 0.1.0
  */
+import type { VaultExportDtoEncryptedRootFolderKey } from './vaultExportDtoEncryptedRootFolderKey';
+import type { VaultExportDtoEncryptedRootIpnsPrivateKey } from './vaultExportDtoEncryptedRootIpnsPrivateKey';
 
 export interface VaultExportDto {
   /** Export format identifier */
@@ -15,10 +17,16 @@ export interface VaultExportDto {
   exportedAt: string;
   /** IPNS name for the root folder (libp2p-key multihash) */
   rootIpnsName: string;
-  /** ECIES-wrapped root folder AES-256 key (hex-encoded) */
-  encryptedRootFolderKey: string;
-  /** ECIES-wrapped Ed25519 IPNS private key (hex-encoded) */
-  encryptedRootIpnsPrivateKey: string;
+  /**
+   * ECIES-wrapped root folder AES-256 key (hex-encoded). Null for migrated v2 blob vaults.
+   * @nullable
+   */
+  encryptedRootFolderKey: VaultExportDtoEncryptedRootFolderKey;
+  /**
+   * ECIES-wrapped Ed25519 IPNS private key (hex-encoded). Null for migrated v2 blob vaults.
+   * @nullable
+   */
+  encryptedRootIpnsPrivateKey: VaultExportDtoEncryptedRootIpnsPrivateKey;
   /**
    * Key derivation method used. Always "web3auth" for Core Kit users. Null if user record not found.
    * @nullable

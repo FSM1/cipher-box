@@ -5,6 +5,8 @@
  * Zero-knowledge encrypted cloud storage API
  * OpenAPI spec version: 0.1.0
  */
+import type { VaultResponseDtoEncryptedRootFolderKey } from './vaultResponseDtoEncryptedRootFolderKey';
+import type { VaultResponseDtoEncryptedRootIpnsPrivateKey } from './vaultResponseDtoEncryptedRootIpnsPrivateKey';
 import type { VaultResponseDtoTeeKeys } from './vaultResponseDtoTeeKeys';
 
 export interface VaultResponseDto {
@@ -12,10 +14,16 @@ export interface VaultResponseDto {
   id: string;
   /** User secp256k1 public key (uncompressed, 65 bytes, hex-encoded) */
   ownerPublicKey: string;
-  /** ECIES-wrapped root folder AES-256 key (hex-encoded) */
-  encryptedRootFolderKey: string;
-  /** ECIES-wrapped Ed25519 IPNS private key (hex-encoded) */
-  encryptedRootIpnsPrivateKey: string;
+  /**
+   * ECIES-wrapped root folder AES-256 key (hex-encoded). Null for migrated v2 blob vaults (rootFolderKey lives in IPFS).
+   * @nullable
+   */
+  encryptedRootFolderKey: VaultResponseDtoEncryptedRootFolderKey;
+  /**
+   * ECIES-wrapped Ed25519 IPNS private key (hex-encoded). Null for migrated v2 blob vaults.
+   * @nullable
+   */
+  encryptedRootIpnsPrivateKey: VaultResponseDtoEncryptedRootIpnsPrivateKey;
   /** IPNS name for root folder */
   rootIpnsName: string;
   /** Vault creation timestamp */
@@ -25,6 +33,11 @@ export interface VaultResponseDto {
    * @nullable
    */
   initializedAt: string | null;
+  /**
+   * When vault was migrated to v2 blob format, null if not yet migrated
+   * @nullable
+   */
+  migratedAt: string | null;
   /**
    * TEE public keys for IPNS key encryption (null if TEE not initialized)
    * @nullable

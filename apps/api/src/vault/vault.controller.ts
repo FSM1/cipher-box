@@ -41,6 +41,29 @@ export class VaultController {
     return this.vaultService.initializeVault(req.user.id, dto);
   }
 
+  @Post('migrate')
+  @ApiOperation({
+    summary: 'Mark vault as migrated to v2 blob format',
+    description:
+      'Stamps migratedAt timestamp and NULLs both encryptedRootFolderKey and encryptedRootIpnsPrivateKey columns. ' +
+      'Called by clients after successfully writing a vault blob v2 to IPFS. Idempotent.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Vault migration recorded (or already migrated)',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Unauthorized - JWT token required',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Not Found - Vault does not exist',
+  })
+  async migrateVault(@Request() req: RequestWithUser): Promise<void> {
+    return this.vaultService.migrateVault(req.user.id);
+  }
+
   @Get('config')
   @ApiOperation({
     summary: 'Get vault configuration',

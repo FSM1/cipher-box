@@ -31,16 +31,21 @@ export class VaultExportDto {
   rootIpnsName!: string;
 
   @ApiProperty({
-    description: 'ECIES-wrapped root folder AES-256 key (hex-encoded)',
+    description:
+      'ECIES-wrapped root folder AES-256 key (hex-encoded). ' + 'Null for migrated v2 blob vaults.',
     example: 'a1b2c3d4e5f6...',
+    nullable: true,
   })
-  encryptedRootFolderKey!: string;
+  encryptedRootFolderKey!: string | null;
 
   @ApiProperty({
-    description: 'ECIES-wrapped Ed25519 IPNS private key (hex-encoded)',
+    description:
+      'ECIES-wrapped Ed25519 IPNS private key (hex-encoded). ' +
+      'Null for migrated v2 blob vaults.',
     example: 'a1b2c3d4e5f6...',
+    nullable: true,
   })
-  encryptedRootIpnsPrivateKey!: string;
+  encryptedRootIpnsPrivateKey!: string | null;
 
   @ApiPropertyOptional({
     description:
