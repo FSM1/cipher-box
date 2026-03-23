@@ -1,0 +1,65 @@
+ok the api is deployed - shall we try and get some `post-phase-19` performance baselines?
+
+---
+
+is this the latest version of someguy? maybe a simple version bump would resolve everything? also I remember seeing something about more recent version of kobo being available.
+
+---
+
+ok before we go updating anything in staging, lets first check that everything works reliably locally - create a branch for this, update the docker-compose, and I will spin it up on your docker host.
+
+---
+
+did the docker-compose changes get pushed up to the branch?
+
+---
+
+ok docker stack is updated on the docker host - 192.168.133.114
+
+can you spin up the local api, and run the e2e tests as well as load tests aginst the local instance to make sure everything continues working
+
+---
+
+<task-notification>
+<task-id>bhvwvmytv</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bhvwvmytv.output</output-file>
+<status>completed</status>
+<summary>Background command "Start API server and verify health" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bhvwvmytv.output
+
+---
+
+<task-notification>
+<task-id>bzx28w2g0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bzx28w2g0.output</output-file>
+<status>completed</status>
+<summary>Background command "Run mixed-workload load test locally" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bzx28w2g0.output
+
+---
+
+ok lets get a pr up for this
+
+---
+
+since I would like this to kick off a release, and is a fairly significant stack upgrade, I think the PR should be a little bit more significant than `chore`
+
+---
+
+/resolve-pr-reviews
+
+---
+
+there is also apparently a patch release v0.40.1 that coderabbit says included stability improvements.
+
+---
+
+https://github.com/FSM1/cipher-box/actions/runs/23416251116/job/68112189050 release please ran but seems like no release was created
+
+---
+
+lets go for #2, merging that will run release please and generate a new release.

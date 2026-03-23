@@ -1,0 +1,90 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "951ccad0bfac",
+  "session_id": "0ab3334d-90bc-4ad6-994f-3b00db82d042",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T00:32:22.804536Z",
+  "branch": "chore/release-please-build-type",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "37f19608e1b1",
+  "token_usage": {
+    "input_tokens": 2659,
+    "cache_creation_tokens": 193526,
+    "cache_read_tokens": 14678837,
+    "output_tokens": 28440,
+    "api_call_count": 140
+  },
+  "session_metrics": {
+    "turn_count": 17
+  },
+  "summary": {
+    "intent": "Investigate the someguy IPFS sidecar state on staging, diagnose performance issues, and upgrade Kubo to v0.40.0 with proper CI/release configuration.",
+    "outcome": "Diagnosed that someguy's IPNS endpoint is completely non-functional (hangs indefinitely), upgraded Kubo from v0.34.0 to v0.40.0 (validated with 83 E2E + 9,100 load test ops, zero errors), fixed Grafana Cloud 503 provisioning failures, and updated release-please config to trigger releases on `build` commits.",
+    "learnings": {
+      "repo": [
+        "Someguy's /routing/v1/providers/ works fine but /routing/v1/ipns/ hangs indefinitely — IPNS operations are completely broken on someguy v0.11.1",
+        "DELEGATED_ROUTING_URL=http://someguy:8190 is set in both .env.staging on the VPS and hardcoded in deploy-staging.yml (line 397), so deploy always resets it",
+        "docker/ directory (docker-compose.staging.yml, Caddyfile, etc.) lives in the repo at /Users/michael/Code/cipher-box/docker/ and is committed to git",
+        "Release-please default config only triggers releases for `feat` and `fix` commits — `build` and `chore` are silently skipped",
+        "The `THROTTLE_BYPASS_SECRET` env var must be set for load/E2E tests to bypass rate limiting; there is no NODE_ENV=test relaxation — throttle limits are hardcoded",
+        "Grafana Cloud free-tier instances sleep when idle and return 503 'Your instance is loading' on wake — provisioning steps need a readiness poll before dashboard push",
+        "Someguy v0.11.1 is actually ahead of the latest stable release (v0.11.0) — no upgrade path available",
+        "Kubo v0.40.1 is a Windows-only bugfix (Go toolchain downgrade for overlapped I/O crash) — not applicable to Linux deployments"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "line": 24,
+          "end_line": 24,
+          "finding": "Default DELEGATED_ROUTING_URL fallback is https://delegated-ipfs.dev when env var is not set"
+        },
+        {
+          "path": "apps/api/src/common/guards/throttler-bypass.guard.ts",
+          "finding": "Throttle bypass via X-Throttle-Bypass header checked against THROTTLE_BYPASS_SECRET env var — no NODE_ENV=test path"
+        },
+        {
+          "path": "tests/load/src/harness/metrics.ts",
+          "finding": "Load test records success:false on thrown exceptions; high error rates can mask whether HTTP layer is healthy"
+        },
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 76,
+          "end_line": 76,
+          "finding": "Code comment references DHT propagation via Someguy"
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "line": 397,
+          "end_line": 397,
+          "finding": "DELEGATED_ROUTING_URL=http://someguy:8190 hardcoded in deploy workflow — overrides any manual .env.staging changes on VPS"
+        },
+        {
+          "path": "release-please-config.json",
+          "finding": "Added changelog-sections config to include build commits as releasable — previously only feat and fix triggered releases"
+        }
+      ],
+      "workflow": [
+        "vitest --testPathPattern can match multiple test files unintentionally if pattern is too broad, causing all scenarios to run concurrently and interfere with each other",
+        "When .env file has NODE_ENV=development, NestJS ConfigModule overrides shell environment — must edit .env directly to change NODE_ENV for local testing",
+        "CodeRabbit's release summaries can be misleading — always verify changelog details directly (v0.40.1 described as 'stability improvements' was actually Windows-only)",
+        "git amend + force push is needed when changing commit type to trigger release-please, but requires care to not lose review thread context on open PRs"
+      ]
+    },
+    "friction": [
+      "Someguy 'disable' from a previous session never persisted — likely edited .env.staging directly on VPS which was overwritten by subsequent deploy resetting to compose defaults",
+      "Load test harness marks all operation exceptions as errors but tests still 'pass', masking a 95%+ functional failure rate — required manual API log inspection to find root cause (delegated routing timeouts)",
+      "NODE_ENV=test has no effect on throttle limits; test harness requires THROTTLE_BYPASS_SECRET which has no documentation in the SDK E2E test directory",
+      "Release-please silently skipped the build commit with no clear error — only discoverable by reading job logs carefully ('No user facing commits found')",
+      "vitest testPathPattern matched sustained-load.test.ts alongside mixed-workload.test.ts causing concurrent 5-minute tests that generated Cloudflare 522 errors"
+    ],
+    "open_items": [
+      "Someguy IPNS is broken — decision pending on whether to remove it, switch DELEGATED_ROUTING_URL back to delegated-ipfs.dev, or investigate root cause further",
+      "Post-phase-19 performance baselines not yet collected — waiting for latest deploy to land on staging before running load tests against someguy",
+      "Kubo v0.40.0 branch merged to main but release-please config fix (build commit type) is on a separate branch not yet merged — release not yet triggered",
+      "TEE Worker still uses delegated-ipfs.dev directly (not routing through someguy) — noted as architectural inconsistency but not addressed",
+      "Load test THROTTLE_BYPASS_SECRET is not documented in tests/load — engineers running load tests locally will hit 429s without knowing why"
+    ]
+  }
+}
