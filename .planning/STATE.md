@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
-status: completed
-last_updated: '2026-03-20T06:06:34.905Z'
+status: unknown
+last_updated: '2026-03-23T18:49:30.952Z'
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 10
-  completed_plans: 10
+  total_phases: 7
+  completed_phases: 3
+  total_plans: 12
+  completed_plans: 11
 ---
 
 # Project State
@@ -18,12 +18,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 19.1 — extract-core-crypto-sdk-as-shared-package
+**Current focus:** Phase 19.2 — ipfs-upload-performance-optimization
 
 ## Current Position
 
-Phase: 19.1 (extract-core-crypto-sdk-as-shared-package) — COMPLETE
-Plan: 6 of 6
+Phase: 19.2 (ipfs-upload-performance-optimization) — EXECUTING
+Plan: 2 of 2
 
 ## Performance Metrics
 
@@ -42,6 +42,7 @@ Plan: 6 of 6
 | 19.1  | 03   | 12min    | 3     | 18    |
 | 19.1  | 04   | 10min    | 2     | 14    |
 | 19.1  | 06   | 13min    | 3     | 52    |
+| 19.2  | 01   | 6min     | 2     | 4     |
 
 ## Accumulated Context
 
@@ -70,6 +71,7 @@ Recent for v1.1:
 ### Roadmap Evolution
 
 - Phase 19.1 inserted after Phase 19: Extract core crypto SDK as shared package (URGENT)
+- Phase 19.2 inserted after Phase 19: IPFS Upload Performance Optimization (URGENT) — concurrent pins, Kubo worker tuning, pin batching to address ~95% bottleneck in upload path identified by Phase 19 baselines
 
 ### Open Concerns
 
@@ -89,4 +91,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-20 after completing 19.1-06 (final cleanup: removed re-exports, Release Please, Codecov, READMEs)
+Last updated: 2026-03-23 after completing 19.2-01 (pre-optimization baselines + concurrent pin orchestration in SDK uploadFile)
