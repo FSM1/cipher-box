@@ -1,0 +1,11 @@
+ok the phase 19 baseline seems to indicate that the main performance bottleneck is in the kubo node operations ipfs upload path and suggested some potential improvements that could be made.
+
+use /gsd:insert-phase to insert a phase after 19 to implement and test out some of these potential performance improvements.
+
+---
+
+/gsd:plan-phase 19.2
+
+---
+
+can you create a git worktree off main for phase 20 work?
