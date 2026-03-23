@@ -69,9 +69,8 @@ jobs:
 
   typecheck:
     name: Typecheck
-    needs: [changes]
-    if: |
-      needs.changes.outputs.src == 'true'
+    needs: [changes, lint]
+    if: needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -93,9 +92,8 @@ jobs:
 
   api-spec:
     name: Verify API Spec & Client
-    needs: [changes]
-    if: |
-      needs.changes.outputs.src == 'true'
+    needs: [changes, lint]
+    if: needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -160,9 +158,8 @@ jobs:
 
   migration-check:
     name: Migration Drift Check
-    needs: [changes]
-    if: |
-      needs.changes.outputs.src == 'true'
+    needs: [changes, lint]
+    if: needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -251,9 +248,7 @@ jobs:
   test:
     name: Test
     needs: [changes, lint]
-    if: |
-      !failure() && !cancelled() &&
-      needs.changes.outputs.src == 'true'
+    if: needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -355,9 +350,7 @@ jobs:
   sdk-e2e:
     name: SDK E2E Tests
     needs: [changes, lint]
-    if: |
-      !failure() && !cancelled() &&
-      needs.changes.outputs.src == 'true'
+    if: needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -495,9 +488,7 @@ jobs:
   build:
     name: Build
     needs: [changes, lint]
-    if: |
-      !failure() && !cancelled() &&
-      needs.changes.outputs.src == 'true'
+    if: needs.changes.outputs.src == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
