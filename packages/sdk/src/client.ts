@@ -635,14 +635,30 @@ export class CipherBoxClient {
         // record may exist. This is benign -- no FilePointer references it, and the
         // IPNS name will be reused on the next successful upload attempt.
         if (batchResult.status === 'rejected') {
+          const batchError =
+            batchResult.reason instanceof Error
+              ? batchResult.reason
+              : new Error(String(batchResult.reason));
           console.warn(
             '[SDK] File IPNS batch publish failed (non-critical, will retry on next publish):',
-            batchResult.reason
+            batchError
           );
           this.emitter.emit({
             type: 'ipns:batchPublishFailed',
             ipnsNames: [uploadResult.ipnsRecord.ipnsName],
-            error: batchResult.reason,
+            error: batchError,
+          });
+        } else if (batchResult.value?.totalFailed > 0) {
+          // Server accepted the request but reported partial failure for some records
+          console.warn(
+            `[SDK] File IPNS batch publish partially failed: ${batchResult.value.totalFailed} of ${batchResult.value.totalFailed + batchResult.value.totalSucceeded} records failed`
+          );
+          this.emitter.emit({
+            type: 'ipns:batchPublishFailed',
+            ipnsNames: [uploadResult.ipnsRecord.ipnsName],
+            error: new Error(
+              `Batch publish partial failure: ${batchResult.value.totalFailed} record(s) failed`
+            ),
           });
         }
 
