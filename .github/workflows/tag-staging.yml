@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to deploy (e.g. v0.3.0)'
+        description: 'Release tag to deploy (e.g. cipher-box-v0.26.4)'
         required: true
         type: string
 
