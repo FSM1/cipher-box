@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.2](https://github.com/FSM1/cipher-box/compare/v0.26.1...v0.26.2) (2026-03-23)
+
+
+### Bug Fixes
+
+* **ci:** change staging tag format to avoid release-please collision ([#326](https://github.com/FSM1/cipher-box/issues/326)) ([293019b](https://github.com/FSM1/cipher-box/commit/293019b8cac00e8770b90c18a8881d0410c6df55))
+
 ## [0.26.1](https://github.com/FSM1/cipher-box/compare/v0.26.0...v0.26.1) (2026-03-23)
 
 
