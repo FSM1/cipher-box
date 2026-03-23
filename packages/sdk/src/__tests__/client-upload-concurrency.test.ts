@@ -118,6 +118,7 @@ describe('CipherBoxClient.uploadFile - concurrent pin orchestration', () => {
       callLog.push('batch:start');
       await Promise.resolve();
       callLog.push('batch:end');
+      return { totalSucceeded: 1, totalFailed: 0 };
     });
 
     vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockImplementation(async () => {
@@ -177,12 +178,50 @@ describe('CipherBoxClient.uploadFile - concurrent pin orchestration', () => {
 
     const folderError = new Error('Folder metadata pin failed');
 
-    vi.mocked(sdkCore.batchPublishIpnsRecords).mockResolvedValue(undefined);
+    vi.mocked(sdkCore.batchPublishIpnsRecords).mockResolvedValue({
+      totalSucceeded: 1,
+      totalFailed: 0,
+    });
     vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockRejectedValue(folderError);
 
     await expect(
       client.uploadFile('folder-ipns', new Uint8Array([1, 2, 3]), 'new.txt', 'text/plain')
     ).rejects.toThrow('Folder metadata pin failed');
+  });
+
+  it('warns and emits event when batchPublishIpnsRecords reports partial failure', async () => {
+    setupFolder(client);
+    setupUploadMocks();
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const events: Array<{ type: string }> = [];
+    client.on((e) => events.push(e));
+
+    vi.mocked(sdkCore.batchPublishIpnsRecords).mockResolvedValue({
+      totalSucceeded: 0,
+      totalFailed: 1,
+    });
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafyfolder',
+      newSequenceNumber: 2n,
+    });
+
+    const result = await client.uploadFile(
+      'folder-ipns',
+      new Uint8Array([1, 2, 3]),
+      'new.txt',
+      'text/plain'
+    );
+    expect(result.cid).toBe('bafyfile');
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[SDK] File IPNS batch publish partially failed')
+    );
+
+    const batchEvent = events.find((e) => e.type === 'ipns:batchPublishFailed');
+    expect(batchEvent).toBeDefined();
+
+    warnSpy.mockRestore();
   });
 
   it('throws the folder metadata error when both reject (prioritize critical path)', async () => {
