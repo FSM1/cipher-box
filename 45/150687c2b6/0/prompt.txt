@@ -270,3 +270,7 @@ Ok deployment is approved should be done in some minutes. Once it's ready can yo
 <summary>Background command "Check someguy container on staging VPS" failed with exit code 255</summary>
 </task-notification>
 Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bmx0qe1b4.output
+
+---
+
+you can pull these values out from the staging server directly
