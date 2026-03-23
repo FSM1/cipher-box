@@ -3,3 +3,7 @@ ok can you push the updated docker-compose.yml up to remote?
 ---
 
 ok the docker-compose is running on 192.168.133.114
+
+---
+
+/gsd:plan-phase 19.2 --gaps
