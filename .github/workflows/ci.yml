@@ -112,7 +112,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       ipfs:
-        image: ipfs/kubo:v0.34.0
+        image: ipfs/kubo:v0.40.0
         ports:
           - 5001:5001
           - 8080:8080
@@ -250,7 +250,7 @@ jobs:
 
   test:
     name: Test
-    needs: [changes, lint, typecheck]
+    needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
       needs.changes.outputs.src == 'true'
@@ -270,7 +270,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       ipfs:
-        image: ipfs/kubo:v0.34.0
+        image: ipfs/kubo:v0.40.0
         ports:
           - 5001:5001
           - 8080:8080
@@ -354,7 +354,7 @@ jobs:
 
   sdk-e2e:
     name: SDK E2E Tests
-    needs: [changes, lint, typecheck, test]
+    needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
       needs.changes.outputs.src == 'true'
@@ -377,7 +377,7 @@ jobs:
           --health-retries 5
 
       ipfs:
-        image: ipfs/kubo:v0.34.0
+        image: ipfs/kubo:v0.40.0
         ports:
           - 5001:5001
           - 8080:8080
@@ -494,7 +494,7 @@ jobs:
 
   build:
     name: Build
-    needs: [changes, lint, typecheck, api-spec, test, sdk-e2e, migration-check]
+    needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
       needs.changes.outputs.src == 'true'
