@@ -1,0 +1,83 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "213de760f59e",
+  "session_id": "0efa9fff-3002-4b6b-a039-4843c3c6162e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T17:27:39.001416Z",
+  "branch": "docs/phase-19-baselines",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "89079590a123",
+  "token_usage": {
+    "input_tokens": 179,
+    "cache_creation_tokens": 183813,
+    "cache_read_tokens": 14198060,
+    "output_tokens": 34609,
+    "api_call_count": 126
+  },
+  "session_metrics": {
+    "turn_count": 24
+  },
+  "summary": {
+    "intent": "Run load tests against the cipher-box staging API at increasing client counts (10, 20, 30, then 50, 75, 100, 200) to establish performance baselines and identify the scaling ceiling for a single instance. Additionally, diagnose which part of the uploadFile flow is the primary latency bottleneck.",
+    "outcome": "Full scaling baselines documented from 10–200 clients; 100 clients is the practical ceiling (zero errors, ~24 ops/s), with first errors appearing at 200 clients (4 errors). Prometheus analysis confirmed Kubo IPFS pinning accounts for ~95% of uploadFile latency (3 pins per upload at ~1.73s mean each). Results committed to `.planning/baselines/19-someguy-ipns-baselines.md`.",
+    "learnings": {
+      "repo": [
+        "The load-test GitHub Actions workflow uses the `staging` GitHub environment for secret scoping — this causes the UI to show 'Deploying to staging' even though no deployment occurs; it is cosmetic only.",
+        "The `uploadFile` SDK operation makes 5 sequential API calls: 3× POST /ipfs/upload (ciphertext, file metadata, folder metadata) + POST /ipns/publish-batch (file IPNS) + POST /ipns/publish (folder IPNS).",
+        "Staging secrets (STAGING_TEST_LOGIN_SECRET, STAGING_THROTTLE_BYPASS_SECRET, STAGING_API_URL) are scoped to the `staging` GitHub environment, not repository-level secrets.",
+        "release-please is triggered by conventional commit prefixes — `chore(ci):` commits do not kick off a release.",
+        "The `staging` branch protection on `main` had a stale required check `Verify E2E Passed` from a previous workflow; the new consolidated CI job is named `SDK E2E Tests` and needed to be added as required separately.",
+        "Throughput scales sub-linearly above 30 clients: 10x clients yields only ~5.4x throughput at 100 clients, plateauing around 24 ops/s."
+      ],
+      "code": [
+        {
+          "path": "tests/load/package.json",
+          "finding": "The `test:single` script used `--testPathPattern` which is a Jest CLI flag, not valid in Vitest. Fixed by removing it; Vitest accepts file filter patterns as positional args."
+        },
+        {
+          "path": ".github/workflows/load-test.yml",
+          "finding": "Using `pnpm test:single -- \u003cscenario\u003e` does not correctly pass the scenario as a Vitest file filter — args after `--` go into CAC's separate bucket. Fixed by calling `pnpm exec vitest run --no-coverage \u003cscenario\u003e` directly."
+        },
+        {
+          "path": ".github/workflows/load-test.yml",
+          "finding": "The job lacked `environment: staging`, causing all staging env vars to be empty. Adding it fixed secret access but introduces the cosmetic 'Deploying to staging' label in the GitHub UI."
+        },
+        {
+          "path": ".github/workflows/load-test.yml",
+          "finding": "Added `concurrency` group `load-test-\u003cenvironment\u003e` so parallel trigger calls queue instead of running simultaneously against the same staging API, preventing result interference."
+        },
+        {
+          "path": ".github/workflows/load-test.yml",
+          "finding": "Default `timeout-minutes: 30` caused cancellation when running all 5 scenarios at high client counts. Increased to 60 minutes. The scenario filter fix reduced per-run time to ~5 minutes for mixed-workload alone."
+        },
+        {
+          "path": ".planning/baselines/19-someguy-ipns-baselines.md",
+          "finding": "Baseline doc updated with full 10/20/30/50/75/100/200-client scaling tables, per-operation latency breakdown, Prometheus upload flow analysis, and bottleneck identification."
+        }
+      ],
+      "workflow": [
+        "Running multiple `gh run watch` instances simultaneously (6 at 3s poll intervals = ~120 req/min) quickly exhausts the GitHub API rate limit (5000 req/hour). Use a single status check instead of concurrent watchers.",
+        "Prometheus histogram buckets allow computing approximate percentiles via linear interpolation between bucket boundaries; mean can be computed exactly as sum/count.",
+        "When cherry-picking commits to rename them for a different conventional commit type, close the original PR first and open a new one from the renamed branch."
+      ]
+    },
+    "friction": [
+      "Initial load test runs all failed because `--testPathPattern` (Jest) was used instead of Vitest's positional arg pattern — required a bug fix PR before any results could be collected.",
+      "Missing `environment: staging` on the workflow job caused all staging secrets/vars to be empty, requiring a second fix in the same PR.",
+      "The scenario filter bug (`--` separator not working with the npm script) caused all 5 scenarios to run instead of just `mixed-workload`, making 10/20/30-client runs take 16+ minutes and causing 50/75/100-client runs to exceed the 30-minute timeout and get cancelled.",
+      "Running 6 concurrent `gh run watch` processes (3 original + 3 re-watches) at 3-second intervals burned through the GitHub API rate limit, blocking status checks for ~1 hour.",
+      "Rate limit persisted longer than expected — two separate 60-second and 5-minute wait attempts both still hit the limit.",
+      "The `gh run watch` command exited prematurely on some runs due to the deployment environment approval step, requiring re-watches that then hit rate limits."
+    ],
+    "open_items": [
+      "Fix the scenario filtering for the 10/20/30 baseline runs — they ran all 5 scenarios instead of just mixed-workload, so those results include noise from other scenarios.",
+      "Investigate and potentially fix the 0.26% async DHT propagation error rate seen in Prometheus (324 errors across all runs) — these are fire-and-forget and don't affect clients but may indicate DHT health issues.",
+      "Explore Kubo pinning optimizations to reduce the ~1.73s mean pin latency that dominates uploadFile: faster storage backend, concurrent pins, or pin batching.",
+      "Consider moving STAGING_TEST_LOGIN_SECRET, STAGING_THROTTLE_BYPASS_SECRET, and STAGING_API_URL to repository-level secrets to remove the `environment: staging` field and eliminate the misleading 'Deploying to staging' UI label.",
+      "Determine whether the 4 errors at 200 clients are upload timeouts, connection resets, or 5xx responses — error type was identified as present but not fully classified.",
+      "Run 150-client test to narrow down the exact threshold between 100 (zero errors) and 200 (first errors) for a more precise single-instance capacity number."
+    ]
+  }
+}
