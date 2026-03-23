@@ -117,30 +117,32 @@ Captured 2026-03-23 via GitHub Actions against staging. Mixed Workload scenario:
 | 50      | 2,171     | 0      | 22.86 ops/s | 95.0s    | 23.1MB |
 | 75      | 3,267     | 0      | 23.60 ops/s | 138.4s   | 36.2MB |
 | 100     | 4,355     | 0      | 24.05 ops/s | 181.1s   | 49.4MB |
+| 200     | 8,734     | 4      | 28.50 ops/s | 306.5s   | 97.3MB |
 
 Note: The 5-client baseline was run separately (different network path). The 10–100 client runs are directly comparable.
 
 ### Latency by operation (p50 / p95 / p99)
 
-| Operation    | 10 clients          | 20 clients          | 30 clients          | 50 clients          | 75 clients         | 100 clients         |
-| ------------ | ------------------- | ------------------- | ------------------- | ------------------- | ------------------ | ------------------- |
-| createFolder | 1.9s / 3.1s / 4.4s  | 2.0s / 3.3s / 3.6s  | 2.4s / 3.5s / 4.2s  | 2.0s / 3.3s / 4.9s  | 2.9s / 4.8s / 7.4s | 3.7s / 6.5s / 8.0s  |
-| uploadFile   | 2.6s / 3.9s / 4.7s  | 2.8s / 4.4s / 4.8s  | 3.0s / 4.5s / 5.2s  | 2.7s / 4.3s / 5.4s  | 3.9s / 6.4s / 9.1s | 5.1s / 7.8s / 11.6s |
-| moveItem     | 1.9s / 2.6s / 3.4s  | 1.9s / 2.9s / 3.4s  | 2.3s / 3.1s / 3.7s  | 1.8s / 2.9s / 3.2s  | 2.7s / 4.4s / 5.1s | 3.5s / 5.6s / 6.7s  |
-| deleteItem   | 815ms / 1.8s / 2.4s | 881ms / 1.8s / 2.0s | 929ms / 1.8s / 2.1s | 890ms / 1.9s / 2.4s | 1.4s / 2.4s / 2.7s | 1.9s / 3.2s / 4.3s  |
-| renameItem   | 712ms / 1.5s / 1.6s | 758ms / 1.8s / 2.3s | 1.1s / 1.8s / 2.1s  | 880ms / 2.1s / 2.3s | 1.3s / 2.5s / 2.9s | 1.9s / 3.2s / 3.6s  |
+| Operation    | 10 clients          | 20 clients          | 30 clients          | 50 clients          | 75 clients         | 100 clients         | 200 clients          |
+| ------------ | ------------------- | ------------------- | ------------------- | ------------------- | ------------------ | ------------------- | -------------------- |
+| createFolder | 1.9s / 3.1s / 4.4s  | 2.0s / 3.3s / 3.6s  | 2.4s / 3.5s / 4.2s  | 2.0s / 3.3s / 4.9s  | 2.9s / 4.8s / 7.4s | 3.7s / 6.5s / 8.0s  | 6.2s / 10.3s / 17.8s |
+| uploadFile   | 2.6s / 3.9s / 4.7s  | 2.8s / 4.4s / 4.8s  | 3.0s / 4.5s / 5.2s  | 2.7s / 4.3s / 5.4s  | 3.9s / 6.4s / 9.1s | 5.1s / 7.8s / 11.6s | 8.8s / 13.5s / 21.0s |
+| moveItem     | 1.9s / 2.6s / 3.4s  | 1.9s / 2.9s / 3.4s  | 2.3s / 3.1s / 3.7s  | 1.8s / 2.9s / 3.2s  | 2.7s / 4.4s / 5.1s | 3.5s / 5.6s / 6.7s  | 6.1s / 9.0s / 10.4s  |
+| deleteItem   | 815ms / 1.8s / 2.4s | 881ms / 1.8s / 2.0s | 929ms / 1.8s / 2.1s | 890ms / 1.9s / 2.4s | 1.4s / 2.4s / 2.7s | 1.9s / 3.2s / 4.3s  | 3.0s / 4.9s / 5.9s   |
+| renameItem   | 712ms / 1.5s / 1.6s | 758ms / 1.8s / 2.3s | 1.1s / 1.8s / 2.1s  | 880ms / 2.1s / 2.3s | 1.3s / 2.5s / 2.9s | 1.9s / 3.2s / 3.6s  | 3.0s / 5.2s / 6.1s   |
 
 ### Scaling observations
 
-1. **Throughput plateaus at ~23-24 ops/s**: From 50→100 clients, throughput barely increases (22.86→24.05 ops/s). The staging VPS (4 vCPU, 8GB) is saturated — adding more clients just increases latency without meaningful throughput gain.
-2. **The knee is at ~50 clients**: Throughput jumps from 12.14 (30 clients) to 22.86 (50 clients), then flattens. This suggests Kubo's pin concurrency maxes out around 50 parallel operations.
-3. **uploadFile p50 doubles at 100 clients**: 2.6s→5.1s. p99 jumps to 11.6s. This is the operation most sensitive to concurrency due to 3 sequential pins.
-4. **Zero errors across all concurrency levels**: No timeouts, no 5xx, no IPNS publish failures up to 100 concurrent clients.
-5. **Metadata-only operations degrade gracefully**: deleteItem/renameItem p50 grows from ~750ms (10 clients) to ~1.9s (100 clients) — still usable.
+1. **Throughput plateaus at ~23-28 ops/s**: From 50→200 clients, throughput only grows from 22.86→28.50 ops/s. The staging VPS (4 vCPU, 8GB) is saturated — additional clients primarily increase latency.
+2. **The knee is at ~50 clients**: Throughput jumps from 12.14 (30 clients) to 22.86 (50 clients), then flattens. Kubo's pin concurrency maxes out around 50 parallel operations.
+3. **First errors at 200 clients**: 4 errors across 8,734 ops (0.05% error rate). 1 each in createFolder, moveItem, renameItem, uploadFile. Also 1 IPNS publish 409 conflict (expected concurrent sequence number collision). Error-free operation up to 100 clients.
+4. **uploadFile p99 reaches 21s at 200 clients**: p50 grows from 2.6s (10 clients) to 8.8s (200 clients). p99 goes from 4.7s to 21.0s — approaching typical HTTP timeout thresholds.
+5. **Kubo pin mean stays flat (~1.6s)**: Server-side pin latency doesn't degrade much with concurrency. The client-side latency increase is primarily queuing — more clients waiting for their turn.
+6. **Metadata-only operations degrade gracefully**: deleteItem/renameItem p50 grows from ~750ms (10 clients) to ~3.0s (200 clients).
 
 ## Upload Flow Latency Breakdown (Prometheus Server-Side)
 
-Captured from staging `/metrics` endpoint after all load test runs (10–100 clients). Cumulative histograms.
+Captured from staging `/metrics` endpoint after all load test runs (10–200 clients). Cumulative histograms.
 
 ### Where uploadFile time goes
 
@@ -158,14 +160,15 @@ A single SDK `uploadFile` call makes 5 sequential API calls:
 
 ### Internal operation timing
 
-| Metric                          | Count   | Mean  | Notes                                              |
-| ------------------------------- | ------- | ----- | -------------------------------------------------- |
-| IPFS Pin (Kubo `pin add`)       | 152,930 | 1.56s | ~95% of upload endpoint time                       |
-| HTTP POST /ipfs/upload          | 152,930 | 1.64s | Pin + quota check + DB write                       |
-| IPNS Publish (DB upsert)        | 111,300 | 134ms | Fast — just a database write                       |
-| IPNS Publish Batch (DB upsert)  | 20,786  | 98ms  | Similar to single publish                          |
-| Async DHT propagation (success) | 131,762 | 861ms | Fire-and-forget, does not block client             |
-| Async DHT propagation (error)   | 324     | 17.2s | 0.25% error rate, does not affect client responses |
+| Metric                          | Count   | Mean  | Notes                                               |
+| ------------------------------- | ------- | ----- | --------------------------------------------------- |
+| IPFS Pin (Kubo `pin add`)       | 172,387 | 1.56s | ~95% of upload endpoint time                        |
+| HTTP POST /ipfs/upload          | 172,387 | 1.64s | Pin + quota check + DB write                        |
+| IPNS Publish (DB upsert)        | 122,892 | 127ms | Fast — just a database write                        |
+| IPNS Publish Batch (DB upsert)  | 24,717  | 92ms  | Similar to single publish                           |
+| IPNS Publish (409 conflict)     | 1       | 4ms   | Expected at high concurrency (seq number collision) |
+| Async DHT propagation (success) | 147,285 | 838ms | Fire-and-forget, does not block client              |
+| Async DHT propagation (error)   | 324     | 17.2s | 0.22% error rate, does not affect client responses  |
 
 ### Bottleneck analysis
 
