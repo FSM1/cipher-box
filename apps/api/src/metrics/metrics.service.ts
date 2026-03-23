@@ -36,6 +36,10 @@ export class MetricsService implements OnModuleInit {
   readonly republishEntriesProcessed: client.Counter;
   readonly authLogins: client.Counter;
 
+  // --- Counters (delegated routing) ---
+  readonly delegatedRoutingRequests: client.Counter;
+  readonly delegatedRoutingFallbacks: client.Counter;
+
   // --- Histograms ---
   readonly httpRequestDuration: client.Histogram;
   readonly ipfsIpnsDuration: client.Histogram;
@@ -145,6 +149,21 @@ export class MetricsService implements OnModuleInit {
       name: 'cipherbox_auth_logins_total',
       help: 'Total successful logins',
       labelNames: ['method', 'new_user'],
+      registers: [this.registry],
+    });
+
+    // Delegated routing counters
+    this.delegatedRoutingRequests = new client.Counter({
+      name: 'cipherbox_delegated_routing_requests_total',
+      help: 'Total delegated routing requests by operation, backend, and outcome',
+      labelNames: ['operation', 'backend', 'outcome'],
+      registers: [this.registry],
+    });
+
+    this.delegatedRoutingFallbacks = new client.Counter({
+      name: 'cipherbox_delegated_routing_fallbacks_total',
+      help: 'Times the primary routing backend failed and fallback was used',
+      labelNames: ['operation'],
       registers: [this.registry],
     });
 
