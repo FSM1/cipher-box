@@ -92,7 +92,15 @@ Plans:
 3. The standalone recovery tool parses vault blob v2 and extracts rootFolderKey without needing the CipherBox API or database
 4. The desktop app (Rust) parses vault blob v2 and uses the embedded rootFolderKey for FUSE mount initialization
 5. The encryptedRootIpnsPrivateKey column is deprecated from the vaults table (HKDF derivation is the canonical path)
-   **Plans**: TBD
+
+**Plans:** 4 plans
+
+Plans:
+
+- [ ] 20-01-PLAN.md -- Vault blob v2 format module in @cipherbox/core with TDD tests and cross-platform test vectors
+- [ ] 20-02-PLAN.md -- API: DB migration, nullable columns, optional IPNS key on init, POST /vault/migrate endpoint
+- [ ] 20-03-PLAN.md -- Desktop Rust: v2 blob module, vault fetch for migrated users, root folder v2 publish
+- [ ] 20-04-PLAN.md -- Web client: v2 blob login read, lazy migration trigger, recovery tool v2 parsing
 
 ### Phase 21: BYO-IPFS Node Support
 
@@ -131,11 +139,11 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 20 -> 21 -> 22
 | 18. Performance Instrumentation    | v1.1      | 2/2            | Complete    | 2026-03-07 |
 | 19. IPNS Resolution Improvement    | v1.1      | 2/2            | Complete    | 2026-03-07 |
 | 19.1 Extract Core Crypto SDK       | v1.1      | 6/6            | Complete    | 2026-03-20 |
-| 20. Vault Migration                | v1.1      | 0/?            | Not started | -          |
+| 20. Vault Migration                | v1.1      | 0/4            | Not started | -          |
 | 21. BYO-IPFS Node Support          | v1.1      | 0/?            | Not started | -          |
 | 22. Performance Baselines Complete | v1.1      | 0/?            | Not started | -          |
 
 ---
 
 _Roadmap created: 2026-03-07_
-_Last updated: 2026-03-20_
+_Last updated: 2026-03-23_
