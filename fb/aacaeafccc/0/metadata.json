@@ -1,0 +1,84 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "fbaacaeafccc",
+  "session_id": "0ab3334d-90bc-4ad6-994f-3b00db82d042",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T01:03:02.176682Z",
+  "branch": "chore/ci-parallelize-and-bump-kubo",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "300620628951",
+  "token_usage": {
+    "input_tokens": 2726,
+    "cache_creation_tokens": 242119,
+    "cache_read_tokens": 23837164,
+    "output_tokens": 39428,
+    "api_call_count": 190
+  },
+  "session_metrics": {
+    "turn_count": 25
+  },
+  "summary": {
+    "intent": "Investigate someguy sidecar status on staging, diagnose IPNS routing failures, upgrade Kubo to v0.40.0, and optimize CI pipeline parallelism.",
+    "outcome": "Diagnosed someguy's IPNS endpoint as completely non-functional (hangs indefinitely), upgraded Kubo v0.34.0→v0.40.0 with full E2E/load test validation, reverted staging to delegated-ipfs.dev, added build/perf/revert to release-please changelog sections, and parallelized CI pipeline jobs.",
+    "learnings": {
+      "repo": [
+        "Someguy's /routing/v1/providers/ works fine but /routing/v1/ipns/ (GET and PUT) hangs indefinitely — someguy v0.11.1 is the latest stable release, so no version bump available",
+        "docker/ directory with compose files is never committed to git — it's generated during CI and SCP'd to the VPS",
+        "Release Please only triggers releases for feat and fix commit types by default — build/perf/revert require explicit changelog-sections config in release-please-config.json",
+        "The .env file (NODE_ENV=development) overrides shell env vars via NestJS ConfigModule — can't just set NODE_ENV=test in the shell",
+        "Throttle bypass requires X-Throttle-Bypass header with THROTTLE_BYPASS_SECRET — not configured for load test harness by default",
+        "CI critical path was fully sequential: changes → typecheck → test → sdk-e2e → build; test/sdk-e2e/build all unnecessarily waited on each other",
+        "Grafana Cloud free-tier instance sleeps when idle and returns 503 'Your instance is loading' on wake — dashboard provisioning needs a readiness poll",
+        "alloy-config.river had a someguy metrics scrape target that needed removal alongside the service"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "line": 24,
+          "end_line": 24,
+          "finding": "Default fallback is https://delegated-ipfs.dev when DELEGATED_ROUTING_URL env var is not set"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 500,
+          "end_line": 500,
+          "finding": "build job if condition !failure() \u0026\u0026 !cancelled() was redundant after removing test/sdk-e2e from needs — simplified to needs: [changes, lint]"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 256,
+          "end_line": 256,
+          "finding": "test job if condition was redundant after parallelization refactor"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 360,
+          "end_line": 360,
+          "finding": "sdk-e2e job if condition was redundant after parallelization refactor"
+        }
+      ],
+      "workflow": [
+        "Vitest runs all test files matching a pattern concurrently — --testPathPattern matching multiple files causes all scenarios to run in parallel, overwhelming the target",
+        "Load test 'errors' can be SDK-side failures (thrown exceptions) not HTTP errors — high error rates don't necessarily mean API is returning 4xx/5xx",
+        "go tool chain version in Kubo v0.40.1 was downgraded from 1.26 to 1.25 specifically to fix Windows memory corruption — not relevant for Linux deployments",
+        "Adding lint to needs of typecheck/api-spec/migration-check enables fail-fast behavior before expensive jobs run"
+      ]
+    },
+    "friction": [
+      "Someguy 'disable' from a previous session never persisted — either the .env.staging was overwritten by a subsequent deploy or the change was never committed",
+      "NODE_ENV=test in shell doesn't override NestJS ConfigModule which loads .env file — required manually editing .env temporarily",
+      "Load test harness missing THROTTLE_BYPASS_SECRET env var configuration causing 429s during local testing",
+      "Vitest testPathPattern matched multiple scenario files causing all 5 load test scenarios to run simultaneously on first attempt",
+      "CodeRabbit described v0.40.1 as 'stability improvements' when it was actually a Windows-only Go toolchain downgrade — misleading review comment",
+      "Release Please silently skipped release creation with build commit type — no error, just 'No user facing commits found'"
+    ],
+    "open_items": [
+      "Investigate someguy IPNS failure locally: add someguy v0.11.1 to local docker-compose, reproduce /routing/v1/ipns/ hang, check someguy GitHub issues — todo captured at .planning/todos/pending/2026-03-23-investigate-someguy-ipns-routing-failure-locally.md",
+      "Post-phase-19 performance baselines against staging still pending — waiting for deploy of latest changes before running load tests against someguy-less staging with delegated-ipfs.dev",
+      "Load test THROTTLE_BYPASS_SECRET not configured in test harness env — needs to be set for clean local load test runs without 429s",
+      "PR #324 (CI parallelization) review comments partially addressed — Copilot threads replied to and resolved but CI run on the PR itself is the validation"
+    ]
+  }
+}
