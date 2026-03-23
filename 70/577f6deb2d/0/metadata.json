@@ -1,0 +1,82 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "70577f6deb2d",
+  "session_id": "17256d92-fa81-4467-a074-6d66d7ec4e84",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T23:34:42.646252Z",
+  "branch": "feat/phase-19.2-ipfs-upload-perf",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/sdk/src/client.ts"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "a9eb8d81373c",
+  "token_usage": {
+    "input_tokens": 1351,
+    "cache_creation_tokens": 430620,
+    "cache_read_tokens": 20588958,
+    "output_tokens": 51778,
+    "api_call_count": 168
+  },
+  "session_metrics": {
+    "turn_count": 35
+  },
+  "summary": {
+    "intent": "Execute Phase 19.2 (IPFS upload performance optimization) gap closure, collect matched-environment load test baselines to validate SDK concurrent pin and Kubo pebbleds datastore optimizations, then create and review a PR.",
+    "outcome": "All 4 Phase 19.2 plans completed and verified. Three-point local baseline comparison collected at 50 clients (matching environment). Concurrent SDK pins alone regress performance at 50 clients; combined with pebbleds they deliver p95 -13%, p99 -15%, throughput +7%. A bonus 75-client run showed pebbleds eliminates the failure mode entirely (0 errors vs 10, p95 -53%). PR #342 created, reviewed, and cleaned up.",
+    "learnings": {
+      "repo": [
+        "SDK concurrent pins and pebbleds datastore are synergistic — concurrent pins alone overwhelm flatfs at 50 clients (p95 blows up from 18.7s to 44.7s), but combined with pebbleds they improve all metrics.",
+        "Rate limiting is bypassed via two env vars: LOAD_TEST_SECRET (sent to POST /auth/test-login) and THROTTLE_BYPASS_SECRET (sent as X-Throttle-Bypass header). These must be passed inline as shell env vars — vitest does not use dotenv.",
+        "Active CIDs tracked in two DB tables: `pinned_cids` (file content) and `folder_ipns` (metadata blobs where latest_cid IS NOT NULL). Anything pinned on Kubo not in these tables is stale.",
+        "DELEGATED_ROUTING_URL in apps/api/.env was pointing to localhost:3001 (mock-ipns-routing); someguy on 192.168.133.114:8190 should be used for staging-representative testing.",
+        "Load test SDK client checkout points for pre/post optimization: pre-optimization parent is 4087fa2b6^, post-SDK-only is 565dccd5d, post-pebbleds is HEAD.",
+        "NODE_ENV=test in apps/api/.env relaxes throttle limits; THROTTLE_BYPASS_SECRET via header fully bypasses regardless of client count.",
+        "All three SDK test files (client.test.ts, client-extended.test.ts, client-upload-concurrency.test.ts) had identical createTestConfig helper — extracted to packages/sdk/src/__tests__/helpers.ts."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "uploadFile now uses Promise.allSettled to parallelize IPNS publish and folder metadata update. On partial failure, emits a new 'upload:batchPublishFailed' event (consistent with 'share:reWrapFailed' pattern) in addition to console.warn."
+        },
+        {
+          "path": "packages/sdk/src/events.ts",
+          "finding": "Added 'upload:batchPublishFailed' typed event for when concurrent pin batch partially fails — keeps event taxonomy consistent with existing error events."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/helpers.ts",
+          "finding": "New file — shared createTestConfig and setupFolder helpers extracted from three test files to eliminate copy-paste duplication."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/client-upload-concurrency.test.ts",
+          "finding": "setTimeout(r, 10) replaced with Promise.resolve() for async tick in tests — faster and semantically equivalent for yielding to the microtask queue."
+        }
+      ],
+      "workflow": [
+        "When comparing optimizations, keep the environment identical across all runs — staging vs localhost with different client counts makes the comparison non-definitive.",
+        "A concurrency probe run (Run 0) at increasing client counts is valuable before committing to a baseline client count — reveals the knee and failure modes.",
+        "For staging datastore migrations, parallel cutover (spin up new container alongside old, cross-reference CIDs against DB to skip stale ones, copy volume, swap) is safer than clean slate when data matters.",
+        "Kubo flatfs→pebbleds is not a standard ipfs repo migrate path — requires manual volume copy or ipfs-ds-convert rather than built-in migration.",
+        "Running multiple pnpm dev processes in background accumulates zombie wrappers; only one can hold the port but the others consume resources silently."
+      ]
+    },
+    "friction": [
+      "API was not running when load tests started — had to start it manually mid-workflow.",
+      "Three duplicate API processes accumulated from background starts; required manual PID hunting and force kills.",
+      "SDK checkout for pre-optimization baseline required manual git checkout from tests/load working directory, which caused the restore to fail silently until the directory issue was identified.",
+      "Vitest does not load dotenv, so LOAD_TEST_SECRET and THROTTLE_BYPASS_SECRET must be passed inline — not obvious from the test setup.",
+      "Background task completion notifications for already-captured results arrived late and cluttered the conversation.",
+      "Web frontend process was killed by the earlier process cleanup, requiring restart.",
+      "19.2-04 plan had to be replanned twice: once for the three-point local approach (vs staging), and again to capture the exact run commands, secrets, and someguy config before execution."
+    ],
+    "open_items": [
+      "Staging pebbleds migration: parallel cutover procedure needs to be performed manually on 192.168.133.114 — PR #342 merged, but staging deploy + IPFS volume migration not yet done.",
+      "Staging human verification items from VERIFICATION.md: live deploy with pebbleds, SC1 on staging, Prometheus histogram validation in Grafana.",
+      "Todo: Investigate removal of mock-ipns-routing layer now that someguy is properly configured in the stack (.planning/todos/pending/2026-03-23-investigate-removal-of-mock-ipns-routing-layer.md).",
+      "Todo: Load tests should handle 401s with token refresh to avoid test failures at high client counts where JWT tokens expire during long runs (.planning/todos/pending/2026-03-23-load-tests-should-handle-401s-with-token-refresh.md).",
+      "SC3 (\u003e15% throughput improvement) was not fully met — only +7% achieved at 50 clients. This was noted but accepted given substantial tail latency improvements and the 75-client result.",
+      "Stale CIDs on staging IPFS node from failed e2e test runs not cleaned up — cross-reference against DB planned as part of the migration procedure.",
+      "75-client pebbleds bonus run results were appended to baselines doc but not formally incorporated into the verification — considered informational."
+    ]
+  }
+}
