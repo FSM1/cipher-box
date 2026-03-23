@@ -631,11 +631,19 @@ export class CipherBoxClient {
         // File IPNS batch publish failure is non-critical -- the FilePointer in
         // folder metadata is valid, and the file IPNS record will be created
         // on next publish attempt or TEE republish cycle
+        // Note: if folder update fails but batch publish succeeded, an orphaned IPNS
+        // record may exist. This is benign -- no FilePointer references it, and the
+        // IPNS name will be reused on the next successful upload attempt.
         if (batchResult.status === 'rejected') {
           console.warn(
             '[SDK] File IPNS batch publish failed (non-critical, will retry on next publish):',
             batchResult.reason
           );
+          this.emitter.emit({
+            type: 'ipns:batchPublishFailed',
+            ipnsNames: [uploadResult.ipnsRecord.ipnsName],
+            error: batchResult.reason,
+          });
         }
 
         const { newSequenceNumber } = folderResult.value;

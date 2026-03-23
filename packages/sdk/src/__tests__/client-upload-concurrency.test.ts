@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CipherBoxClient } from '../client';
-import type { CipherBoxClientConfig } from '../types';
+import { createTestConfig, setupFolder } from './helpers';
 
 // Mock crypto (clearBytes used in uploadFile for key cleanup)
 vi.mock('@cipherbox/crypto', () => ({
@@ -50,45 +50,6 @@ vi.mock('../share', () => ({
 }));
 
 import * as sdkCore from '@cipherbox/sdk-core';
-
-function createTestConfig(overrides?: Partial<CipherBoxClientConfig>): CipherBoxClientConfig {
-  return {
-    apiUrl: 'http://localhost:3000',
-    getAccessToken: vi.fn().mockResolvedValue('test-token'),
-    vaultKeypair: {
-      publicKey: new Uint8Array(33).fill(1),
-      privateKey: new Uint8Array(32).fill(2),
-    },
-    rootIpnsName: 'k51test',
-    rootFolderKey: new Uint8Array(32).fill(3),
-    ...overrides,
-  };
-}
-
-function setupFolder(client: CipherBoxClient, ipnsName = 'folder-ipns') {
-  client.getFolderTree().set(ipnsName, {
-    ipnsName,
-    folderKey: new Uint8Array(32).fill(1),
-    ipnsKeypair: {
-      publicKey: new Uint8Array(32).fill(2),
-      privateKey: new Uint8Array(64).fill(3),
-    },
-    sequenceNumber: 1n,
-    children: [
-      {
-        type: 'file' as const,
-        id: 'file1',
-        name: 'existing.txt',
-        fileMetaIpnsName: 'k51file',
-        ipnsPrivateKeyEncrypted: 'abc',
-        createdAt: Date.now(),
-        modifiedAt: Date.now(),
-      },
-    ],
-    metadata: null,
-    lastLoadedAt: Date.now(),
-  });
-}
 
 function setupUploadMocks() {
   vi.mocked(sdkCore.uploadFile).mockResolvedValue({
@@ -155,14 +116,13 @@ describe('CipherBoxClient.uploadFile - concurrent pin orchestration', () => {
 
     vi.mocked(sdkCore.batchPublishIpnsRecords).mockImplementation(async () => {
       callLog.push('batch:start');
-      // Simulate async work
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
       callLog.push('batch:end');
     });
 
     vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockImplementation(async () => {
       callLog.push('folder:start');
-      await new Promise((r) => setTimeout(r, 10));
+      await Promise.resolve();
       callLog.push('folder:end');
       return { cid: 'bafyfolder', newSequenceNumber: 2n };
     });
