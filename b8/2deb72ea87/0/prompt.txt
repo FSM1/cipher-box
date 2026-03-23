@@ -1,0 +1,17 @@
+/gsd:discuss-phase 20
+
+---
+
+I am not sure whether we have baselines for client facing `first login -> fully loaded vault` but we did discuss gathering baselines for this earlier in the sesssion, so guess that will cover it. any deeper metrics can be collected from the running api /metrics endpoint.
+
+---
+
+you were also trying to commit to `main`
+
+---
+
+no, thats not how this works. I was AFK, so missed the 1pass notification, please switch to the right branch, commit and I will unlock 1pass
+
+---
+
+/gsd:plan-phase 20
