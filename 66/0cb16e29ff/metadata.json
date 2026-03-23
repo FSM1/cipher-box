@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "660cb16e29ff",
+  "strategy": "manual-commit",
+  "branch": "docs/phase-20-context",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/66/0cb16e29ff/0/metadata.json",
+      "transcript": "/66/0cb16e29ff/0/full.jsonl",
+      "content_hash": "/66/0cb16e29ff/0/content_hash.txt",
+      "prompt": "/66/0cb16e29ff/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 60,
+    "cache_creation_tokens": 111113,
+    "cache_read_tokens": 4595035,
+    "output_tokens": 17737,
+    "api_call_count": 50
+  }
+}
