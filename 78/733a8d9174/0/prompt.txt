@@ -101,3 +101,7 @@ the crypto package was only removed from extra-files to ensure that it is also v
 ---
 
 yeah
+
+---
+
+ok i think the staging tag format is probably easiest to deal with
