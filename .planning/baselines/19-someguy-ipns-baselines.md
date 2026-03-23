@@ -114,30 +114,33 @@ Captured 2026-03-23 via GitHub Actions against staging. Mixed Workload scenario:
 | 10      | 434       | 0      | 4.49 ops/s  | 96.6s    | 5.2MB  |
 | 20      | 856       | 0      | 8.42 ops/s  | 101.7s   | 9.6MB  |
 | 30      | 1,299     | 0      | 12.14 ops/s | 107.0s   | 14.4MB |
+| 50      | 2,171     | 0      | 22.86 ops/s | 95.0s    | 23.1MB |
+| 75      | 3,267     | 0      | 23.60 ops/s | 138.4s   | 36.2MB |
 | 100     | 4,355     | 0      | 24.05 ops/s | 181.1s   | 49.4MB |
 
 Note: The 5-client baseline was run separately (different network path). The 10–100 client runs are directly comparable.
 
 ### Latency by operation (p50 / p95 / p99)
 
-| Operation    | 10 clients          | 20 clients          | 30 clients          | 100 clients         |
-| ------------ | ------------------- | ------------------- | ------------------- | ------------------- |
-| createFolder | 1.9s / 3.1s / 4.4s  | 2.0s / 3.3s / 3.6s  | 2.4s / 3.5s / 4.2s  | 3.7s / 6.5s / 8.0s  |
-| uploadFile   | 2.6s / 3.9s / 4.7s  | 2.8s / 4.4s / 4.8s  | 3.0s / 4.5s / 5.2s  | 5.1s / 7.8s / 11.6s |
-| moveItem     | 1.9s / 2.6s / 3.4s  | 1.9s / 2.9s / 3.4s  | 2.3s / 3.1s / 3.7s  | 3.5s / 5.6s / 6.7s  |
-| deleteItem   | 815ms / 1.8s / 2.4s | 881ms / 1.8s / 2.0s | 929ms / 1.8s / 2.1s | 1.9s / 3.2s / 4.3s  |
-| renameItem   | 712ms / 1.5s / 1.6s | 758ms / 1.8s / 2.3s | 1.1s / 1.8s / 2.1s  | 1.9s / 3.2s / 3.6s  |
+| Operation    | 10 clients          | 20 clients          | 30 clients          | 50 clients          | 75 clients         | 100 clients         |
+| ------------ | ------------------- | ------------------- | ------------------- | ------------------- | ------------------ | ------------------- |
+| createFolder | 1.9s / 3.1s / 4.4s  | 2.0s / 3.3s / 3.6s  | 2.4s / 3.5s / 4.2s  | 2.0s / 3.3s / 4.9s  | 2.9s / 4.8s / 7.4s | 3.7s / 6.5s / 8.0s  |
+| uploadFile   | 2.6s / 3.9s / 4.7s  | 2.8s / 4.4s / 4.8s  | 3.0s / 4.5s / 5.2s  | 2.7s / 4.3s / 5.4s  | 3.9s / 6.4s / 9.1s | 5.1s / 7.8s / 11.6s |
+| moveItem     | 1.9s / 2.6s / 3.4s  | 1.9s / 2.9s / 3.4s  | 2.3s / 3.1s / 3.7s  | 1.8s / 2.9s / 3.2s  | 2.7s / 4.4s / 5.1s | 3.5s / 5.6s / 6.7s  |
+| deleteItem   | 815ms / 1.8s / 2.4s | 881ms / 1.8s / 2.0s | 929ms / 1.8s / 2.1s | 890ms / 1.9s / 2.4s | 1.4s / 2.4s / 2.7s | 1.9s / 3.2s / 4.3s  |
+| renameItem   | 712ms / 1.5s / 1.6s | 758ms / 1.8s / 2.3s | 1.1s / 1.8s / 2.1s  | 880ms / 2.1s / 2.3s | 1.3s / 2.5s / 2.9s | 1.9s / 3.2s / 3.6s  |
 
 ### Scaling observations
 
-1. **Sub-linear throughput at 100 clients**: 10x clients (10→100) yields 5.4x throughput (4.49→24.05 ops/s). The staging VPS handles 100 concurrent clients but is showing diminishing returns.
-2. **uploadFile p50 doubles at 100 clients**: 2.6s→5.1s. p99 jumps to 11.6s. This is the operation most sensitive to concurrency.
-3. **Zero errors across all concurrency levels**: No timeouts, no 5xx, no IPNS publish failures up to 100 concurrent clients.
-4. **Metadata-only operations degrade gracefully**: deleteItem/renameItem p50 grows from ~750ms (10 clients) to ~1.9s (100 clients) — still usable.
+1. **Throughput plateaus at ~23-24 ops/s**: From 50→100 clients, throughput barely increases (22.86→24.05 ops/s). The staging VPS (4 vCPU, 8GB) is saturated — adding more clients just increases latency without meaningful throughput gain.
+2. **The knee is at ~50 clients**: Throughput jumps from 12.14 (30 clients) to 22.86 (50 clients), then flattens. This suggests Kubo's pin concurrency maxes out around 50 parallel operations.
+3. **uploadFile p50 doubles at 100 clients**: 2.6s→5.1s. p99 jumps to 11.6s. This is the operation most sensitive to concurrency due to 3 sequential pins.
+4. **Zero errors across all concurrency levels**: No timeouts, no 5xx, no IPNS publish failures up to 100 concurrent clients.
+5. **Metadata-only operations degrade gracefully**: deleteItem/renameItem p50 grows from ~750ms (10 clients) to ~1.9s (100 clients) — still usable.
 
 ## Upload Flow Latency Breakdown (Prometheus Server-Side)
 
-Captured from staging `/metrics` endpoint after the 100-client run. These are cumulative histograms across all load test runs.
+Captured from staging `/metrics` endpoint after all load test runs (10–100 clients). Cumulative histograms.
 
 ### Where uploadFile time goes
 
@@ -157,12 +160,12 @@ A single SDK `uploadFile` call makes 5 sequential API calls:
 
 | Metric                          | Count   | Mean  | Notes                                              |
 | ------------------------------- | ------- | ----- | -------------------------------------------------- |
-| IPFS Pin (Kubo `pin add`)       | 140,816 | 1.64s | ~95% of upload endpoint time                       |
-| HTTP POST /ipfs/upload          | 140,816 | 1.73s | Pin + quota check + DB write                       |
-| IPNS Publish (DB upsert)        | 103,998 | 141ms | Fast — just a database write                       |
-| IPNS Publish Batch (DB upsert)  | 18,380  | 107ms | Similar to single publish                          |
-| Async DHT propagation (success) | 122,054 | 906ms | Fire-and-forget, does not block client             |
-| Async DHT propagation (error)   | 324     | 17.2s | 0.26% error rate, does not affect client responses |
+| IPFS Pin (Kubo `pin add`)       | 152,930 | 1.56s | ~95% of upload endpoint time                       |
+| HTTP POST /ipfs/upload          | 152,930 | 1.64s | Pin + quota check + DB write                       |
+| IPNS Publish (DB upsert)        | 111,300 | 134ms | Fast — just a database write                       |
+| IPNS Publish Batch (DB upsert)  | 20,786  | 98ms  | Similar to single publish                          |
+| Async DHT propagation (success) | 131,762 | 861ms | Fire-and-forget, does not block client             |
+| Async DHT propagation (error)   | 324     | 17.2s | 0.25% error rate, does not affect client responses |
 
 ### Bottleneck analysis
 
@@ -182,6 +185,5 @@ Phase 22 (Performance Baselines Completion) should:
 
 - Re-capture server-side Prometheus histograms for direct comparison with Phase 18 internal timings
 - Add client-side instrumentation for real user latency measurement
-- Fill in 50/75 client data points (runs queued 2026-03-23)
 - Document capacity limits and scaling recommendations
 - Performance regression threshold: >20% p95 increase requires investigation
