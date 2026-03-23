@@ -1,0 +1,89 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "45150687c2b6",
+  "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T13:58:10.767189Z",
+  "branch": "chore/add-throttle-bypass-to-staging-deploy",
+  "checkpoints_count": 7,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "f71e7bccf8bc",
+  "token_usage": {
+    "input_tokens": 588,
+    "cache_creation_tokens": 665328,
+    "cache_read_tokens": 101835230,
+    "output_tokens": 100583,
+    "api_call_count": 475
+  },
+  "session_metrics": {
+    "turn_count": 50
+  },
+  "summary": {
+    "intent": "Investigate and fix someguy v0.11.1 IPNS routing failures on staging (endpoints hanging indefinitely), then deploy the fix to staging with proper monitoring and a delegated-ipfs.dev fallback.",
+    "outcome": "Someguy was fixed with corrected resource limits and DHT configuration, deployed to staging successfully with a working fallback mechanism and Prometheus metrics. Additionally, a long-running release-please tagging deadlock was finally resolved by switching to component-prefixed tags (`cipher-box-v*`) and fixing the staging tag format.",
+    "learnings": {
+      "repo": [
+        "Someguy IPNS routing requires: libp2p port 4004 exposed (TCP+UDP), DHT mode set to 'accelerated', minimum 2GB RAM / 1 CPU, connection limits 100/3000, and SOMEGUY_LIBP2P_MAX_MEMORY must be a raw uint64 byte count (e.g. 1073741824), not a human-readable string like '1GB'",
+        "The delegated routing client in ipns.service.ts resolves from both network and DB then picks the higher sequence number — since DB is written synchronously before DHT publish, the DB always wins, so 100% of resolves come from the database by design",
+        "Vitest does not auto-load .env files into process.env; env vars must be passed explicitly (e.g. SDK_E2E_THROTTLE_BYPASS_SECRET=xxx pnpm exec vitest)",
+        "The ThrottlerBypassGuard uses an x-throttle-bypass header checked against THROTTLE_BYPASS_SECRET, not NODE_ENV=test",
+        "Release-please multi-package Merge plugin produces PR titles like 'chore: release main' (no version) and 'include-component-in-tag: false' is broken for the root package in multi-package mode — release scanner cannot match bare v{version} tags back to path '.'",
+        "Release-please deadlocks when it finds a merged release PR with 'autorelease: pending' label: it aborts with 'untagged, merged release PRs outstanding' instead of tagging it",
+        "Staging GitHub Releases with old format 'v{version}-staging-rc-{n}' were parsed by release-please as component 'staging' and collided with root package tag scanning, causing it to walk 600+ commit history",
+        "The THROTTLE_BYPASS_SECRET was not wired into the staging deploy workflow, meaning it would be lost on every redeploy"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "line": 1,
+          "finding": "Rewrote to support primary/fallback backends: primary (someguy) is tried with full retry logic, fallback (delegated-ipfs.dev) only triggered after primary exhausts all retries. Prometheus counters track per-backend request outcomes."
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "line": 100,
+          "finding": "backend parameter typed as 'primary' | 'fallback' union instead of string — PR review comment from Copilot"
+        },
+        {
+          "path": "apps/api/src/metrics/metrics.service.ts",
+          "finding": "Two new Prometheus counters added: cipherbox_delegated_routing_requests_total{operation,backend,outcome} and cipherbox_delegated_routing_fallbacks_total{operation}"
+        },
+        {
+          "path": "docker/docker-compose.yml",
+          "line": 85,
+          "finding": "Someguy healthcheck must use 'curl -sf' not 'wget -qO-' — someguy image ships curl but not wget (confirmed via docker exec)"
+        },
+        {
+          "path": "release-please-config.json",
+          "finding": "Root package needs 'include-component-in-tag: true' with component 'cipher-box' to produce 'cipher-box-v{version}' tags. Without this, release-please creates bare 'v{version}' tags but its own scanner cannot match them back to path '.' in multi-package mode."
+        }
+      ],
+      "workflow": [
+        "Load test comparison (someguy vs delegated-ipfs.dev): someguy has ~40% higher median latency but ~20% lower p99 (more predictable); delegated-ipfs.dev is faster at median but higher variance. Both zero errors at tested load levels.",
+        "Release-please anchor releases must be created manually when bootstrapping a new package or recovering from a broken state — the release must point to the correct commit SHA and match the expected tag format exactly",
+        "When release-please creates a release PR but fails to tag it, the label must be manually flipped from 'autorelease: pending' to 'autorelease: tagged' after manually creating the tag, otherwise it will deadlock on the next run",
+        "Staging GitHub Releases (containing desktop build artifacts) should not be created under 'v*' tag prefixes — use a format that release-please won't parse as a component (staging-v* was still parsed as component 'staging'; consider omitting GitHub Releases for staging builds entirely)",
+        "The 1Password SSH agent requires interactive approval for each SSH session; automated scripts that require VPS access will fail without prior approval"
+      ]
+    },
+    "friction": [
+      "release-please has a fundamental bug: 'include-component-in-tag: false' for the root package in multi-package mode creates bare 'v{version}' tags but the scanner cannot match them back to path '.' — required switching to component-prefixed tags after extensive debugging",
+      "Multiple release-please deadlocks due to merged PRs with 'autorelease: pending' labels requiring manual intervention (label flip + manual tag creation) at least 4 times during the session",
+      "Old-format staging releases (v{version}-staging-rc-{n}) were silently corrupting release-please's release scanner — 29 historical releases had to be deleted",
+      "SOMEGUY_LIBP2P_MAX_MEMORY silently fails with human-readable strings like '1GB' — container crash-looped on staging with no obvious error until SSH investigation",
+      "1Password SSH agent blocks automated VPS SSH commands, requiring manual approval or workarounds",
+      "Web E2E tests on main are flaky, blocking auto-merge of release PRs multiple times",
+      "The release-please label race condition on PR creation (label API call fires before GitHub resolves the PR node ID) caused a spurious failure requiring manual label addition",
+      "Vitest doesn't auto-load .env files, causing 429s in SDK E2E tests until env vars were passed explicitly — wasted time debugging throttler configuration"
+    ],
+    "open_items": [
+      "packages/crypto is now tracked by release-please independently but has no historical releases — first release will include all accumulated commits since repo start",
+      "DB-first IPNS resolution means someguy/DHT provides no latency benefit for API clients; reducing DB dependency would require changing resolve logic to prefer network when sequence numbers match",
+      "Staging GitHub Releases containing desktop build artifacts (Tauri) are still parsed by release-please as component 'staging' — causes a warning each run; consider not creating GitHub Releases for staging builds",
+      "THROTTLE_BYPASS_SECRET was added to deploy-staging.yml but that change needs to be committed and included in the next release",
+      "Someguy fallback metrics (cipherbox_delegated_routing_fallbacks_total) are not yet wired into Grafana dashboards or alerts — needs panel and alert rule creation",
+      "Mock IPNS routing service is still in docker-compose.yml alongside someguy — kept for CI isolation but adds cognitive overhead",
+      "The someguy sidecar DHT routing table was freshly started during load testing — median latency gap vs delegated-ipfs.dev should narrow after the DHT warms up on staging"
+    ]
+  }
+}
