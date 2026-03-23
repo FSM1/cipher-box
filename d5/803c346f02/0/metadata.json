@@ -1,0 +1,100 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d5803c346f02",
+  "session_id": "0ab3334d-90bc-4ad6-994f-3b00db82d042",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T00:35:00.223027Z",
+  "branch": "chore/release-please-build-type",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/deploy-staging.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "80c5e198c0ce",
+  "token_usage": {
+    "input_tokens": 2672,
+    "cache_creation_tokens": 197382,
+    "cache_read_tokens": 16499125,
+    "output_tokens": 30578,
+    "api_call_count": 151
+  },
+  "session_metrics": {
+    "turn_count": 18
+  },
+  "summary": {
+    "intent": "Investigate the someguy IPFS sidecar state on staging, diagnose performance issues, upgrade Kubo, and set up proper routing configuration with CI improvements.",
+    "outcome": "Diagnosed someguy's IPNS endpoint as completely non-functional (hangs indefinitely), upgraded Kubo from v0.34.0 to v0.40.0 (verified with 83 E2E tests + load tests), removed someguy from staging and reverted to delegated-ipfs.dev, fixed Grafana Cloud 503s with a readiness poll, and added `build` commit type to release-please config to trigger version bumps.",
+    "learnings": {
+      "repo": [
+        "The `docker/` directory (docker-compose.staging.yml, Caddyfile, etc.) is generated during CI and copied to the VPS — it is committed to the repo under docker/ but not deployed via git directly.",
+        "someguy's `/routing/v1/providers/` endpoint works correctly, but `/routing/v1/ipns/` (both GET and PUT) hangs indefinitely — IPNS operations are completely broken in the deployed version.",
+        "DELEGATED_ROUTING_URL defaults to https://delegated-ipfs.dev in the code (delegated-routing.client.ts line 24), but staging overrides this via .env.staging to http://someguy:8190.",
+        "The API's delegated routing publish is fire-and-forget (PR #308), so someguy IPNS timeouts don't cause HTTP errors — they silently fail after 3 retries x 10s = 30s wasted per publish.",
+        "release-please only triggers releases for `feat` and `fix` commit types by default — `build`, `chore`, and `ci` commits are non-user-facing and skipped.",
+        "Grafana Cloud free-tier instances sleep when idle and return 503 'Your instance is loading' when woken — the provisioning step must poll /api/health before pushing dashboards.",
+        "someguy v0.11.1 is actually a patch ahead of the latest tagged release v0.11.0 — no newer version available to upgrade to.",
+        "Kubo v0.40's breaking changes (IPIP-524, IPIP-523) are all gateway-related; the API uses the RPC API exclusively (/api/v0/*) so no migration needed.",
+        "The throttle bypass uses X-Throttle-Bypass header with THROTTLE_BYPASS_SECRET — SDK E2E tests must set this env var or they get 429s. ThrottlerModule limits are hardcoded (10 req/s, 100 req/min), not relaxed by NODE_ENV."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "line": 24,
+          "end_line": 24,
+          "finding": "Fallback default URL is https://delegated-ipfs.dev when DELEGATED_ROUTING_URL env var is not set."
+        },
+        {
+          "path": "apps/api/src/common/guards/throttler-bypass.guard.ts",
+          "finding": "Throttle bypass guard checks X-Throttle-Bypass header against THROTTLE_BYPASS_SECRET — required for E2E/load tests to avoid 429s."
+        },
+        {
+          "path": "tests/load/src/harness/metrics.ts",
+          "finding": "Load test harness records success:false on thrown exceptions — high error rates in metrics don't necessarily mean HTTP errors; can be SDK-level failures."
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "line": 397,
+          "end_line": 397,
+          "finding": "DELEGATED_ROUTING_URL=http://someguy:8190 is hardcoded in the deploy workflow env block — changes to .env.staging on the server get overwritten on each deploy."
+        },
+        {
+          "path": "release-please-config.json",
+          "finding": "Added changelog-sections config to include build commit type so infrastructure upgrades trigger version bumps via release-please."
+        }
+      ],
+      "workflow": [
+        "When someguy was 'disabled' previously, the change didn't persist because the deploy workflow hardcodes DELEGATED_ROUTING_URL — server-side .env changes are overwritten on each deploy.",
+        "Running all vitest load test scenarios in one command causes them to run concurrently (sustained-load overlaps with others), producing misleading 522/error results — run scenarios individually for clean baselines.",
+        "NODE_ENV set in shell is overridden by .env file when NestJS ConfigModule loads it — must edit the file directly or pass via explicit env injection to override.",
+        "Copilot PR review suggestions: use `: \"${VAR:?msg}\"` syntax for env var validation in bash, and add early exit on non-retryable HTTP codes (401/403/404) in retry loops.",
+        "Use `--field in_reply_to=COMMENT_ID` (not `-f`) when replying to PR review comments via gh api — the value must be an integer.",
+        "Kubo v0.40.1 is a Windows-only Go toolchain downgrade fix — not relevant for Linux deployments; v0.40.0 uses Go 1.26 with better memory/GC on Linux."
+      ]
+    },
+    "friction": [
+      "someguy was believed to have been disabled previously, but the disable never persisted because deploy workflow hardcodes DELEGATED_ROUTING_URL — took significant investigation to determine the sidecar was active.",
+      "Initial load tests showed 74-95% error rates that looked like a performance problem but were actually someguy IPNS hangs (fire-and-forget failures) plus concurrent test scenario interference.",
+      "SDK E2E tests failed with 429s until the THROTTLE_BYPASS_SECRET env var was set — no documentation or .env.example entry for the load test suite.",
+      "The docker/ directory location wasn't obvious — the working directory during the session was tests/load, causing initial glob searches to find nothing.",
+      "`build` commit type doesn't trigger release-please by default — the Kubo upgrade PR merged without generating a release, requiring a follow-up config PR.",
+      "CodeRabbit described v0.40.1 as 'stability improvements' which was misleading — it's a Windows-only Go toolchain fix with no relevance to Linux deployments."
+    ],
+    "open_items": [
+      "Post-phase-19 performance baselines not yet collected against staging — deferred until the latest deploy (with someguy removed) is live and stable.",
+      "someguy IPNS is broken — root cause not identified. May be a bug in someguy v0.11.x, an incompatibility with the Kubo version, or a configuration issue. Needs investigation before re-enabling.",
+      "TEE Worker still uses delegated-ipfs.dev directly — not routing through any self-hosted solution.",
+      "Kubo v0.40.0 deployed locally and staging compose updated, but staging hasn't been redeployed yet — PR #322 needs to merge and deploy to fully validate the upgrade in staging.",
+      "Load test throttle bypass secret not documented for SDK E2E test suite — tests/load and SDK E2E test suites both need THROTTLE_BYPASS_SECRET in their .env.example or README.",
+      "IPNS resolution improvement (Phase 19) goals not yet fully validated — need post-deploy staging load tests comparing someguy-off performance vs phase 18 delegated-ipfs.dev baseline."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T00:34:09.777536Z",
+    "agent_lines": 0,
+    "human_added": 0,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 0,
+    "agent_percentage": 0
+  }
+}
