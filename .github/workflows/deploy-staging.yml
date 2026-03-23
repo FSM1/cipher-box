@@ -3,7 +3,7 @@ name: Deploy Staging
 on:
   push:
     tags:
-      - 'v*-staging*'
+      - 'staging-v*'
   workflow_call:
     inputs:
       staging_tag:
