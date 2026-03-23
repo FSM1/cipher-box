@@ -52,7 +52,8 @@ _Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky_
 
 ## Wave 0 Requirements
 
-- [ ] `packages/core/src/vault/__tests__/blob-v2.test.ts` — v2 serialize/deserialize, v1 detection, round-trip with ECIES key
+- [ ] `packages/core/src/__tests__/vault-blob.test.ts` — v2 serialize/deserialize, v1 detection, round-trip
+- [ ] `packages/core/src/__tests__/vault-blob-vectors.test.ts` — hardcoded cross-platform test vectors for Rust parity
 - [ ] `apps/api/src/vault/vault.service.spec.ts` — extend with migration endpoint tests, nullable column handling
 - [ ] Test vectors: known v1 blob, known v2 blob with expected key extraction
 
