@@ -98,11 +98,16 @@ pub struct InitVaultRequest {
 }
 
 /// Vault response from GET /vault.
+///
+/// For migrated users (v2 blob), `encrypted_root_folder_key` and
+/// `encrypted_root_ipns_private_key` are null -- the rootFolderKey lives
+/// in the IPFS vault blob header and the IPNS key is HKDF-derived.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultResponse {
-    pub encrypted_root_folder_key: String,
+    pub encrypted_root_folder_key: Option<String>,
     pub root_ipns_name: String,
-    pub encrypted_root_ipns_private_key: String,
+    pub encrypted_root_ipns_private_key: Option<String>,
     pub tee_keys: Option<TeeKeysResponse>,
+    pub migrated_at: Option<String>,
 }
