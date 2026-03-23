@@ -56,3 +56,7 @@ also for the api .env config: please make sure that someguy running on 192.168.1
 ---
 
 /gsd:add-todo now that someguy has been configured and is properly part of the stack, I think it might be time to investigate the removal of the mock-ipns-routing layer
+
+---
+
+stack is up and ready - before we do anything, I think that plan 4 of phase 19.2 needs to be updated slightly withthe exact work plan, so that this context is not lost.
