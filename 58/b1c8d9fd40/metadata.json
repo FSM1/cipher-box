@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "58b1c8d9fd40",
+  "strategy": "manual-commit",
+  "branch": "fix/someguy-ipns-routing",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/58/b1c8d9fd40/0/metadata.json",
+      "transcript": "/58/b1c8d9fd40/0/full.jsonl",
+      "content_hash": "/58/b1c8d9fd40/0/content_hash.txt",
+      "prompt": "/58/b1c8d9fd40/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 56,
+    "cache_creation_tokens": 45302,
+    "cache_read_tokens": 3826047,
+    "output_tokens": 11146,
+    "api_call_count": 54
+  }
+}
