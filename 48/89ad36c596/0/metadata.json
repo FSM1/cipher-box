@@ -1,0 +1,77 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "4889ad36c596",
+  "session_id": "17256d92-fa81-4467-a074-6d66d7ec4e84",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T19:43:26.268718Z",
+  "branch": "feat/phase-19.2-ipfs-upload-perf",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/REQUIREMENTS.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ffe08830e72d",
+  "token_usage": {
+    "input_tokens": 54,
+    "cache_creation_tokens": 88128,
+    "cache_read_tokens": 2737053,
+    "output_tokens": 16336,
+    "api_call_count": 41
+  },
+  "session_metrics": {
+    "turn_count": 6
+  },
+  "summary": {
+    "intent": "Execute Phase 19.2 gap closure plans to fix two verification failures: missing PERF-09 requirement definition and non-definitive post-optimization baselines due to mismatched test environments.",
+    "outcome": "PERF-09 was registered in REQUIREMENTS.md and a replanned three-point local baseline approach was adopted (replacing a destructive staging deployment). Gap closure plans 03 and 04 were spawned for execution, with 19.2-04 redesigned to collect matched-environment baselines across three optimization stages.",
+    "learnings": {
+      "repo": [
+        "Phase 19.2 covers IPFS upload performance optimization — primary bottleneck was sequential IPNS publish + folder metadata update, fixed via Promise.allSettled concurrent execution",
+        "Kubo is configured via Docker Compose with IPFS_PROFILE=server,pebbleds; switching datastores requires volume deletion (destructive)",
+        "Load test harness at tests/load/src/ uses a scenario/harness architecture — upload-throughput scenario runs N clients × 20 files (1KB-500KB) capturing p50/p95/p99/min/max/avg and throughput ops/s",
+        "Pre/post baselines are stored in .planning/baselines/ as markdown files",
+        "REQUIREMENTS.md had a PERF-09 gap — both plans referenced it but it was never defined; requirements only went to PERF-08",
+        "Git commits for phase 19.2 include distinct checkpoints for baseline capture, SDK changes, and infrastructure changes — usable as checkout points for isolated benchmarking"
+      ],
+      "code": [
+        {
+          "path": "tests/load/src/scenarios/upload-throughput.test.ts",
+          "finding": "Upload throughput scenario — N clients × 20 files each with sizes 1KB-500KB"
+        },
+        {
+          "path": "tests/load/src/harness/metrics.ts",
+          "finding": "Collects per-operation p50/p95/p99/min/max/avg latencies plus throughput ops/s"
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "finding": "Manages concurrent test clients for load scenarios"
+        }
+      ],
+      "workflow": [
+        "Verification failures with mismatched test environments (staging vs localhost, different client counts) produce non-definitive results — always use matched-condition baselines",
+        "Three-point isolated benchmarking (no opts / SDK only / SDK+infra) gives cleaner signal than single before/after comparison",
+        "Gap closure plans should be numbered sequentially after completed plans (01, 02 done → gaps start at 03)",
+        "Pushing a feature branch to remote before requiring infrastructure changes on a remote host is an efficient handoff pattern"
+      ]
+    },
+    "friction": [
+      "Original post-optimization baselines were captured in different environments (staging vs localhost) with different client counts (10 vs 5), making verification non-definitive — required replanning",
+      "Switching from flatfs to pebbleds datastore requires deleting the IPFS Docker volume, which wipes all pinned content — destructive operation that blocked the original staging validation approach",
+      "PERF-09 was referenced in both completed plans but never formally defined in REQUIREMENTS.md — a planning oversight that only surfaced at verification"
+    ],
+    "open_items": [
+      "Three-point local baseline collection still pending — plans 03 and 04 were spawned but transcript ends before completion is confirmed",
+      "Phase 19.2 final verification not yet run — gaps found in first pass, gap closure plans created and executing",
+      "Staging environment has not been validated with pebbleds datastore — local dev baselines were chosen as a substitute to avoid destructive volume deletion on staging"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T19:43:04.336367Z",
+    "agent_lines": 5,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 5,
+    "agent_percentage": 100
+  }
+}
