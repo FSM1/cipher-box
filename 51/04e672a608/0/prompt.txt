@@ -1,0 +1,1 @@
+ok can you push the updated docker-compose.yml up to remote?
