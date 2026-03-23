@@ -1,0 +1,82 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e2e8eb7a398d",
+  "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T04:59:27.322839Z",
+  "branch": "fix/release-please-component-in-tag",
+  "checkpoints_count": 10,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "64fd9e72a930",
+  "token_usage": {
+    "input_tokens": 530,
+    "cache_creation_tokens": 316277,
+    "cache_read_tokens": 87147251,
+    "output_tokens": 93487,
+    "api_call_count": 429
+  },
+  "session_metrics": {
+    "turn_count": 44
+  },
+  "summary": {
+    "intent": "Investigate and fix someguy IPNS routing failures on staging, implement a delegated-ipfs.dev fallback with Prometheus metrics, and resolve a long-standing release-please tagging deadlock that prevented automated releases.",
+    "outcome": "Someguy was fixed (libp2p port, DHT mode, resource limits), fallback routing with metrics was implemented and tested, all E2E tests pass. The release-please deadlock was traced to old staging tags (v*-staging*) colliding with the root package scanner, and ultimately to include-component-in-tag: false being broken in multi-package mode; switched to cipher-box-v* tag format.",
+    "learnings": {
+      "repo": [
+        "Someguy's SOMEGUY_LIBP2P_MAX_MEMORY env var expects raw uint64 bytes, not human-readable strings like '1GB' — causes crash loop on startup.",
+        "The DelegatedRoutingClient uses fire-and-forget IPNS publish; DB is always ahead of DHT so 100% of IPNS resolves are served from the database, not the network.",
+        "release-please with the Merge plugin generates PRs titled 'chore: release main' (not 'chore: release v${version}'), but the real blocker was include-component-in-tag: false being broken in multi-package mode — the release scanner cannot match bare v{version} tags back to the root path.",
+        "Old staging releases (v*-staging-rc-*) were being parsed by release-please as component 'staging' with version 'rc-1', polluting the release scanner and causing 'Missing 1 paths: .' failures.",
+        "release-please deadlocks with 'untagged, merged release PRs outstanding' when a merged release PR has autorelease: pending but the tag was never created — must manually create the tag AND flip label to autorelease: tagged to unblock.",
+        "Vitest does NOT auto-load .env files into process.env — env vars must be passed explicitly via CLI (e.g. THROTTLE_BYPASS_SECRET=x pnpm exec vitest) or configured in vitest.config.ts.",
+        "The API's throttler bypass uses an x-throttle-bypass header with a secret, not NODE_ENV detection.",
+        "Someguy self-hosted has higher median latency than delegated-ipfs.dev (~20-70% slower p50) but better tail latency (p99 ~20% lower) due to no CDN variability.",
+        "The mock-ipns-routing service should be kept for CI (instant, no DHT warmup, no outbound internet needed) even though someguy handles local dev."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 320,
+          "end_line": 358,
+          "finding": "resolveRecord() tries delegated routing first but always also queries DB; if both return results, higher sequence number wins. Since DB is written synchronously before DHT publish (which is fire-and-forget), DB always has higher seq number and 100% of resolves are DB-served."
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "line": 100,
+          "end_line": 100,
+          "finding": "backend parameter typed as 'primary' | 'fallback' literal union — PR review caught it was typed as string, fixed to union type."
+        },
+        {
+          "path": "apps/api/src/common/guards/throttler-bypass.guard.ts",
+          "finding": "Throttler bypass uses x-throttle-bypass header + THROTTLE_BYPASS_SECRET env var, not NODE_ENV=test. Tests need THROTTLE_BYPASS_SECRET set and sent as a default header via SDK client."
+        }
+      ],
+      "workflow": [
+        "release-please in multi-package mode requires include-component-in-tag: true with an explicit component name for the root package; bare v{version} tags are not reliably matched back to the root path.",
+        "When release-please fails to tag a merged release PR, the fix requires: (1) manually create the missing git tag + GitHub Release, (2) flip label from autorelease: pending to autorelease: tagged, (3) re-run the workflow.",
+        "Staging pre-release GitHub Releases must use a format release-please cannot parse as a component — prefix-based format (staging-v0.26.2-rc-1) still gets parsed as component 'staging'; consider not creating GitHub Releases for staging builds at all.",
+        "Docker healthcheck commands run inside the container — wget vs curl availability must be verified inside the container image (docker exec ... which wget), not on the host.",
+        "SSH root access to staging VPS is available via 1Password agent SSH key, separate from the CI deploy key which only works from GitHub Actions runner IPs."
+      ]
+    },
+    "friction": [
+      "release-please deadlock saga consumed the majority of the session — the root cause (include-component-in-tag: false broken in multi-package mode) was only discovered after exhausting: title pattern fixes, bootstrap-sha, label resets, staging tag format changes, component: '' empty string, and manually anchoring releases.",
+      "Old staging releases (v*-staging-rc-*) had to be manually deleted en masse (29 releases) — they were never cleaned up and caused release-please scanner noise.",
+      "vitest not auto-loading .env files caused initial 429 failures that looked like throttling bugs, wasted debugging time.",
+      "SOMEGUY_LIBP2P_MAX_MEMORY crash loop was only discovered post-deploy by SSHing into the staging VPS — no local indication it would fail.",
+      "Web E2E tests on main were flaky and blocked auto-merge on multiple release PRs, requiring manual re-runs.",
+      "GitHub API race condition caused release-please to fail adding autorelease: pending label to a freshly created PR (node ID not yet resolved).",
+      "Git stash on branch switch silently dropped file edits, requiring the changes to be redone on the new branch."
+    ],
+    "open_items": [
+      "packages/crypto is now in release-please config but its first auto-managed release will bump to 0.26.0 based on accumulated history — version alignment with the rest of the monorepo is not clean.",
+      "Staging desktop builds create GitHub Releases that release-please scans — these may continue to interfere with the release scanner even with the new cipher-box-v* tag format for the root package.",
+      "DB-first IPNS resolution means 100% of resolves hit the database — if DB load becomes an issue, the lever is to prefer network result when sequence numbers match.",
+      "The mock-ipns-routing service is redundant for local dev now that someguy runs locally — left in place for now, could be removed from docker-compose.yml in a future cleanup.",
+      "Someguy SOMEGUY_IPNS_ENDPOINTS fanout config (race vs fallback) was investigated but not implemented — the API-level fallback is in place instead; the sidecar-level config remains default.",
+      "Grafana alert rules for cipherbox_delegated_routing_fallbacks_total were not configured — only the metric was added; alert setup is deferred.",
+      "Release-please anchor release for packages/crypto was created at v0.25.1 on the current HEAD commit rather than at the actual historical commit where 0.25.1 was released."
+    ]
+  }
+}
