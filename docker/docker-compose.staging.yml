@@ -84,30 +84,6 @@ services:
           memory: 2G
           cpus: '1.0'
 
-  someguy:
-    image: ghcr.io/ipfs/someguy:v0.11.1
-    restart: unless-stopped
-    environment:
-      SOMEGUY_LISTEN_ADDRESS: 0.0.0.0:8190
-      SOMEGUY_DHT: standard
-      SOMEGUY_LIBP2P_CONNMGR_LOW: 50
-      SOMEGUY_LIBP2P_CONNMGR_HIGH: 300
-      SOMEGUY_LIBP2P_MAX_MEMORY: 536870912 # 512MB in bytes
-      GOLOG_LOG_LEVEL: info
-      GOLOG_LOG_FMT: json
-    logging: *default-logging
-    healthcheck:
-      test: ['CMD-SHELL', 'curl -sf http://localhost:8190/version || exit 1']
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-    deploy:
-      resources:
-        limits:
-          memory: 768M
-          cpus: '0.5'
-
   tee-worker:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-OWNER}/cipherbox-tee-worker:${TAG:-latest}
     restart: unless-stopped

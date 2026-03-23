@@ -394,7 +394,7 @@ jobs:
           IPFS_PROVIDER=local
           IPFS_LOCAL_API_URL=http://ipfs:5001
           IPFS_LOCAL_GATEWAY_URL=http://ipfs:8080
-          DELEGATED_ROUTING_URL=http://someguy:8190
+          DELEGATED_ROUTING_URL=https://delegated-ipfs.dev
           REDIS_HOST=redis
           REDIS_PORT=6379
           TEE_WORKER_URL=http://tee-worker:3001
