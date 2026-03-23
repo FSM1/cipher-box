@@ -258,3 +258,7 @@ ok, so I think the order of operations is as follows:
 8. delete old kubo volume entirely
 9. approve staging deployment, let the deployment script do its thing and create a blank kubo
 10. stop everything, attach the migrated bebbleds datastore to the new kubo container and restart everything
+
+---
+
+yeah I dont want to mess with the deploy script if we are not automating this entirely. hence the switching strategy above.
