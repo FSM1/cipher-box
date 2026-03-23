@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-23T21:16:30.656Z'
+last_updated: '2026-03-23T21:38:41.696Z'
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 14
-  completed_plans: 11
+  completed_plans: 12
 ---
 
 # Project State
@@ -23,7 +23,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 20 (vault-migration) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 
 ## Performance Metrics
 
@@ -43,6 +43,7 @@ Plan: 2 of 4
 | 19.1  | 04   | 10min    | 2     | 14    |
 | 19.1  | 06   | 13min    | 3     | 52    |
 | 20    | 01   | 4min     | 2     | 5     |
+| 20    | 02   | 17min    | 3     | 16    |
 
 ## Accumulated Context
 
@@ -67,6 +68,8 @@ Recent for v1.1:
 - Bin/share operations take explicit context objects (BinOperationContext, ShareOperationContext) instead of Zustand stores
 - Share module accepts callback functions for API calls to stay transport-decoupled
 - Moved @cipherbox/core from dependencies to devDependencies in crypto (test-only cross-package assertions)
+- Combined per-task commits into single commit due to pre-commit hook requiring api-client regeneration with entity/dto/controller changes
+- VaultExportDto crypto fields made nullable (string | null) to reflect migrated user state
 
 ### Roadmap Evolution
 
@@ -90,4 +93,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-23 after completing 20-01 (vault blob v2 binary format with TDD: serialize/deserialize/detect in @cipherbox/core)
+Last updated: 2026-03-23 after completing 20-02 (vault migration API infrastructure: DB migration, entity/DTO/service updates, POST /vault/migrate endpoint, API client regeneration)

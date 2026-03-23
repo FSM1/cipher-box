@@ -93,7 +93,7 @@ Plans:
 4. The desktop app (Rust) parses vault blob v2 and uses the embedded rootFolderKey for FUSE mount initialization
 5. The encryptedRootIpnsPrivateKey column is deprecated from the vaults table (HKDF derivation is the canonical path)
 
-**Plans:** 1/4 plans executed
+**Plans:** 2/4 plans executed
 
 Plans:
 
@@ -139,7 +139,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 20 -> 21 -> 22
 | 18. Performance Instrumentation    | v1.1      | 2/2            | Complete    | 2026-03-07 |
 | 19. IPNS Resolution Improvement    | v1.1      | 2/2            | Complete    | 2026-03-07 |
 | 19.1 Extract Core Crypto SDK       | v1.1      | 6/6            | Complete    | 2026-03-20 |
-| 20. Vault Migration                | 1/4       | In Progress    |             | -          |
+| 20. Vault Migration                | 2/4       | In Progress    |             | -          |
 | 21. BYO-IPFS Node Support          | v1.1      | 0/?            | Not started | -          |
 | 22. Performance Baselines Complete | v1.1      | 0/?            | Not started | -          |
 
