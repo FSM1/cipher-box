@@ -1,0 +1,9 @@
+can you redeploy the fresh docker-compose for local development?
+
+---
+
+ok please start up the latest docker compose
+
+---
+
+the current branch contains a new docker-compose with someguy

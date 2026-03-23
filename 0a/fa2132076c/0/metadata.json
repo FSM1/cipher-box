@@ -1,0 +1,65 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "0afa2132076c",
+  "session_id": "14b5ee14-c84a-4fd1-8c10-e73441635b5a",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T01:27:01.232895Z",
+  "branch": "fix/someguy-ipns-routing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docker/docker-compose.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "e26dcf518ba5",
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 45619,
+    "cache_read_tokens": 623231,
+    "output_tokens": 2995,
+    "api_call_count": 22
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Redeploy the local Docker Compose dev stack for cipher-box, including a new 'someguy' delegated routing daemon added on the current branch.",
+    "outcome": "All 5 services (Postgres, Kubo IPFS v0.40.0, Redis, someguy v0.11.1, mock-ipns-routing) are running. A config bug in someguy was fixed and the change was committed and pushed.",
+    "learnings": {
+      "repo": [
+        "The project uses a Docker Compose stack at docker/docker-compose.yml with 5 services: Postgres 16, Kubo v0.40.0, Redis 7, someguy v0.11.1, and a mock-ipns-routing service.",
+        "someguy is a delegated routing daemon added on this branch, exposing an API on port 8190 and swarm on port 4004.",
+        "SOMEGUY_LIBP2P_MAX_MEMORY must be set as a raw uint64 byte count (e.g. 1073741824), not a human-readable string like '1GB'.",
+        "The mock-ipns-routing healthcheck is misconfigured — it uses wget against localhost but the service binds to 0.0.0.0, causing false unhealthy status despite the service functioning correctly."
+      ],
+      "code": [
+        {
+          "path": "docker/docker-compose.yml",
+          "finding": "SOMEGUY_LIBP2P_MAX_MEMORY was set to '1GB' (invalid string); corrected to 1073741824 (bytes as uint64)."
+        }
+      ],
+      "workflow": [
+        "When a branch adds new Docker Compose services, the stack must be fully torn down and recreated (not just restarted) to pick up the new service definitions.",
+        "Kubo v0.40.0 image was newly pulled on this branch, indicating a version bump was part of the branch's changes.",
+        "someguy has a 60-second start period before health checks apply, so initial 'starting' status is expected."
+      ]
+    },
+    "friction": [
+      "Initial redeploy didn't include someguy because the branch's updated docker-compose wasn't used — required a second teardown/recreate cycle.",
+      "someguy crash-looped on first start due to the SOMEGUY_LIBP2P_MAX_MEMORY string format bug, requiring log investigation and a config fix before it would run.",
+      "mock-ipns-routing reports as unhealthy in Docker due to a healthcheck misconfiguration (localhost vs 0.0.0.0 binding), creating noise in status checks."
+    ],
+    "open_items": [
+      "mock-ipns-routing healthcheck is misconfigured and always reports unhealthy — should be fixed to use 0.0.0.0 or the correct host in the wget command.",
+      "User intends to run tests against this live instance ('shorylu') — test results not yet known."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T01:26:40.313824Z",
+    "agent_lines": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1,
+    "agent_percentage": 100
+  }
+}

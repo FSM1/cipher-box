@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.0",
+  "checkpoint_id": "0afa2132076c",
+  "strategy": "manual-commit",
+  "branch": "fix/someguy-ipns-routing",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "docker/docker-compose.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/0a/fa2132076c/0/metadata.json",
+      "transcript": "/0a/fa2132076c/0/full.jsonl",
+      "content_hash": "/0a/fa2132076c/0/content_hash.txt",
+      "prompt": "/0a/fa2132076c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 45619,
+    "cache_read_tokens": 623231,
+    "output_tokens": 2995,
+    "api_call_count": 22
+  }
+}
