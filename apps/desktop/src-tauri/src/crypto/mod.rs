@@ -12,6 +12,7 @@ pub mod folder;
 pub mod hkdf;
 pub mod ipns;
 pub mod utils;
+pub mod vault_blob;
 
 #[cfg(test)]
 mod tests;
