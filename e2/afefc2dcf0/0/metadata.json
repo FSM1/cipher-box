@@ -1,0 +1,73 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "e2afefc2dcf0",
+  "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T01:12:22.253693Z",
+  "branch": "fix/someguy-ipns-routing",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/todos/done/2026-03-23-investigate-someguy-ipns-routing-failure-locally.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "6d0b8b65e5db",
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 24672,
+    "cache_read_tokens": 273944,
+    "output_tokens": 1457,
+    "api_call_count": 9
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Review pending todos and select one to work on, specifically investigating why Someguy v0.11.1 IPNS endpoints hang indefinitely on staging.",
+    "outcome": "Selected the Someguy IPNS routing failure todo, created a feature branch, moved the todo to done, and committed the change — ready to begin local reproduction and debugging.",
+    "learnings": {
+      "repo": [
+        "Someguy v0.11.1 was deployed as self-hosted IPNS routing sidecar in Phase 19 (completed 2026-03-07) but was reverted in PR #322 due to IPNS endpoint failures",
+        "The /routing/v1/ipns/ endpoints (PUT and GET) hang indefinitely while /routing/v1/providers/ works fine — suggesting the issue is IPNS-specific in someguy",
+        "Staging uses delegated-ipfs.dev as fallback after the someguy revert",
+        "IPNS publish failures cost ~30s per attempt (3 retries x 10s timeout), generating ~2,000 abort errors in 10 minutes of load testing",
+        "Local reproduction environment uses Docker host at 192.168.133.114 with Kubo v0.40.0"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "finding": "Delegated routing client handles IPNS publish with 3 retries at 10s timeout each — the site of the ~30s waste per failed publish"
+        },
+        {
+          "path": "docker/docker-compose.yml",
+          "finding": "Relevant for reproducing the someguy sidecar setup locally"
+        },
+        {
+          "path": "docker/docker-compose.staging.yml",
+          "finding": "Staging compose config that had someguy configured before the revert"
+        }
+      ],
+      "workflow": [
+        "GSD check-todos workflow correlates todos against roadmap phases automatically, surfacing that this issue is a regression from a previously 'completed' phase"
+      ]
+    },
+    "friction": [
+      "Someguy IPNS endpoints hang indefinitely with no error response, making debugging harder than a clear failure mode",
+      "The revert to delegated-ipfs.dev means the self-hosted routing goal is blocked until this is resolved"
+    ],
+    "open_items": [
+      "Reproduce the IPNS hang locally with Docker + Kubo v0.40.0 and test endpoints directly",
+      "Check for known someguy bugs related to IPNS endpoint behavior",
+      "Validate fix with SDK E2E tests and load tests before re-deploying to staging",
+      "Re-enable someguy as self-hosted IPNS router once the root cause is identified and fixed (previously reverted in PR #322)"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T01:12:07.931307Z",
+    "agent_lines": 35,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 35,
+    "agent_percentage": 100
+  }
+}
