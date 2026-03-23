@@ -20,3 +20,7 @@ this should give us enough clarity on what the general trend is based on these c
 ---
 
 yeah that is much better an approach
+
+---
+
+/gsd:execute-phase 19.2 --gaps-only
