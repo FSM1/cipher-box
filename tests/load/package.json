@@ -6,7 +6,7 @@
   "scripts": {
     "test": "vitest run --no-coverage",
     "test:watch": "vitest",
-    "test:single": "vitest run --no-coverage --testPathPattern"
+    "test:single": "vitest run --no-coverage"
   },
   "devDependencies": {
     "@cipherbox/api-client": "workspace:*",
