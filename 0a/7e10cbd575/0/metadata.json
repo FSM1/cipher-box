@@ -1,0 +1,79 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "0a7e10cbd575",
+  "session_id": "17256d92-fa81-4467-a074-6d66d7ec4e84",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T22:16:23.476012Z",
+  "branch": "feat/phase-19.2-ipfs-upload-perf",
+  "checkpoints_count": 4,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "ccd409bd0100",
+  "token_usage": {
+    "input_tokens": 1265,
+    "cache_creation_tokens": 226873,
+    "cache_read_tokens": 11641021,
+    "output_tokens": 34093,
+    "api_call_count": 113
+  },
+  "session_metrics": {
+    "turn_count": 23
+  },
+  "summary": {
+    "intent": "Execute Phase 19.2 gap closure plans to address verification failures: register PERF-09 in REQUIREMENTS.md and collect definitive matched-environment load test baselines comparing three optimization states (no opts, SDK concurrent pins, SDK + pebbleds).",
+    "outcome": "PERF-09 was registered and a four-run load test protocol (concurrency probe + three baselines at 50 clients) was completed, revealing that concurrent SDK pins alone hurt performance at high concurrency but pebbleds datastore restored and improved it — the two optimizations are synergistic.",
+    "learnings": {
+      "repo": [
+        "Kubo/IPFS throughput plateaus around 3.5–4 ops/s at 10+ concurrent clients regardless of client count — the bottleneck is IPFS write throughput, not the API layer",
+        "50 concurrent clients is the highest clean load test run (zero errors, completes within timeout); 75+ clients trigger JWT token expiry and 401 errors under sustained load",
+        "Concurrent SDK pins (Promise.allSettled) double the simultaneous Kubo pin load — this hurts flatfs (p95 18.7s→44.7s) but pebbleds handles it (p95 16.3s, better than baseline)",
+        "DELEGATED_ROUTING_URL in apps/api/.env should point to someguy on 192.168.133.114:8190 for staging-representative tests; localhost:3001 is mock-ipns-routing",
+        "Load test secrets (LOAD_TEST_SECRET, THROTTLE_BYPASS_SECRET) must be passed as inline shell env vars — vitest does not load dotenv",
+        "THROTTLE_BYPASS_SECRET is sent as X-Throttle-Bypass header; BypassableThrottlerGuard skips rate limiting on non-production environments when this matches",
+        "LOAD_TEST_SECRET is used in POST /auth/test-login body for test account creation; API checks against TEST_LOGIN_SECRET"
+      ],
+      "code": [
+        {
+          "path": "tests/load/src/harness/metrics.ts",
+          "finding": "Collects per-operation p50/p95/p99/min/max/avg latencies plus throughput ops/s"
+        },
+        {
+          "path": "tests/load/src/scenarios/upload-throughput.test.ts",
+          "finding": "Runs N clients × 20 files each with file sizes 1KB-500KB; client count controlled via LOAD_TEST_CLIENTS env var"
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "finding": "Manages concurrent test client pool for load testing"
+        },
+        {
+          "path": "apps/api/.env",
+          "finding": "DELEGATED_ROUTING_URL changed from http://localhost:3001 (mock-ipns-routing) to http://192.168.133.114:8190 (someguy) during this session"
+        },
+        {
+          "path": ".planning/phases/19.2-ipfs-upload-performance-optimization/19.2-04-PLAN.md",
+          "finding": "Replanned twice during session — first to local three-point comparison, then updated with exact four-run protocol (probe + baselines), inline secret env vars, and someguy routing config"
+        }
+      ],
+      "workflow": [
+        "Pre-optimization baselines collected in different environments (staging vs localhost) are non-definitive — matched-environment comparison is essential for valid performance claims",
+        "Concurrency probe (incrementing client count until errors appear) is necessary before committing to a baseline client count — throughput plateau and error boundary are not obvious upfront",
+        "When running background bash tasks, working directory matters — cd to repo root before restoring files with git checkout",
+        "Git checkout of individual files for testing optimization stages requires care about CWD; run from repo root to avoid path resolution issues"
+      ]
+    },
+    "friction": [
+      "API server was not running and had to be started manually mid-session — no auto-start or healthcheck before tests",
+      "vitest does not load dotenv, so load test secrets cannot be set in .env files — must be passed as inline shell env vars; this was discovered mid-session",
+      "SDK git checkout for pre-optimization state failed silently when CWD was tests/load instead of repo root — required multiple recovery attempts",
+      "100-client load test timed out at 600s and returned a failed exit code, requiring a separate 75-client probe run to bracket the error boundary",
+      "Task notification for background 100-client and 75-client runs arrived after results were already interpreted, creating redundant output"
+    ],
+    "open_items": [
+      "Plan 19.2-04 Task 2 (documenting three-point baseline results in baselines file) was handed to a continuation agent at end of transcript — completion not confirmed",
+      "Todo: Investigate removal of mock-ipns-routing layer now that someguy is properly part of the stack (.planning/todos/pending/2026-03-23-investigate-removal-of-mock-ipns-routing-layer.md)",
+      "Todo: Load tests should handle 401s with token refresh — JWT tokens expire under sustained 75+ client load, causing test failures (.planning/todos/pending/2026-03-23-load-tests-should-handle-401s-with-token-refresh.md)",
+      "Phase 19.2 verification not yet re-run after gap closure execution — VERIFICATION.md status still 'gaps_found'; needs re-verification after 19.2-04 completes",
+      "apps/api/.env DELEGATED_ROUTING_URL was changed to someguy for testing — confirm this is the intended persistent value or revert to appropriate default for local dev"
+    ]
+  }
+}
