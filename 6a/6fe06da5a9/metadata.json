@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "6a6fe06da5a9",
+  "strategy": "manual-commit",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".planning/security/REVIEW-2026-03-24-phase20.md",
+    "apps/desktop/src-tauri/src/api/types.rs",
+    "apps/desktop/src-tauri/src/commands/vault.rs",
+    "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+    "apps/desktop/src-tauri/src/fuse/mod.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6a/6fe06da5a9/0/metadata.json",
+      "transcript": "/6a/6fe06da5a9/0/full.jsonl",
+      "content_hash": "/6a/6fe06da5a9/0/content_hash.txt",
+      "prompt": "/6a/6fe06da5a9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 41,
+    "cache_creation_tokens": 110913,
+    "cache_read_tokens": 1994620,
+    "output_tokens": 13697,
+    "api_call_count": 35
+  }
+}
