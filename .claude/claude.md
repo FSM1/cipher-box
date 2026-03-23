@@ -206,6 +206,6 @@ Valid types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`
 - All packages share a single unified version (currently tracked in `.release-please-manifest.json`)
 - [Release Please](https://github.com/googleapis/release-please) automates changelog generation, version bumping, and GitHub Releases
 - On push to `main`, the `release-please.yml` workflow creates/updates a release PR with accumulated changes
-- When that PR is merged, Release Please creates a GitHub Release and `vX.Y.Z` tag
+- When that PR is merged, Release Please creates a GitHub Release and `cipher-box-vX.Y.Z` tag (root package uses `include-component-in-tag: true` because release-please's multi-package release scanner cannot match bare `v{version}` tags to the root path)
 - Version bumps propagate to all `package.json` files, `Cargo.toml`, and `tauri.conf.json` via `release-please-config.json`
-- Staging deploys are triggered by pushing a tag matching `v*-staging*`. Legacy tags (e.g., `v0.1.0-staging.1`) also match but the **recommended convention** for new tags is `v<version>-staging-rc-<N>` (e.g., `v0.1.2-staging-rc-1`, `v0.1.2-staging-rc-2`). The `rc-N` suffix is a sequential counter allowing multiple staging deploys per version.
+- Staging deploys are triggered by pushing a tag matching `staging-v*` (e.g., `staging-v0.26.0-rc-1`). The `staging-` prefix avoids collision with release-please's `v{version}` tag pattern — previous `v*-staging*` format caused release-please to match staging pre-releases to the root package path, blocking tag creation. The `rc-N` suffix is a sequential counter allowing multiple staging deploys per version.
