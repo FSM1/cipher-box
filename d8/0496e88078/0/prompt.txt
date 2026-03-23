@@ -282,3 +282,7 @@ ok and in comparison with utilizing delegated-ipfs.dev?
 ---
 
 there were performance baselines captured between phase 18 and 19
+
+---
+
+yes that seems like a great idea to me
