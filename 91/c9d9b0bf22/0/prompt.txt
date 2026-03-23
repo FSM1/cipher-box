@@ -16,3 +16,7 @@ I am not so sure I want to verify these baselines on staging when we can collect
 3 - after kubo optimizations
 
 this should give us enough clarity on what the general trend is based on these changes, without unnecessary destructive staging deployments.
+
+---
+
+yeah that is much better an approach
