@@ -1,0 +1,75 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "c660dc8f2284",
+  "session_id": "17256d92-fa81-4467-a074-6d66d7ec4e84",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T21:52:37.323586Z",
+  "branch": "feat/phase-19.2-ipfs-upload-perf",
+  "checkpoints_count": 6,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "cdfb42eae701",
+  "token_usage": {
+    "input_tokens": 1249,
+    "cache_creation_tokens": 221908,
+    "cache_read_tokens": 10200865,
+    "output_tokens": 31049,
+    "api_call_count": 103
+  },
+  "session_metrics": {
+    "turn_count": 20
+  },
+  "summary": {
+    "intent": "Execute Phase 19.2 gap closure plans for IPFS upload performance optimization, then run a four-pass load test (concurrency probe + three-point before/after comparison) to produce definitive, matched-environment baselines for the SDK concurrent-pin and Kubo pebbleds optimizations.",
+    "outcome": "Both original Phase 19.2 plans executed and verified with two gaps found (PERF-09 missing from REQUIREMENTS.md, non-definitive baselines). Gap closure plans created and plan 19.2-04 revised to use a local four-run methodology. PERF-09 registered (plan 19.2-03 complete). Concurrency probe completed (50 clients = clean ceiling). Run 1 baseline (sequential SDK + flatfs, 50 clients) captured. Run 2 (concurrent SDK + flatfs) was in progress at end of session.",
+    "learnings": {
+      "repo": [
+        "Load test secrets (LOAD_TEST_SECRET, THROTTLE_BYPASS_SECRET) must be passed as inline shell env vars — vitest does not load dotenv, so values in tests/load/.env are ignored at runtime.",
+        "Rate limiting is bypassed via X-Throttle-Bypass header (BypassableThrottlerGuard) only when NODE_ENV !== 'production'; LOAD_TEST_SECRET authenticates test account creation via POST /auth/test-login.",
+        "DELEGATED_ROUTING_URL in apps/api/.env controls IPNS routing; was pointing to mock-ipns-routing (localhost:3001), must be set to someguy at 192.168.133.114:8190 for representative testing.",
+        "Kubo/IPFS throughput hard-caps around 3.4–3.5 ops/s regardless of client count (10–50 clients); adding concurrency does not increase throughput but does balloon latency linearly.",
+        "JWT tokens expire under sustained long-running load tests at 75+ clients, causing 401 errors and cascading 500s ('Key wrapping failed', 'Folder not loaded').",
+        "50 concurrent clients is the highest clean ceiling (zero errors, completes within timeout); 75 clients starts hitting auth token expiry and timeouts."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "finding": "uploadFile was updated to use Promise.allSettled to parallelize IPNS publish and folder metadata update (previously sequential); this is the SDK-layer optimization being validated in the baseline runs."
+        },
+        {
+          "path": "tests/load/src/harness/metrics.ts",
+          "finding": "Captures per-operation p50/p95/p99/min/max/avg latencies and throughput ops/s — sufficient for three-point optimization comparison."
+        },
+        {
+          "path": "tests/load/src/scenarios/upload-throughput.test.ts",
+          "finding": "Scenario runs N clients × 20 files each (1KB–500KB); client count controlled by LOAD_TEST_CLIENTS env var."
+        },
+        {
+          "path": "apps/api/.env",
+          "finding": "DELEGATED_ROUTING_URL changed from http://localhost:3001 (mock-ipns-routing) to http://192.168.133.114:8190 (someguy) for this baseline session."
+        }
+      ],
+      "workflow": [
+        "Comparing pre/post baselines captured in different environments (staging vs localhost, different client counts) produces non-definitive results — same-environment three-point methodology avoids this confound.",
+        "When a git checkout is run from within a subdirectory (tests/load), the relative path to a file in another package resolves incorrectly; must run from repo root or use absolute paths.",
+        "GSD plan files should be updated with concrete execution details (exact commands, env vars, client counts) before execution begins so context is not lost if the session ends mid-run.",
+        "Background tasks via run_in_background accumulate task-notification messages that arrive out-of-order; spot-checking via TaskOutput is necessary to reconcile results before acting on them."
+      ]
+    },
+    "friction": [
+      "Original phase 19.2 baselines were captured in mismatched environments (staging for pre-optimization, localhost for post-optimization), making the verification non-definitive and requiring a full gap-closure cycle.",
+      "PERF-09 was referenced in plans but never added to REQUIREMENTS.md, causing a requirements traceability gap caught only at verification.",
+      "Load test secrets silently fail when placed in tests/load/.env because vitest does not invoke dotenv — no error is thrown, tests just run unauthenticated.",
+      "API server was not running when load tests were initiated and had to be started mid-session before any tests could run.",
+      "git checkout of a pre-optimization file failed silently when the working directory was tests/load — the relative path did not resolve correctly, requiring a workaround from the repo root."
+    ],
+    "open_items": [
+      "Run 2 (concurrent SDK + flatfs, 50 clients) was in progress at end of session — results not yet captured.",
+      "Run 3 (concurrent SDK + pebbleds, 50 clients) not yet started — requires Docker volume wipe and pebbleds stack redeployment on 192.168.133.114.",
+      "SUMMARY.md for plan 19.2-04 not yet written — depends on all three baseline runs completing.",
+      "Load test 401 handling: JWT tokens expire under sustained 75+ client load; a token refresh mechanism in the load test client would allow probing higher concurrency (todo captured).",
+      "Investigate removal of mock-ipns-routing layer now that someguy is properly integrated into the stack (todo captured).",
+      "Phase 19.2 re-verification needed after gap closure plans 03 and 04 are fully executed to flip VERIFICATION.md status from gaps_found to passed."
+    ]
+  }
+}
