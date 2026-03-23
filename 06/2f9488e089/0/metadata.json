@@ -1,0 +1,84 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "062f9488e089",
+  "session_id": "0efa9fff-3002-4b6b-a039-4843c3c6162e",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T17:03:21.890731Z",
+  "branch": "docs/phase-19-baselines",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/baselines/19-someguy-ipns-baselines.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "1adb1a41af92",
+  "token_usage": {
+    "input_tokens": 150,
+    "cache_creation_tokens": 157807,
+    "cache_read_tokens": 9670435,
+    "output_tokens": 24226,
+    "api_call_count": 101
+  },
+  "session_metrics": {
+    "turn_count": 22
+  },
+  "summary": {
+    "intent": "Run load tests against the staging API with 10/20/30 clients to establish baselines, then scale up to find the capacity limit of a single instance, and analyze where the uploadFile latency is spent.",
+    "outcome": "Baselines captured for 10/20/30/100 clients with zero errors; two CI workflow bugs were fixed (Vitest flag, missing environment declaration, scenario filter, timeout); Prometheus analysis identified Kubo IPFS pinning as the dominant bottleneck (~95% of upload latency, ~1.73s per pin, 3 pins per uploadFile); results documented in the baselines file; 50/75-client runs queued to fill the scaling curve.",
+    "learnings": {
+      "repo": [
+        "The load-test workflow uses GitHub environment 'staging' for secrets (STAGING_TEST_LOGIN_SECRET, STAGING_THROTTLE_BYPASS_SECRET, STAGING_API_URL) — jobs must declare `environment: staging` or those vars are empty.",
+        "SDK uploadFile makes 5 sequential API calls: 3x POST /ipfs/upload (ciphertext, file metadata, folder metadata) + POST /ipns/publish-batch + POST /ipns/publish.",
+        "Kubo IPFS pinning accounts for ~95% of upload endpoint latency (mean 1.73s per pin), with 3 pins per uploadFile making it the dominant bottleneck.",
+        "IPNS publish is fast (mean ~141ms) — it's a DB upsert only; DHT propagation is async and fire-and-forget with 0.26% error rate.",
+        "Baselines are stored in .planning/baselines/ following the pattern 19-someguy-ipns-baselines.md; a phase-18 file exists for format reference.",
+        "A 'docs/phase-19-baselines' branch is used for accumulating baseline documentation.",
+        "Throughput scales sub-linearly at high concurrency: 5.4x throughput at 10x clients (10→100), with upload p50 doubling from 2.6s to 5.1s but zero errors throughout.",
+        "The 'SDK E2E Tests' required check was missing from branch protection on main after a CI consolidation; 'Verify E2E Passed' is a separate job that should not be modified."
+      ],
+      "code": [
+        {
+          "path": ".github/workflows/load-test.yml",
+          "finding": "Original workflow used `pnpm test:single -- \u003cscenario\u003e` which passes args after `--` into CAC's separate bucket, not vitest's file filter — all 5 scenarios ran instead of the selected one. Fixed by calling `pnpm exec vitest run --no-coverage \u003cscenario\u003e` directly."
+        },
+        {
+          "path": ".github/workflows/load-test.yml",
+          "finding": "Job timeout was 30 minutes — insufficient when scenario filter was broken and all 5 scenarios ran. Bumped to 60 minutes after fixing the filter."
+        },
+        {
+          "path": "tests/load/package.json",
+          "finding": "The test:single script used --testPathPattern which is a Jest flag, not valid in Vitest."
+        }
+      ],
+      "workflow": [
+        "Running multiple `gh run watch` instances simultaneously (6 watchers at 3s poll interval = ~120 req/min) will hit GitHub API rate limits quickly; use a single status check instead.",
+        "GitHub Actions jobs referencing an environment show as 'Deploying to \u003cenv\u003e' in the UI — this is cosmetic only, no actual deployment occurs.",
+        "Commit messages should use `chore(ci):` prefix to prevent release-please from triggering a version bump for CI-only changes.",
+        "Load tests hitting the same staging API should use a concurrency group to queue runs sequentially and avoid interference between concurrent runs."
+      ]
+    },
+    "friction": [
+      "First three load test runs failed immediately due to two bugs: --testPathPattern (Jest flag in Vitest) and missing environment: staging causing empty secret vars.",
+      "Scenario filter bug caused all 5 scenarios to run instead of just the selected one, making runs take 16+ minutes and causing 50/75/100-client runs to hit the 30-minute job timeout and get cancelled.",
+      "Running 6 concurrent `gh run watch` instances burned through the GitHub API rate limit; multiple check attempts failed for ~1 hour.",
+      "`gh run watch` exited early on some runs due to the deployment environment approval step, creating confusion about whether runs had completed.",
+      "Background task watchers returned stale exit-0 results from earlier completed runs, creating confusion about which notifications were real.",
+      "User had to interrupt the assistant twice when it appeared stuck (once at the start, once during result formatting)."
+    ],
+    "open_items": [
+      "50 and 75-client load test runs are queued but not yet complete — results need to be retrieved and added to the baselines doc to fill in the scaling curve.",
+      "The Prometheus analysis should be added to the baselines doc once 50/75 results are in.",
+      "Potential optimization: Kubo pinning is the bottleneck — investigate faster storage backend, pin batching, or concurrent pins to improve upload latency.",
+      "0.26% async DHT propagation error rate noted — worth monitoring but not blocking.",
+      "The scenario filter fix (PR #340) was merged but the 100-client run was triggered before it was merged and still passed — worth verifying the filter is working correctly in the 50/75 runs."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T17:02:43.880513Z",
+    "agent_lines": 0,
+    "human_added": 78,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 78,
+    "agent_percentage": 0
+  }
+}
