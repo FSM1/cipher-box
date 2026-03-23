@@ -133,3 +133,7 @@ ok i have enabled auto merge on the release pr - monitor for it being merged, ch
 ---
 
 why can you not ssh in to the staging vps?
+
+---
+
+you have an entirely different root ssh key for the staging vps
