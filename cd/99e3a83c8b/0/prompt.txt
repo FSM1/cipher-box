@@ -9,3 +9,53 @@ use /gsd:insert-phase to insert a phase after 19 to implement and test out some 
 ---
 
 can you create a git worktree off main for phase 20 work?
+
+---
+
+<task-notification>
+<task-id>a04c1641d14926c16</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/a04c1641d14926c16.output</output-file>
+<status>completed</status>
+<summary>Agent "Research Phase 19.2" completed</summary>
+<result>The commit succeeded. Here is the structured result:
+
+## RESEARCH COMPLETE
+
+**Phase:** 19.2 - IPFS Upload Performance Optimization
+**Confidence:** HIGH
+
+### Key Findings
+
+1. **The primary parallelization opportunity is between steps 2 and 3 of the upload flow.** The file IPNS batch publish and folder metadata update (pin + IPNS publish) have no data dependencies on each other. Running them concurrently with `Promise.allSettled` saves one full pin duration (~1.73s), reducing the 5-call sequence from ~5.4s to ~3.7s -- aligning with the success criteria target of ~3.5s at p50.
+
+2. **Steps 1a and 1b (ciphertext pin + file metadata pin) CANNOT be parallelized** because the file metadata embeds the CID from the ciphertext pin. The baselines document incorrectly suggested pins 1+2 could be parallelized -- the actual dependency chain makes only steps 2+3 parallelizable.
+
+3. **Kubo pebbleds is the recommended datastore alternative to flatfs** if per-pin latency needs further reduction. Badgerds is explicitly deprecated and scheduled for removal. PebbleDB (LSM-tree) has faster write throughput than flatfs, though at the cost of higher memory usage and read amplification. No published benchmarks exist for pebbleds vs flatfs v0.40.0, so empirical testing is needed.
+
+4. **No new dependencies or API changes are needed.** The primary optimization (Lever 1) is a ~10-line change in `packages/sdk/src/client.ts` to wrap two sequential awaits in `Promise.allSettled`. The datastore optimization (Lever 2) is a Docker config change only.
+
+5. **Existing load test infrastructure is fully ready** for before/after comparison. The `tests/load/` vitest suite with `mixed-workload` and `upload-throughput` scenarios produces JSON metrics reports with percentile breakdowns. Prometheus histograms (`cipherbox_ipfs_ipns_duration_seconds`) already capture server-side pin timing.
+
+### File Created
+`/Users/michael/Code/cipher-box/.planning/phases/19.2-ipfs-upload-performance-optimization/19.2-RESEARCH.md`
+
+### Confidence Assessment
+| Area | Level | Reason |
+|------|-------|--------|
+| Standard Stack | HIGH | No new dependencies, all changes to existing code |
+| Architecture (concurrent pins) | HIGH | Code paths directly traced, dependency analysis definitive from source code |
+| Architecture (pebbleds datastore) | MEDIUM | Kubo docs recommend but no benchmarks for v0.40.0 flatfs rewrite comparison |
+| Pitfalls | HIGH | Based on direct code reading and known IPFS/Kubo architectural limitations |
+| Load test infrastructure | HIGH | Already built, working, and producing metrics from Phase 19 |
+
+### Open Questions
+1. pebbleds vs flatfs v0.40.0 performance under CipherBox's specific workload (many small pin ops, moderate concurrency) -- needs empirical testing
+2. Whether making 2 concurrent pin requests per upload from the API hits Kubo internal write locks -- empirical question
+3. Whether `IPFS_PROFILE=server,pebbleds` correctly composes both profiles -- needs local testing
+
+### Ready for Planning
+Research complete. Planner can now create PLAN.md files.</result>
+<usage><total_tokens>139507</total_tokens><tool_uses>94</tool_uses><duration_ms>414715</duration_ms></usage>
+</task-notification>
+Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/a04c1641d14926c16.output
