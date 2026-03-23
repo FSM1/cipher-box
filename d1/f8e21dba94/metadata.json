@@ -1,0 +1,25 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "d1f8e21dba94",
+  "strategy": "manual-commit",
+  "branch": "chore/ci-parallelize-and-bump-kubo",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/load-test.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d1/f8e21dba94/0/metadata.json",
+      "transcript": "/d1/f8e21dba94/0/full.jsonl",
+      "content_hash": "/d1/f8e21dba94/0/content_hash.txt",
+      "prompt": "/d1/f8e21dba94/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 327,
+    "cache_creation_tokens": 311818,
+    "cache_read_tokens": 55029196,
+    "output_tokens": 91999,
+    "api_call_count": 291
+  }
+}
