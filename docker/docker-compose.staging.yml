@@ -102,6 +102,34 @@ services:
       timeout: 5s
       retries: 5
 
+  someguy:
+    image: ghcr.io/ipfs/someguy:v0.11.1
+    restart: unless-stopped
+    environment:
+      SOMEGUY_LISTEN_ADDRESS: 0.0.0.0:8190
+      SOMEGUY_DHT: accelerated
+      SOMEGUY_LIBP2P_CONNMGR_LOW: 100
+      SOMEGUY_LIBP2P_CONNMGR_HIGH: 3000
+      SOMEGUY_LIBP2P_MAX_MEMORY: 1GB
+      GOLOG_LOG_LEVEL: info
+      GOLOG_LOG_FMT: json
+    ports:
+      # libp2p swarm - required for DHT participation
+      - '4004:4004/tcp'
+      - '4004:4004/udp'
+    logging: *default-logging
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:8190/version || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
