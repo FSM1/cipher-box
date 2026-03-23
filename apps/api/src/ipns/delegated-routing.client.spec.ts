@@ -1,6 +1,7 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DelegatedRoutingClient } from './delegated-routing.client';
+import { MetricsService } from '../metrics/metrics.service';
 
 // Mock global fetch
 const mockFetch = jest.fn();
@@ -21,9 +22,17 @@ function createMockResponse(
   } as unknown as Response;
 }
 
+function createMockMetrics(): MetricsService {
+  return {
+    delegatedRoutingRequests: { inc: jest.fn() },
+    delegatedRoutingFallbacks: { inc: jest.fn() },
+  } as unknown as MetricsService;
+}
+
 describe('DelegatedRoutingClient', () => {
   let client: DelegatedRoutingClient;
   let configService: ConfigService;
+  let metricsService: MetricsService;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let delaySpy: jest.SpyInstance<Promise<void>, [ms: number], any>;
 
@@ -32,10 +41,15 @@ describe('DelegatedRoutingClient', () => {
     mockFetch.mockReset();
 
     configService = {
-      get: jest.fn().mockReturnValue('https://routing.example.com'),
+      get: jest.fn((key: string, fallback: string) => {
+        if (key === 'DELEGATED_ROUTING_URL') return 'https://routing.example.com';
+        if (key === 'DELEGATED_ROUTING_FALLBACK_URL') return '';
+        return fallback;
+      }),
     } as unknown as ConfigService;
 
-    client = new DelegatedRoutingClient(configService);
+    metricsService = createMockMetrics();
+    client = new DelegatedRoutingClient(configService, metricsService);
 
     // Eliminate real delays by making delay() resolve instantly
     delaySpy = jest.spyOn(client as never, 'delay' as never).mockResolvedValue(undefined as never);
@@ -47,6 +61,10 @@ describe('DelegatedRoutingClient', () => {
         'DELEGATED_ROUTING_URL',
         'https://delegated-ipfs.dev'
       );
+    });
+
+    it('reads DELEGATED_ROUTING_FALLBACK_URL from config', () => {
+      expect(configService.get).toHaveBeenCalledWith('DELEGATED_ROUTING_FALLBACK_URL', '');
     });
   });
 
@@ -66,6 +84,18 @@ describe('DelegatedRoutingClient', () => {
       );
       expect(init.method).toBe('PUT');
       expect(init.headers['Content-Type']).toBe('application/vnd.ipfs.ipns-record');
+    });
+
+    it('records success metric on primary', async () => {
+      mockFetch.mockResolvedValueOnce(createMockResponse(200));
+
+      await client.publish(ipnsName, recordBytes);
+
+      expect(metricsService.delegatedRoutingRequests.inc).toHaveBeenCalledWith({
+        operation: 'publish',
+        backend: 'primary',
+        outcome: 'success',
+      });
     });
 
     it('throws BAD_GATEWAY on non-retryable HTTP error', async () => {
@@ -225,6 +255,129 @@ describe('DelegatedRoutingClient', () => {
       expect(error).toBeInstanceOf(HttpException);
       expect(error.getStatus()).toBe(HttpStatus.BAD_GATEWAY);
       expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe('fallback behavior', () => {
+    const ipnsName = 'k51qzi5uqu5dg12345';
+    const recordBytes = new Uint8Array([1, 2, 3]);
+    let fallbackClient: DelegatedRoutingClient;
+    let fallbackMetrics: MetricsService;
+
+    beforeEach(() => {
+      const fallbackConfig = {
+        get: jest.fn((key: string, fallback: string) => {
+          if (key === 'DELEGATED_ROUTING_URL') return 'https://someguy.local:8190';
+          if (key === 'DELEGATED_ROUTING_FALLBACK_URL') return 'https://delegated-ipfs.dev';
+          return fallback;
+        }),
+      } as unknown as ConfigService;
+
+      fallbackMetrics = createMockMetrics();
+      fallbackClient = new DelegatedRoutingClient(fallbackConfig, fallbackMetrics);
+      jest.spyOn(fallbackClient as never, 'delay' as never).mockResolvedValue(undefined as never);
+    });
+
+    it('uses fallback URL when primary publish fails', async () => {
+      // Primary fails all retries
+      mockFetch
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+        // Fallback succeeds
+        .mockResolvedValueOnce(createMockResponse(200));
+
+      await fallbackClient.publish(ipnsName, recordBytes);
+
+      // 3 primary + 1 fallback
+      expect(mockFetch).toHaveBeenCalledTimes(4);
+      expect(mockFetch.mock.calls[0][0]).toContain('someguy.local');
+      expect(mockFetch.mock.calls[3][0]).toContain('delegated-ipfs.dev');
+    });
+
+    it('records fallback metric when primary fails', async () => {
+      mockFetch
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+        .mockResolvedValueOnce(createMockResponse(200));
+
+      await fallbackClient.publish(ipnsName, recordBytes);
+
+      expect(fallbackMetrics.delegatedRoutingFallbacks.inc).toHaveBeenCalledWith({
+        operation: 'publish',
+      });
+      expect(fallbackMetrics.delegatedRoutingRequests.inc).toHaveBeenCalledWith({
+        operation: 'publish',
+        backend: 'primary',
+        outcome: 'error',
+      });
+      expect(fallbackMetrics.delegatedRoutingRequests.inc).toHaveBeenCalledWith({
+        operation: 'publish',
+        backend: 'fallback',
+        outcome: 'success',
+      });
+    });
+
+    it('uses fallback URL when primary resolve fails', async () => {
+      const testBuffer = new Uint8Array([10, 20, 30]).buffer;
+      mockFetch
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          arrayBuffer: jest.fn().mockResolvedValue(testBuffer),
+        });
+
+      const result = await fallbackClient.resolve(ipnsName);
+
+      expect(result).toBeInstanceOf(Uint8Array);
+      expect(mockFetch).toHaveBeenCalledTimes(4);
+      expect(mockFetch.mock.calls[3][0]).toContain('delegated-ipfs.dev');
+    });
+
+    it('records fallback metric when primary resolve fails', async () => {
+      mockFetch
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+        .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          arrayBuffer: jest.fn().mockResolvedValue(new ArrayBuffer(10)),
+        });
+
+      await fallbackClient.resolve(ipnsName);
+
+      expect(fallbackMetrics.delegatedRoutingFallbacks.inc).toHaveBeenCalledWith({
+        operation: 'resolve',
+      });
+    });
+
+    it('throws when both primary and fallback fail', async () => {
+      mockFetch.mockRejectedValue(new Error('ECONNREFUSED'));
+
+      const error = await fallbackClient.publish(ipnsName, recordBytes).catch((e) => e);
+
+      expect(error).toBeInstanceOf(HttpException);
+      expect(error.getStatus()).toBe(HttpStatus.BAD_GATEWAY);
+      // 3 primary retries + 3 fallback retries
+      expect(mockFetch).toHaveBeenCalledTimes(6);
+    });
+
+    it('does not use fallback when no fallback URL configured', async () => {
+      mockFetch.mockRejectedValue(new Error('ECONNREFUSED'));
+
+      const error = await client.publish(ipnsName, recordBytes).catch((e) => e);
+
+      expect(error).toBeInstanceOf(HttpException);
+      // Only 3 primary retries, no fallback
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+      expect(metricsService.delegatedRoutingFallbacks.inc).not.toHaveBeenCalled();
     });
   });
 
