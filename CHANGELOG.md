@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.5](https://github.com/FSM1/cipher-box/compare/cipher-box-v0.26.4...cipher-box-v0.26.5) (2026-03-23)
+
+
+### Bug Fixes
+
+* **ci:** use include-component-in-tag for root release-please package ([#333](https://github.com/FSM1/cipher-box/issues/333)) ([cb749fb](https://github.com/FSM1/cipher-box/commit/cb749fbcae0154c2da85746e4471907494c6e523))
+
 ## [0.26.4](https://github.com/FSM1/cipher-box/compare/v0.26.3...v0.26.4) (2026-03-23)
 
 
