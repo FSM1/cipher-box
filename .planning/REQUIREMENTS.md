@@ -21,7 +21,7 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 - [x] **VAULT-03**: Lazy migration writes vault blob v2 on next folder metadata publish
 - [x] **VAULT-04**: encryptedRootIpnsPrivateKey column deprecated from vaults table (HKDF-derivable)
 - [ ] **VAULT-05**: Recovery tool updated to parse vault blob v2 format
-- [ ] **VAULT-06**: Desktop app (Rust) parses vault blob v2 format
+- [x] **VAULT-06**: Desktop app (Rust) parses vault blob v2 format
 
 ### BYO-IPFS
 
@@ -105,7 +105,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | VAULT-03    | Phase 20   | Complete |
 | VAULT-04    | Phase 20   | Complete |
 | VAULT-05    | Phase 20   | Pending  |
-| VAULT-06    | Phase 20   | Pending  |
+| VAULT-06    | Phase 20   | Complete |
 | BYO-01      | Phase 21   | Pending  |
 | BYO-02      | Phase 21   | Pending  |
 | BYO-03      | Phase 21   | Pending  |

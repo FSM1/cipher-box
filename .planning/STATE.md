@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-23T21:38:41.696Z'
+last_updated: '2026-03-23T21:50:25.587Z'
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 14
-  completed_plans: 12
+  completed_plans: 13
 ---
 
 # Project State
@@ -23,7 +23,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 20 (vault-migration) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 
 ## Performance Metrics
 
@@ -44,6 +44,7 @@ Plan: 3 of 4
 | 19.1  | 06   | 13min    | 3     | 52    |
 | 20    | 01   | 4min     | 2     | 5     |
 | 20    | 02   | 17min    | 3     | 16    |
+| 20    | 03   | 25min    | 2     | 6     |
 
 ## Accumulated Context
 
@@ -69,6 +70,9 @@ Recent for v1.1:
 - Share module accepts callback functions for API calls to stay transport-decoupled
 - Moved @cipherbox/core from dependencies to devDependencies in crypto (test-only cross-package assertions)
 - Combined per-task commits into single commit due to pre-commit hook requiring api-client regeneration with entity/dto/controller changes
+- Desktop root folder detected by inode::ROOT_INO at publish call sites (simpler than modifying build_folder_metadata return type)
+- Desktop initialize_vault produces v2 blob for new users from day one (not just on migration)
+- decrypt_metadata_from_ipfs_public transparently handles both v1 JSON and v2 binary blobs
 - VaultExportDto crypto fields made nullable (string | null) to reflect migrated user state
 
 ### Roadmap Evolution
@@ -93,4 +97,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-23 after completing 20-02 (vault migration API infrastructure: DB migration, entity/DTO/service updates, POST /vault/migrate endpoint, API client regeneration)
+Last updated: 2026-03-23 after completing 20-03 (desktop Rust v2 blob module, vault fetch for migrated users, root folder v2 publish)
