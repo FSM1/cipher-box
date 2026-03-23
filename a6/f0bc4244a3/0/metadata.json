@@ -1,0 +1,83 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "a6f0bc4244a3",
+  "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T02:02:55.071368Z",
+  "branch": "fix/someguy-ipns-routing",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".github/workflows/deploy-staging.yml"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "ce4bc0eeda1d",
+  "checkpoint_transcript_start": 691,
+  "transcript_lines_at_start": 691,
+  "token_usage": {
+    "input_tokens": 39,
+    "cache_creation_tokens": 51168,
+    "cache_read_tokens": 4586661,
+    "output_tokens": 16956,
+    "api_call_count": 35
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Implement a delegated-ipfs.dev fallback for IPNS routing in the DelegatedRoutingClient, with Prometheus metrics to expose fallback frequency in Grafana.",
+    "outcome": "Fallback logic was implemented at the API level in DelegatedRoutingClient with Prometheus counters tracking primary vs fallback backend usage. All 27 client tests and 58 IPNS service tests pass; changes were committed and pushed.",
+    "learnings": {
+      "repo": [
+        "Someguy's SOMEGUY_IPNS_ENDPOINTS does concurrent fanout (race), not sequential fallback — it queries DHT and delegated endpoint in parallel and returns the winner, with no per-source metrics exposure.",
+        "Fallback routing must be implemented at the API layer (DelegatedRoutingClient) rather than someguy config to get meaningful observability.",
+        "MetricsService is the central place to register Prometheus counters; DelegatedRoutingClient is injected via DelegatedRoutingModule.",
+        "Jest must be run from the api directory or with a specific config path — running from repo root requires different invocation."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "finding": "Rewritten to add fallback to delegated-ipfs.dev when someguy fails after retries, with {backend='primary'|'fallback'} label on Prometheus counters."
+        },
+        {
+          "path": "apps/api/src/metrics/metrics.service.ts",
+          "finding": "New counters added for delegated routing backend hits (primary/fallback/error)."
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.spec.ts",
+          "finding": "Test suite expanded to 27 tests covering fallback behavior and metric counter assertions."
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "finding": "Updated to document/pass the fallback URL env var for staging deployments."
+        },
+        {
+          "path": "apps/api/.env.example",
+          "finding": "Added DELEGATED_IPFS_FALLBACK_URL documentation entry."
+        }
+      ],
+      "workflow": [
+        "Research agent was used to investigate existing metrics setup before writing new metric definitions — avoids duplication.",
+        "Running tests in three scopes (client spec, ipns service spec, republish spec) validated no regressions across all consumers of DelegatedRoutingClient.",
+        "Jest invocation from repo root vs api directory has different behavior — prefer running from the app directory directly."
+      ]
+    },
+    "friction": [
+      "Jest test runner location confusion — required multiple attempts (checking jest config, finding spec file, running from different directories) before finding the correct invocation.",
+      "Initial design considered someguy-level SOMEGUY_IPNS_ENDPOINTS config before discovering it performs concurrent fanout rather than fallback, requiring a design pivot."
+    ],
+    "open_items": [
+      "Grafana dashboard configuration for the new fallback metrics counters was not set up — metrics are being emitted but no dashboard panels were created to visualize fallback frequency.",
+      "Untracked load test metrics JSON files and .env restoration were left out of the PR intentionally — may need cleanup or gitignore entries.",
+      "The someguy-level SOMEGUY_IPNS_ENDPOINTS fanout behavior could be useful for latency optimization in the future, separate from fallback concerns."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T02:02:32.651099Z",
+    "agent_lines": 0,
+    "human_added": 303,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 303,
+    "agent_percentage": 0
+  }
+}
