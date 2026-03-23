@@ -1,0 +1,52 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "1743c748c3e8",
+  "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T01:18:26.474911Z",
+  "branch": "fix/someguy-ipns-routing",
+  "checkpoints_count": 0,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "6d0b8b65e5db",
+  "checkpoint_transcript_start": 53,
+  "transcript_lines_at_start": 53,
+  "token_usage": {
+    "input_tokens": 5,
+    "cache_creation_tokens": 14755,
+    "cache_read_tokens": 202859,
+    "output_tokens": 2169,
+    "api_call_count": 5
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Investigate and fix an IPNS routing failure with someguy locally by adding a properly configured someguy service to the local docker-compose.",
+    "outcome": "Added a corrected someguy service to docker-compose.yml with proper libp2p port exposure, accelerated DHT mode, and relaxed resource limits, then committed and pushed for deployment.",
+    "learnings": {
+      "repo": [
+        "cipher-box uses delegated routing via someguy for IPNS resolution, configured in apps/api/src/ipns/delegated-routing.client.ts",
+        "The project has separate docker-compose files for local and staging environments: docker/docker-compose.yml and docker/docker-compose.staging.yml"
+      ],
+      "code": [
+        {
+          "path": "docker/docker-compose.yml",
+          "finding": "someguy service was missing libp2p port 4004 exposure, used 'standard' DHT mode instead of 'accelerated', had too-tight resources (0.5 CPU, 768MB RAM, 512MB libp2p), and low connection limits (50/300 vs defaults 100/3000) — all contributing to IPNS routing failure"
+        }
+      ],
+      "workflow": [
+        "Previous someguy deployment issues were discoverable via git history research on Phase 19 work",
+        "someguy Resource Manager errors are triggered by insufficient memory/CPU limits"
+      ]
+    },
+    "friction": [
+      "The prior someguy configuration had multiple compounding misconfigurations (port, DHT mode, resources, connection limits) that were not obvious from a single root cause"
+    ],
+    "open_items": [
+      "Verify the fix works end-to-end on the Docker host after pulling the updated compose file",
+      "Consider updating docker-compose.staging.yml with the same corrected someguy configuration if it shares the same issues",
+      "The todo task was only started (commit message says 'start work on') — full investigation/resolution may still be pending"
+    ]
+  }
+}
