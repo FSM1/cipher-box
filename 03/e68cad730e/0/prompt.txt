@@ -52,3 +52,7 @@ Ahhh no i meant it more like: run 0 - figure out concurrency limits on the old s
 ---
 
 also for the api .env config: please make sure that someguy running on 192.168.133.114 is utilized to make this comparison more close to staging setup. the mock-ipns-routing should not be utilized.
+
+---
+
+/gsd:add-todo now that someguy has been configured and is properly part of the stack, I think it might be time to investigate the removal of the mock-ipns-routing layer
