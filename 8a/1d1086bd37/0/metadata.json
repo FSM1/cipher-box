@@ -1,0 +1,82 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "8a1d1086bd37",
+  "session_id": "20f4a3f5-eda6-4aef-a4d0-b4bd794aa423",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T19:20:55.417206Z",
+  "branch": "docs/phase-20-context",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "b32b45890674",
+  "token_usage": {
+    "input_tokens": 55,
+    "cache_creation_tokens": 106973,
+    "cache_read_tokens": 4000618,
+    "output_tokens": 15919,
+    "api_call_count": 45
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Capture implementation decisions for Phase 20 (Vault Migration) via discuss-phase, then kick off plan-phase to research and create executable plans for moving rootFolderKey from the database into IPFS vault blob v2 format.",
+    "outcome": "CONTEXT.md was successfully created at `.planning/phases/20-vault-migration/20-CONTEXT.md` with all five discussion areas resolved. The file was committed on branch `docs/phase-20-context`. Plan-phase was initiated and a researcher agent was spawned before the transcript ended.",
+    "learnings": {
+      "repo": [
+        "Vault blob v2 format is defined in ARCHITECTURE.md: `0x02 | uint16 key_length | ECIES_key | AES_GCM_metadata`",
+        "encryptedRootFolderKey and encryptedRootIpnsPrivateKey are the two crypto columns being deprecated from the vault DB row",
+        "IPNS key is HKDF-derivable, making the stored copy in the DB redundant — already verified in desktop Rust code",
+        "Migration strategy is dual-write (v2 blob + DB keep), triggered on next login rather than on publish",
+        "Silent DB fallback is the safety net while Kubo performance fixes are in-flight; IPFS-only retry-then-error is the eventual target",
+        "Blob v2 logic lives in @cipherbox/core (TypeScript) with a Rust equivalent for the desktop client",
+        "Phase 18 added server-side Prometheus histograms for IPNS resolve/publish; Phase 22 will add end-to-end login-to-vault timing",
+        "Per-user phased rollout is gated on the migratedAt timestamp stamped on the vault row"
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/vault/entities/vault.entity.ts",
+          "finding": "Contains encryptedRootFolderKey and encryptedRootIpnsPrivateKey columns to be NULLed post-migration"
+        },
+        {
+          "path": "packages/core/src/vault/init.ts",
+          "finding": "Vault init logic lives in @cipherbox/core — blob v2 logic should be added here"
+        },
+        {
+          "path": "packages/core/src/vault/types.ts",
+          "finding": "Vault type definitions that will need VaultBlob v2 type additions"
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "finding": "API-side vault service — will need migration trigger on login and migratedAt stamping"
+        },
+        {
+          "path": "apps/web/src/stores/vault.store.ts",
+          "finding": "Web client vault store — needs to write v2 blob on root folder publish"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "finding": "Desktop Rust vault commands — IPNS key HKDF-derivability confirmed here; needs v2 blob write on publish"
+        }
+      ],
+      "workflow": [
+        "1Password signing agent must be unlocked before git commits in subprocesses — if AFK, the commit will fail silently",
+        "Feature branches should be created before committing planning docs, not committing directly to main",
+        "discuss-phase correctly defers column DROP and IPFS-only mode to open items rather than locking them as decisions",
+        "Prior CONTEXT.md files from phases 19 and 19.1 were loaded to avoid re-asking already-decided questions (SDK architecture, IPNS resolution strategy)"
+      ]
+    },
+    "friction": [
+      "Commit failed due to 1Password signing agent not being available in the subprocess — required manual branch creation and re-commit",
+      "Initial commit attempt targeted main instead of a feature branch, requiring correction",
+      "System readiness discussion question was too narrowly framed — user had to clarify that Phase 18 baselines + /metrics endpoint cover the measurement needs"
+    ],
+    "open_items": [
+      "Column DROP migration for encryptedRootFolderKey and encryptedRootIpnsPrivateKey — deferred until all users are migrated to v2",
+      "Transition from silent DB fallback to IPFS-only retry-then-error mode — deferred until Kubo performance improvements prove out",
+      "End-to-end 'first login → fully loaded vault' client-side baseline metrics — Phase 22 will add this instrumentation",
+      "plan-phase researcher agent was spawned at end of transcript — research and planning not yet complete"
+    ]
+  }
+}
