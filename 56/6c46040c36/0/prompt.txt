@@ -1,0 +1,152 @@
+ok can you push the updated docker-compose.yml up to remote?
+
+---
+
+ok the docker-compose is running on 192.168.133.114
+
+---
+
+/gsd:plan-phase 19.2 --gaps
+
+---
+
+I am not so sure I want to verify these baselines on staging when we can collect like-for-like baselines on local dev:
+1 - Before all optimizations
+2 - after SDK layer optimizations
+3 - after kubo optimizations
+
+this should give us enough clarity on what the general trend is based on these changes, without unnecessary destructive staging deployments.
+
+---
+
+yeah that is much better an approach
+
+---
+
+/gsd:execute-phase 19.2 --gaps-only
+
+---
+
+just give me a second to redeploy the right docker stack, and I will let you run the first and 2nd batch of tests. I also think that we will get much better data by first figuring out what the concurrency limits are like on the local dev backend and really seeing if the changes are worthwhile
+
+---
+
+rate limits really shouldnt be an issue here, since we should be using the bypass thresholds flag on the api
+
+---
+
+there is also a special flag and header passed by the load testing client, but the secret for this needs to be passed via env vars. there are a total of 2 separate flags that should get passed in.
+
+---
+
+setting them in .env does not work as vitest does not utilize dotenv in its code. the secrets need to be passed in via shell
+
+---
+
+so for passes 0, 1, 2 I will deploy the `main` docker compose stack, with flatfs.
+
+---
+
+Ahhh no i meant it more like: run 0 - figure out concurrency limits on the old stack, and then 3 actual baselines recorded as above.
+
+---
+
+also for the api .env config: please make sure that someguy running on 192.168.133.114 is utilized to make this comparison more close to staging setup. the mock-ipns-routing should not be utilized.
+
+---
+
+/gsd:add-todo now that someguy has been configured and is properly part of the stack, I think it might be time to investigate the removal of the mock-ipns-routing layer
+
+---
+
+stack is up and ready - before we do anything, I think that plan 4 of phase 19.2 needs to be updated slightly withthe exact work plan, so that this context is not lost.
+
+---
+
+GO GO GO !!!!
+
+---
+
+you're perfectly capable of starting the api yourself
+
+---
+
+I would say that we keep pushing further until there are errors, since I really need this to be representative of a worst case scenario baseline, so that any improvements are more visible.
+
+---
+
+<task-notification>
+<task-id>bfh1016hd</task-id>
+<tool-use-id>toolu_01WDyCNrAPHw1Hwx6ET2KdT1</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bfh1016hd.output</output-file>
+<status>failed</status>
+<summary>Background command "Run 0: concurrency probe — 100 clients" failed with exit code 1</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bfh1016hd.output
+
+---
+
+<task-notification>
+<task-id>bg9p9udrb</task-id>
+<tool-use-id>toolu_015SK6eHFyFBDYRmuH6T5QXR</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bg9p9udrb.output</output-file>
+<status>failed</status>
+<summary>Background command "Run 0: concurrency probe — 75 clients" failed with exit code 1</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bg9p9udrb.output
+
+---
+
+yeah lets do it
+
+---
+
+<task-notification>
+<task-id>bl25nxbx3</task-id>
+<tool-use-id>toolu_01PM7Gy5HnHjATQKyJHB95cA</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bl25nxbx3.output</output-file>
+<status>completed</status>
+<summary>Background command "Run 1: sequential SDK + flatfs — 50 clients" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bl25nxbx3.output
+
+---
+
+<task-notification>
+<task-id>bxhgaf2lw</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bxhgaf2lw.output</output-file>
+<status>completed</status>
+<summary>Background command "Run 2: concurrent SDK + flatfs — 50 clients" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bxhgaf2lw.output
+
+---
+
+ok docker stack redeployed - you can start the api again
+
+---
+
+<task-notification>
+<task-id>bz9mgvn47</task-id>
+<tool-use-id>toolu_01R1ijU3ZQqv7tKRoK7Kc8A4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bz9mgvn47.output</output-file>
+<status>completed</status>
+<summary>Background command "Run 3: concurrent SDK + pebbleds — 50 clients" completed (exit code 0)</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bz9mgvn47.output
+
+---
+
+I just noticed that there are 2 copies of the api running concurrently
+
+---
+
+<task-notification>
+<task-id>bvy5wndzi</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bvy5wndzi.output</output-file>
+<status>failed</status>
+<summary>Background command "Start the API server" failed with exit code 144</summary>
+</task-notification>
+Read the output file to retrieve the result: /private/tmp/claude-501/-Users-michael-Code-cipher-box/943c2c60-882f-4afa-a2e7-8090c086f230/tasks/bvy5wndzi.output
