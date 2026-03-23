@@ -53,6 +53,9 @@ export function serializeVaultBlobV2(
   encryptedMetadataJson: Uint8Array
 ): Uint8Array {
   const keyLen = encryptedRootFolderKey.length;
+  if (keyLen > 0xffff) {
+    throw new Error(`Encrypted key too long for v2 blob (${keyLen} bytes, max ${0xffff})`);
+  }
   const totalLen = 3 + keyLen + encryptedMetadataJson.length;
   const result = new Uint8Array(totalLen);
 

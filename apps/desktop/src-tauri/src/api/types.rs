@@ -88,7 +88,7 @@ pub struct TeeKeysResponse {
 }
 
 /// Request body for POST /vault/init (new user vault initialization).
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InitVaultRequest {
     pub owner_public_key: String,
@@ -97,12 +97,23 @@ pub struct InitVaultRequest {
     pub root_ipns_name: String,
 }
 
+impl fmt::Debug for InitVaultRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InitVaultRequest")
+            .field("owner_public_key", &"[REDACTED]")
+            .field("encrypted_root_folder_key", &"[REDACTED]")
+            .field("encrypted_root_ipns_private_key", &"[REDACTED]")
+            .field("root_ipns_name", &self.root_ipns_name)
+            .finish()
+    }
+}
+
 /// Vault response from GET /vault.
 ///
 /// For migrated users (v2 blob), `encrypted_root_folder_key` and
 /// `encrypted_root_ipns_private_key` are null -- the rootFolderKey lives
 /// in the IPFS vault blob header and the IPNS key is HKDF-derived.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultResponse {
     pub encrypted_root_folder_key: Option<String>,
@@ -110,4 +121,16 @@ pub struct VaultResponse {
     pub encrypted_root_ipns_private_key: Option<String>,
     pub tee_keys: Option<TeeKeysResponse>,
     pub migrated_at: Option<String>,
+}
+
+impl fmt::Debug for VaultResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VaultResponse")
+            .field("encrypted_root_folder_key", &self.encrypted_root_folder_key.as_ref().map(|_| "[REDACTED]"))
+            .field("root_ipns_name", &self.root_ipns_name)
+            .field("encrypted_root_ipns_private_key", &self.encrypted_root_ipns_private_key.as_ref().map(|_| "[REDACTED]"))
+            .field("tee_keys", &self.tee_keys)
+            .field("migrated_at", &self.migrated_at)
+            .finish()
+    }
 }

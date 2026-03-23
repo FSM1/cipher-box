@@ -25,7 +25,14 @@ pub fn detect_blob_version(blob: &[u8]) -> u8 {
 pub fn serialize_vault_blob_v2(
     encrypted_root_folder_key: &[u8],
     encrypted_metadata_json: &[u8],
-) -> Vec<u8> {
+) -> Result<Vec<u8>, String> {
+    if encrypted_root_folder_key.len() > u16::MAX as usize {
+        return Err(format!(
+            "Encrypted key too long for v2 blob ({} bytes, max {})",
+            encrypted_root_folder_key.len(),
+            u16::MAX
+        ));
+    }
     let key_len = encrypted_root_folder_key.len() as u16;
     let mut result =
         Vec::with_capacity(3 + encrypted_root_folder_key.len() + encrypted_metadata_json.len());
@@ -34,7 +41,7 @@ pub fn serialize_vault_blob_v2(
     result.push((key_len & 0xff) as u8);
     result.extend_from_slice(encrypted_root_folder_key);
     result.extend_from_slice(encrypted_metadata_json);
-    result
+    Ok(result)
 }
 
 /// Deserialize a vault blob v2 into (encrypted_key, encrypted_metadata_json).
@@ -69,7 +76,7 @@ mod tests {
     fn test_round_trip() {
         let key = vec![0xAA; 129];
         let metadata = b"{\"iv\":\"abc\",\"data\":\"def\"}";
-        let blob = serialize_vault_blob_v2(&key, metadata);
+        let blob = serialize_vault_blob_v2(&key, metadata).unwrap();
         let (decoded_key, decoded_meta) = deserialize_vault_blob_v2(&blob).unwrap();
         assert_eq!(decoded_key, key.as_slice());
         assert_eq!(decoded_meta, metadata);
@@ -77,7 +84,7 @@ mod tests {
 
     #[test]
     fn test_detect_v2() {
-        let blob = serialize_vault_blob_v2(&[0; 129], b"test");
+        let blob = serialize_vault_blob_v2(&[0; 129], b"test").unwrap();
         assert_eq!(detect_blob_version(&blob), 2);
     }
 
@@ -114,7 +121,7 @@ mod tests {
     fn test_header_format() {
         let key = vec![0xBB; 129];
         let meta = b"meta";
-        let blob = serialize_vault_blob_v2(&key, meta);
+        let blob = serialize_vault_blob_v2(&key, meta).unwrap();
         assert_eq!(blob[0], 0x02);
         assert_eq!(blob[1], 0x00); // 129 >> 8 = 0
         assert_eq!(blob[2], 0x81); // 129 & 0xFF = 0x81
@@ -136,7 +143,7 @@ mod tests {
         assert_eq!(key.len(), 129);
 
         let metadata = b"{\"iv\":\"abc\",\"data\":\"def\"}";
-        let blob = serialize_vault_blob_v2(&key, metadata);
+        let blob = serialize_vault_blob_v2(&key, metadata).unwrap();
 
         // Verify structure
         assert_eq!(blob[0], 0x02);
@@ -174,7 +181,7 @@ mod tests {
     fn test_cross_platform_minimal_vector() {
         let key = vec![0xFF];
         let meta = vec![0x42];
-        let blob = serialize_vault_blob_v2(&key, &meta);
+        let blob = serialize_vault_blob_v2(&key, &meta).unwrap();
         let expected_hex = "020001ff42";
         assert_eq!(hex::encode(&blob), expected_hex);
 

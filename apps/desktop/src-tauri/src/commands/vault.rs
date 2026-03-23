@@ -87,7 +87,7 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
     let blob_bytes = {
         let encrypted_key = crypto::ecies::wrap_key(&root_folder_key, public_key)
             .map_err(|e| format!("Failed to wrap rootFolderKey for v2 blob: {}", e))?;
-        crypto::vault_blob::serialize_vault_blob_v2(&encrypted_key, &json_bytes)
+        crypto::vault_blob::serialize_vault_blob_v2(&encrypted_key, &json_bytes)?
     };
 
     // Upload v2 blob to IPFS

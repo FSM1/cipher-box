@@ -245,7 +245,7 @@ fn encrypt_root_metadata_to_v2_blob(
         .map_err(|e| format!("Failed to wrap rootFolderKey for v2 blob: {}", e))?;
 
     // 3. Produce v2 blob envelope
-    Ok(crate::crypto::vault_blob::serialize_vault_blob_v2(&encrypted_key, &json_bytes))
+    crate::crypto::vault_blob::serialize_vault_blob_v2(&encrypted_key, &json_bytes)
 }
 
 /// Merge local children onto remote children to resolve a concurrent-edit conflict.
