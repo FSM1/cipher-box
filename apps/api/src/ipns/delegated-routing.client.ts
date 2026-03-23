@@ -96,7 +96,7 @@ export class DelegatedRoutingClient {
     url: string,
     recordBytes: Uint8Array,
     ipnsName: string,
-    backend: string
+    backend: 'primary' | 'fallback'
   ): Promise<void> {
     let lastError: Error | null = null;
 
@@ -191,7 +191,7 @@ export class DelegatedRoutingClient {
   private async executeResolve(
     url: string,
     ipnsName: string,
-    backend: string
+    backend: 'primary' | 'fallback'
   ): Promise<Uint8Array | null> {
     let lastError: Error | null = null;
 
