@@ -1,0 +1,1 @@
+{"version":3,"file":"on-worker-event.decorator.d.ts","sourceRoot":"","sources":["../../lib/decorators/on-worker-event.decorator.ts"],"names":[],"mappings":"AACA,OAAO,EAAE,cAAc,EAAE,MAAM,QAAQ,CAAC;AAGxC;;GAEG;AACH,MAAM,WAAW,qBAAqB;IACpC,SAAS,EAAE,MAAM,cAAc,CAAC;CACjC;AAED;;;;;;GAMG;AACH,eAAO,MAAM,aAAa,GACxB,WAAW,MAAM,cAAc,KAC9B,eAG0B,CAAC"}

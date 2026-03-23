@@ -1,0 +1,1 @@
+{"version":3,"file":"on-queue-event.decorator.d.ts","sourceRoot":"","sources":["../../lib/decorators/on-queue-event.decorator.ts"],"names":[],"mappings":"AACA,OAAO,EAAE,mBAAmB,EAAE,MAAM,QAAQ,CAAC;AAG7C;;GAEG;AACH,MAAM,WAAW,oBAAoB;IACnC,SAAS,EAAE,MAAM,mBAAmB,CAAC;CACtC;AAED;;;;;;GAMG;AACH,eAAO,MAAM,YAAY,GACvB,WAAW,MAAM,mBAAmB,KACnC,eAC0E,CAAC"}

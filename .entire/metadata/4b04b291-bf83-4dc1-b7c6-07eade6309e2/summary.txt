@@ -1,0 +1,5 @@
+All 4 M3 researchers are running in the background. They'll write to `.planning/research/m3/` when done. 
+
+When you're ready (next session or whenever), just ask me to synthesize the M3 findings — I'll read the 4 files, create `m3/SUMMARY.md`, and commit.
+
+You're good to `/clear` now.

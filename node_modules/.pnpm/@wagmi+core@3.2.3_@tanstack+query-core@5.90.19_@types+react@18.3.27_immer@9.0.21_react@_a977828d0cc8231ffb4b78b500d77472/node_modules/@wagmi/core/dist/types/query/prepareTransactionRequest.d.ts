@@ -1,0 +1,18 @@
+import type { PrepareTransactionRequestRequest as viem_PrepareTransactionRequestRequest } from 'viem';
+import { type PrepareTransactionRequestErrorType, type PrepareTransactionRequestParameters, type PrepareTransactionRequestReturnType } from '../actions/prepareTransactionRequest.js';
+import type { Config } from '../createConfig.js';
+import type { SelectChains } from '../types/chain.js';
+import type { ScopeKeyParameter } from '../types/properties.js';
+import type { QueryOptions, QueryParameter } from '../types/query.js';
+import type { UnionExactPartial } from '../types/utils.js';
+export type PrepareTransactionRequestOptions<config extends Config, chainId extends config['chains'][number]['id'] | undefined, request extends viem_PrepareTransactionRequestRequest<SelectChains<config, chainId>[0], SelectChains<config, chainId>[0]>, selectData = PrepareTransactionRequestData<config, chainId, request>> = UnionExactPartial<PrepareTransactionRequestParameters<config, chainId, request>> & ScopeKeyParameter & QueryParameter<PrepareTransactionRequestQueryFnData<config, chainId, request>, PrepareTransactionRequestErrorType, selectData, PrepareTransactionRequestQueryKey<config, chainId, request>>;
+export declare function prepareTransactionRequestQueryOptions<config extends Config, chainId extends config['chains'][number]['id'] | undefined, request extends viem_PrepareTransactionRequestRequest<SelectChains<config, chainId>[0], SelectChains<config, chainId>[0]>, selectData = PrepareTransactionRequestData<config, chainId, request>>(config: config, options?: PrepareTransactionRequestOptions<config, chainId, request, selectData>): PrepareTransactionRequestQueryOptions<config, chainId, request, selectData>;
+export type PrepareTransactionRequestQueryFnData<config extends Config, chainId extends config['chains'][number]['id'] | undefined, request extends viem_PrepareTransactionRequestRequest<SelectChains<config, chainId>[0], SelectChains<config, chainId>[0]>> = PrepareTransactionRequestReturnType<config, chainId, request>;
+export type PrepareTransactionRequestData<config extends Config, chainId extends config['chains'][number]['id'] | undefined, request extends viem_PrepareTransactionRequestRequest<SelectChains<config, chainId>[0], SelectChains<config, chainId>[0]>> = PrepareTransactionRequestQueryFnData<config, chainId, request>;
+export declare function prepareTransactionRequestQueryKey<config extends Config, chainId extends config['chains'][number]['id'] | undefined, request extends viem_PrepareTransactionRequestRequest<SelectChains<config, chainId>[0], SelectChains<config, chainId>[0]>>(options?: UnionExactPartial<PrepareTransactionRequestParameters<config, chainId, request>> & ScopeKeyParameter): readonly ["prepareTransactionRequest", {
+    [x: string]: unknown;
+    connectorUid?: string | undefined;
+}];
+export type PrepareTransactionRequestQueryKey<config extends Config, chainId extends config['chains'][number]['id'] | undefined, request extends viem_PrepareTransactionRequestRequest<SelectChains<config, chainId>[0], SelectChains<config, chainId>[0]>> = ReturnType<typeof prepareTransactionRequestQueryKey<config, chainId, request>>;
+export type PrepareTransactionRequestQueryOptions<config extends Config, chainId extends config['chains'][number]['id'] | undefined, request extends viem_PrepareTransactionRequestRequest<SelectChains<config, chainId>[0], SelectChains<config, chainId>[0]>, selectData = PrepareTransactionRequestData<config, chainId, request>> = QueryOptions<PrepareTransactionRequestQueryFnData<config, chainId, request>, PrepareTransactionRequestErrorType, selectData, PrepareTransactionRequestQueryKey<config, chainId, request>>;
+//# sourceMappingURL=prepareTransactionRequest.d.ts.map

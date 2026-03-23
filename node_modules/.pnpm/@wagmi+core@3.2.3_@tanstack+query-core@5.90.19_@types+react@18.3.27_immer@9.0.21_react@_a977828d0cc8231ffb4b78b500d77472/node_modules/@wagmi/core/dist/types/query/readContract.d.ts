@@ -1,0 +1,17 @@
+import type { Abi, ContractFunctionArgs, ContractFunctionName } from 'viem';
+import { type ReadContractErrorType, type ReadContractParameters, type ReadContractReturnType } from '../actions/readContract.js';
+import type { Config } from '../createConfig.js';
+import type { ScopeKeyParameter } from '../types/properties.js';
+import type { QueryOptions, QueryParameter } from '../types/query.js';
+import type { UnionExactPartial } from '../types/utils.js';
+export type ReadContractOptions<abi extends Abi | readonly unknown[], functionName extends ContractFunctionName<abi, 'pure' | 'view'>, args extends ContractFunctionArgs<abi, 'pure' | 'view', functionName>, config extends Config, selectData = ReadContractData<abi, functionName, args>> = UnionExactPartial<ReadContractParameters<abi, functionName, args, config>> & ScopeKeyParameter & QueryParameter<ReadContractQueryFnData<abi, functionName, args>, ReadContractErrorType, selectData, ReadContractQueryKey<abi, functionName, args, config>>;
+export declare function readContractQueryOptions<config extends Config, const abi extends Abi | readonly unknown[], functionName extends ContractFunctionName<abi, 'pure' | 'view'>, const args extends ContractFunctionArgs<abi, 'pure' | 'view', functionName>, selectData = ReadContractData<abi, functionName, args>>(config: config, options?: ReadContractOptions<abi, functionName, args, config>): ReadContractQueryOptions<abi, functionName, args, config, selectData>;
+export type ReadContractQueryFnData<abi extends Abi | readonly unknown[], functionName extends ContractFunctionName<abi, 'pure' | 'view'>, args extends ContractFunctionArgs<abi, 'pure' | 'view', functionName>> = ReadContractReturnType<abi, functionName, args>;
+export type ReadContractData<abi extends Abi | readonly unknown[], functionName extends ContractFunctionName<abi, 'pure' | 'view'>, args extends ContractFunctionArgs<abi, 'pure' | 'view', functionName>> = ReadContractQueryFnData<abi, functionName, args>;
+export declare function readContractQueryKey<config extends Config, const abi extends Abi | readonly unknown[], functionName extends ContractFunctionName<abi, 'pure' | 'view'>, args extends ContractFunctionArgs<abi, 'pure' | 'view', functionName>>(options?: UnionExactPartial<ReadContractParameters<abi, functionName, args, config>> & ScopeKeyParameter): readonly ["readContract", {
+    [x: string]: unknown;
+    connectorUid?: string | undefined;
+}];
+export type ReadContractQueryKey<abi extends Abi | readonly unknown[], functionName extends ContractFunctionName<abi, 'pure' | 'view'>, args extends ContractFunctionArgs<abi, 'pure' | 'view', functionName>, config extends Config> = ReturnType<typeof readContractQueryKey<config, abi, functionName, args>>;
+export type ReadContractQueryOptions<abi extends Abi | readonly unknown[], functionName extends ContractFunctionName<abi, 'pure' | 'view'>, args extends ContractFunctionArgs<abi, 'pure' | 'view', functionName>, config extends Config, selectData = ReadContractData<abi, functionName, args>> = QueryOptions<ReadContractQueryFnData<abi, functionName, args>, ReadContractErrorType, selectData, ReadContractQueryKey<abi, functionName, args, config>>;
+//# sourceMappingURL=readContract.d.ts.map

@@ -1,0 +1,1 @@
+No, nothing called "entire" is running. The `/entire` skill doesn't exist — that error was just from a typo. There are no background tasks active right now.

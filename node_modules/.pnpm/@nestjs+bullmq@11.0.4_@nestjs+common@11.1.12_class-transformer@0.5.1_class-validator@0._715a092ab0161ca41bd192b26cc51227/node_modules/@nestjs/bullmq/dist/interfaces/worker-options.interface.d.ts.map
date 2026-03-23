@@ -1,0 +1,1 @@
+{"version":3,"file":"worker-options.interface.d.ts","sourceRoot":"","sources":["../../lib/interfaces/worker-options.interface.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,aAAa,EAAE,MAAM,QAAQ,CAAC;AACvC,OAAO,EAAE,oBAAoB,EAAE,MAAM,sCAAsC,CAAC;AAE5E;;GAEG;AACH,MAAM,WAAW,iBACf,SAAQ,oBAAoB,CAAC,aAAa,EAAE,YAAY,CAAC;IACzD;;;SAGK;IACL,gBAAgB,CAAC,EAAE,OAAO,CAAC;CAC5B"}
