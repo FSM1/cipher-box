@@ -1,0 +1,94 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "93856123f7e6",
+  "session_id": "099d476e-36bb-41f5-a974-a5d9e4617389",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T04:29:00.071712Z",
+  "branch": "fix/release-please-root-component",
+  "checkpoints_count": 5,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "e3a366851361",
+  "token_usage": {
+    "input_tokens": 445,
+    "cache_creation_tokens": 299773,
+    "cache_read_tokens": 66951792,
+    "output_tokens": 84084,
+    "api_call_count": 364
+  },
+  "session_metrics": {
+    "turn_count": 35
+  },
+  "summary": {
+    "intent": "Investigate and fix someguy IPNS routing failures on staging, implement a delegated-ipfs.dev fallback with Prometheus metrics, and resolve a long-standing release-please tagging deadlock that prevented automated releases.",
+    "outcome": "Someguy was fixed locally (missing libp2p port 4004, wrong DHT mode, insufficient resources), all 83 SDK E2E tests passed against it, and the fallback client with metrics was implemented and merged (PR #325). The release-please deadlock was partially resolved by deleting old staging releases and fixing the staging tag format, but a new component-matching bug prevented release-please from finding the root package release even after creating it itself — still unresolved at session end.",
+    "learnings": {
+      "repo": [
+        "Someguy IPNS endpoints require libp2p port 4004 exposed (TCP+UDP), 'accelerated' DHT mode, ≥1GB libp2p memory, ≥2GB container memory, and ≥1.0 CPU — the staging deployment had none of these correct.",
+        "SOMEGUY_LIBP2P_MAX_MEMORY expects a raw uint64 byte count, not a human-readable string like '1GB' — the container crash-loops silently until you check docker logs.",
+        "release-please cannot match releases to path '.' (root package) when there are many staging releases with 'v*-staging*' tags — they exhaust the release search depth (400) before the real release is found.",
+        "Even after deleting all staging releases, release-please still cannot match 'v0.26.2' to path '.' — likely a component name mismatch where release-please derives 'cipher-box' from package.json name but searches with empty component.",
+        "The DelegatedRoutingClient throttler bypass requires passing THROTTLE_BYPASS_SECRET as an explicit env var to vitest — it does NOT auto-load .env files into process.env.",
+        "The mock-ipns-routing service should stay in docker-compose for CI (instant, no DHT warm-up, no internet) but someguy can replace it for local dev.",
+        "packages/crypto was missing from release-please config entirely despite having its own package.json with independent versioning.",
+        "release-please 'untagged merged release PRs outstanding - aborting' deadlock occurs when a merged release PR's autorelease label is stuck at 'pending' with no matching tag."
+      ],
+      "code": [
+        {
+          "path": "apps/api/src/ipns/ipns.service.ts",
+          "line": 294,
+          "end_line": 373,
+          "finding": "resolveRecord() always queries the DB regardless of network result, and prefers higher sequence number. Since DB is written synchronously before DHT publish, DB always wins — 100% of resolves hit the database by design, not accidentally."
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "line": 75,
+          "end_line": 75,
+          "finding": "publishRecord() fires DHT publish as fire-and-forget — comment explicitly states 'DB is the reliable source'. This is intentional architecture, not a bug."
+        },
+        {
+          "path": "apps/api/src/ipns/delegated-routing.client.ts",
+          "line": 100,
+          "end_line": 100,
+          "finding": "backend parameter should be typed as 'primary' | 'fallback' not string — Copilot review caught this, fixed in session."
+        },
+        {
+          "path": "tests/sdk-e2e/vitest.config.ts",
+          "line": 1,
+          "end_line": 20,
+          "finding": "Vitest does not auto-load .env files into process.env — env vars must be passed explicitly (e.g., THROTTLE_BYPASS_SECRET=x pnpm test) or configured via envDir in vitest config."
+        }
+      ],
+      "workflow": [
+        "Vitest does not auto-load .env files — must pass env vars explicitly on the command line or configure envDir.",
+        "release-please's Merge plugin produces 'chore: release main' as PR title (not 'chore: release v{version}') — the pull-request-title-pattern must match this exactly.",
+        "GitHub API can return 'unprocessable' node ID error when labeling a PR immediately after creation — transient race condition, retry resolves it.",
+        "Staging GitHub Releases (even with new-format tags) are scanned by release-please and parsed as components — any release matching 'staging-v*' gets parsed as component 'staging', still confusing the scanner.",
+        "Docker healthcheck CMD-SHELL runs inside the container, not on the host — wget working on the Docker host doesn't mean wget exists inside the someguy image (only curl does).",
+        "release-please bootstrap-sha and anchor releases must have the correct targetCommitish (branch name, not raw SHA) to be matched correctly by the release scanner.",
+        "Load test comparison: someguy has ~40% higher p50 latency vs delegated-ipfs.dev but better p99 tail latency and zero dependency on external infrastructure — tradeoff is predictability vs speed."
+      ]
+    },
+    "friction": [
+      "release-please has a persistent deadlock where it finds its own created releases but cannot match them to path '.' — root cause unclear even after extensive log analysis.",
+      "Old staging releases in 'v*-staging-rc-*' format (29 total) were confusing release-please's release scanner by appearing to match the root package's 'v{version}' tag pattern — required bulk deletion.",
+      "SOMEGUY_LIBP2P_MAX_MEMORY crash wasn't discovered until after the full release and staging deploy cycle completed — no error surfaced until checking docker logs manually.",
+      "SSH access assumption — Claude assumed CI deploy key was the only key available, but a root SSH key existed for direct VPS access.",
+      "The Web E2E test suite has recurring flakiness on main that blocked auto-merge of release PRs multiple times, requiring manual re-runs.",
+      "Git branch management friction: edits got lost when switching branches, stash operations reverted changes mid-session.",
+      "release-please's 'Expected 5 releases, only found 4' error was a symptom of the root package anchor problem, not a separate issue — required full log analysis to understand.",
+      "The staging tag format change (v*-staging* → staging-v*) fixed the direct tag collision but GitHub Releases created by Tauri's publish step are still scanned by release-please regardless of tag format."
+    ],
+    "open_items": [
+      "release-please still cannot match 'v0.26.2' to root path '.' even after deleting all staging releases — session ended mid-fix attempting to set explicit component field to empty string in release-please-config.json.",
+      "Staging deploy of v0.26.3 (with SOMEGUY_LIBP2P_MAX_MEMORY fix) never completed — blocked by release-please tagging failure.",
+      "Someguy on staging VPS is crash-looping with the '1GB' memory format error — needs PR #328 to deploy.",
+      "Grafana dashboard panels for delegated routing metrics not yet created — metrics are being emitted but no visualization configured.",
+      "packages/crypto was added to release-please config but needs to actually get its first tagged release to establish an anchor.",
+      "The delegated-ipfs.dev fallback URL needs to be set in staging environment variables (DELEGATED_ROUTING_FALLBACK_URL) — added to deploy workflow but untested on staging.",
+      "DB-first IPNS resolution means 100% of resolves hit the database — future optimization possible by preferring network result when sequence numbers match, but deferred until DB load becomes a concern.",
+      "Staging GitHub Releases created by Tauri's desktop publish step may still confuse release-please even with new tag format — needs verification after release flow is unblocked.",
+      "The mock-ipns-routing service in docker-compose is now redundant for local dev since someguy handles routing — cleanup deferred by user preference."
+    ]
+  }
+}
