@@ -27,11 +27,16 @@ on:
           - sustained-load
           - spike-test
 
+concurrency:
+  group: load-test-${{ inputs.environment }}
+  cancel-in-progress: false
+
 jobs:
   load-test:
     name: 'Load Test: ${{ inputs.scenario }} (${{ inputs.client_count }} clients)'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    environment: ${{ inputs.environment == 'staging' && 'staging' || '' }}
+    timeout-minutes: 60
 
     services:
       postgres:
@@ -182,9 +187,9 @@ jobs:
           echo "LOAD_TEST_CLIENTS=$CLIENT_COUNT" >> $GITHUB_ENV
 
       - name: Run load test
+        working-directory: tests/load
         run: |
-          pnpm --filter @cipherbox/load-tests test:single -- \
-            "${{ inputs.scenario }}"
+          pnpm exec vitest run --no-coverage "${{ inputs.scenario }}"
 
       - name: Upload metrics report
         if: always()

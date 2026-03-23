@@ -396,6 +396,7 @@ jobs:
           IPFS_LOCAL_GATEWAY_URL=http://ipfs:8080
           DELEGATED_ROUTING_URL=http://someguy:8190
           DELEGATED_ROUTING_FALLBACK_URL=https://delegated-ipfs.dev
+          THROTTLE_BYPASS_SECRET=${{ secrets.STAGING_THROTTLE_BYPASS_SECRET }}
           REDIS_HOST=redis
           REDIS_PORT=6379
           TEE_WORKER_URL=http://tee-worker:3001

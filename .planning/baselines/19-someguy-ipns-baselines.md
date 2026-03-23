@@ -102,7 +102,7 @@ New metrics added in this phase for ongoing monitoring:
 | `cipherbox_ipns_publish_duration_seconds`     | outcome                     | Delegated routing publish latency             |
 | `cipherbox_ipns_resolve_duration_seconds`     | source, outcome             | End-to-end resolve latency                    |
 
-## Extended Load Test: Mixed Workload Scaling (10–100 clients)
+## Extended Load Test: Mixed Workload Scaling (10–200 clients)
 
 Captured 2026-03-23 via GitHub Actions against staging. Mixed Workload scenario: weighted mix of createFolder, uploadFile, moveItem, deleteItem, renameItem.
 
@@ -119,7 +119,7 @@ Captured 2026-03-23 via GitHub Actions against staging. Mixed Workload scenario:
 | 100     | 4,355     | 0      | 24.05 ops/s | 181.1s   | 49.4MB |
 | 200     | 8,734     | 4      | 28.50 ops/s | 306.5s   | 97.3MB |
 
-Note: The 5-client baseline was run separately (different network path). The 10–100 client runs are directly comparable.
+Note: The 5-client baseline was run separately (different network path). The 10–200 client runs are directly comparable.
 
 ### Latency by operation (p50 / p95 / p99)
 
