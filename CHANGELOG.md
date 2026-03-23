@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.3](https://github.com/FSM1/cipher-box/compare/v0.26.2...v0.26.3) (2026-03-23)
+
+
+### Bug Fixes
+
+* **docker:** use raw byte count for SOMEGUY_LIBP2P_MAX_MEMORY ([#328](https://github.com/FSM1/cipher-box/issues/328)) ([89c11c0](https://github.com/FSM1/cipher-box/commit/89c11c0454a99ecc9a8dfc0ceff65e707e01655f))
+
 ## [0.26.2](https://github.com/FSM1/cipher-box/compare/v0.26.1...v0.26.2) (2026-03-23)
 
 
