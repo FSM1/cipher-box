@@ -1,0 +1,19 @@
+ok the api is deployed - shall we try and get some `post-phase-19` performance baselines?
+
+---
+
+is this the latest version of someguy? maybe a simple version bump would resolve everything? also I remember seeing something about more recent version of kobo being available.
+
+---
+
+ok before we go updating anything in staging, lets first check that everything works reliably locally - create a branch for this, update the docker-compose, and I will spin it up on your docker host.
+
+---
+
+did the docker-compose changes get pushed up to the branch?
+
+---
+
+ok docker stack is updated on the docker host - 192.168.133.114
+
+can you spin up the local api, and run the e2e tests as well as load tests aginst the local instance to make sure everything continues working
