@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.4](https://github.com/FSM1/cipher-box/compare/v0.26.3...v0.26.4) (2026-03-23)
+
+
+### Bug Fixes
+
+* **ci:** set explicit empty component for root release-please package ([#330](https://github.com/FSM1/cipher-box/issues/330)) ([4fb0ace](https://github.com/FSM1/cipher-box/commit/4fb0acede557880869d0b796bf44d35a148c36ca))
+
 ## [0.26.3](https://github.com/FSM1/cipher-box/compare/v0.26.2...v0.26.3) (2026-03-23)
 
 
