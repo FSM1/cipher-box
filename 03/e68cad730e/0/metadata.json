@@ -1,0 +1,69 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "03e68cad730e",
+  "session_id": "17256d92-fa81-4467-a074-6d66d7ec4e84",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T21:01:12.264865Z",
+  "branch": "feat/phase-19.2-ipfs-upload-perf",
+  "checkpoints_count": 9,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "d5ad4ad4e01e",
+  "token_usage": {
+    "input_tokens": 1192,
+    "cache_creation_tokens": 193034,
+    "cache_read_tokens": 4648516,
+    "output_tokens": 19550,
+    "api_call_count": 60
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Execute phase 19.2 gap closure plans for IPFS upload performance optimization, addressing verification gaps around PERF-09 requirement registration and non-definitive post-optimization baselines.",
+    "outcome": "PERF-09 was registered in REQUIREMENTS.md, plan 19.2-04 was replanned to use a three-point local baseline comparison instead of staging, env was configured with real someguy delegated routing, and a todo was captured for mock-ipns-routing removal. Load tests were not yet run — blocked waiting for Docker stack redeployment.",
+    "learnings": {
+      "repo": [
+        "Load test bypass requires two separate secrets: LOAD_TEST_SECRET (for POST /auth/test-login) and THROTTLE_BYPASS_SECRET (sent as X-Throttle-Bypass header) — both must match values in apps/api/.env",
+        "vitest does not load dotenv automatically — load test secrets must be passed as inline shell env vars, not via .env files",
+        "DELEGATED_ROUTING_URL in apps/api/.env controls IPNS routing; was pointing to localhost:3001 (mock-ipns-routing), updated to http://192.168.133.114:8190 (someguy)",
+        "BypassableThrottlerGuard skips rate limiting via X-Throttle-Bypass header using timing-safe comparison; only active when NODE_ENV !== 'production'",
+        "The load test upload-throughput scenario uses LOAD_TEST_CLIENTS env var and collects p50/p95/p99/min/max/avg latencies plus throughput ops/s",
+        "Three git checkpoints identified for baseline comparison: parent of 4087fa2b6 (pre-optimization), 565dccd5d (SDK concurrent pins, flatfs), and HEAD (concurrent pins + pebbleds)"
+      ],
+      "code": [
+        {
+          "path": "apps/api/.env",
+          "finding": "DELEGATED_ROUTING_URL changed from http://localhost:3001 to http://192.168.133.114:8190 to use real someguy instead of mock-ipns-routing"
+        },
+        {
+          "path": "tests/load/src/harness/metrics.ts",
+          "finding": "Metrics harness collects per-operation p50/p95/p99/min/max/avg latencies and throughput ops/s"
+        },
+        {
+          "path": "tests/load/src/scenarios/upload-throughput.test.ts",
+          "finding": "Upload throughput scenario runs N clients × 20 files each with file sizes 1KB-500KB"
+        },
+        {
+          "path": "tests/load/src/harness/client-pool.ts",
+          "finding": "Client pool handles concurrent load test connections; LOAD_TEST_CLIENTS env var controls parallelism"
+        }
+      ],
+      "workflow": [
+        "Same-environment three-point baselines (no opts → SDK only → SDK+infra) are more analytically sound than cross-environment comparisons; eliminates confounding variables",
+        "Probing concurrency limits before recording baselines (Run 0) gives a principled client count for subsequent runs",
+        "When staging involves destructive operations (volume deletion), local dev comparison with matched conditions is a valid and safer alternative for performance validation"
+      ]
+    },
+    "friction": [
+      "Initial verification failure was partly caused by pre/post baselines captured in different environments (staging vs localhost) with different client counts — a methodology gap not caught during planning",
+      "vitest not loading dotenv meant secrets had to be passed inline rather than via .env; this was discovered mid-session",
+      "PERF-09 was referenced in both plans but was never formally registered in REQUIREMENTS.md — a traceability gap that caused verification to fail"
+    ],
+    "open_items": [
+      "Run 0 (concurrency limit probe) + Runs 1-3 (three-point baselines) not yet executed — blocked on Docker stack redeployment with flatfs",
+      "Investigate and potentially remove mock-ipns-routing layer now that someguy is properly integrated into the stack (captured as todo: .planning/todos/pending/2026-03-23-investigate-removal-of-mock-ipns-routing-layer.md)",
+      "Phase 19.2 verification not yet re-run after gap closure execution — still shows gaps_found status"
+    ]
+  }
+}
