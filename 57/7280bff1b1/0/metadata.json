@@ -1,0 +1,67 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "577280bff1b1",
+  "session_id": "17256d92-fa81-4467-a074-6d66d7ec4e84",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-23T18:44:20.750606Z",
+  "branch": "feat/phase-19.2-ipfs-upload-perf",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/baselines/19.2-pre-optimization-baselines.md",
+    "tests/load/metrics-baseline-pre-19.2.json"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "61cf28a4b528",
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 33011,
+    "cache_read_tokens": 176752,
+    "output_tokens": 1666,
+    "api_call_count": 5
+  },
+  "summary": {
+    "intent": "Execute phase 19.2 (IPFS upload performance optimization) using the GSD wave-based parallel execution workflow, covering concurrent pin orchestration and pebbleds datastore improvements.",
+    "outcome": "Wave 1 was initiated — a gsd-executor subagent was spawned for plan 19.2-01 (Concurrent Pin Orchestration) and captured pre-optimization baselines. The session transcript ends mid-execution before Wave 1 completed.",
+    "learnings": {
+      "repo": [
+        "Phase 19.2 is on branch `feat/phase-19.2-ipfs-upload-perf`, which differs from the GSD-computed branch name `phase-19.2-ipfs-upload-performance-optimization` — the workflow accepted the existing branch.",
+        "Phase 19.2 has 2 plans across 2 sequential waves: Wave 1 handles SDK-level concurrent pin orchestration, Wave 2 handles pebbleds datastore + post-optimization baselines.",
+        "Pre-optimization baselines are stored in `.planning/baselines/19.2-pre-optimization-baselines.md` and `tests/load/metrics-baseline-pre-19.2.json`.",
+        "The primary upload latency bottleneck identified is sequential IPNS publish + folder metadata update steps in the SDK client."
+      ],
+      "code": [
+        {
+          "path": "tests/load/metrics-baseline-pre-19.2.json",
+          "finding": "Pre-optimization load test metrics baseline captured before phase 19.2 changes, used for post-optimization comparison in Wave 2."
+        },
+        {
+          "path": ".planning/baselines/19.2-pre-optimization-baselines.md",
+          "finding": "Human-readable pre-optimization baseline document created as part of plan 19.2-01 execution."
+        }
+      ],
+      "workflow": [
+        "GSD init step loads phase context including executor_model, branching_strategy, plan inventory, and parallelization config in a single CLI call.",
+        "The stale auto-chain flag must be explicitly cleared on manual invocations to prevent unwanted auto-advance from previous --auto runs.",
+        "When an existing feature branch is present that doesn't match the GSD-computed branch name, the workflow continues on the existing branch without creating a new one."
+      ]
+    },
+    "friction": [
+      "Branch name mismatch between existing branch (`feat/phase-19.2-ipfs-upload-perf`) and GSD-computed name (`phase-19.2-ipfs-upload-performance-optimization`) required a manual check to resolve."
+    ],
+    "open_items": [
+      "Wave 1 (plan 19.2-01) execution was in progress at transcript end — needs completion confirmation and spot-checks.",
+      "Wave 2 (plan 19.2-02: pebbleds datastore + post-optimization baselines) has not yet been executed.",
+      "Phase verification (gsd-verifier) has not yet run.",
+      "STATE.md and ROADMAP.md updates for phase completion are pending."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-23T18:43:55.703881Z",
+    "agent_lines": 0,
+    "human_added": 204,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 204,
+    "agent_percentage": 0
+  }
+}
