@@ -34,3 +34,7 @@ can you get me the otp for myankelev@gmail.com from the shell?
 ---
 
 you most definitely do - it is logged in clear text in the terminal where the api and web app are running.
+
+---
+
+ok sync is failing and I do not see the migration console log in the browser unfortunately.
