@@ -110,9 +110,8 @@ export function useAuth() {
 
       // Read rootFolderKey from dedicated vault key IPNS (separate from root folder IPNS)
       const vaultKeyKeypair = await deriveVaultKeyIpnsKeypair(userKeypair.privateKey);
-      const vaultKeyIpnsName = await deriveIpnsName(vaultKeyKeypair.publicKey);
 
-      const resolved = await resolveIpnsRecord(vaultKeyIpnsName);
+      const resolved = await resolveIpnsRecord(vaultKeyKeypair.ipnsName);
       if (!resolved) throw new Error('Vault key IPNS name not found');
 
       const blobBytes = await fetchFromIpfs(resolved.cid);
@@ -144,7 +143,7 @@ export function useAuth() {
 
         // Derive vault key IPNS keypair (separate from root folder IPNS)
         const vaultKeyKeypair = await deriveVaultKeyIpnsKeypair(userKeypair.privateKey);
-        const vaultKeyIpnsName = await deriveIpnsName(vaultKeyKeypair.publicKey);
+        const vaultKeyIpnsName = vaultKeyKeypair.ipnsName;
 
         // 1. Publish v2 key blob to vault key IPNS (rootFolderKey storage — key only, no metadata)
         const encryptedRootFolderKey = await wrapKey(newVault.rootFolderKey, userKeypair.publicKey);

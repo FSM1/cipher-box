@@ -207,7 +207,7 @@ Per-file metadata stored in a file's own IPNS record. Contains all crypto materi
 
 **Encryption:** AES-256-GCM with the parent folder's `folderKey` (not the file's own key). This means anyone who can read the folder can also read file metadata and decrypt the file.
 
-**Storage:** IPFS (as JSON envelope `{iv, data}`), addressed via the file's own IPNS name. For new files, the IPNS keypair is randomly generated and stored in the parent's `FilePointer.ipnsPrivateKeyEncrypted`. For legacy files, it is derived via HKDF from `privateKey + fileId` (see [Section 14](#15-ipns-key-derivation-summary)).
+**Storage:** IPFS (as JSON envelope `{iv, data}`), addressed via the file's own IPNS name. For new files, the IPNS keypair is randomly generated and stored in the parent's `FilePointer.ipnsPrivateKeyEncrypted`. For legacy files, it is derived via HKDF from `privateKey + fileId` (see [Section 15](#15-ipns-key-derivation-summary)).
 
 **Source files:**
 

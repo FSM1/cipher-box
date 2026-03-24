@@ -312,7 +312,6 @@ fn spawn_metadata_publish(
     ipns_name: String,
     old_metadata_cid: Option<String>,
     coordinator: Arc<PublishCoordinator>,
-    user_public_key: Option<Vec<u8>>,
 ) {
     std::thread::spawn(move || {
         let result = rt.block_on(async {
@@ -873,12 +872,6 @@ impl CipherBoxFS {
         // Build metadata and publish immediately (no debounce needed)
         let (metadata, folder_key, ipns_private_key, ipns_name, old_cid) =
             self.build_folder_metadata(folder_ino)?;
-        // Root folder publishes use v2 blob format (includes ECIES-wrapped rootFolderKey)
-        let pub_key = if folder_ino == inode::ROOT_INO {
-            Some(self.public_key.to_vec())
-        } else {
-            None
-        };
         spawn_metadata_publish(
             self.api.clone(),
             self.rt.clone(),
@@ -888,7 +881,6 @@ impl CipherBoxFS {
             ipns_name,
             old_cid,
             self.publish_coordinator.clone(),
-            pub_key,
         );
         Ok(())
     }
@@ -992,12 +984,6 @@ impl CipherBoxFS {
             self.publish_queue.remove(&folder_ino);
             match self.build_folder_metadata(folder_ino) {
                 Ok((metadata, folder_key, ipns_private_key, ipns_name, old_cid)) => {
-                    // Root folder publishes use v2 blob format
-                    let pub_key = if folder_ino == inode::ROOT_INO {
-                        Some(self.public_key.to_vec())
-                    } else {
-                        None
-                    };
                     spawn_metadata_publish(
                         self.api.clone(),
                         self.rt.clone(),
@@ -1007,7 +993,6 @@ impl CipherBoxFS {
                         ipns_name,
                         old_cid,
                         self.publish_coordinator.clone(),
-                        pub_key,
                     );
                 }
                 Err(e) => {
