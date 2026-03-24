@@ -722,6 +722,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "cipherbox-fuse"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "cipherbox-api-client",
+ "cipherbox-core",
+ "cipherbox-crypto",
+ "dirs 5.0.1",
+ "ed25519-dalek",
+ "fuser",
+ "hex",
+ "libc",
+ "log",
+ "rand 0.8.5",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "unicode-normalization",
+ "widestring",
+ "winfsp",
+ "zeroize",
+]
+
+[[package]]
+name = "cipherbox-sdk"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "cipherbox-api-client",
+ "cipherbox-core",
+ "cipherbox-crypto",
+ "hex",
+ "hostname",
+ "log",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "clang-sys"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
