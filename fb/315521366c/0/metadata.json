@@ -1,0 +1,102 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "fb315521366c",
+  "session_id": "3a9e3004-d380-4fc4-a1a4-3d0276947c57",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T14:53:22.549573Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "c23d54cb6fc2",
+  "token_usage": {
+    "input_tokens": 169,
+    "cache_creation_tokens": 211444,
+    "cache_read_tokens": 16015125,
+    "output_tokens": 27901,
+    "api_call_count": 142
+  },
+  "session_metrics": {
+    "turn_count": 12
+  },
+  "summary": {
+    "intent": "Complete Phase 23 gap closure execution (plan 23-08: WinFsp extraction to crate), then run a security review on the Rust SDK changes, fix findings, increase Rust test coverage to address Codecov feedback, and get PR #352 merged-ready.",
+    "outcome": "All goals achieved: Phase 23 gap closure committed, security review generated with 2 HIGH findings fixed (Ed25519 zeroization + ed25519-dalek zeroize feature), 181 lines of dead code removed, 163 new unit tests added across 3 crates (168 total passing), CI failures fixed (vendored fuser build.rs on Windows + pnpm version), and a copy-paste bug in registry.rs fixed via PR review resolution.",
+    "learnings": {
+      "repo": [
+        "The workspace-level [patch.crates-io] for vendored fuser applies to all members including on Windows builds, causing fuser's build.rs to run even when fuser isn't a transitive dependency — requires explicit early-return on cfg(target_os = 'windows')",
+        "CI collects Rust coverage via `cargo llvm-cov --workspace` on Linux; any tests added to workspace crates are automatically included",
+        "KeyState and CipherBoxFS key fields already use Zeroizing\u003cVec\u003cu8\u003e\u003e consistently, but generate_ed25519_keypair returned bare Vec\u003cu8\u003e — callers were wrapping in Zeroizing::new() redundantly",
+        "ed25519-dalek's SigningKey only zeroes on drop when the 'zeroize' feature is explicitly enabled in Cargo.toml",
+        "Zeroizing\u003cVec\u003cu8\u003e\u003e does not implement TryInto\u003c[u8; 32]\u003e directly — callers converting to fixed-size arrays must use Vec::from(zeroizing_val).try_into()",
+        "fetch_and_populate_folder and resolve_file_pointers_blocking existed in both macOS/Linux and Windows operations.rs but had zero external callers — pure dead code",
+        "The pnpm setup action in CI requires an explicit version: field; other jobs used version: 10"
+      ],
+      "code": [
+        {
+          "path": "crates/crypto/src/ed25519.rs",
+          "line": 1,
+          "end_line": 30,
+          "finding": "generate_ed25519_keypair returned (Vec\u003cu8\u003e, Vec\u003cu8\u003e) — private key not in Zeroizing wrapper, leaving key material in freed memory after drop"
+        },
+        {
+          "path": "Cargo.toml",
+          "line": 1,
+          "end_line": 50,
+          "finding": "ed25519-dalek dependency was missing the 'zeroize' feature flag at workspace level"
+        },
+        {
+          "path": "crates/fuse/src/write_ops.rs",
+          "line": 472,
+          "end_line": 472,
+          "finding": "Callers of generate_ed25519_keypair were wrapping return value in Zeroizing::new(...clone()) — redundant double-wrapping after return type fix"
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "line": 146,
+          "end_line": 146,
+          "finding": "ipns_private_key.try_into() for Vec\u003cu8\u003e -\u003e [u8; 32] needed Vec::from() unwrap when value became Zeroizing\u003cVec\u003cu8\u003e\u003e"
+        },
+        {
+          "path": "crates/fuse/src/operations.rs",
+          "line": 51,
+          "end_line": 130,
+          "finding": "fetch_and_populate_folder and resolve_file_pointers_blocking were dead code — no external callers in either platform path"
+        },
+        {
+          "path": "apps/desktop/src-tauri/vendor/fuser/build.rs",
+          "line": 1,
+          "end_line": 15,
+          "finding": "Vendored fuser build.rs called unimplemented!() on non-Linux without libfuse feature, causing Windows cargo check to fail even when fuser is not a transitive dependency"
+        },
+        {
+          "path": "crates/sdk/src/registry.rs",
+          "line": 102,
+          "end_line": 102,
+          "finding": "Copy-paste bug: manifest.app_version was set to device_info.device_id instead of app_version; fields were already partially moved so fix required storing app_version before the move"
+        }
+      ],
+      "workflow": [
+        "When a subagent disconnects mid-execution, spot-checking via git log --oneline and file existence checks can confirm which tasks completed before resuming bookkeeping manually",
+        "Parallel subagent execution for independent test-writing tasks (crypto/core/sdk crates) saved significant wall-clock time with no coordination overhead",
+        "The security:review command scope question (Specific files / Recent changes / Phase code / Full audit) effectively scoped the review to Phase 23's 5 crates",
+        "Codecov PR comments are a useful trigger for identifying untested code — addressing them proactively before merge avoids future coverage debt",
+        "resolve-pr-comments workflow correctly identified a copy-paste bug (device_id used instead of app_version) that automated reviewer caught"
+      ]
+    },
+    "friction": [
+      "1Password SSH signing agent failed 3 consecutive times mid-session, requiring the user to retry manually after returning from AFK",
+      "The subagent API connection dropped mid-execution (ConnectionRefused) for the initial 23-08 executor agent, requiring manual resume and bookkeeping",
+      "CI job log extraction via gh run view required multiple attempts to isolate actual compiler errors from download noise",
+      "Zeroizing\u003cVec\u003cu8\u003e\u003e TryInto\u003c[u8; 32]\u003e incompatibility required identifying all call sites that used .try_into() on the return value — not surfaced until compile time"
+    ],
+    "open_items": [
+      "AES-CTR lacks client-side CID integrity verification after fetch — HIGH finding from security review, not fixed in this session (deferred)",
+      "file_ipns_private_key in write_ops.rs uses ed25519_dalek SigningKey directly (not through generate_ed25519_keypair) — key material handling not reviewed/fixed in this session",
+      "fuse crate still has pre-existing dead code warnings from vendored fuser and other sources — not addressed (pre-existing, out of scope)",
+      "Security review generated ~30 test case suggestions for AES-GCM, ECIES, HKDF etc. — only a subset were implemented as actual tests; attack scenario tests (replay, timing) not yet written",
+      "Codecov will report new coverage numbers after CI runs — may still have gaps in fuse crate (platform-specific code difficult to unit test without FUSE environment)"
+    ]
+  }
+}
