@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-24T03:30:09.478Z'
+last_updated: '2026-03-24T14:19:34.588Z'
 progress:
   total_phases: 8
   completed_phases: 5
-  total_plans: 20
-  completed_plans: 20
+  total_plans: 27
+  completed_plans: 22
 ---
 
 # Project State
@@ -18,12 +18,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-07)
 
 **Core value:** Zero-knowledge privacy -- files encrypted client-side, server never sees plaintext
-**Current focus:** Phase 20 — vault-migration
+**Current focus:** Phase 21 — byo-ipfs-node-support
 
 ## Current Position
 
-Phase: 20 (vault-migration) — COMPLETE
-Plan: 6 of 6 (all plans complete)
+Phase: 21 (byo-ipfs-node-support) — EXECUTING
+Plan: 3 of 7
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Plan: 6 of 6 (all plans complete)
 | 20    | 04   | 45min    | 3     | 15    |
 | 20    | 05   | 6min     | 2     | 13    |
 | 20    | 06   | 6min     | 2     | 4     |
+| 21    | 01   | 5min     | 2     | 9     |
 
 ## Accumulated Context
 
@@ -86,7 +87,10 @@ Recent for v1.1:
 - Recovery tool IPNS resolution uses gateway /ipns/ HEAD request with redirect following (most reliable without API dependency)
 - fetchAndDecryptMetadata handles both v1 JSON and v2 binary blobs transparently for folder sync
 - Zero-crypto vault schema: server stores only ownerPublicKey and rootIpnsName, all crypto material lives exclusively in IPFS v2 blobs
-- DB crypto columns (encrypted_root_folder_key, encrypted_root_ipns_private_key, migrated_at) fully dropped — no fallback paths
+- DB crypto columns (encrypted_root_folder_key, encrypted_root_ipns_private_key, migrated_at) fully dropped -- no fallback paths
+- PinningProvider interface: KuboProvider uses Basic auth, PsaProvider uses Bearer auth, matching each protocol's native auth model
+- PsaProvider.pin() throws intentionally; pinByCid() is the correct PSA workflow (CID-reference-only protocol)
+- Connection test uses sequential probe: Kubo /api/v0/id first, then PSA /pins, with 10s timeout per probe
 
 ### Roadmap Evolution
 
@@ -112,4 +116,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-24 after completing 20-06 (client dead code removal, IPFS-only v2 blob paths, Phase 20 complete)
+Last updated: 2026-03-24 after completing 21-01 (SDK pinning interface + KuboProvider, PsaProvider, connection test)
