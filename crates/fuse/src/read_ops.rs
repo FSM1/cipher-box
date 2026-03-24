@@ -345,25 +345,22 @@ pub(crate) mod implementation {
         );
 
         if has_temp {
-            match fs.open_files.get(&fh) {
-                Some(handle) => {
-                    match handle.read_at(offset, size) {
-                        Ok(data) => {
-                            log::debug!("read: temp file returned {} bytes", data.len());
-                            reply.data(&data);
-                            return;
-                        }
-                        Err(e) => {
-                            log::error!("Temp file read failed: {}", e);
-                            reply.error(libc::EIO);
-                            return;
-                        }
+            if let Some(handle) = fs.open_files.get(&fh) {
+                match handle.read_at(offset, size) {
+                    Ok(data) => {
+                        log::debug!("read: temp file returned {} bytes", data.len());
+                        reply.data(&data);
+                        return;
+                    }
+                    Err(e) => {
+                        log::error!("Temp file read failed: {}", e);
+                        reply.error(libc::EIO);
+                        return;
                     }
                 }
-                None => {
-                    reply.error(libc::EBADF);
-                    return;
-                }
+            } else {
+                reply.error(libc::EBADF);
+                return;
             }
         }
 
