@@ -137,9 +137,31 @@ export class VaultService {
   }
 
   /**
-   * Get current storage quota usage for a user
+   * Check if user is in BYO (Bring Your Own) IPFS mode.
+   * BYO users manage their own IPFS node; quota is advisory only.
+   */
+  async isUserByo(userId: string): Promise<boolean> {
+    const vault = await this.vaultRepository.findOne({
+      where: { ownerId: userId },
+      select: ['isByoUser'],
+    });
+    return vault?.isByoUser ?? false;
+  }
+
+  /**
+   * Set BYO status for a user's vault.
+   */
+  async setByoStatus(userId: string, isByo: boolean): Promise<void> {
+    await this.vaultRepository.update({ ownerId: userId }, { isByoUser: isByo });
+  }
+
+  /**
+   * Get current storage quota usage for a user.
+   * For BYO users, the advisory flag is set to true.
    */
   async getQuota(userId: string): Promise<QuotaResponseDto> {
+    const isByo = await this.isUserByo(userId);
+
     const result = await this.pinnedCidRepository
       .createQueryBuilder('pin')
       .select('COALESCE(SUM(pin.size_bytes), 0)', 'total')
@@ -153,15 +175,20 @@ export class VaultService {
       usedBytes,
       limitBytes: QUOTA_LIMIT_BYTES,
       remainingBytes,
+      advisory: isByo,
     };
   }
 
   /**
-   * Check if user has sufficient quota for additional storage
+   * Check if user has sufficient quota for additional storage.
+   * BYO users always pass (advisory only -- no enforcement).
    *
-   * @returns true if (current usage + additionalBytes) <= quota limit
+   * @returns true if BYO user OR (current usage + additionalBytes) <= quota limit
    */
   async checkQuota(userId: string, additionalBytes: number): Promise<boolean> {
+    const isByo = await this.isUserByo(userId);
+    if (isByo) return true; // Advisory only -- always allow
+
     const quota = await this.getQuota(userId);
     return quota.usedBytes + additionalBytes <= QUOTA_LIMIT_BYTES;
   }

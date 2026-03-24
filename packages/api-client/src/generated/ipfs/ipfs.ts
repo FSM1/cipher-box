@@ -7,6 +7,8 @@
  */
 import type {
   IpfsControllerUploadBody,
+  RegisterCidDto,
+  RegisterCidResponseDto,
   UnpinDto,
   UnpinResponseDto,
   UploadResponseDto,
@@ -57,6 +59,24 @@ export const ipfsControllerUnpin = (
   );
 };
 /**
+ * BYO users report CIDs pinned to their own nodes. Advisory only -- no enforcement.
+ * @summary Register externally-pinned CID for advisory quota tracking
+ */
+export const ipfsControllerRegisterCid = (
+  registerCidDto: BodyType<RegisterCidDto>,
+  options?: SecondParameter<typeof customInstance<RegisterCidResponseDto>>
+) => {
+  return customInstance<RegisterCidResponseDto>(
+    {
+      url: `/ipfs/register-cid`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      data: registerCidDto,
+    },
+    options
+  );
+};
+/**
  * Download an encrypted file from IPFS via the configured gateway.
  * @summary Get file from IPFS
  */
@@ -74,5 +94,8 @@ export type IpfsControllerUploadResult = NonNullable<
 >;
 export type IpfsControllerUnpinResult = NonNullable<
   Awaited<ReturnType<typeof ipfsControllerUnpin>>
+>;
+export type IpfsControllerRegisterCidResult = NonNullable<
+  Awaited<ReturnType<typeof ipfsControllerRegisterCid>>
 >;
 export type IpfsControllerGetResult = NonNullable<Awaited<ReturnType<typeof ipfsControllerGet>>>;

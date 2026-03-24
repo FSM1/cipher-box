@@ -71,6 +71,8 @@ export * from './publishIpnsResponseDto';
 export * from './quotaResponseDto';
 export * from './receivedShareResponseDto';
 export * from './receivedShareResponseDtoItemType';
+export * from './registerCidDto';
+export * from './registerCidResponseDto';
 export * from './resolveIpnsResponseDto';
 export * from './respondApprovalDto';
 export * from './respondApprovalDtoAction';

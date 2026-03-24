@@ -21,4 +21,10 @@ export class QuotaResponseDto {
     example: 419430400,
   })
   remainingBytes!: number;
+
+  @ApiProperty({
+    description: 'Whether quota is advisory-only (BYO users manage their own storage)',
+    example: false,
+  })
+  advisory!: boolean;
 }

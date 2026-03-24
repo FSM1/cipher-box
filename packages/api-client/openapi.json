@@ -577,6 +577,42 @@
         "tags": ["IPFS"]
       }
     },
+    "/ipfs/register-cid": {
+      "post": {
+        "description": "BYO users report CIDs pinned to their own nodes. Advisory only -- no enforcement.",
+        "operationId": "IpfsController_registerCid",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterCidDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "CID registered for tracking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterCidResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Register externally-pinned CID for advisory quota tracking",
+        "tags": ["IPFS"]
+      }
+    },
     "/ipfs/{cid}": {
       "get": {
         "description": "Download an encrypted file from IPFS via the configured gateway.",
@@ -2358,6 +2394,30 @@
         },
         "required": ["success"]
       },
+      "RegisterCidDto": {
+        "type": "object",
+        "properties": {
+          "cid": {
+            "type": "string",
+            "description": "IPFS CID pinned to external provider (CIDv0 or CIDv1)"
+          },
+          "sizeBytes": {
+            "type": "number",
+            "description": "Size of the pinned content in bytes"
+          }
+        },
+        "required": ["cid", "sizeBytes"]
+      },
+      "RegisterCidResponseDto": {
+        "type": "object",
+        "properties": {
+          "recorded": {
+            "type": "boolean",
+            "description": "Whether the CID was recorded"
+          }
+        },
+        "required": ["recorded"]
+      },
       "InitVaultDto": {
         "type": "object",
         "properties": {
@@ -2505,9 +2565,14 @@
             "type": "number",
             "description": "Remaining storage in bytes",
             "example": 419430400
+          },
+          "advisory": {
+            "type": "boolean",
+            "description": "Whether quota is advisory-only (BYO users manage their own storage)",
+            "example": false
           }
         },
-        "required": ["usedBytes", "limitBytes", "remainingBytes"]
+        "required": ["usedBytes", "limitBytes", "remainingBytes", "advisory"]
       },
       "PublishIpnsDto": {
         "type": "object",

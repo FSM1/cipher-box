@@ -341,6 +341,7 @@ describe('VaultService', () => {
         usedBytes,
         limitBytes: QUOTA_LIMIT_BYTES,
         remainingBytes: QUOTA_LIMIT_BYTES - usedBytes,
+        advisory: false,
       });
     });
 
@@ -353,6 +354,7 @@ describe('VaultService', () => {
         usedBytes: 0,
         limitBytes: QUOTA_LIMIT_BYTES,
         remainingBytes: QUOTA_LIMIT_BYTES,
+        advisory: false,
       });
     });
 
@@ -365,6 +367,7 @@ describe('VaultService', () => {
         usedBytes: QUOTA_LIMIT_BYTES,
         limitBytes: QUOTA_LIMIT_BYTES,
         remainingBytes: 0,
+        advisory: false,
       });
     });
 
@@ -377,6 +380,7 @@ describe('VaultService', () => {
         usedBytes: 0,
         limitBytes: QUOTA_LIMIT_BYTES,
         remainingBytes: QUOTA_LIMIT_BYTES,
+        advisory: false,
       });
     });
 
@@ -389,6 +393,7 @@ describe('VaultService', () => {
         usedBytes: 0,
         limitBytes: QUOTA_LIMIT_BYTES,
         remainingBytes: QUOTA_LIMIT_BYTES,
+        advisory: false,
       });
     });
 
