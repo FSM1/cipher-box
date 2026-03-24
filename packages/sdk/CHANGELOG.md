@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.26.1...@cipherbox/sdk-v0.27.0) (2026-03-24)
+
+
+### Features
+
+* vault blob v2 migration — zero-knowledge server ([#344](https://github.com/FSM1/cipher-box/issues/344)) ([6aa4114](https://github.com/FSM1/cipher-box/commit/6aa4114bd57a339d28c2e95be0d544e62aef11c2))
+
 ## [0.26.1](https://github.com/FSM1/cipher-box/compare/@cipherbox/sdk-v0.26.0...@cipherbox/sdk-v0.26.1) (2026-03-24)
 
 ### Performance Improvements

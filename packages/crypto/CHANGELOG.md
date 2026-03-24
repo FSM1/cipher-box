@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.1](https://github.com/FSM1/cipher-box/compare/@cipherbox/crypto-v0.26.0...@cipherbox/crypto-v0.26.1) (2026-03-24)
+
+
+### Bug Fixes
+
+* separate vault key blob from root folder IPNS name ([#349](https://github.com/FSM1/cipher-box/issues/349)) ([f04ba16](https://github.com/FSM1/cipher-box/commit/f04ba16ea099b16d13cc3c846e979ee461bd966d))
+
 ## [0.26.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/crypto-v0.25.1...@cipherbox/crypto-v0.26.0) (2026-03-23)
 
 
