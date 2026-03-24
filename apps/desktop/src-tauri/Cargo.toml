@@ -13,7 +13,7 @@ winfsp = ["cipherbox-fuse/winfsp", "dep:winfsp", "dep:widestring"]
 cipherbox-crypto = { workspace = true }
 cipherbox-core = { workspace = true }
 cipherbox-api-client = { workspace = true }
-cipherbox-fuse = { workspace = true }
+cipherbox-fuse = { workspace = true, default-features = false }
 cipherbox-sdk = { workspace = true }
 
 # Tauri

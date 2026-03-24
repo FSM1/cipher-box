@@ -699,6 +699,9 @@ jobs:
       - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build TypeScript packages
+        run: pnpm --filter @cipherbox/core --filter @cipherbox/crypto build
+
       - name: Run Rust vector tests
         run: cargo test -p cipherbox-crypto --test cross_language --no-default-features
 
