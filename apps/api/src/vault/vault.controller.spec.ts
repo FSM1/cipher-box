@@ -16,8 +16,6 @@ describe('VaultController', () => {
   const mockVaultResponse = {
     id: 'vault-uuid-123',
     ownerPublicKey: '04abcd1234567890',
-    encryptedRootFolderKey: 'encrypted-folder-key-hex',
-    encryptedRootIpnsPrivateKey: 'encrypted-ipns-key-hex',
     rootIpnsName: 'k51qzi5uqu5test',
     createdAt: new Date('2026-01-20T00:00:00Z'),
     initializedAt: null,
@@ -57,8 +55,6 @@ describe('VaultController', () => {
   describe('initializeVault', () => {
     const initVaultDto: InitVaultDto = {
       ownerPublicKey: '04abcd1234567890',
-      encryptedRootFolderKey: 'encrypted-folder-key-hex',
-      encryptedRootIpnsPrivateKey: 'encrypted-ipns-key-hex',
       rootIpnsName: 'k51qzi5uqu5test',
     };
 

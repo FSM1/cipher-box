@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, Matches } from 'class-validator';
+import { IsString, IsNotEmpty, Matches } from 'class-validator';
 import { TeeKeysDto } from '../../tee/dto/tee-keys.dto';
 
 /**
@@ -15,31 +15,6 @@ export class InitVaultDto {
   @IsNotEmpty()
   @Matches(/^[0-9a-fA-F]+$/, { message: 'ownerPublicKey must be hex-encoded' })
   ownerPublicKey!: string;
-
-  @ApiProperty({
-    description: 'ECIES-wrapped root folder AES-256 key (hex-encoded)',
-    example: 'a1b2c3d4e5f6...',
-  })
-  @IsString()
-  @IsNotEmpty()
-  @Matches(/^[0-9a-fA-F]+$/, {
-    message: 'encryptedRootFolderKey must be hex-encoded',
-  })
-  encryptedRootFolderKey!: string;
-
-  @ApiProperty({
-    description:
-      'ECIES-wrapped Ed25519 IPNS private key (hex-encoded). ' +
-      'Optional for v2 blob vaults where IPNS key is managed client-side.',
-    example: 'a1b2c3d4e5f6...',
-    required: false,
-  })
-  @IsOptional()
-  @IsString()
-  @Matches(/^[0-9a-fA-F]+$/, {
-    message: 'encryptedRootIpnsPrivateKey must be hex-encoded',
-  })
-  encryptedRootIpnsPrivateKey?: string;
 
   @ApiProperty({
     description: 'IPNS name (libp2p-key multihash, base58btc or base36)',
@@ -67,26 +42,6 @@ export class VaultResponseDto {
   ownerPublicKey!: string;
 
   @ApiProperty({
-    description:
-      'ECIES-wrapped root folder AES-256 key (hex-encoded). ' +
-      'Null for migrated v2 blob vaults (rootFolderKey lives in IPFS).',
-    example: 'a1b2c3d4e5f6...',
-    type: String,
-    nullable: true,
-  })
-  encryptedRootFolderKey!: string | null;
-
-  @ApiProperty({
-    description:
-      'ECIES-wrapped Ed25519 IPNS private key (hex-encoded). ' +
-      'Null for migrated v2 blob vaults.',
-    example: 'a1b2c3d4e5f6...',
-    type: String,
-    nullable: true,
-  })
-  encryptedRootIpnsPrivateKey!: string | null;
-
-  @ApiProperty({
     description: 'IPNS name for root folder',
     example: 'k51qzi5uqu5dg...',
   })
@@ -106,14 +61,6 @@ export class VaultResponseDto {
     nullable: true,
   })
   initializedAt!: Date | null;
-
-  @ApiProperty({
-    description: 'When vault was migrated to v2 blob format, null if not yet migrated',
-    type: String,
-    format: 'date-time',
-    nullable: true,
-  })
-  migratedAt!: Date | null;
 
   @ApiProperty({
     description: 'TEE public keys for IPNS key encryption (null if TEE not initialized)',

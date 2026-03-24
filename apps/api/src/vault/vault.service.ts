@@ -67,10 +67,6 @@ export class VaultService {
     const vault = this.vaultRepository.create({
       ownerId: userId,
       ownerPublicKey: Buffer.from(dto.ownerPublicKey, 'hex'),
-      encryptedRootFolderKey: Buffer.from(dto.encryptedRootFolderKey, 'hex'),
-      encryptedRootIpnsPrivateKey: dto.encryptedRootIpnsPrivateKey
-        ? Buffer.from(dto.encryptedRootIpnsPrivateKey, 'hex')
-        : null,
       rootIpnsName: dto.rootIpnsName,
       initializedAt: null,
     });
@@ -193,36 +189,6 @@ export class VaultService {
   }
 
   /**
-   * Mark vault as migrated to v2 blob format.
-   * Stamps migratedAt and NULLs both crypto columns
-   * (rootFolderKey now lives in the IPFS vault blob).
-   * Idempotent -- calling multiple times is safe.
-   */
-  async migrateVault(userId: string): Promise<void> {
-    const vault = await this.vaultRepository.findOne({
-      where: { ownerId: userId },
-    });
-
-    if (!vault) {
-      throw new NotFoundException('Vault not found');
-    }
-
-    // Idempotent: if already migrated, return success
-    if (vault.migratedAt) {
-      return;
-    }
-
-    await this.vaultRepository.update(
-      { ownerId: userId },
-      {
-        migratedAt: new Date(),
-        encryptedRootFolderKey: null,
-        encryptedRootIpnsPrivateKey: null,
-      }
-    );
-  }
-
-  /**
    * Get export data for independent recovery.
    * Returns the minimal set of fields needed to reconstruct the vault:
    * root IPNS name + encrypted root keys + derivation hints.
@@ -245,8 +211,6 @@ export class VaultService {
       version: '1.0',
       exportedAt: new Date().toISOString(),
       rootIpnsName: vault.rootIpnsName,
-      encryptedRootFolderKey: vault.encryptedRootFolderKey?.toString('hex') ?? null,
-      encryptedRootIpnsPrivateKey: vault.encryptedRootIpnsPrivateKey?.toString('hex') ?? null,
       derivationMethod: user ? 'web3auth' : null,
     };
   }
@@ -258,12 +222,9 @@ export class VaultService {
     return {
       id: vault.id,
       ownerPublicKey: vault.ownerPublicKey.toString('hex'),
-      encryptedRootFolderKey: vault.encryptedRootFolderKey?.toString('hex') ?? null,
-      encryptedRootIpnsPrivateKey: vault.encryptedRootIpnsPrivateKey?.toString('hex') ?? null,
       rootIpnsName: vault.rootIpnsName,
       createdAt: vault.createdAt,
       initializedAt: vault.initializedAt,
-      migratedAt: vault.migratedAt ?? null,
       teeKeys,
     };
   }

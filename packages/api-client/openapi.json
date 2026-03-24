@@ -661,31 +661,6 @@
         "tags": ["Vault"]
       }
     },
-    "/vault/migrate": {
-      "post": {
-        "description": "Stamps migratedAt timestamp and NULLs both encryptedRootFolderKey and encryptedRootIpnsPrivateKey columns. Called by clients after successfully writing a vault blob v2 to IPFS. Idempotent.",
-        "operationId": "VaultController_migrateVault",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Vault migration recorded (or already migrated)"
-          },
-          "401": {
-            "description": "Unauthorized - JWT token required"
-          },
-          "404": {
-            "description": "Not Found - Vault does not exist"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Mark vault as migrated to v2 blob format",
-        "tags": ["Vault"]
-      }
-    },
     "/vault/config": {
       "get": {
         "description": "Returns application configuration including recycle bin retention period. The retention period is configurable via the RECYCLE_BIN_RETENTION_DAYS environment variable (default: 30).",
@@ -2391,23 +2366,13 @@
             "description": "User secp256k1 public key (uncompressed, 65 bytes, hex-encoded)",
             "example": "04a1b2c3d4e5f6...(130 hex characters for 65 bytes with 0x04 prefix)"
           },
-          "encryptedRootFolderKey": {
-            "type": "string",
-            "description": "ECIES-wrapped root folder AES-256 key (hex-encoded)",
-            "example": "a1b2c3d4e5f6..."
-          },
-          "encryptedRootIpnsPrivateKey": {
-            "type": "string",
-            "description": "ECIES-wrapped Ed25519 IPNS private key (hex-encoded). Optional for v2 blob vaults where IPNS key is managed client-side.",
-            "example": "a1b2c3d4e5f6..."
-          },
           "rootIpnsName": {
             "type": "string",
             "description": "IPNS name (libp2p-key multihash, base58btc or base36)",
             "example": "k51qzi5uqu5dg..."
           }
         },
-        "required": ["ownerPublicKey", "encryptedRootFolderKey", "rootIpnsName"]
+        "required": ["ownerPublicKey", "rootIpnsName"]
       },
       "TeeKeysDto": {
         "type": "object",
@@ -2450,18 +2415,6 @@
             "description": "User secp256k1 public key (uncompressed, 65 bytes, hex-encoded)",
             "example": "04a1b2c3d4e5f6...(130 hex characters for 65 bytes with 0x04 prefix)"
           },
-          "encryptedRootFolderKey": {
-            "type": "string",
-            "description": "ECIES-wrapped root folder AES-256 key (hex-encoded). Null for migrated v2 blob vaults (rootFolderKey lives in IPFS).",
-            "example": "a1b2c3d4e5f6...",
-            "nullable": true
-          },
-          "encryptedRootIpnsPrivateKey": {
-            "type": "string",
-            "description": "ECIES-wrapped Ed25519 IPNS private key (hex-encoded). Null for migrated v2 blob vaults.",
-            "example": "a1b2c3d4e5f6...",
-            "nullable": true
-          },
           "rootIpnsName": {
             "type": "string",
             "description": "IPNS name for root folder",
@@ -2480,12 +2433,6 @@
             "format": "date-time",
             "nullable": true
           },
-          "migratedAt": {
-            "type": "string",
-            "description": "When vault was migrated to v2 blob format, null if not yet migrated",
-            "format": "date-time",
-            "nullable": true
-          },
           "teeKeys": {
             "description": "TEE public keys for IPNS key encryption (null if TEE not initialized)",
             "nullable": true,
@@ -2496,16 +2443,7 @@
             ]
           }
         },
-        "required": [
-          "id",
-          "ownerPublicKey",
-          "encryptedRootFolderKey",
-          "encryptedRootIpnsPrivateKey",
-          "rootIpnsName",
-          "createdAt",
-          "initializedAt",
-          "migratedAt"
-        ]
+        "required": ["id", "ownerPublicKey", "rootIpnsName", "createdAt", "initializedAt"]
       },
       "VaultConfigResponseDto": {
         "type": "object",
@@ -2541,18 +2479,6 @@
             "description": "IPNS name for the root folder (libp2p-key multihash)",
             "example": "k51qzi5uqu5dg..."
           },
-          "encryptedRootFolderKey": {
-            "type": "string",
-            "description": "ECIES-wrapped root folder AES-256 key (hex-encoded). Null for migrated v2 blob vaults.",
-            "example": "a1b2c3d4e5f6...",
-            "nullable": true
-          },
-          "encryptedRootIpnsPrivateKey": {
-            "type": "string",
-            "description": "ECIES-wrapped Ed25519 IPNS private key (hex-encoded). Null for migrated v2 blob vaults.",
-            "example": "a1b2c3d4e5f6...",
-            "nullable": true
-          },
           "derivationMethod": {
             "type": "string",
             "description": "Key derivation method used. Always \"web3auth\" for Core Kit users. Null if user record not found.",
@@ -2560,14 +2486,7 @@
             "nullable": true
           }
         },
-        "required": [
-          "format",
-          "version",
-          "exportedAt",
-          "rootIpnsName",
-          "encryptedRootFolderKey",
-          "encryptedRootIpnsPrivateKey"
-        ]
+        "required": ["format", "version", "exportedAt", "rootIpnsName"]
       },
       "QuotaResponseDto": {
         "type": "object",
