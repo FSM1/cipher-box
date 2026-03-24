@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "fc0068bcda30",
+  "strategy": "manual-commit",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/vault/dto/init-vault.dto.ts",
+    "apps/web/public/recovery.html"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fc/0068bcda30/0/metadata.json",
+      "transcript": "/fc/0068bcda30/0/full.jsonl",
+      "content_hash": "/fc/0068bcda30/0/content_hash.txt",
+      "prompt": "/fc/0068bcda30/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6775,
+    "cache_creation_tokens": 465136,
+    "cache_read_tokens": 53757711,
+    "output_tokens": 90515,
+    "api_call_count": 299
+  }
+}
