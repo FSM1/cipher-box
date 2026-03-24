@@ -38,3 +38,7 @@ you most definitely do - it is logged in clear text in the terminal where the ap
 ---
 
 ok sync is failing and I do not see the migration console log in the browser unfortunately.
+
+---
+
+how can I approve the checkpoint if the migration was never called ? get investigating using /gsd:debug
