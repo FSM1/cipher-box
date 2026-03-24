@@ -804,10 +804,22 @@
     // =========================================================================
     // IPNS Resolution
     // =========================================================================
-    async function resolveIpns(ipnsName, gatewayUrl) {
+    async function resolveIpns(ipnsName, gatewayUrl, ipfsGatewayUrl) {
       const maxRetries = 3;
 
-      // Primary: Delegated routing API
+      // Primary: IPFS gateway /ipns/ HEAD request (extracts CID from X-Ipfs-Roots header)
+      const gwBase = ipfsGatewayUrl || gatewayUrl;
+      try {
+        const resp = await fetch(`${gwBase}/ipns/${ipnsName}`, { method: 'HEAD' });
+        if (resp.ok) {
+          const roots = resp.headers.get('X-Ipfs-Roots');
+          if (roots) return roots.split(',')[0].trim();
+        }
+      } catch (e) {
+        // Gateway doesn't support /ipns/ path, try delegated routing
+      }
+
+      // Fallback 1: Delegated routing API
       for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
           const url = `${gatewayUrl}/routing/v1/ipns/${ipnsName}`;
@@ -979,7 +991,7 @@
     async function recoverFolder(ipnsName, folderKey, path, gatewayConfig) {
       // 1. Resolve IPNS name -> CID
       log(`Resolving IPNS: ${truncate(ipnsName, 30)}...`, 'info');
-      const cid = await resolveIpns(ipnsName, gatewayConfig.ipnsGateway);
+      const cid = await resolveIpns(ipnsName, gatewayConfig.ipnsGateway, gatewayConfig.ipfsGateway);
       log(`  Resolved to CID: ${truncate(cid, 40)}`, 'info');
 
       // 2. Fetch encrypted metadata
@@ -1062,7 +1074,7 @@
             // a. Resolve file IPNS to get file metadata CID
             let fileMetaCid;
             try {
-              fileMetaCid = await resolveIpns(fileIpnsName, gatewayConfig.ipnsGateway);
+              fileMetaCid = await resolveIpns(fileIpnsName, gatewayConfig.ipnsGateway, gatewayConfig.ipfsGateway);
             } catch (resolveErr) {
               log(`  WARNING: File IPNS record may have expired for "${child.name}". ` +
                   `IPNS name: ${truncate(fileIpnsName, 30)}. ` +
