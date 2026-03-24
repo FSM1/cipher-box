@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-24T07:28:49.809Z'
+last_updated: '2026-03-24T07:43:49.555Z'
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 27
-  completed_plans: 21
+  completed_plans: 23
 ---
 
 # Project State
@@ -23,7 +23,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 23 (rust-sdk-extraction) — EXECUTING
-Plan: 2 of 7
+Plan: 4 of 7
 
 ## Performance Metrics
 
@@ -53,6 +53,7 @@ Plan: 2 of 7
 | 20    | 05   | 6min     | 2     | 13    |
 | 20    | 06   | 6min     | 2     | 4     |
 | 23    | 01   | 13min    | 2     | 26    |
+| 23    | 02   | 10min    | 2     | 33    |
 
 ## Accumulated Context
 
@@ -90,6 +91,12 @@ Recent for v1.1:
 - DB crypto columns (encrypted_root_folder_key, encrypted_root_ipns_private_key, migrated_at) fully dropped — no fallback paths
 - Cargo workspace with centralized deps at repo root; cipherbox-crypto crate as foundation for all Rust SDK extraction
 - Module re-export pattern in desktop crypto/mod.rs preserves all existing crate::crypto::\* paths without touching call sites
+- cipherbox-core crate layered on cipherbox-crypto: folder, file, bin, vault_blob, ipns, registry, decrypt, error modules
+- File module re-exports FileMetadata types from folder.rs (shared AES encryption context with parent folder key)
+- decrypt module moved from fuse to crypto re-export (domain logic, not FUSE-specific)
+- Hand-structured API client crate rather than openapi-generator (modest API surface, proven code, no Java/Docker CI dependency)
+- critical-section std feature required for standalone ecies linking (Tauri provides it in desktop builds)
+- Shared test vectors in tests/vectors/ JSON files loadable by both Rust and TypeScript for CI parity gates
 
 ### Roadmap Evolution
 
@@ -115,4 +122,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-24 after completing 23-01 (Cargo workspace + cipherbox-crypto crate extraction)
+Last updated: 2026-03-24 after completing 23-02 (cipherbox-core crate extraction)

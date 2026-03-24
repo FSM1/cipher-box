@@ -63,9 +63,9 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 
 - [x] **RSDK-01**: Cargo workspace at repo root with centralized `[workspace.dependencies]` and all five Rust crates as members
 - [x] **RSDK-02**: `cipherbox-crypto` crate contains pure crypto primitives (AES-GCM/CTR, ECIES, Ed25519, HKDF, IPNS name derivation) with no domain knowledge
-- [ ] **RSDK-03**: Shared JSON test vectors in `tests/vectors/` loaded by both Rust and TypeScript test suites for cross-language parity verification
-- [ ] **RSDK-04**: `cipherbox-core` crate contains domain types (FolderMetadata, FileMetadata, RecycleBinMetadata, DeviceRegistry), metadata encrypt/decrypt, vault blob v2, IPNS record creation
-- [ ] **RSDK-05**: `cipherbox-api-client` crate provides typed HTTP client for all CipherBox API endpoints used by desktop
+- [x] **RSDK-03**: Shared JSON test vectors in `tests/vectors/` loaded by both Rust and TypeScript test suites for cross-language parity verification
+- [x] **RSDK-04**: `cipherbox-core` crate contains domain types (FolderMetadata, FileMetadata, RecycleBinMetadata, DeviceRegistry), metadata encrypt/decrypt, vault blob v2, IPNS record creation
+- [x] **RSDK-05**: `cipherbox-api-client` crate provides typed HTTP client for all CipherBox API endpoints used by desktop
 - [ ] **RSDK-06**: `cipherbox-fuse` crate contains platform-agnostic FUSE abstractions (InodeTable, caches, file handles) and platform-specific modules behind feature flags (fuse for macOS/Linux, winfsp for Windows)
 - [ ] **RSDK-07**: `cipherbox-sdk` crate contains stateful orchestration (SyncDaemon, WriteQueue, KeyState, device registry ops) with no Tauri dependency
 - [ ] **RSDK-08**: Desktop app is a thin Tauri shell (commands/, tray/, main.rs) with all logic delegated to workspace crates
@@ -149,9 +149,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SDK-11      | Phase 19.1 | Complete |
 | RSDK-01     | Phase 23   | Complete |
 | RSDK-02     | Phase 23   | Complete |
-| RSDK-03     | Phase 23   | Pending  |
-| RSDK-04     | Phase 23   | Pending  |
-| RSDK-05     | Phase 23   | Pending  |
+| RSDK-03     | Phase 23   | Complete |
+| RSDK-04     | Phase 23   | Complete |
+| RSDK-05     | Phase 23   | Complete |
 | RSDK-06     | Phase 23   | Pending  |
 | RSDK-07     | Phase 23   | Pending  |
 | RSDK-08     | Phase 23   | Pending  |
