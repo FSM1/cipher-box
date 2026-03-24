@@ -105,7 +105,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | VAULT-02    | Phase 20   | Complete |
 | VAULT-03    | Phase 20   | Complete |
 | VAULT-04    | Phase 20   | Complete |
-| VAULT-05    | Phase 20   | Pending  |
+| VAULT-05    | Phase 20   | Complete |
 | VAULT-06    | Phase 20   | Complete |
 | BYO-01      | Phase 21   | Pending  |
 | BYO-02      | Phase 21   | Pending  |

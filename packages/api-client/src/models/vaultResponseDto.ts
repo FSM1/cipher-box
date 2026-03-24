@@ -5,8 +5,6 @@
  * Zero-knowledge encrypted cloud storage API
  * OpenAPI spec version: 0.1.0
  */
-import type { VaultResponseDtoEncryptedRootFolderKey } from './vaultResponseDtoEncryptedRootFolderKey';
-import type { VaultResponseDtoEncryptedRootIpnsPrivateKey } from './vaultResponseDtoEncryptedRootIpnsPrivateKey';
 import type { VaultResponseDtoTeeKeys } from './vaultResponseDtoTeeKeys';
 
 export interface VaultResponseDto {
@@ -18,12 +16,12 @@ export interface VaultResponseDto {
    * ECIES-wrapped root folder AES-256 key (hex-encoded). Null for migrated v2 blob vaults (rootFolderKey lives in IPFS).
    * @nullable
    */
-  encryptedRootFolderKey: VaultResponseDtoEncryptedRootFolderKey;
+  encryptedRootFolderKey: string | null;
   /**
    * ECIES-wrapped Ed25519 IPNS private key (hex-encoded). Null for migrated v2 blob vaults.
    * @nullable
    */
-  encryptedRootIpnsPrivateKey: VaultResponseDtoEncryptedRootIpnsPrivateKey;
+  encryptedRootIpnsPrivateKey: string | null;
   /** IPNS name for root folder */
   rootIpnsName: string;
   /** Vault creation timestamp */

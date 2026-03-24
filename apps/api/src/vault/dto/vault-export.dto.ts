@@ -34,6 +34,7 @@ export class VaultExportDto {
     description:
       'ECIES-wrapped root folder AES-256 key (hex-encoded). ' + 'Null for migrated v2 blob vaults.',
     example: 'a1b2c3d4e5f6...',
+    type: String,
     nullable: true,
   })
   encryptedRootFolderKey!: string | null;
@@ -43,6 +44,7 @@ export class VaultExportDto {
       'ECIES-wrapped Ed25519 IPNS private key (hex-encoded). ' +
       'Null for migrated v2 blob vaults.',
     example: 'a1b2c3d4e5f6...',
+    type: String,
     nullable: true,
   })
   encryptedRootIpnsPrivateKey!: string | null;
