@@ -1,0 +1,83 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "352fc8fdda86",
+  "session_id": "3a9e3004-d380-4fc4-a1a4-3d0276947c57",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T12:22:07.374455Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "crates/fuse/src/lib.rs",
+    "crates/fuse/src/platform/windows/dir_ops.rs",
+    "crates/fuse/src/platform/windows/mod.rs",
+    "crates/fuse/src/platform/windows/operations.rs",
+    "crates/fuse/src/platform/windows/read_ops.rs",
+    "crates/fuse/src/platform/windows/write_ops.rs"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "981dfd4a66f7",
+  "token_usage": {
+    "input_tokens": 7,
+    "cache_creation_tokens": 40115,
+    "cache_read_tokens": 220166,
+    "output_tokens": 1453,
+    "api_call_count": 6
+  },
+  "summary": {
+    "intent": "Execute gap closure plans for Phase 23 (rust-sdk-extraction) using the GSD wave-based execution workflow, specifically targeting only plans with gap_closure: true via --gaps-only flag.",
+    "outcome": "Plan 23-08 (Windows WinFsp Extraction) was successfully executed, moving WinFsp operation files from the desktop app into the cipherbox-fuse crate and closing verification gaps RSDK-06 and RSDK-08.",
+    "learnings": {
+      "repo": [
+        "Phase 23 is rust-sdk-extraction; 7 of 8 plans were already complete before this session",
+        "The cipherbox-fuse crate has a platform/windows/ module structure for WinFsp FUSE operations",
+        "There was a latent compile error: `pub mod windows` in the desktop app had no backing directory, fixed by moving files to the crate",
+        "Gap closure plans are tracked with gap_closure: true frontmatter in PLAN.md files"
+      ],
+      "code": [
+        {
+          "path": "crates/fuse/src/lib.rs",
+          "finding": "Modified as part of WinFsp extraction to expose windows platform module from crate"
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/mod.rs",
+          "finding": "New or updated module entry point for Windows FUSE operations in the crate"
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/operations.rs",
+          "finding": "FUSE operations moved from desktop app to crate"
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/dir_ops.rs",
+          "finding": "Directory operations extracted to crate"
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/read_ops.rs",
+          "finding": "Read operations extracted to crate"
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "finding": "Write operations extracted to crate"
+        }
+      ],
+      "workflow": [
+        "GSD --gaps-only flag filters execution to only plans with gap_closure: true, useful after verify-work creates fix plans",
+        "The GSD init tool confirms gap_closure status before execution begins",
+        "Single-plan phases still go through full wave execution infrastructure (Wave 1 with 1 agent)"
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Desktop app's fuse/windows/ directory should retain only mount/unmount after extraction — verify cleanup is complete",
+      "RSDK-06 and RSDK-08 verification gaps closed by this plan should be confirmed resolved in VERIFICATION.md after phase verification runs"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T12:21:52.879348Z",
+    "agent_lines": 0,
+    "human_added": 2340,
+    "human_modified": 1,
+    "human_removed": 0,
+    "total_committed": 2340,
+    "agent_percentage": 0
+  }
+}
