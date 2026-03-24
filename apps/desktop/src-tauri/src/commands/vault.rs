@@ -83,12 +83,9 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
     let json_bytes = serde_json::to_vec(&json_metadata)
         .map_err(|e| format!("JSON serialization failed: {}", e))?;
 
-    // Wrap rootFolderKey in v2 blob envelope for zero-knowledge server operation
-    let blob_bytes = {
-        let encrypted_key = crypto::ecies::wrap_key(&root_folder_key, public_key)
-            .map_err(|e| format!("Failed to wrap rootFolderKey for v2 blob: {}", e))?;
-        crypto::vault_blob::serialize_vault_blob_v2(&encrypted_key, &json_bytes)?
-    };
+    // Wrap rootFolderKey in v2 blob envelope -- reuse the ECIES-wrapped key from above
+    let blob_bytes =
+        crypto::vault_blob::serialize_vault_blob_v2(&encrypted_root_folder_key, &json_bytes)?;
 
     // Upload v2 blob to IPFS
     let initial_cid = crate::api::ipfs::upload_content(&state.api, &blob_bytes).await?;

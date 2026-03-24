@@ -110,10 +110,10 @@ export function useAuth() {
 
       if (existingVault.migratedAt) {
         // PATH A: Migrated user -- read rootFolderKey from IPFS v2 blob
+        // Derive IPNS keypair once (used for both resolution and vault keys)
+        const ipnsKeypair = await deriveVaultIpnsKeypair(userKeypair.privateKey);
         let rootFolderKey: Uint8Array;
         try {
-          // Derive IPNS keypair for resolution
-          const ipnsKeypair = await deriveVaultIpnsKeypair(userKeypair.privateKey);
           const ipnsName = await deriveIpnsName(ipnsKeypair.publicKey);
 
           // Resolve IPNS to CID using the existing IPNS service (handles signature verification)
@@ -143,16 +143,9 @@ export function useAuth() {
           }
         }
 
-        // Derive IPNS keypair via HKDF (canonical path for migrated users)
-        const ipnsKeypair = await deriveVaultIpnsKeypair(userKeypair.privateKey);
-        const rootIpnsKeypair = {
-          privateKey: ipnsKeypair.privateKey,
-          publicKey: ipnsKeypair.publicKey,
-        };
-
         setVaultKeys({
           rootFolderKey,
-          rootIpnsKeypair,
+          rootIpnsKeypair: ipnsKeypair,
           rootIpnsName: existingVault.rootIpnsName,
           vaultId: existingVault.id,
         });
