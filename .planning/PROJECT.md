@@ -60,8 +60,8 @@ See `.planning/REQUIREMENTS.md` for full requirements.
 
 #### Database Minimization
 
-- [ ] Move rootFolderKey to IPFS vault record (DB copy retained as permanent fallback)
-- [ ] Deprecate encryptedRootIpnsPrivateKey (already HKDF-derivable)
+- [x] Move rootFolderKey to IPFS vault blob v2 format (DB crypto columns dropped entirely) — Validated in Phase 20: Vault Migration
+- [x] Deprecate encryptedRootIpnsPrivateKey (HKDF-derivable, DB column dropped) — Validated in Phase 20: Vault Migration
 
 #### BYO-IPFS
 
@@ -142,4 +142,4 @@ See `.planning/REQUIREMENTS.md` for full requirements.
 
 ---
 
-Last updated: 2026-03-07 after Milestone v1.1 IPFS Infrastructure started
+Last updated: 2026-03-24 after Phase 20 Vault Migration completed
