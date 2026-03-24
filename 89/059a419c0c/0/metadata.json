@@ -1,0 +1,97 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "89059a419c0c",
+  "session_id": "2fa81926-9dda-4621-a65d-1b27247ed309",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T01:40:00.47839Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "08952a9ae92f",
+  "token_usage": {
+    "input_tokens": 6711,
+    "cache_creation_tokens": 434446,
+    "cache_read_tokens": 39783334,
+    "output_tokens": 76416,
+    "api_call_count": 245
+  },
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "summary": {
+    "intent": "Execute Phase 20 (vault-migration) end-to-end: implement v2 vault blob format across TypeScript core, NestJS API, Rust desktop, and web client, then verify via security review, code cleanup, and manual checkpoint testing.",
+    "outcome": "All 4 plans executed and verified. Two HIGH security issues fixed, code simplified, and the recovery tool repaired through several bugs discovered during live UAT. Phase 20 checkpoint approved with confirmed migration working end-to-end.",
+    "learnings": {
+      "repo": [
+        "orval codegen generates `{ [key: string]: unknown } | null` instead of `string | null` for nullable string OpenAPI fields — a known orval bug; `as unknown as string` casts are the correct workaround, not a code smell",
+        "NestJS does not auto-log incoming request routes, making POST /vault/migrate invisible in server logs — must check DB directly to confirm API calls occurred",
+        "The IPFS gateway at 192.168.133.114:8080 serves /ipns/{name} paths directly with CORS `Access-Control-Allow-Origin: *`, and returns the resolved CID in the X-Ipfs-Roots response header — a cleaner alternative to the delegated routing API",
+        "Kubo API port 5001 has no CORS headers and cannot be used directly from browser-based tools",
+        "The IPNS controller requires JWT auth, so the recovery tool cannot use the CipherBox API as an IPNS resolution proxy",
+        "Subfolder IPNS records are only stored in the CipherBox API DB cache and were never published to the public DHT — public gateway resolution for subfolders will always fail in this setup",
+        "fetchAndDecryptMetadata in both folder.service.ts and sdk-core/src/folder/index.ts blindly JSON.parsed IPFS blob bytes, crashing on v2 binary format — a gap in the v2 plan scope"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/folder.service.ts",
+          "line": 962,
+          "end_line": 966,
+          "finding": "fetchAndDecryptMetadata called JSON.parse directly on IPFS blob bytes without checking for v2 binary format — caused SyntaxError crash after migration wrote v2 blobs to IPFS"
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 44,
+          "end_line": 45,
+          "finding": "Same v2 blob handling gap as folder.service.ts — SDK's fetchAndDecryptMetadata also needs detectBlobVersion/deserializeVaultBlobV2 before JSON.parse"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1265,
+          "end_line": 1277,
+          "finding": "fetchFromIpfs could return undefined on non-200/non-404 responses (e.g. 502/503), then detectBlobVersion(undefined) crashed on .length — needed explicit undefined guard and throw"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+          "finding": "serialize_vault_blob_v2 changed from returning Vec\u003cu8\u003e to Result\u003cVec\u003cu8\u003e, \u0026'static str\u003e to add key length bounds check — all callers in vault.rs and fuse/mod.rs needed ? propagation; test calls needed .unwrap()"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/api/types.rs",
+          "finding": "InitVaultRequest and VaultResponse derived Debug, which would print encrypted key material in logs — replaced with custom Debug impls that redact sensitive fields"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 181,
+          "end_line": 233,
+          "finding": "Migration IIFE called deriveVaultIpnsKeypair() twice with identical inputs in the migrated login path — hoisted above try/catch; also had redundant ipnsKeypair destructure/re-wrap into rootIpnsKeypair"
+        }
+      ],
+      "workflow": [
+        "When a background async operation appears to fail silently, check the database directly before debugging code — the migration had succeeded at 00:12:38 UTC but was invisible because NestJS doesn't log routes",
+        "The /ipns/{name} gateway HEAD request pattern (checking X-Ipfs-Roots header) is more reliable than the delegated routing API for IPNS resolution in browser-based tools",
+        "Security review finding that serialize returns without bounds checking is a real serialization vulnerability class — u16 truncation of key length without error is a silent data corruption bug",
+        "Spot-checking executor agent results via git log --grep and file existence checks caught a folder sync gap that wasn't in the original plan scope"
+      ]
+    },
+    "friction": [
+      "API ConnectionRefused error mid-security-review required re-running the entire security review command",
+      "orval codegen bug with nullable string fields forced ugly `as unknown as string` casts throughout useAuth.ts — DTO changes and API client regeneration had no effect",
+      "IPNS resolution for recovery tool required four separate implementation attempts before finding a working approach (delegated routing → Kubo API → CipherBox API proxy → /ipns/ gateway HEAD)",
+      "Kubo API lacks CORS headers, blocking all browser-based tools from using it directly",
+      "NestJS not logging requests made the vault migration appear to fail silently, requiring a direct DB query to confirm success — cost significant debugging time",
+      "Public IPFS gateways returned 400/502 errors because locally-published content had not propagated to the DHT",
+      "Playwright session state required re-authentication multiple times during testing due to HMR page reloads clearing session"
+    ],
+    "open_items": [
+      "Add e2e tests exercising vault v2 recovery tool (.planning/todos/pending/2026-03-24-add-e2e-tests-for-vault-v2-recovery-tool.md)",
+      "Fix device registry CryptoError: Invalid registry format — schema mismatch between current device registry format and what's stored on IPFS (.planning/todos/pending/2026-03-24-fix-device-registry-cryptoerror-invalid-registry-format.md)",
+      "Fix bin IPNS name 404 resolution failure (.planning/todos/pending/2026-03-24-fix-bin-ipns-name-404-resolution-failure.md)",
+      "Recovery tool M-1: recovery.html private key not zeroed from memory after use",
+      "Recovery tool: subfolder recovery fails when IPNS records are not on public DHT — requires either DHT propagation or a public IPNS resolution proxy endpoint",
+      "Security medium M-2: no dedup guard for concurrent vault migration from multiple browser tabs",
+      "Security medium M-3: ECIES re-wrap on every root folder FUSE publish — optimization requiring AppState key caching",
+      "Security low L-1: zero-length key accepted by v2 blob deserializers",
+      "Security low L-2: no SRI hashes on CDN scripts in recovery.html"
+    ]
+  }
+}
