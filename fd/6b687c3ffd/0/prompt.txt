@@ -37,3 +37,7 @@ Full transcript available at: /private/tmp/claude-501/-Users-michael-Code-cipher
 ---
 
 I am honestly thinking that these tests will make most sense with an actual ipfs node from pinata or another external provider.
+
+---
+
+lets keep the decision on provider option and document some of these benchmarking type tasks in an additional plan in the current phase.
