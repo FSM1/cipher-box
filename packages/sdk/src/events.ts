@@ -38,6 +38,7 @@ export type SdkEvent =
   | { type: 'file:downloaded'; cid: string }
   | { type: 'bin:updated'; entries: BinEntry[] }
   | { type: 'share:reWrapFailed'; folderIpnsName: string; failedRecipients: string[] }
+  | { type: 'ipns:batchPublishFailed'; ipnsNames: string[]; error: Error }
   | { type: 'operation:start'; operation: string }
   | { type: 'operation:end'; operation: string; durationMs: number }
   | { type: 'error'; operation: string; error: Error };

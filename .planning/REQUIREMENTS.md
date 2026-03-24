@@ -43,6 +43,7 @@ Requirements for IPFS infrastructure milestone. Each maps to roadmap phases.
 - [ ] **PERF-06**: End-to-end user journey timing captured (login-to-vault, upload-to-visible, share-to-accessible)
 - [ ] **PERF-07**: k6 load testing scripts simulating concurrent users (upload, download, publish, resolve)
 - [ ] **PERF-08**: Capacity thresholds documented with scaling recommendations
+- [x] **PERF-09**: Upload operations optimized via concurrent SDK pin orchestration (Promise.allSettled) and Kubo pebbleds datastore, with before/after baselines documented
 
 ### SDK Extraction (Phase 19.1)
 
@@ -121,6 +122,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PERF-06     | Phase 22   | Pending  |
 | PERF-07     | Phase 22   | Pending  |
 | PERF-08     | Phase 22   | Pending  |
+| PERF-09     | Phase 19.2 | Complete |
 | SDK-01      | Phase 19.1 | Complete |
 | SDK-02      | Phase 19.1 | Complete |
 | SDK-03      | Phase 19.1 | Complete |
@@ -135,11 +137,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 **Coverage:**
 
-- v1.1 requirements: 36 total
-- Mapped to phases: 36
+- v1.1 requirements: 37 total
+- Mapped to phases: 37
 - Unmapped: 0
 
 ---
 
 _Requirements defined: 2026-03-07_
-_Last updated: 2026-03-20 after Phase 19.1 SDK extraction requirements added_
+_Last updated: 2026-03-23 after Phase 19.2 gap closure (PERF-09 registration)_

@@ -5,8 +5,8 @@ milestone_name: milestone
 status: unknown
 last_updated: '2026-03-24T01:50:37.185Z'
 progress:
-  total_phases: 6
-  completed_phases: 4
+  total_phases: 7
+  completed_phases: 5
   total_plans: 14
   completed_plans: 14
 ---
@@ -29,7 +29,7 @@ Plan: 4 of 4 (all plans executed)
 
 **Velocity:**
 
-- Total plans completed: 157 (72 M1 + 83 M2 + 2 M3)
+- Total plans completed: 160 (72 M1 + 83 M2 + 5 M3)
 - Average duration: 5.5 min
 - Total execution time: ~16.5 hours
 
@@ -42,6 +42,10 @@ Plan: 4 of 4 (all plans executed)
 | 19.1  | 03   | 12min    | 3     | 18    |
 | 19.1  | 04   | 10min    | 2     | 14    |
 | 19.1  | 06   | 13min    | 3     | 52    |
+| 19.2  | 01   | 6min     | 2     | 4     |
+| 19.2  | 02   | 12min    | 3     | 3     |
+| 19.2  | 03   | 1min     | 1     | 1     |
+| 19.2  | 04   | 71min    | 2     | 1     |
 | 20    | 01   | 4min     | 2     | 5     |
 | 20    | 02   | 17min    | 3     | 16    |
 | 20    | 03   | 25min    | 2     | 6     |
@@ -70,6 +74,8 @@ Recent for v1.1:
 - Bin/share operations take explicit context objects (BinOperationContext, ShareOperationContext) instead of Zustand stores
 - Share module accepts callback functions for API calls to stay transport-decoupled
 - Moved @cipherbox/core from dependencies to devDependencies in crypto (test-only cross-package assertions)
+- Kubo pebbleds datastore (LSM-tree) configured via IPFS_PROFILE=server,pebbleds; requires fresh volume on deploy
+- SDK concurrent pins require pebbleds datastore (synergistic); concurrent pins alone cause regression at 50 clients
 - Combined per-task commits into single commit due to pre-commit hook requiring api-client regeneration with entity/dto/controller changes
 - Desktop root folder detected by inode::ROOT_INO at publish call sites (simpler than modifying build_folder_metadata return type)
 - Desktop initialize_vault produces v2 blob for new users from day one (not just on migration)
@@ -82,6 +88,7 @@ Recent for v1.1:
 ### Roadmap Evolution
 
 - Phase 19.1 inserted after Phase 19: Extract core crypto SDK as shared package (URGENT)
+- Phase 19.2 inserted after Phase 19: IPFS Upload Performance Optimization (URGENT) — concurrent pins, Kubo worker tuning, pin batching to address ~95% bottleneck in upload path identified by Phase 19 baselines
 
 ### Open Concerns
 

@@ -608,17 +608,61 @@ export class CipherBoxClient {
           ipnsPrivateKeyEncrypted: uploadResult.ipnsPrivateKeyEncrypted,
         });
 
-        // 3. Batch publish: file metadata IPNS + folder metadata IPNS
-        await sdkCore.batchPublishIpnsRecords([uploadResult.ipnsRecord], this.ctx);
+        // 3. Concurrent: file IPNS batch publish + folder metadata update
+        //    These two operations are independent -- no data dependency between them.
+        //    Using Promise.allSettled to handle partial failures gracefully.
+        const [batchResult, folderResult] = await Promise.allSettled([
+          sdkCore.batchPublishIpnsRecords([uploadResult.ipnsRecord], this.ctx),
+          sdkCore.updateFolderMetadataAndPublish({
+            children: updatedChildren,
+            folderKey: folder.folderKey,
+            ipnsPrivateKey: folder.ipnsKeypair.privateKey,
+            ipnsName: folderIpnsName,
+            sequenceNumber: folder.sequenceNumber,
+            ctx: this.ctx,
+          }),
+        ]);
 
-        const { newSequenceNumber } = await sdkCore.updateFolderMetadataAndPublish({
-          children: updatedChildren,
-          folderKey: folder.folderKey,
-          ipnsPrivateKey: folder.ipnsKeypair.privateKey,
-          ipnsName: folderIpnsName,
-          sequenceNumber: folder.sequenceNumber,
-          ctx: this.ctx,
-        });
+        // Folder metadata update is critical -- must succeed for upload to be valid
+        if (folderResult.status === 'rejected') {
+          throw folderResult.reason;
+        }
+
+        // File IPNS batch publish failure is non-critical -- the FilePointer in
+        // folder metadata is valid, and the file IPNS record will be created
+        // on next publish attempt or TEE republish cycle
+        // Note: if folder update fails but batch publish succeeded, an orphaned IPNS
+        // record may exist. This is benign -- no FilePointer references it, and the
+        // IPNS name will be reused on the next successful upload attempt.
+        if (batchResult.status === 'rejected') {
+          const batchError =
+            batchResult.reason instanceof Error
+              ? batchResult.reason
+              : new Error(String(batchResult.reason));
+          console.warn(
+            '[SDK] File IPNS batch publish failed (non-critical, will retry on next publish):',
+            batchError
+          );
+          this.emitter.emit({
+            type: 'ipns:batchPublishFailed',
+            ipnsNames: [uploadResult.ipnsRecord.ipnsName],
+            error: batchError,
+          });
+        } else if (batchResult.value?.totalFailed > 0) {
+          // Server accepted the request but reported partial failure for some records
+          console.warn(
+            `[SDK] File IPNS batch publish partially failed: ${batchResult.value.totalFailed} of ${batchResult.value.totalFailed + batchResult.value.totalSucceeded} records failed`
+          );
+          this.emitter.emit({
+            type: 'ipns:batchPublishFailed',
+            ipnsNames: [uploadResult.ipnsRecord.ipnsName],
+            error: new Error(
+              `Batch publish partial failure: ${batchResult.value.totalFailed} record(s) failed`
+            ),
+          });
+        }
+
+        const { newSequenceNumber } = folderResult.value;
 
         // 4. Update internal state
         folder.children = updatedChildren;

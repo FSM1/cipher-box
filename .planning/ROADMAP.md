@@ -21,6 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 18: Performance Instrumentation** - Server-side Prometheus histograms and Kubo metrics scraping to establish baselines before any architectural changes (completed 2026-03-07)
 - [x] **Phase 19: IPNS Resolution Improvement** - Replace delegated-ipfs.dev with self-hosted Someguy sidecar for reliable IPNS routing, add latency histograms for resolve/publish operations (completed 2026-03-07)
+- [x] **Phase 19.2: IPFS Upload Performance Optimization** - Optimize Kubo pinning path (concurrent pins, worker tuning, pin batching) to reduce upload latency (INSERTED) (completed 2026-03-23)
 - [x] **Phase 20: Vault Migration** - Move rootFolderKey to IPFS vault blob v2 format, making the server store zero crypto material (completed 2026-03-24)
 - [ ] **Phase 21: BYO-IPFS Node Support** - User-configurable IPFS pinning endpoint with dual-pin strategy, Settings UI, and connection testing
 - [ ] **Phase 22: Performance Baselines Completion** - Client-side timing instrumentation, end-to-end journey timing, k6 load testing, and capacity documentation
@@ -80,6 +81,27 @@ Plans:
 - [ ] 19.1-05-PLAN.md -- Rewire web app hooks and stores to use SDK
 - [ ] 19.1-06-PLAN.md -- Remove re-exports, update imports, configure Release Please
 
+### Phase 19.2: IPFS Upload Performance Optimization (INSERTED)
+
+**Goal:** Upload operations are measurably faster by optimizing the Kubo IPFS pinning path — the dominant bottleneck consuming ~95% of upload endpoint latency (~1.73s mean per pin, 3 sequential pins per upload)
+**Depends on:** Phase 19.1 (SDK needed for load test benchmarking)
+**Requirements**: PERF-09
+**Success Criteria** (what must be TRUE):
+
+1. Independent pin operations within a single upload (ciphertext + file metadata) execute concurrently rather than sequentially, reducing per-upload server-side time from ~5.4s to ~3.5s at p50
+2. Kubo pin worker configuration is tuned for concurrent load — pin latency under 50 concurrent clients does not exceed 2x the single-client baseline
+3. Load test results (same mixed workload scenario, same staging hardware) show measurable throughput improvement over Phase 19 baselines (>15% ops/s increase at 50+ clients)
+4. Latency improvements are validated with before/after Prometheus histogram comparisons and documented in baselines
+
+**Plans:** 4/4 plans complete
+
+Plans:
+
+- [x] 19.2-01-PLAN.md -- Capture pre-optimization baselines, parallelize SDK upload pin orchestration with Promise.allSettled
+- [x] 19.2-02-PLAN.md -- Switch Kubo datastore to pebbleds, capture post-optimization baselines with before/after comparison
+- [x] 19.2-03-PLAN.md -- Register PERF-09 in REQUIREMENTS.md (gap closure)
+- [x] 19.2-04-PLAN.md -- Three-point local performance baselines with matched-environment comparison (gap closure)
+
 ### Phase 20: Vault Migration
 
 **Goal**: The server stores zero crypto material -- rootFolderKey lives in the IPFS vault blob, making the server a true zero-knowledge relay
@@ -132,16 +154,17 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 18 -> 19 -> 19.1 -> 20 -> 21 -> 22
+Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22
 
-| Phase                              | Milestone | Plans Complete | Status      | Completed  |
-| ---------------------------------- | --------- | -------------- | ----------- | ---------- |
-| 18. Performance Instrumentation    | v1.1      | 2/2            | Complete    | 2026-03-07 |
-| 19. IPNS Resolution Improvement    | v1.1      | 2/2            | Complete    | 2026-03-07 |
-| 19.1 Extract Core Crypto SDK       | v1.1      | 6/6            | Complete    | 2026-03-20 |
-| 20. Vault Migration                | v1.1      | Complete       | 2026-03-24  | 2026-03-24 |
-| 21. BYO-IPFS Node Support          | v1.1      | 0/?            | Not started | -          |
-| 22. Performance Baselines Complete | v1.1      | 0/?            | Not started | -          |
+| Phase                                     | Milestone | Plans Complete | Status      | Completed  |
+| ----------------------------------------- | --------- | -------------- | ----------- | ---------- |
+| 18. Performance Instrumentation           | v1.1      | 2/2            | Complete    | 2026-03-07 |
+| 19. IPNS Resolution Improvement           | v1.1      | 2/2            | Complete    | 2026-03-07 |
+| 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete    | 2026-03-20 |
+| 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete    | 2026-03-23 |
+| 20. Vault Migration                       | v1.1      | 4/4            | Complete    | 2026-03-24 |
+| 21. BYO-IPFS Node Support                 | v1.1      | 0/?            | Not started | -          |
+| 22. Performance Baselines Complete        | v1.1      | 0/?            | Not started | -          |
 
 ---
 
