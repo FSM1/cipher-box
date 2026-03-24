@@ -1,7 +1,7 @@
 # CipherBox Metadata Schema Reference
 
-**Version:** 1.0
-**Last Updated:** 2026-02-21
+**Version:** 1.1
+**Last Updated:** 2026-03-24
 **Status:** Stable
 
 ## Table of Contents
@@ -15,11 +15,12 @@
 7. [FilePointer](#7-filepointer)
 8. [FileMetadata (v1)](#8-filemetadata-v1)
 9. [VersionEntry](#9-versionentry)
-10. [EncryptedVaultKeys](#10-encryptedvaultkeys)
-11. [DeviceRegistry (v1)](#11-deviceregistry-v1)
-12. [DeviceEntry](#12-deviceentry)
-13. [Cross-Implementation Parity](#13-cross-implementation-parity)
-14. [IPNS Key Derivation Summary](#14-ipns-key-derivation-summary)
+10. [VaultKeyBlob (v2)](#10-vaultkeyblob-v2)
+11. [EncryptedVaultKeys (Removed)](#11-encryptedvaultkeys-removed)
+12. [DeviceRegistry (v1)](#12-deviceregistry-v1)
+13. [DeviceEntry](#13-deviceentry)
+14. [Cross-Implementation Parity](#14-cross-implementation-parity)
+15. [IPNS Key Derivation Summary](#15-ipns-key-derivation-summary)
 
 ---
 
@@ -40,13 +41,13 @@ This document defines the canonical schema for every metadata object in the syst
 
 Each metadata type uses a specific encryption scheme and storage location.
 
-| Metadata Type      | Encrypted By                 | Algorithm                  | Storage   | IPNS Addressing           |
-| ------------------ | ---------------------------- | -------------------------- | --------- | ------------------------- |
-| FolderMetadata     | Folder's own `folderKey`     | AES-256-GCM                | IPFS blob | Folder's IPNS name        |
-| FileMetadata       | Parent folder's `folderKey`  | AES-256-GCM                | IPFS blob | File's own IPNS name      |
-| EncryptedVaultKeys | User's secp256k1 `publicKey` | ECIES                      | Server DB | N/A                       |
-| DeviceRegistry     | User's secp256k1 `publicKey` | ECIES                      | IPFS blob | Registry's IPNS name      |
-| File content       | Per-file random `fileKey`    | AES-256-GCM or AES-256-CTR | IPFS blob | N/A (CID in FileMetadata) |
+| Metadata Type     | Encrypted By                 | Algorithm                            | Storage   | IPNS Addressing            |
+| ----------------- | ---------------------------- | ------------------------------------ | --------- | -------------------------- |
+| FolderMetadata    | Folder's own `folderKey`     | AES-256-GCM                          | IPFS blob | Folder's IPNS name         |
+| VaultKeyBlob (v2) | User's secp256k1 `publicKey` | ECIES (key) + AES-256-GCM (metadata) | IPFS blob | Vault key IPNS name (HKDF) |
+| FileMetadata      | Parent folder's `folderKey`  | AES-256-GCM                          | IPFS blob | File's own IPNS name       |
+| DeviceRegistry    | User's secp256k1 `publicKey` | ECIES                                | IPFS blob | Registry's IPNS name       |
+| File content      | Per-file random `fileKey`    | AES-256-GCM or AES-256-CTR           | IPFS blob | N/A (CID in FileMetadata)  |
 
 **Key principle:** Access to a folder's `folderKey` grants access to all children (subfolders via ECIES-wrapped keys, files via the parent's `folderKey` encrypting their metadata).
 
@@ -206,7 +207,7 @@ Per-file metadata stored in a file's own IPNS record. Contains all crypto materi
 
 **Encryption:** AES-256-GCM with the parent folder's `folderKey` (not the file's own key). This means anyone who can read the folder can also read file metadata and decrypt the file.
 
-**Storage:** IPFS (as JSON envelope `{iv, data}`), addressed via the file's own IPNS name. For new files, the IPNS keypair is randomly generated and stored in the parent's `FilePointer.ipnsPrivateKeyEncrypted`. For legacy files, it is derived via HKDF from `privateKey + fileId` (see [Section 14](#14-ipns-key-derivation-summary)).
+**Storage:** IPFS (as JSON envelope `{iv, data}`), addressed via the file's own IPNS name. For new files, the IPNS keypair is randomly generated and stored in the parent's `FilePointer.ipnsPrivateKeyEncrypted`. For legacy files, it is derived via HKDF from `privateKey + fileId` (see [Section 14](#15-ipns-key-derivation-summary)).
 
 **Source files:**
 
@@ -269,36 +270,65 @@ A single past version of a file. Embedded in the `versions` array of `FileMetada
 
 ---
 
-## 10. EncryptedVaultKeys
+## 10. VaultKeyBlob (v2)
 
-Root-level keys for the user's vault, encrypted with ECIES for server-side storage.
+Binary envelope storing the ECIES-wrapped `rootFolderKey` alongside a copy of the root folder's encrypted metadata. Written once during vault initialization and read on every login. Stored at a **dedicated IPNS name** separate from the root folder's IPNS name.
 
-| Field                     | Type         | Encoding | Required | Description                                                |
-| ------------------------- | ------------ | -------- | -------- | ---------------------------------------------------------- |
-| `encryptedRootFolderKey`  | `Uint8Array` | raw      | Yes      | ECIES-wrapped 32-byte AES-256 root folder key (129 bytes)  |
-| `encryptedIpnsPrivateKey` | `Uint8Array` | raw      | Yes      | ECIES-wrapped 64-byte Ed25519 IPNS private key (161 bytes) |
+**Binary format:**
 
-**Encryption:** ECIES with the user's secp256k1 `publicKey`.
+```text
+0x02 | uint16_BE(key_len) | ECIES_encrypted_rootFolderKey | AES_GCM_encrypted_metadata_json
+```
 
-**Storage:** Server database (API `users` table). Transmitted as raw `Uint8Array` in TypeScript, not hex-encoded strings.
+| Offset        | Size      | Field                    | Description                                                                        |
+| ------------- | --------- | ------------------------ | ---------------------------------------------------------------------------------- |
+| 0             | 1         | Version                  | `0x02` — v2 blob identifier                                                        |
+| 1             | 2         | `key_len`                | Big-endian uint16: length of ECIES-wrapped key (typically 129 bytes). Must be > 0. |
+| 3             | `key_len` | `encryptedRootFolderKey` | ECIES-wrapped 32-byte AES-256 root folder key                                      |
+| 3 + `key_len` | remaining | `encryptedMetadataJson`  | AES-256-GCM encrypted root folder metadata (v1 JSON `{iv, data}` format)           |
+
+**Encryption:** The `encryptedRootFolderKey` is ECIES-wrapped with the user's secp256k1 `publicKey`. The `encryptedMetadataJson` is AES-256-GCM encrypted with `rootFolderKey` (standard folder encryption).
+
+**Storage:** IPFS blob, addressed via vault key IPNS name (HKDF-derived with `cipherbox-vault-key-ipns-v1`).
+
+**IPNS separation:** The vault key blob has its own IPNS name, distinct from the root folder's IPNS name. This prevents folder metadata publishes from overwriting the key blob. The root folder uses standard v1 JSON `{iv, data}` format like all other folders.
+
+**Lifecycle:**
+
+1. **Created** during vault init (new user). Never updated — the key blob is immutable after creation.
+2. **Read** on every login to extract `rootFolderKey` via ECIES unwrap.
+3. **Not affected** by folder operations — folder publishes go to the root folder IPNS name, not the vault key IPNS name.
 
 **Source files:**
 
-- TS: `packages/crypto/src/vault/types.ts:32-37`
+- TS: `packages/core/src/vault/blob.ts` (`serializeVaultBlobV2`, `deserializeVaultBlobV2`, `detectBlobVersion`)
+- TS types: `packages/core/src/vault/types.ts` (`VaultBlobV2`)
+- Rust: `apps/desktop/src-tauri/src/crypto/vault_blob.rs`
 
-**No Rust equivalent.** The desktop app retrieves vault keys from the API response and decrypts them using the webview's TypeScript crypto.
+**Detection:** `detectBlobVersion(blob)` returns `2` if `blob[0] === 0x02`, else `1` (v1 JSON). v1 blobs start with `0x7B` (`{`).
+
+**Validation:** Both serialize and deserialize reject `key_len === 0` (TypeScript and Rust). Maximum `key_len` is `0xFFFF` (65535 bytes).
+
+**Cross-platform:** TypeScript and Rust produce byte-identical output for the same inputs (verified by cross-platform test vectors in `vault-blob-vectors.test.ts` and `vault_blob.rs`).
 
 **Version history:**
 
-| Change                      | Phase  | Description                                                                                                                                                                                |
-| --------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `rootIpnsPublicKey` removed | 12.3.1 | Was previously stored alongside private key. Removed because it is derivable from the private key via deterministic Ed25519 derivation. Eliminates redundancy and potential inconsistency. |
-
-**No version field.** Changes to this structure should be paired with a new vault export format version (see [VAULT_EXPORT_FORMAT.md](VAULT_EXPORT_FORMAT.md)).
+| Change                  | Phase | Description                                                                                                       |
+| ----------------------- | ----- | ----------------------------------------------------------------------------------------------------------------- |
+| v2 blob format created  | 20    | Binary envelope replaces server-side `EncryptedVaultKeys` storage. rootFolderKey moves from DB to IPFS.           |
+| Separate vault key IPNS | 20    | Dedicated IPNS name (`cipherbox-vault-key-ipns-v1`) prevents root folder publishes from overwriting the key blob. |
 
 ---
 
-## 11. DeviceRegistry (v1)
+## 11. EncryptedVaultKeys (Removed)
+
+> **Removed in Phase 20.** The server no longer stores any crypto material. `rootFolderKey` is stored exclusively in the [VaultKeyBlob (v2)](#10-vaultkeyblob-v2) on IPFS. The IPNS private key is HKDF-derived client-side and never transmitted to the server.
+>
+> The `encrypted_root_folder_key`, `encrypted_root_ipns_private_key`, and `migrated_at` database columns have been dropped. The API vault DTO only contains `ownerPublicKey` and `rootIpnsName`.
+
+---
+
+## 12. DeviceRegistry (v1)
 
 The encrypted device registry tracking all authenticated devices for a user.
 
@@ -333,7 +363,7 @@ The encrypted device registry tracking all authenticated devices for a user.
 
 ---
 
-## 12. DeviceEntry
+## 13. DeviceEntry
 
 An individual device record within the `DeviceRegistry`. Tracks authentication status, platform information, and revocation state.
 
@@ -375,21 +405,21 @@ An individual device record within the `DeviceRegistry`. Tracks authentication s
 
 ---
 
-## 13. Cross-Implementation Parity
+## 14. Cross-Implementation Parity
 
 TypeScript and Rust implementations must produce identical JSON for the same logical data.
 
-| Schema             | TypeScript          | Rust                                   | Notes           |
-| ------------------ | ------------------- | -------------------------------------- | --------------- |
-| FolderMetadata     | `folder/types.ts`   | `crypto/folder.rs`                     | Both platforms  |
-| FolderChild        | `folder/types.ts`   | `crypto/folder.rs` (serde tagged enum) | Both platforms  |
-| FolderEntry        | `folder/types.ts`   | `crypto/folder.rs`                     | Both platforms  |
-| FilePointer        | `file/types.ts`     | `crypto/folder.rs`                     | Both platforms  |
-| FileMetadata       | `file/types.ts`     | `crypto/folder.rs`                     | Both platforms  |
-| VersionEntry       | `file/types.ts`     | `crypto/folder.rs`                     | Both platforms  |
-| EncryptedVaultKeys | `vault/types.ts`    | --                                     | TypeScript only |
-| DeviceRegistry     | `registry/types.ts` | --                                     | TypeScript only |
-| DeviceEntry        | `registry/types.ts` | --                                     | TypeScript only |
+| Schema            | TypeScript          | Rust                                   | Notes                          |
+| ----------------- | ------------------- | -------------------------------------- | ------------------------------ |
+| FolderMetadata    | `folder/types.ts`   | `crypto/folder.rs`                     | Both platforms                 |
+| FolderChild       | `folder/types.ts`   | `crypto/folder.rs` (serde tagged enum) | Both platforms                 |
+| FolderEntry       | `folder/types.ts`   | `crypto/folder.rs`                     | Both platforms                 |
+| FilePointer       | `file/types.ts`     | `crypto/folder.rs`                     | Both platforms                 |
+| FileMetadata      | `file/types.ts`     | `crypto/folder.rs`                     | Both platforms                 |
+| VersionEntry      | `file/types.ts`     | `crypto/folder.rs`                     | Both platforms                 |
+| VaultKeyBlob (v2) | `vault/blob.ts`     | `crypto/vault_blob.rs`                 | Both platforms (binary format) |
+| DeviceRegistry    | `registry/types.ts` | --                                     | TypeScript only                |
+| DeviceEntry       | `registry/types.ts` | --                                     | TypeScript only                |
 
 **Rust serialization strategy:** All Rust structs use `#[serde(rename_all = "camelCase")]` to produce camelCase JSON field names matching the TypeScript convention. The `FolderChild` enum uses `#[serde(tag = "type", rename_all = "lowercase")]` for internally tagged union serialization.
 
@@ -397,18 +427,21 @@ TypeScript and Rust implementations must produce identical JSON for the same log
 
 ---
 
-## 14. IPNS Key Derivation Summary
+## 15. IPNS Key Derivation Summary
 
 CipherBox uses two strategies for Ed25519 IPNS keypairs:
 
 ### HKDF-derived (deterministic)
 
-Used for the root vault and device registry where discoverability from the private key alone is required.
+Used for the root vault, vault key blob, and device registry where discoverability from the private key alone is required.
 
-| Purpose              | Salt           | HKDF Info                           | Source File                                   |
-| -------------------- | -------------- | ----------------------------------- | --------------------------------------------- |
-| Root vault IPNS      | `CipherBox-v1` | `cipherbox-vault-ipns-v1`           | `packages/crypto/src/vault/derive-ipns.ts`    |
-| Device registry IPNS | `CipherBox-v1` | `cipherbox-device-registry-ipns-v1` | `packages/crypto/src/registry/derive-ipns.ts` |
+| Purpose              | Salt           | HKDF Info                           | Stores                          | Source File                                   |
+| -------------------- | -------------- | ----------------------------------- | ------------------------------- | --------------------------------------------- |
+| Root folder IPNS     | `CipherBox-v1` | `cipherbox-vault-ipns-v1`           | v1 folder metadata `{iv, data}` | `packages/crypto/src/vault/derive-ipns.ts`    |
+| Vault key blob IPNS  | `CipherBox-v1` | `cipherbox-vault-key-ipns-v1`       | v2 blob (ECIES key + metadata)  | `packages/crypto/src/vault/derive-ipns.ts`    |
+| Device registry IPNS | `CipherBox-v1` | `cipherbox-device-registry-ipns-v1` | ECIES-encrypted registry        | `packages/crypto/src/registry/derive-ipns.ts` |
+
+**Root folder vs vault key blob:** These are two separate IPNS names derived from the same private key with different HKDF info strings. The root folder IPNS stores standard folder metadata (updated on every folder operation). The vault key blob IPNS stores the ECIES-wrapped `rootFolderKey` (written once at vault init, read on every login). This separation prevents folder publishes from overwriting the key blob.
 
 **Legacy: Per-file IPNS (HKDF fallback):** Files created before v0.14.0 use `cipherbox-file-ipns-v1:{fileId}` as the HKDF info string. This derivation path is retained for backward compatibility and used when `FilePointer.ipnsPrivateKeyEncrypted` is absent.
 
@@ -434,7 +467,7 @@ Used for subfolders and new files. The private key is ECIES-wrapped with the vau
 
 ---
 
-_Document version: 1.0_
-_Last updated: 2026-02-21_
+_Document version: 1.1_
+_Last updated: 2026-03-24_
 _See also: [METADATA_EVOLUTION_PROTOCOL.md](METADATA_EVOLUTION_PROTOCOL.md) for schema change rules_
 _See also: [VAULT_EXPORT_FORMAT.md](VAULT_EXPORT_FORMAT.md) for recovery and crypto format details_
