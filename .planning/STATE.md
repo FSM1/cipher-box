@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-24T14:34:41.876Z'
+last_updated: '2026-03-24T14:48:18.430Z'
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 27
-  completed_plans: 23
+  completed_plans: 24
 ---
 
 # Project State
@@ -23,7 +23,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 21 (byo-ipfs-node-support) — EXECUTING
-Plan: 4 of 7
+Plan: 6 of 7
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Plan: 4 of 7
 | 20    | 06   | 6min     | 2     | 4     |
 | 21    | 01   | 5min     | 2     | 9     |
 | 21    | 03   | 10min    | 3     | 13    |
+| 21    | 05   | 9min     | 2     | 13    |
 
 ## Accumulated Context
 
@@ -97,6 +98,8 @@ Recent for v1.1:
 - pinFn injection pattern: optional pinFn parameter on sdkCore.uploadFile() replaces addToIpfs when BYO mode active
 - External+Kubo bypasses CipherBox entirely; external+PSA uses relay for CID only; dual does both with best-effort secondary
 - PsaProvider.pinByCid() accessed via cast in client.ts (PSA-specific, not on PinningProvider interface)
+- Migration uses existing BullMQ pattern with pin-migration queue name; TEE decrypts ECIES-encrypted provider configs in-enclave with epoch key
+- SSRF protection on TEE migration: validates URL structure (HTTPS-only, no private IPs) and DNS resolution (rebinding check)
 
 ### Roadmap Evolution
 
@@ -122,4 +125,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-24 after completing 21-03 (DualPinProvider, mode-aware upload flow, ByoIpfsConfig type)
+Last updated: 2026-03-24 after completing 21-05 (pin migration backend: entity, service, controller, BullMQ processor, TEE migrate endpoint)
