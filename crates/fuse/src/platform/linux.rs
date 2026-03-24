@@ -16,11 +16,10 @@ pub fn unmount_filesystem() -> Result<(), String> {
         }
     }
 
-    let mount_str = mount_path.to_str().unwrap();
-
     // Try fusermount3 first (preferred, doesn't require root)
     let status = std::process::Command::new("fusermount3")
-        .args(["-u", mount_str])
+        .arg("-u")
+        .arg(&mount_path)
         .status();
 
     match status {
@@ -35,7 +34,8 @@ pub fn unmount_filesystem() -> Result<(), String> {
 
     // Fallback to fusermount (FUSE 2 compat)
     let status = std::process::Command::new("fusermount")
-        .args(["-u", mount_str])
+        .arg("-u")
+        .arg(&mount_path)
         .status();
 
     match status {
@@ -50,7 +50,7 @@ pub fn unmount_filesystem() -> Result<(), String> {
 
     // Last resort: umount
     let status = std::process::Command::new("umount")
-        .arg(mount_str)
+        .arg(&mount_path)
         .status()
         .map_err(|e| format!("Failed to run umount: {}", e))?;
 

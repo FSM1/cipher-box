@@ -26,7 +26,7 @@ pub async fn fetch_content(client: &ApiClient, cid: &str) -> Result<Vec<u8>, Api
     }
 
     let bytes = resp.bytes().await.map_err(|e| {
-        ApiError::DeserializationFailed(format!("Failed to read IPFS response: {}", e))
+        ApiError::RequestFailed(e)
     })?;
     Ok(bytes.to_vec())
 }
@@ -40,9 +40,7 @@ pub async fn upload_content(client: &ApiClient, data: &[u8]) -> Result<String, A
     let part = multipart::Part::bytes(data.to_vec())
         .file_name("encrypted")
         .mime_str("application/octet-stream")
-        .map_err(|e| {
-            ApiError::DeserializationFailed(format!("Failed to create multipart part: {}", e))
-        })?;
+        .map_err(ApiError::RequestFailed)?;
 
     let form = multipart::Form::new().part("file", part);
 

@@ -18,7 +18,7 @@ pub fn unmount_filesystem() -> Result<(), String> {
     }
 
     let status = std::process::Command::new("umount")
-        .arg(mount_path.to_str().unwrap())
+        .arg(&mount_path)
         .status()
         .map_err(|e| format!("Failed to run umount: {}", e))?;
 
@@ -28,7 +28,9 @@ pub fn unmount_filesystem() -> Result<(), String> {
     } else {
         log::info!("umount failed (likely busy), trying diskutil unmount force");
         let status = std::process::Command::new("diskutil")
-            .args(["unmount", "force", mount_path.to_str().unwrap()])
+            .arg("unmount")
+            .arg("force")
+            .arg(&mount_path)
             .status()
             .map_err(|e| format!("Failed to run diskutil unmount force: {}", e))?;
 
