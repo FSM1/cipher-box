@@ -14,6 +14,8 @@ import { useQuotaStore } from '../../stores/quota.store';
 import { addToIpfs, fetchFromIpfs } from '../../lib/api/ipfs';
 import { createAndPublishIpnsRecord, resolveIpnsRecord } from '../../services/ipns.service';
 import { ConnectionTest } from './ConnectionTest';
+import { MigrationProgress } from './MigrationProgress';
+import { migrationApi } from '../../lib/api/migration';
 
 /** Local storage key for the BYO config IPNS name (not sensitive -- public identifier) */
 const BYO_IPNS_NAME_KEY = 'cipherbox-byo-ipns-name';
@@ -253,14 +255,7 @@ export function StorageTab() {
           await wrapKey(new TextEncoder().encode(destConfig), teePublicKey)
         );
 
-        // Migration API call -- Plan 06 will provide migrationApi.start()
-        // For now, log the intent; the migration module will be wired in Plan 06
-        console.info('[BYO] Migration triggered:', {
-          sourceConfigEncrypted: sourceConfigEncrypted.slice(0, 20) + '...',
-          destConfigEncrypted: destConfigEncrypted.slice(0, 20) + '...',
-        });
-
-        // TODO: await migrationApi.start(sourceConfigEncrypted, destConfigEncrypted);
+        await migrationApi.start(sourceConfigEncrypted, destConfigEncrypted);
       }
 
       // 11. Refetch quota to update advisory status
@@ -429,6 +424,9 @@ export function StorageTab() {
           </button>
         </div>
       )}
+
+      {/* Migration Progress (shown when active migration exists) */}
+      <MigrationProgress />
     </div>
   );
 }
