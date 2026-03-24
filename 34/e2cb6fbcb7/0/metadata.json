@@ -1,0 +1,99 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "34e2cb6fbcb7",
+  "session_id": "2fa81926-9dda-4621-a65d-1b27247ed309",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T00:54:47.250866Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 8,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "ae989cc47408",
+  "token_usage": {
+    "input_tokens": 6643,
+    "cache_creation_tokens": 408817,
+    "cache_read_tokens": 26425472,
+    "output_tokens": 63399,
+    "api_call_count": 187
+  },
+  "session_metrics": {
+    "turn_count": 15
+  },
+  "summary": {
+    "intent": "Execute Phase 20 (vault-migration) of the cipher-box project, implementing a v2 binary blob format for vaults across the core library, API, Rust desktop app, and web client, then verify the implementation through human UAT.",
+    "outcome": "All 4 plans executed successfully across 3 waves. Security review and simplify pass completed with 2 high issues fixed. A critical bug was discovered and fixed in fetchAndDecryptMetadata (both web and SDK) that failed to handle v2 binary blobs. Phase 20 checkpoint partially verified — migration confirmed working via DB, recovery tool bug found and fixed during UAT.",
+    "learnings": {
+      "repo": [
+        "The project uses a GSD (get-shit-done) workflow system with wave-based parallel agent execution, plan files, SUMMARY.md artifacts, and STATE.md tracking in .planning/",
+        "orval codegen generates `{ [key: string]: unknown } | null` instead of `string | null` for nullable string fields — `as unknown as string` casts are the correct workaround, not a code smell",
+        "NestJS does not auto-log incoming request routes, making it appear that API endpoints were never called when they actually were — confirmed by querying the database directly",
+        "The cipher-box stack runs IPFS on 192.168.133.114 with gateway on port 8080, but Kubo's delegated routing API (/routing/v1/ipns) is not exposed — only /api/v0/name/resolve on port 5001",
+        "TEE decrypts IPNS keys in hardware only, signs, and immediately discards — IPNS private keys must always be encrypted with TEE public key before transmission",
+        "The key hierarchy is rootFolderKey → folderKey → fileKey; ECIES is used for key wrapping, AES-256-GCM for content encryption"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/folder.service.ts",
+          "line": 962,
+          "end_line": 966,
+          "finding": "fetchAndDecryptMetadata blindly JSON.parsed IPFS blob bytes without checking for v2 binary format — needed to strip the v2 header (detectBlobVersion + deserializeVaultBlobV2) before decryption"
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 44,
+          "end_line": 45,
+          "finding": "Same v2 blob handling bug as folder.service.ts — SDK version also needed detectBlobVersion check before JSON.parse"
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1265,
+          "end_line": 1277,
+          "finding": "fetchFromIpfs returned undefined on non-404 gateway failures (502/503), causing detectBlobVersion to crash on undefined.length — needed explicit undefined guard"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+          "finding": "serialize_vault_blob_v2 had no key length bounds checking — silent u16 truncation possible for oversized keys; function changed to return Result with explicit length validation"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/api/types.rs",
+          "finding": "InitVaultRequest and VaultResponse derived Debug which would expose encrypted key material in logs — replaced with custom Debug impls that redact sensitive fields"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 181,
+          "end_line": 233,
+          "finding": "Migration IIFE called deriveVaultIpnsKeypair() twice with identical inputs — hoisted above try/catch and reused. Also had redundant destructure/re-wrap of ipnsKeypair into identical object."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "finding": "Desktop vault init wrapped rootFolderKey twice with same ECIES public key — once for DB storage and once for v2 blob serialization. Fixed to reuse first wrap."
+        }
+      ],
+      "workflow": [
+        "When NestJS API logs show no calls to an endpoint, query the database directly before concluding the endpoint was never hit — NestJS doesn't auto-log request routes",
+        "The GSD debug workflow (gsd:debug) spawns a fresh 200k context subagent — effective for deep investigation without polluting orchestrator context",
+        "Recovery tool testing requires extracting the vault IPNS private key; in Playwright/Vite dev mode this can be done via browser_evaluate importing the auth store directly",
+        "Public IPFS gateways (ipfs.io, delegated-ipfs.dev) may be unavailable or slow for IPNS resolution during local testing — local Kubo can resolve via /api/v0/name/resolve on port 5001 but uses a different API format than delegated routing",
+        "Playwright MCP can be used to automate login flows and capture browser console output mid-session, enabling live debugging of browser-side crypto issues"
+      ]
+    },
+    "friction": [
+      "API Error: Unable to connect to API (ConnectionRefused) interrupted the first security review attempt, requiring a second invocation",
+      "orval codegen generates incorrect TypeScript types for nullable string fields — investigation into fixing the DTO wasted time before discovering it's an orval bug requiring casts",
+      "NestJS not logging request routes caused significant confusion — migration appeared to never run when it had actually succeeded 12+ hours earlier",
+      "Local Kubo IPFS doesn't expose delegated routing API on the gateway port, making recovery tool IPNS resolution fail with public gateways when IPNS record wasn't in DHT",
+      "Playwright session was cleared by HMR after code changes, requiring re-login for each test iteration",
+      "OTP codes had to be manually extracted from server logs multiple times during UAT"
+    ],
+    "open_items": [
+      "M-1: Recovery tool private key (ipnsPrivateKey) not zeroed from memory after use",
+      "M-2: No deduplication guard on concurrent migration from multiple browser tabs — could trigger double migration race",
+      "M-3: Unnecessary ECIES re-wrap of rootFolderKey on every root folder FUSE publish — should cache wrapped key in AppState",
+      "L-1: Zero-length key accepted by v2 blob deserializers without error",
+      "L-2: No SRI hashes on CDN scripts in recovery.html",
+      "Device registry sync failing with CryptoError: Invalid registry format — pre-existing schema mismatch between current device registry format and what's stored on IPFS (todo captured)",
+      "Bin IPNS name 404 resolution failure — pre-existing issue with bin IPNS record not resolving (todo captured)",
+      "Recovery tool IPNS resolution falls back to ipfs.io public gateway which may not have the record — consider adding Kubo API fallback (/api/v0/name/resolve on port 5001) for local dev"
+    ]
+  }
+}
