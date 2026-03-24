@@ -226,3 +226,201 @@ pub fn decrypt_file_metadata(
     json.zeroize();
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_key() -> [u8; 32] {
+        [0xAB; 32]
+    }
+
+    fn sample_folder_metadata_empty() -> FolderMetadata {
+        FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![],
+        }
+    }
+
+    fn sample_folder_metadata_with_children() -> FolderMetadata {
+        FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![
+                FolderChild::Folder(FolderEntry {
+                    id: "folder-1".to_string(),
+                    name: "Documents".to_string(),
+                    ipns_name: "k51abc".to_string(),
+                    folder_key_encrypted: "deadbeef".to_string(),
+                    ipns_private_key_encrypted: "cafebabe".to_string(),
+                    created_at: 1700000000000,
+                    modified_at: 1700000001000,
+                }),
+                FolderChild::File(FilePointer {
+                    id: "file-1".to_string(),
+                    name: "photo.jpg".to_string(),
+                    file_meta_ipns_name: "k51def".to_string(),
+                    ipns_private_key_encrypted: Some("aabbccdd".to_string()),
+                    created_at: 1700000002000,
+                    modified_at: 1700000003000,
+                }),
+            ],
+        }
+    }
+
+    fn sample_file_metadata() -> FileMetadata {
+        FileMetadata {
+            version: "v1".to_string(),
+            cid: "bafy123".to_string(),
+            file_key_encrypted: "encrypted-key-hex".to_string(),
+            file_iv: "aabbccdd".to_string(),
+            size: 4096,
+            mime_type: "image/jpeg".to_string(),
+            encryption_mode: "GCM".to_string(),
+            created_at: 1700000000000,
+            modified_at: 1700000001000,
+            versions: None,
+        }
+    }
+
+    #[test]
+    fn encrypt_decrypt_folder_metadata_empty_children() {
+        let key = test_key();
+        let metadata = sample_folder_metadata_empty();
+        let sealed = encrypt_folder_metadata(&metadata, &key).unwrap();
+        let decrypted = decrypt_folder_metadata(&sealed, &key).unwrap();
+        assert_eq!(decrypted.version, "v2");
+        assert!(decrypted.children.is_empty());
+    }
+
+    #[test]
+    fn encrypt_decrypt_folder_metadata_with_children() {
+        let key = test_key();
+        let metadata = sample_folder_metadata_with_children();
+        let sealed = encrypt_folder_metadata(&metadata, &key).unwrap();
+        let decrypted = decrypt_folder_metadata(&sealed, &key).unwrap();
+        assert_eq!(decrypted.version, "v2");
+        assert_eq!(decrypted.children.len(), 2);
+
+        // Verify folder child
+        match &decrypted.children[0] {
+            FolderChild::Folder(f) => {
+                assert_eq!(f.id, "folder-1");
+                assert_eq!(f.name, "Documents");
+                assert_eq!(f.ipns_name, "k51abc");
+            }
+            _ => panic!("Expected FolderChild::Folder"),
+        }
+
+        // Verify file child
+        match &decrypted.children[1] {
+            FolderChild::File(f) => {
+                assert_eq!(f.id, "file-1");
+                assert_eq!(f.name, "photo.jpg");
+                assert_eq!(f.file_meta_ipns_name, "k51def");
+                assert_eq!(f.ipns_private_key_encrypted, Some("aabbccdd".to_string()));
+            }
+            _ => panic!("Expected FolderChild::File"),
+        }
+    }
+
+    #[test]
+    fn decrypt_folder_metadata_wrong_key_returns_error() {
+        let key = test_key();
+        let wrong_key = [0xCD; 32];
+        let metadata = sample_folder_metadata_empty();
+        let sealed = encrypt_folder_metadata(&metadata, &key).unwrap();
+        let result = decrypt_folder_metadata(&sealed, &wrong_key);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn encrypt_decrypt_file_metadata_round_trip() {
+        let key = test_key();
+        let metadata = sample_file_metadata();
+        let sealed = encrypt_file_metadata(&metadata, &key).unwrap();
+        let decrypted = decrypt_file_metadata(&sealed, &key).unwrap();
+        assert_eq!(decrypted.version, "v1");
+        assert_eq!(decrypted.cid, "bafy123");
+        assert_eq!(decrypted.file_key_encrypted, "encrypted-key-hex");
+        assert_eq!(decrypted.file_iv, "aabbccdd");
+        assert_eq!(decrypted.size, 4096);
+        assert_eq!(decrypted.mime_type, "image/jpeg");
+        assert_eq!(decrypted.encryption_mode, "GCM");
+        assert_eq!(decrypted.created_at, 1700000000000);
+        assert_eq!(decrypted.modified_at, 1700000001000);
+        assert!(decrypted.versions.is_none());
+    }
+
+    #[test]
+    fn version_field_preserved_in_folder_metadata() {
+        let key = test_key();
+        let metadata = FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![],
+        };
+        let sealed = encrypt_folder_metadata(&metadata, &key).unwrap();
+        let decrypted = decrypt_folder_metadata(&sealed, &key).unwrap();
+        assert_eq!(decrypted.version, "v2");
+    }
+
+    #[test]
+    fn decrypt_folder_metadata_rejects_non_v2() {
+        let key = test_key();
+        // Manually create v1 metadata JSON, encrypt it, and try to decrypt
+        let v1_json = serde_json::json!({
+            "version": "v1",
+            "children": []
+        });
+        let json_bytes = serde_json::to_vec(&v1_json).unwrap();
+        let sealed = aes::seal_aes_gcm(&json_bytes, &key).unwrap();
+        let result = decrypt_folder_metadata(&sealed, &key);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn file_metadata_default_encryption_mode() {
+        // JSON without encryptionMode should default to "GCM"
+        let json = r#"{
+            "version": "v1",
+            "cid": "bafy",
+            "fileKeyEncrypted": "aabb",
+            "fileIv": "ccdd",
+            "size": 100,
+            "mimeType": "text/plain",
+            "createdAt": 0,
+            "modifiedAt": 0
+        }"#;
+        let metadata: FileMetadata = serde_json::from_str(json).unwrap();
+        assert_eq!(metadata.encryption_mode, "GCM");
+    }
+
+    #[test]
+    fn file_metadata_with_versions_round_trip() {
+        let key = test_key();
+        let metadata = FileMetadata {
+            version: "v1".to_string(),
+            cid: "bafy-current".to_string(),
+            file_key_encrypted: "key-hex".to_string(),
+            file_iv: "iv-hex".to_string(),
+            size: 2048,
+            mime_type: "application/pdf".to_string(),
+            encryption_mode: "GCM".to_string(),
+            created_at: 1000,
+            modified_at: 2000,
+            versions: Some(vec![VersionEntry {
+                cid: "bafy-old".to_string(),
+                file_key_encrypted: "old-key".to_string(),
+                file_iv: "old-iv".to_string(),
+                size: 1024,
+                timestamp: 500,
+                encryption_mode: "GCM".to_string(),
+            }]),
+        };
+        let sealed = encrypt_file_metadata(&metadata, &key).unwrap();
+        let decrypted = decrypt_file_metadata(&sealed, &key).unwrap();
+        let versions = decrypted.versions.unwrap();
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[0].cid, "bafy-old");
+        assert_eq!(versions[0].size, 1024);
+    }
+}

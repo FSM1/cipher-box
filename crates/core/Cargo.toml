@@ -15,3 +15,6 @@ ciborium = { workspace = true }
 zeroize = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+ecies = { workspace = true }

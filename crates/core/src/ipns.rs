@@ -267,3 +267,156 @@ fn encode_varint(buf: &mut Vec<u8>, mut value: u64) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cipherbox_crypto::ed25519::{generate_ed25519_keypair, verify_ed25519};
+
+    #[test]
+    fn create_ipns_record_produces_valid_fields() {
+        let (_pub_key, priv_key) = generate_ed25519_keypair();
+        let priv_key_arr: [u8; 32] = priv_key[..32].try_into().unwrap();
+
+        let record = create_ipns_record(
+            &priv_key_arr,
+            "/ipfs/bafytest123",
+            42,
+            3600000, // 1 hour
+        )
+        .unwrap();
+
+        assert_eq!(record.value, "/ipfs/bafytest123");
+        assert_eq!(record.sequence, 42);
+        assert_eq!(record.validity_type, 0);
+        assert_eq!(record.ttl, 300_000_000_000);
+        assert_eq!(record.signature_v1.len(), 64);
+        assert_eq!(record.signature_v2.len(), 64);
+        assert_eq!(record.public_key.len(), 32);
+        assert!(!record.data.is_empty());
+        // Validity should be RFC3339 with nanosecond precision ending in Z
+        assert!(record.validity.ends_with('Z'));
+        assert!(record.validity.contains('T'));
+    }
+
+    #[test]
+    fn create_ipns_record_v2_signature_verifiable() {
+        let (pub_key, priv_key) = generate_ed25519_keypair();
+        let priv_key_arr: [u8; 32] = priv_key[..32].try_into().unwrap();
+
+        let record = create_ipns_record(&priv_key_arr, "/ipfs/bafytest", 0, 60000).unwrap();
+
+        // V2 signature is over "ipns-signature:" + cbor_data
+        let mut signed_data = Vec::new();
+        signed_data.extend_from_slice(b"ipns-signature:");
+        signed_data.extend_from_slice(&record.data);
+
+        assert!(verify_ed25519(&signed_data, &record.signature_v2, &pub_key));
+    }
+
+    #[test]
+    fn format_validity_timestamp_epoch_zero() {
+        let ts = format_validity_timestamp(UNIX_EPOCH);
+        assert_eq!(ts, "1970-01-01T00:00:00.000000000Z");
+    }
+
+    #[test]
+    fn format_validity_timestamp_known_date() {
+        // 2024-01-01T00:00:00Z = 1704067200 seconds since epoch
+        let ts = format_validity_timestamp(UNIX_EPOCH + Duration::from_secs(1704067200));
+        assert_eq!(ts, "2024-01-01T00:00:00.000000000Z");
+    }
+
+    #[test]
+    fn format_validity_timestamp_with_nanos() {
+        let ts = format_validity_timestamp(
+            UNIX_EPOCH + Duration::from_secs(1704067200) + Duration::from_nanos(138000000),
+        );
+        assert_eq!(ts, "2024-01-01T00:00:00.138000000Z");
+    }
+
+    #[test]
+    fn civil_from_days_epoch() {
+        // Day 0 = 1970-01-01
+        let (y, m, d) = civil_from_days(0);
+        assert_eq!((y, m, d), (1970, 1, 1));
+    }
+
+    #[test]
+    fn civil_from_days_one_year() {
+        // Day 365 = 1971-01-01 (1970 is not a leap year)
+        let (y, m, d) = civil_from_days(365);
+        assert_eq!((y, m, d), (1971, 1, 1));
+    }
+
+    #[test]
+    fn civil_from_days_leap_year() {
+        // 1972 is a leap year. Days from epoch to 1972-02-29:
+        // 1970: 365 days, 1971: 365 days = 730 days to 1972-01-01
+        // Jan 31 + Feb 28 = 59 days to 1972-02-29 => day 730 + 59 = 789
+        let (y, m, d) = civil_from_days(789);
+        assert_eq!((y, m, d), (1972, 2, 29));
+    }
+
+    #[test]
+    fn civil_from_days_known_date_2024() {
+        // 2024-01-01: 1704067200 / 86400 = 19723 days from epoch
+        let (y, m, d) = civil_from_days(19723);
+        assert_eq!((y, m, d), (2024, 1, 1));
+    }
+
+    #[test]
+    fn build_cbor_data_produces_valid_cbor() {
+        let data = build_cbor_data("/ipfs/bafytest", "2024-01-01T00:00:00.000000000Z", 5, 300_000_000_000).unwrap();
+        // Should be valid CBOR -- attempt to parse it back
+        let value: ciborium::Value = ciborium::from_reader(&data[..]).unwrap();
+        match value {
+            CborValue::Map(entries) => {
+                assert_eq!(entries.len(), 5);
+                // Check keys present
+                let keys: Vec<String> = entries
+                    .iter()
+                    .filter_map(|(k, _)| {
+                        if let CborValue::Text(s) = k {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                assert!(keys.contains(&"TTL".to_string()));
+                assert!(keys.contains(&"Value".to_string()));
+                assert!(keys.contains(&"Sequence".to_string()));
+                assert!(keys.contains(&"Validity".to_string()));
+                assert!(keys.contains(&"ValidityType".to_string()));
+            }
+            _ => panic!("Expected CBOR map"),
+        }
+    }
+
+    #[test]
+    fn different_sequences_produce_different_output() {
+        let (_pub_key, priv_key) = generate_ed25519_keypair();
+        let priv_key_arr: [u8; 32] = priv_key[..32].try_into().unwrap();
+
+        let record0 = create_ipns_record(&priv_key_arr, "/ipfs/bafytest", 0, 60000).unwrap();
+        let record100 = create_ipns_record(&priv_key_arr, "/ipfs/bafytest", 100, 60000).unwrap();
+
+        assert_ne!(record0.data, record100.data);
+        assert_ne!(record0.signature_v2, record100.signature_v2);
+        assert_eq!(record0.sequence, 0);
+        assert_eq!(record100.sequence, 100);
+    }
+
+    #[test]
+    fn marshal_ipns_record_produces_bytes() {
+        let (_pub_key, priv_key) = generate_ed25519_keypair();
+        let priv_key_arr: [u8; 32] = priv_key[..32].try_into().unwrap();
+
+        let record = create_ipns_record(&priv_key_arr, "/ipfs/bafytest", 1, 60000).unwrap();
+        let marshaled = marshal_ipns_record(&record).unwrap();
+        assert!(!marshaled.is_empty());
+        // Protobuf: first byte should be field 1, wire type 2 (length-delimited) = 0x0A
+        assert_eq!(marshaled[0], 0x0A);
+    }
+}

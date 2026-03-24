@@ -87,3 +87,115 @@ pub fn decrypt_file_metadata_from_ipfs_public(
     crate::folder::decrypt_file_metadata(&sealed, folder_key)
         .map_err(|e| format!("File metadata decryption failed: {}", e))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cipherbox_crypto::aes;
+
+    fn test_key() -> [u8; 32] {
+        [0xAB; 32]
+    }
+
+    /// Helper: encrypt metadata with seal_aes_gcm, split into IV + ciphertext,
+    /// then wrap in the JSON `{"iv":"hex","data":"base64"}` format that IPFS uses.
+    fn encrypt_to_ipfs_json(plaintext_json: &[u8], key: &[u8; 32]) -> Vec<u8> {
+        use base64::Engine;
+        let sealed = aes::seal_aes_gcm(plaintext_json, key).unwrap();
+        let iv_hex = hex::encode(&sealed[..12]);
+        let ciphertext_b64 = base64::engine::general_purpose::STANDARD.encode(&sealed[12..]);
+        let json = serde_json::json!({
+            "iv": iv_hex,
+            "data": ciphertext_b64
+        });
+        serde_json::to_vec(&json).unwrap()
+    }
+
+    #[test]
+    fn decrypt_metadata_from_ipfs_public_round_trip() {
+        let key = test_key();
+        let folder_meta = crate::folder::FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![],
+        };
+        let plaintext = serde_json::to_vec(&folder_meta).unwrap();
+        let encrypted_json = encrypt_to_ipfs_json(&plaintext, &key);
+
+        let decrypted = decrypt_metadata_from_ipfs_public(&encrypted_json, &key).unwrap();
+        assert_eq!(decrypted.version, "v2");
+        assert!(decrypted.children.is_empty());
+    }
+
+    #[test]
+    fn decrypt_file_metadata_from_ipfs_public_round_trip() {
+        let key = test_key();
+        let file_meta = crate::folder::FileMetadata {
+            version: "v1".to_string(),
+            cid: "bafytest".to_string(),
+            file_key_encrypted: "aabb".to_string(),
+            file_iv: "ccdd".to_string(),
+            size: 1024,
+            mime_type: "text/plain".to_string(),
+            encryption_mode: "GCM".to_string(),
+            created_at: 1000,
+            modified_at: 2000,
+            versions: None,
+        };
+        let plaintext = serde_json::to_vec(&file_meta).unwrap();
+        let encrypted_json = encrypt_to_ipfs_json(&plaintext, &key);
+
+        let decrypted = decrypt_file_metadata_from_ipfs_public(&encrypted_json, &key).unwrap();
+        assert_eq!(decrypted.version, "v1");
+        assert_eq!(decrypted.cid, "bafytest");
+        assert_eq!(decrypted.size, 1024);
+    }
+
+    #[test]
+    fn invalid_json_input_returns_error() {
+        let key = test_key();
+        let result = decrypt_metadata_from_ipfs_public(b"not json at all", &key);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Failed to parse"));
+    }
+
+    #[test]
+    fn invalid_base64_in_data_field_returns_error() {
+        let key = test_key();
+        let bad_json = serde_json::json!({
+            "iv": "000000000000000000000000",  // 12 bytes in hex
+            "data": "!!!not-base64!!!"
+        });
+        let bytes = serde_json::to_vec(&bad_json).unwrap();
+        let result = decrypt_metadata_from_ipfs_public(&bytes, &key);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("base64"));
+    }
+
+    #[test]
+    fn invalid_iv_hex_returns_error() {
+        let key = test_key();
+        let bad_json = serde_json::json!({
+            "iv": "zzzz",
+            "data": "AAAA"
+        });
+        let bytes = serde_json::to_vec(&bad_json).unwrap();
+        let result = decrypt_metadata_from_ipfs_public(&bytes, &key);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("IV"));
+    }
+
+    #[test]
+    fn wrong_key_returns_decryption_error() {
+        let key = test_key();
+        let wrong_key = [0xCD; 32];
+        let folder_meta = crate::folder::FolderMetadata {
+            version: "v2".to_string(),
+            children: vec![],
+        };
+        let plaintext = serde_json::to_vec(&folder_meta).unwrap();
+        let encrypted_json = encrypt_to_ipfs_json(&plaintext, &key);
+
+        let result = decrypt_metadata_from_ipfs_public(&encrypted_json, &wrong_key);
+        assert!(result.is_err());
+    }
+}

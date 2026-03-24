@@ -116,3 +116,131 @@ pub fn empty_bin_metadata() -> RecycleBinMetadata {
         entries: vec![],
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Generate a secp256k1 keypair for ECIES tests.
+    /// Returns (private_key_32bytes, public_key_65bytes_uncompressed).
+    fn generate_secp256k1_keypair() -> (Vec<u8>, Vec<u8>) {
+        let (sk, pk) = ecies::utils::generate_keypair();
+        (sk.serialize().to_vec(), pk.serialize().to_vec())
+    }
+
+    fn sample_bin_entry() -> BinEntry {
+        BinEntry {
+            id: "entry-1".to_string(),
+            item_type: BinItemType::File,
+            name: "deleted-photo.jpg".to_string(),
+            original_parent_ipns_name: "k51parent".to_string(),
+            original_path: "/Documents/deleted-photo.jpg".to_string(),
+            deleted_at: 1700000000000,
+            size: 4096,
+            mime_type: "image/jpeg".to_string(),
+            content_cid: Some("bafyfile123".to_string()),
+            content_size: Some(4096),
+            version_cids: None,
+            file_pointer: None,
+            folder_entry: None,
+        }
+    }
+
+    #[test]
+    fn empty_bin_metadata_returns_v1_with_empty_entries() {
+        let meta = empty_bin_metadata();
+        assert_eq!(meta.version, "v1");
+        assert_eq!(meta.sequence_number, 0);
+        assert!(meta.entries.is_empty());
+    }
+
+    #[test]
+    fn encrypt_decrypt_bin_metadata_round_trip() {
+        let (sk, pk) = generate_secp256k1_keypair();
+        let metadata = empty_bin_metadata();
+
+        let encrypted = encrypt_bin_metadata(&metadata, &pk).unwrap();
+        let decrypted = decrypt_bin_metadata(&encrypted, &sk).unwrap();
+
+        assert_eq!(decrypted.version, "v1");
+        assert_eq!(decrypted.sequence_number, 0);
+        assert!(decrypted.entries.is_empty());
+    }
+
+    #[test]
+    fn encrypt_decrypt_bin_metadata_with_entries() {
+        let (sk, pk) = generate_secp256k1_keypair();
+        let metadata = RecycleBinMetadata {
+            version: "v1".to_string(),
+            sequence_number: 5,
+            entries: vec![
+                sample_bin_entry(),
+                BinEntry {
+                    id: "entry-2".to_string(),
+                    item_type: BinItemType::Folder,
+                    name: "old-folder".to_string(),
+                    original_parent_ipns_name: "k51root".to_string(),
+                    original_path: "/old-folder".to_string(),
+                    deleted_at: 1700000001000,
+                    size: 0,
+                    mime_type: "".to_string(),
+                    content_cid: None,
+                    content_size: None,
+                    version_cids: None,
+                    file_pointer: None,
+                    folder_entry: Some(FolderEntry {
+                        id: "folder-id".to_string(),
+                        name: "old-folder".to_string(),
+                        ipns_name: "k51folder".to_string(),
+                        folder_key_encrypted: "aabb".to_string(),
+                        ipns_private_key_encrypted: "ccdd".to_string(),
+                        created_at: 1000,
+                        modified_at: 2000,
+                    }),
+                },
+            ],
+        };
+
+        let encrypted = encrypt_bin_metadata(&metadata, &pk).unwrap();
+        let decrypted = decrypt_bin_metadata(&encrypted, &sk).unwrap();
+
+        assert_eq!(decrypted.version, "v1");
+        assert_eq!(decrypted.sequence_number, 5);
+        assert_eq!(decrypted.entries.len(), 2);
+        assert_eq!(decrypted.entries[0].id, "entry-1");
+        assert_eq!(decrypted.entries[0].name, "deleted-photo.jpg");
+        assert_eq!(decrypted.entries[1].id, "entry-2");
+        assert!(decrypted.entries[1].folder_entry.is_some());
+    }
+
+    #[test]
+    fn decrypt_bin_metadata_wrong_key_returns_error() {
+        let (_, pk) = generate_secp256k1_keypair();
+        let (wrong_sk, _) = generate_secp256k1_keypair();
+        let metadata = empty_bin_metadata();
+
+        let encrypted = encrypt_bin_metadata(&metadata, &pk).unwrap();
+        let result = decrypt_bin_metadata(&encrypted, &wrong_sk);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn bin_item_type_serializes_lowercase() {
+        let file_json = serde_json::to_string(&BinItemType::File).unwrap();
+        assert_eq!(file_json, r#""file""#);
+        let folder_json = serde_json::to_string(&BinItemType::Folder).unwrap();
+        assert_eq!(folder_json, r#""folder""#);
+    }
+
+    #[test]
+    fn bin_metadata_camel_case_fields() {
+        let metadata = RecycleBinMetadata {
+            version: "v1".to_string(),
+            sequence_number: 3,
+            entries: vec![],
+        };
+        let json = serde_json::to_string(&metadata).unwrap();
+        assert!(json.contains("\"sequenceNumber\""));
+        assert!(!json.contains("\"sequence_number\""));
+    }
+}

@@ -190,4 +190,19 @@ mod tests {
         let blob = vec![0x02, 0x00, 0x00];
         assert!(deserialize_vault_blob_v2(&blob).is_err());
     }
+
+    #[test]
+    fn test_detect_empty_blob_defaults_to_v1() {
+        assert_eq!(detect_blob_version(&[]), 1);
+    }
+
+    #[test]
+    fn test_large_key_round_trip() {
+        // Just under the u16 max
+        let key = vec![0x42; 65535];
+        let blob = serialize_vault_blob_v2(&key).unwrap();
+        let decoded = deserialize_vault_blob_v2(&blob).unwrap();
+        assert_eq!(decoded.len(), 65535);
+        assert_eq!(decoded, key.as_slice());
+    }
 }

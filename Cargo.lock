@@ -648,6 +648,7 @@ dependencies = [
  "base64 0.22.1",
  "ciborium",
  "cipherbox-crypto",
+ "ecies",
  "hex",
  "log",
  "prost",
