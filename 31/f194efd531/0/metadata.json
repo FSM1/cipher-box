@@ -1,0 +1,96 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "31f194efd531",
+  "session_id": "17256d92-fa81-4467-a074-6d66d7ec4e84",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T00:08:21.695563Z",
+  "branch": "feat/phase-19.2-ipfs-upload-perf",
+  "checkpoints_count": 0,
+  "files_touched": [
+    "packages/sdk/src/__tests__/helpers.ts",
+    ".planning/phases/19.2-ipfs-upload-performance-optimization/19.2-RESEARCH.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "969830db41dd",
+  "token_usage": {
+    "input_tokens": 1413,
+    "cache_creation_tokens": 476523,
+    "cache_read_tokens": 31461339,
+    "output_tokens": 65567,
+    "api_call_count": 217
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Complete Phase 19.2 (IPFS upload performance optimization) by executing gap closure plans, collecting definitive three-point local baselines, and getting PR #342 merged after code review.",
+    "outcome": "Phase 19.2 fully executed with all 4 plans complete, definitive three-point local baselines collected (concurrent SDK + pebbleds together yield p95 -13%, p99 -15%, throughput +7% at 50 clients; pebbleds alone eliminates the 75-client failure mode), PR #342 created and all 10 review threads resolved.",
+    "learnings": {
+      "repo": [
+        "The two optimizations (concurrent SDK pins + pebbleds datastore) are synergistic — concurrent pins alone cause a regression at 50 clients (p95 jumps from 18.7s to 44.7s, throughput -26%) because they double Kubo's concurrent write load, which flatfs cannot handle",
+        "Pebbleds eliminates the 75-client failure mode entirely: zero errors vs 10, throughput +44%, p95 -53% compared to sequential SDK + flatfs at same concurrency",
+        "Load test secrets (LOAD_TEST_SECRET, THROTTLE_BYPASS_SECRET) must be passed as inline shell env vars — vitest does not load dotenv, so .env files are not read",
+        "The THROTTLE_BYPASS_SECRET is sent as X-Throttle-Bypass header; BypassableThrottlerGuard does timing-safe comparison and skips rate limiting only in non-production environments",
+        "DELEGATED_ROUTING_URL was pointing to localhost mock-ipns-routing (port 3001); someguy on 192.168.133.114:8190 is the correct delegated routing endpoint for staging-representative testing",
+        "Active CIDs are tracked in two DB tables: pinned_cids (file content) and folder_ipns (latest_cid IS NOT NULL) — anything pinned on Kubo not in these tables is stale from failed e2e runs",
+        "PERF-09 was missing from REQUIREMENTS.md entirely (requirements stopped at PERF-08) despite both plans referencing it",
+        "JWT tokens expire under long-running load tests — at 75 clients with flatfs, 401 errors appear alongside 500s and 'Key wrapping failed'"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 616,
+          "end_line": 650,
+          "finding": "batchPublishIpnsRecords returns { totalSucceeded, totalFailed }; the totalFailed check needs a null guard since existing test mocks return undefined — use optional chaining or check fulfilled result existence"
+        },
+        {
+          "path": "packages/sdk/src/events.ts",
+          "finding": "Added ipns:batchPublishFailed typed event to match the share:reWrapFailed pattern for SDK error observability"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/helpers.ts",
+          "finding": "Extracted createTestConfig and setupFolder shared helpers from three duplicate test files (client.test.ts, client-extended.test.ts, client-upload-concurrency.test.ts)"
+        },
+        {
+          "path": "packages/sdk/src/__tests__/client-upload-concurrency.test.ts",
+          "finding": "batchPublishIpnsRecords mock must return { totalSucceeded, totalFailed } shape — previously returned undefined causing silent totalFailed check bypass"
+        }
+      ],
+      "workflow": [
+        "GSD gap closure flow: execute-phase → verifier finds gaps → plan-phase --gaps creates gap plans → execute-phase --gaps-only executes only gap_closure:true plans → re-verify",
+        "For concurrency probing, push until errors appear then use the last clean run as the baseline client count — in this case 50 clients was the ceiling (75 produced 401s/500s/timeouts with flatfs)",
+        "The parallel cutover strategy for Kubo datastore migration: spin up temp pebbleds container alongside old flatfs, cross-check Kubo pins against DB, pin valid CIDs to new node, let deploy create blank volume, then cp -a from new volume to deploy volume and rm temp",
+        "CodeRabbit and GitHub Copilot review threads can come in waves — running /resolve-pr-reviews may need to be run multiple times as new automated reviews are posted",
+        "Background task notifications for killed processes (duplicate API instances) are expected noise after process cleanup — can be ignored if PID matches previously killed processes"
+      ]
+    },
+    "friction": [
+      "Multiple duplicate API processes accumulated (PIDs 53301, 61103, 70577) from repeated API starts across the session — not killed automatically",
+      "Background 100-client and 75-client probe runs timed out at 600s, requiring TaskOutput polling to recover partial results",
+      "SDK checkout for pre-optimization baseline (git checkout \u003chash\u003e -- packages/sdk/src/client.ts) failed because working directory was inside tests/load — had to run from repo root",
+      "Run 2 result (concurrent SDK + flatfs) was worse than baseline, which was unexpected and required explanation — the doubling of concurrent Kubo writes was the root cause",
+      "Web frontend was killed by the process cleanup that was targeting duplicate API instances",
+      "Some GraphQL review thread queries returned 0 unresolved threads despite the PR UI showing open comments — had to fall back to REST API to fetch specific review details",
+      "API dotenv not loaded by vitest caused load test secrets to silently be empty when set in .env files — discovered late in the session"
+    ],
+    "open_items": [
+      "Staging deployment with pebbleds: parallel cutover migration plan defined (pin export, cross-check against DB, copy volume) but not yet executed — waiting on PR merge and release",
+      "SC3 requirement (\u003e15% throughput improvement at 50+ clients) was not fully met (+7% achieved at 50 clients) — documented in VERIFICATION.md but not re-targeted",
+      "Todo captured: investigate removal of mock-ipns-routing layer now that someguy is properly integrated (.planning/todos/pending/2026-03-23-investigate-removal-of-mock-ipns-routing-layer.md)",
+      "Todo captured: load tests should handle 401s with token refresh to avoid auth expiry failures at high concurrency (.planning/todos/pending/2026-03-23-load-tests-should-handle-401s-with-token-refresh.md)",
+      "Stale pinned CIDs on staging IPFS node from failed e2e runs — will be cleaned up as part of the parallel cutover migration (DB cross-check step)",
+      "Staging Prometheus histogram validation (SC1 on staging, Grafana dashboards) deferred as post-deploy human verification items",
+      "75-client bonus run results added to baselines but not formally incorporated into VERIFICATION.md must-haves — the stronger pebbleds data point (p95 -53%, zero errors) could strengthen the SC3 case",
+      "batchPublishIpnsRecords retry queue for partial IPNS failures noted as follow-up in PR review response — not yet tracked as a todo"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T00:07:30.509146Z",
+    "agent_lines": 15,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 15,
+    "agent_percentage": 100
+  }
+}
