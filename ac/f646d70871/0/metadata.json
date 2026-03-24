@@ -1,0 +1,90 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "acf646d70871",
+  "session_id": "2fa81926-9dda-4621-a65d-1b27247ed309",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T00:27:11.12914Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "57f5367411bf",
+  "token_usage": {
+    "input_tokens": 6563,
+    "cache_creation_tokens": 205599,
+    "cache_read_tokens": 14901907,
+    "output_tokens": 44385,
+    "api_call_count": 128
+  },
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Execute Phase 20 (vault-migration) end-to-end: implement vault blob v2 binary format across core, API, desktop, and web client, including a security review and code quality pass.",
+    "outcome": "All 4 plans executed successfully with security fixes (key bounds checks, debug redaction) and simplify fixes (duplicate HKDF, double ECIES wrap) applied. A critical bug was discovered and fixed during UAT: folder sync crashed on v2 binary blobs because fetchAndDecryptMetadata tried to JSON.parse binary data. Vault migration itself did not complete for the test user — the migration IIFE failed silently and /vault/migrate was never called.",
+    "learnings": {
+      "repo": [
+        "orval codegen generates `{ [key: string]: unknown } | null` instead of `string | null` for nullable string fields in OpenAPI specs — `as unknown as string` casts are the correct workaround, not a bug",
+        "The phase 20 working directory was cipher-box-phase-20 (separate repo clone), not cipher-box — gsd-tools init must be run from the correct directory",
+        "Both apps/web/src/services/folder.service.ts and packages/sdk-core/src/folder/index.ts independently implement fetchAndDecryptMetadata and both needed the same v2 blob handling fix",
+        "vault blob v2 format is written to IPFS by the migration path, but folder sync reads that same IPFS blob — any consumer of IPFS metadata blobs must handle both v1 (JSON) and v2 (binary) formats",
+        "The CipherBox project has a TEE architecture: IPNS private keys are encrypted with a TEE public key before transmission; the TEE decrypts in hardware, signs, and discards"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/folder.service.ts",
+          "line": 962,
+          "end_line": 966,
+          "finding": "fetchAndDecryptMetadata blindly JSON.parsed the IPFS blob — did not handle v2 binary format, causing SyntaxError on migrated vaults"
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 44,
+          "end_line": 45,
+          "finding": "Same fetchAndDecryptMetadata JSON.parse bug as folder.service.ts — both needed detectVaultBlobVersion + deserializeVaultBlobV2 import and a version branch before parsing"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+          "finding": "serialize_vault_blob_v2 originally returned Vec\u003cu8\u003e with no validation — changed to Result\u003cVec\u003cu8\u003e, String\u003e with key length bounds check (key \u003e u16::MAX bytes panics silently otherwise)"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/api/types.rs",
+          "finding": "InitVaultRequest and VaultResponse derived Debug, which would print encrypted key material in logs — replaced with custom Debug impls that redact sensitive fields"
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "finding": "Desktop vault init ECIES-wrapped rootFolderKey twice with the same public key (once for DB, once for v2 blob) — fixed to reuse the first wrap"
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "finding": "Migrated-user login path called deriveVaultIpnsKeypair() twice with identical inputs — hoisted above try/catch and reused result; also had redundant destructure/re-wrap of ipnsKeypair"
+        }
+      ],
+      "workflow": [
+        "The security:review command scope 'all phase 20 work' effectively catches issues missed during implementation — running it as part of the checkpoint flow before user verification is a good pattern",
+        "The simplify skill's three-agent parallel review (reuse/quality/efficiency) caught the orval workaround as a false positive — having the orchestrator verify against the actual OpenAPI spec before reverting changes saved time",
+        "Playwright MCP was used to automate login and observe browser console during UAT — significantly faster than manual testing for identifying the JSON.parse crash",
+        "OTPs from Web3Auth are logged in cleartext in the API dev server stdout — accessible via reading the background task output file",
+        "When gsd-tools init returns phase_found: false, check that the working directory matches the phase repo clone, not the parent project"
+      ]
+    },
+    "friction": [
+      "API connection error interrupted the first security:review invocation — had to re-invoke the entire command",
+      "gsd-tools init ran from the wrong directory (cipher-box instead of cipher-box-phase-20) before being corrected",
+      "orval codegen bug with nullable string fields required investigation to confirm it was pre-existing — DTO change, API client regeneration, and diff inspection all needed before reverting",
+      "Playwright browser session was cleared by HMR after the folder.service.ts fix went live — required a full re-login to verify the fix",
+      "The vault migration IIFE failed silently on first login — no error surfaced in server logs or browser console, making it difficult to diagnose whether migration ran at all"
+    ],
+    "open_items": [
+      "Vault migration IIFE fails silently for test user myankelev@gmail.com — /vault/migrate was never called; root cause unknown and needs investigation",
+      "Device registry sync fails with 'CryptoError: Invalid registry format' at validateDeviceEntry (core/dist/index.mjs:360) — pre-existing schema mismatch, captured as todo 2026-03-24-fix-device-registry-cryptoerror-invalid-registry-format.md",
+      "Bin IPNS name 404 resolution failure — pre-existing, captured as todo 2026-03-24-fix-bin-ipns-name-404-resolution-failure.md",
+      "M-1: Recovery tool private key not zeroed after use (medium security finding, documented in REVIEW-2026-03-24-phase20.md)",
+      "M-2: No dedup guard on concurrent migration from multiple browser tabs (medium security finding)",
+      "M-3: ECIES re-wrap on every FUSE root folder publish — optimization requires caching wrapped key in AppState (medium security finding)",
+      "L-1: Zero-length key accepted by deserializers (low security finding)",
+      "L-2: No SRI hashes on CDN scripts in recovery.html (low security finding)",
+      "Plan 20-04 checkpoint human verification (task 3 — recovery.html testing) not completed before session ended"
+    ]
+  }
+}
