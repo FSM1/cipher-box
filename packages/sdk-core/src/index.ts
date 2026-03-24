@@ -43,3 +43,16 @@ export { uploadFile, type UploadResult } from './upload';
 
 // Download operations
 export { downloadAndDecrypt } from './download';
+
+// Pinning providers (BYO-IPFS)
+export {
+  type PinningProvider,
+  type PinResult,
+  type PinStatus,
+  type PinningMode,
+  type ExternalProviderConfig,
+  type ConnectionTestResult,
+  KuboProvider,
+  PsaProvider,
+  testConnection,
+} from './pinning';
