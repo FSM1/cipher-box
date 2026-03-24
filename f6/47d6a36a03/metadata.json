@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "f647d6a36a03",
+  "strategy": "manual-commit",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 0,
+  "files_touched": [
+    ".planning/ROADMAP.md",
+    ".planning/phases/20-vault-migration/20-05-PLAN.md",
+    ".planning/phases/20-vault-migration/20-06-PLAN.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f6/47d6a36a03/0/metadata.json",
+      "transcript": "/f6/47d6a36a03/0/full.jsonl",
+      "content_hash": "/f6/47d6a36a03/0/content_hash.txt",
+      "prompt": "/f6/47d6a36a03/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 5,
+    "cache_creation_tokens": 38281,
+    "cache_read_tokens": 133150,
+    "output_tokens": 2909,
+    "api_call_count": 4
+  }
+}
