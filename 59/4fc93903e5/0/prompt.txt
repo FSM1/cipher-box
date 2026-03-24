@@ -23,3 +23,7 @@ https://github.com/FSM1/cipher-box/pull/344#pullrequestreview-3996079661 a criti
 ---
 
 also, since we will be resetting the database once more, is there any reason for the unnecessary migrations with the vault migratedat column, if these are not actually utilized. should we not jsut update the initial migration to be the current known db structure, and get rid of all the unnecessary migrations?
+
+---
+
+ok monitor for the coderabbit review that is going to come in shortly. if there are any comments /resolve-pr-reviews to handle the responses.
