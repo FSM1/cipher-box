@@ -25,7 +25,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 20: Vault Migration** - Move rootFolderKey to IPFS vault blob v2 format, making the server store zero crypto material (gap closure in progress) (completed 2026-03-24)
 - [ ] **Phase 21: BYO-IPFS Node Support** - User-configurable IPFS pinning endpoint with dual-pin strategy, Settings UI, and connection testing
 - [ ] **Phase 22: Performance Baselines Completion** - Client-side timing instrumentation, end-to-end journey timing, k6 load testing, and capacity documentation
-- [ ] **Phase 23: Rust SDK Extraction** - Extract five Rust crates (crypto, core, api-client, fuse, sdk) mirroring the TypeScript SDK hierarchy, replace duplicated logic in desktop FUSE code, enable unit testing at same granularity as TypeScript (gap closure in progress)
+- [x] **Phase 23: Rust SDK Extraction** - Extract five Rust crates (crypto, core, api-client, fuse, sdk) mirroring the TypeScript SDK hierarchy, replace duplicated logic in desktop FUSE code, enable unit testing at same granularity as TypeScript (completed 2026-03-24)
 
 ## Phase Details
 
@@ -167,7 +167,7 @@ Plans:
 4. CI runs workspace-level builds on macOS, Linux, and Windows with cross-language parity gate
 5. No duplicated crypto, domain, or API logic remains in the desktop app
 
-**Plans:** 8 plans (7 complete, 1 gap closure)
+**Plans:** 8/8 plans complete
 
 Plans:
 
@@ -178,7 +178,7 @@ Plans:
 - [x] 23-05-PLAN.md -- cipherbox-sdk crate extraction (sync, queue, state, registry)
 - [ ] 23-06-PLAN.md -- Desktop app thin shell cleanup + full workspace verification
 - [ ] 23-07-PLAN.md -- CI workspace builds + Release Please + cross-language parity gate
-- [ ] 23-08-PLAN.md -- Gap closure: Move Windows WinFsp operations to crates/fuse/src/platform/windows/
+- [x] 23-08-PLAN.md -- Gap closure: Move Windows WinFsp operations to crates/fuse/src/platform/windows/
 
 ## Progress
 
@@ -194,7 +194,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22
 | 20. Vault Migration                       | v1.1      | 6/6            | Complete    | 2026-03-24 |
 | 21. BYO-IPFS Node Support                 | v1.1      | 0/?            | Not started | -          |
 | 22. Performance Baselines Complete        | v1.1      | 0/?            | Not started | -          |
-| 23. Rust SDK Extraction                   | v1.1      | 7/8            | Gap closure | -          |
+| 23. Rust SDK Extraction                   | v1.1      | 8/8            | Complete    | 2026-03-24 |
 
 ---
 
