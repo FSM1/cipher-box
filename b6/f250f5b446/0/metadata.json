@@ -1,0 +1,122 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "b6f250f5b446",
+  "session_id": "3a9e3004-d380-4fc4-a1a4-3d0276947c57",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T19:03:49.255673Z",
+  "branch": "feat/phase-23-rust-sdk-extraction",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-4-6[1m]",
+  "turn_id": "60def01834d3",
+  "token_usage": {
+    "input_tokens": 207,
+    "cache_creation_tokens": 433597,
+    "cache_read_tokens": 22097407,
+    "output_tokens": 34829,
+    "api_call_count": 176
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Complete Phase 23 (Rust SDK extraction) gap closure, run a security review on the extracted crates, add unit test coverage to address Codecov feedback, and get PR #352 merged.",
+    "outcome": "Phase 23 gap closure was completed (plan 23-08), security review identified and fixed 2 HIGH findings (Ed25519 zeroization + ed25519-dalek zeroize feature), 163 new unit tests were added across 3 crates, CI failures were fixed (Windows cargo check + cross-language parity), and PR review comments were addressed — though the final commit was blocked by 1Password SSH signing.",
+    "learnings": {
+      "repo": [
+        "The workspace [patch.crates-io] for vendored fuser causes Cargo to resolve and compile the crate on ALL platforms even when it's optional and feature-gated — fix requires [target.'cfg(unix)'.dependencies] in all Cargo.toml files that reference it",
+        "ed25519-dalek requires the 'zeroize' feature flag to be explicitly enabled in workspace Cargo.toml for SigningKey to zero on drop — it does NOT happen automatically",
+        "KeyState and CipherBoxFS key fields already use Zeroizing\u003cVec\u003cu8\u003e\u003e and clear on logout/unmount — the existing zeroization architecture is sound",
+        "The desktop app uses AES-CTR mode for IPFS content (not GCM) and relies on IPFS CID for integrity rather than client-side MAC verification — a known design tradeoff",
+        "generate_ed25519_keypair callers in fuse/write_ops.rs were already wrapping the return value in redundant Zeroizing::new() — changing the return type to Zeroizing\u003cVec\u003cu8\u003e\u003e allowed simplification",
+        "CI runs cargo llvm-cov --workspace on Linux for Rust coverage reporting to Codecov",
+        "The five Rust crates (crypto, core, fuse, sdk, api-client) had almost no unit tests before this session — only 5 cross-language tests in crypto and 11 vault_blob tests in core",
+        "registry.rs had a copy-paste bug where device_entry.app_version was being set to device_info.device_id instead of device_info.app_version"
+      ],
+      "code": [
+        {
+          "path": "crates/crypto/src/ed25519.rs",
+          "line": 1,
+          "end_line": 50,
+          "finding": "generate_ed25519_keypair returned bare Vec\u003cu8\u003e for private key — changed to Zeroizing\u003cVec\u003cu8\u003e\u003e to prevent key material lingering in freed memory"
+        },
+        {
+          "path": "crates/fuse/src/write_ops.rs",
+          "line": 472,
+          "end_line": 472,
+          "finding": "Caller was wrapping generate_ed25519_keypair result in redundant Zeroizing::new() — simplified after return type change"
+        },
+        {
+          "path": "crates/fuse/src/write_ops.rs",
+          "line": 522,
+          "end_line": 522,
+          "finding": "ipns_private_key.try_into() consuming Zeroizing\u003cVec\u003cu8\u003e\u003e required Vec::from() unwrap before TryInto\u003c[u8; 32]\u003e"
+        },
+        {
+          "path": "crates/fuse/src/platform/windows/write_ops.rs",
+          "line": 146,
+          "end_line": 146,
+          "finding": "Same try_into() issue on Windows path — Zeroizing\u003cVec\u003cu8\u003e\u003e doesn't implement TryInto\u003c[u8; 32]\u003e directly"
+        },
+        {
+          "path": "crates/fuse/src/operations.rs",
+          "line": 51,
+          "end_line": 130,
+          "finding": "fetch_and_populate_folder and resolve_file_pointers_blocking were dead code — no callers outside themselves in both Unix and Windows paths"
+        },
+        {
+          "path": "crates/sdk/src/registry.rs",
+          "line": 102,
+          "end_line": 102,
+          "finding": "Copy-paste bug: app_version field set to device_info.device_id instead of pre-saved app_version — device_info was partially moved so the field was consumed"
+        },
+        {
+          "path": "apps/desktop/src-tauri/vendor/fuser/build.rs",
+          "line": 8,
+          "end_line": 9,
+          "finding": "Vendored fuser build.rs called unimplemented!() on non-Linux platforms without libfuse — needed early return for Windows, but this alone was insufficient since Rust source still compiled"
+        },
+        {
+          "path": "crates/fuse/Cargo.toml",
+          "line": 1,
+          "end_line": 50,
+          "finding": "fuser dependency moved from top-level optional to [target.'cfg(unix)'.dependencies] optional to prevent Cargo from resolving it on Windows"
+        },
+        {
+          "path": "apps/desktop/src-tauri/Cargo.toml",
+          "line": 1,
+          "end_line": 80,
+          "finding": "Same fuser gating fix needed here — both Cargo.tomls reference fuser and both needed the target cfg gate"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 674,
+          "end_line": 674,
+          "finding": "pnpm/action-setup@v4 in cross-language parity job was missing 'version: 10' — other jobs in the same workflow had it"
+        }
+      ],
+      "workflow": [
+        "When an agent disconnects mid-execution, spot-check via git log before retrying — both task commits may already exist and only bookkeeping (SUMMARY.md, STATE.md, ROADMAP.md) remains",
+        "Cargo [patch.crates-io] applies workspace-wide and cannot be conditionally activated by cfg — the only way to prevent platform-specific compilation is to gate the dependency itself under [target.'cfg(...)'.dependencies]",
+        "Moving optional deps from top-level to target-specific sections in Cargo.toml is backward compatible — features still work on the target platform",
+        "The classifyHandoffIfNeeded error is a Claude Code runtime bug that fires after tool calls complete — treat as success if spot-checks pass (SUMMARY.md exists, commits present)",
+        "1Password SSH signing is flaky and sometimes requires multiple retries — the agent should retry 2-3 times before giving up and asking the user"
+      ]
+    },
+    "friction": [
+      "1Password SSH agent signing failures required multiple retries and ultimately blocked the final commit of the PR review fixes",
+      "Initial gsd-executor agent disconnected mid-execution (API ConnectionRefused) requiring manual resume and bookkeeping",
+      "Windows cargo check fix required two iterations — fixing the build.rs was insufficient because the Rust source still compiled; needed to move the dependency under cfg(unix) target",
+      "gh CLI run/job log fetching was unreliable — multiple bash commands needed to extract actual error lines from CI output",
+      "Cargo [patch.crates-io] behavior (resolving patched crates even when optional and feature-gated) is non-obvious and caused the Windows build failure"
+    ],
+    "open_items": [
+      "AES-CTR client-side integrity verification gap — client doesn't verify IPFS CID after fetching bytes, relying on relay trustworthiness; deferred from security review",
+      "file_ipns_private_key in write_ops.rs uses ed25519_dalek SigningKey directly (not via generate_ed25519_keypair) and returns plain Vec\u003cu8\u003e — not addressed in this session",
+      "Security review generated ~30 test case suggestions for attack scenarios (replay, timing, key confusion) that were not implemented — only positive/negative/edge cases added",
+      "fuse crate still has pre-existing dead code warnings from vendored fuser crate (not our code) — not cleaned up",
+      "The security review report (.planning/security/REVIEW-2026-03-24-phase23.md) noted 4 MEDIUM and 5 LOW findings that were not fixed in this session"
+    ]
+  }
+}
