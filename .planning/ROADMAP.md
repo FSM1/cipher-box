@@ -176,7 +176,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22
 | 19.1 Extract Core Crypto SDK              | v1.1      | 6/6            | Complete    | 2026-03-20 |
 | 19.2 IPFS Upload Performance Optimization | v1.1      | 4/4            | Complete    | 2026-03-23 |
 | 20. Vault Migration                       | 6/6       | Complete       | 2026-03-24  | -          |
-| 21. BYO-IPFS Node Support                 | 2/7       | In Progress    |             | -          |
+| 21. BYO-IPFS Node Support                 | 3/7       | In Progress    |             | -          |
 | 22. Performance Baselines Complete        | v1.1      | 0/?            | Not started | -          |
 | 23. Rust SDK Extraction                   | v1.1      | 0/?            | Not started | -          |
 
@@ -185,7 +185,7 @@ Phases execute in numeric order: 18 -> 19 -> 19.1 -> 19.2 -> 20 -> 21 -> 22
 **Goal:** Extract shared `cipherbox-core` Rust crate mirroring `@cipherbox/core` and `@cipherbox/sdk-core` TypeScript packages. Replace duplicated crypto/IPNS/metadata logic in desktop FUSE code with crate imports. Enable unit testing at the same granularity as TypeScript. Platform-specific plans for macOS (FUSE-T SMB), Linux (kernel FUSE), Windows (WinFSP).
 **Requirements**: TBD
 **Depends on:** None (can run independently alongside other phases)
-**Plans:** 2/7 plans executed
+**Plans:** 3/7 plans executed
 
 Plans:
 

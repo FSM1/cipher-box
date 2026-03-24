@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-24T14:19:34.588Z'
+last_updated: '2026-03-24T14:34:41.876Z'
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 27
-  completed_plans: 22
+  completed_plans: 23
 ---
 
 # Project State
@@ -23,7 +23,7 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 ## Current Position
 
 Phase: 21 (byo-ipfs-node-support) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 
 ## Performance Metrics
 
@@ -53,6 +53,7 @@ Plan: 3 of 7
 | 20    | 05   | 6min     | 2     | 13    |
 | 20    | 06   | 6min     | 2     | 4     |
 | 21    | 01   | 5min     | 2     | 9     |
+| 21    | 03   | 10min    | 3     | 13    |
 
 ## Accumulated Context
 
@@ -93,6 +94,9 @@ Recent for v1.1:
 - Connection test uses sequential probe: Kubo /api/v0/id first, then PSA /pins, with 10s timeout per probe
 - CID registration gated to BYO users only via ForbiddenException (non-BYO users cannot bypass upload relay)
 - Advisory quota: checkQuota() always true for BYO, getQuota() includes advisory boolean flag for UI display
+- pinFn injection pattern: optional pinFn parameter on sdkCore.uploadFile() replaces addToIpfs when BYO mode active
+- External+Kubo bypasses CipherBox entirely; external+PSA uses relay for CID only; dual does both with best-effort secondary
+- PsaProvider.pinByCid() accessed via cast in client.ts (PSA-specific, not on PinningProvider interface)
 
 ### Roadmap Evolution
 
@@ -118,4 +122,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-24 after completing 21-02 (register-cid endpoint, advisory quota mode, isByoUser flag)
+Last updated: 2026-03-24 after completing 21-03 (DualPinProvider, mode-aware upload flow, ByoIpfsConfig type)
