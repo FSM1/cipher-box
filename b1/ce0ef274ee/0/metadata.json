@@ -1,0 +1,108 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "b1ce0ef274ee",
+  "session_id": "2fa81926-9dda-4621-a65d-1b27247ed309",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T02:49:28.849295Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 4,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "9ce1ef293cda",
+  "token_usage": {
+    "input_tokens": 6883,
+    "cache_creation_tokens": 821815,
+    "cache_read_tokens": 78601215,
+    "output_tokens": 108391,
+    "api_call_count": 381
+  },
+  "session_metrics": {
+    "turn_count": 36
+  },
+  "summary": {
+    "intent": "Execute Phase 20 (vault-migration) end-to-end: implement vault blob v2 binary format across core, API, Rust desktop, and web client with lazy migration for existing users.",
+    "outcome": "All 4 plans executed and verified (6/6 VAULT requirements passed), PR #344 shipped. Scope change documented as a gap: since the staging DB was nuked in phase 19.2 and all vaults are already v2, migration code should be removed in phase 20.1.",
+    "learnings": {
+      "repo": [
+        "orval v7.18.0 generates `{ [key: string]: unknown } | null` instead of `string | null` for nullable string fields even when OpenAPI spec is correct — `as unknown as string` casts are the intentional workaround",
+        "NestJS does not auto-log incoming request routes, so POST /vault/migrate appeared to never be called when it actually succeeded silently",
+        "The staging database was nuked in phase 19.2 (datastore migration), making all vault migration code dead weight since there are zero non-migrated users",
+        "IPFS gateway at port 8080 exposes `/ipns/{name}` path that resolves IPNS AND fetches content in one request with `Access-Control-Allow-Origin: *` — no separate IPNS resolution step needed",
+        "Kubo IPFS API at port 5001 resolves IPNS correctly server-side but returns no CORS headers, blocking direct browser requests",
+        "Delegated routing API returns CBOR-wrapped records, not raw protobuf — attempting to parse as protobuf returns garbage CIDs",
+        "IPNS records for subfolders are only in the CipherBox API DB cache, not propagated to the public DHT — subfolder recovery is blocked without API access",
+        "API branch coverage threshold is 77%; new nullable migration fields dropped vault.service.ts to 72% and failed CI"
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/folder.service.ts",
+          "line": 962,
+          "end_line": 966,
+          "finding": "fetchAndDecryptMetadata blindly JSON.parses IPFS blob data — crashes with SyntaxError on v2 binary blobs. Fix: detect v2 header and deserialize before JSON parsing."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+          "line": 1,
+          "end_line": 50,
+          "finding": "serialize_vault_blob_v2 had no key length bounds check — u16 would silently truncate keys \u003e 65535 bytes. Changed return type to Result\u003cVec\u003cu8\u003e, VaultBlobError\u003e with explicit length validation."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/api/types.rs",
+          "line": 1,
+          "end_line": 50,
+          "finding": "#[derive(Debug)] on InitVaultRequest and VaultResponse was leaking encrypted key material in logs. Replaced with custom Debug impls that redact sensitive fields."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 121,
+          "end_line": 233,
+          "finding": "Migration PATH A called deriveVaultIpnsKeypair() twice with identical inputs. Hoisted derivation above try/catch. Also found redundant destructure/re-wrap of ipnsKeypair into identical rootIpnsKeypair object."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 1,
+          "end_line": 80,
+          "finding": "Desktop vault init was ECIES-wrapping rootFolderKey twice with the same public key — once for DB, once for v2 blob. Fixed to reuse first wrap."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1265,
+          "end_line": 1277,
+          "finding": "fetchFromIpfs returned undefined on non-404 gateway errors (e.g. 502/503), then detectBlobVersion(undefined) crashed on .length. Added explicit error throw when all gateways fail without 404."
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.spec.ts",
+          "line": 1,
+          "end_line": 400,
+          "finding": "getVault test assertion was missing migratedAt field after toVaultResponse was updated to include it. Also needed 6 new tests to cover nullable migration branch paths to pass 77% threshold."
+        }
+      ],
+      "workflow": [
+        "When a user's database is reset between phases, always check whether migration/compatibility code has any remaining consumers before investing in it",
+        "GSD gap closure workflow (update VERIFICATION.md with gaps_found → plan-phase --gaps → execute) provides clean audit trail for mid-phase scope changes",
+        "Spot-checking SUMMARY.md existence + git log for phase-plan commits is a reliable proxy for agent completion when the orchestrator doesn't receive a completion signal",
+        "Playwright browser automation is valuable for testing auth flows that require live OTPs — can retrieve OTPs from server logs and extract in-memory keys via page.evaluate()",
+        "Pre-wave dependency check (gsd-tools verify key-links) catches cross-plan wiring gaps before spawning dependent agents"
+      ]
+    },
+    "friction": [
+      "orval v7.18.0 codegen bug: `nullable: true` on string fields generates wrong TypeScript type regardless of correct OpenAPI spec — required `as unknown as string` casts and confusing Copilot review comment",
+      "Kubo IPFS API lacks CORS headers, making direct browser-to-Kubo communication impossible and requiring multiple fallback approaches in the recovery tool",
+      "IPNS records for subfolders not propagated to public DHT — recovery tool subfolder traversal hung indefinitely with no clear error",
+      "NestJS silent request logging made the successful /vault/migrate call appear as a failure, requiring database query to confirm the migration actually ran",
+      "API test coverage threshold failure required adding 6 new tests after CI caught the regression — coverage check wasn't run locally before push",
+      "Merge conflicts in ROADMAP.md and STATE.md from merging main required manual resolution"
+    ],
+    "open_items": [
+      "Phase 20.1 gap closure: Remove all migration code (PATH B in useAuth.ts, POST /vault/migrate endpoint, nullable crypto DB columns, Rust ECIES key wrapping) — staging DB was nuked so zero non-migrated users exist",
+      "Phase 23: Rust SDK Extraction — create shared cipherbox-core crate mirroring @cipherbox/core and @cipherbox/sdk-core, reuse in FUSE code, enable unit testing at same granularity as TypeScript",
+      "Todo: Add e2e tests exercising vault v2 recovery tool (.planning/todos/pending/2026-03-24-add-e2e-tests-for-vault-v2-recovery-tool.md)",
+      "Todo: Fix device registry CryptoError 'Invalid registry format' — pre-existing schema mismatch in validateDeviceEntry (core/dist/index.mjs:360)",
+      "Todo: Fix bin IPNS name 404 resolution failures — pre-existing",
+      "Security M-1: Recovery tool private key not zeroed from memory after use",
+      "Security M-2: No dedup guard for concurrent vault migration from multiple browser tabs",
+      "Security M-3: Unnecessary ECIES re-wrap of rootFolderKey on every root folder FUSE publish",
+      "Recovery subfolder traversal requires IPNS records to be on the public DHT — records only in CipherBox API DB cache are unreachable without authenticated API access"
+    ]
+  }
+}
