@@ -1,0 +1,98 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "37cd480422a3",
+  "session_id": "2fa81926-9dda-4621-a65d-1b27247ed309",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T01:36:57.962486Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "64c52ff9e14b",
+  "token_usage": {
+    "input_tokens": 6705,
+    "cache_creation_tokens": 432924,
+    "cache_read_tokens": 38815002,
+    "output_tokens": 75446,
+    "api_call_count": 241
+  },
+  "session_metrics": {
+    "turn_count": 18
+  },
+  "summary": {
+    "intent": "Execute Phase 20 (vault-migration) end-to-end: implement vault blob v2 binary format across core, API, Rust desktop, and web client, then verify the migration works correctly.",
+    "outcome": "All 4 plans executed successfully. Migration was confirmed working (DB shows migrated_at timestamp). Several bugs discovered and fixed during UAT: v2 blob parsing in folder sync, recovery tool IPNS resolution chain, and security issues (key bounds checking, debug redaction).",
+    "learnings": {
+      "repo": [
+        "The vault migration for myankelev@gmail.com succeeded silently — NestJS doesn't auto-log incoming requests, so POST /vault/migrate was invisible in server logs even when it succeeded.",
+        "fetchAndDecryptMetadata in both folder.service.ts and sdk-core blindly JSON.parse'd IPFS blob bytes — it did not account for v2 binary format, causing sync failures after migration.",
+        "The IPNS controller at apps/api/src/ipns/ipns.controller.ts requires JWT auth on all endpoints — recovery tool cannot use it without credentials.",
+        "Kubo at 192.168.133.114:5001 resolves IPNS via /api/v0/name/resolve but does not send CORS headers, blocking browser requests.",
+        "Kubo gateway at 192.168.133.114:8080 serves /ipns/{name} paths directly, returns X-Ipfs-Roots header with CID, and allows all CORS origins — this is the correct approach for browser-based IPNS resolution.",
+        "Subfolder IPNS records are only in the CipherBox API DB cache and are not propagated to the public DHT, so the recovery tool cannot resolve them without API access.",
+        "orval generates { [key: string]: unknown } | null instead of string | null for nullable string fields — the as unknown as string casts in useAuth.ts are the correct workaround for this pre-existing orval codegen bug.",
+        "The desktop vault init was double-wrapping rootFolderKey with ECIES — once for DB storage and once for v2 blob — using the same public key."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/folder.service.ts",
+          "line": 962,
+          "end_line": 966,
+          "finding": "fetchAndDecryptMetadata blindly JSON.parsed IPFS blob bytes without checking for v2 binary format header — fixed to detect and strip v2 header before parsing."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 44,
+          "end_line": 45,
+          "finding": "Same v2 blob parsing bug as folder.service.ts — SDK version also needed v2 detection before JSON.parse."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 181,
+          "end_line": 233,
+          "finding": "Migration IIFE: deriveVaultIpnsKeypair() was called twice with identical inputs in PATH A. Hoisted to single call. Also had redundant destructure/re-wrap of ipnsKeypair."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "finding": "serialize_vault_blob_v2 was changed to return Result to support key length bounds checking — callers needed ? propagation added."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/api/types.rs",
+          "finding": "InitVaultRequest and VaultResponse derived Debug — custom Debug impls added to redact encrypted key material from logs."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "finding": "fetchFromIpfs could return undefined on non-200/non-404 responses, causing detectBlobVersion to crash on undefined.length. IPNS resolution went through multiple broken fallback chains before being simplified to a single /ipns/{name} HEAD request on the IPFS gateway using X-Ipfs-Roots header."
+        }
+      ],
+      "workflow": [
+        "NestJS does not auto-log HTTP requests by default — absence of log lines does not mean the endpoint was never called.",
+        "When debugging 'silent failures', check the database directly before assuming the operation failed.",
+        "The gsd:debug workflow with Playwright console inspection is effective for diagnosing frontend issues that don't surface in server logs.",
+        "Security review (security:review command) running in parallel with UAT checkpoint is an efficient pattern — issues found and fixed before verification completed.",
+        "The simplify workflow caught a real double-ECIES-wrap bug in the desktop vault init that would have caused incorrect behavior.",
+        "Kubo's /ipns/{name} gateway path is the correct approach for browser-based IPNS resolution in local dev — avoids CORS issues that affect the API port."
+      ]
+    },
+    "friction": [
+      "Phase directory was in cipher-box-phase-20 instead of cipher-box — init tool failed initially, requiring manual directory discovery.",
+      "NestJS silent request logging caused a lengthy debug investigation that concluded the migration had actually succeeded all along.",
+      "IPNS records for subfolders are only in the API DB cache and not propagated to the DHT — recovery tool hit a dead end on subfolder resolution.",
+      "orval codegen generates incorrect types for nullable string fields — requires as unknown as string casts throughout useAuth.ts.",
+      "Kubo API port lacks CORS headers, blocking all browser-direct API calls for IPNS resolution.",
+      "Recovery tool IPNS resolution required multiple iteration cycles (delegated routing → Kubo API → CipherBox API → gateway /ipns/ path) before finding a working approach.",
+      "The checkpoint was held open for an extended UAT session while debugging the migration, security review, simplify review, and recovery tool fixes were all completed."
+    ],
+    "open_items": [
+      "M-1: Recovery tool private key not zeroed after use in memory.",
+      "M-2: No dedup guard on concurrent migration from multiple browser tabs — race condition possible.",
+      "M-3: ECIES re-wrap on every root folder FUSE publish — optimization requires caching wrapped key in AppState.",
+      "L-1: Zero-length key accepted by v2 blob deserializers.",
+      "L-2: No SRI hashes on CDN scripts in recovery.html.",
+      "Recovery tool cannot recover subfolder contents when IPNS records are only in the API DB cache and not propagated to the DHT — architectural limitation.",
+      "Device registry sync failing with CryptoError: Invalid registry format (todo captured: fix-device-registry-cryptoerror-invalid-registry-format).",
+      "Bin IPNS name 404 resolution failure during sync (todo captured: fix-bin-ipns-name-404-resolution-failure).",
+      "Kubo IPNS records for subfolders should be published to the DHT so the recovery tool can resolve them without API access."
+    ]
+  }
+}
