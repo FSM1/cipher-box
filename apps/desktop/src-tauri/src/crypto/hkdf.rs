@@ -23,8 +23,11 @@ use super::ipns;
 /// Common HKDF salt for all CipherBox derivations.
 const HKDF_SALT: &[u8] = b"CipherBox-v1";
 
-/// HKDF info for vault IPNS keypair derivation.
+/// HKDF info for vault IPNS keypair derivation (root folder metadata).
 const VAULT_HKDF_INFO: &[u8] = b"cipherbox-vault-ipns-v1";
+
+/// HKDF info for vault key blob IPNS keypair derivation (rootFolderKey storage).
+const VAULT_KEY_HKDF_INFO: &[u8] = b"cipherbox-vault-key-ipns-v1";
 
 /// HKDF info for device registry IPNS keypair derivation.
 const REGISTRY_HKDF_INFO: &[u8] = b"cipherbox-device-registry-ipns-v1";
@@ -90,6 +93,18 @@ pub fn derive_vault_ipns_keypair(
     user_private_key: &[u8; 32],
 ) -> Result<(Zeroizing<Vec<u8>>, Vec<u8>, String), HkdfError> {
     derive_ipns_keypair(user_private_key, VAULT_HKDF_INFO)
+}
+
+/// Derive a dedicated Ed25519 IPNS keypair for the vault key blob.
+///
+/// This IPNS name stores the v2 blob containing the ECIES-wrapped rootFolderKey.
+/// Separate from the root folder IPNS name to avoid folder publishes overwriting the key blob.
+///
+/// Uses HKDF info "cipherbox-vault-key-ipns-v1" for domain separation.
+pub fn derive_vault_key_ipns_keypair(
+    user_private_key: &[u8; 32],
+) -> Result<(Zeroizing<Vec<u8>>, Vec<u8>, String), HkdfError> {
+    derive_ipns_keypair(user_private_key, VAULT_KEY_HKDF_INFO)
 }
 
 /// Derive a deterministic Ed25519 IPNS keypair for a specific file.

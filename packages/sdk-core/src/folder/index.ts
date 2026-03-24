@@ -17,8 +17,6 @@ import {
 import {
   encryptFolderMetadata,
   decryptFolderMetadata,
-  detectBlobVersion,
-  deserializeVaultBlobV2,
   type FolderMetadata,
   type EncryptedFolderMetadata,
   type FolderEntry,
@@ -44,16 +42,9 @@ export async function fetchAndDecryptMetadata(
 ): Promise<FolderMetadata> {
   const encryptedBytes = await fetchFromIpfs(ctx, cid);
 
-  // Handle v2 blob: strip header to extract metadata portion
-  let metadataBytes: Uint8Array;
-  if (detectBlobVersion(encryptedBytes) === 2) {
-    const { encryptedMetadataJson } = deserializeVaultBlobV2(encryptedBytes);
-    metadataBytes = encryptedMetadataJson;
-  } else {
-    metadataBytes = encryptedBytes;
-  }
-
-  const encryptedJson = new TextDecoder().decode(metadataBytes);
+  // All folder metadata (including root) is v1 JSON {iv, data}.
+  // v2 blob format is only for the vault key blob (separate IPNS name).
+  const encryptedJson = new TextDecoder().decode(encryptedBytes);
   const encrypted: EncryptedFolderMetadata = JSON.parse(encryptedJson);
   return decryptFolderMetadata(encrypted, folderKey);
 }
