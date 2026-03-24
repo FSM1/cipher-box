@@ -1,0 +1,91 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "670cd43693d7",
+  "session_id": "1bd099b7-d304-4249-816c-e90453415d15",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T04:29:30.955833Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 3,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "1a1e680db94f",
+  "token_usage": {
+    "input_tokens": 199,
+    "cache_creation_tokens": 214714,
+    "cache_read_tokens": 26044116,
+    "output_tokens": 50420,
+    "api_call_count": 185
+  },
+  "session_metrics": {
+    "turn_count": 8
+  },
+  "summary": {
+    "intent": "Complete Phase 20 (Vault Migration) gap closure by removing dead migration code, then resolve all PR review comments from CodeRabbit and Copilot, and finally consolidate the migration history since the DB will be reset.",
+    "outcome": "Phase 20 fully completed with 9/9 verification truths passing and GAP-01 resolved. All PR review threads resolved across 4 rounds. Migration history consolidated — FullSchema updated to final schema, two now-redundant migrations deleted.",
+    "learnings": {
+      "repo": [
+        "v2 blob format is exclusively for the root vault blob (wraps rootFolderKey via ECIES). Non-root folder metadata uses v1 JSON format ({iv, data}). These are not interchangeable.",
+        "The HKDF-derived ipnsName and existingVault.rootIpnsName are always identical by construction — no mismatch is possible.",
+        "TypeORM auto-discovers migrations from the migrations/ directory glob — no explicit imports needed in any config file.",
+        "The orval API client regeneration does not clean up stale model files from previous runs — manual deletion is required.",
+        "The desktop Rust vault init was registering the vault on the backend BEFORE uploading the v2 blob to IPFS, creating an inconsistent state if IPFS upload failed. The web client already did this correctly (publish first).",
+        "SDK E2E test harness bypasses the login flow entirely — it passes keys directly to CipherBoxClient, so no v2 blob IPFS read is needed during test setup."
+      ],
+      "code": [
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "line": 36,
+          "end_line": 46,
+          "finding": "Critical ordering bug: /vault/init API call happened before IPFS upload + IPNS publish. Fixed to register with backend only after successful IPFS/IPNS operations."
+        },
+        {
+          "path": "packages/core/src/vault/blob.ts",
+          "line": 56,
+          "end_line": 58,
+          "finding": "Zero-length key_len must be rejected in both serializeVaultBlobV2 and deserializeVaultBlobV2 for consistency."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+          "line": 69,
+          "end_line": 69,
+          "finding": "Rust serialize and deserialize both need zero-length key rejection to match TypeScript behavior."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 816,
+          "end_line": 816,
+          "finding": "Inline fetch calls needed AbortController timeouts (15s/30s) via fetchWithTimeout helper."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "line": 1369,
+          "end_line": 1369,
+          "finding": "rootIpnsName flowed into innerHTML unsanitized; format validation (^k[0-9a-z]{20,}$) and escapeHtml helper added."
+        },
+        {
+          "path": "apps/api/src/migrations/1700000000000-FullSchema.ts",
+          "line": 1,
+          "end_line": 999,
+          "finding": "FullSchema created vaults with encrypted_root_folder_key and encrypted_root_ipns_private_key as NOT NULL, then subsequent migrations added/dropped them. Net effect was zero — FullSchema updated to final schema directly."
+        }
+      ],
+      "workflow": [
+        "GitHub outside-diff comments appear in the review body rather than as separate review threads — they cannot be resolved via the standard resolveReviewThread mutation and require manual tracking.",
+        "After orval regeneration, manually check and delete stale model files that orval leaves behind from previous schema versions.",
+        "When gap closure plans remove code paths, SDK E2E tests that directly construct request bodies (bypassing the SDK) will break if they still send now-rejected DTO fields.",
+        "GSD gap closure mode skips research and proceeds directly to planning from VERIFICATION.md gaps."
+      ]
+    },
+    "friction": [
+      "Orval API client regeneration left behind 4 stale model files (vaultResponseDtoEncryptedRoot*, vaultExportDtoEncryptedRootFolderKey*) that weren't cleaned up automatically, causing Copilot review comments.",
+      "GitHub outside-diff review comments are not surfaced by the reviewThreads GraphQL query — the critical vault.rs ordering bug comment was in the review body and required a separate fetch strategy to discover.",
+      "Multiple rounds of /resolve-pr-reviews were needed (4 rounds) as CodeRabbit and Copilot posted new reviews after each push.",
+      "CI was still running when checking job logs, requiring a switch from gh run view to direct job log fetching."
+    ],
+    "open_items": [
+      "2 items need human verification in a live environment: (1) new user init publishes v2 blob to IPFS before API registration, (2) recovery tool IPFS-direct path with a real vault and live IPFS gateway.",
+      "Next phase is Phase 23 — discuss-phase 23 is the suggested next step.",
+      "encryptedRootIpnsPrivateKey is now optional in the recovery tool export-file path — worth verifying the old export-file format (with the field present) still decrypts correctly."
+    ]
+  }
+}
