@@ -1,5 +1,5 @@
 /**
- * @cipherbox/core - Vault Blob v2 Test Vectors
+ * @cipherbox/core - Vault Key Blob v2 Test Vectors
  *
  * Hardcoded test vectors for cross-platform verification.
  * These exact hex values must be replicated in the Rust implementation
@@ -10,16 +10,14 @@ import { describe, it, expect } from 'vitest';
 import { serializeVaultBlobV2, deserializeVaultBlobV2, BLOB_V2_VERSION } from '../vault/blob';
 
 /**
- * Test Vector 1: Standard 129-byte ECIES key with JSON metadata.
+ * Test Vector 1: Standard 129-byte ECIES key (key-only blob).
  *
  * Key (129 bytes): 0xAA followed by 128 bytes incrementing 0x00..0x7F (128 values).
- * Metadata: UTF-8 encoded '{"iv":"abc","data":"def"}'
  *
  * Expected binary layout:
  *   [0]     = 0x02 (version)
  *   [1..2]  = 0x00 0x81 (key_len = 129, big-endian)
  *   [3..131] = key bytes (129 bytes)
- *   [132..] = metadata bytes
  */
 
 // Build the 129-byte test key: 0xAA then 0x00..0x7F (128 bytes)
@@ -29,10 +27,7 @@ for (let i = 0; i < 128; i++) {
   TEST_KEY_129[1 + i] = i;
 }
 
-const TEST_METADATA = new TextEncoder().encode('{"iv":"abc","data":"def"}');
-
-// Pre-computed expected hex for the full blob
-// version(02) + keylen(0081) + key(aa 00..7f) + metadata(UTF-8 of JSON)
+// Pre-computed expected hex for the full blob (key only, no metadata)
 const EXPECTED_HEX =
   '02' + // version byte
   '0081' + // key_len = 129
@@ -44,8 +39,7 @@ const EXPECTED_HEX =
   '404142434445464748494a4b4c4d4e4f' + // key[65..80]
   '505152535455565758595a5b5c5d5e5f' + // key[81..96]
   '606162636465666768696a6b6c6d6e6f' + // key[97..112]
-  '707172737475767778797a7b7c7d7e7f' + // key[113..128]
-  '7b226976223a22616263222c2264617461223a22646566227d'; // metadata JSON
+  '707172737475767778797a7b7c7d7e7f'; // key[113..128]
 
 function toHex(bytes: Uint8Array): string {
   return Array.from(bytes)
@@ -61,26 +55,25 @@ function fromHex(hex: string): Uint8Array {
   return bytes;
 }
 
-describe('Vault Blob v2 Test Vectors', () => {
+describe('Vault Key Blob v2 Test Vectors', () => {
   it('Vector 1: serialize produces exact expected hex output', () => {
-    const blob = serializeVaultBlobV2(TEST_KEY_129, TEST_METADATA);
+    const blob = serializeVaultBlobV2(TEST_KEY_129);
     const blobHex = toHex(blob);
 
     expect(blobHex).toBe(EXPECTED_HEX);
   });
 
-  it('Vector 1: deserialize from expected hex recovers exact components', () => {
+  it('Vector 1: deserialize from expected hex recovers exact key', () => {
     const blob = fromHex(EXPECTED_HEX);
     const parsed = deserializeVaultBlobV2(blob);
 
-    expect(toHex(parsed.encryptedRootFolderKey)).toBe(toHex(TEST_KEY_129));
-    expect(toHex(parsed.encryptedMetadataJson)).toBe(toHex(TEST_METADATA));
+    expect(toHex(parsed)).toBe(toHex(TEST_KEY_129));
   });
 
   it('Vector 1: round-trip produces byte-identical output', () => {
-    const blob1 = serializeVaultBlobV2(TEST_KEY_129, TEST_METADATA);
+    const blob1 = serializeVaultBlobV2(TEST_KEY_129);
     const parsed = deserializeVaultBlobV2(blob1);
-    const blob2 = serializeVaultBlobV2(parsed.encryptedRootFolderKey, parsed.encryptedMetadataJson);
+    const blob2 = serializeVaultBlobV2(parsed);
 
     expect(toHex(blob2)).toBe(toHex(blob1));
   });
@@ -90,18 +83,15 @@ describe('Vault Blob v2 Test Vectors', () => {
     expect(blob[0]).toBe(BLOB_V2_VERSION);
   });
 
-  it('Vector 2: minimal blob with 1-byte key and 1-byte metadata', () => {
-    // Minimal possible blob: version + keylen(0001) + 1 key byte + 1 metadata byte
+  it('Vector 2: minimal blob with 1-byte key', () => {
     const minimalKey = new Uint8Array([0xff]);
-    const minimalMeta = new Uint8Array([0x42]);
 
-    const blob = serializeVaultBlobV2(minimalKey, minimalMeta);
-    const expectedMinimalHex = '02' + '0001' + 'ff' + '42';
+    const blob = serializeVaultBlobV2(minimalKey);
+    const expectedMinimalHex = '02' + '0001' + 'ff';
 
     expect(toHex(blob)).toBe(expectedMinimalHex);
 
     const parsed = deserializeVaultBlobV2(blob);
-    expect(parsed.encryptedRootFolderKey).toEqual(minimalKey);
-    expect(parsed.encryptedMetadataJson).toEqual(minimalMeta);
+    expect(parsed).toEqual(minimalKey);
   });
 });

@@ -121,7 +121,7 @@ export function useAuth() {
         throw new Error('Vault key blob is not v2 format');
       }
 
-      const { encryptedRootFolderKey: encKey } = deserializeVaultBlobV2(blobBytes);
+      const encKey = deserializeVaultBlobV2(blobBytes);
       const rootFolderKey = await unwrapKey(encKey, userKeypair.privateKey);
 
       // Root folder IPNS keypair is the original vault derivation
@@ -146,12 +146,9 @@ export function useAuth() {
         const vaultKeyKeypair = await deriveVaultKeyIpnsKeypair(userKeypair.privateKey);
         const vaultKeyIpnsName = await deriveIpnsName(vaultKeyKeypair.publicKey);
 
-        // 1. Publish v2 key blob to vault key IPNS (rootFolderKey storage)
+        // 1. Publish v2 key blob to vault key IPNS (rootFolderKey storage — key only, no metadata)
         const encryptedRootFolderKey = await wrapKey(newVault.rootFolderKey, userKeypair.publicKey);
-        const emptyMetadata: FolderMetadata = { version: 'v2', children: [] };
-        const encrypted = await encryptFolderMetadata(emptyMetadata, newVault.rootFolderKey);
-        const metadataJsonBytes = new TextEncoder().encode(JSON.stringify(encrypted));
-        const v2Blob = serializeVaultBlobV2(encryptedRootFolderKey, metadataJsonBytes);
+        const v2Blob = serializeVaultBlobV2(encryptedRootFolderKey);
 
         const keyBlobUpload = await addToIpfs(new Blob([v2Blob as BlobPart]));
         const keyPublishResult = await createAndPublishIpnsRecord({
@@ -166,6 +163,8 @@ export function useAuth() {
         }
 
         // 2. Publish v1 folder metadata to root folder IPNS (standard folder format)
+        const emptyMetadata: FolderMetadata = { version: 'v2', children: [] };
+        const encrypted = await encryptFolderMetadata(emptyMetadata, newVault.rootFolderKey);
         const metadataBlob = new Blob([JSON.stringify(encrypted)], { type: 'application/json' });
         const metadataUpload = await addToIpfs(metadataBlob);
         const folderPublishResult = await createAndPublishIpnsRecord({

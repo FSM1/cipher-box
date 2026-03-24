@@ -42,31 +42,10 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
 
     log::info!("Publishing vault key blob and root folder metadata");
 
-    let empty_metadata = crypto::folder::FolderMetadata {
-        version: "v2".to_string(),
-        children: vec![],
-    };
-
-    let folder_key_arr: [u8; 32] = root_folder_key
-        .as_slice()
-        .try_into()
-        .map_err(|_| "Invalid root folder key length".to_string())?;
-    let sealed = crypto::folder::encrypt_folder_metadata(&empty_metadata, &folder_key_arr)
-        .map_err(|e| format!("Metadata encryption failed: {}", e))?;
-
     use base64::Engine;
-    let iv_hex = hex::encode(&sealed[..12]);
-    let data_base64 = base64::engine::general_purpose::STANDARD.encode(&sealed[12..]);
-    let json_metadata = serde_json::json!({
-        "iv": iv_hex,
-        "data": data_base64,
-    });
-    let json_bytes = serde_json::to_vec(&json_metadata)
-        .map_err(|e| format!("JSON serialization failed: {}", e))?;
 
-    // 1. Publish v2 key blob to vault key IPNS (rootFolderKey storage)
-    let blob_bytes =
-        crypto::vault_blob::serialize_vault_blob_v2(&encrypted_root_folder_key, &json_bytes)?;
+    // 1. Publish v2 key blob to vault key IPNS (key only, no metadata)
+    let blob_bytes = crypto::vault_blob::serialize_vault_blob_v2(&encrypted_root_folder_key)?;
     let key_blob_cid = crate::api::ipfs::upload_content(&state.api, &blob_bytes).await?;
 
     let vault_key_ipns_arr: [u8; 32] = vault_key_ipns_private.as_slice()
@@ -95,6 +74,21 @@ pub(crate) async fn initialize_vault(state: &AppState, public_key: &[u8]) -> Res
     }
 
     // 2. Publish v1 folder metadata to root folder IPNS (standard folder format)
+    let empty_metadata = crypto::folder::FolderMetadata {
+        version: "v2".to_string(),
+        children: vec![],
+    };
+    let folder_key_arr: [u8; 32] = root_folder_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| "Invalid root folder key length".to_string())?;
+    let sealed = crypto::folder::encrypt_folder_metadata(&empty_metadata, &folder_key_arr)
+        .map_err(|e| format!("Metadata encryption failed: {}", e))?;
+    let iv_hex = hex::encode(&sealed[..12]);
+    let data_base64 = base64::engine::general_purpose::STANDARD.encode(&sealed[12..]);
+    let json_metadata = serde_json::json!({ "iv": iv_hex, "data": data_base64 });
+    let json_bytes = serde_json::to_vec(&json_metadata)
+        .map_err(|e| format!("JSON serialization failed: {}", e))?;
     let folder_cid = crate::api::ipfs::upload_content(&state.api, &json_bytes).await?;
 
     let root_ipns_arr: [u8; 32] = root_ipns_private_key.as_slice()
@@ -204,7 +198,7 @@ pub(crate) async fn fetch_and_decrypt_vault(state: &AppState) -> Result<(), Stri
     if crypto::vault_blob::detect_blob_version(&blob_bytes) != 2 {
         return Err("Vault key blob is not v2 format".into());
     }
-    let (enc_key, _meta) = crypto::vault_blob::deserialize_vault_blob_v2(&blob_bytes)
+    let enc_key = crypto::vault_blob::deserialize_vault_blob_v2(&blob_bytes)
         .map_err(|e| format!("v2 blob parse failed: {}", e))?;
     let root_folder_key = crypto::ecies::unwrap_key(enc_key, &private_key)
         .map_err(|e| format!("Failed to decrypt rootFolderKey from v2 blob: {}", e))?;

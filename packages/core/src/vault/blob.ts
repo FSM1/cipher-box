@@ -1,10 +1,11 @@
 /**
- * @cipherbox/core - Vault Blob v2 Format
+ * @cipherbox/core - Vault Key Blob v2 Format
  *
- * Binary envelope format for storing ECIES-encrypted rootFolderKey alongside
- * AES-GCM encrypted folder metadata in a single IPFS blob.
+ * Binary envelope for storing ECIES-encrypted rootFolderKey on IPFS.
+ * This is a key-only blob — folder metadata is stored separately at
+ * the root folder's own IPNS name using standard v1 JSON format.
  *
- * Format: 0x02 | uint16_BE(key_len) | encrypted_key | encrypted_metadata_json
+ * Format: 0x02 | uint16_BE(key_len) | encrypted_key
  *
  * This module is pure byte manipulation with zero external dependencies
  * (beyond types), making it easy to verify and port to other languages (Rust).
@@ -12,8 +13,6 @@
  * Cross-platform test vectors in vault-blob-vectors.test.ts ensure binary
  * compatibility between TypeScript and Rust implementations.
  */
-
-import type { VaultBlobV2 } from './types';
 
 /** Version byte for vault blob v2 format */
 export const BLOB_V2_VERSION = 0x02;
@@ -36,22 +35,17 @@ export function detectBlobVersion(blob: Uint8Array): 1 | 2 {
 }
 
 /**
- * Serialize vault blob v2.
+ * Serialize vault key blob v2.
  *
  * Constructs a binary envelope:
  *   byte 0:    version (0x02)
  *   bytes 1-2: key_len as big-endian uint16
  *   bytes 3..: encrypted rootFolderKey (key_len bytes)
- *   remaining: encrypted metadata JSON
  *
  * @param encryptedRootFolderKey - ECIES-wrapped rootFolderKey (typically 129 bytes)
- * @param encryptedMetadataJson - AES-GCM encrypted folder metadata JSON
- * @returns Complete v2 blob ready for IPFS storage
+ * @returns Complete v2 key blob ready for IPFS storage
  */
-export function serializeVaultBlobV2(
-  encryptedRootFolderKey: Uint8Array,
-  encryptedMetadataJson: Uint8Array
-): Uint8Array {
+export function serializeVaultBlobV2(encryptedRootFolderKey: Uint8Array): Uint8Array {
   const keyLen = encryptedRootFolderKey.length;
   if (keyLen === 0) {
     throw new Error('Encrypted key must not be empty for v2 blob');
@@ -59,8 +53,7 @@ export function serializeVaultBlobV2(
   if (keyLen > 0xffff) {
     throw new Error(`Encrypted key too long for v2 blob (${keyLen} bytes, max ${0xffff})`);
   }
-  const totalLen = 3 + keyLen + encryptedMetadataJson.length;
-  const result = new Uint8Array(totalLen);
+  const result = new Uint8Array(3 + keyLen);
 
   // Version byte
   result[0] = BLOB_V2_VERSION;
@@ -69,23 +62,20 @@ export function serializeVaultBlobV2(
   result[2] = keyLen & 0xff;
   // ECIES-encrypted rootFolderKey
   result.set(encryptedRootFolderKey, 3);
-  // AES-GCM encrypted metadata JSON
-  result.set(encryptedMetadataJson, 3 + keyLen);
 
   return result;
 }
 
 /**
- * Deserialize vault blob v2 into its components.
+ * Deserialize vault key blob v2 to extract the encrypted rootFolderKey.
  *
- * Validates the version byte and key_len field, then slices the blob
- * into its two components.
+ * Validates the version byte and key_len field, then slices the key bytes.
  *
- * @param blob - Complete v2 blob from IPFS
- * @returns Parsed components: encryptedRootFolderKey and encryptedMetadataJson
- * @throws Error if blob is not v2 format, truncated, or key_len overflows
+ * @param blob - Complete v2 key blob from IPFS
+ * @returns The ECIES-encrypted rootFolderKey
+ * @throws Error if blob is not v2 format, truncated, or key_len is invalid
  */
-export function deserializeVaultBlobV2(blob: Uint8Array): VaultBlobV2 {
+export function deserializeVaultBlobV2(blob: Uint8Array): Uint8Array {
   if (blob.length < 3) {
     throw new Error('Vault blob too short for v2 header (need at least 3 bytes)');
   }
@@ -106,8 +96,5 @@ export function deserializeVaultBlobV2(blob: Uint8Array): VaultBlobV2 {
     );
   }
 
-  return {
-    encryptedRootFolderKey: blob.slice(3, 3 + keyLen),
-    encryptedMetadataJson: blob.slice(3 + keyLen),
-  };
+  return blob.slice(3, 3 + keyLen);
 }

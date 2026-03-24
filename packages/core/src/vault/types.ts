@@ -37,17 +37,8 @@ export type EncryptedVaultKeys = {
 };
 
 /**
- * Parsed vault blob v2 components.
+ * Vault key blob v2 is now a simple binary envelope: 0x02 | uint16_BE(key_len) | encrypted_key
  *
- * Binary format: 0x02 | uint16_BE(key_len) | encrypted_key | encrypted_metadata_json
- *
- * The encrypted key is the ECIES-wrapped rootFolderKey (typically 129 bytes
- * for a 32-byte plaintext key). The encrypted metadata JSON is the existing
- * AES-GCM encrypted folder metadata (variable length).
+ * deserializeVaultBlobV2 returns the ECIES-encrypted rootFolderKey directly as Uint8Array.
+ * No separate type needed.
  */
-export type VaultBlobV2 = {
-  /** ECIES-encrypted rootFolderKey (129 bytes for 32-byte key) */
-  encryptedRootFolderKey: Uint8Array;
-  /** AES-GCM encrypted folder metadata JSON bytes */
-  encryptedMetadataJson: Uint8Array;
-};

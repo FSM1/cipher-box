@@ -272,22 +272,21 @@ A single past version of a file. Embedded in the `versions` array of `FileMetada
 
 ## 10. VaultKeyBlob (v2)
 
-Binary envelope storing the ECIES-wrapped `rootFolderKey` alongside a copy of the root folder's encrypted metadata. Written once during vault initialization and read on every login. Stored at a **dedicated IPNS name** separate from the root folder's IPNS name.
+Key-only binary envelope storing the ECIES-wrapped `rootFolderKey`. Written once during vault initialization and read on every login. Stored at a **dedicated IPNS name** separate from the root folder's IPNS name. Contains no folder metadata — the root folder uses standard v1 JSON format at its own IPNS name.
 
 **Binary format:**
 
 ```text
-0x02 | uint16_BE(key_len) | ECIES_encrypted_rootFolderKey | AES_GCM_encrypted_metadata_json
+0x02 | uint16_BE(key_len) | ECIES_encrypted_rootFolderKey
 ```
 
-| Offset        | Size      | Field                    | Description                                                                        |
-| ------------- | --------- | ------------------------ | ---------------------------------------------------------------------------------- |
-| 0             | 1         | Version                  | `0x02` — v2 blob identifier                                                        |
-| 1             | 2         | `key_len`                | Big-endian uint16: length of ECIES-wrapped key (typically 129 bytes). Must be > 0. |
-| 3             | `key_len` | `encryptedRootFolderKey` | ECIES-wrapped 32-byte AES-256 root folder key                                      |
-| 3 + `key_len` | remaining | `encryptedMetadataJson`  | AES-256-GCM encrypted root folder metadata (v1 JSON `{iv, data}` format)           |
+| Offset | Size      | Field                    | Description                                                                        |
+| ------ | --------- | ------------------------ | ---------------------------------------------------------------------------------- |
+| 0      | 1         | Version                  | `0x02` — v2 blob identifier                                                        |
+| 1      | 2         | `key_len`                | Big-endian uint16: length of ECIES-wrapped key (typically 129 bytes). Must be > 0. |
+| 3      | `key_len` | `encryptedRootFolderKey` | ECIES-wrapped 32-byte AES-256 root folder key                                      |
 
-**Encryption:** The `encryptedRootFolderKey` is ECIES-wrapped with the user's secp256k1 `publicKey`. The `encryptedMetadataJson` is AES-256-GCM encrypted with `rootFolderKey` (standard folder encryption).
+**Encryption:** The `encryptedRootFolderKey` is ECIES-wrapped with the user's secp256k1 `publicKey`.
 
 **Storage:** IPFS blob, addressed via vault key IPNS name (HKDF-derived with `cipherbox-vault-key-ipns-v1`).
 

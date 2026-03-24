@@ -536,10 +536,7 @@
       const keyLen = (blob[1] << 8) | blob[2];
       if (keyLen === 0) throw new Error('Invalid v2 blob: encrypted key length must be > 0');
       if (blob.length < 3 + keyLen) throw new Error('Blob too short for key');
-      return {
-        encryptedRootFolderKey: blob.slice(3, 3 + keyLen),
-        encryptedMetadataJson: blob.slice(3 + keyLen),
-      };
+      return blob.slice(3, 3 + keyLen);
     }
 
     // =========================================================================
@@ -1015,26 +1012,12 @@
       log(`Fetching metadata for ${path || '/'}...`, 'info');
       const metadataBytes = await fetchFromIpfs(cid, gatewayConfig.ipfsGateway);
 
-      // 3. Detect blob version and parse metadata
+      // 3. Parse v1 JSON metadata (all folders use standard {iv, data} format)
       let encryptedMeta;
-      let blobVersion = detectBlobVersion(metadataBytes);
-
-      if (blobVersion === 2) {
-        // v2 binary envelope: extract encrypted metadata JSON from blob
-        log(`  Detected v2 blob format`, 'info');
-        const parsed = deserializeVaultBlobV2(metadataBytes);
-        try {
-          encryptedMeta = JSON.parse(new TextDecoder().decode(parsed.encryptedMetadataJson));
-        } catch (e) {
-          throw new Error(`Failed to parse v2 blob metadata JSON for ${path || '/'}`);
-        }
-      } else {
-        // v1 JSON metadata (legacy format)
-        try {
-          encryptedMeta = JSON.parse(new TextDecoder().decode(metadataBytes));
-        } catch (e) {
-          throw new Error(`Failed to parse metadata JSON for ${path || '/'}`);
-        }
+      try {
+        encryptedMeta = JSON.parse(new TextDecoder().decode(metadataBytes));
+      } catch (e) {
+        throw new Error(`Failed to parse metadata JSON for ${path || '/'}`);
       }
 
       // 4. Decrypt metadata
@@ -1322,8 +1305,8 @@
               return;
             }
 
-            // 4. Extract and decrypt rootFolderKey from v2 blob header
-            const { encryptedRootFolderKey } = deserializeVaultBlobV2(blobBytes);
+            // 4. Extract and decrypt rootFolderKey from v2 key blob
+            const encryptedRootFolderKey = deserializeVaultBlobV2(blobBytes);
             rootFolderKey = await eciesDecrypt(privateKeyBytes, encryptedRootFolderKey);
 
             btn.disabled = false;
