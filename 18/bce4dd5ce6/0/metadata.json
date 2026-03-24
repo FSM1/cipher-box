@@ -1,0 +1,98 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "18bce4dd5ce6",
+  "session_id": "2fa81926-9dda-4621-a65d-1b27247ed309",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T01:32:25.132211Z",
+  "branch": "phase-20-vault-migration",
+  "checkpoints_count": 2,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "64c52ff9e14b",
+  "token_usage": {
+    "input_tokens": 6678,
+    "cache_creation_tokens": 421693,
+    "cache_read_tokens": 32918807,
+    "output_tokens": 71132,
+    "api_call_count": 216
+  },
+  "session_metrics": {
+    "turn_count": 18
+  },
+  "summary": {
+    "intent": "Execute phase 20 (vault-migration) of cipher-box, implementing vault blob v2 binary format across the TypeScript core library, NestJS API, Rust desktop app, and web client with lazy user migration on login.",
+    "outcome": "All 4 plans executed and verified. The vault blob v2 format works end-to-end: migration triggers on first non-migrated login, migrated users read rootFolderKey from IPFS v2 blobs, and folder sync handles v2 blobs transparently. Several bugs surfaced during UAT were discovered and fixed before checkpoint approval.",
+    "learnings": {
+      "repo": [
+        "NestJS does not auto-log incoming requests — a successful POST /vault/migrate appeared as a 'silent failure' until the DB was queried directly to confirm migrated_at was set.",
+        "Orval generates `{ [key: string]: unknown } | null` instead of `string | null` for nullable string fields; `as unknown as string` casts are the correct workaround for this pre-existing codegen bug.",
+        "The IPFS gateway at port 8080 exposes CORS-friendly `/ipns/{name}` path resolution (Access-Control-Allow-Origin: *), but Kubo's API port 5001 sends no CORS headers and is unusable from the browser.",
+        "The IPNS controller requires JWT auth — it cannot be called from the offline recovery tool.",
+        "The delegated routing API (/routing/v1/ipns/{name}) returns CBOR-wrapped records, not raw protobuf; naive protobuf parsing returns garbage bytes as the CID.",
+        "IPNS records published to a local Kubo node do not automatically propagate to the public DHT — public gateways (ipfs.io, delegated-ipfs.dev) will 404 for locally-published records.",
+        "OTPs from Web3Auth are logged in clear text to the API server stdout in the dev environment."
+      ],
+      "code": [
+        {
+          "path": "apps/web/src/services/folder.service.ts",
+          "line": 962,
+          "end_line": 966,
+          "finding": "fetchAndDecryptMetadata blindly JSON.parsed the raw IPFS blob — crashed with SyntaxError on v2 binary format. Fixed by detecting blob version before parsing."
+        },
+        {
+          "path": "packages/sdk-core/src/folder/index.ts",
+          "line": 44,
+          "end_line": 45,
+          "finding": "Same JSON.parse-without-version-check bug as folder.service.ts; both needed the same v2 blob detection fix."
+        },
+        {
+          "path": "apps/web/src/hooks/useAuth.ts",
+          "line": 181,
+          "end_line": 233,
+          "finding": "Migration IIFE: duplicate HKDF derivation (deriveVaultIpnsKeypair called twice with identical inputs) and redundant destructure/re-wrap of ipnsKeypair. Also: PATH A re-derived the keypair instead of reusing it from login."
+        },
+        {
+          "path": "apps/web/public/recovery.html",
+          "finding": "fetchFromIpfs returned undefined on non-404 gateway errors (loop fell through); detectBlobVersion then crashed on undefined.length. Fixed with explicit undefined guard and clear error message."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/commands/vault.rs",
+          "finding": "Double ECIES wrap: vault init wrapped rootFolderKey once for DB storage, then wrapped it again with the same key for the v2 blob. Fixed by reusing the first wrapped result."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/crypto/vault_blob.rs",
+          "finding": "serialize_vault_blob_v2 lacked key length bounds checks — oversized keys would silently truncate to u16 max on cast. Changed return type to Result and added validation."
+        },
+        {
+          "path": "apps/desktop/src-tauri/src/api/types.rs",
+          "finding": "InitVaultRequest and VaultResponse derived Debug, leaking encrypted key material to logs. Replaced with custom Debug impls that redact sensitive fields."
+        }
+      ],
+      "workflow": [
+        "When an API call appears to have never fired, query the database directly before concluding it failed — NestJS silence does not mean the request was never received.",
+        "The GSD security:review command's subagent can run concurrently with an active user checkpoint (wave 3 paused waiting for human approval), effectively parallelizing security review with UAT.",
+        "Playwright browser automation is available in the session and can execute JavaScript in the active browser context, enabling direct Zustand store access for extracting keys during manual testing.",
+        "The /gsd:debug workflow spawns a fresh gsd-debugger subagent with isolated context — useful when investigation requires extensive file reads that would bloat the orchestrator context.",
+        "For IPFS/IPNS resolution in offline recovery tools, fetching /ipns/{name} directly from the IPFS gateway (port 8080) is simpler and more reliable than delegated routing APIs or Kubo's auth-required API."
+      ]
+    },
+    "friction": [
+      "Silent NestJS request logging caused significant time lost investigating a 'failed' migration that had actually succeeded — required direct DB query to confirm.",
+      "First security:review invocation failed with ConnectionRefused mid-execution; had to be re-invoked.",
+      "Public IPFS gateways could not resolve locally-published IPNS records, requiring multiple failed approaches (Kubo API, CipherBox API, delegated routing) before landing on the /ipns/ gateway path.",
+      "Kubo API port 5001 has no CORS headers, blocking all browser-initiated requests; discovered only after implementing the fallback.",
+      "The delegated routing API's CBOR response format was not documented — the existing protobuf parser silently returned garbage bytes as the resolved CID.",
+      "Orval codegen bug for nullable string fields required `as unknown as string` casts throughout vault-related API response handling; regenerating the client after DTO changes had no effect."
+    ],
+    "open_items": [
+      "Recovery tool: private key (Uint8Array) not zeroed from memory after use (security review M-1)",
+      "useAuth.ts: no deduplication guard for concurrent migration from multiple browser tabs — two tabs logging in simultaneously could both trigger POST /vault/migrate (security review M-2)",
+      "vault.rs FUSE publish: rootFolderKey is ECIES-re-wrapped on every root folder publish rather than cached in AppState (security review M-3)",
+      "Blob deserializers accept zero-length keys without error (security review L-1)",
+      "recovery.html: no SRI hashes on CDN script tags (security review L-2)",
+      "Device registry sync fails with 'CryptoError: Invalid registry format' — schema mismatch between current registry format and stored IPFS data (pre-existing, captured as todo)",
+      "bin IPNS name resolution returns 404 — bin-specific IPNS record may be missing or the record format changed (pre-existing, captured as todo)",
+      "IPNS records are only published to the local Kubo node and do not propagate to the public DHT — production deployment will need DHT publishing configured"
+    ]
+  }
+}
