@@ -1,0 +1,1 @@
+ok monitor the pr for comments and when these come in use /resolve-pr-reviews to address these. keep going until all responses are very low impact.
