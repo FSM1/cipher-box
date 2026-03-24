@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-24T14:48:18.430Z'
+last_updated: '2026-03-24T19:56:14.324Z'
 progress:
   total_phases: 8
   completed_phases: 5
   total_plans: 27
-  completed_plans: 24
+  completed_plans: 25
 ---
 
 # Project State
@@ -55,6 +55,7 @@ Plan: 6 of 7
 | 21    | 01   | 5min     | 2     | 9     |
 | 21    | 03   | 10min    | 3     | 13    |
 | 21    | 05   | 9min     | 2     | 13    |
+| 21    | 04   | 8min     | 3     | 9     |
 
 ## Accumulated Context
 
@@ -100,6 +101,8 @@ Recent for v1.1:
 - PsaProvider.pinByCid() accessed via cast in client.ts (PSA-specific, not on PinningProvider interface)
 - Migration uses existing BullMQ pattern with pin-migration queue name; TEE decrypts ECIES-encrypted provider configs in-enclave with epoch key
 - SSRF protection on TEE migration: validates URL structure (HTTPS-only, no private IPs) and DNS resolution (rebinding check)
+- BYO config stored as encrypted IPNS entry using rootFolderKey -- no server-side credential storage (zero-knowledge preserved)
+- Dedicated IPNS key derived via HKDF with context string byo-ipfs-config from vault keypair
 
 ### Roadmap Evolution
 
@@ -125,4 +128,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-24 after completing 21-05 (pin migration backend: entity, service, controller, BullMQ processor, TEE migrate endpoint)
+Last updated: 2026-03-24 after completing 21-04 (Settings STORAGE tab: pinning mode selector, encrypted IPNS config persistence, connection test, advisory quota badge)
