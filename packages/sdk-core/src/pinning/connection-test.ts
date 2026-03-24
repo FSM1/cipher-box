@@ -66,7 +66,17 @@ async function probeKubo(
       };
     }
 
-    // Non-200 but not CORS (got a response) -- not Kubo, try PSA
+    // 401/403/422 means the endpoint exists and speaks Kubo, but auth failed
+    if (response.status === 401 || response.status === 403 || response.status === 422) {
+      return {
+        success: false,
+        protocol: 'kubo',
+        latencyMs,
+        error: 'authentication failed. check your auth token.',
+      };
+    }
+
+    // Other non-200 -- not Kubo, try PSA
     return null;
   } catch (err) {
     const latencyMs = Math.round(performance.now() - start);
@@ -124,7 +134,7 @@ async function probePsa(
       };
     }
 
-    if (response.status === 401) {
+    if (response.status === 401 || response.status === 403 || response.status === 422) {
       return {
         success: false,
         protocol: 'psa',

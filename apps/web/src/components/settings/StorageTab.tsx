@@ -224,20 +224,21 @@ export function StorageTab() {
       });
 
       // 10. Trigger migration if provider changed and user has existing pins
+      // Treat null savedConfig as implicit "cipherbox" mode (first-time user)
+      const previousMode = savedConfig?.mode ?? 'cipherbox';
+      const previousEndpoint = savedConfig?.endpoint ?? '';
       const providerChanged =
-        savedConfig &&
-        (savedConfig.mode !== mode || savedConfig.endpoint !== endpoint) &&
-        usedBytes > 0;
+        (previousMode !== mode || previousEndpoint !== endpoint) && usedBytes > 0;
 
       if (providerChanged && teeKeys?.currentPublicKey) {
         // ECIES-wrap source and destination provider configs for TEE
         const teePublicKey = hexToBytes(teeKeys.currentPublicKey);
 
         const sourceConfig = JSON.stringify(
-          savedConfig.mode !== 'cipherbox'
+          previousMode !== 'cipherbox'
             ? {
-                endpoint: savedConfig.endpoint,
-                authToken: savedConfig.authToken,
+                endpoint: savedConfig?.endpoint ?? '',
+                authToken: savedConfig?.authToken ?? '',
                 protocol: 'kubo',
               }
             : { endpoint: 'cipherbox', protocol: 'cipherbox' }
