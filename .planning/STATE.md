@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: milestone
 status: unknown
-last_updated: '2026-03-24T03:14:17.201Z'
+last_updated: '2026-03-24T03:23:27.970Z'
 progress:
   total_phases: 8
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 20
-  completed_plans: 19
+  completed_plans: 20
 ---
 
 # Project State
@@ -22,8 +22,8 @@ See: .planning/PROJECT.md (updated 2026-03-07)
 
 ## Current Position
 
-Phase: 20 (vault-migration) — EXECUTING
-Plan: 6 of 6
+Phase: 20 (vault-migration) — COMPLETE
+Plan: 6 of 6 (all plans complete)
 
 ## Performance Metrics
 
@@ -51,6 +51,7 @@ Plan: 6 of 6
 | 20    | 03   | 25min    | 2     | 6     |
 | 20    | 04   | 45min    | 3     | 15    |
 | 20    | 05   | 6min     | 2     | 13    |
+| 20    | 06   | 6min     | 2     | 4     |
 
 ## Accumulated Context
 
@@ -111,4 +112,4 @@ All M2 blockers resolved. See `.planning/milestones/m2/m2-v1.0-production-MILEST
 
 ---
 
-Last updated: 2026-03-24 after completing 20-05 (drop vault crypto columns, remove migrate endpoint, zero-crypto schema)
+Last updated: 2026-03-24 after completing 20-06 (client dead code removal, IPFS-only v2 blob paths, Phase 20 complete)
