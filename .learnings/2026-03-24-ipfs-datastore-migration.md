@@ -82,4 +82,4 @@ Note: staging DB name is `cipherbox_staging`, not `cipherbox`.
 - `.github/workflows/deploy-staging.yml` — staging deployment workflow
 - `apps/api/src/vault/entities/pinned-cid.entity.ts` — file content CID tracking
 - `apps/api/src/ipns/entities/folder-ipns.entity.ts` — metadata CID tracking (latest_cid)
-- `scripts/staging-ipfs-migration.sh` — migration script (bitswap approach, too slow for large repos)
+- `.learnings/staging-ipfs-migration.sh` — migration script (bitswap approach, too slow for large repos but useful as a reference for the DB query, CID diffing, and parallel cutover steps)
