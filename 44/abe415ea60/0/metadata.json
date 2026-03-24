@@ -1,0 +1,85 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "44abe415ea60",
+  "session_id": "17256d92-fa81-4467-a074-6d66d7ec4e84",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T01:40:34.770896Z",
+  "branch": "docs/ipfs-datastore-migration-learnings",
+  "checkpoints_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "turn_id": "082e0bdc7792",
+  "token_usage": {
+    "input_tokens": 1546,
+    "cache_creation_tokens": 513103,
+    "cache_read_tokens": 56346747,
+    "output_tokens": 83749,
+    "api_call_count": 312
+  },
+  "session_metrics": {
+    "turn_count": 19
+  },
+  "summary": {
+    "intent": "Complete Phase 19.2 (IPFS upload performance optimization) by executing gap closure plans, collecting matched three-point local baselines to definitively validate the concurrent pin orchestration and pebbleds datastore optimizations, then merge and deploy to staging.",
+    "outcome": "Phase 19.2 fully completed with PR #342 merged and released as v0.26.6. Staging deployed with pebbleds datastore (clean slate after ipfs-ds-convert proved unavailable). Key finding: SDK concurrent pins and pebbleds are synergistic — concurrent pins alone regress at 50 clients, but together deliver p95 -13%, p99 -15%, throughput +7%; at 75 clients pebbleds eliminates the failure mode entirely (-53% p95, +44% throughput, 0 errors vs 10).",
+    "learnings": {
+      "repo": [
+        "Load test secrets (LOAD_TEST_SECRET and THROTTLE_BYPASS_SECRET) must be passed as inline shell env vars — vitest does not load dotenv, so .env files are ignored for these.",
+        "The BypassableThrottlerGuard skips rate limiting when X-Throttle-Bypass header matches THROTTLE_BYPASS_SECRET and NODE_ENV !== 'production'.",
+        "Valid CIDs are tracked in two DB tables: pinned_cids (file content) and folder_ipns.latest_cid (metadata blobs). Anything pinned on Kubo not in those tables is stale.",
+        "DELEGATED_ROUTING_URL should point to someguy on 192.168.133.114:8190 for staging-representative local testing, not mock-ipns-routing on localhost:3001.",
+        "The staging deploy workflow is tag-staging.yml (not deploy-staging.yml) and must be triggered via the workflow, not by pushing tags manually.",
+        "ipfs-ds-convert is archived and incompatible with modern Kubo — there is no supported in-place flatfs→pebbleds conversion path.",
+        "Parallel Kubo pin migration via bitswap is impractical at scale (31K CIDs): new node doesn't auto-peer with old node on same Docker network, must be manually connected via `ipfs swarm connect`, and even then sequential pin add is too slow.",
+        "Docker volume names on staging follow pattern cipherbox-staging_\u003cservice\u003e_\u003cvolume\u003e."
+      ],
+      "code": [
+        {
+          "path": "packages/sdk/src/client.ts",
+          "line": 616,
+          "end_line": 650,
+          "finding": "uploadFile uses Promise.allSettled to parallelize IPNS publish and folder metadata update. On batch publish failure, emits typed ipns:batchPublishFailed event (consistent with share:reWrapFailed pattern). batchResult.reason normalized to Error before emitting. totalFailed check guards against undefined return from batchPublishIpnsRecords."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/helpers.ts",
+          "line": 1,
+          "end_line": 51,
+          "finding": "Shared test helpers extracted here: createTestConfig and setupFolder. All three SDK test files (client.test.ts, client-extended.test.ts, client-upload-concurrency.test.ts) import from this file. setupFolder creates a fresh object each call to avoid aliasing issues."
+        },
+        {
+          "path": "packages/sdk/src/events.ts",
+          "finding": "Added ipns:batchPublishFailed typed event to the SDK event map."
+        },
+        {
+          "path": "packages/sdk/src/__tests__/client-upload-concurrency.test.ts",
+          "finding": "All batchPublishIpnsRecords mocks must return { totalSucceeded, totalFailed } shape — returning undefined causes the totalFailed guard to silently skip the error path."
+        }
+      ],
+      "workflow": [
+        "Three-point matched-environment baseline methodology (no opts → SDK only → SDK+infra) isolates each optimization's contribution and eliminates confounding variables from environment differences.",
+        "Concurrency probe pattern: ramp clients 1/5/10/20/50/75/100 until errors appear, then use highest clean run for baseline comparisons.",
+        "When staging Docker migration goes wrong, a clean slate is often faster than complex in-place migration for non-production environments.",
+        "GSD gap closure cycle: execute-phase detects gaps → plan-phase --gaps creates gap closure plans → execute-phase --gaps-only runs them → verifier re-runs.",
+        "Tagging releases manually by pushing git tags bypasses the tag-staging-release workflow — always use the workflow to trigger staging deploys."
+      ]
+    },
+    "friction": [
+      "ipfs-ds-convert is archived and incompatible with modern Kubo — discovered only after planning the migration around it.",
+      "Bitswap pin-by-pin migration of 31K CIDs was impractically slow; new node didn't auto-peer with old node on same Docker bridge network.",
+      "Sequential `ipfs pin add` approach saturated the VPS and caused SSH connection drops mid-migration.",
+      "Multiple duplicate API processes accumulated from background task launches, requiring manual cleanup before load tests were valid.",
+      "1Password SSH agent socket wasn't available initially, blocking remote SSH access until the user connected directly.",
+      "Load test secrets can't be put in .env because vitest doesn't load dotenv — this caused confusion about how to run tests with bypass credentials.",
+      "The assistant pushed a staging release tag manually instead of using the tag-staging-release workflow, requiring a revert."
+    ],
+    "open_items": [
+      "Staging pebbleds deploy verified locally but SC1/Prometheus histogram checks on live staging still pending (human_needed items from VERIFICATION.md).",
+      "TODO: investigate removal of mock-ipns-routing layer now that someguy is properly integrated (.planning/todos/pending/2026-03-23-investigate-removal-of-mock-ipns-routing-layer.md).",
+      "TODO: load tests should handle 401s with token refresh for long-running sessions (.planning/todos/pending/2026-03-23-load-tests-should-handle-401s-with-token-refresh.md).",
+      "SC3 (\u003e15% throughput improvement at 50+ clients) was not met at 50 clients (+7% achieved) — only clearly met at 75 clients where failure mode is eliminated.",
+      "PR #343 (IPFS datastore migration learnings) still open, pending merge.",
+      "Copilot comment on client.ts:634 about DB fallback + TEE republish design noted as follow-up but not addressed — retry queue for partially failed IPNS batch publishes.",
+      "scripts/staging-ipfs-migration.sh moved to .learnings/ as reference material — the approach (dag export/import) was not validated in practice."
+    ]
+  }
+}
