@@ -98,7 +98,7 @@ mod mount_impl {
 
         match fetch_result {
             Ok((encrypted_bytes, cid)) => {
-                match crate::fuse::decrypt::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &root_folder_key) {
+                match crate::crypto::decrypt::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &root_folder_key) {
                     Ok(metadata) => {
                         metadata_cache.set(&root_ipns_name, metadata.clone(), cid);
 
@@ -139,7 +139,7 @@ mod mount_impl {
                                             .await;
                                             match fp_result {
                                                 Ok(enc_bytes) => {
-                                                    match crate::fuse::decrypt::decrypt_file_metadata_from_ipfs_public(
+                                                    match crate::crypto::decrypt::decrypt_file_metadata_from_ipfs_public(
                                                         &enc_bytes, &fk,
                                                     ) {
                                                         Ok(fm) => {
@@ -216,7 +216,7 @@ mod mount_impl {
                                     .await;
                                     match sub_result {
                                         Ok((enc_bytes, sub_cid)) => {
-                                            match crate::fuse::decrypt::decrypt_metadata_from_ipfs_public(&enc_bytes, sub_key) {
+                                            match crate::crypto::decrypt::decrypt_metadata_from_ipfs_public(&enc_bytes, sub_key) {
                                                 Ok(sub_metadata) => {
                                                     metadata_cache.set(
                                                         sub_ipns,
@@ -265,7 +265,7 @@ mod mount_impl {
                                                                         .await;
                                                                         match fp_result {
                                                                             Ok(enc_bytes) => {
-                                                                                match crate::fuse::decrypt::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &sk) {
+                                                                                match crate::crypto::decrypt::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &sk) {
                                                                                     Ok(fm) => {
                                                                                         inodes.resolve_file_pointer(
                                                                                             *fp_ino,

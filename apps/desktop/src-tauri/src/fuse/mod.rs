@@ -10,8 +10,6 @@
 pub mod cache;
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub(crate) mod constants;
-#[cfg(any(feature = "fuse", feature = "winfsp"))]
-pub mod decrypt;
 pub mod file_handle;
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub(crate) mod helpers;
@@ -386,7 +384,7 @@ fn spawn_metadata_publish(
 
                     // 3. Fetch and decrypt the remote metadata (contains the other device's changes)
                     let remote_bytes = crate::api::ipfs::fetch_content(&api, &remote_cid).await?;
-                    let remote_metadata = crate::fuse::decrypt::decrypt_metadata_from_ipfs_public(
+                    let remote_metadata = crate::crypto::decrypt::decrypt_metadata_from_ipfs_public(
                         &remote_bytes, &folder_key,
                     )?;
 
@@ -1064,7 +1062,7 @@ impl CipherBoxFS {
                             });
                             match resolve_result {
                                 Ok(enc_bytes) => {
-                                    match decrypt::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk_arr) {
+                                    match crate::crypto::decrypt::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk_arr) {
                                         Ok(fm) => {
                                             self.inodes.resolve_file_pointer(
                                                 *ino, fm.cid, fm.file_key_encrypted,
@@ -1222,7 +1220,7 @@ pub async fn mount_filesystem(
     }.await;
     match fetch_result {
         Ok((encrypted_bytes, cid)) => {
-            match decrypt::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &root_folder_key) {
+            match crate::crypto::decrypt::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &root_folder_key) {
                 Ok(metadata) => {
                     // Cache metadata directly for readdir staleness checks
                     metadata_cache.set(&root_ipns_name, metadata.clone(), cid);
@@ -1246,7 +1244,7 @@ pub async fn mount_filesystem(
                                         }.await;
                                         match fp_result {
                                             Ok(enc_bytes) => {
-                                                match decrypt::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk) {
+                                                match crate::crypto::decrypt::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &fk) {
                                                     Ok(fm) => {
                                                         inodes.resolve_file_pointer(
                                                             *fp_ino, fm.cid, fm.file_key_encrypted,
@@ -1292,7 +1290,7 @@ pub async fn mount_filesystem(
                         }.await;
                         match sub_result {
                             Ok((enc_bytes, sub_cid)) => {
-                                match decrypt::decrypt_metadata_from_ipfs_public(&enc_bytes, sub_key) {
+                                match crate::crypto::decrypt::decrypt_metadata_from_ipfs_public(&enc_bytes, sub_key) {
                                     Ok(sub_metadata) => {
                                         metadata_cache.set(sub_ipns, sub_metadata.clone(), sub_cid);
                                         match inodes.populate_folder(*sub_ino, &sub_metadata, &private_key, &public_key, false) {
@@ -1311,7 +1309,7 @@ pub async fn mount_filesystem(
                                                             }.await;
                                                             match fp_result {
                                                                 Ok(enc_bytes) => {
-                                                                    match decrypt::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &sk) {
+                                                                    match crate::crypto::decrypt::decrypt_file_metadata_from_ipfs_public(&enc_bytes, &sk) {
                                                                         Ok(fm) => {
                                                                             inodes.resolve_file_pointer(
                                                                                 *fp_ino, fm.cid, fm.file_key_encrypted,

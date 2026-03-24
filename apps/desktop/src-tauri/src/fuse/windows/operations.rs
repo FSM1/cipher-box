@@ -401,7 +401,7 @@ pub(crate) mod implementation {
 
         let (encrypted_bytes, cid) = result;
         let metadata =
-            crate::fuse::decrypt::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &folder_key_owned)?;
+            crate::crypto::decrypt::decrypt_metadata_from_ipfs_public(&encrypted_bytes, &folder_key_owned)?;
         fs.metadata_cache
             .set(&ipns_name.to_string(), metadata.clone(), cid);
         fs.inodes.populate_folder(
@@ -449,7 +449,7 @@ pub(crate) mod implementation {
 
             match resolve_result {
                 Ok(encrypted_bytes) => {
-                    match crate::fuse::decrypt::decrypt_file_metadata_from_ipfs_public(
+                    match crate::crypto::decrypt::decrypt_file_metadata_from_ipfs_public(
                         &encrypted_bytes,
                         &folder_key_arr,
                     ) {

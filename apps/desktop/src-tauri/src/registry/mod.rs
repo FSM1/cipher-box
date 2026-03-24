@@ -8,8 +8,6 @@
 //! IMPORTANT: Registry operations must NEVER block login.
 //! All errors are caught and logged by the caller (tokio::spawn wrapper).
 
-pub mod types;
-
 use std::sync::Arc;
 
 use base64::Engine;
@@ -17,7 +15,7 @@ use base64::Engine;
 use crate::api::client::ApiClient;
 use crate::api::ipns::IpnsPublishRequest;
 use crate::crypto;
-use types::{DeviceAuthStatus, DeviceEntry, DevicePlatform, DeviceRegistry};
+use cipherbox_core::registry::{DeviceAuthStatus, DeviceEntry, DevicePlatform, DeviceRegistry};
 
 /// Register this desktop device in the encrypted device registry.
 ///

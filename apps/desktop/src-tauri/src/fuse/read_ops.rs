@@ -135,7 +135,7 @@ pub(crate) mod implementation {
                     Ok(resolve_resp) => {
                         match crate::api::ipfs::fetch_content(&api, &resolve_resp.cid).await {
                             Ok(encrypted_bytes) => {
-                                match crate::fuse::decrypt::decrypt_metadata_from_ipfs_public(
+                                match crate::crypto::decrypt::decrypt_metadata_from_ipfs_public(
                                     &encrypted_bytes, &folder_key,
                                 ) {
                                     Ok(metadata) => {
