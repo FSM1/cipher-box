@@ -62,6 +62,7 @@ describe('VaultService', () => {
     rootIpnsName: testRootIpnsName,
     createdAt: new Date('2026-01-20T12:00:00.000Z'),
     initializedAt: null,
+    migratedAt: null,
     updatedAt: new Date('2026-01-20T12:00:00.000Z'),
     owner: {} as unknown as User,
   };
@@ -223,6 +224,29 @@ describe('VaultService', () => {
       expect(mockVaultRepo.save).not.toHaveBeenCalled();
       expect(mockFolderIpnsRepo.create).not.toHaveBeenCalled();
       expect(mockFolderIpnsRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('should store null encryptedRootIpnsPrivateKey when omitted from DTO', async () => {
+      mockVaultRepo.findOne.mockResolvedValue(null);
+      mockVaultRepo.create.mockReturnValue(mockVaultEntity);
+      mockVaultRepo.save.mockResolvedValue(mockVaultEntity);
+      mockFolderIpnsRepo.create.mockReturnValue({});
+      mockFolderIpnsRepo.save.mockResolvedValue({});
+      mockTeeKeyStateService.getTeeKeysDto.mockResolvedValue(null);
+
+      const dtoWithoutIpnsKey: InitVaultDto = {
+        ownerPublicKey: testOwnerPublicKey,
+        encryptedRootFolderKey: testEncryptedRootFolderKey,
+        rootIpnsName: testRootIpnsName,
+      };
+
+      await service.initializeVault(testUserId, dtoWithoutIpnsKey);
+
+      expect(mockVaultRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          encryptedRootIpnsPrivateKey: null,
+        })
+      );
     });
 
     it('should handle valid hex strings of various lengths', async () => {
@@ -530,6 +554,40 @@ describe('VaultService', () => {
     });
   });
 
+  describe('migrateVault', () => {
+    it('should stamp migratedAt and NULL crypto columns', async () => {
+      mockVaultRepo.findOne.mockResolvedValue({ ...mockVaultEntity, migratedAt: null });
+
+      await service.migrateVault(testUserId);
+
+      expect(mockVaultRepo.update).toHaveBeenCalledWith(
+        { ownerId: testUserId },
+        expect.objectContaining({
+          migratedAt: expect.any(Date),
+          encryptedRootFolderKey: null,
+          encryptedRootIpnsPrivateKey: null,
+        })
+      );
+    });
+
+    it('should be idempotent — skip if already migrated', async () => {
+      mockVaultRepo.findOne.mockResolvedValue({
+        ...mockVaultEntity,
+        migratedAt: new Date('2026-03-24'),
+      });
+
+      await service.migrateVault(testUserId);
+
+      expect(mockVaultRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('should throw NotFoundException if vault does not exist', async () => {
+      mockVaultRepo.findOne.mockResolvedValue(null);
+
+      await expect(service.migrateVault(testUserId)).rejects.toThrow(NotFoundException);
+    });
+  });
+
   describe('toVaultResponse (tested indirectly)', () => {
     it('should hex-encode all buffer fields via getVault', async () => {
       const vaultWithInitialized = {
@@ -584,6 +642,23 @@ describe('VaultService', () => {
       const result = await service.getVault(testUserId);
 
       expect(result.teeKeys).toBeNull();
+    });
+
+    it('should return null crypto fields for migrated vault', async () => {
+      const migratedVault = {
+        ...mockVaultEntity,
+        encryptedRootFolderKey: null,
+        encryptedRootIpnsPrivateKey: null,
+        migratedAt: new Date('2026-03-24'),
+      };
+      mockVaultRepo.findOne.mockResolvedValue(migratedVault);
+      mockTeeKeyStateService.getTeeKeysDto.mockResolvedValue(null);
+
+      const result = await service.getVault(testUserId);
+
+      expect(result.encryptedRootFolderKey).toBeNull();
+      expect(result.encryptedRootIpnsPrivateKey).toBeNull();
+      expect(result.migratedAt).toEqual(new Date('2026-03-24'));
     });
   });
 
@@ -673,6 +748,22 @@ describe('VaultService', () => {
 
       await expect(service.getExportData(testUserId)).rejects.toThrow(NotFoundException);
       await expect(service.getExportData(testUserId)).rejects.toThrow('Vault not found');
+    });
+
+    it('should return null crypto fields for migrated vaults', async () => {
+      const migratedVault = {
+        ...mockVaultEntity,
+        encryptedRootFolderKey: null,
+        encryptedRootIpnsPrivateKey: null,
+        migratedAt: new Date('2026-03-24'),
+      };
+      mockVaultRepo.findOne.mockResolvedValue(migratedVault);
+      mockUserRepo.findOne.mockResolvedValue({ id: testUserId });
+
+      const result = await service.getExportData(testUserId);
+
+      expect(result.encryptedRootFolderKey).toBeNull();
+      expect(result.encryptedRootIpnsPrivateKey).toBeNull();
     });
 
     it('should include ISO 8601 exportedAt timestamp', async () => {
