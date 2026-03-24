@@ -1,0 +1,82 @@
+{
+  "cli_version": "0.5.1",
+  "checkpoint_id": "69b19ce234c0",
+  "session_id": "307145be-5d6b-4c58-9faa-418cafde1db6",
+  "strategy": "manual-commit",
+  "created_at": "2026-03-24T14:36:03.751814Z",
+  "branch": "docs/phase-21-context",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".planning/STATE.md"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "2da5084883fd",
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 40294,
+    "cache_read_tokens": 365295,
+    "output_tokens": 3070,
+    "api_call_count": 9
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Execute Phase 21 (BYO IPFS Node Support) using GSD wave-based parallel execution across 7 plans in 4 waves.",
+    "outcome": "Wave 1 completed successfully with both plans (21-01 pinning provider abstraction and 21-02 CID registration/advisory quota) executing in parallel. Wave 2 (21-03 SDK client integration) was spawned but the transcript ends mid-execution.",
+    "learnings": {
+      "repo": [
+        "Phase 21 branch is `docs/phase-21-context` — GSD continues on existing branch rather than creating a new one",
+        "BYO IPFS support uses a lightweight API footprint: BYO users pin externally and notify CipherBox via POST /ipfs/register-cid rather than uploading through CipherBox",
+        "Quota enforcement becomes advisory (non-enforced) for BYO users — tracked but not blocked",
+        "The codebase uses IF NOT EXISTS migrations pattern (seen in AddByoUserFlag migration)",
+        "SDK pinning abstraction supports two protocols: Kubo RPC (/api/v0/* endpoints) and IPFS Pinning Service API (PSA /pins endpoints)"
+      ],
+      "code": [
+        {
+          "path": "packages/sdk-core/src/pinning/types.ts",
+          "finding": "PinningProvider interface, PinningMode, ExternalProviderConfig, ConnectionTestResult types defined here"
+        },
+        {
+          "path": "packages/sdk-core/src/pinning/connection-test.ts",
+          "finding": "testConnection implements protocol auto-detection and CORS validation"
+        },
+        {
+          "path": "apps/api/src/vault/vault.service.ts",
+          "finding": "isUserByo() and setByoStatus() methods added for BYO user flag management alongside advisory quota logic"
+        },
+        {
+          "path": "apps/api/src/vault/entities/vault.entity.ts",
+          "finding": "isByoUser column added to vault entity"
+        },
+        {
+          "path": "apps/api/src/migrations/1740600000000-AddByoUserFlag.ts",
+          "finding": "Migration uses IF NOT EXISTS pattern for safe re-runs"
+        }
+      ],
+      "workflow": [
+        "GSD wave-based parallel execution works well: Wave 1 two agents ran concurrently and both completed within ~10 minutes",
+        "Spot-checking after each wave verifies SUMMARY.md existence, git commits, and absence of Self-Check: FAILED markers",
+        "GSD continues on existing phase branch rather than creating a new one when branch already exists"
+      ]
+    },
+    "friction": [
+      "Transcript ends mid-execution during Wave 2 — unclear if Wave 2 completed or was interrupted"
+    ],
+    "open_items": [
+      "Wave 2 (21-03): SDK client wiring with DualPinProvider, ByoIpfsConfig, and mode-aware upload orchestration — spawned but result not captured in transcript",
+      "Wave 3 (21-04, 21-05): Settings UI STORAGE tab + TEE pin migration backend — not yet started",
+      "Wave 4 (21-06, 21-07): Migration progress UI + performance benchmarks — not yet started",
+      "Phase verification (gsd-verifier) and ROADMAP.md update pending full phase completion"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-03-24T14:35:46.954238Z",
+    "agent_lines": 0,
+    "human_added": 1094,
+    "human_modified": 4,
+    "human_removed": 0,
+    "total_committed": 1097,
+    "agent_percentage": 0
+  }
+}
