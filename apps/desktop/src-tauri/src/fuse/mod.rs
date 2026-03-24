@@ -16,6 +16,8 @@ pub use cipherbox_fuse::{
 #[allow(unused_imports)]
 pub use cipherbox_fuse::inode;
 #[allow(unused_imports)]
+pub use cipherbox_fuse::cache;
+#[allow(unused_imports)]
 pub use cipherbox_fuse::file_handle;
 #[allow(unused_imports)]
 #[cfg(any(feature = "fuse", feature = "winfsp"))]

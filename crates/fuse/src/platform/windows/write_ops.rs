@@ -4,7 +4,7 @@
 //! set_basic_info, set_file_size, set_delete, rename.
 
 #[cfg(feature = "winfsp")]
-pub(crate) mod implementation {
+pub mod implementation {
     use std::ffi::c_void;
     use std::sync::atomic::Ordering;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -17,7 +17,7 @@ pub(crate) mod implementation {
     use crate::file_handle::OpenFileHandle;
     use crate::helpers::mime_from_extension;
     use crate::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
-    use super::operations::implementation::{
+    use super::super::operations::implementation::{
         WinFspContext, WinFspFileContext,
         status_object_name_not_found, status_invalid_parameter,
         status_object_name_collision, status_directory_not_empty,

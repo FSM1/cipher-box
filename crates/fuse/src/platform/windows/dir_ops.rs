@@ -3,14 +3,14 @@
 //! Contains handler logic for: read_directory.
 
 #[cfg(feature = "winfsp")]
-pub(crate) mod implementation {
+pub mod implementation {
     use winfsp::filesystem::{DirInfo, DirMarker, FileInfo, WideNameInfo};
     use widestring::U16CString;
     use winfsp::FspError;
 
     use crate::constants::CONTENT_DOWNLOAD_TIMEOUT;
     use crate::inode::InodeKind;
-    use super::operations::implementation::{
+    use super::super::operations::implementation::{
         WinFspContext, WinFspFileContext,
         status_object_name_not_found,
         fill_file_info, fetch_and_decrypt_content_async,

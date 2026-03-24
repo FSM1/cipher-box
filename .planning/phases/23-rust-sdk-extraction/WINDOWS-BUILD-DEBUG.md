@@ -92,6 +92,42 @@ cargo check --workspace --no-default-features --features winfsp -vv 2>&1 | Selec
 | `apps/desktop/src-tauri/Cargo.toml:8-9`       | Desktop feature defs forwarding to cipherbox-fuse                                    |
 | `.github/workflows/ci.yml` cargo-windows step | `cargo check --workspace --no-default-features --features winfsp`                    |
 
+## Resolution (2026-03-25)
+
+All errors resolved. Both CI cargo scripts pass locally on Windows:
+
+- `cargo check --workspace --no-default-features --features winfsp`
+- `cargo test --workspace --no-default-features --features winfsp`
+
+### Root Causes
+
+1. **`super::` path depth in nested modules (20 E0433 errors):** Each Windows module
+   wraps code in `pub(crate) mod implementation { }`. From inside `implementation`,
+   `super::` resolves to the file-level module (e.g., `operations`), NOT the parent
+   `windows` module. Cross-module references like `super::read_ops` from inside
+   `operations::implementation` failed because `read_ops` is a sibling of `operations`
+   in the `windows` module, not a child of `operations`.
+   **Fix:** Changed all cross-module refs from `super::` to `super::super::`.
+
+2. **`pub(crate)` visibility (1 E0603 error):** The `implementation` submodules were
+   `pub(crate)`, invisible to the separate `cipherbox-desktop` crate which imports
+   `cipherbox_fuse::platform::windows::operations::implementation::WinFspContext`.
+   **Fix:** Changed to `pub mod implementation`.
+
+3. **Missing `cache` re-export (1 E0432 error):** Desktop's `fuse/windows/mod.rs`
+   imported `crate::fuse::cache`, but the bridge `fuse/mod.rs` didn't re-export it.
+   **Fix:** Added `pub use cipherbox_fuse::cache;`.
+
+4. **`ApiError` not convertible to `String` via `?` (6 E0277 errors):** Async blocks
+   in `fuse/windows/mod.rs` used `.await?` on API calls returning `Result<_, ApiError>`
+   in a `Result<_, String>` context. The macOS version had `.map_err()` but Windows didn't.
+   **Fix:** Added `.map_err(|e| e.to_string())` to all 6 call sites.
+
+### Key Insight
+
+These errors could only be diagnosed on Windows — the `winfsp` feature gate and WinFsp
+SDK dependency mean the code is never compiled on macOS/Linux CI.
+
 ## CI Run References
 
 - Latest failure: https://github.com/FSM1/cipher-box/actions/runs/23512770684

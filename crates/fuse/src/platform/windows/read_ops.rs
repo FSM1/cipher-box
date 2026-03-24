@@ -4,7 +4,7 @@
 //! close, read, get_file_info, get_security, flush.
 
 #[cfg(feature = "winfsp")]
-pub(crate) mod implementation {
+pub mod implementation {
     use std::ffi::c_void;
     use std::sync::atomic::Ordering;
     use std::time::Duration;
@@ -16,7 +16,7 @@ pub(crate) mod implementation {
     use crate::constants::CONTENT_DOWNLOAD_TIMEOUT;
     use crate::file_handle::OpenFileHandle;
     use crate::inode::InodeKind;
-    use super::operations::implementation::{
+    use super::super::operations::implementation::{
         WinFspContext, WinFspFileContext,
         status_object_name_not_found, status_invalid_parameter,
         status_invalid_handle, status_io_device_error,

@@ -14,7 +14,7 @@
 //! this by walking the inode table component-by-component from the root.
 
 #[cfg(feature = "winfsp")]
-pub(crate) mod implementation {
+pub mod implementation {
     use std::ffi::c_void;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -387,7 +387,7 @@ pub(crate) mod implementation {
             &self,
             volume_info: &mut winfsp::filesystem::VolumeInfo,
         ) -> Result<(), FspError> {
-            super::read_ops::implementation::handle_get_volume_info(
+            super::super::read_ops::implementation::handle_get_volume_info(
                 self, volume_info,
             )
         }
@@ -398,7 +398,7 @@ pub(crate) mod implementation {
             security_descriptor: Option<&mut [c_void]>,
             _find_reparse_point: impl FnOnce(&U16CStr) -> Option<FileSecurity>,
         ) -> Result<FileSecurity, FspError> {
-            super::read_ops::implementation::handle_get_security_by_name(
+            super::super::read_ops::implementation::handle_get_security_by_name(
                 self, file_name, security_descriptor,
             )
         }
@@ -410,7 +410,7 @@ pub(crate) mod implementation {
             granted_access: u32,
             file_info: &mut OpenFileInfo,
         ) -> Result<Self::FileContext, FspError> {
-            super::read_ops::implementation::handle_open(
+            super::super::read_ops::implementation::handle_open(
                 self, file_name, create_options, granted_access, file_info,
             )
         }
@@ -424,13 +424,13 @@ pub(crate) mod implementation {
             _extra_buffer: Option<&[u8]>,
             file_info: &mut FileInfo,
         ) -> Result<(), FspError> {
-            super::write_ops::implementation::handle_overwrite(
+            super::super::write_ops::implementation::handle_overwrite(
                 self, context, file_info,
             )
         }
 
         fn close(&self, context: Self::FileContext) {
-            super::read_ops::implementation::handle_close(
+            super::super::read_ops::implementation::handle_close(
                 self, context,
             );
         }
@@ -441,7 +441,7 @@ pub(crate) mod implementation {
             buffer: &mut [u8],
             offset: u64,
         ) -> Result<u32, FspError> {
-            super::read_ops::implementation::handle_read(
+            super::super::read_ops::implementation::handle_read(
                 self, context, buffer, offset,
             )
         }
@@ -455,7 +455,7 @@ pub(crate) mod implementation {
             _constrained_io: bool,
             file_info: &mut FileInfo,
         ) -> Result<u32, FspError> {
-            super::write_ops::implementation::handle_write(
+            super::super::write_ops::implementation::handle_write(
                 self, context, buffer, offset, write_to_end_of_file, file_info,
             )
         }
@@ -465,7 +465,7 @@ pub(crate) mod implementation {
             _context: Option<&Self::FileContext>,
             _file_info: &mut FileInfo,
         ) -> Result<(), FspError> {
-            super::read_ops::implementation::handle_flush()
+            super::super::read_ops::implementation::handle_flush()
         }
 
         fn get_file_info(
@@ -473,7 +473,7 @@ pub(crate) mod implementation {
             context: &Self::FileContext,
             file_info: &mut FileInfo,
         ) -> Result<(), FspError> {
-            super::read_ops::implementation::handle_get_file_info(
+            super::super::read_ops::implementation::handle_get_file_info(
                 self, context, file_info,
             )
         }
@@ -483,7 +483,7 @@ pub(crate) mod implementation {
             _context: &Self::FileContext,
             security_descriptor: Option<&mut [c_void]>,
         ) -> Result<u64, FspError> {
-            super::read_ops::implementation::handle_get_security(
+            super::super::read_ops::implementation::handle_get_security(
                 security_descriptor,
             )
         }
@@ -498,7 +498,7 @@ pub(crate) mod implementation {
             change_time: u64,
             file_info: &mut FileInfo,
         ) -> Result<(), FspError> {
-            super::write_ops::implementation::handle_set_basic_info(
+            super::super::write_ops::implementation::handle_set_basic_info(
                 self, context, creation_time, last_access_time, last_write_time,
                 change_time, file_info,
             )
@@ -511,7 +511,7 @@ pub(crate) mod implementation {
             set_allocation_size: bool,
             file_info: &mut FileInfo,
         ) -> Result<(), FspError> {
-            super::write_ops::implementation::handle_set_file_size(
+            super::super::write_ops::implementation::handle_set_file_size(
                 self, context, new_size, set_allocation_size, file_info,
             )
         }
@@ -522,7 +522,7 @@ pub(crate) mod implementation {
             _file_name: Option<&U16CStr>,
             flags: u32,
         ) {
-            super::write_ops::implementation::handle_cleanup(
+            super::super::write_ops::implementation::handle_cleanup(
                 self, context, flags,
             );
         }
@@ -534,7 +534,7 @@ pub(crate) mod implementation {
             marker: DirMarker,
             buffer: &mut [u8],
         ) -> Result<u32, FspError> {
-            super::dir_ops::implementation::handle_read_directory(
+            super::super::dir_ops::implementation::handle_read_directory(
                 self, context, marker, buffer,
             )
         }
@@ -551,7 +551,7 @@ pub(crate) mod implementation {
             _extra_buffer_is_reparse_point: bool,
             file_info: &mut OpenFileInfo,
         ) -> Result<Self::FileContext, FspError> {
-            super::write_ops::implementation::handle_create(
+            super::super::write_ops::implementation::handle_create(
                 self, file_name, create_options, granted_access,
                 _file_attributes, _security_descriptor, _allocation_size,
                 _extra_buffer, _extra_buffer_is_reparse_point, file_info,
@@ -565,7 +565,7 @@ pub(crate) mod implementation {
             new_file_name: &U16CStr,
             replace_if_exists: bool,
         ) -> Result<(), FspError> {
-            super::write_ops::implementation::handle_rename(
+            super::super::write_ops::implementation::handle_rename(
                 self, file_name, new_file_name, replace_if_exists,
             )
         }
@@ -576,7 +576,7 @@ pub(crate) mod implementation {
             file_name: &U16CStr,
             delete_file: bool,
         ) -> Result<(), FspError> {
-            super::write_ops::implementation::handle_set_delete(
+            super::super::write_ops::implementation::handle_set_delete(
                 context, file_name, delete_file,
             )
         }

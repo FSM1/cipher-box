@@ -120,12 +120,12 @@ mod mount_impl {
                                                     &state.sdk.api,
                                                     fp_ipns,
                                                 )
-                                                .await?;
+                                                .await.map_err(|e| e.to_string())?;
                                                 let bytes = cipherbox_api_client::ipfs::fetch_content(
                                                     &state.sdk.api,
                                                     &resp.cid,
                                                 )
-                                                .await?;
+                                                .await.map_err(|e| e.to_string())?;
                                                 Ok(bytes)
                                             }
                                             .await;
@@ -197,12 +197,12 @@ mod mount_impl {
                                     let sub_result: Result<(Vec<u8>, String), String> = async {
                                         let resp =
                                             cipherbox_api_client::ipns::resolve_ipns(&state.sdk.api, sub_ipns)
-                                                .await?;
+                                                .await.map_err(|e| e.to_string())?;
                                         let bytes = cipherbox_api_client::ipfs::fetch_content(
                                             &state.sdk.api,
                                             &resp.cid,
                                         )
-                                        .await?;
+                                        .await.map_err(|e| e.to_string())?;
                                         Ok((bytes, resp.cid))
                                     }
                                     .await;
@@ -245,13 +245,13 @@ mod mount_impl {
                                                                                     &state.sdk.api,
                                                                                     fp_ipns,
                                                                                 )
-                                                                                .await?;
+                                                                                .await.map_err(|e| e.to_string())?;
                                                                             let bytes =
                                                                                 cipherbox_api_client::ipfs::fetch_content(
                                                                                     &state.sdk.api,
                                                                                     &resp.cid,
                                                                                 )
-                                                                                .await?;
+                                                                                .await.map_err(|e| e.to_string())?;
                                                                             Ok(bytes)
                                                                         }
                                                                         .await;
