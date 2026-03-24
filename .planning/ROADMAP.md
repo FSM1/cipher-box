@@ -128,7 +128,7 @@ Plans:
 3. All IPNS publishes still route through the CipherBox API regardless of BYO configuration (no bypass of optimistic concurrency)
 4. BYO users see an advisory quota display (not enforced) with clear indication that storage is managed by their own node
 5. The connection test endpoint validates reachability and API compatibility of the user's node before saving configuration
-   **Plans**: 6 plans
+   **Plans**: 7 plans
 
 Plans:
 
@@ -138,6 +138,7 @@ Plans:
 - [ ] 21-04-PLAN.md -- Settings UI STORAGE tab with connection test and advisory badge
 - [ ] 21-05-PLAN.md -- TEE migration backend (entity, service, controller, BullMQ, TEE worker)
 - [ ] 21-06-PLAN.md -- Migration progress UI + final integration verification
+- [ ] 21-07-PLAN.md -- BYO performance benchmarking scenarios + baselines capture
 
 ### Phase 22: Performance Baselines Completion
 
